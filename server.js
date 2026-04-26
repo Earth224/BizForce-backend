@@ -79,4 +79,6 @@ async function runStaffTask(business, staffMember) {
     sam: { role: 'Reputation Manager', task: 'Write 5 professional responses to common customer reviews (mix of positive and negative) for this type of business.' },
     dana: { role: 'Analytics Officer', task: 'Create a detailed weekly performance report template with key metrics, insights, and recommendations for this business.' },
     taylor: { role: 'Ad Campaign Manager', task: 'Write 3 complete Google Ad campaigns with headlines, descriptions, and targeting recommendations for this business.' },
-    blake: { role: 'Influencer Outreach Agent', task: 'Write 3​​​​​​​​​​​​​​​​
+    blake: { role: 'Influencer Outreach Agent', task: 'Write 3 personalized influencer outreach emails for micro-influencers relevant to this business niche.' },
+
+​​​​​​​​​​​​​​​​
