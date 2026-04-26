@@ -80,5 +80,8 @@ async function runStaffTask(business, staffMember) {
     dana: { role: 'Analytics Officer', task: 'Create a detailed weekly performance report template with key metrics, insights, and recommendations for this business.' },
     taylor: { role: 'Ad Campaign Manager', task: 'Write 3 complete Google Ad campaigns with headlines, descriptions, and targeting recommendations for this business.' },
     blake: { role: 'Influencer Outreach Agent', task: 'Write 3 personalized influencer outreach emails for micro-influencers relevant to this business niche.' },
+ };
+}
+
 
 ​​​​​​​​​​​​​​​​
