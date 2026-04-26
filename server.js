@@ -1,6 +1,6 @@
-​​​​​​​const express = require('express');
+
+const express = require('express');
 const cors = require('cors');
-const cron = require('node-cron');
 const { createClient } = require('@supabase/supabase-js');
 const Anthropic = require('@anthropic-ai/sdk');
 
@@ -17,12 +17,10 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// --- HEALTH CHECK ---
 app.get('/', (req, res) => {
   res.json({ status: 'BizForce AI Backend Running', time: new Date().toISOString() });
 });
 
-// --- REGISTER NEW BUSINESS ---
 app.post('/api/register', async (req, res) => {
   const { business_name, website, products, target_customer, tone, goals, email, plan } = req.body;
   try {
@@ -41,7 +39,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// --- GET BUSINESS DASHBOARD ---
 app.get('/api/dashboard/:business_id', async (req, res) => {
   try {
     const { data: business } = await supabase
@@ -51,7 +48,6 @@ app.get('/api/dashboard/:business_id', async (req, res) => {
       .order('created_at', { ascending: false }).limit(50);
     const { data: revenue } = await supabase
       .from('revenue_events').select('*').eq('business_id', req.params.business_id);
-
     const staffRevenue = {};
     if (revenue) {
       revenue.forEach(r => {
@@ -59,19 +55,11 @@ app.get('/api/dashboard/:business_id', async (req, res) => {
         staffRevenue[r.staff_member] += r.amount;
       });
     }
-
     res.json({ business, tasks, staffRevenue, totalRevenue: business?.total_revenue || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- AI STAFF TASK RUNNER ---
-async function runStaffTask(business, staffMember) {
-  const staffRoles = {
-    alex: { role: 'SEO Specialist', task: 'Generate 3 high-value SEO keyword recommendations and meta description improvements for this business.' },
-    jordan: { role: 'Community Manager', task: 'Write 2 authentic Reddit/Quora responses that would help people in relevant communities while naturally referencing this business.' },
-    morgan: { role: 'Content Creator', task: 'Write a complete 400-word SEO blog post for this business. Include a title, meta description, and full post body.' },
-    casey: { role: 'Email Marketing Manager', task: 'Write a complete email marketing sequence of​​​​​​​​​​​​​​​​
-
-
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log('BizForce running on port ' + PORT));
