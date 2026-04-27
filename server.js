@@ -191,7 +191,7 @@ res.json({ received: true });
 });
 app.get('/health', function(req, res) { res.json({ status: 'BizForce AI is LIVE', timestamp: new Date().toISOString() }); });
 var PORT = process.env.PORT || 8080;
-app.listen(PORT, function() { console.log('BizForce AI running on port ' + PORT); });
+app.listen(PORT, function() { console.log('BizForce AI running on port ' + PORT); }); 
 
 
 
