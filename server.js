@@ -29,14 +29,44 @@ try { req.user = jwt.verify(token, process.env.JWT_SECRET); next(); }
 catch(e) { res.status(403).json({ error: 'Invalid token' }); }
 };
 app.post('/api/auth/register', async (req, res) => {
-const { email, password, business_name, industry } = req.body;
-try {
-const hash = await bcrypt.hash(password, 10);
-const { data, error } = await supabase.from('users').insert([{ email, password_hash: hash, business_name, industry }]).select().single();
-console.log('supabase error:',error);if (error) return res.status(400).json({ error: error.message });
-const token = jwt.sign({ id: data.id, email: data.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
-res.json({ token, user: data });
-} catch (err) { res.status(500).json({ error: err.message }); }
+  const { email, password, business_name, industry } = req.body;
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    
+    // Check if user already exists
+    const { data: existing } = await supabase
+      .from('users').select('*')
+      .eq('email', email).single();
+    
+    if (existing) {
+      const token = jwt.sign(
+        { id: existing.id, email: existing.email },
+        process.env.JWT_SECRET, { expiresIn: '7d' }
+      );
+      return res.json({ token, user: {
+        id: existing.id,
+        email: existing.email,
+        business_name: existing.business_name
+      }});
+    }
+
+    const { data, error } = await supabase.from('users')
+      .insert([{ email, password_hash: hash, 
+        business_name, industry }])
+      .select().single();
+    
+    if (error) return res.status(400).json({ error: error.message });
+    const token = jwt.sign(
+      { id: data.id, email: data.email },
+      process.env.JWT_SECRET, { expiresIn: '7d' }
+    );
+    res.json({ token, user: {
+      id: data.id, email: data.email,
+      business_name: data.business_name
+    }});
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
 });
 app.post('/api/auth/login', async (req, res) => {
 const { email, password } = req.body;
