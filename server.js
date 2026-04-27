@@ -8,10 +8,11 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const app = express();
+app.set('trust proxy' , 1)
 app.use(helmet());
 app.options('*', cors());
 app.use(cors());
-;
+
 app.use('/api/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
