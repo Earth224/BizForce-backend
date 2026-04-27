@@ -9,7 +9,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const app = express();
 app.use(helmet());
-app.use(cors({ origin: '*' }));
+app.use(cors());
 app.use(rateLimit({ windowMs: 900000, max: 100 }));
 app.use('/api/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
