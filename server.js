@@ -28,7 +28,7 @@ const { email, password, business_name, industry } = req.body;
 try {
 const hash = await bcrypt.hash(password, 10);
 const { data, error } = await supabase.from('users').insert([{ email, password_hash: hash, business_name, industry }]).select().single();
-if (error) return res.status(400).json({ error: error.message });
+console.log('supabase error:',error);if (error) return res.status(400).json({ error: error.message });
 const token = jwt.sign({ id: data.id, email: data.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
 res.json({ token, user: data });
 } catch (err) { res.status(500).json({ error: err.message }); }
