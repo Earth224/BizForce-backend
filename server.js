@@ -10,7 +10,13 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 app.set('trust proxy' , 1)
 app.use(helmet());
-app.use(cors({origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization']}));
+app.use(cors({
+  origin: ["https://bizforceai.net","https://www.bizforceai.net"],
+  credentials: true,
+  methods: ["GET","POST","PUT","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"]
+}));
+
 
 app.use('/api/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
