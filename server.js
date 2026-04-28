@@ -14,7 +14,24 @@ const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+app.get("/", function (req, res) {
+  return res.status(200).json({
+    ok: true,
+    app: "BizForce AI",
+    status: "online",
+    message: "BizForce AI backend is running",
+    timestamp: new Date().toISOString()
+  });
+});
 
+app.get("/health", function (req, res) {
+  return res.status(200).json({
+    ok: true,
+    status: "healthy",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://bizforceai.net";
 
 const allowedOrigins = [
