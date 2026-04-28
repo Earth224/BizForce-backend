@@ -8,6 +8,11 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const app = express();
+process.on('unhandledRejection', (err) => { console.error('Unhandled:', err); });
+process.on('uncaughtException', (err) => { console.error('Uncaught:', err); });
+app.get('/', (req,res) => res.send('BizForce API OK'));
+app.get('/health', (req,res) => res.json({ ok:true }));
+
 app.set('trust proxy' , 1)
 app.use(helmet());
 app.use(cors({
