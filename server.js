@@ -262,7 +262,7 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     role: user.role || "user",
-    email_verified: Boolean(user.email_verified),
+    email_verified: false,
     verification_status: user.verification_status || "pending",
     banned_at: user.banned_at || null,
     created_at: user.created_at
@@ -280,7 +280,7 @@ function getPlanConfig(plan) {
 async function getUserById(userId) {
   const { data, error } = await supabase
     .from("users")
-    .select("id, email, role, email_verified, verification_status, banned_at, created_at")
+    .select("id, email, role, banned_at, created_at")
     .eq("id", userId)
     .maybeSingle();
 
