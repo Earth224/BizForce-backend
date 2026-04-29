@@ -926,7 +926,7 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
 
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, email, password_hash, role, email_verified, verification_status, banned_at, created_at")
+      .select("id, email, password_hash, email_verified, verification_status, banned_at, created_at")
       .eq("email", email)
       .maybeSingle();
 
