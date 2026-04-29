@@ -262,7 +262,7 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     role: user.role || "user",
-    email_verified: false,
+    
     verification_status: user.verification_status || "pending",
     banned_at: user.banned_at || null,
     created_at: user.created_at
@@ -926,7 +926,7 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
 
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, email, password_hash, email_verified, verification_status, banned_at, created_at")
+      .select("id, email, password_hash, verification_status, banned_at, created_at")
       .eq("email", email)
       .maybeSingle();
 
@@ -1045,7 +1045,7 @@ app.post("/api/auth/verify-email", async function (req, res, next) {
     await supabase
       .from("users")
       .update({
-        email_verified: true,
+        
         email_verification_token: null,
         updated_at: nowIso()
       })
@@ -2408,7 +2408,7 @@ app.get("/api/admin/users", requireAuth, requireAdmin, async function (req, res,
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("id, email, role, email_verified, verification_status, banned_at, created_at, profiles(*)")
+      .select("id, email, role, verification_status, banned_at, created_at, profiles(*)")
       .order("created_at", { ascending: false })
       .limit(500);
 
