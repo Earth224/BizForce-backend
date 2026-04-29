@@ -263,7 +263,7 @@ function publicUser(user) {
     email: user.email,
     role: user.role || "user",
     
-    verification_status: user.verification_status || "pending",
+    
     banned_at: user.banned_at || null,
     created_at: user.created_at
   };
@@ -844,12 +844,12 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         role: "user",
         
         email_verification_token: emailVerificationToken,
-        verification_status: "pending",
+        
         signup_ip: req.ip,
         created_at: nowIso(),
         updated_at: nowIso()
       })
-      .select("id, email, role, verification_status, banned_at, created_at")
+      .select("id, email, role, banned_at, created_at")
       .single();
 
     if (userError) {
@@ -883,7 +883,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         profile_visibility: "public",
         seo_title: businessName,
         seo_description: null,
-        verification_status: "pending",
+        
         created_at: nowIso(),
         updated_at: nowIso()
       })
@@ -926,7 +926,7 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
 
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, email, password_hash, verification_status, banned_at, created_at")
+      .select("id, email, password_hash, banned_at, created_at")
       .eq("email", email)
       .maybeSingle();
 
@@ -1305,7 +1305,7 @@ app.get("/api/search/businesses", requireAuth, async function (req, res, next) {
 
     let query = supabase
       .from("profiles")
-      .select("id, user_id, business_name, username, bio, industry, location, website, logo_url, banner_url, verification_status")
+      .select("id, user_id, business_name, username, bio, industry, location, website, logo_url, banner_url")
       .eq("profile_visibility", "public")
       .limit(limit);
 
@@ -2408,7 +2408,7 @@ app.get("/api/admin/users", requireAuth, requireAdmin, async function (req, res,
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("id, email, role, verification_status, banned_at, created_at, profiles(*)")
+      .select("id, email, role, banned_at, created_at, profiles(*)")
       .order("created_at", { ascending: false })
       .limit(500);
 
@@ -2576,11 +2576,11 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
     const { data, error } = await supabase
       .from("users")
       .update({
-        verification_status: "verified",
+        
         updated_at: nowIso()
       })
       .eq("id", userId)
-      .select("id, email, verification_status")
+      .select("id, email")
       .single();
 
     if (error) {
@@ -2590,7 +2590,7 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
     await supabase
       .from("profiles")
       .update({
-        verification_status: "verified",
+        
         updated_at: nowIso()
       })
       .eq("user_id", userId);
