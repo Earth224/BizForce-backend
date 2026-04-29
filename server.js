@@ -842,14 +842,14 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         email,
         password_hash: passwordHash,
         role: "user",
-        email_verified: false,
+        
         email_verification_token: emailVerificationToken,
         verification_status: "pending",
         signup_ip: req.ip,
         created_at: nowIso(),
         updated_at: nowIso()
       })
-      .select("id, email, role, email_verified, verification_status, banned_at, created_at")
+      .select("id, email, role, verification_status, banned_at, created_at")
       .single();
 
     if (userError) {
