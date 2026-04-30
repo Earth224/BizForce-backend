@@ -2312,12 +2312,12 @@ app.post("/api/stripe/checkout", requireAuth, async (req, res) => {
       line_items: [
         {
           price: "price_1TRu8o157b9rpvGC2y4uYNqv",
-          quantity: 1
+          quantity: 1,
         }
       ],
       success_url: "https://bizforceai.net/dashboard.html",
       cancel_url: "https://bizforceai.net/app.html",
-      allow_promotion_codes: true
+      allow_promotion_codes: true,
     });
 
     return res.json({ url: session.url });
@@ -2327,7 +2327,7 @@ app.post("/api/stripe/checkout", requireAuth, async (req, res) => {
   }
 });
 
-});
+
 
 app.get("/api/admin/flagged-accounts", requireAuth, requireAdmin, async function (req, res, next) {
   try {
