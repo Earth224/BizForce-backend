@@ -2305,183 +2305,28 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
     next(error);
   }
 });
-
-app.post("/api/stripe/checkout", requireAuth, async function (req, res, next) {
+app.post("/api/stripe/checkout", requireAuth, async (req, res) => {
   try {
-    const plan = String(req.body.plan || "").toLowerCase();
-    let priceId = req.body.price_id;
-
-    if (!priceId) {
-      if (plan === "starter") {
-        priceId = process.env.STRIPE_STARTER_PRICE_ID;
-      }
-      if (plan === "pro") {
-        priceId = process.env.STRIPE_PRO_PRICE_ID;
-      }
-      if (plan === "enterprise") {
-        priceId = process.env.STRIPE_ENTERPRISE_PRICE_ID;
-      }
-    }
-
-    if (!priceId) {
-      return res.status(400).json({ error: "Stripe price_id is required" });
-    }
-
-    const profile = await getProfileByUserId(req.user.id);
-
-    let customerId = profile ? profile.stripe_customer_id : null;
-
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: req.user.email,
-        metadata: {
-          user_id: req.user.id
-        }
-      });
-
-      customerId = customer.id;
-
-      await supabase
-        .from("profiles")
-        .update({
-          stripe_customer_id: customerId,
-          updated_at: nowIso()
-        })
-        .eq("user_id", req.user.id);
-    }
-
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      customer: customerId,
-      payment_method_types: ["card"],
       line_items: [
         {
-          price: priceId,
+          price: "price_1TRu8o157b9rpvGC2y4uYNqv",
           quantity: 1
         }
       ],
-      success_url: FRONTEND_URL + "/dashboard?checkout=success",
-      cancel_url: FRONTEND_URL + "/pricing?checkout=cancel",
-      metadata: {
-        user_id: req.user.id,
-        plan: plan || getPlanFromPriceId(priceId) || "starter",
-        price_id: priceId
-      },
-      subscription_data: {
-        metadata: {
-          user_id: req.user.id,
-          plan: plan || getPlanFromPriceId(priceId) || "starter",
-          price_id: priceId
-        }
-      }
-    });
-
-    return res.json({
-      url: session.url,
-      session_id: session.id
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/stripe/billing-portal", requireAuth, async function (req, res, next) {
-  try {
-    const profile = await getProfileByUserId(req.user.id);
-
-    if (!profile || !profile.stripe_customer_id) {
-      return res.status(400).json({ error: "No Stripe customer found" });
-    }
-
-    const session = await stripe.billingPortal.sessions.create({
-      customer: profile.stripe_customer_id,
-      return_url: FRONTEND_URL + "/dashboard/billing"
+      success_url: "https://bizforceai.net/dashboard.html",
+      cancel_url: "https://bizforceai.net/app.html",
+      allow_promotion_codes: true
     });
 
     return res.json({ url: session.url });
   } catch (error) {
-    next(error);
+    console.error("Stripe checkout error:", error);
+    return res.status(500).json({ error: "Stripe checkout failed" });
   }
 });
 
-app.get("/api/admin/users", requireAuth, requireAdmin, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase
-      .from("users")
-      .select("id, email, role, banned_at, created_at, profiles(*)")
-      .order("created_at", { ascending: false })
-      .limit(500);
-
-    if (error) {
-      throw error;
-    }
-
-    return res.json({ users: data });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/admin/subscriptions", requireAuth, requireAdmin, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(500);
-
-    if (error) {
-      throw error;
-    }
-
-    return res.json({ subscriptions: data });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/admin/usage", requireAuth, requireAdmin, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase
-      .from("usage_logs")
-      .select("*")
-      .order("updated_at", { ascending: false })
-      .limit(500);
-
-    if (error) {
-      throw error;
-    }
-
-    return res.json({ usage: data });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/admin/revenue", requireAuth, requireAdmin, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase
-      .from("subscriptions")
-      .select("*")
-      .in("status", ["active", "trialing", "past_due"]);
-
-    if (error) {
-      throw error;
-    }
-
-    const monthlyRecurringRevenue = (data || []).reduce(function (sum, sub) {
-      const config = getPlanConfig(sub.plan);
-      return sum + Number(config.price || 0);
-    }, 0);
-
-    return res.json({
-      monthly_recurring_revenue: monthlyRecurringRevenue,
-      active_subscriptions: data.length,
-      subscriptions: data
-    });
-  } catch (error) {
-    next(error);
-  }
 });
 
 app.get("/api/admin/flagged-accounts", requireAuth, requireAdmin, async function (req, res, next) {
