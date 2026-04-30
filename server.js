@@ -132,7 +132,14 @@ app.use(compression());
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.endsWith(".netlify.app")
+      ) {
         return callback(null, true);
       }
 
@@ -143,6 +150,8 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization", "Stripe-Signature"]
   })
 );
+
+app.options("*", cors());
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
