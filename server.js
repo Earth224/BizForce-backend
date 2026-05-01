@@ -645,6 +645,19 @@ async function handleStripeEvent(event) {
         })
         .eq("user_id", userId);
     }
+    const email = session.customer_details ? session.customer_details.email : null;
+if (!email) {
+  console.error("Stripe checkout session missing customer email");
+  return;
+}
+await supabase
+  .from("users")
+  .update({
+    subscription_active: true,
+    subscription_status: "active",
+    updated_at: new Date().toISOString()
+  })
+  .eq("email", email);
   }
 
   if (
