@@ -1004,11 +1004,15 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
     const usage = await getMonthlyUsage(req.user.id);
 
     return res.json({
-      user: publicUser(req.user),
-      profile,
-      subscription,
-      usage
-    });
+  user: Object.assign({}, publicUser(req.user), {
+    subscription_status: subscription?.status || "free",
+    subscription_plan: subscription?.plan || "free",
+    subscription_active: subscription?.status === "active"
+  }),
+  profile,
+  subscription,
+  usage
+});
   } catch (error) {
     next(error);
   }
