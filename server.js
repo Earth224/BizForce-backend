@@ -1001,8 +1001,7 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
   try {
     const profile = await getProfileByUserId(req.user.id);
     const subscription = await getActiveSubscription(req.user.id);
-    const usage = await getMonthlyUsage(req.user.id);
-
+    
     return res.json({
   user: Object.assign({}, publicUser(req.user), {
     subscription_status: subscription?.status || "free",
@@ -1010,8 +1009,7 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
     subscription_active: subscription?.status === "active"
   }),
   profile,
-  subscription,
-  usage
+  subscription
 });
   } catch (error) {
     next(error);
