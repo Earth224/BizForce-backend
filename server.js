@@ -2329,19 +2329,32 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
     next(error);
   }
 });
-app.post("/api/stripe/checkout", requireAuth, async (req, res) => {
+app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
+      customer_email: req.user.email,
       line_items: [
         {
-          price: "price_1TRu8o157b9rpvGC2y4uYNqv",
-          quantity: 1,
+          price: "price_1TRu8o157b9npvGC2y4uYNqv",
+          quantity: 1
         }
       ],
+      metadata: {
+        user_id: req.user.id,
+        email: req.user.email,
+        plan: "starter"
+      },
+      subscription_data: {
+        metadata: {
+          user_id: req.user.id,
+          email: req.user.email,
+          plan: "starter"
+        }
+      },
       success_url: "https://bizforceai.net/dashboard.html",
       cancel_url: "https://bizforceai.net/app.html",
-      allow_promotion_codes: true,
+      allow_promotion_codes: true
     });
 
     return res.json({ url: session.url });
@@ -2522,7 +2535,77 @@ app.use(function (error, req, res, next) {
     details: process.env.NODE_ENV === "production" ? undefined : error.message
   });
 });
+app.post("/api/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  const sig = req.headers["stripe-signature"];
 
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("Webhook signature failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    // ✅ SUBSCRIPTION CREATED / UPDATED
+    if (
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated"
+    ) {
+      const subscription = event.data.object;
+
+      const userId = subscription.metadata?.user_id;
+
+if (!userId) {
+  console.error("Missing user_id in Stripe metadata", subscription.id);
+  return;
+}
+
+      if (userId) {
+        await supabase
+          .from("users")
+          .update({
+            subscription_status: "active",
+            subscription_id: subscription.id,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", userId);
+      }
+    }
+
+    // ❌ SUBSCRIPTION CANCELED
+    if (event.type === "customer.subscription.deleted") {
+      const subscription = event.data.object;
+
+      const userId = subscription.metadata?.user_id;
+
+if (!userId) {
+  console.error("Missing user_id in Stripe deleted metadata", subscription.id);
+  return;
+}
+
+        await supabase
+          .from("users")
+          .update({
+            subscription_status: "free",
+            subscription_id: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", userId);
+    }
+
+    res.json({ received: true });
+
+  } catch (err) {
+    console.error("Webhook processing error:", err);
+    res.status(500).send("Webhook handler failed");
+  }
+});
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
 });
