@@ -1004,9 +1004,9 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
     
     return res.json({
   user: Object.assign({}, publicUser(req.user), {
-    subscription_status: subscription?.status || "free",
-    subscription_plan: subscription?.plan || "free",
-    subscription_active: subscription?.status === "active"
+    subscription_status: req.user.subscription_status || "free",
+    subscription_plan: "starter",
+    subscription_active: req.user.subscription_status === "active"
   }),
   profile,
   subscription
