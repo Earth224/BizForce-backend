@@ -2156,7 +2156,7 @@ app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, as
   }
 });
 
-app.get("/api/dashboard", requireAuth, async function (req, res, next) {
+app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
       await Promise.all([
