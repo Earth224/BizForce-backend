@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
-const cors = require("cors");
+
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const compression = require("compression");
@@ -13,6 +13,33 @@ const Anthropic = require("@anthropic-ai/sdk");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
+
+app.set("trust proxy", 1);
+
+const allowedOrigins = [
+  "https://bizforceai.net",
+  "https://www.bizforceai.net"
+];
+
+app.use(function (req, res, next) {
+  const origin = req.headers.origin;
+
+  if (origin && allowedOrigins.indexOf(origin) !== -1) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Max-Age", "86400");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  next();
+});
 const PORT = process.env.PORT || 8080;
 app.get("/", (req, res) => {
   res.status(200).send("BizForce AI Backend Live");
@@ -129,29 +156,9 @@ app.use(
 
 app.use(compression());
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) {
-        return callback(null, true);
-      }
 
-      if (
-        allowedOrigins.includes(origin) ||
-        origin.endsWith(".netlify.app")
-      ) {
-        return callback(null, true);
-      }
 
-      return callback(new Error("CORS blocked"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Stripe-Signature"]
-  })
-);
 
-app.options("*", cors());
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
