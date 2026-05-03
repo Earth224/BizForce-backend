@@ -53,11 +53,7 @@ app.get("/health", (req, res) => {
 });
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://bizforceai.net";
 
-const allowedOrigins = [
-  "https://bizforceai.net",
-  "https://www.bizforceai.net",
-  FRONTEND_URL
-].filter(Boolean);
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
