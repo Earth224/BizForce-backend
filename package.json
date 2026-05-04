@@ -1,6 +1,6 @@
 {
   "name": "bizforce-backend",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "BizForce AI Backend Server",
   "main": "server.js",
   "scripts": {
