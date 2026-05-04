@@ -1929,11 +1929,14 @@ app.post("/api/ai/tasks", async (req, res) => {
     }
 
     const anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY
-    });
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  defaultHeaders: {
+    "anthropic-version": "2023-06-01"
+  }
+});
 
     const response = await anthropic.messages.create({
-      model: "claude-3-haiku-20240307",
+      model: "claude-3-5-haiku-latest",
       max_tokens: 500,
       messages: [
         {
@@ -1943,7 +1946,9 @@ app.post("/api/ai/tasks", async (req, res) => {
       ]
     });
 
-    var output = response.content[0].text;
+    var output = response.content && response.content[0] && response.content[0].text
+  ? response.content[0].text
+  : JSON.stringify(response);
 
    
 
