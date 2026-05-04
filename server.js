@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+console.log("🚀 NEW BUILD DEPLOYED:", new Date().toISOString());
 const express = require("express");
 
 const helmet = require("helmet");
@@ -1929,22 +1929,24 @@ app.post("/api/ai/tasks", async (req, res) => {
     }
 
     const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  defaultHeaders: {
-    "anthropic-version": "2023-06-01"
-  }
+  apiKey: process.env.ANTHROPIC_API_KEY
 });
 
     const response = await anthropic.messages.create({
-      model: "claude-3-haiku-20240307",
-      max_tokens: 500,
-      messages: [
+  model: "claude-haiku-4-5-20251001",
+  max_tokens: 500,
+  messages: [
+    {
+      role: "user",
+      content: [
         {
-          role: "user",
-          content: prompt
+          type: "text",
+          text: prompt
         }
       ]
-    });
+    }
+  ]
+});
 
     var output = response.content && response.content[0] && response.content[0].text
   ? response.content[0].text
