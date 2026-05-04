@@ -1911,192 +1911,47 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+app.post("/api/ai/tasks", async (req, res) => {
   try {
-    const agentId = req.body.agent_id || null;
-    const agentTypeInput = String(req.body.agent_type || "").toLowerCase();
-    const prompt = safeText(req.body.prompt, 12000);
-    const taskType = safeText(req.body.task_type, 120) || "general";
-    const websiteId = req.body.website_id || null;
+    var token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({ error: "No token" });
+    }
+
+    var decoded = jwt.verify(token, process.env.JWT_SECRET);
+    var userId = decoded.id;
+
+    var prompt = req.body.prompt;
+    var agent = req.body.agent || "general";
 
     if (!prompt) {
-      return res.status(400).json({ error: "Prompt is required" });
+      return res.status(400).json({ error: "Missing prompt" });
     }
 
-    let agent = null;
-    let agentType = agentTypeInput;
+    const anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY
+    });
 
-    if (agentId) {
-      const { data, error } = await supabase
-        .from("ai_agents")
-        .select("*")
-        .eq("id", agentId)
-        .eq("user_id", req.user.id)
-        .eq("active", true)
-        .maybeSingle();
+    const response = await anthropic.messages.create({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 500,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ]
+    });
 
-      if (error) {
-        throw error;
-      }
+    var output = response.content[0].text;
 
-      if (!data) {
-        return res.status(404).json({ error: "Agent not found" });
-      }
+   
 
-      agent = data;
-      agentType = data.type;
-    }
+    res.json({ result: output });
 
-    if (!agentType || !AGENT_SYSTEM_PROMPTS[agentType]) {
-      return res.status(400).json({ error: "Valid agent_type is required" });
-    }
-
-    const taskLimit = await enforceTaskLimit(req.user.id, agentType);
-
-    if (!taskLimit.allowed) {
-      return res.status(403).json(taskLimit);
-    }
-
-    const profile = await getProfileByUserId(req.user.id);
-
-    let website = null;
-
-    if (websiteId) {
-      const { data: site, error: siteError } = await supabase
-        .from("websites")
-        .select("*")
-        .eq("id", websiteId)
-        .eq("user_id", req.user.id)
-        .maybeSingle();
-
-      if (siteError) {
-        throw siteError;
-      }
-
-      website = site;
-    }
-
-    const { data: task, error: taskCreateError } = await supabase
-      .from("ai_tasks")
-      .insert({
-        user_id: req.user.id,
-        agent_id: agent ? agent.id : null,
-        agent_type: agentType,
-        task_type: taskType,
-        prompt,
-        status: "running",
-        input: {
-          prompt,
-          website_id: websiteId,
-          business_context: req.body.business_context || null
-        },
-        created_at: nowIso(),
-        updated_at: nowIso()
-      })
-      .select("*")
-      .single();
-
-    if (taskCreateError) {
-      throw taskCreateError;
-    }
-
-    const businessContext = {
-      profile,
-      website,
-      custom_context: req.body.business_context || null
-    };
-
-    let responseText = "";
-
-    try {
-      const completion = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || "claude-3-5-sonnet-latest",
-        max_tokens: Number(process.env.ANTHROPIC_MAX_TOKENS || 1600),
-        temperature: 0.35,
-        system: AGENT_SYSTEM_PROMPTS[agentType],
-        messages: [
-          {
-            role: "user",
-            content:
-              "Business context:\n" +
-              JSON.stringify(businessContext, null, 2) +
-              "\n\nTask type: " +
-              taskType +
-              "\n\nUser request:\n" +
-              prompt +
-              "\n\nReturn clear business output with action steps, measurable result targets, and next recommended move."
-          }
-        ]
-      });
-
-      responseText = completion.content
-        .map(function (item) {
-          return item.text || "";
-        })
-        .join("\n")
-        .trim();
-
-      await incrementTaskUsage(req.user.id);
-
-      const estimatedRoi = Number(req.body.estimated_roi || 0);
-
-      const { data: completedTask, error: taskUpdateError } = await supabase
-        .from("ai_tasks")
-        .update({
-          status: "completed",
-          output: responseText,
-          estimated_roi: estimatedRoi,
-          completed_at: nowIso(),
-          updated_at: nowIso()
-        })
-        .eq("id", task.id)
-        .select("*")
-        .single();
-
-      if (taskUpdateError) {
-        throw taskUpdateError;
-      }
-
-      if (agent) {
-        await supabase
-          .from("ai_agents")
-          .update({
-            tasks_completed: Number(agent.tasks_completed || 0) + 1,
-            estimated_roi: Number(agent.estimated_roi || 0) + estimatedRoi,
-            updated_at: nowIso()
-          })
-          .eq("id", agent.id);
-      }
-
-      await supabase.from("analytics_events").insert({
-        user_id: req.user.id,
-        event_type: "ai_task_completed",
-        event_data: {
-          agent_type: agentType,
-          task_type: taskType,
-          task_id: task.id
-        },
-        created_at: nowIso()
-      });
-
-      return res.json({
-        task: completedTask,
-        response: responseText
-      });
-    } catch (aiError) {
-      await supabase
-        .from("ai_tasks")
-        .update({
-          status: "failed",
-          error_message: aiError.message || "AI task failed",
-          updated_at: nowIso()
-        })
-        .eq("id", task.id);
-
-      throw aiError;
-    }
-  } catch (error) {
-    next(error);
+  } catch (err) {
+    console.error("AI TASK ERROR:", err);
+    res.status(500).json({ error: err.message || "Internal server error" });
   }
 });
 
