@@ -1921,8 +1921,46 @@ app.post("/api/ai/tasks", async (req, res) => {
     var decoded = jwt.verify(token, process.env.JWT_SECRET);
     var userId = decoded.id;
 
-    var prompt = req.body.prompt;
-    var agent = req.body.agent || "general";
+    var userPrompt = req.body.prompt;
+var agent = req.body.agent || "general";
+
+var systemPrompt = "";
+
+if (agent === "seo") {
+  systemPrompt = "You are an elite SEO strategist. Give advanced, actionable SEO plans, keyword strategies, ranking tactics, and technical optimizations.";
+}
+else if (agent === "sales") {
+  systemPrompt = "You are a high-level sales expert. Generate persuasive sales scripts, funnels, closing techniques, and revenue strategies.";
+}
+else if (agent === "content") {
+  systemPrompt = "You are a content marketing expert. Create viral content ideas, blogs, scripts, and high-engagement posts.";
+}
+else if (agent === "ads") {
+  systemPrompt = "You are a paid ads specialist. Generate high-converting ad copy, targeting strategies, and campaign structures.";
+}
+else if (agent === "reputation") {
+  systemPrompt = "You are a reputation management expert. Provide strategies to improve online presence, reviews, and brand authority.";
+}
+else if (agent === "analytics") {
+  systemPrompt = "You are a data analyst. Break down metrics, performance insights, and optimization strategies.";
+}
+else if (agent === "email") {
+  systemPrompt = "You are an email marketing expert. Write high-converting email sequences, subject lines, and automation flows.";
+}
+else if (agent === "community") {
+  systemPrompt = "You are a community growth expert. Build engagement strategies, retention systems, and audience loyalty plans.";
+}
+else if (agent === "influencer") {
+  systemPrompt = "You are an influencer marketing expert. Create outreach scripts, deal structures, and growth strategies.";
+}
+else if (agent === "operations") {
+  systemPrompt = "You are a business operations expert. Optimize workflows, automation systems, and scaling strategies.";
+}
+else {
+  systemPrompt = "You are a powerful AI business assistant. Provide high-level actionable business advice.";
+}
+
+var prompt = systemPrompt + "\n\nUSER REQUEST:\n" + userPrompt;
 
     if (!prompt) {
       return res.status(400).json({ error: "Missing prompt" });
@@ -1941,7 +1979,7 @@ app.post("/api/ai/tasks", async (req, res) => {
       content: [
         {
           type: "text",
-          text: prompt
+         text: prompt
         }
       ]
     }
