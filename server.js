@@ -1911,6 +1911,63 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
+async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval) {
+    try {
+        var anthropic = new Anthropic({
+            apiKey: process.env.ANTHROPIC_API_KEY
+        });
+
+        var response = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1200,
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: finalPrompt
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var output = response.content &&
+            response.content[0] &&
+            response.content[0].text
+            ? response.content[0].text
+            : JSON.stringify(response);
+
+        var updateResult = await supabase
+            .from("ai_tasks")
+            .update({
+                result: output,
+                status: requiresApproval ? "requires_approval" : "completed",
+                updated_at: nowIso()
+            })
+            .eq("id", taskId)
+            .eq("user_id", userId);
+
+        if (updateResult.error) {
+            throw updateResult.error;
+        }
+
+    } catch (error) {
+        console.error("PROCESS AI TASK ERROR:", error);
+
+        await supabase
+            .from("ai_tasks")
+            .update({
+                status: "failed",
+                result: "Task failed: " + error.message,
+                updated_at: nowIso()
+            })
+            .eq("id", taskId)
+            .eq("user_id", userId);
+    }
+}
+
 app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var userId = req.user.id;
@@ -2009,62 +2066,17 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, asy
 
     var taskRecord = pendingInsert.data;
 
-    var anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY
-    });
+    processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval).catch(function (error) {
+  console.error("Async AI task failed:", error);
+});
+});
 
-    var response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1200,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: finalPrompt
-            }
-          ]
-        }
-      ]
-    });
-
-    var output = response.content && response.content[0] && response.content[0].text
-      ? response.content[0].text
-      : JSON.stringify(response);
-
-    var actionPlan = requiresApproval
-      ? [
-          "Review the proposed action.",
-          "Confirm exact business, budget, recipient, platform, or account details.",
-          "Approve execution manually before any external action is taken."
-        ]
-      : [];
-
-    var updateResult = await supabase
-      .from("ai_tasks")
-      .update({
-        result: output,
-        status: requiresApproval ? "requires_approval" : "completed"
-      })
-      .eq("id", taskRecord.id)
-      .eq("user_id", userId)
-      .select("*")
-      .single();
-
-    if (updateResult.error) {
-      throw updateResult.error;
-    }
-
-    return res.json({
-      success: true,
-      task: updateResult.data,
-      result: output,
-      agent_type: agentType,
-      task_type: taskType,
-      requires_approval: requiresApproval,
-      action_plan: actionPlan
-    });
+return res.status(202).json({
+  success: true,
+  queued: true,
+  task: taskRecord,
+  message: "AI task queued successfully."
+});
   } catch (error) {
     console.error("AI TASK ERROR:", error);
     next(error);
