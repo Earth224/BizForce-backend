@@ -2065,10 +2065,10 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, asy
     }
 
     var taskRecord = pendingInsert.data;
-
-    processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval).catch(function (error) {
-  console.error("Async AI task failed:", error);
-});
+setImmediate(function () {
+  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval).catch(function (error) {
+    console.error("Async AI task failed:", error);
+  });
 });
 
 return res.status(202).json({
