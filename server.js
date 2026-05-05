@@ -1911,111 +1911,182 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/ai/tasks", async (req, res) => {
+app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
-    var token = req.headers.authorization?.split(" ")[1];
-    if (!token) {
-      return res.status(401).json({ error: "No token" });
-    }
+    var userId = req.user.id;
+    var agentType = String(req.body.agent_type || req.body.agent || "general").toLowerCase().trim();
+    var taskType = String(req.body.task_type || "general").toLowerCase().trim();
+    var userPrompt = String(req.body.prompt || "").trim();
 
-    var decoded = jwt.verify(token, process.env.JWT_SECRET);
-    var userId = decoded.id;
-
-    var userPrompt = req.body.prompt;
-var agent = req.body.agent || "general";
-
-var systemPrompt = "";
-
-if (agent === "seo") {
-  systemPrompt = "You are an elite SEO strategist. Give advanced, actionable SEO plans, keyword strategies, ranking tactics, and technical optimizations.";
-}
-else if (agent === "sales") {
-  systemPrompt = "You are a high-level sales expert. Generate persuasive sales scripts, funnels, closing techniques, and revenue strategies.";
-}
-else if (agent === "content") {
-  systemPrompt = "You are a content marketing expert. Create viral content ideas, blogs, scripts, and high-engagement posts.";
-}
-else if (agent === "ads") {
-  systemPrompt = "You are a paid ads specialist. Generate high-converting ad copy, targeting strategies, and campaign structures.";
-}
-else if (agent === "reputation") {
-  systemPrompt = "You are a reputation management expert. Provide strategies to improve online presence, reviews, and brand authority.";
-}
-else if (agent === "analytics") {
-  systemPrompt = "You are a data analyst. Break down metrics, performance insights, and optimization strategies.";
-}
-else if (agent === "email") {
-  systemPrompt = "You are an email marketing expert. Write high-converting email sequences, subject lines, and automation flows.";
-}
-else if (agent === "community") {
-  systemPrompt = "You are a community growth expert. Build engagement strategies, retention systems, and audience loyalty plans.";
-}
-else if (agent === "influencer") {
-  systemPrompt = "You are an influencer marketing expert. Create outreach scripts, deal structures, and growth strategies.";
-}
-else if (agent === "operations") {
-  systemPrompt = "You are a business operations expert. Optimize workflows, automation systems, and scaling strategies.";
-}
-else {
-  systemPrompt = "You are a powerful AI business assistant. Provide high-level actionable business advice.";
-}
-
-var prompt = systemPrompt + "\n\nUSER REQUEST:\n" + userPrompt;
-
-    if (!prompt) {
+    if (!userPrompt) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
+    var allowedAgents = ["general", "seo", "sales", "content", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "executive"];
+    var allowedTaskTypes = ["general", "seo_audit", "sales_funnel", "content_plan", "ad_campaign"];
 
-    const response = await anthropic.messages.create({
-  model: "claude-haiku-4-5-20251001",
-  max_tokens: 500,
-  messages: [
-    {
-      role: "user",
-      content: [
+    if (!allowedAgents.includes(agentType)) {
+      agentType = "general";
+    }
+
+    if (!allowedTaskTypes.includes(taskType)) {
+      taskType = "general";
+    }
+
+    var highRiskPattern = /(buy|purchase|spend|charge|pay|refund|transfer|wire|invest|trade|file taxes|legal filing|lawsuit|sign contract|delete account|hire|fire|send email|post ad|publish|launch campaign)/i;
+    var requiresApproval = highRiskPattern.test(userPrompt);
+
+    var memoryResult = await supabase
+      .from("ai_tasks")
+      .select("agent_type, prompt, result, status, created_at")
+      .eq("user_id", userId)
+      .eq("agent_type", agentType)
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (memoryResult.error) {
+      throw memoryResult.error;
+    }
+
+    var memoryText = (memoryResult.data || []).map(function (task, index) {
+      return "Memory " + (index + 1) + ":\nAgent: " + task.agent_type + "\nPrompt: " + task.prompt + "\nResult: " + task.result;
+    }).join("\n\n");
+
+    var agentBrains = {
+      general: "You are BizForce AI, a senior business execution assistant. Give practical, revenue-focused business help.",
+      seo: "You are an elite SEO strategist. Build technical SEO, local SEO, keyword, content, backlink, and Google visibility plans.",
+      sales: "You are a high-level sales strategist. Build offers, scripts, funnels, objection handling, and conversion systems.",
+      content: "You are a content marketing expert. Build content calendars, viral ideas, blog plans, social posts, and brand messaging.",
+      ads: "You are a paid advertising strategist. Build campaigns, hooks, targeting, creatives, budget logic, and conversion strategy.",
+      reputation: "You are a reputation management expert. Build review, authority, trust, and brand protection systems.",
+      analytics: "You are a business analytics expert. Break down metrics, KPIs, bottlenecks, dashboards, and optimization strategy.",
+      email: "You are an email marketing expert. Build sequences, subject lines, retention flows, and automation strategy.",
+      community: "You are a community growth expert. Build retention, engagement, referral, and loyalty systems.",
+      influencer: "You are an influencer marketing expert. Build outreach scripts, deal structures, partnerships, and growth plays.",
+      operations: "You are an operations expert. Build workflows, SOPs, automation systems, and scaling procedures.",
+      executive: "You are the Executive Coordinator Agent. Coordinate all other agents, create structured action plans, assign workstreams, identify dependencies, risks, approvals, and next steps."
+    };
+
+    var taskInstructions = {
+      general: "Handle the user request directly and produce a practical business output.",
+      seo_audit: "Produce a structured SEO audit with technical SEO, keywords, local SEO, content gaps, backlinks, and priority fixes.",
+      sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, emails, objections, and conversion steps.",
+      content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, and repurposing strategy.",
+      ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget logic, and testing plan."
+    };
+
+    var approvalInstruction = requiresApproval
+      ? "This request contains high-risk execution. Do NOT claim the action was executed. Return an approval-required action plan only."
+      : "This request is advisory/planning only. Provide execution-ready guidance.";
+
+    var finalPrompt =
+      agentBrains[agentType] +
+      "\n\nTASK TYPE:\n" + taskType +
+      "\n\nTASK INSTRUCTIONS:\n" + taskInstructions[taskType] +
+      "\n\nSAFETY RULES:\n" +
+      "- Do not execute purchases, payments, legal filings, tax actions, account changes, outbound messages, ad launches, or public posts.\n" +
+      "- For high-risk actions, return requires_approval true and an action_plan array.\n" +
+      "- Keep outputs lawful, practical, and business-safe.\n" +
+      "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
+      "\n\nPAST MEMORY:\n" + (memoryText || "No prior memory found.") +
+      "\n\nUSER REQUEST:\n" + userPrompt;
+
+    var pendingInsert = await supabase
+      .from("ai_tasks")
+      .insert({
+        user_id: userId,
+        agent_type: agentType,
+        prompt: userPrompt,
+        result: null,
+        status: "processing"
+      })
+      .select("*")
+      .single();
+
+    if (pendingInsert.error) {
+      throw pendingInsert.error;
+    }
+
+    var taskRecord = pendingInsert.data;
+
+    var anthropic = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY
+    });
+
+    var response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1200,
+      messages: [
         {
-          type: "text",
-         text: prompt
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: finalPrompt
+            }
+          ]
         }
       ]
-    }
-  ]
-});
+    });
 
     var output = response.content && response.content[0] && response.content[0].text
-  ? response.content[0].text
-  : JSON.stringify(response);
+      ? response.content[0].text
+      : JSON.stringify(response);
 
-   
+    var actionPlan = requiresApproval
+      ? [
+          "Review the proposed action.",
+          "Confirm exact business, budget, recipient, platform, or account details.",
+          "Approve execution manually before any external action is taken."
+        ]
+      : [];
 
-    res.json({ result: output });
+    var updateResult = await supabase
+      .from("ai_tasks")
+      .update({
+        result: output,
+        status: requiresApproval ? "requires_approval" : "completed"
+      })
+      .eq("id", taskRecord.id)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
 
-  } catch (err) {
-    console.error("AI TASK ERROR:", err);
-    res.status(500).json({ error: err.message || "Internal server error" });
+    if (updateResult.error) {
+      throw updateResult.error;
+    }
+
+    return res.json({
+      success: true,
+      task: updateResult.data,
+      result: output,
+      agent_type: agentType,
+      task_type: taskType,
+      requires_approval: requiresApproval,
+      action_plan: actionPlan
+    });
+  } catch (error) {
+    console.error("AI TASK ERROR:", error);
+    next(error);
   }
 });
 
 app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
   try {
-    const limit = Math.min(Number(req.query.limit || 50), 100);
+    var limit = Math.min(Number(req.query.limit || 50), 100);
 
-    const { data, error } = await supabase
+    var result = await supabase
       .from("ai_tasks")
-      .select("*, agent:ai_agents(id, display_name, type)")
+      .select("*")
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: false })
       .limit(limit);
 
-    if (error) {
-      throw error;
+    if (result.error) {
+      throw result.error;
     }
 
-    return res.json({ tasks: data });
+    return res.json({ tasks: result.data || [] });
   } catch (error) {
     next(error);
   }
@@ -2023,22 +2094,22 @@ app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
 
 app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   try {
-    const { data, error } = await supabase
+    var result = await supabase
       .from("ai_tasks")
-      .select("*, agent:ai_agents(id, display_name, type)")
+      .select("*")
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .maybeSingle();
 
-    if (error) {
-      throw error;
+    if (result.error) {
+      throw result.error;
     }
 
-    if (!data) {
+    if (!result.data) {
       return res.status(404).json({ error: "Task not found" });
     }
 
-    return res.json({ task: data });
+    return res.json({ task: result.data });
   } catch (error) {
     next(error);
   }
