@@ -1968,7 +1968,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .eq("user_id", userId);
     }
 }
-app.get("/api/business-profile", authMiddleware, async (req, res) => {
+app.get("/api/business-profile", requireAuth, async (req, res) => {
     try {
         const { data, error } = await supabase
             .from("business_profiles")
@@ -1994,7 +1994,7 @@ app.get("/api/business-profile", authMiddleware, async (req, res) => {
     }
 });
 
-app.post("/api/business-profile", authMiddleware, async (req, res) => {
+app.post("/api/business-profile", requireAuth, async (req, res) => {
     try {
         const {
             business_name,
