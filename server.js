@@ -2068,32 +2068,7 @@ app.post("/api/business-profile", requireAuth, async (req, res) => {
     }
 });
 
-app.get("/api/business-profile", requireAuth, async function (req, res) {
-  try {
-    var result = await supabase
-      .from("business_profiles")
-      .select("*")
-      .eq("user_id", req.user.id)
-      .maybeSingle();
 
-    if (result.error) {
-      throw result.error;
-    }
-
-    res.json({
-      ok: true,
-      profile: result.data || null
-    });
-
-  } catch (err) {
-    console.error("Business profile fetch error:", err.message);
-
-    res.status(500).json({
-      ok: false,
-      error: "Failed to fetch business profile"
-    });
-  }
-});
 
 app.post("/api/business-profile", requireAuth, async function (req, res) {
   try {
