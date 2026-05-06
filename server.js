@@ -1968,6 +1968,172 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .eq("user_id", userId);
     }
 }
+app.get("/api/business-profile", authMiddleware, async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from("business_profiles")
+            .select("*")
+            .eq("user_id", req.user.id)
+            .single();
+
+        if (error && error.code !== "PGRST116") {
+            throw error;
+        }
+
+        res.json({
+            ok: true,
+            profile: data || null
+        });
+    } catch (err) {
+        console.error("Business profile fetch error:", err.message);
+
+        res.status(500).json({
+            ok: false,
+            error: "Failed to fetch business profile"
+        });
+    }
+});
+
+app.post("/api/business-profile", authMiddleware, async (req, res) => {
+    try {
+        const {
+            business_name,
+            niche,
+            target_audience,
+            website,
+            revenue_goal,
+            monthly_budget,
+            brand_voice,
+            automation_level
+        } = req.body;
+
+        const { data: existing } = await supabase
+            .from("business_profiles")
+            .select("id")
+            .eq("user_id", req.user.id)
+            .single();
+
+        let result;
+
+        if (existing) {
+            result = await supabase
+                .from("business_profiles")
+                .update({
+                    business_name,
+                    niche,
+                    target_audience,
+                    website,
+                    revenue_goal,
+                    monthly_budget,
+                    brand_voice,
+                    automation_level,
+                    updated_at: new Date().toISOString()
+                })
+                .eq("user_id", req.user.id)
+                .select()
+                .single();
+        } else {
+            result = await supabase
+                .from("business_profiles")
+                .insert({
+                    user_id: req.user.id,
+                    business_name,
+                    niche,
+                    target_audience,
+                    website,
+                    revenue_goal,
+                    monthly_budget,
+                    brand_voice,
+                    automation_level
+                })
+                .select()
+                .single();
+        }
+
+        if (result.error) {
+            throw result.error;
+        }
+
+        res.json({
+            ok: true,
+            profile: result.data
+        });
+    } catch (err) {
+        console.error("Business profile save error:", err.message);
+
+        res.status(500).json({
+            ok: false,
+            error: "Failed to save business profile"
+        });
+    }
+});
+
+app.get("/api/business-profile", requireAuth, async function (req, res) {
+  try {
+    var result = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    res.json({
+      ok: true,
+      profile: result.data || null
+    });
+
+  } catch (err) {
+    console.error("Business profile fetch error:", err.message);
+
+    res.status(500).json({
+      ok: false,
+      error: "Failed to fetch business profile"
+    });
+  }
+});
+
+app.post("/api/business-profile", requireAuth, async function (req, res) {
+  try {
+    var payload = {
+      user_id: req.user.id,
+      business_name: req.body.business_name || "",
+      industry: req.body.industry || "",
+      description: req.body.description || "",
+      website: req.body.website || "",
+      target_audience: req.body.target_audience || "",
+      goals: req.body.goals || "",
+      updated_at: nowIso()
+    };
+
+    var result = await supabase
+      .from("business_profiles")
+      .upsert(payload, {
+        onConflict: "user_id"
+      })
+      .select("*")
+      .single();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    res.json({
+      ok: true,
+      profile: result.data
+    });
+
+  } catch (err) {
+    console.error("Business profile save error:", err.message);
+
+    res.status(500).json({
+      ok: false,
+      error: "Failed to save business profile"
+    });
+  }
+});
 
 app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
