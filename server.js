@@ -2142,7 +2142,25 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, asy
       .eq("agent_type", agentType)
       .order("created_at", { ascending: false })
       .limit(5);
+var profileResult = await supabase
+.from("business_profiles")
+.select("*")
+.eq("user_id", userId)
+.single();
 
+var businessProfile = profileResult.data || {};
+
+var businessContext = `
+BUSINESS PROFILE:
+Business Name: ${businessProfile.business_name || "Not Provided"}
+Industry: ${businessProfile.industry || "Not Provided"}
+Website: ${businessProfile.website || "Not Provided"}
+Description: ${businessProfile.description || "Not Provided"}
+Target Audience: ${businessProfile.target_audience || "Not Provided"}
+Goals: ${businessProfile.goals || "Not Provided"}
+Services: ${businessProfile.services || "Not Provided"}
+Location: ${businessProfile.location || "Not Provided"}
+`;
     if (memoryResult.error) {
       throw memoryResult.error;
     }
@@ -2178,18 +2196,18 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, asy
       ? "This request contains high-risk execution. Do NOT claim the action was executed. Return an approval-required action plan only."
       : "This request is advisory/planning only. Provide execution-ready guidance.";
 
-    var finalPrompt =
-      agentBrains[agentType] +
-      "\n\nTASK TYPE:\n" + taskType +
-      "\n\nTASK INSTRUCTIONS:\n" + taskInstructions[taskType] +
-      "\n\nSAFETY RULES:\n" +
-      "- Do not execute purchases, payments, legal filings, tax actions, account changes, outbound messages, ad launches, or public posts.\n" +
-      "- For high-risk actions, return requires_approval true and an action_plan array.\n" +
-      "- Keep outputs lawful, practical, and business-safe.\n" +
-      "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
-      "\n\nPAST MEMORY:\n" + (memoryText || "No prior memory found.") +
-      "\n\nUSER REQUEST:\n" + userPrompt;
-
+   var finalPrompt =
+  agentBrains[agentType] +
+  "\n\nBUSINESS PROFILE:\n" + businessContext +
+  "\n\nTASK TYPE:\n" + taskType +
+  "\n\nTASK INSTRUCTIONS:\n" + taskInstructions[taskType] +
+  "\n\nSAFETY RULES:\n" +
+  "- Do not execute purchases, payments, legal filings, tax actions, account creation, or financial transactions.\n" +
+  "- For high-risk actions, return requires_approval true and an approval plan.\n" +
+  "- Keep outputs lawful, practical, and business-safe.\n" +
+  "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
+  "\n\nPAST MEMORY:\n" + (memoryText || "No prior memory found.") +
+  "\n\nUSER REQUEST:\n" + userPrompt;
     var pendingInsert = await supabase
       .from("ai_tasks")
       .insert({
