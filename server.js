@@ -1994,78 +1994,57 @@ app.get("/api/business-profile", requireAuth, async (req, res) => {
     }
 });
 
-app.post("/api/business-profile", requireAuth, async (req, res) => {
-    try {
-        const {
-            business_name,
-            niche,
-            target_audience,
-            website,
-            revenue_goal,
-            monthly_budget,
-            brand_voice,
-            automation_level
-        } = req.body;
+app.post("/api/business-profile", requireAuth, async function (req, res) {
+  try {
+    var payload = {
+      user_id: req.user.id,
+      business_name: req.body.business_name || "",
+      business_type: req.body.business_type || "",
+      industry: req.body.industry || req.body.niche || "",
+      niche: req.body.niche || req.body.industry || "",
+      website: req.body.website || "",
+      location: req.body.location || "",
+      target_audience: req.body.target_audience || "",
+      offer: req.body.offer || "",
+      monthly_revenue: req.body.monthly_revenue || "",
+      monthly_budget: req.body.monthly_budget || "",
+      primary_goal: req.body.primary_goal || req.body.goals || "",
+      goals: req.body.goals || req.body.primary_goal || "",
+      top_keywords: req.body.top_keywords || "",
+      top_competitors: req.body.top_competitors || "",
+      social_platforms: req.body.social_platforms || "",
+      products_services: req.body.products_services || "",
+      brand_voice: req.body.brand_voice || "",
+      business_description: req.body.business_description || req.body.description || "",
+      description: req.body.description || req.body.business_description || "",
+      automation_level: req.body.automation_level || "",
+      updated_at: nowIso()
+    };
 
-        const { data: existing } = await supabase
-            .from("business_profiles")
-            .select("id")
-            .eq("user_id", req.user.id)
-            .single();
+    var result = await supabase
+      .from("business_profiles")
+      .upsert(payload, {
+        onConflict: "user_id"
+      })
+      .select("*")
+      .single();
 
-        let result;
-
-        if (existing) {
-            result = await supabase
-                .from("business_profiles")
-                .update({
-                    business_name,
-                    niche,
-                    target_audience,
-                    website,
-                    revenue_goal,
-                    monthly_budget,
-                    brand_voice,
-                    automation_level,
-                    updated_at: new Date().toISOString()
-                })
-                .eq("user_id", req.user.id)
-                .select()
-                .single();
-        } else {
-            result = await supabase
-                .from("business_profiles")
-                .insert({
-                    user_id: req.user.id,
-                    business_name,
-                    niche,
-                    target_audience,
-                    website,
-                    revenue_goal,
-                    monthly_budget,
-                    brand_voice,
-                    automation_level
-                })
-                .select()
-                .single();
-        }
-
-        if (result.error) {
-            throw result.error;
-        }
-
-        res.json({
-            ok: true,
-            profile: result.data
-        });
-    } catch (err) {
-        console.error("Business profile save error:", err.message);
-
-        res.status(500).json({
-            ok: false,
-            error: "Failed to save business profile"
-        });
+    if (result.error) {
+      throw result.error;
     }
+
+    res.json({
+      ok: true,
+      profile: result.data
+    });
+  } catch (err) {
+    console.error("Business profile save error:", err.message);
+
+    res.status(500).json({
+      ok: false,
+      error: err.message || "Failed to save business profile"
+    });
+  }
 });
 
 
