@@ -2221,7 +2221,37 @@ return res.status(202).json({
     next(error);
   }
 });
+app.post("/api/ai-reports", requireAuth, async function (req, res, next) {
+  try {
+    var payload = {
+      user_id: req.user.id,
+      agent: req.body.agent || "AI Agent",
+      task_type: req.body.task_type || "general",
+      prompt: req.body.prompt || "",
+      summary: req.body.summary || "",
+      result: req.body.result || "",
+      unread: req.body.unread !== false
+    };
 
+    var result = await supabase
+      .from("ai_reports")
+      .insert(payload)
+      .select("*")
+      .single();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return res.json({
+      ok: true,
+      report: result.data
+    });
+  } catch (error) {
+    console.error("AI REPORT SAVE ERROR:", error);
+    next(error);
+  }
+});
 app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
   try {
     var limit = Math.min(Number(req.query.limit || 50), 100);
