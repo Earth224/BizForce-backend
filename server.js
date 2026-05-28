@@ -2272,7 +2272,28 @@ app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
     next(error);
   }
 });
+app.delete("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
+  try {
 
+    var result = await supabase
+      .from("ai_tasks")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id);
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return res.json({
+      success: true
+    });
+
+  } catch (error) {
+    console.error("DELETE AI TASK ERROR:", error);
+    next(error);
+  }
+});
 app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   try {
     var result = await supabase
