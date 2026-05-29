@@ -2272,6 +2272,29 @@ app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
     next(error);
   }
 });
+
+app.delete("/api/ai/tasks", requireAuth, async function (req, res, next) {
+  try {
+    var result = await supabase
+      .from("ai_tasks")
+      .delete()
+      .eq("user_id", req.user.id)
+      .select("id");
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return res.json({
+      success: true,
+      deleted_count: result.data ? result.data.length : 0
+    });
+  } catch (error) {
+    console.error("CLEAR AI MAILBOX ERROR:", error);
+    next(error);
+  }
+});
+
 app.delete("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   try {
     var result = await supabase
