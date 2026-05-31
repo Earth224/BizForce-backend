@@ -2100,9 +2100,8 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, asy
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    var allowedAgents = ["general", "seo", "sales", "content", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "executive"];
-    var allowedTaskTypes = ["general", "seo_audit", "sales_funnel", "content_plan", "ad_campaign"];
-
+   var allowedAgents = ["general", "executive", "seo", "sales", "content", "social", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "store", "publicist", "broker", "crm", "security", "finance", "legal", "research"];
+    var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report"];
     if (!allowedAgents.includes(agentType)) {
       agentType = "general";
     }
