@@ -2163,11 +2163,12 @@ Location: ${businessProfile.location || "Not Provided"}
     }; 
 
     var taskInstructions = {
-      executive: "Produce an executive command plan. Assign work to each relevant BizForce agent, define priority order, explain what each agent must do, set 7-day, 30-day, and 90-day actions, include KPIs, risks, approval gates, and next moves.",
-      seo_audit: "Produce a structured SEO audit with technical SEO, keywords, local SEO, content gaps, backlinks, and priority fixes.",
-      sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, emails, objections, and conversion steps.",
-      content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, and repurposing strategy.",
-      ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget logic, and testing plan."
+      general: "Handle the user request directly and produce a practical business output.",
+      executive: "Produce an Executive Command Plan. Act as the coordinator over all BizForce agents. Break the business objective into agent assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations. For each agent include mission, priority level, exact tasks, deadline, KPI, expected outcome, dependencies, and owner approval needs. End with a 7-day, 30-day, 60-day, and 90-day execution roadmap.",
+      seo_audit: "Produce a structured SEO audit with technical SEO, keyword strategy, local SEO, content strategy, backlinks, metadata, schema, sitemap, page speed, and conversion recommendations.",
+      sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, email sequence, objections, conversion points, upsell path, and tracking KPIs.",
+      content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, platform strategy, repurposing plan, and brand voice guidance.",
+      ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget guidance, testing plan, and compliance-safe language."
     };
 
     var approvalInstruction = requiresApproval
