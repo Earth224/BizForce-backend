@@ -337,6 +337,228 @@ function buildAssignmentPlaceholderResult(assignment) {
   return placeholders[agentType] || null;
 }
 
+var MEMORY_AGENT_TYPES = [
+  "seo",
+  "content",
+  "sales",
+  "analytics",
+  "operations",
+  "reputation",
+  "executive"
+];
+
+var MEMORY_TYPES = [
+  "goal",
+  "task",
+  "campaign",
+  "insight",
+  "metric",
+  "conversation",
+  "report"
+];
+
+function normalizeMemoryMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value;
+}
+
+var COLLABORATION_AGENT_TYPES = [
+  "executive",
+  "seo",
+  "content",
+  "sales",
+  "analytics",
+  "operations",
+  "reputation",
+  "social",
+  "email",
+  "community",
+  "influencer"
+];
+
+var COLLABORATION_TYPES = [
+  "handoff",
+  "request",
+  "response",
+  "review",
+  "approval",
+  "insight",
+  "memory_share"
+];
+
+var COLLABORATION_STATUSES = [
+  "pending",
+  "in_progress",
+  "completed",
+  "failed",
+  "cancelled"
+];
+
+function normalizeCollaborationPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value;
+}
+
+var AGENT_ORCHESTRATION_HANDOFFS = {
+  seo: "content",
+  content: "analytics",
+  sales: "operations",
+  operations: "analytics",
+  reputation: "content",
+  analytics: "executive"
+};
+
+function truncateOrchestratorPreview(value, maxLength) {
+  var text = String(value || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return text.slice(0, maxLength) + "...";
+}
+
+async function orchestrateAgentWorkflow(options) {
+  var userId = options.userId;
+  var assignment = options.assignment || {};
+  var resultText = String(options.resultText || "");
+  var agentType = String(assignment.agent_type || "").toLowerCase().trim();
+  var assignmentId = assignment.id;
+  var timestamp = nowIso();
+  var orchestrationResult = {
+    memory_created: false,
+    collaboration_created: false
+  };
+
+  console.log("AGENT ORCHESTRATOR START", {
+    user_id: userId,
+    assignment_id: assignmentId,
+    agent_type: agentType
+  });
+
+  if (MEMORY_AGENT_TYPES.indexOf(agentType) !== -1) {
+    try {
+      var memoryInsert = await supabase
+        .from("agent_memory")
+        .insert({
+          user_id: userId,
+          agent_type: agentType,
+          assignment_id: assignmentId,
+          memory_type: "insight",
+          title: agentType.toUpperCase() + " completed assignment",
+          content: truncateOrchestratorPreview(resultText, 2000),
+          metadata: {
+            assignment_id: assignmentId,
+            mission: assignment.mission || "",
+            status: "completed"
+          },
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+        .select("id")
+        .single();
+
+      if (memoryInsert.error) {
+        console.error("AGENT ORCHESTRATOR MEMORY ERROR:", memoryInsert.error);
+      } else {
+        orchestrationResult.memory_created = true;
+        console.log("AGENT ORCHESTRATOR MEMORY SAVED", {
+          user_id: userId,
+          assignment_id: assignmentId,
+          memory_id: memoryInsert.data.id
+        });
+      }
+    } catch (memoryError) {
+      console.error("AGENT ORCHESTRATOR MEMORY ERROR:", memoryError);
+    }
+  } else {
+    console.log("AGENT ORCHESTRATOR SKIPPED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      reason: "unsupported_memory_agent"
+    });
+  }
+
+  var targetAgent = AGENT_ORCHESTRATION_HANDOFFS[agentType];
+
+  if (!targetAgent) {
+    console.log("AGENT ORCHESTRATOR SKIPPED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      reason: "no_handoff_rule"
+    });
+  } else if (COLLABORATION_AGENT_TYPES.indexOf(agentType) === -1) {
+    console.log("AGENT ORCHESTRATOR SKIPPED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      reason: "unsupported_source_agent"
+    });
+  } else if (COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
+    console.log("AGENT ORCHESTRATOR SKIPPED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      reason: "missing_target_agent",
+      target_agent: targetAgent
+    });
+  } else {
+    try {
+      var collaborationInsert = await supabase
+        .from("agent_collaborations")
+        .insert({
+          user_id: userId,
+          parent_assignment_id: assignmentId,
+          source_agent: agentType,
+          target_agent: targetAgent,
+          collaboration_type: "handoff",
+          payload: {
+            note: "Agent completed work and handed off next recommended context.",
+            source_assignment_id: assignmentId,
+            source_result_preview: truncateOrchestratorPreview(resultText, 1000)
+          },
+          status: "pending",
+          created_at: timestamp,
+          updated_at: timestamp
+        })
+        .select("id")
+        .single();
+
+      if (collaborationInsert.error) {
+        console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationInsert.error);
+      } else {
+        orchestrationResult.collaboration_created = true;
+        console.log("AGENT ORCHESTRATOR COLLABORATION CREATED", {
+          user_id: userId,
+          assignment_id: assignmentId,
+          collaboration_id: collaborationInsert.data.id,
+          source_agent: agentType,
+          target_agent: targetAgent
+        });
+      }
+    } catch (collaborationError) {
+      console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationError);
+    }
+  }
+
+  console.log("AGENT ORCHESTRATOR COMPLETE", {
+    user_id: userId,
+    assignment_id: assignmentId,
+    memory_created: orchestrationResult.memory_created,
+    collaboration_created: orchestrationResult.collaboration_created
+  });
+
+  return orchestrationResult;
+}
+
 function createToken(user) {
   return jwt.sign(
     {
@@ -2790,13 +3012,479 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
       agent_type: agentType
     });
 
+    var orchestration = await orchestrateAgentWorkflow({
+      userId: userId,
+      assignment: completedUpdate.data,
+      resultText: placeholderResult
+    });
+
     return res.json({
       ok: true,
       assignment: completedUpdate.data,
-      result: placeholderResult
+      result: placeholderResult,
+      orchestration: orchestration
     });
   } catch (error) {
     console.error("ASSIGNMENT START ERROR:", error);
+    next(error);
+  }
+});
+
+app.post("/api/memory", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var agentType = String(req.body.agent_type || "").toLowerCase().trim();
+    var memoryType = String(req.body.memory_type || "").toLowerCase().trim();
+    var title = safeText(req.body.title, 500);
+    var content = safeText(req.body.content, 20000);
+
+    if (!agentType || MEMORY_AGENT_TYPES.indexOf(agentType) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or missing agent_type"
+      });
+    }
+
+    if (!memoryType || MEMORY_TYPES.indexOf(memoryType) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or missing memory_type"
+      });
+    }
+
+    if (!title) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing title"
+      });
+    }
+
+    if (!content) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing content"
+      });
+    }
+
+    var timestamp = nowIso();
+    var insertResult = await supabase
+      .from("agent_memory")
+      .insert({
+        user_id: userId,
+        agent_type: agentType,
+        assignment_id: null,
+        memory_type: memoryType,
+        title: title,
+        content: content,
+        metadata: normalizeMemoryMetadata(req.body.metadata),
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+      .select("*")
+      .single();
+
+    if (insertResult.error) {
+      throw insertResult.error;
+    }
+
+    return res.status(201).json({
+      ok: true,
+      memory: insertResult.data
+    });
+  } catch (error) {
+    console.error("AGENT MEMORY CREATE ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/memory", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
+    var query = supabase
+      .from("agent_memory")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    var agentType = String(req.query.agent_type || "").toLowerCase().trim();
+    var memoryType = String(req.query.memory_type || "").toLowerCase().trim();
+
+    if (agentType) {
+      if (MEMORY_AGENT_TYPES.indexOf(agentType) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid agent_type filter"
+        });
+      }
+
+      query = query.eq("agent_type", agentType);
+    }
+
+    if (memoryType) {
+      if (MEMORY_TYPES.indexOf(memoryType) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid memory_type filter"
+        });
+      }
+
+      query = query.eq("memory_type", memoryType);
+    }
+
+    var result = await query;
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    return res.json({
+      ok: true,
+      memories: result.data || []
+    });
+  } catch (error) {
+    console.error("AGENT MEMORY LIST ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/memory/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var memoryId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(memoryId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid memory id"
+      });
+    }
+
+    var result = await supabase
+      .from("agent_memory")
+      .select("*")
+      .eq("id", memoryId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Memory not found"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      memory: result.data
+    });
+  } catch (error) {
+    console.error("AGENT MEMORY DETAIL ERROR:", error);
+    next(error);
+  }
+});
+
+app.delete("/api/memory/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var memoryId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(memoryId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid memory id"
+      });
+    }
+
+    var result = await supabase
+      .from("agent_memory")
+      .delete()
+      .eq("id", memoryId)
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Memory not found"
+      });
+    }
+
+    return res.json({
+      ok: true,
+      deleted: true,
+      memory: result.data
+    });
+  } catch (error) {
+    console.error("AGENT MEMORY DELETE ERROR:", error);
+    next(error);
+  }
+});
+
+app.post("/api/collaborations", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var sourceAgent = String(req.body.source_agent || "").toLowerCase().trim();
+    var targetAgent = String(req.body.target_agent || "").toLowerCase().trim();
+    var collaborationType = String(req.body.collaboration_type || "").toLowerCase().trim();
+    var status = String(req.body.status || "pending").toLowerCase().trim();
+    var parentAssignmentId = req.body.parent_assignment_id
+      ? String(req.body.parent_assignment_id).trim()
+      : null;
+
+    if (!sourceAgent || COLLABORATION_AGENT_TYPES.indexOf(sourceAgent) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or missing source_agent"
+      });
+    }
+
+    if (!targetAgent || COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or missing target_agent"
+      });
+    }
+
+    if (!collaborationType || COLLABORATION_TYPES.indexOf(collaborationType) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid or missing collaboration_type"
+      });
+    }
+
+    if (COLLABORATION_STATUSES.indexOf(status) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid status"
+      });
+    }
+
+    if (parentAssignmentId && !isValidUuid(parentAssignmentId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid parent_assignment_id"
+      });
+    }
+
+    var timestamp = nowIso();
+    var insertResult = await supabase
+      .from("agent_collaborations")
+      .insert({
+        user_id: userId,
+        parent_assignment_id: parentAssignmentId,
+        source_agent: sourceAgent,
+        target_agent: targetAgent,
+        collaboration_type: collaborationType,
+        payload: normalizeCollaborationPayload(req.body.payload),
+        status: status,
+        created_at: timestamp,
+        updated_at: timestamp
+      })
+      .select("*")
+      .single();
+
+    if (insertResult.error) {
+      throw insertResult.error;
+    }
+
+    console.log("COLLABORATION CREATED", {
+      user_id: userId,
+      collaboration_id: insertResult.data.id,
+      source_agent: sourceAgent,
+      target_agent: targetAgent,
+      collaboration_type: collaborationType
+    });
+
+    return res.status(201).json({
+      ok: true,
+      collaboration: insertResult.data
+    });
+  } catch (error) {
+    console.error("COLLABORATION CREATE ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/collaborations", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
+    var query = supabase
+      .from("agent_collaborations")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    var sourceAgent = String(req.query.source_agent || "").toLowerCase().trim();
+    var targetAgent = String(req.query.target_agent || "").toLowerCase().trim();
+    var collaborationType = String(req.query.collaboration_type || "").toLowerCase().trim();
+    var status = String(req.query.status || "").toLowerCase().trim();
+
+    if (sourceAgent) {
+      if (COLLABORATION_AGENT_TYPES.indexOf(sourceAgent) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid source_agent filter"
+        });
+      }
+
+      query = query.eq("source_agent", sourceAgent);
+    }
+
+    if (targetAgent) {
+      if (COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid target_agent filter"
+        });
+      }
+
+      query = query.eq("target_agent", targetAgent);
+    }
+
+    if (collaborationType) {
+      if (COLLABORATION_TYPES.indexOf(collaborationType) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid collaboration_type filter"
+        });
+      }
+
+      query = query.eq("collaboration_type", collaborationType);
+    }
+
+    if (status) {
+      if (COLLABORATION_STATUSES.indexOf(status) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid status filter"
+        });
+      }
+
+      query = query.eq("status", status);
+    }
+
+    var result = await query;
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    console.log("COLLABORATIONS FETCHED", {
+      user_id: userId,
+      count: result.data ? result.data.length : 0
+    });
+
+    return res.json({
+      ok: true,
+      collaborations: result.data || []
+    });
+  } catch (error) {
+    console.error("COLLABORATIONS LIST ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/collaborations/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var collaborationId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(collaborationId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid collaboration id"
+      });
+    }
+
+    var result = await supabase
+      .from("agent_collaborations")
+      .select("*")
+      .eq("id", collaborationId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Collaboration not found"
+      });
+    }
+
+    console.log("COLLABORATION DETAIL FETCHED", {
+      user_id: userId,
+      collaboration_id: collaborationId
+    });
+
+    return res.json({
+      ok: true,
+      collaboration: result.data
+    });
+  } catch (error) {
+    console.error("COLLABORATION DETAIL ERROR:", error);
+    next(error);
+  }
+});
+
+app.delete("/api/collaborations/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var collaborationId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(collaborationId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid collaboration id"
+      });
+    }
+
+    var result = await supabase
+      .from("agent_collaborations")
+      .delete()
+      .eq("id", collaborationId)
+      .eq("user_id", userId)
+      .select("*")
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Collaboration not found"
+      });
+    }
+
+    console.log("COLLABORATION DELETED", {
+      user_id: userId,
+      collaboration_id: collaborationId
+    });
+
+    return res.json({
+      ok: true,
+      deleted: true,
+      collaboration: result.data
+    });
+  } catch (error) {
+    console.error("COLLABORATION DELETE ERROR:", error);
     next(error);
   }
 });
