@@ -256,6 +256,87 @@ function safeText(value, maxLength) {
   return String(value).trim().slice(0, maxLength || 5000);
 }
 
+var ASSIGNMENT_STATUSES = ["pending", "in_progress", "completed", "failed"];
+
+function normalizeJsonbArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(function (item) {
+    return String(item || "").trim();
+  }).filter(function (item) {
+    return item.length > 0;
+  });
+}
+
+function normalizeAssignmentInput(item) {
+  var assignmentNumber = Number(item && item.assignment_number);
+
+  if (!Number.isFinite(assignmentNumber) || assignmentNumber < 1) {
+    return null;
+  }
+
+  var agentType = String(item && item.agent_type || "").toLowerCase().trim();
+
+  if (!agentType) {
+    return null;
+  }
+
+  return {
+    assignment_number: Math.floor(assignmentNumber),
+    agent_type: agentType,
+    mission: safeText(item.mission, 5000) || "",
+    priority: safeText(item.priority, 120) || "",
+    timeline: safeText(item.timeline, 500) || "",
+    tasks: normalizeJsonbArray(item.tasks),
+    kpis: normalizeJsonbArray(item.kpis),
+    risks: normalizeJsonbArray(item.risks)
+  };
+}
+
+function isValidUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
+var ROUTABLE_ASSIGNMENT_AGENT_TYPES = [
+  "seo",
+  "sales",
+  "content",
+  "analytics",
+  "operations",
+  "reputation"
+];
+
+function summarizeAssignmentTasks(assignment) {
+  var tasks = assignment && assignment.tasks;
+
+  if (!Array.isArray(tasks) || !tasks.length) {
+    return "No tasks listed";
+  }
+
+  return tasks.join("; ");
+}
+
+function buildAssignmentPlaceholderResult(assignment) {
+  var agentType = String(assignment.agent_type || "").toLowerCase().trim();
+  var mission = assignment.mission || "No mission provided";
+  var tasksSummary = summarizeAssignmentTasks(assignment);
+  var priority = assignment.priority || "unspecified";
+  var timeline = assignment.timeline || "unspecified";
+
+  var placeholders = {
+    seo: "SEO Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: review keyword targets, audit on-page metadata, and track ranking KPIs.",
+    sales: "Sales Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: refine offer messaging, update follow-up sequence, and monitor conversion KPIs.",
+    content: "Content Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: finalize content calendar, draft priority assets, and schedule publishing checkpoints.",
+    analytics: "Analytics Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: validate KPI baselines, define tracking events, and prepare performance dashboard.",
+    operations: "Operations Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: document SOPs, assign owners, and confirm workflow handoffs.",
+    reputation: "Reputation Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: review response templates, monitor review channels, and track trust KPIs."
+  };
+
+  return placeholders[agentType] || null;
+}
+
 function createToken(user) {
   return jwt.sign(
     {
@@ -2382,6 +2463,344 @@ app.post("/api/ai-reports", requireAuth, async function (req, res, next) {
     next(error);
   }
 });
+
+app.post("/api/assignments/batch", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var executiveTaskId = String(req.body.executive_task_id || "").trim();
+    var rawAssignments = req.body.assignments;
+
+    console.log("ASSIGNMENTS BATCH RECEIVED", {
+      user_id: userId,
+      executive_task_id: executiveTaskId,
+      count: Array.isArray(rawAssignments) ? rawAssignments.length : 0
+    });
+
+    if (!isValidUuid(executiveTaskId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing or invalid executive_task_id"
+      });
+    }
+
+    if (!Array.isArray(rawAssignments) || rawAssignments.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "assignments must be a non-empty array"
+      });
+    }
+
+    var taskCheck = await supabase
+      .from("ai_tasks")
+      .select("id")
+      .eq("id", executiveTaskId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (taskCheck.error) {
+      throw taskCheck.error;
+    }
+
+    if (!taskCheck.data) {
+      return res.status(400).json({
+        ok: false,
+        error: "executive_task_id not found for this user"
+      });
+    }
+
+    var normalizedAssignments = [];
+    var seenKeys = {};
+
+    for (var i = 0; i < rawAssignments.length; i++) {
+      var normalized = normalizeAssignmentInput(rawAssignments[i]);
+
+      if (!normalized) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid assignment at index " + i + ". assignment_number and agent_type are required."
+        });
+      }
+
+      var dedupeKey =
+        normalized.assignment_number + "|" + normalized.agent_type;
+
+      if (seenKeys[dedupeKey]) {
+        return res.status(400).json({
+          ok: false,
+          error: "Duplicate assignment in request: " + dedupeKey
+        });
+      }
+
+      seenKeys[dedupeKey] = true;
+      normalizedAssignments.push(normalized);
+    }
+
+    var timestamp = nowIso();
+    var rows = normalizedAssignments.map(function (item) {
+      return {
+        user_id: userId,
+        executive_task_id: executiveTaskId,
+        assignment_number: item.assignment_number,
+        agent_type: item.agent_type,
+        mission: item.mission,
+        priority: item.priority,
+        timeline: item.timeline,
+        tasks: item.tasks,
+        kpis: item.kpis,
+        risks: item.risks,
+        status: "pending",
+        updated_at: timestamp
+      };
+    });
+
+    var insertResult = await supabase
+      .from("agent_assignments")
+      .upsert(rows, {
+        onConflict: "user_id,executive_task_id,assignment_number,agent_type",
+        ignoreDuplicates: true
+      })
+      .select("*");
+
+    if (insertResult.error) {
+      throw insertResult.error;
+    }
+
+    var listResult = await supabase
+      .from("agent_assignments")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("executive_task_id", executiveTaskId)
+      .order("assignment_number", { ascending: true });
+
+    if (listResult.error) {
+      throw listResult.error;
+    }
+
+    var insertedCount = insertResult.data ? insertResult.data.length : 0;
+
+    console.log("ASSIGNMENTS BATCH SAVED", {
+      user_id: userId,
+      executive_task_id: executiveTaskId,
+      inserted: insertedCount,
+      total: listResult.data ? listResult.data.length : 0
+    });
+
+    return res.status(201).json({
+      ok: true,
+      inserted: insertedCount,
+      assignments: listResult.data || []
+    });
+  } catch (error) {
+    console.error("ASSIGNMENTS BATCH ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/assignments", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var query = supabase
+      .from("agent_assignments")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    var status = String(req.query.status || "").toLowerCase().trim();
+    var agentType = String(req.query.agent_type || "").toLowerCase().trim();
+    var executiveTaskId = String(req.query.executive_task_id || "").trim();
+
+    if (status) {
+      if (ASSIGNMENT_STATUSES.indexOf(status) === -1) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid status filter"
+        });
+      }
+
+      query = query.eq("status", status);
+    }
+
+    if (agentType) {
+      query = query.eq("agent_type", agentType);
+    }
+
+    if (executiveTaskId) {
+      if (!isValidUuid(executiveTaskId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Invalid executive_task_id filter"
+        });
+      }
+
+      query = query.eq("executive_task_id", executiveTaskId);
+    }
+
+    var result = await query;
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    console.log("ASSIGNMENTS LIST FETCHED", {
+      user_id: userId,
+      count: result.data ? result.data.length : 0
+    });
+
+    return res.json({
+      ok: true,
+      assignments: result.data || []
+    });
+  } catch (error) {
+    console.error("ASSIGNMENTS LIST ERROR:", error);
+    next(error);
+  }
+});
+
+app.get("/api/assignments/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var assignmentId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(assignmentId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid assignment id"
+      });
+    }
+
+    var result = await supabase
+      .from("agent_assignments")
+      .select("*")
+      .eq("id", assignmentId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Assignment not found"
+      });
+    }
+
+    console.log("ASSIGNMENT DETAIL FETCHED", {
+      user_id: userId,
+      assignment_id: assignmentId
+    });
+
+    return res.json({
+      ok: true,
+      assignment: result.data
+    });
+  } catch (error) {
+    console.error("ASSIGNMENT DETAIL ERROR:", error);
+    next(error);
+  }
+});
+
+app.post("/api/assignments/:id/start", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var assignmentId = String(req.params.id || "").trim();
+
+    if (!isValidUuid(assignmentId)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid assignment id"
+      });
+    }
+
+    var fetchResult = await supabase
+      .from("agent_assignments")
+      .select("*")
+      .eq("id", assignmentId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (fetchResult.error) {
+      throw fetchResult.error;
+    }
+
+    if (!fetchResult.data) {
+      return res.status(404).json({
+        ok: false,
+        error: "Assignment not found"
+      });
+    }
+
+    var assignment = fetchResult.data;
+
+    if (assignment.status === "completed") {
+      return res.json({
+        ok: true,
+        already_completed: true,
+        message: "Assignment already completed.",
+        assignment: assignment,
+        result: "Assignment was already completed. No further action was taken."
+      });
+    }
+
+    var agentType = String(assignment.agent_type || "").toLowerCase().trim();
+
+    if (ROUTABLE_ASSIGNMENT_AGENT_TYPES.indexOf(agentType) === -1) {
+      return res.status(400).json({
+        ok: false,
+        error: "Unsupported agent_type for routing: " + agentType
+      });
+    }
+
+    var inProgressUpdate = await supabase
+      .from("agent_assignments")
+      .update({
+        status: "in_progress",
+        updated_at: nowIso()
+      })
+      .eq("id", assignmentId)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
+
+    if (inProgressUpdate.error) {
+      throw inProgressUpdate.error;
+    }
+
+    var placeholderResult = buildAssignmentPlaceholderResult(inProgressUpdate.data);
+
+    var completedUpdate = await supabase
+      .from("agent_assignments")
+      .update({
+        status: "completed",
+        updated_at: nowIso()
+      })
+      .eq("id", assignmentId)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
+
+    if (completedUpdate.error) {
+      throw completedUpdate.error;
+    }
+
+    console.log("ASSIGNMENT START COMPLETED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      agent_type: agentType
+    });
+
+    return res.json({
+      ok: true,
+      assignment: completedUpdate.data,
+      result: placeholderResult
+    });
+  } catch (error) {
+    console.error("ASSIGNMENT START ERROR:", error);
+    next(error);
+  }
+});
+
 app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
   try {
     var limit = Math.min(Number(req.query.limit || 50), 100);
