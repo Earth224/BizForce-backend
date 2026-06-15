@@ -1912,33 +1912,163 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
-async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval) {
+async function callAnthropicText(promptText, maxTokens) {
+  var anthropicClient = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY
+  });
+
+  var response = await anthropicClient.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: maxTokens,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: promptText
+          }
+        ]
+      }
+    ]
+  });
+
+  return {
+    text: response.content &&
+      response.content[0] &&
+      response.content[0].text
+      ? response.content[0].text
+      : JSON.stringify(response),
+    stopReason: response.stop_reason || ""
+  };
+}
+
+function extractRequiredExecutiveAssignmentHeadings(promptText) {
+  var text = String(promptText || "");
+  var headings = [];
+  var seen = {};
+  var regex = /AGENT\s+ASSIGNMENT\s+(\d+)\s*:\s*(SEO|CONTENT|SALES|ADS|REPUTATION|ANALYTICS|EMAIL|COMMUNITY|OPERATIONS|INFLUENCER)\s+AGENT\b/gi;
+  var match;
+
+  while ((match = regex.exec(text)) !== null) {
+    var number = String(match[1]).trim();
+    var agent = String(match[2]).trim().toUpperCase();
+    var key = number + "|" + agent;
+
+    if (seen[key]) {
+      continue;
+    }
+
+    seen[key] = true;
+    headings.push({
+      number: number,
+      agent: agent,
+      heading: "AGENT ASSIGNMENT " + number + ": " + agent + " AGENT"
+    });
+  }
+
+  return headings.sort(function(a, b) {
+    return Number(a.number) - Number(b.number);
+  });
+}
+
+function getMissingExecutiveAssignmentHeadings(promptText, outputText) {
+  var required = extractRequiredExecutiveAssignmentHeadings(promptText);
+
+  if (!required.length) {
+    return [];
+  }
+
+  return required.filter(function(item) {
+    var pattern = new RegExp(
+      "AGENT\\s+ASSIGNMENT\\s+" + item.number + "\\s*:\\s*" + item.agent + "\\s+AGENT\\b",
+      "i"
+    );
+
+    return !pattern.test(String(outputText || ""));
+  });
+}
+
+function mergeExecutiveAssignmentOutput(existingOutput, repairOutput) {
+  var merged = String(existingOutput || "").trim();
+  var repair = String(repairOutput || "").trim();
+
+  if (!repair) {
+    return merged;
+  }
+
+  if (merged.indexOf(repair) !== -1) {
+    return merged;
+  }
+
+  return merged + "\n\n" + repair;
+}
+
+async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialStopReason) {
+  var output = String(initialOutput || "").trim();
+  var missing = getMissingExecutiveAssignmentHeadings(userPrompt, output);
+  var stopReason = initialStopReason || "";
+
+  if (!missing.length && stopReason !== "max_tokens") {
+    return {
+      output: output,
+      complete: true
+    };
+  }
+
+  var repairPrompt =
+    "Return ONLY the missing Executive assignment block(s) listed below.\n" +
+    "Use the exact heading format and include all fields: Mission, Owner, Priority, Timeline, Tasks, KPIs, Risks, Next Action.\n" +
+    "Do not rewrite or repeat assignments that already exist.\n\n" +
+    "Missing required heading(s):\n" +
+    missing.map(function(item) {
+      return "- " + item.heading;
+    }).join("\n") +
+    "\n\nExisting report context:\n" +
+    output.slice(-6000);
+
+  var repairResult = await callAnthropicText(repairPrompt, 4096);
+  output = mergeExecutiveAssignmentOutput(output, repairResult.text);
+  missing = getMissingExecutiveAssignmentHeadings(userPrompt, output);
+
+  return {
+    output: output,
+    complete: !missing.length
+  };
+}
+
+async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
     try {
-        var anthropic = new Anthropic({
-            apiKey: process.env.ANTHROPIC_API_KEY
-        });
+        var isExecutive = agentType === "executive";
+        var maxTokens = isExecutive ? 8192 : 1200;
+        var generation = await callAnthropicText(finalPrompt, maxTokens);
+        var output = generation.text;
+        var executiveComplete = true;
 
-        var response = await anthropic.messages.create({
-            model: "claude-haiku-4-5-20251001",
-            max_tokens: 1200,
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        {
-                            type: "text",
-                            text: finalPrompt
-                        }
-                    ]
-                }
-            ]
-        });
+        if (isExecutive) {
+          var executiveResult = await finalizeExecutiveTaskOutput(
+            userPrompt || finalPrompt,
+            output,
+            generation.stopReason
+          );
 
-        var output = response.content &&
-            response.content[0] &&
-            response.content[0].text
-            ? response.content[0].text
-            : JSON.stringify(response);
+          output = executiveResult.output;
+          executiveComplete = executiveResult.complete;
+        }
+
+        if (isExecutive && !executiveComplete) {
+          await supabase
+            .from("ai_tasks")
+            .update({
+              result: output,
+              status: "failed",
+              updated_at: nowIso()
+            })
+            .eq("id", taskId)
+            .eq("user_id", userId);
+
+          return;
+        }
 
         var updateResult = await supabase
             .from("ai_tasks")
@@ -2205,7 +2335,7 @@ Location: ${businessProfile.location || "Not Provided"}
 
     var taskRecord = pendingInsert.data;
 setImmediate(function () {
-  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval).catch(function (error) {
+  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt).catch(function (error) {
     console.error("Async AI task failed:", error);
   });
 });
