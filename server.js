@@ -318,23 +318,153 @@ function summarizeAssignmentTasks(assignment) {
   return tasks.join("; ");
 }
 
-function buildAssignmentPlaceholderResult(assignment) {
-  var agentType = String(assignment.agent_type || "").toLowerCase().trim();
-  var mission = assignment.mission || "No mission provided";
-  var tasksSummary = summarizeAssignmentTasks(assignment);
-  var priority = assignment.priority || "unspecified";
-  var timeline = assignment.timeline || "unspecified";
+function formatAssignmentBulletList(items, fallback) {
+  if (!Array.isArray(items) || !items.length) {
+    return fallback;
+  }
 
-  var placeholders = {
-    seo: "SEO Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: review keyword targets, audit on-page metadata, and track ranking KPIs.",
-    sales: "Sales Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: refine offer messaging, update follow-up sequence, and monitor conversion KPIs.",
-    content: "Content Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: finalize content calendar, draft priority assets, and schedule publishing checkpoints.",
-    analytics: "Analytics Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: validate KPI baselines, define tracking events, and prepare performance dashboard.",
-    operations: "Operations Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: document SOPs, assign owners, and confirm workflow handoffs.",
-    reputation: "Reputation Agent placeholder execution complete. Mission: " + mission + ". Priority: " + priority + ". Timeline: " + timeline + ". Tasks addressed: " + tasksSummary + ". Recommended next steps: review response templates, monitor review channels, and track trust KPIs."
+  return items.map(function (item) {
+    return "- " + String(item || "").trim();
+  }).filter(function (line) {
+    return line.length > 2;
+  }).join("\n");
+}
+
+function getAssignmentAgentLabel(agentType) {
+  var labels = {
+    seo: "SEO Agent",
+    sales: "Sales Agent",
+    content: "Content Agent",
+    analytics: "Analytics Agent",
+    operations: "Operations Agent",
+    reputation: "Reputation Agent",
+    executive: "Executive Agent",
+    general: "BizForce Agent"
   };
 
-  return placeholders[agentType] || null;
+  return labels[agentType] || String(agentType || "agent").toUpperCase() + " Agent";
+}
+
+function buildAssignmentExecutionResult(assignment) {
+  var agentType = String(assignment.agent_type || "general").toLowerCase().trim().replace(/\s+agent$/i, "");
+  var agentLabel = getAssignmentAgentLabel(agentType);
+  var mission = assignment.mission || "No mission provided";
+  var priority = assignment.priority || "unspecified";
+  var timeline = assignment.timeline || "unspecified";
+  var tasks = normalizeJsonbArray(assignment.tasks);
+  var kpis = normalizeJsonbArray(assignment.kpis);
+  var risks = normalizeJsonbArray(assignment.risks);
+  var handoffAgent = AGENT_ORCHESTRATION_HANDOFFS[agentType];
+  var handoffLabel = handoffAgent ? getAssignmentAgentLabel(handoffAgent) : "No automatic handoff configured";
+
+  var executionPlans = {
+    seo: [
+      "Audit current search visibility and page-level SEO signals.",
+      "Prioritize keyword targets aligned to the mission.",
+      "Define on-page, technical, and local SEO actions for the timeline."
+    ],
+    sales: [
+      "Clarify offer positioning and buyer journey for this mission.",
+      "Map conversion points, follow-up timing, and objection handling.",
+      "Prepare revenue-focused messaging and pipeline next steps."
+    ],
+    content: [
+      "Translate the mission into a focused content theme and audience angle.",
+      "Outline priority assets, publishing cadence, and repurposing plan.",
+      "Define hooks, CTAs, and distribution checkpoints."
+    ],
+    analytics: [
+      "Identify the KPIs needed to measure mission progress.",
+      "Define tracking events, baselines, and reporting cadence.",
+      "Prepare dashboard priorities and bottleneck analysis."
+    ],
+    operations: [
+      "Break the mission into operational workflows and owners.",
+      "Document SOP checkpoints, dependencies, and handoffs.",
+      "Define execution rhythm for the stated timeline."
+    ],
+    reputation: [
+      "Assess trust signals, review channels, and brand sentiment risks.",
+      "Prepare response templates and reputation recovery actions.",
+      "Define monitoring cadence and customer proof priorities."
+    ]
+  };
+
+  var defaultDeliverables = {
+    seo: "Keyword priority list, SEO action checklist, and ranking KPI targets.",
+    sales: "Offer messaging draft, funnel action plan, and conversion KPI set.",
+    content: "Content theme outline, asset list, and publishing schedule.",
+    analytics: "KPI baseline summary, tracking plan, and dashboard priorities.",
+    operations: "Workflow checklist, SOP outline, and owner handoff plan.",
+    reputation: "Review response templates, trust-building actions, and monitoring plan."
+  };
+
+  var executionPlanItems = tasks.length
+    ? tasks.map(function (task, index) {
+      return String(index + 1) + ". " + task;
+    })
+    : (executionPlans[agentType] || [
+      "Review the mission and confirm scope for the stated timeline.",
+      "Break work into immediate, near-term, and follow-up actions.",
+      "Prepare deliverables aligned to the mission outcome."
+    ]).map(function (item, index) {
+      return String(index + 1) + ". " + item;
+    });
+
+  var immediateActions = tasks.length
+    ? tasks.slice(0, 3).map(function (task, index) {
+      return String(index + 1) + ". " + task;
+    }).join("\n")
+    : executionPlanItems.slice(0, 3).join("\n");
+
+  var deliverables = tasks.length
+    ? tasks.map(function (task) {
+      return "- " + task;
+    }).join("\n")
+    : "- " + (defaultDeliverables[agentType] || "Mission execution summary and recommended next-step action plan.");
+
+  var risksBlock = formatAssignmentBulletList(
+    risks,
+    "- Mission scope may expand without a fixed timeline.\n- Dependencies on other teams or assets may delay execution.\n- KPI tracking should be confirmed before scaling efforts."
+  );
+
+  var successCriteria = formatAssignmentBulletList(
+    kpis,
+    "- Mission deliverables completed within the stated timeline.\n- Priority actions executed and documented.\n- Next-step handoff prepared for downstream agents."
+  );
+
+  var handoffBlock = handoffAgent
+    ? "Hand off to " + handoffLabel + " with completed context, deliverables, and success criteria for the next stage."
+    : handoffLabel;
+
+  return [
+    agentLabel.toUpperCase() + " EXECUTION REPORT",
+    "Status: Complete",
+    "",
+    "Mission Accepted",
+    mission,
+    "",
+    "Priority: " + priority,
+    "Timeline: " + timeline,
+    "",
+    "Execution Plan",
+    executionPlanItems.join("\n"),
+    "",
+    "Immediate Next Actions",
+    immediateActions,
+    "",
+    "Deliverables",
+    deliverables,
+    "",
+    "Risks / Dependencies",
+    risksBlock,
+    "",
+    "Success Criteria",
+    successCriteria,
+    "",
+    "Recommended Handoff",
+    handoffBlock
+  ].join("\n");
 }
 
 var MEMORY_AGENT_TYPES = [
@@ -2991,8 +3121,7 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
         var localResult = safeText(req.body.result, 20000);
 
         if (!localResult) {
-          localResult = buildAssignmentPlaceholderResult(localAssignment) ||
-            "Assignment placeholder execution complete.";
+          localResult = buildAssignmentExecutionResult(localAssignment);
         }
 
         console.log("ASSIGNMENT START COMPLETED", {
@@ -3066,7 +3195,7 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
       throw inProgressUpdate.error;
     }
 
-    var placeholderResult = buildAssignmentPlaceholderResult(inProgressUpdate.data);
+    var executionResult = buildAssignmentExecutionResult(inProgressUpdate.data);
 
     var completedUpdate = await supabase
       .from("agent_assignments")
@@ -3092,13 +3221,13 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
     var orchestration = await orchestrateAgentWorkflow({
       userId: userId,
       assignment: completedUpdate.data,
-      resultText: placeholderResult
+      resultText: executionResult
     });
 
     return res.json({
       ok: true,
       assignment: completedUpdate.data,
-      result: placeholderResult,
+      result: executionResult,
       orchestration: orchestration
     });
   } catch (error) {
