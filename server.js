@@ -432,13 +432,24 @@ async function orchestrateAgentWorkflow(options) {
   var userId = options.userId;
   var assignment = options.assignment || {};
   var resultText = String(options.resultText || "");
+  var isFrontendAssignment = Boolean(options.isFrontendAssignment);
   var agentType = String(assignment.agent_type || "").toLowerCase().trim();
   var assignmentId = assignment.id;
+  var persistableAssignmentId = isValidUuid(String(assignmentId || "")) ? assignmentId : null;
   var timestamp = nowIso();
   var orchestrationResult = {
     memory_created: false,
     collaboration_created: false
   };
+  var memoryMetadata = {
+    assignment_id: assignmentId,
+    mission: assignment.mission || "",
+    status: "completed"
+  };
+
+  if (isFrontendAssignment) {
+    memoryMetadata.source = "frontend_asg_start";
+  }
 
   console.log("AGENT ORCHESTRATOR START", {
     user_id: userId,
@@ -453,15 +464,11 @@ async function orchestrateAgentWorkflow(options) {
         .insert({
           user_id: userId,
           agent_type: agentType,
-          assignment_id: assignmentId,
+          assignment_id: persistableAssignmentId,
           memory_type: "insight",
           title: agentType.toUpperCase() + " completed assignment",
           content: truncateOrchestratorPreview(resultText, 2000),
-          metadata: {
-            assignment_id: assignmentId,
-            mission: assignment.mission || "",
-            status: "completed"
-          },
+          metadata: memoryMetadata,
           created_at: timestamp,
           updated_at: timestamp
         })
@@ -516,7 +523,7 @@ async function orchestrateAgentWorkflow(options) {
         .from("agent_collaborations")
         .insert({
           user_id: userId,
-          parent_assignment_id: assignmentId,
+          parent_assignment_id: persistableAssignmentId,
           source_agent: agentType,
           target_agent: targetAgent,
           collaboration_type: "handoff",
@@ -2954,15 +2961,51 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
     if (!fetchResult.data) {
       if (isFrontendAssignmentId) {
         var localAgentType = String(req.body.agent_type || "general").toLowerCase().trim();
+        var localMission = safeText(req.body.mission, 5000) || "";
+        var localPriority = safeText(req.body.priority, 120) || "";
+        var localTimeline = safeText(req.body.timeline, 500) || "";
+        var localAssignment = {
+          id: assignmentId,
+          agent_type: localAgentType,
+          mission: localMission,
+          priority: localPriority,
+          timeline: localTimeline,
+          status: "completed",
+          tasks: normalizeJsonbArray(req.body.tasks)
+        };
+        var localResult = safeText(req.body.result, 20000);
+
+        if (!localResult) {
+          localResult = buildAssignmentPlaceholderResult(localAssignment) ||
+            "Assignment placeholder execution complete.";
+        }
+
+        console.log("ASSIGNMENT START COMPLETED", {
+          user_id: userId,
+          assignment_id: assignmentId,
+          agent_type: localAgentType,
+          source: "frontend_asg"
+        });
+
+        var frontendOrchestration = await orchestrateAgentWorkflow({
+          userId: userId,
+          assignment: localAssignment,
+          resultText: localResult,
+          isFrontendAssignment: true
+        });
 
         return res.json({
           ok: true,
           assignment: {
             id: assignmentId,
             agent_type: localAgentType,
+            mission: localMission,
+            priority: localPriority,
+            timeline: localTimeline,
             status: "completed"
           },
-          result: "Assignment placeholder execution complete."
+          result: localResult,
+          orchestration: frontendOrchestration
         });
       }
 
