@@ -466,7 +466,10 @@ async function orchestrateAgentWorkflow(options) {
     try {
       var memoryPayload = {
         user_id: userId,
+        agent: agentType,
         agent_type: agentType,
+        memory_key: agentType + "_completed_assignment",
+        memory_value: memoryContent,
         memory_type: "insight",
         title: agentType.toUpperCase() + " completed assignment",
         content: memoryContent,
