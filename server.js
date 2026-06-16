@@ -433,7 +433,7 @@ async function orchestrateAgentWorkflow(options) {
   var assignment = options.assignment || {};
   var resultText = String(options.resultText || "");
   var isFrontendAssignment = Boolean(options.isFrontendAssignment);
-  var agentType = String(assignment.agent_type || "").toLowerCase().trim();
+  var agentType = String(assignment.agent_type || "").toLowerCase().trim().replace(/\s+agent$/i, "");
   var assignmentId = assignment.id;
   var persistableAssignmentId = isValidUuid(String(assignmentId || "")) ? assignmentId : null;
   var timestamp = nowIso();
@@ -446,6 +446,11 @@ async function orchestrateAgentWorkflow(options) {
     mission: assignment.mission || "",
     status: "completed"
   };
+  var memoryContent = truncateOrchestratorPreview(resultText, 2000);
+
+  if (!memoryContent) {
+    memoryContent = "Assignment completed.";
+  }
 
   if (isFrontendAssignment) {
     memoryMetadata.source = "frontend_asg_start";
@@ -459,24 +464,30 @@ async function orchestrateAgentWorkflow(options) {
 
   if (MEMORY_AGENT_TYPES.indexOf(agentType) !== -1) {
     try {
+      var memoryPayload = {
+        user_id: userId,
+        agent_type: agentType,
+        memory_type: "insight",
+        title: agentType.toUpperCase() + " completed assignment",
+        content: memoryContent,
+        metadata: normalizeMemoryMetadata(memoryMetadata),
+        created_at: timestamp,
+        updated_at: timestamp
+      };
+
+      if (persistableAssignmentId) {
+        memoryPayload.assignment_id = persistableAssignmentId;
+      }
+
       var memoryInsert = await supabase
         .from("agent_memory")
-        .insert({
-          user_id: userId,
-          agent_type: agentType,
-          assignment_id: persistableAssignmentId,
-          memory_type: "insight",
-          title: agentType.toUpperCase() + " completed assignment",
-          content: truncateOrchestratorPreview(resultText, 2000),
-          metadata: memoryMetadata,
-          created_at: timestamp,
-          updated_at: timestamp
-        })
+        .insert(memoryPayload)
         .select("id")
         .single();
 
       if (memoryInsert.error) {
-        console.error("AGENT ORCHESTRATOR MEMORY ERROR:", memoryInsert.error);
+        console.error("AGENT ORCHESTRATOR MEMORY ERROR:", JSON.stringify(memoryInsert.error, null, 2));
+        console.error("AGENT ORCHESTRATOR MEMORY PAYLOAD:", JSON.stringify(memoryPayload, null, 2));
       } else {
         orchestrationResult.memory_created = true;
         console.log("AGENT ORCHESTRATOR MEMORY SAVED", {
@@ -492,7 +503,8 @@ async function orchestrateAgentWorkflow(options) {
     console.log("AGENT ORCHESTRATOR SKIPPED", {
       user_id: userId,
       assignment_id: assignmentId,
-      reason: "unsupported_memory_agent"
+      reason: "unsupported_memory_agent",
+      agent_type: agentType
     });
   }
 
