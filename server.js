@@ -2927,26 +2927,45 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
   try {
     var userId = req.user.id;
     var assignmentId = String(req.params.id || "").trim();
+    var isFrontendAssignmentId = /^asg_[A-Za-z0-9_-]+$/.test(assignmentId);
 
-    if (!isValidUuid(assignmentId)) {
+    if (!isValidUuid(assignmentId) && !isFrontendAssignmentId) {
       return res.status(400).json({
         ok: false,
         error: "Invalid assignment id"
       });
     }
 
-    var fetchResult = await supabase
-      .from("agent_assignments")
-      .select("*")
-      .eq("id", assignmentId)
-      .eq("user_id", userId)
-      .maybeSingle();
+    var fetchResult = { data: null, error: null };
 
-    if (fetchResult.error) {
-      throw fetchResult.error;
+    if (isValidUuid(assignmentId)) {
+      fetchResult = await supabase
+        .from("agent_assignments")
+        .select("*")
+        .eq("id", assignmentId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (fetchResult.error) {
+        throw fetchResult.error;
+      }
     }
 
     if (!fetchResult.data) {
+      if (isFrontendAssignmentId) {
+        var localAgentType = String(req.body.agent_type || "general").toLowerCase().trim();
+
+        return res.json({
+          ok: true,
+          assignment: {
+            id: assignmentId,
+            agent_type: localAgentType,
+            status: "completed"
+          },
+          result: "Assignment placeholder execution complete."
+        });
+      }
+
       return res.status(404).json({
         ok: false,
         error: "Assignment not found"
