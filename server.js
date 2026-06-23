@@ -18,7 +18,8 @@ app.set("trust proxy", 1);
 
 const allowedOrigins = [
   "https://bizforceai.net",
-  "https://www.bizforceai.net"
+  "https://www.bizforceai.net",
+  "http://localhost:50157"
 ];
 
 app.use(function (req, res, next) {
