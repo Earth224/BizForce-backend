@@ -1235,22 +1235,6 @@ await supabase
   }
 }
 
-app.get("/", function (req, res) {
-  res.json({
-    app: "BizForce AI",
-    status: "running",
-    production: process.env.NODE_ENV === "production"
-  });
-});
-
-app.get("/health", function (req, res) {
-  res.json({
-    ok: true,
-    uptime: process.uptime(),
-    timestamp: nowIso()
-  });
-});
-
 app.post("/api/auth/register", authLimiter, async function (req, res, next) {
   try {
     const email = normalizeEmail(req.body.email);
@@ -1461,16 +1445,18 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
   try {
     const profile = await getProfileByUserId(req.user.id);
     const subscription = await getActiveSubscription(req.user.id);
-    
+    const plan = subscription ? String(subscription.plan || "free").toLowerCase() : "free";
+    const isActive = subscription ? ["active", "trialing"].includes(subscription.status) : false;
+
     return res.json({
-  user: Object.assign({}, publicUser(req.user), {
-    subscription_status: req.user.subscription_status || "free",
-    subscription_plan: "starter",
-    subscription_active: req.user.subscription_status === "active"
-  }),
-  profile,
-  subscription
-});
+      user: Object.assign({}, publicUser(req.user), {
+        subscription_status: subscription ? subscription.status : "free",
+        subscription_plan: plan,
+        subscription_active: isActive
+      }),
+      profile,
+      subscription
+    });
   } catch (error) {
     next(error);
   }
@@ -2635,47 +2621,7 @@ app.post("/api/business-profile", requireAuth, async function (req, res) {
 
 
 
-app.post("/api/business-profile", requireAuth, async function (req, res) {
-  try {
-    var payload = {
-      user_id: req.user.id,
-      business_name: req.body.business_name || "",
-      industry: req.body.industry || "",
-      description: req.body.description || "",
-      website: req.body.website || "",
-      target_audience: req.body.target_audience || "",
-      goals: req.body.goals || "",
-      updated_at: nowIso()
-    };
-
-    var result = await supabase
-      .from("business_profiles")
-      .upsert(payload, {
-        onConflict: "user_id"
-      })
-      .select("*")
-      .single();
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    res.json({
-      ok: true,
-      profile: result.data
-    });
-
-  } catch (err) {
-    console.error("Business profile save error:", err.message);
-
-    res.status(500).json({
-      ok: false,
-      error: "Failed to save business profile"
-    });
-  }
-});
-
-app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+async function handleAiTaskRequest(req, res, next) {
   try {
     var userId = req.user.id;
     var agentType = String(req.body.agent_type || req.body.agent || "general").toLowerCase().trim();
@@ -2806,7 +2752,9 @@ return res.status(202).json({
     console.error("AI TASK ERROR:", error);
     next(error);
   }
-});
+}
+app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, handleAiTaskRequest);
+
 app.post("/api/ai-reports", requireAuth, async function (req, res, next) {
   try {
     var payload = {
@@ -3793,18 +3741,13 @@ app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
 });
 
 app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
-  try {
-    req.body.agent_type = "seo";
-    req.body.task_type = "seo_audit";
-    req.body.prompt =
-      "Run a complete SEO audit for this website: " +
-      safeText(req.body.website, 1000) +
-      ". Include technical SEO, keywords, local SEO, content gaps, backlink opportunities, ranking issues, and 10 priority actions.";
-
-    return app._router.handle(req, res, next);
-  } catch (error) {
-    next(error);
-  }
+  req.body.agent_type = "seo";
+  req.body.task_type = "seo_audit";
+  req.body.prompt =
+    "Run a complete SEO audit for this website: " +
+    safeText(req.body.website, 1000) +
+    ". Include technical SEO, keywords, local SEO, content gaps, backlink opportunities, ranking issues, and 10 priority actions.";
+  return handleAiTaskRequest(req, res, next);
 });
 
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
@@ -4185,77 +4128,6 @@ app.use(function (error, req, res, next) {
     error: status === 500 ? "Internal server error" : error.message,
     details: process.env.NODE_ENV === "production" ? undefined : error.message
   });
-});
-app.post("/api/webhook", express.raw({ type: "application/json" }), async (req, res) => {
-  const sig = req.headers["stripe-signature"];
-
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.error("Webhook signature failed:", err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    // ✅ SUBSCRIPTION CREATED / UPDATED
-    if (
-      event.type === "customer.subscription.created" ||
-      event.type === "customer.subscription.updated"
-    ) {
-      const subscription = event.data.object;
-
-      const userId = subscription.metadata?.user_id;
-
-if (!userId) {
-  console.error("Missing user_id in Stripe metadata", subscription.id);
-  return;
-}
-
-      if (userId) {
-        await supabase
-          .from("users")
-          .update({
-            subscription_status: "active",
-            subscription_id: subscription.id,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", userId);
-      }
-    }
-
-    // ❌ SUBSCRIPTION CANCELED
-    if (event.type === "customer.subscription.deleted") {
-      const subscription = event.data.object;
-
-      const userId = subscription.metadata?.user_id;
-
-if (!userId) {
-  console.error("Missing user_id in Stripe deleted metadata", subscription.id);
-  return;
-}
-
-        await supabase
-          .from("users")
-          .update({
-            subscription_status: "free",
-            subscription_id: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", userId);
-    }
-
-    res.json({ received: true });
-
-  } catch (err) {
-    console.error("Webhook processing error:", err);
-    res.status(500).send("Webhook handler failed");
-  }
 });
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
