@@ -3654,12 +3654,19 @@ app.get("/api/ai/tasks", requireAuth, async function (req, res, next) {
   try {
     var limit = Math.min(Number(req.query.limit || 50), 100);
 
-    var result = await supabase
+    var query = supabase
       .from("ai_tasks")
       .select("*")
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: false })
       .limit(limit);
+
+    var agentTypeFilter = String(req.query.agent_type || "").toLowerCase().trim();
+    if (agentTypeFilter) {
+      query = query.eq("agent_type", agentTypeFilter);
+    }
+
+    var result = await query;
 
     if (result.error) {
       throw result.error;
