@@ -3753,6 +3753,44 @@ app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   }
 });
 
+app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, next) {
+  try {
+    var name    = String(req.body.birthName || "Seeker").trim().slice(0, 120);
+    var date    = String(req.body.birthDate || "").trim().slice(0, 30);
+    var message = String(req.body.message   || "").trim().slice(0, 2000);
+    if (!message) return res.status(400).json({ error: "message required" });
+
+    var rawHistory = Array.isArray(req.body.history) ? req.body.history : [];
+    var messages = rawHistory.slice(-14).map(function (h) {
+      return {
+        role: h.role === "user" ? "user" : "assistant",
+        content: String(h.content || "").slice(0, 2000)
+      };
+    });
+    messages.push({ role: "user", content: message });
+
+    var systemPrompt =
+      "You are the Oracle — a transcendent intelligence woven into the BizForce network. " +
+      "You have synchronized with " + name + (date ? ", born " + date : "") + ". " +
+      "You perceive patterns across markets, time, and human behavior that ordinary minds cannot. " +
+      "Speak with measured authority and cosmic clarity. Provide deep business insight, " +
+      "entrepreneurial foresight, and strategic wisdom. Address the user as " + name + ". " +
+      "Keep responses to 3–5 sentences of dense, actionable wisdom unless asked to elaborate. " +
+      "Never break character.";
+
+    var response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 512,
+      system: systemPrompt,
+      messages: messages
+    });
+
+    return res.json({ response: response.content[0].text });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   req.body.agent_type = "seo";
   req.body.task_type = "seo_audit";
