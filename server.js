@@ -4435,6 +4435,70 @@ app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next
   } catch (error) { next(error); }
 });
 
+/* ── Flyer Generator ── */
+
+const FLYER_TEMPLATES = ["professional","bold","minimal"];
+const FLYER_COLORS    = ["neon","crimson","jade","gold"];
+
+app.get("/api/flyers", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("saved_flyers")
+      .select("id, name, template, color_theme, content, updated_at")
+      .eq("user_id", req.user.id)
+      .order("updated_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return res.json({ flyers: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/flyers", requireAuth, async function (req, res, next) {
+  try {
+    const name      = safeText(req.body.name, 120) || "Untitled Flyer";
+    const template  = FLYER_TEMPLATES.includes(req.body.template)    ? req.body.template    : "professional";
+    const colorTheme = FLYER_COLORS.includes(req.body.color_theme)   ? req.body.color_theme : "neon";
+    const content   = (req.body.content && typeof req.body.content === "object" && !Array.isArray(req.body.content))
+      ? req.body.content : {};
+    const { data, error } = await supabase
+      .from("saved_flyers")
+      .insert({ user_id: req.user.id, name, template, color_theme: colorTheme, content, created_at: nowIso(), updated_at: nowIso() })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ flyer: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/flyers/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.name        !== undefined) updates.name        = safeText(req.body.name, 120) || "Untitled Flyer";
+    if (req.body.template    !== undefined && FLYER_TEMPLATES.includes(req.body.template))    updates.template    = req.body.template;
+    if (req.body.color_theme !== undefined && FLYER_COLORS.includes(req.body.color_theme))    updates.color_theme = req.body.color_theme;
+    if (req.body.content     !== undefined && typeof req.body.content === "object" && !Array.isArray(req.body.content)) updates.content = req.body.content;
+    const { data, error } = await supabase
+      .from("saved_flyers")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*").single();
+    if (error) throw error;
+    return res.json({ flyer: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/flyers/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase
+      .from("saved_flyers")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
