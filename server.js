@@ -4544,9 +4544,9 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
 
 app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
   try {
-    const allowed = ["display_name","tagline","bio","avatar_url","banner_url",
+    const allowed = ["display_name","title","tagline","bio","avatar_url","banner_url",
       "accent_color","font_style","show_products","show_portfolio","show_music",
-      "show_card","location","website","social_links"];
+      "show_card","show_videos","location","website","social_links","skills","industry"];
     const updates = { user_id: req.user.id, updated_at: nowIso() };
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(req.body, key)) {
@@ -4621,6 +4621,67 @@ app.put("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
 app.delete("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
   try {
     const { error } = await supabase.from("bf_products")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+// ── profile_products CRUD ─────────────────────────────────────────────────────
+app.get("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("profile_products")
+      .select("*").eq("user_id", req.user.id).order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ products: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/pproducts/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("profile_products")
+      .select("*").eq("user_id", req.params.userId).order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ products: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
+  try {
+    const name = safeText(req.body.name, 200);
+    if (!name) return res.status(400).json({ error: "name is required" });
+    const row = {
+      user_id:     req.user.id,
+      name,
+      description: safeText(req.body.description, 2000),
+      price:       req.body.price != null && req.body.price !== "" ? Number(req.body.price) : null,
+      image_url:   safeText(req.body.image_url, 500),
+      buy_link:    safeText(req.body.buy_link, 500)
+    };
+    const { data, error } = await supabase.from("profile_products").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ product: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/pproducts/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["name","description","price","image_url","buy_link"];
+    const updates = {};
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "nothing to update" });
+    const { data, error } = await supabase.from("profile_products")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ product: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/pproducts/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("profile_products")
       .delete().eq("id", req.params.id).eq("user_id", req.user.id);
     if (error) throw error;
     return res.json({ success: true });
@@ -4751,6 +4812,76 @@ app.put("/api/bfp/music/:id", requireAuth, async function (req, res, next) {
 app.delete("/api/bfp/music/:id", requireAuth, async function (req, res, next) {
   try {
     const { error } = await supabase.from("bf_music_tracks")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+// ── Videos CRUD ───────────────────────────────────────────────────────────────
+const VIDEO_TYPES = ["youtube","vimeo","upload"];
+
+app.get("/api/bfp/videos", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_videos")
+      .select("*").eq("user_id", req.user.id).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ videos: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/videos/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_videos")
+      .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ videos: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/videos", requireAuth, async function (req, res, next) {
+  try {
+    const title     = safeText(req.body.title, 200);
+    const video_url = safeText(req.body.video_url, 500);
+    if (!title)     return res.status(400).json({ error: "title is required" });
+    if (!video_url) return res.status(400).json({ error: "video_url is required" });
+    const video_type = VIDEO_TYPES.includes(req.body.video_type) ? req.body.video_type : "youtube";
+    const { data: existing } = await supabase.from("bf_videos")
+      .select("sort_order").eq("user_id", req.user.id)
+      .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+    const row = {
+      user_id:       req.user.id,
+      title,
+      description:   safeText(req.body.description, 1000),
+      video_url,
+      video_type,
+      thumbnail_url: safeText(req.body.thumbnail_url, 500),
+      sort_order:    existing ? existing.sort_order + 1 : 0
+    };
+    const { data, error } = await supabase.from("bf_videos").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ video: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/videos/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["title","description","video_url","video_type","thumbnail_url","sort_order"];
+    const updates = { updated_at: nowIso() };
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    if (updates.video_type && !VIDEO_TYPES.includes(updates.video_type)) delete updates.video_type;
+    const { data, error } = await supabase.from("bf_videos")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ video: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/videos/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("bf_videos")
       .delete().eq("id", req.params.id).eq("user_id", req.user.id);
     if (error) throw error;
     return res.json({ success: true });
