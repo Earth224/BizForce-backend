@@ -4394,7 +4394,8 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         company:   safeText(req.body.company, 120)   || "",
         website:   normalizeUrl(req.body.website)    || "",
         theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
-        video_url: safeText(req.body.video_url, 500) || null,
+        video_url:   safeText(req.body.video_url, 500) || null,
+        share_token: crypto.randomBytes(16).toString("hex"),
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -4434,6 +4435,45 @@ app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next
       .eq("user_id", req.user.id);
     if (error) throw error;
     return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+// Returns (and lazily generates) a share token for the user's card
+app.post("/api/cards/share-token", requireAuth, async function (req, res, next) {
+  try {
+    const cardId = req.body.card_id;
+    if (!cardId) return res.status(400).json({ error: "card_id required" });
+    const { data: card, error: fetchErr } = await supabase
+      .from("digital_cards")
+      .select("id, share_token")
+      .eq("id", cardId)
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!card) return res.status(404).json({ error: "Card not found" });
+    if (card.share_token) return res.json({ share_token: card.share_token });
+    const share_token = crypto.randomBytes(16).toString("hex");
+    const { error: upErr } = await supabase
+      .from("digital_cards")
+      .update({ share_token, updated_at: nowIso() })
+      .eq("id", cardId)
+      .eq("user_id", req.user.id);
+    if (upErr) throw upErr;
+    return res.json({ share_token });
+  } catch (error) { next(error); }
+});
+
+// Public — no auth — returns card by share token
+app.get("/api/cards/share/:token", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("digital_cards")
+      .select("full_name, job_title, company, email, phone, website, theme, video_url")
+      .eq("share_token", req.params.token)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Card not found" });
+    return res.json({ card: data });
   } catch (error) { next(error); }
 });
 
