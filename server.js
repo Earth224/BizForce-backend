@@ -4752,6 +4752,69 @@ app.delete("/api/bfp/portfolio/:id", requireAuth, async function (req, res, next
   } catch (error) { next(error); }
 });
 
+// ── profile_portfolio CRUD ────────────────────────────────────────────────────
+app.get("/api/bfp/pportfolio", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("profile_portfolio")
+      .select("*").eq("user_id", req.user.id).order("sort_order").order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ items: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/pportfolio/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("profile_portfolio")
+      .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ items: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/pportfolio", requireAuth, async function (req, res, next) {
+  try {
+    const title = safeText(req.body.title, 200);
+    if (!title) return res.status(400).json({ error: "title is required" });
+    const CATS = ["Design","Photography","Art","Web","Other"];
+    const row = {
+      user_id:     req.user.id,
+      title,
+      description: safeText(req.body.description, 2000),
+      image_url:   safeText(req.body.image_url, 500),
+      url:         safeText(req.body.url, 500),
+      category:    CATS.includes(req.body.category) ? req.body.category : (safeText(req.body.category, 80) || null),
+      sort_order:  0
+    };
+    const { data, error } = await supabase.from("profile_portfolio").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ item: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/pportfolio/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["title","description","image_url","url","category","sort_order"];
+    const updates = {};
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: "nothing to update" });
+    const { data, error } = await supabase.from("profile_portfolio")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ item: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/pportfolio/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("profile_portfolio")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
 // ── Music CRUD ────────────────────────────────────────────────────────────────
 app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
   try {
