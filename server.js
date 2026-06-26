@@ -4211,10 +4211,228 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
 
     if (error) throw error;
 
+    if (passed) {
+      try {
+        await creditWallet(req.user.id, 100, "Certification earned: " + certId);
+      } catch (walletErr) {
+        console.error("Wallet credit skipped:", walletErr.message);
+      }
+    }
+
     return res.status(201).json({ certification: data, success: true });
   } catch (error) {
     next(error);
   }
+});
+
+/* ── Wallet ── */
+
+async function creditWallet(userId, amount, description) {
+  const { data: existing } = await supabase
+    .from("user_wallets")
+    .select("balance")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!existing) {
+    await supabase.from("user_wallets").insert({
+      user_id: userId, balance: amount, currency: "BFC", updated_at: nowIso()
+    });
+  } else {
+    await supabase.from("user_wallets").update({
+      balance: existing.balance + amount, updated_at: nowIso()
+    }).eq("user_id", userId);
+  }
+
+  await supabase.from("wallet_transactions").insert({
+    user_id: userId, type: "reward", amount, description, created_at: nowIso()
+  });
+}
+
+app.get("/api/wallet", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wallet } = await supabase
+      .from("user_wallets")
+      .select("balance")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+
+    if (!wallet) {
+      await supabase.from("user_wallets").insert({
+        user_id: req.user.id, balance: 0, currency: "BFC", updated_at: nowIso()
+      });
+    }
+
+    const { data: txns, error } = await supabase
+      .from("wallet_transactions")
+      .select("id, type, amount, description, created_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    return res.json({ balance: wallet ? wallet.balance : 0, transactions: txns || [] });
+  } catch (error) { next(error); }
+});
+
+/* ── Marketplace ── */
+
+const MARKETPLACE_CATEGORIES = ["consulting","design","development","marketing","sales","strategy","operations","other"];
+
+app.get("/api/marketplace/listings", requireAuth, async function (req, res, next) {
+  try {
+    const category = safeText(req.query.category, 40);
+    const q = safeText(req.query.q, 120);
+    let query = supabase
+      .from("marketplace_listings")
+      .select("id, seller_id, title, description, price_bfc, category, tags, status, created_at")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    if (category && category !== "all") query = query.eq("category", category);
+    if (q) query = query.or("title.ilike.%" + q + "%,description.ilike.%" + q + "%");
+    const { data, error } = await query;
+    if (error) throw error;
+    return res.json({ listings: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/marketplace/my-listings", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("marketplace_listings")
+      .select("*")
+      .eq("seller_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ listings: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/marketplace/listings", requireAuth, async function (req, res, next) {
+  try {
+    const title       = safeText(req.body.title, 150);
+    const description = safeText(req.body.description, 2000);
+    const category    = safeText(req.body.category, 40);
+    const priceBfc    = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
+    const tags        = Array.isArray(req.body.tags)
+      ? req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
+      : [];
+    if (!title)    return res.status(400).json({ error: "Title is required" });
+    if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
+    const { data, error } = await supabase
+      .from("marketplace_listings")
+      .insert({
+        seller_id: req.user.id, title, description: description || "",
+        price_bfc: priceBfc, category, tags, status: "active",
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ listing: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
+    if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
+    if (req.body.price_bfc   !== undefined) updates.price_bfc   = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
+    if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
+    if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
+    if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
+    const { data, error } = await supabase
+      .from("marketplace_listings")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("seller_id", req.user.id)
+      .select("*").single();
+    if (error) throw error;
+    return res.json({ listing: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase
+      .from("marketplace_listings")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("seller_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+/* ── Digital Cards ── */
+
+const CARD_THEMES = ["dark","midnight","forest","ember"];
+
+app.get("/api/digital-cards", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("digital_cards")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ cards: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("digital_cards")
+      .insert({
+        user_id:   req.user.id,
+        full_name: safeText(req.body.full_name, 120) || "",
+        job_title: safeText(req.body.job_title, 120) || "",
+        email:     normalizeEmail(req.body.email)    || "",
+        phone:     safeText(req.body.phone, 40)      || "",
+        company:   safeText(req.body.company, 120)   || "",
+        website:   normalizeUrl(req.body.website)    || "",
+        theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ card: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.full_name !== undefined) updates.full_name = safeText(req.body.full_name, 120) || "";
+    if (req.body.job_title !== undefined) updates.job_title = safeText(req.body.job_title, 120) || "";
+    if (req.body.email     !== undefined) updates.email     = normalizeEmail(req.body.email)    || "";
+    if (req.body.phone     !== undefined) updates.phone     = safeText(req.body.phone, 40)      || "";
+    if (req.body.company   !== undefined) updates.company   = safeText(req.body.company, 120)   || "";
+    if (req.body.website   !== undefined) updates.website   = normalizeUrl(req.body.website)    || "";
+    if (req.body.theme     !== undefined && CARD_THEMES.includes(req.body.theme)) updates.theme = req.body.theme;
+    const { data, error } = await supabase
+      .from("digital_cards")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*").single();
+    if (error) throw error;
+    return res.json({ card: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase
+      .from("digital_cards")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
 });
 
 app.use(function (req, res) {
