@@ -4394,6 +4394,7 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         company:   safeText(req.body.company, 120)   || "",
         website:   normalizeUrl(req.body.website)    || "",
         theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
+        video_url: safeText(req.body.video_url, 500) || null,
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -4412,6 +4413,7 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.company   !== undefined) updates.company   = safeText(req.body.company, 120)   || "";
     if (req.body.website   !== undefined) updates.website   = normalizeUrl(req.body.website)    || "";
     if (req.body.theme     !== undefined && CARD_THEMES.includes(req.body.theme)) updates.theme = req.body.theme;
+    if (req.body.video_url !== undefined) updates.video_url = safeText(req.body.video_url, 500) || null;
     const { data, error } = await supabase
       .from("digital_cards")
       .update(updates)
