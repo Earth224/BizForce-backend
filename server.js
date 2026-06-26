@@ -4499,6 +4499,264 @@ app.delete("/api/flyers/:id", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+// ════════════════════════════════════════════════════════
+//  PROFILE PAGE  (bf_profiles, bf_products, bf_portfolio, bf_music_tracks)
+// ════════════════════════════════════════════════════════
+
+const BFP_FONTS = ["modern", "classic", "technical"];
+
+// ── Upload signed URL (client uploads directly to Supabase Storage) ──────────
+app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
+  try {
+    const folder      = safeText(req.body.folder, 40)   || "misc";
+    const filename    = safeText(req.body.filename, 200) || "file";
+    const contentType = safeText(req.body.contentType, 100) || "application/octet-stream";
+    const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
+    const path        = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
+    const { data, error } = await supabase.storage
+      .from("bf-public")
+      .createSignedUploadUrl(path);
+    if (error) throw error;
+    const publicUrl = supabase.storage.from("bf-public").getPublicUrl(path).data.publicUrl;
+    return res.json({ signedUrl: data.signedUrl, token: data.token, path, publicUrl });
+  } catch (error) { next(error); }
+});
+
+// ── BF Profile CRUD ───────────────────────────────────────────────────────────
+app.get("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("bf_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
+    if (error) throw error;
+    return res.json({ profile: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/profile/:userId", async function (req, res, next) {
+  try {
+    const userId = safeText(req.params.userId, 60);
+    const { data, error } = await supabase
+      .from("bf_profiles").select("*").eq("user_id", userId).maybeSingle();
+    if (error) throw error;
+    return res.json({ profile: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["display_name","tagline","bio","avatar_url","banner_url",
+      "accent_color","font_style","show_products","show_portfolio","show_music",
+      "show_card","location","website","social_links"];
+    const updates = { user_id: req.user.id, updated_at: nowIso() };
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
+        updates[key] = req.body[key];
+      }
+    }
+    if (updates.font_style && !BFP_FONTS.includes(updates.font_style)) {
+      updates.font_style = "modern";
+    }
+    const { data, error } = await supabase.from("bf_profiles")
+      .upsert(updates, { onConflict: "user_id" }).select("*").single();
+    if (error) throw error;
+    return res.json({ profile: data });
+  } catch (error) { next(error); }
+});
+
+// ── Products CRUD ─────────────────────────────────────────────────────────────
+app.get("/api/bfp/products", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_products")
+      .select("*").eq("user_id", req.user.id).order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ products: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/products/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_products")
+      .select("*").eq("user_id", req.params.userId).eq("status","active")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ products: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/products", requireAuth, async function (req, res, next) {
+  try {
+    const name = safeText(req.body.name, 200);
+    if (!name) return res.status(400).json({ error: "name is required" });
+    const row = {
+      user_id:     req.user.id,
+      name,
+      description: safeText(req.body.description, 2000),
+      price:       req.body.price != null ? Number(req.body.price) : null,
+      currency:    safeText(req.body.currency, 10) || "USD",
+      image_url:   safeText(req.body.image_url, 500),
+      category:    safeText(req.body.category, 80),
+      status:      ["active","draft"].includes(req.body.status) ? req.body.status : "active"
+    };
+    const { data, error } = await supabase.from("bf_products").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ product: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["name","description","price","currency","image_url","category","status"];
+    const updates = { updated_at: nowIso() };
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    if (updates.status && !["active","draft"].includes(updates.status)) delete updates.status;
+    const { data, error } = await supabase.from("bf_products")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ product: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("bf_products")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+// ── Portfolio CRUD ────────────────────────────────────────────────────────────
+app.get("/api/bfp/portfolio", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_portfolio")
+      .select("*").eq("user_id", req.user.id).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ items: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/portfolio/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_portfolio")
+      .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ items: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/portfolio", requireAuth, async function (req, res, next) {
+  try {
+    const title = safeText(req.body.title, 200);
+    if (!title) return res.status(400).json({ error: "title is required" });
+    const { data: existing } = await supabase.from("bf_portfolio")
+      .select("sort_order").eq("user_id", req.user.id)
+      .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+    const row = {
+      user_id:     req.user.id,
+      title,
+      description: safeText(req.body.description, 2000),
+      image_url:   safeText(req.body.image_url, 500),
+      url:         safeText(req.body.url, 500),
+      category:    safeText(req.body.category, 80),
+      sort_order:  existing ? existing.sort_order + 1 : 0
+    };
+    const { data, error } = await supabase.from("bf_portfolio").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ item: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/portfolio/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["title","description","image_url","url","category","sort_order"];
+    const updates = { updated_at: nowIso() };
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    const { data, error } = await supabase.from("bf_portfolio")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ item: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/portfolio/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("bf_portfolio")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
+// ── Music CRUD ────────────────────────────────────────────────────────────────
+app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_music_tracks")
+      .select("*").eq("user_id", req.user.id).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ tracks: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/music/public/:userId", async function (req, res, next) {
+  try {
+    const { data, error } = await supabase.from("bf_music_tracks")
+      .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
+    if (error) throw error;
+    return res.json({ tracks: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bfp/music", requireAuth, async function (req, res, next) {
+  try {
+    const title     = safeText(req.body.title, 200);
+    const audio_url = safeText(req.body.audio_url, 500);
+    if (!title)     return res.status(400).json({ error: "title is required" });
+    if (!audio_url) return res.status(400).json({ error: "audio_url is required" });
+    const { data: existing } = await supabase.from("bf_music_tracks")
+      .select("sort_order").eq("user_id", req.user.id)
+      .order("sort_order", { ascending: false }).limit(1).maybeSingle();
+    const row = {
+      user_id:       req.user.id,
+      title,
+      artist:        safeText(req.body.artist, 200),
+      audio_url,
+      cover_url:     safeText(req.body.cover_url, 500),
+      duration_secs: req.body.duration_secs ? Number(req.body.duration_secs) : null,
+      sort_order:    existing ? existing.sort_order + 1 : 0
+    };
+    const { data, error } = await supabase.from("bf_music_tracks").insert(row).select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ track: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bfp/music/:id", requireAuth, async function (req, res, next) {
+  try {
+    const allowed = ["title","artist","audio_url","cover_url","duration_secs","sort_order"];
+    const updates = {};
+    for (const key of allowed) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
+    }
+    const { data, error } = await supabase.from("bf_music_tracks")
+      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
+    if (error) throw error;
+    return res.json({ track: data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/bfp/music/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("bf_music_tracks")
+      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
