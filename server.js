@@ -2638,8 +2638,8 @@ async function handleAiTaskRequest(req, res, next) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-   var allowedAgents = ["general", "executive", "seo", "sales", "content", "social", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "store", "publicist", "broker", "crm", "security", "finance", "legal", "research"];
-    var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report"];
+   var allowedAgents = ["general", "executive", "seo", "sales", "content", "social", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "store", "publicist", "broker", "crm", "security", "finance", "legal", "research", "rd", "etsy"];
+    var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis"];
     if (!allowedAgents.includes(agentType)) {
       agentType = "general";
     }
@@ -2697,27 +2697,96 @@ Location: ${businessProfile.location || "Not Provided"}
       email: "You are the BizForce AI Email Agent. Build email sequences, subject lines, retention flows, winback flows, and nurture campaigns.",
       community: "You are the BizForce AI Community Agent. Build community growth plans, engagement systems, member retention, and partnership plays.",
       influencer: "You are the BizForce AI Influencer Agent. Build outreach scripts, partnership offers, creator lists, and collaboration campaigns.",
-      operations: "You are the BizForce AI Operations Agent. Build SOPs, workflows, automation systems, fulfillment checklists, and operating procedures."
-    }; 
+      operations: "You are the BizForce AI Operations Agent. Build SOPs, workflows, automation systems, fulfillment checklists, and operating procedures.",
+      store: "You are the BizForce AI Store Agent. Optimize e-commerce stores with product strategy, inventory management, conversion rate optimization, omnichannel tactics, and launch plans for physical and digital products.",
+      publicist: "You are the BizForce AI Publicist Agent. Write press releases, craft media pitches, build PR campaigns, shape brand narratives, and identify media outreach opportunities to earn coverage and grow visibility.",
+      broker: "You are the BizForce AI Broker Agent. Identify deal flow, structure partnership opportunities, build negotiation briefs, outline due diligence checklists, and draft term sheet frameworks for business deals.",
+      rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
+      research: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
+      etsy: "You are the BizForce AI Etsy Agent. Optimize Etsy shop listings with SEO-rich titles and tags, conduct shop audits, research high-volume keywords, build pricing strategies, and analyze competitor shops to maximize marketplace visibility and revenue.",
+      social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth."
+    };
 
     var taskInstructions = {
-      general: "Handle the user request directly and produce a practical business output.",
+      general: "Handle the user request directly and produce a specific, actionable business output. Give concrete steps, examples, and measurable actions — not generic advice.",
       executive: "Produce an Executive Command Plan. Act as the coordinator over all BizForce agents. Break the business objective into agent assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations. For each agent include mission, priority level, exact tasks, deadline, KPI, expected outcome, dependencies, and owner approval needs. End with a 7-day, 30-day, 60-day, and 90-day execution roadmap.",
       seo_audit: "Produce a structured SEO audit with technical SEO, keyword strategy, local SEO, content strategy, backlinks, metadata, schema, sitemap, page speed, and conversion recommendations.",
       sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, email sequence, objections, conversion points, upsell path, and tracking KPIs.",
       content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, platform strategy, repurposing plan, and brand voice guidance.",
-      ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget guidance, testing plan, and compliance-safe language."
+      ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget guidance, testing plan, and compliance-safe language.",
+      deal_pipeline: "Build a deal pipeline analysis: identify 5 specific deal or partnership opportunities relevant to the business, each with target company profile, deal structure, estimated value, and first outreach step.",
+      partnership_strategy: "Create a partnership strategy: identify ideal partner types, value exchange structure, co-marketing opportunities, revenue share models, and an outreach sequence with a sample first message.",
+      negotiation_brief: "Write a negotiation brief covering the user's objectives, BATNA, key leverage points, concession ranges, red lines, and a proposed opening position with reasoning.",
+      due_diligence: "Build a due diligence checklist tailored to the deal context covering: financials, legal, operations, team, technology, market position, and risk factors — with specific questions for each area.",
+      term_sheet: "Draft a term sheet framework covering deal structure, valuation basis, equity or revenue split, key milestones, exit provisions, exclusivity period, and standard protective clauses.",
+      community_plan: "Create a community growth plan with platform selection, founding member strategy, content programming schedule, engagement rituals, and a 90-day launch roadmap with weekly milestones.",
+      engagement_strategy: "Build an engagement strategy: daily engagement actions, response templates, community challenges, recognition programs, and UGC (user-generated content) prompts to increase participation.",
+      referral_loop: "Design a referral loop system: incentive structure, referral mechanics, messaging templates, tracking method, and activation sequence to turn members into advocates.",
+      retention_system: "Create a retention system: onboarding sequence, 30/60/90 day check-in touchpoints, churn warning signals, win-back campaigns, and loyalty recognition tiers.",
+      moderation_plan: "Write a moderation plan: community rules, enforcement tiers, moderator playbook, escalation process, and templates for handling violations, conflicts, and spam.",
+      email_campaign: "Write a complete email campaign: subject lines (A/B variants), preview text, body copy, CTA, send cadence, audience segmentation, and success metrics.",
+      email_sequence: "Build a multi-email nurture sequence: welcome email, value emails (2-3), proof/social email, and offer email — each with subject line, body copy, and CTA.",
+      winback_flow: "Create a winback email flow: trigger definition, 3-5 email sequence with subject lines and copy, final offer email, and sunset criteria for unresponsive contacts.",
+      nurture_campaign: "Build a lead nurture campaign: segment definitions, content themes per stage, email templates, send timing, and conversion triggers that move leads to purchase.",
+      subject_lines: "Generate 20 subject line variations for the given campaign goal — including curiosity, urgency, personalization, benefit-led, and question-based styles. Note which to A/B test first.",
+      influencer_outreach: "Write an influencer outreach campaign: target creator profile (niche, size, engagement rate), 3 outreach email templates, partnership offer structure, and a 30-day campaign timeline.",
+      campaign_plan: "Build an influencer campaign plan: campaign goal, creator selection criteria, content brief, usage rights, performance KPIs, payment structure, and post-campaign reporting format.",
+      partnership_offer: "Draft a creator partnership offer: value proposition, deliverables, compensation (flat fee + performance bonus structure), exclusivity terms, and content approval process.",
+      creator_list: "Generate a creator list strategy: ideal creator archetypes, platform focus, discovery methods, outreach prioritization, and a scoring rubric to evaluate fit.",
+      roi_forecast: "Build an influencer ROI forecast: estimated reach, engagement rate assumptions, conversion rate, projected revenue, cost per acquisition, and break-even analysis.",
+      operations_sop: "Write a detailed SOP for the requested process: purpose, scope, step-by-step procedure, roles and responsibilities, tools used, quality checkpoints, and exception handling.",
+      workflow_plan: "Build a workflow plan: process map with stages, handoff points, estimated time per step, automation opportunities, bottleneck risks, and KPIs to track efficiency.",
+      automation_plan: "Create an automation plan: identify 5 high-impact processes to automate, recommended tools, implementation priority, estimated time savings, and integration steps.",
+      checklist_build: "Build a detailed operational checklist for the requested process: pre-execution checks, execution steps, quality verification points, and completion sign-off criteria.",
+      efficiency_audit: "Conduct an operations efficiency audit: identify 5 bottlenecks or waste areas, root cause for each, recommended fix, implementation difficulty, and expected impact.",
+      press_release: "Write a professional press release: headline, dateline, lead paragraph (5 Ws), body with quotes, boilerplate, and media contact block — ready for distribution.",
+      media_outreach: "Build a media outreach plan: target publications and journalists (by beat), personalized pitch angles for each, pitch email template, follow-up sequence, and tracking method.",
+      pr_campaign: "Create a PR campaign: news hook, story angles, target media list (type/tier), press materials checklist, launch timeline, and success metrics.",
+      brand_narrative: "Craft a brand narrative: origin story, mission statement, brand values, hero customer story, key messages by audience, and an elevator pitch in 3 lengths (30s, 60s, 3min).",
+      media_pitch: "Write 3 media pitch variations for different journalist personas: a news hook pitch, a trend story pitch, and a human interest pitch — each under 200 words with a subject line.",
+      market_research: "Conduct a market research brief: market size estimate, key segments, growth trends, customer pain points, unmet needs, and 3 market entry or expansion opportunities.",
+      competitive_intel: "Build a competitive intelligence report: top 5 competitors, their positioning, pricing, strengths, weaknesses, recent moves, and strategic gaps the business can exploit.",
+      trend_analysis: "Produce a trend analysis: 5 relevant industry or market trends, evidence for each, business impact (opportunity/threat), recommended response, and 12-month outlook.",
+      innovation_brief: "Write an innovation brief: problem to solve, customer insight driving it, 3 product or service concepts, feasibility assessment, potential business model, and next validation step.",
+      executive_briefing: "Create an executive briefing: situation summary, key data points, decision options with pros/cons, recommended action, risk factors, and resource requirements — fit for a leadership presentation.",
+      reputation_audit: "Conduct a reputation audit: review platform scores, sentiment patterns, top positive/negative themes, competitor comparison, and a priority repair plan for weak areas.",
+      review_strategy: "Build a review generation strategy: ask timing, request channels, messaging templates (email/SMS/in-person), incentive-safe approaches, and a monthly review tracking system.",
+      brand_trust: "Create a brand trust plan: trust signals to add (certifications, testimonials, press, guarantees), messaging changes, website credibility elements, and a 60-day trust-building calendar.",
+      crisis_response: "Write a crisis response playbook: situation assessment criteria, internal escalation steps, holding statement template, spokesperson guidelines, platform-specific response templates, and post-crisis review process.",
+      sentiment_report: "Produce a sentiment report: overall brand sentiment score, positive/negative/neutral breakdown, key themes driving each, competitor sentiment comparison, and recommended messaging shifts.",
+      store_audit: "Conduct a store audit: homepage effectiveness, product page quality, checkout friction points, mobile experience, trust signals, load speed, and a prioritized fix list.",
+      inventory_plan: "Build an inventory plan: demand forecasting method, reorder point calculation, safety stock formula, supplier diversity strategy, and seasonal adjustment guidelines.",
+      omnichannel_strategy: "Create an omnichannel retail strategy: channel mix (online/offline/marketplace), inventory sync approach, customer experience consistency plan, and channel-specific marketing tactics.",
+      conversion_audit: "Audit conversion rate: identify 5 drop-off points in the funnel, root cause analysis, A/B test recommendations for each, priority order, and expected lift estimates.",
+      product_launch: "Build a product launch plan: launch timeline, pre-launch buzz tactics, launch day actions, email/social/ad coordination, influencer seeding, and post-launch review criteria.",
+      etsy_listing: "Optimize an Etsy listing: SEO-rich title (140 chars), 13 keyword tags, description structure (hook + features + story + CTA), pricing guidance, photo requirements, and shipping strategy.",
+      shop_audit: "Conduct an Etsy shop audit: shop score assessment, listing quality review, keyword coverage gaps, pricing competitiveness, photo quality, shop sections, and a 30-day improvement plan.",
+      keyword_research: "Produce an Etsy keyword research report: 20 high-volume low-competition keywords, long-tail phrase variations, seasonal keyword opportunities, and placement guidance (title vs tags).",
+      pricing_strategy: "Build an Etsy pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan.",
+      competitor_analysis: "Analyze Etsy competitors: top 5 competing shops, their listing strategies, pricing, review counts, bestseller patterns, and gaps the user can exploit to differentiate.",
+      reputation_plan: "Build a reputation management plan: monitoring setup, review response templates, proactive reputation tactics, and a 90-day brand trust improvement roadmap.",
+      analytics_report: "Produce an analytics report framework: key metrics dashboard, traffic analysis, conversion funnel, revenue attribution, and monthly reporting cadence with action triggers.",
+      email_campaign_plan: "Create an email marketing strategy: list segmentation, campaign calendar, automation workflows, deliverability best practices, and growth tactics.",
+      community_growth: "Build a community growth strategy: acquisition channels, onboarding flow, engagement programming, and member retention systems.",
+      operations_workflow: "Design an operations workflow: process documentation, team roles, handoff procedures, quality controls, and efficiency metrics.",
+      store_plan: "Create a comprehensive store strategy: product selection, pricing, marketing mix, customer acquisition, and scaling roadmap.",
+      etsy_store_plan: "Build an Etsy shop strategy: niche selection, product line planning, SEO approach, listing optimization, and growth tactics.",
+      publicist_pitch: "Craft media pitches and PR materials: press releases, journalist outreach, story angles, and media relationship building.",
+      broker_opportunity: "Identify and structure business opportunities: deal sourcing, partnership frameworks, negotiation preparation, and deal closing strategy.",
+      research_report: "Conduct business research and analysis: market intelligence, competitive landscape, trend identification, and strategic recommendations."
     };
 
     var approvalInstruction = requiresApproval
       ? "This request contains high-risk execution. Do NOT claim the action was executed. Return an approval-required action plan only."
       : "This request is advisory/planning only. Provide execution-ready guidance.";
 
-   var finalPrompt =
-  agentBrains[agentType] +
+   var agentBrain = agentBrains[agentType] || agentBrains["general"];
+    var taskInstruction = taskInstructions[taskType] || taskInstructions["general"];
+    var finalPrompt =
+  agentBrain +
   "\n\nBUSINESS PROFILE:\n" + businessContext +
   "\n\nTASK TYPE:\n" + taskType +
-  "\n\nTASK INSTRUCTIONS:\n" + taskInstructions[taskType] +
+  "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
   "\n\nSAFETY RULES:\n" +
   "- Do not execute purchases, payments, legal filings, tax actions, account creation, or financial transactions.\n" +
   "- For high-risk actions, return requires_approval true and an approval plan.\n" +
