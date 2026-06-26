@@ -4163,6 +4163,60 @@ app.post("/api/admin/flag/:userId", requireAuth, requireAdmin, async function (r
   }
 });
 
+/* ── Certifications ── */
+
+app.get("/api/certifications/earned", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("user_certifications")
+      .select("cert_id, category, score, passed, earned_at")
+      .eq("user_id", req.user.id)
+      .eq("passed", true)
+      .order("earned_at", { ascending: false });
+
+    if (error) throw error;
+
+    return res.json({ certifications: data || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/certifications/award", requireAuth, async function (req, res, next) {
+  try {
+    const certId   = safeText(req.body.cert_id,  80);
+    const category = safeText(req.body.category, 40);
+    const score    = Math.max(0, Math.min(100, Math.round(Number(req.body.score) || 0)));
+    const passed   = Boolean(req.body.passed);
+
+    if (!certId || !category) {
+      return res.status(400).json({ error: "cert_id and category are required" });
+    }
+
+    const { data, error } = await supabase
+      .from("user_certifications")
+      .upsert(
+        {
+          user_id:   req.user.id,
+          cert_id:   certId,
+          category,
+          score,
+          passed,
+          earned_at: nowIso()
+        },
+        { onConflict: "user_id,cert_id" }
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return res.status(201).json({ certification: data, success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
