@@ -4622,19 +4622,39 @@ const BFP_FONTS = ["modern", "classic", "technical"];
 
 // ── Upload signed URL (client uploads directly to Supabase Storage) ──────────
 app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
+  const folder      = safeText(req.body.folder, 40)   || "misc";
+  const filename    = safeText(req.body.filename, 200) || "file";
+  const contentType = safeText(req.body.contentType, 100) || "application/octet-stream";
+  const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
+  const storagePath = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
+
+  console.log("[upload-url] REQUEST  folder=%s file=%s ct=%s path=%s", folder, filename, contentType, storagePath);
+  console.log("[upload-url] ENV CHECK  SUPABASE_URL=%s  SERVICE_KEY_SET=%s",
+    process.env.SUPABASE_URL ? "yes" : "MISSING",
+    process.env.SUPABASE_SERVICE_KEY ? "yes" : "MISSING"
+  );
+
   try {
-    const folder      = safeText(req.body.folder, 40)   || "misc";
-    const filename    = safeText(req.body.filename, 200) || "file";
-    const contentType = safeText(req.body.contentType, 100) || "application/octet-stream";
-    const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
-    const path        = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
     const { data, error } = await supabase.storage
       .from("bf-public")
-      .createSignedUploadUrl(path);
-    if (error) throw error;
-    const publicUrl = supabase.storage.from("bf-public").getPublicUrl(path).data.publicUrl;
-    return res.json({ signedUrl: data.signedUrl, token: data.token, path, publicUrl });
-  } catch (error) { next(error); }
+      .createSignedUploadUrl(storagePath);
+
+    if (error) {
+      console.error("[upload-url] Supabase error:", JSON.stringify(error));
+      return res.status(502).json({ error: "Storage error: " + (error.message || JSON.stringify(error)) });
+    }
+    if (!data || !data.signedUrl) {
+      console.error("[upload-url] No signedUrl in response — data:", JSON.stringify(data));
+      return res.status(502).json({ error: "Storage returned no signed URL" });
+    }
+
+    const publicUrl = supabase.storage.from("bf-public").getPublicUrl(storagePath).data.publicUrl;
+    console.log("[upload-url] OK  publicUrl=%s", publicUrl);
+    return res.json({ signedUrl: data.signedUrl, token: data.token, path: storagePath, publicUrl });
+  } catch (err) {
+    console.error("[upload-url] EXCEPTION:", err);
+    return res.status(500).json({ error: "Upload URL generation failed: " + (err.message || String(err)) });
+  }
 });
 
 // ── BF Profile CRUD ───────────────────────────────────────────────────────────
