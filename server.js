@@ -4464,6 +4464,7 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         website:   normalizeUrl(req.body.website)    || "",
         theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
         video_url:        safeText(req.body.video_url, 500) || null,
+        bg_image_url:     safeText(req.body.bg_image_url, 500) || null,
         holographic_style: Boolean(req.body.holographic_style) || false,
         share_token: crypto.randomBytes(16).toString("hex"),
         created_at: nowIso(), updated_at: nowIso()
@@ -4484,7 +4485,8 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.company   !== undefined) updates.company   = safeText(req.body.company, 120)   || "";
     if (req.body.website   !== undefined) updates.website   = normalizeUrl(req.body.website)    || "";
     if (req.body.theme     !== undefined && CARD_THEMES.includes(req.body.theme)) updates.theme = req.body.theme;
-    if (req.body.video_url !== undefined) updates.video_url = safeText(req.body.video_url, 500) || null;
+    if (req.body.video_url   !== undefined) updates.video_url   = safeText(req.body.video_url, 500)   || null;
+    if (req.body.bg_image_url !== undefined) updates.bg_image_url = safeText(req.body.bg_image_url, 500) || null;
     if (req.body.holographic_style !== undefined) updates.holographic_style = Boolean(req.body.holographic_style);
     const { data, error } = await supabase
       .from("digital_cards")
@@ -4539,7 +4541,7 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("digital_cards")
-      .select("full_name, job_title, company, email, phone, website, theme, video_url, holographic_style")
+      .select("full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, holographic_style")
       .eq("share_token", req.params.token)
       .maybeSingle();
     if (error) throw error;
