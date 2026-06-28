@@ -4045,15 +4045,20 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
 });
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
-    const session = await stripe.checkout.sessions.create({
+    const priceId = process.env.STRIPE_STARTER_PRICE_ID || "price_1TRu8o157b9npvGC2y4uYNqv";
+
+    const { data: existingSub } = await supabase
+      .from("subscriptions")
+      .select("stripe_customer_id")
+      .eq("user_id", req.user.id)
+      .not("stripe_customer_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const sessionParams = {
       mode: "subscription",
-      customer_email: req.user.email,
-      line_items: [
-        {
-          price: "price_1TRu8o157b9npvGC2y4uYNqv",
-          quantity: 1
-        }
-      ],
+      line_items: [{ price: priceId, quantity: 1 }],
       metadata: {
         user_id: req.user.id,
         email: req.user.email,
@@ -4066,15 +4071,49 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
           plan: "starter"
         }
       },
-      success_url: "https://bizforceai.net/dashboard.html",
-      cancel_url: "https://bizforceai.net/app.html",
+      success_url: FRONTEND_URL + "/dashboard.html?subscribed=1",
+      cancel_url: FRONTEND_URL + "/app.html",
       allow_promotion_codes: true
-    });
+    };
 
+    if (existingSub && existingSub.stripe_customer_id) {
+      sessionParams.customer = existingSub.stripe_customer_id;
+    } else {
+      sessionParams.customer_email = req.user.email;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
     return res.json({ url: session.url });
   } catch (error) {
     console.error("Stripe checkout error:", error);
     return res.status(500).json({ error: "Stripe checkout failed" });
+  }
+});
+
+app.post("/api/billing/portal", requireAuth, async function (req, res) {
+  try {
+    const { data: subscription } = await supabase
+      .from("subscriptions")
+      .select("stripe_customer_id")
+      .eq("user_id", req.user.id)
+      .not("stripe_customer_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!subscription || !subscription.stripe_customer_id) {
+      return res.status(400).json({ error: "No billing account found. Please subscribe first." });
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: subscription.stripe_customer_id,
+      return_url: FRONTEND_URL + "/billing.html"
+    });
+
+    return res.json({ url: session.url });
+  } catch (error) {
+    console.error("Billing portal error:", error);
+    return res.status(500).json({ error: "Could not open billing portal" });
   }
 });
 
