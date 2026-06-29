@@ -4511,7 +4511,18 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
-    if (error) throw error;
+    if (error) {
+      console.error("[digital-cards POST] Supabase error:", {
+        code: error.code, message: error.message,
+        details: error.details, hint: error.hint
+      });
+      return res.status(500).json({
+        error: "Save failed",
+        db_code: error.code,
+        db_message: error.message,
+        db_hint: error.hint || error.details || null
+      });
+    }
     return res.status(201).json({ card: data });
   } catch (error) { next(error); }
 });
@@ -4537,7 +4548,18 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .select("*").single();
-    if (error) throw error;
+    if (error) {
+      console.error("[digital-cards PUT] Supabase error:", {
+        code: error.code, message: error.message,
+        details: error.details, hint: error.hint
+      });
+      return res.status(500).json({
+        error: "Save failed",
+        db_code: error.code,
+        db_message: error.message,
+        db_hint: error.hint || error.details || null
+      });
+    }
     return res.json({ card: data });
   } catch (error) { next(error); }
 });
@@ -5137,13 +5159,21 @@ app.use(function (req, res) {
 });
 
 app.use(function (error, req, res, next) {
-  console.error("Server error:", error);
+  console.error("Server error [%s %s]:", req.method, req.path, {
+    message: error.message,
+    code: error.code,
+    details: error.details,
+    hint: error.hint,
+    stack: error.stack
+  });
 
   const status = error.status || error.statusCode || 500;
 
   return res.status(status).json({
     error: status === 500 ? "Internal server error" : error.message,
-    details: process.env.NODE_ENV === "production" ? undefined : error.message
+    db_message: error.message || undefined,
+    db_code: error.code || undefined,
+    db_hint: error.hint || error.details || undefined
   });
 });
 app.listen(PORT, function () {
