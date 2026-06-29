@@ -4504,6 +4504,7 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
         video_url:        safeText(req.body.video_url, 500) || null,
         bg_image_url:     safeText(req.body.bg_image_url, 500) || null,
+        still_image_url:  safeText(req.body.still_image_url, 500) || null,
         audio_url:        safeText(req.body.audio_url, 500) || null,
         holographic_style: Boolean(req.body.holographic_style) || false,
         media_layout: req.body.media_layout || {},
@@ -4537,9 +4538,10 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.company   !== undefined) updates.company   = safeText(req.body.company, 120)   || "";
     if (req.body.website   !== undefined) updates.website   = normalizeUrl(req.body.website)    || "";
     if (req.body.theme     !== undefined && CARD_THEMES.includes(req.body.theme)) updates.theme = req.body.theme;
-    if (req.body.video_url   !== undefined) updates.video_url   = safeText(req.body.video_url, 500)   || null;
-    if (req.body.bg_image_url !== undefined) updates.bg_image_url = safeText(req.body.bg_image_url, 500) || null;
-    if (req.body.audio_url    !== undefined) updates.audio_url    = safeText(req.body.audio_url, 500)    || null;
+    if (req.body.video_url      !== undefined) updates.video_url      = safeText(req.body.video_url, 500)      || null;
+    if (req.body.bg_image_url   !== undefined) updates.bg_image_url   = safeText(req.body.bg_image_url, 500)   || null;
+    if (req.body.still_image_url !== undefined) updates.still_image_url = safeText(req.body.still_image_url, 500) || null;
+    if (req.body.audio_url       !== undefined) updates.audio_url       = safeText(req.body.audio_url, 500)       || null;
     if (req.body.holographic_style !== undefined) updates.holographic_style = Boolean(req.body.holographic_style);
     if (req.body.media_layout !== undefined) updates.media_layout = req.body.media_layout || {};
     const { data, error } = await supabase
@@ -4606,7 +4608,7 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("digital_cards")
-      .select("full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, audio_url, holographic_style, media_layout")
+      .select("full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, still_image_url, audio_url, holographic_style, media_layout")
       .eq("share_token", req.params.token)
       .maybeSingle();
     if (error) throw error;
