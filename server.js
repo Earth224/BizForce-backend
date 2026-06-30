@@ -5196,30 +5196,114 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
 
 /* ── Social Post Drafts ── */
 
+/* Calls GET /api/v1/accounts and returns the _id of the first account
+   matching the given platform slug, or null if none found / key missing. */
+async function getZernioAccountId(platform) {
+  var apiKey = (process.env.ZERNIO_API_KEY || "").trim();
+  if (!apiKey) return null;
+  var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
+  try {
+    var r = await fetch("https://zernio.com/api/v1/accounts", {
+      headers: { "Authorization": "Bearer " + apiKey }
+    });
+    if (!r.ok) {
+      var body = await r.text().catch(function () { return ""; });
+      console.error("[social/publish] Zernio accounts error " + r.status + ":", body.slice(0, 300));
+      return null;
+    }
+    var d        = await r.json();
+    var accounts = Array.isArray(d.accounts) ? d.accounts : [];
+    var match    = accounts.find(function (a) { return a.platform === zernioPlatform; });
+    console.log("[social/publish] accounts fetched:", accounts.length, "| looking for:", zernioPlatform, "| match:", match ? match._id : "none");
+    return match ? match._id : null;
+  } catch (e) {
+    console.error("[social/publish] getZernioAccountId threw:", e.message);
+    return null;
+  }
+}
+
 app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
   try {
+    var platform = safeText(req.body.platform, 100)  || null;
+    var content  = safeText(req.body.content, 10000) || null;
+    var schedFor = req.body.scheduled_for             || null;
+    var apiKey   = (process.env.ZERNIO_API_KEY || "").trim();
+
+    console.log("[social/publish] Approve — user:", req.user.id, "platform:", platform);
+
+    if (!apiKey) {
+      return res.status(503).json({ error: "Publishing unavailable — ZERNIO_API_KEY not configured" });
+    }
+
+    // 1. Look up connected accountId for this platform
+    var accountId = await getZernioAccountId(platform);
+    if (!accountId) {
+      console.log("[social/publish] No connected account for platform:", platform);
+      return res.status(400).json({
+        error: "No connected " + (platform || "social") + " account — connect one first"
+      });
+    }
+    console.log("[social/publish] accountId:", accountId, "platform:", platform);
+
+    // 2. Build Zernio post payload
+    var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
+    var postPayload    = {
+      content:   content,
+      platforms: [{ platform: zernioPlatform, accountId: accountId }]
+    };
+    if (schedFor) {
+      postPayload.scheduledFor = schedFor;
+    } else {
+      postPayload.publishNow = true;
+    }
+    console.log("[social/publish] Posting to Zernio:", JSON.stringify(postPayload));
+
+    // 3. Publish via Zernio
+    var zernioRes  = await fetch("https://zernio.com/api/v1/posts", {
+      method:  "POST",
+      headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
+      body:    JSON.stringify(postPayload)
+    });
+    var zernioText = await zernioRes.text();
+    console.log("[social/publish] Zernio response " + zernioRes.status + ":", zernioText.slice(0, 500));
+
+    if (!zernioRes.ok) {
+      return res.status(502).json({
+        error:   "Failed to publish to " + (platform || "social platform"),
+        details: zernioText.slice(0, 300)
+      });
+    }
+
+    var zernioData   = JSON.parse(zernioText);
+    var zernioPostId = (zernioData.post && zernioData.post._id) || null;
+    console.log("[social/publish] Published OK — Zernio post ID:", zernioPostId);
+
+    // 4. Persist draft with final status (do NOT mark published on Zernio error)
+    var finalStatus = schedFor ? "scheduled" : "published";
     const { data, error } = await supabase
       .from("social_post_drafts")
       .insert({
-        user_id:       req.user.id,
-        platform:      safeText(req.body.platform, 100)     || null,
-        content:       safeText(req.body.content, 10000)    || null,
-        status:        safeText(req.body.status, 40)        || "pending",
-        scheduled_for: req.body.scheduled_for               || null,
-        created_at:    nowIso(),
-        updated_at:    nowIso()
+        user_id:        req.user.id,
+        platform:       platform,
+        content:        content,
+        status:         finalStatus,
+        scheduled_for:  schedFor,
+        zernio_post_id: zernioPostId,
+        created_at:     nowIso(),
+        updated_at:     nowIso()
       })
       .select("*").single();
+
     if (error) {
       console.error("[social-drafts POST] Supabase error:", {
         code: error.code, message: error.message,
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error: "Save failed",
-        db_code: error.code,
+        error:      "Save failed",
+        db_code:    error.code,
         db_message: error.message,
-        db_hint: error.hint || error.details || null
+        db_hint:    error.hint || error.details || null
       });
     }
     return res.status(201).json({ draft: data });
