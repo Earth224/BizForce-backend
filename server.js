@@ -2671,8 +2671,8 @@ Industry: ${businessProfile.industry || "Not Provided"}
 Website: ${businessProfile.website || "Not Provided"}
 Description: ${businessProfile.description || "Not Provided"}
 Target Audience: ${businessProfile.target_audience || "Not Provided"}
-Goals: ${businessProfile.goals || "Not Provided"}
-Services: ${businessProfile.services || "Not Provided"}
+Goals: ${businessProfile.business_goals || "Not Provided"}
+Services: ${businessProfile.products_services || "Not Provided"}
 Location: ${businessProfile.location || "Not Provided"}
 `;
     if (memoryResult.error) {
