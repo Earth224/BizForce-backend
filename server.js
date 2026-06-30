@@ -5267,17 +5267,56 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
-/* ── Social Account Connect (placeholder — Ayrshare integration pending) ── */
+/* ── Social Account Connect (Zernio OAuth) ── */
+/* Maps our platform slugs to Zernio's platform identifiers */
+var ZERNIO_PLATFORM_MAP = {
+  x:         "twitter",
+  instagram: "instagram",
+  facebook:  "facebook",
+  tiktok:    "tiktok",
+  youtube:   "youtube",
+  linkedin:  "linkedin"
+};
 
 app.post("/api/social/connect/:platform", requireAuth, async function (req, res, next) {
   try {
-    var platform = safeText(req.params.platform, 40) || "unknown";
-    console.log("[social/connect] User " + req.user.id + " requested connect for platform: " + platform);
-    return res.json({
-      ok: true,
-      platform: platform,
-      message: "Coming soon — Ayrshare integration pending API key setup"
-    });
+    var rawPlatform    = safeText(req.params.platform, 40) || "";
+    var zernioPlatform = ZERNIO_PLATFORM_MAP[rawPlatform] || rawPlatform;
+    var apiKey         = process.env.ZERNIO_API_KEY;
+
+    if (!apiKey) {
+      return res.status(503).json({ error: "Social connect unavailable — ZERNIO_API_KEY not configured" });
+    }
+
+    /* profileId scopes connected accounts within Zernio; fall back to authenticated user id */
+    var profileId = process.env.ZERNIO_PROFILE_ID || req.user.id;
+
+    console.log("[social/connect] User " + req.user.id + " → Zernio connect for platform: " + zernioPlatform);
+
+    var zernioRes = await fetch(
+      "https://zernio.com/api/v1/connect/" + encodeURIComponent(zernioPlatform) +
+        "?profileId=" + encodeURIComponent(profileId),
+      { headers: { "Authorization": "Bearer " + apiKey } }
+    );
+
+    if (!zernioRes.ok) {
+      var errBody = await zernioRes.json().catch(function () { return {}; });
+      console.error("[social/connect] Zernio error " + zernioRes.status + ":", errBody);
+      return res.status(502).json({
+        error: "Could not generate connect URL",
+        details: errBody.message || errBody.error || ("HTTP " + zernioRes.status)
+      });
+    }
+
+    var data       = await zernioRes.json();
+    var connectUrl = data.url || data.authUrl || data.connect_url || null;
+
+    if (!connectUrl) {
+      console.error("[social/connect] Zernio response missing URL field:", JSON.stringify(data));
+      return res.status(502).json({ error: "Zernio did not return a connect URL" });
+    }
+
+    return res.json({ ok: true, platform: rawPlatform, url: connectUrl });
   } catch (error) { next(error); }
 });
 
