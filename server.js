@@ -2575,53 +2575,51 @@ app.get("/api/business-profile", requireAuth, async (req, res) => {
 app.post("/api/business-profile", requireAuth, async function (req, res) {
   try {
     var payload = {
-      user_id: req.user.id,
-      business_name: req.body.business_name || "",
-      business_type: req.body.business_type || "",
-      industry: req.body.industry || req.body.niche || "",
-      niche: req.body.niche || req.body.industry || "",
-      website: req.body.website || "",
-      location: req.body.location || "",
-      target_audience: req.body.target_audience || "",
-      offer: req.body.offer || "",
-      monthly_revenue: req.body.monthly_revenue || "",
-      monthly_budget: req.body.monthly_budget || "",
-      primary_goal: req.body.primary_goal || req.body.goals || "",
-      goals: req.body.goals || req.body.primary_goal || "",
-      top_keywords: req.body.top_keywords || "",
-      top_competitors: req.body.top_competitors || "",
-      social_platforms: req.body.social_platforms || "",
-      products_services: req.body.products_services || "",
-      brand_voice: req.body.brand_voice || "",
-      business_description: req.body.business_description || req.body.description || "",
-      description: req.body.description || req.body.business_description || "",
-      automation_level: req.body.automation_level || "",
-      updated_at: nowIso()
+      user_id:           req.user.id,
+      business_name:     safeText(req.body.business_name, 120)                                          || null,
+      business_type:     safeText(req.body.business_type, 120)                                          || null,
+      industry:          safeText(req.body.industry || req.body.niche, 120)                             || null,
+      website:           safeText(req.body.website, 500)                                                || null,
+      location:          safeText(req.body.location, 200)                                               || null,
+      target_audience:   safeText(req.body.target_audience, 500)                                        || null,
+      offer:             safeText(req.body.offer, 500)                                                  || null,
+      products_services: safeText(req.body.products_services, 1000)                                     || null,
+      brand_voice:       safeText(req.body.brand_voice, 500)                                            || null,
+      brand_values:      safeText(req.body.brand_values, 1000)                                          || null,
+      business_goals:    safeText(req.body.business_goals || req.body.goals || req.body.primary_goal, 1000) || null,
+      banned_topics:     safeText(req.body.banned_topics, 1000)                                         || null,
+      competitors:       safeText(req.body.competitors || req.body.top_competitors, 500)                || null,
+      description:       safeText(req.body.description || req.body.business_description, 2000)          || null,
+      social_platforms:  (req.body.social_platforms && typeof req.body.social_platforms === "object" && !Array.isArray(req.body.social_platforms))
+        ? req.body.social_platforms : {},
+      posting_frequency: safeText(req.body.posting_frequency, 100)                                      || null,
+      created_at: nowIso(), updated_at: nowIso()
     };
 
     var result = await supabase
       .from("business_profiles")
-      .upsert(payload, {
-        onConflict: "user_id"
-      })
+      .upsert(payload, { onConflict: "user_id" })
       .select("*")
       .single();
 
     if (result.error) {
-      throw result.error;
+      console.error("[business-profile POST] Supabase error:", {
+        code: result.error.code, message: result.error.message,
+        details: result.error.details, hint: result.error.hint
+      });
+      return res.status(500).json({
+        ok: false,
+        error: "Save failed",
+        db_code: result.error.code,
+        db_message: result.error.message,
+        db_hint: result.error.hint || result.error.details || null
+      });
     }
 
-    res.json({
-      ok: true,
-      profile: result.data
-    });
+    res.json({ ok: true, profile: result.data });
   } catch (err) {
-    console.error("Business profile save error:", err.message);
-
-    res.status(500).json({
-      ok: false,
-      error: err.message || "Failed to save business profile"
-    });
+    console.error("[business-profile POST] Unexpected error:", err.message);
+    res.status(500).json({ ok: false, error: err.message || "Failed to save business profile" });
   }
 });
 
@@ -5159,15 +5157,19 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
     if (req.body.business_name     !== undefined) updates.business_name     = safeText(req.body.business_name, 120)      || null;
+    if (req.body.business_type     !== undefined) updates.business_type     = safeText(req.body.business_type, 120)      || null;
     if (req.body.industry          !== undefined) updates.industry          = safeText(req.body.industry, 120)           || null;
     if (req.body.website           !== undefined) updates.website           = safeText(req.body.website, 500)            || null;
     if (req.body.location          !== undefined) updates.location          = safeText(req.body.location, 200)           || null;
     if (req.body.target_audience   !== undefined) updates.target_audience   = safeText(req.body.target_audience, 500)    || null;
+    if (req.body.offer             !== undefined) updates.offer             = safeText(req.body.offer, 500)              || null;
+    if (req.body.products_services !== undefined) updates.products_services = safeText(req.body.products_services, 1000) || null;
     if (req.body.brand_voice       !== undefined) updates.brand_voice       = safeText(req.body.brand_voice, 500)        || null;
     if (req.body.brand_values      !== undefined) updates.brand_values      = safeText(req.body.brand_values, 1000)      || null;
     if (req.body.business_goals    !== undefined) updates.business_goals    = safeText(req.body.business_goals, 1000)    || null;
     if (req.body.banned_topics     !== undefined) updates.banned_topics     = safeText(req.body.banned_topics, 1000)     || null;
     if (req.body.competitors       !== undefined) updates.competitors       = safeText(req.body.competitors, 500)        || null;
+    if (req.body.description       !== undefined) updates.description       = safeText(req.body.description, 2000)       || null;
     if (req.body.social_platforms  !== undefined && typeof req.body.social_platforms === "object" && !Array.isArray(req.body.social_platforms))
       updates.social_platforms = req.body.social_platforms;
     if (req.body.posting_frequency !== undefined) updates.posting_frequency = safeText(req.body.posting_frequency, 100)  || null;
