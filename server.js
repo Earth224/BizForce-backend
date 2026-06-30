@@ -5282,7 +5282,7 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
   try {
     var rawPlatform    = safeText(req.params.platform, 40) || "";
     var zernioPlatform = ZERNIO_PLATFORM_MAP[rawPlatform] || rawPlatform;
-    var apiKey         = process.env.ZERNIO_API_KEY;
+    var apiKey         = (process.env.ZERNIO_API_KEY || "").trim();
 
     if (!apiKey) {
       return res.status(503).json({ error: "Social connect unavailable — ZERNIO_API_KEY not configured" });
