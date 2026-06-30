@@ -5153,6 +5153,45 @@ app.delete("/api/bfp/videos/:id", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+/* ── Business Profile — PUT (GET and POST already registered above) ── */
+
+app.put("/api/business-profile", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.business_name     !== undefined) updates.business_name     = safeText(req.body.business_name, 120)      || null;
+    if (req.body.industry          !== undefined) updates.industry          = safeText(req.body.industry, 120)           || null;
+    if (req.body.website           !== undefined) updates.website           = safeText(req.body.website, 500)            || null;
+    if (req.body.location          !== undefined) updates.location          = safeText(req.body.location, 200)           || null;
+    if (req.body.target_audience   !== undefined) updates.target_audience   = safeText(req.body.target_audience, 500)    || null;
+    if (req.body.brand_voice       !== undefined) updates.brand_voice       = safeText(req.body.brand_voice, 500)        || null;
+    if (req.body.brand_values      !== undefined) updates.brand_values      = safeText(req.body.brand_values, 1000)      || null;
+    if (req.body.business_goals    !== undefined) updates.business_goals    = safeText(req.body.business_goals, 1000)    || null;
+    if (req.body.banned_topics     !== undefined) updates.banned_topics     = safeText(req.body.banned_topics, 1000)     || null;
+    if (req.body.competitors       !== undefined) updates.competitors       = safeText(req.body.competitors, 500)        || null;
+    if (req.body.social_platforms  !== undefined && typeof req.body.social_platforms === "object" && !Array.isArray(req.body.social_platforms))
+      updates.social_platforms = req.body.social_platforms;
+    if (req.body.posting_frequency !== undefined) updates.posting_frequency = safeText(req.body.posting_frequency, 100)  || null;
+    const { data, error } = await supabase
+      .from("business_profiles")
+      .update(updates)
+      .eq("user_id", req.user.id)
+      .select("*").single();
+    if (error) {
+      console.error("[business-profile PUT] Supabase error:", {
+        code: error.code, message: error.message,
+        details: error.details, hint: error.hint
+      });
+      return res.status(500).json({
+        error: "Save failed",
+        db_code: error.code,
+        db_message: error.message,
+        db_hint: error.hint || error.details || null
+      });
+    }
+    return res.json({ profile: data });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
