@@ -5196,30 +5196,34 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
 
 /* ── Social Post Drafts ── */
 
-/* Calls GET /api/v1/accounts and returns the _id of the first account
-   matching the given platform slug, or null if none found / key missing. */
-async function getZernioAccountId(platform) {
+/* Fetches all connected Zernio accounts; returns raw array (empty on any error). */
+async function fetchZernioAccounts(logPrefix) {
   var apiKey = (process.env.ZERNIO_API_KEY || "").trim();
-  if (!apiKey) return null;
-  var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
+  if (!apiKey) return [];
   try {
     var r = await fetch("https://zernio.com/api/v1/accounts", {
       headers: { "Authorization": "Bearer " + apiKey }
     });
     if (!r.ok) {
       var body = await r.text().catch(function () { return ""; });
-      console.error("[social/publish] Zernio accounts error " + r.status + ":", body.slice(0, 300));
-      return null;
+      console.error("[" + logPrefix + "] Zernio accounts error " + r.status + ":", body.slice(0, 300));
+      return [];
     }
-    var d        = await r.json();
-    var accounts = Array.isArray(d.accounts) ? d.accounts : [];
-    var match    = accounts.find(function (a) { return a.platform === zernioPlatform; });
-    console.log("[social/publish] accounts fetched:", accounts.length, "| looking for:", zernioPlatform, "| match:", match ? match._id : "none");
-    return match ? match._id : null;
+    var d = await r.json();
+    return Array.isArray(d.accounts) ? d.accounts : [];
   } catch (e) {
-    console.error("[social/publish] getZernioAccountId threw:", e.message);
-    return null;
+    console.error("[" + logPrefix + "] fetchZernioAccounts threw:", e.message);
+    return [];
   }
+}
+
+/* Returns the Zernio account _id for a given platform slug, or null if not connected. */
+async function getZernioAccountId(platform) {
+  var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
+  var accounts = await fetchZernioAccounts("social/publish");
+  var match = accounts.find(function (a) { return a.platform === zernioPlatform; });
+  console.log("[social/publish] accounts:", accounts.length, "| looking for:", zernioPlatform, "| match:", match ? match._id : "none");
+  return match ? match._id : null;
 }
 
 app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
@@ -5348,6 +5352,26 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
       });
     }
     return res.json({ draft: data });
+  } catch (error) { next(error); }
+});
+
+/* ── List connected social accounts ── */
+app.get("/api/social/accounts", requireAuth, async function (req, res, next) {
+  try {
+    var raw = await fetchZernioAccounts("social/accounts");
+    var reverseMap = {};
+    Object.keys(ZERNIO_PLATFORM_MAP).forEach(function (k) {
+      reverseMap[ZERNIO_PLATFORM_MAP[k]] = k;
+    });
+    var accounts = raw.map(function (a) {
+      return {
+        platform:  reverseMap[a.platform] || a.platform,
+        accountId: a._id,
+        name:      a.name || a.username || a.handle || a.displayName || a._id
+      };
+    });
+    console.log("[social/accounts] returning", accounts.length, "connected accounts");
+    return res.json({ accounts: accounts });
   } catch (error) { next(error); }
 });
 
