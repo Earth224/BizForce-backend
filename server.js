@@ -5267,6 +5267,20 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+/* ── Social Account Connect (placeholder — Ayrshare integration pending) ── */
+
+app.post("/api/social/connect/:platform", requireAuth, async function (req, res, next) {
+  try {
+    var platform = safeText(req.params.platform, 40) || "unknown";
+    console.log("[social/connect] User " + req.user.id + " requested connect for platform: " + platform);
+    return res.json({
+      ok: true,
+      platform: platform,
+      message: "Coming soon — Ayrshare integration pending API key setup"
+    });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
