@@ -5320,6 +5320,35 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
   } catch (error) { next(error); }
 });
 
+/* ── Zernio key + connectivity diagnostic (REMOVE BEFORE PRODUCTION) ── */
+app.get("/api/_zerniodebug", async function (req, res, next) {
+  try {
+    var raw    = process.env.ZERNIO_API_KEY || "";
+    var key    = raw.trim();
+    var meta   = {
+      keyLength: key.length,
+      keyPrefix: key.slice(0, 6),
+      keySuffix: key.slice(-4)
+    };
+
+    var zernioStatus = null;
+    var zernioBody   = null;
+
+    try {
+      var r = await fetch("https://zernio.com/api/v1/profiles", {
+        headers: { "Authorization": "Bearer " + key }
+      });
+      zernioStatus = r.status;
+      var text = await r.text();
+      zernioBody = text.slice(0, 500);
+    } catch (fetchErr) {
+      zernioBody = "fetch error: " + fetchErr.message;
+    }
+
+    return res.json({ ok: true, ...meta, zernioStatus, zernioBody });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
