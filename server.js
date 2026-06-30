@@ -5194,6 +5194,79 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+/* ── Social Post Drafts ── */
+
+app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("social_post_drafts")
+      .insert({
+        user_id:       req.user.id,
+        platform:      safeText(req.body.platform, 100)     || null,
+        content:       safeText(req.body.content, 10000)    || null,
+        status:        safeText(req.body.status, 40)        || "pending",
+        scheduled_for: req.body.scheduled_for               || null,
+        created_at:    nowIso(),
+        updated_at:    nowIso()
+      })
+      .select("*").single();
+    if (error) {
+      console.error("[social-drafts POST] Supabase error:", {
+        code: error.code, message: error.message,
+        details: error.details, hint: error.hint
+      });
+      return res.status(500).json({
+        error: "Save failed",
+        db_code: error.code,
+        db_message: error.message,
+        db_hint: error.hint || error.details || null
+      });
+    }
+    return res.status(201).json({ draft: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/social-drafts", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("social_post_drafts")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ drafts: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.platform      !== undefined) updates.platform      = safeText(req.body.platform, 100)  || null;
+    if (req.body.content       !== undefined) updates.content       = safeText(req.body.content, 10000) || null;
+    if (req.body.status        !== undefined) updates.status        = safeText(req.body.status, 40)     || "pending";
+    if (req.body.scheduled_for !== undefined) updates.scheduled_for = req.body.scheduled_for            || null;
+    const { data, error } = await supabase
+      .from("social_post_drafts")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*").single();
+    if (error) {
+      console.error("[social-drafts PUT] Supabase error:", {
+        code: error.code, message: error.message,
+        details: error.details, hint: error.hint
+      });
+      return res.status(500).json({
+        error: "Save failed",
+        db_code: error.code,
+        db_message: error.message,
+        db_hint: error.hint || error.details || null
+      });
+    }
+    return res.json({ draft: data });
+  } catch (error) { next(error); }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
