@@ -5753,7 +5753,7 @@ app.post("/api/sms/campaigns/:id/enroll", requireAuth, async function (req, res,
           user_id:      req.user.id,
           current_step: 0,
           status:       "active",
-          created_at:   new Date().toISOString()
+          enrolled_at:  new Date().toISOString()
         });
 
       if (error) {
