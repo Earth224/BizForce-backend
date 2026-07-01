@@ -2366,7 +2366,9 @@ async function callAnthropicText(promptText, maxTokens) {
     apiKey: process.env.ANTHROPIC_API_KEY
   });
 
-  var response = await anthropicClient.messages.create({
+  var text = "";
+
+  var stream = anthropicClient.messages.stream({
     model: "claude-haiku-4-5-20251001",
     max_tokens: maxTokens,
     messages: [
@@ -2382,13 +2384,21 @@ async function callAnthropicText(promptText, maxTokens) {
     ]
   });
 
+  for await (var event of stream) {
+    if (
+      event.type === "content_block_delta" &&
+      event.delta &&
+      event.delta.type === "text_delta"
+    ) {
+      text += event.delta.text;
+    }
+  }
+
+  var finalMsg = await stream.finalMessage();
+
   return {
-    text: response.content &&
-      response.content[0] &&
-      response.content[0].text
-      ? response.content[0].text
-      : JSON.stringify(response),
-    stopReason: response.stop_reason || ""
+    text: text || "",
+    stopReason: (finalMsg && finalMsg.stop_reason) || ""
   };
 }
 
