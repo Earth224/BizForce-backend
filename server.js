@@ -5731,6 +5731,76 @@ app.get("/api/sms/send-log", requireAuth, async function (req, res, next) {
   }
 });
 
+app.post("/api/sms/campaigns/:id/enroll", requireAuth, async function (req, res, next) {
+  try {
+    var campaignId    = req.params.id;
+    var subscriberIds = req.body.subscriber_ids;
+
+    if (!Array.isArray(subscriberIds) || subscriberIds.length === 0) {
+      return res.status(400).json({ error: "subscriber_ids array required" });
+    }
+
+    console.log("[sms/campaigns/enroll] User " + req.user.id + " → enrolling " + subscriberIds.length + " subscriber(s) into campaign " + campaignId);
+
+    var enrolled = 0;
+
+    for (var i = 0; i < subscriberIds.length; i++) {
+      var { error } = await supabase
+        .from("sms_campaign_enrollments")
+        .insert({
+          campaign_id:  campaignId,
+          subscriber_id: subscriberIds[i],
+          user_id:      req.user.id,
+          current_step: 0,
+          status:       "active",
+          created_at:   new Date().toISOString()
+        });
+
+      if (error) {
+        if (error.code === "23505") {
+          console.log("[sms/campaigns/enroll] Skipping duplicate subscriber " + subscriberIds[i]);
+          continue;
+        }
+        console.error("[sms/campaigns/enroll] Supabase error for subscriber " + subscriberIds[i] + ":", error.message);
+      } else {
+        enrolled++;
+      }
+    }
+
+    return res.json({ enrolled: enrolled });
+
+  } catch (error) {
+    console.error("[sms/campaigns/enroll] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, res, next) {
+  try {
+    var campaignId = req.params.id;
+
+    console.log("[sms/campaigns/enrollments] User " + req.user.id + " → fetching enrollments for campaign " + campaignId);
+
+    var { data, error } = await supabase
+      .from("sms_campaign_enrollments")
+      .select("*")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[sms/campaigns/enrollments] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ enrollments: data });
+
+  } catch (error) {
+    console.error("[sms/campaigns/enrollments] Error:", error.message || error);
+    next(error);
+  }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
