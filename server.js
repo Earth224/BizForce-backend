@@ -5429,6 +5429,155 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
   } catch (error) { next(error); }
 });
 
+/* ── SMS Drip Engine ─────────────────────────────────────────────────────── */
+
+async function runDripEngine(userId) {
+  try {
+    var DRY_RUN = true;
+
+    var { data: enrollments, error } = await supabase
+      .from("sms_campaign_enrollments")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", "active");
+
+    if (error) {
+      console.error("[dripEngine] Supabase error loading enrollments:", error.message);
+      return { processed: 0, sent: 0, skipped: 0, completed: 0 };
+    }
+
+    var list = enrollments || [];
+    console.log("[dripEngine] User " + userId + " — active enrollments found:", list.length);
+
+    var summary = { processed: 0, sent: 0, skipped: 0, completed: 0 };
+
+    for (var i = 0; i < list.length; i++) {
+      var enrollment = list[i];
+      summary.processed++;
+
+      var { data: msgs, error: msgsErr } = await supabase
+        .from("sms_campaign_messages")
+        .select("*")
+        .eq("campaign_id", enrollment.campaign_id)
+        .order("step_order", { ascending: true });
+
+      if (msgsErr) {
+        console.error("[dripEngine] Error loading messages for campaign " + enrollment.campaign_id + ":", msgsErr.message);
+        summary.skipped++;
+        continue;
+      }
+
+      msgs = msgs || [];
+
+      if (enrollment.current_step >= msgs.length) {
+        console.log("[dripEngine] Enrollment " + enrollment.id + " — all steps complete, marking completed");
+
+        var { error: completeErr } = await supabase
+          .from("sms_campaign_enrollments")
+          .update({ status: "completed" })
+          .eq("id", enrollment.id);
+
+        if (completeErr) {
+          console.error("[dripEngine] Error completing enrollment " + enrollment.id + ":", completeErr.message);
+        } else {
+          summary.completed++;
+        }
+        continue;
+      }
+
+      var currentMsg = msgs[enrollment.current_step];
+
+      if (enrollment.next_send_at && new Date(enrollment.next_send_at) > new Date()) {
+        console.log("[dripEngine] Enrollment " + enrollment.id + " — not yet due (next_send_at: " + enrollment.next_send_at + ")");
+        summary.skipped++;
+        continue;
+      }
+
+      var { data: subscriber, error: subErr } = await supabase
+        .from("sms_subscribers")
+        .select("*")
+        .eq("id", enrollment.subscriber_id)
+        .maybeSingle();
+
+      if (subErr) {
+        console.error("[dripEngine] Error loading subscriber " + enrollment.subscriber_id + ":", subErr.message);
+        summary.skipped++;
+        continue;
+      }
+
+      if (!subscriber || subscriber.consent_status !== "opted_in") {
+        console.log("[dripEngine] Enrollment " + enrollment.id + " — subscriber " + enrollment.subscriber_id + " not opted in, skipping");
+        summary.skipped++;
+        continue;
+      }
+
+      console.log("[dripEngine] Enrollment " + enrollment.id +
+        " — subscriber " + enrollment.subscriber_id +
+        " due for step " + enrollment.current_step +
+        " (step_order " + currentMsg.step_order + ")" +
+        (DRY_RUN ? " [DRY RUN]" : ""));
+
+      var nowIso = new Date().toISOString();
+
+      var { error: logErr } = await supabase
+        .from("sms_send_log")
+        .insert({
+          user_id:       userId,
+          campaign_id:   enrollment.campaign_id,
+          subscriber_id: enrollment.subscriber_id,
+          message_id:    currentMsg.id,
+          phone_number:  subscriber.phone_number,
+          status:        DRY_RUN ? "dry_run" : "sent",
+          twilio_sid:    null,
+          sent_at:       nowIso
+        });
+
+      if (logErr) {
+        console.error("[dripEngine] Error writing send log for enrollment " + enrollment.id + ":", logErr.message);
+        summary.skipped++;
+        continue;
+      }
+
+      var newStep = enrollment.current_step + 1;
+      var nextSendAt = null;
+
+      if (msgs[newStep]) {
+        var delayHours = (msgs[newStep].delay_hours != null ? msgs[newStep].delay_hours : 0);
+        var nextDate = new Date(Date.now() + delayHours * 60 * 60 * 1000);
+        nextSendAt = nextDate.toISOString();
+      }
+
+      var { error: advanceErr } = await supabase
+        .from("sms_campaign_enrollments")
+        .update({ current_step: newStep, next_send_at: nextSendAt })
+        .eq("id", enrollment.id);
+
+      if (advanceErr) {
+        console.error("[dripEngine] Error advancing enrollment " + enrollment.id + ":", advanceErr.message);
+      }
+
+      summary.sent++;
+    }
+
+    return summary;
+
+  } catch (error) {
+    console.error("[dripEngine] Unexpected error:", error.message || error);
+    return { processed: 0, sent: 0, skipped: 0, completed: 0 };
+  }
+}
+
+app.post("/api/sms/run-engine", requireAuth, async function (req, res, next) {
+  try {
+    console.log("[sms/run-engine] User " + req.user.id + " → running drip engine");
+    var result = await runDripEngine(req.user.id);
+    return res.json({ result: result });
+  } catch (error) {
+    console.error("[sms/run-engine] Error:", error.message || error);
+    next(error);
+  }
+});
+
 /* ── SMS ─────────────────────────────────────────────────────────────────── */
 
 app.post("/api/sms/send", requireAuth, async function (req, res, next) {
