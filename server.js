@@ -5584,6 +5584,129 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
   }
 });
 
+/* ── SMS Campaigns ───────────────────────────────────────────────────────── */
+
+app.get("/api/sms/campaigns", requireAuth, async function (req, res, next) {
+  try {
+    console.log("[sms/campaigns] User " + req.user.id + " → fetching campaigns");
+
+    var { data, error } = await supabase
+      .from("sms_campaigns")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[sms/campaigns] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ campaigns: data });
+
+  } catch (error) {
+    console.error("[sms/campaigns] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.post("/api/sms/campaigns", requireAuth, async function (req, res, next) {
+  try {
+    var name = safeText(req.body.name, 255) || "";
+    name = name.trim();
+
+    if (!name) {
+      return res.status(400).json({ error: "Name required" });
+    }
+
+    console.log("[sms/campaigns/create] User " + req.user.id + " → creating campaign: " + name);
+
+    var { data, error } = await supabase
+      .from("sms_campaigns")
+      .insert({
+        user_id: req.user.id,
+        name:    name,
+        status:  "draft"
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[sms/campaigns/create] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ campaign: data });
+
+  } catch (error) {
+    console.error("[sms/campaigns/create] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.get("/api/sms/campaigns/:id/messages", requireAuth, async function (req, res, next) {
+  try {
+    var campaignId = req.params.id;
+
+    console.log("[sms/campaigns/messages] User " + req.user.id + " → fetching messages for campaign " + campaignId);
+
+    var { data, error } = await supabase
+      .from("sms_campaign_messages")
+      .select("*")
+      .eq("campaign_id", campaignId)
+      .eq("user_id", req.user.id)
+      .order("step_number", { ascending: true });
+
+    if (error) {
+      console.error("[sms/campaigns/messages] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ messages: data });
+
+  } catch (error) {
+    console.error("[sms/campaigns/messages] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.post("/api/sms/campaigns/:id/messages", requireAuth, async function (req, res, next) {
+  try {
+    var campaignId  = req.params.id;
+    var body        = safeText(req.body.body, 1600) || "";
+    var stepNumber  = Number.isInteger(req.body.step_number)  ? req.body.step_number  : 1;
+    var delayHours  = Number.isInteger(req.body.delay_hours)  ? req.body.delay_hours  : 0;
+
+    if (!body.trim()) {
+      return res.status(400).json({ error: "Message body required" });
+    }
+
+    console.log("[sms/campaigns/messages/add] User " + req.user.id + " → adding step " + stepNumber + " to campaign " + campaignId);
+
+    var { data, error } = await supabase
+      .from("sms_campaign_messages")
+      .insert({
+        campaign_id:  campaignId,
+        user_id:      req.user.id,
+        step_number:  stepNumber,
+        body:         body.trim(),
+        delay_hours:  delayHours
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[sms/campaigns/messages/add] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ message: data });
+
+  } catch (error) {
+    console.error("[sms/campaigns/messages/add] Error:", error.message || error);
+    next(error);
+  }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
