@@ -5715,7 +5715,7 @@ app.get("/api/sms/send-log", requireAuth, async function (req, res, next) {
       .from("sms_send_log")
       .select("*")
       .eq("user_id", req.user.id)
-      .order("created_at", { ascending: false })
+      .order("sent_at", { ascending: false })
       .limit(100);
 
     if (error) {
