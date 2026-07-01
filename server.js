@@ -5526,6 +5526,7 @@ async function runDripEngine(userId) {
           campaign_id:   enrollment.campaign_id,
           subscriber_id: enrollment.subscriber_id,
           message_id:    currentMsg.id,
+          message_body:  currentMsg.message_body,
           phone_number:  subscriber.phone_number,
           status:        DRY_RUN ? "dry_run" : "sent",
           twilio_sid:    null,
