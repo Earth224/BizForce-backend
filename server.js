@@ -2489,7 +2489,7 @@ async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialSto
 async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
     try {
         var isExecutive = agentType === "executive";
-        var maxTokens = isExecutive ? 8192 : 1200;
+        var maxTokens = (isExecutive || agentType === "content") ? 8192 : 1200;
         var generation = await callAnthropicText(finalPrompt, maxTokens);
         var output = generation.text;
         var executiveComplete = true;
