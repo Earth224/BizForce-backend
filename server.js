@@ -5568,6 +5568,35 @@ async function runDripEngine(userId) {
   }
 }
 
+async function runDripForAllUsers() {
+  var { data: rows, error } = await supabase
+    .from("sms_campaign_enrollments")
+    .select("user_id")
+    .eq("status", "active");
+
+  if (error) {
+    console.error("[dripForAllUsers] Error fetching user IDs:", error.message);
+    return;
+  }
+
+  var seen = {};
+  var userIds = (rows || []).map(function (r) { return r.user_id; }).filter(function (id) {
+    if (seen[id]) return false;
+    seen[id] = true;
+    return true;
+  });
+
+  for (var i = 0; i < userIds.length; i++) {
+    try {
+      await runDripEngine(userIds[i]);
+    } catch (err) {
+      console.error("[dripForAllUsers] Error for user " + userIds[i] + ":", err.message || err);
+    }
+  }
+
+  console.log("[dripForAllUsers] " + new Date().toISOString() + " — processed " + userIds.length + " user(s)");
+}
+
 app.post("/api/sms/run-engine", requireAuth, async function (req, res, next) {
   try {
     console.log("[sms/run-engine] User " + req.user.id + " → running drip engine");
