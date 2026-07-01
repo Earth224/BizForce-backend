@@ -5980,6 +5980,31 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
   }
 });
 
+app.post("/api/sms/inbound", async function (req, res) {
+  var from = (req.body.From || "").trim();
+  var body = (req.body.Body || "").trim().toUpperCase();
+
+  var STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
+  var START_WORDS = ["START", "YES", "UNSTOP"];
+
+  if (from) {
+    if (STOP_WORDS.indexOf(body) !== -1) {
+      await supabase
+        .from("sms_subscribers")
+        .update({ consent_status: "opted_out" })
+        .eq("phone_number", from);
+    } else if (START_WORDS.indexOf(body) !== -1) {
+      await supabase
+        .from("sms_subscribers")
+        .update({ consent_status: "opted_in" })
+        .eq("phone_number", from);
+    }
+  }
+
+  res.set("Content-Type", "text/xml");
+  return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
