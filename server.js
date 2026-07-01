@@ -5981,7 +5981,7 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
 });
 
 app.post("/api/sms/inbound", async function (req, res) {
-  var from = (req.body.From || "").trim();
+  var from = (req.body.From || "").trim().replace(/^\+/, "");
   var body = (req.body.Body || "").trim().toUpperCase();
 
   var STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
