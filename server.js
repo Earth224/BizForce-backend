@@ -10,6 +10,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const Stripe = require("stripe");
 const Anthropic = require("@anthropic-ai/sdk");
+const twilio = require("twilio");
 const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
@@ -5426,6 +5427,51 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
 
     return res.json({ ok: true, platform: rawPlatform, url: connectUrl });
   } catch (error) { next(error); }
+});
+
+/* ── SMS ─────────────────────────────────────────────────────────────────── */
+
+app.post("/api/sms/send", requireAuth, async function (req, res, next) {
+  try {
+    var accountSid  = (process.env.TWILIO_ACCOUNT_SID   || "").trim();
+    var authToken   = (process.env.TWILIO_AUTH_TOKEN     || "").trim();
+    var fromNumber  = (process.env.TWILIO_PHONE_NUMBER   || "").trim();
+
+    if (!accountSid || !authToken || !fromNumber) {
+      var missing = [
+        !accountSid  && "TWILIO_ACCOUNT_SID",
+        !authToken   && "TWILIO_AUTH_TOKEN",
+        !fromNumber  && "TWILIO_PHONE_NUMBER"
+      ].filter(Boolean).join(", ");
+      console.error("[sms/send] Missing env vars:", missing);
+      return res.status(503).json({
+        error: "SMS unavailable — missing Twilio configuration: " + missing
+      });
+    }
+
+    var to      = safeText(req.body.to,      20)  || "";
+    var message = safeText(req.body.message, 1600) || "";
+
+    if (!to || !message) {
+      return res.status(400).json({ error: "Both 'to' and 'message' are required" });
+    }
+
+    console.log("[sms/send] User " + req.user.id + " → sending SMS to " + to);
+
+    var client = twilio(accountSid, authToken);
+    var sent   = await client.messages.create({
+      from: fromNumber,
+      to:   to,
+      body: message
+    });
+
+    console.log("[sms/send] Delivered — SID:", sent.sid, "status:", sent.status);
+    return res.json({ ok: true, sid: sent.sid, status: sent.status });
+
+  } catch (error) {
+    console.error("[sms/send] Error:", error.message || error);
+    next(error);
+  }
 });
 
 
