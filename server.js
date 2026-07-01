@@ -5654,7 +5654,7 @@ app.get("/api/sms/campaigns/:id/messages", requireAuth, async function (req, res
       .select("*")
       .eq("campaign_id", campaignId)
       .eq("user_id", req.user.id)
-      .order("step_number", { ascending: true });
+      .order("step_order", { ascending: true });
 
     if (error) {
       console.error("[sms/campaigns/messages] Supabase error:", error.message);
@@ -5687,8 +5687,8 @@ app.post("/api/sms/campaigns/:id/messages", requireAuth, async function (req, re
       .insert({
         campaign_id:  campaignId,
         user_id:      req.user.id,
-        step_number:  stepNumber,
-        body:         body.trim(),
+        step_order:   stepNumber,
+        message_body: body.trim(),
         delay_hours:  delayHours
       })
       .select()
