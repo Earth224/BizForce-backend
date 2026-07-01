@@ -6005,6 +6005,24 @@ app.use(function (error, req, res, next) {
     db_hint: error.hint || error.details || undefined
   });
 });
+var dripSchedulerRunning = false;
+
+async function dripTick() {
+  if (dripSchedulerRunning) {
+    console.log("[dripScheduler] Tick skipped — previous run still in progress");
+    return;
+  }
+  dripSchedulerRunning = true;
+  try {
+    await runDripForAllUsers();
+  } finally {
+    dripSchedulerRunning = false;
+  }
+}
+
+setInterval(dripTick, 300000);
+dripTick();
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
 });
