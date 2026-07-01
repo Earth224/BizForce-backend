@@ -5475,6 +5475,115 @@ app.post("/api/sms/send", requireAuth, async function (req, res, next) {
 });
 
 
+app.get("/api/sms/subscribers", requireAuth, async function (req, res, next) {
+  try {
+    console.log("[sms/subscribers] User " + req.user.id + " → fetching subscribers");
+
+    var { data, error } = await supabase
+      .from("sms_subscribers")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[sms/subscribers] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ subscribers: data });
+
+  } catch (error) {
+    console.error("[sms/subscribers] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.post("/api/sms/subscribers", requireAuth, async function (req, res, next) {
+  try {
+    var phone   = ((req.body.phone   || "") + "").trim();
+    var name    = safeText(req.body.name,    120) || null;
+    var consent = req.body.consent !== undefined ? !!req.body.consent : false;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone is required" });
+    }
+
+    console.log("[sms/subscribers/add] User " + req.user.id + " → adding " + phone);
+
+    var { data, error } = await supabase
+      .from("sms_subscribers")
+      .insert({
+        user_id:          req.user.id,
+        phone_number:     phone,
+        customer_name:    name,
+        consent_status:   consent ? "opted_in" : "opted_out"
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[sms/subscribers/add] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ subscriber: data });
+
+  } catch (error) {
+    console.error("[sms/subscribers/add] Error:", error.message || error);
+    next(error);
+  }
+});
+
+app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, next) {
+  try {
+    var list = req.body.subscribers;
+
+    if (!Array.isArray(list) || list.length === 0) {
+      return res.status(400).json({ error: "subscribers array required" });
+    }
+
+    var rows    = [];
+    var skipped = 0;
+
+    list.forEach(function (entry) {
+      var phone = ((entry.phone || "") + "").trim();
+      if (!phone) {
+        skipped++;
+        return;
+      }
+      var name    = safeText(entry.name, 120) || null;
+      var consent = entry.consent !== undefined ? !!entry.consent : false;
+      rows.push({
+        user_id:        req.user.id,
+        phone_number:   phone,
+        customer_name:  name,
+        consent_status: consent ? "opted_in" : "opted_out"
+      });
+    });
+
+    console.log("[sms/subscribers/bulk] User " + req.user.id + " → inserting " + rows.length + ", skipping " + skipped);
+
+    if (rows.length === 0) {
+      return res.json({ inserted: 0, skipped: skipped });
+    }
+
+    var { error } = await supabase
+      .from("sms_subscribers")
+      .insert(rows);
+
+    if (error) {
+      console.error("[sms/subscribers/bulk] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ inserted: rows.length, skipped: skipped });
+
+  } catch (error) {
+    console.error("[sms/subscribers/bulk] Error:", error.message || error);
+    next(error);
+  }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
