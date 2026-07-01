@@ -5707,6 +5707,30 @@ app.post("/api/sms/campaigns/:id/messages", requireAuth, async function (req, re
   }
 });
 
+app.get("/api/sms/send-log", requireAuth, async function (req, res, next) {
+  try {
+    console.log("[sms/send-log] User " + req.user.id + " → fetching send log");
+
+    var { data, error } = await supabase
+      .from("sms_send_log")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.error("[sms/send-log] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ log: data });
+
+  } catch (error) {
+    console.error("[sms/send-log] Error:", error.message || error);
+    next(error);
+  }
+});
+
 app.use(function (req, res) {
   return res.status(404).json({
     error: "Route not found",
