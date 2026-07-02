@@ -2366,40 +2366,77 @@ async function callAnthropicText(promptText, maxTokens) {
     apiKey: process.env.ANTHROPIC_API_KEY
   });
 
-  var text = "";
+  var maxAttempts = 3;
+  var lastError;
 
-  var stream = anthropicClient.messages.stream({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: maxTokens,
-    messages: [
-      {
-        role: "user",
-        content: [
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      var text = "";
+
+      var stream = anthropicClient.messages.stream({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: maxTokens,
+        messages: [
           {
-            type: "text",
-            text: promptText
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: promptText
+              }
+            ]
           }
         ]
-      }
-    ]
-  });
+      });
 
-  for await (var event of stream) {
-    if (
-      event.type === "content_block_delta" &&
-      event.delta &&
-      event.delta.type === "text_delta"
-    ) {
-      text += event.delta.text;
+      for await (var event of stream) {
+        if (
+          event.type === "content_block_delta" &&
+          event.delta &&
+          event.delta.type === "text_delta"
+        ) {
+          text += event.delta.text;
+        }
+      }
+
+      var finalMsg = await stream.finalMessage();
+
+      return {
+        text: text || "",
+        stopReason: (finalMsg && finalMsg.stop_reason) || ""
+      };
+
+    } catch (err) {
+      lastError = err;
+
+      var msgLower = (err.message || "").toLowerCase();
+      var isNetworkError =
+        err.code === "ERR_STREAM_PREMATURE_CLOSE" ||
+        err.code === "ECONNRESET" ||
+        err.code === "ECONNREFUSED" ||
+        err.code === "ETIMEDOUT" ||
+        err.code === "ENOTFOUND" ||
+        msgLower.indexOf("premature close") !== -1 ||
+        msgLower.indexOf("socket") !== -1 ||
+        msgLower.indexOf("network") !== -1 ||
+        msgLower.indexOf("connection") !== -1 ||
+        msgLower.indexOf("econnreset") !== -1;
+
+      // Never retry real API errors (auth, bad request, etc.)
+      var isApiError = err.status >= 400 || err.status === 401 || err.status === 400;
+
+      if (isNetworkError && !isApiError && attempt < maxAttempts) {
+        var delay = attempt * 1000;
+        console.warn("[callAnthropicText] Network/stream error on attempt " + attempt + ", retrying in " + (delay / 1000) + "s... (" + (err.code || err.message) + ")");
+        await new Promise(function (resolve) { setTimeout(resolve, delay); });
+        continue;
+      }
+
+      throw err;
     }
   }
 
-  var finalMsg = await stream.finalMessage();
-
-  return {
-    text: text || "",
-    stopReason: (finalMsg && finalMsg.stop_reason) || ""
-  };
+  throw lastError;
 }
 
 function extractRequiredExecutiveAssignmentHeadings(promptText) {
