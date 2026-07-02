@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const { BskyAgent } = require("@atproto/api");
+const Anthropic = require("@anthropic-ai/sdk");
 
 const BLUESKY_IDENTIFIER  = process.env.BLUESKY_IDENTIFIER;
 const BLUESKY_APP_PASSWORD = process.env.BLUESKY_APP_PASSWORD;
@@ -119,6 +120,7 @@ async function radarTick() {
   radarRunning = true;
   try {
     await runLeadRadarOnce();
+    await scoreNewLeads();
   } catch (err) {
     console.error("[LeadRadar] radarTick error:", err.message || err);
   } finally {
@@ -133,4 +135,82 @@ async function startLeadRadar() {
   setInterval(radarTick, 300000);
 }
 
-module.exports = { runLeadRadarOnce, startLeadRadar };
+async function scoreNewLeads() {
+  try {
+    var { data, error } = await supabase
+      .from("bsky_leads")
+      .select("*")
+      .eq("status", "new")
+      .order("created_at", { ascending: true })
+      .limit(20);
+
+    if (error) {
+      console.error("[LeadRadar] scoreNewLeads query error:", error.message);
+      return;
+    }
+
+    var leads = data || [];
+    console.log("[LeadRadar] scoring " + leads.length + " leads");
+
+    var anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    var scoredCount = 0;
+
+    for (var i = 0; i < leads.length; i++) {
+      var lead = leads[i];
+      var updatePayload;
+
+      try {
+        var prompt =
+          "You are a buying-intent classifier for three products:\n" +
+          "- War Horse: a natural male vitality and energy supplement\n" +
+          "- Tongkat Ali: a natural herbal supplement for male energy and libido\n" +
+          "- Quantum Jumping book: an esoteric self-help / manifestation book\n\n" +
+          "Given this social media post, score how likely the author is actively looking to buy something in these categories.\n\n" +
+          "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
+          "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
+          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\"}";
+
+        var response = await anthropic.messages.create({
+          model:      "claude-haiku-4-5-20251001",
+          max_tokens: 300,
+          messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
+        });
+
+        var raw = (response.content && response.content[0] && response.content[0].text) || "";
+        var cleaned = raw.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+        var result = JSON.parse(cleaned);
+
+        updatePayload = {
+          intent_score:      result.score,
+          intent_reason:     result.reason,
+          suggested_product: result.product,
+          status:            "scored"
+        };
+
+        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + result.score + " product=" + result.product + " reason=" + result.reason);
+
+      } catch (scoreErr) {
+        console.error("[LeadRadar] Failed to score lead " + lead.id + ":", scoreErr.message || scoreErr);
+        updatePayload = { intent_score: 0, status: "scored" };
+      }
+
+      var { error: updateErr } = await supabase
+        .from("bsky_leads")
+        .update(updatePayload)
+        .eq("id", lead.id);
+
+      if (updateErr) {
+        console.error("[LeadRadar] Failed to update lead " + lead.id + ":", updateErr.message);
+      } else {
+        scoredCount++;
+      }
+    }
+
+    console.log("[LeadRadar] scored " + scoredCount + " leads");
+
+  } catch (err) {
+    console.error("[LeadRadar] scoreNewLeads error:", err.message || err);
+  }
+}
+
+module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads };
