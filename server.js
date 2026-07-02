@@ -13,6 +13,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 const twilio = require("twilio");
 const { createClient } = require("@supabase/supabase-js");
 const { startLeadRadar } = require("./leadRadar");
+const { startRedditRadar } = require("./redditRadar");
 
 const app = express();
 
@@ -6144,5 +6145,8 @@ app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
+  });
+  startRedditRadar().catch(function (err) {
+    console.error("[RedditRadar] startup error:", err.message || err);
   });
 });
