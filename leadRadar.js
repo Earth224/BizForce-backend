@@ -18,7 +18,16 @@ const KEYWORDS = [
   "quantum jumping",
   "law of assumption",
   "manifestation method",
-  "reality shifting"
+  "reality shifting",
+  "natural remedy for energy",
+  "always tired no energy",
+  "help with low libido",
+  "boost my energy naturally",
+  "cant focus tired all day",
+  "anyone tried tongkat ali",
+  "how to manifest",
+  "does manifestation work",
+  "quantum jumping method"
 ];
 
 const agent = new BskyAgent({ service: "https://bsky.social" });
