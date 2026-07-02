@@ -6160,7 +6160,8 @@ app.listen(PORT, function () {
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
   });
-  startRedditRadar().catch(function (err) {
-    console.error("[RedditRadar] startup error:", err.message || err);
-  });
+  // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
+  // startRedditRadar().catch(function (err) {
+  //   console.error("[RedditRadar] startup error:", err.message || err);
+  // });
 });
