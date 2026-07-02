@@ -2363,7 +2363,8 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
 
 async function callAnthropicText(promptText, maxTokens) {
   var anthropicClient = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: 120000
   });
 
   var maxAttempts = 3;
@@ -2371,9 +2372,7 @@ async function callAnthropicText(promptText, maxTokens) {
 
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      var text = "";
-
-      var stream = anthropicClient.messages.stream({
+      var response = await anthropicClient.messages.create({
         model: "claude-haiku-4-5-20251001",
         max_tokens: maxTokens,
         messages: [
@@ -2389,21 +2388,14 @@ async function callAnthropicText(promptText, maxTokens) {
         ]
       });
 
-      for await (var event of stream) {
-        if (
-          event.type === "content_block_delta" &&
-          event.delta &&
-          event.delta.type === "text_delta"
-        ) {
-          text += event.delta.text;
-        }
-      }
-
-      var finalMsg = await stream.finalMessage();
+      var text = (response.content || [])
+        .filter(function (block) { return block.type === "text"; })
+        .map(function (block) { return block.text; })
+        .join("");
 
       return {
         text: text || "",
-        stopReason: (finalMsg && finalMsg.stop_reason) || ""
+        stopReason: response.stop_reason || ""
       };
 
     } catch (err) {
