@@ -20,10 +20,16 @@ const SUBREDDITS = [
 
 async function fetchSubreddit(sub) {
   try {
-    var res = await fetch("https://www.reddit.com/r/" + sub + "/new.json?limit=100", {
+    var res = await fetch("https://old.reddit.com/r/" + sub + "/new.json?limit=100", {
       headers: { "User-Agent": "BizForce Radar/1.0 (by /u/earthrose422)" }
     });
-    var json = await res.json();
+    var rawText = await res.text();
+    var ct = res.headers.get("content-type") || "";
+    if (!ct.includes("json") || rawText.trimStart().charAt(0) === "<") {
+      console.log("[RedditRadar] r/" + sub + " returned non-JSON (blocked/HTML)");
+      return [];
+    }
+    var json = JSON.parse(rawText);
     var children = (json.data && json.data.children) || [];
     return children.map(function (child) {
       return {
