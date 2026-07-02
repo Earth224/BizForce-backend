@@ -6020,6 +6020,58 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
   }
 });
 
+app.get("/api/leads", requireAuth, async function (req, res, next) {
+  try {
+    var { data, error } = await supabase
+      .from("bsky_leads")
+      .select("*")
+      .eq("status", "scored")
+      .order("intent_score", { ascending: false })
+      .limit(100);
+
+    if (error) {
+      console.error("[/api/leads] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ leads: data || [] });
+  } catch (err) {
+    console.error("[/api/leads] Error:", err.message || err);
+    next(err);
+  }
+});
+
+app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) {
+  try {
+    var postText        = String(req.body.post_text        || "").trim();
+    var suggestedProduct = String(req.body.suggested_product || "").trim();
+
+    if (!postText) {
+      return res.status(400).json({ error: "post_text is required" });
+    }
+
+    var prompt =
+      "You are helping a small business owner engage authentically on social media.\n" +
+      "Write a short, genuine reply (2-3 sentences) to the following post. The reply should sound like a real, helpful person — not a brand or a sales pitch.\n" +
+      "If it feels natural, subtly mention how " + (suggestedProduct || "the product") + " might help, but only if it fits the conversation. Never be pushy or salesy.\n\n" +
+      "Post: " + postText + "\n\n" +
+      "Reply:";
+
+    var response = await anthropic.messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 300,
+      messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
+    });
+
+    var reply = (response.content && response.content[0] && response.content[0].text) || "";
+
+    return res.json({ reply: reply.trim() });
+  } catch (err) {
+    console.error("[/api/leads/draft-reply] Error:", err.message || err);
+    next(err);
+  }
+});
+
 app.post("/api/sms/inbound", async function (req, res) {
   var from = (req.body.From || "").trim().replace(/^\+/, "");
   var body = (req.body.Body || "").trim().toUpperCase();
