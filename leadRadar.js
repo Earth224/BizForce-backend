@@ -18,7 +18,6 @@ const KEYWORDS = [
   "quantum jumping",
   "law of assumption",
   "manifestation method",
-  "reality shifting",
   "natural remedy for energy",
   "always tired no energy",
   "help with low libido",
@@ -30,9 +29,13 @@ const KEYWORDS = [
   "quantum jumping method",
   "neville goddard",
   "law of attraction",
-  "shift my reality",
-  "i want to change my life",
-  "stuck in my life"
+  "how to quantum jump",
+  "neville goddard method",
+  "sats manifestation",
+  "manifestation not working",
+  "how to manifest faster",
+  "living in the end",
+  "revision method neville"
 ];
 
 const agent = new BskyAgent({ service: "https://bsky.social" });
