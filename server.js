@@ -12,6 +12,7 @@ const Stripe = require("stripe");
 const Anthropic = require("@anthropic-ai/sdk");
 const twilio = require("twilio");
 const { createClient } = require("@supabase/supabase-js");
+const { startLeadRadar } = require("./leadRadar");
 
 const app = express();
 
@@ -6089,4 +6090,7 @@ dripTick();
 
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
+  startLeadRadar().catch(function (err) {
+    console.error("[LeadRadar] startup error:", err.message || err);
+  });
 });
