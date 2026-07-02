@@ -6051,12 +6051,26 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
       return res.status(400).json({ error: "post_text is required" });
     }
 
-    var prompt =
-      "You are helping a small business owner engage authentically on social media.\n" +
-      "Write a short, genuine reply (2-3 sentences) to the following post. The reply should sound like a real, helpful person — not a brand or a sales pitch.\n" +
-      "If it feels natural, subtly mention how " + (suggestedProduct || "the product") + " might help, but only if it fits the conversation. Never be pushy or salesy.\n\n" +
-      "Post: " + postText + "\n\n" +
-      "Reply:";
+    var prompt;
+
+    if (suggestedProduct === "Quantum Jumping book") {
+      prompt =
+        "You are a thoughtful person who has personally explored manifestation and reality-shifting methods.\n" +
+        "Read the post below carefully and write a genuine 2-3 sentence reply that:\n" +
+        "1. Speaks directly to what this specific person actually said — acknowledge their feeling, question, or situation.\n" +
+        "2. Offers ONE real, human insight from your own experience — something that feels true, not motivational-poster fluff.\n" +
+        "3. Only if it fits naturally, mention in passing that there is a method called Quantum Jumping that helped you think differently — as a gentle pointer, not a recommendation or a sell. Never include a URL or price.\n" +
+        "Sound like a real person in a comment section, not a marketer. No hashtags, no exclamation spam, no 'DM me'.\n\n" +
+        "Post: " + postText + "\n\n" +
+        "Reply:";
+    } else {
+      prompt =
+        "You are helping a small business owner engage authentically on social media.\n" +
+        "Write a short, genuine reply (2-3 sentences) to the following post. The reply should sound like a real, helpful person — not a brand or a sales pitch.\n" +
+        "If it feels natural, subtly mention how " + (suggestedProduct || "the product") + " might help, but only if it fits the conversation. Never be pushy or salesy.\n\n" +
+        "Post: " + postText + "\n\n" +
+        "Reply:";
+    }
 
     var response = await anthropic.messages.create({
       model:      "claude-haiku-4-5-20251001",

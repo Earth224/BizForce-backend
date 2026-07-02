@@ -27,7 +27,12 @@ const KEYWORDS = [
   "anyone tried tongkat ali",
   "how to manifest",
   "does manifestation work",
-  "quantum jumping method"
+  "quantum jumping method",
+  "neville goddard",
+  "law of attraction",
+  "shift my reality",
+  "i want to change my life",
+  "stuck in my life"
 ];
 
 const agent = new BskyAgent({ service: "https://bsky.social" });
@@ -170,11 +175,17 @@ async function scoreNewLeads() {
 
       try {
         var prompt =
-          "You are a buying-intent classifier for three products:\n" +
+          "You are a buyer-intent classifier for three products:\n" +
           "- War Horse: a natural male vitality and energy supplement\n" +
           "- Tongkat Ali: a natural herbal supplement for male energy and libido\n" +
           "- Quantum Jumping book: an esoteric self-help / manifestation book\n\n" +
-          "Given this social media post, score how likely the author is actively looking to buy something in these categories.\n\n" +
+          "Your job is to separate SEEKERS from TEACHERS/SELLERS.\n\n" +
+          "Score HIGH (60-100) ONLY when the post shows a real individual expressing personal desire, struggle, confusion, or genuine openness to a method or product — someone who might actually buy.\n" +
+          "Examples of high scores: asking for recommendations, venting about low energy or low libido, sharing personal frustration, saying they want to try something, admitting confusion about a method.\n\n" +
+          "Score LOW (0-24) when the account appears to be teaching, coaching, promoting, or selling — even if the topic is a perfect match. Creators, coaches, and sellers are competition, not buyers.\n" +
+          "Examples of low scores: sharing tips, explaining techniques to followers, promoting their own program or product, posting motivational content, using phrases like 'here is how', 'I teach', 'my clients', 'DM me'.\n\n" +
+          "Score MIDDLE (25-59) for ambiguous posts where intent is unclear.\n\n" +
+          "Only assign a product tag to genuine seekers. For teachers/sellers set product to 'none'.\n\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
           "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\"}";
