@@ -2122,6 +2122,110 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
   }
 });
 
+app.post("/api/business-chat", requireAuth, async function (req, res, next) {
+  try {
+    var message = safeText(req.body.message, 4000);
+    if (!message) {
+      return res.status(400).json({ error: "message is required" });
+    }
+
+    var userInsert = await supabase
+      .from("chat_messages")
+      .insert({
+        user_id: req.user.id,
+        role: "user",
+        content: message,
+        created_at: nowIso()
+      })
+      .select("*")
+      .single();
+    if (userInsert.error) throw userInsert.error;
+
+    var historyResult = await supabase
+      .from("chat_messages")
+      .select("role, content, created_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: true })
+      .limit(20);
+    var history = historyResult.data || [];
+
+    var profileResult = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+    var businessProfile = profileResult.data || {};
+
+    var systemPrompt =
+      "You are the BizForce AI Business Guide — a knowledgeable, concise advisor embedded directly inside the user's business platform. " +
+      "Your role is to answer questions, give strategic advice, and help solve problems specifically for THIS business. " +
+      "Always ground your answers in the business context below. Never give generic advice when specific advice is possible.\n\n" +
+      "BUSINESS CONTEXT:\n" +
+      "Business Name: " + (businessProfile.business_name || "Not provided") + "\n" +
+      "Industry: "       + (businessProfile.industry        || "Not provided") + "\n" +
+      "Website: "        + (businessProfile.website         || "Not provided") + "\n" +
+      "Description: "    + (businessProfile.description     || "Not provided") + "\n" +
+      "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
+      "Target Audience: " + (businessProfile.target_audience  || "Not provided") + "\n" +
+      "Goals: "          + (businessProfile.business_goals   || "Not provided") + "\n" +
+      "Location: "       + (businessProfile.location         || "Not provided") + "\n" +
+      "Positioning: "    + (businessProfile.positioning      || "Not provided") + "\n\n" +
+      "Keep responses clear and practical. Use bullet points when listing steps or options. Be direct.";
+
+    var messages = history.map(function (row) {
+      return { role: row.role, content: row.content };
+    });
+
+    var aiResponse = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: messages
+    });
+
+    var aiText = (aiResponse.content || [])
+      .filter(function (block) { return block.type === "text"; })
+      .map(function (block) { return block.text; })
+      .join("");
+
+    if (!aiText) {
+      return res.status(500).json({ error: "AI returned an empty response. Please try again." });
+    }
+
+    var assistantInsert = await supabase
+      .from("chat_messages")
+      .insert({
+        user_id: req.user.id,
+        role: "assistant",
+        content: aiText,
+        created_at: nowIso()
+      });
+    if (assistantInsert.error) {
+      console.error("[business-chat] Failed to save assistant message:", assistantInsert.error.message);
+    }
+
+    return res.json({ reply: aiText });
+
+  } catch (error) {
+    console.error("[business-chat] Error:", error.message || error);
+    return res.status(500).json({ error: "Something went wrong. Please try again." });
+  }
+});
+
+app.get("/api/business-chat", requireAuth, async function (req, res, next) {
+  try {
+    var result = await supabase
+      .from("chat_messages")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: true });
+    if (result.error) throw result.error;
+    return res.json({ messages: result.data || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/deals", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
