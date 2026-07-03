@@ -6042,6 +6042,143 @@ app.get("/api/leads", requireAuth, async function (req, res, next) {
   }
 });
 
+app.post("/api/content-library", requireAuth, async function (req, res, next) {
+  try {
+    var userId     = req.user.id;
+    var type       = String(req.body.type || "").trim();
+    var title      = String(req.body.title || "").trim();
+    var keyword    = String(req.body.keyword || "").trim();
+    var source_url = String(req.body.source_url || "").trim();
+    var body       = String(req.body.body || "").trim();
+
+    if (!type || !body) {
+      return res.status(400).json({ error: "type and body are required" });
+    }
+
+    var { data, error } = await supabase
+      .from("content_library")
+      .insert({
+        user_id:    userId,
+        type:       type,
+        title:      title || null,
+        keyword:    keyword || null,
+        source_url: source_url || null,
+        body:       body
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("[/api/content-library] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    try {
+      var capResult = await supabase
+        .from("content_library")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("type", type)
+        .order("created_at", { ascending: false });
+
+      if (!capResult.error && capResult.data && capResult.data.length > 50) {
+        var toDelete = capResult.data.slice(50).map(function (r) { return r.id; });
+        await supabase
+          .from("content_library")
+          .delete()
+          .in("id", toDelete)
+          .eq("user_id", userId);
+      }
+    } catch (capErr) {
+      console.warn("[/api/content-library] Cap retire failed (non-fatal):", capErr.message || capErr);
+    }
+
+    return res.status(201).json({ success: true, entry: data });
+  } catch (err) {
+    console.error("[/api/content-library] Error:", err.message || err);
+    next(err);
+  }
+});
+
+app.get("/api/content-library", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var type   = String(req.query.type || "").trim();
+
+    var query = supabase
+      .from("content_library")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (type) {
+      query = query.eq("type", type);
+    }
+
+    var { data, error } = await query;
+
+    if (error) {
+      console.error("[GET /api/content-library] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ entries: data || [] });
+  } catch (err) {
+    console.error("[GET /api/content-library] Error:", err.message || err);
+    next(err);
+  }
+});
+
+app.post("/api/content-library/empty", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var type   = String(req.body.type || "").trim();
+
+    if (!type) {
+      return res.status(400).json({ error: "type is required" });
+    }
+
+    var { error } = await supabase
+      .from("content_library")
+      .delete()
+      .eq("user_id", userId)
+      .eq("type", type);
+
+    if (error) {
+      console.error("[POST /api/content-library/empty] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("[POST /api/content-library/empty] Error:", err.message || err);
+    next(err);
+  }
+});
+
+app.delete("/api/content-library/:id", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var id     = req.params.id;
+
+    var { error } = await supabase
+      .from("content_library")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("[DELETE /api/content-library] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("[DELETE /api/content-library] Error:", err.message || err);
+    next(err);
+  }
+});
+
 app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) {
   try {
     var postText        = String(req.body.post_text        || "").trim();
