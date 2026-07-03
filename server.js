@@ -4042,6 +4042,94 @@ app.post("/api/analytics/event", requireAuth, async function (req, res, next) {
   }
 });
 
+app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
+  try {
+    var stats = {};
+
+    var r;
+
+    r = await supabase
+      .from("ai_tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+    if (r.error) throw r.error;
+    stats.tasksRun = r.count || 0;
+
+    r = await supabase
+      .from("ai_tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id)
+      .eq("status", "completed");
+    if (r.error) throw r.error;
+    stats.tasksCompleted = r.count || 0;
+
+    r = await supabase
+      .from("content_library")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+    if (r.error) throw r.error;
+    stats.contentItems = r.count || 0;
+
+    r = await supabase
+      .from("content_library")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id)
+      .eq("type", "blog");
+    if (r.error) throw r.error;
+    stats.blogItems = r.count || 0;
+
+    r = await supabase
+      .from("content_library")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id)
+      .eq("type", "sms");
+    if (r.error) throw r.error;
+    stats.smsItems = r.count || 0;
+
+    r = await supabase
+      .from("sms_subscribers")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+    stats.subscribers = r.error ? 0 : (r.count || 0);
+
+    r = await supabase
+      .from("sms_subscribers")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id)
+      .eq("consent_status", "opted_in");
+    stats.optedIn = r.error ? 0 : (r.count || 0);
+
+    r = await supabase
+      .from("sms_campaigns")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+    stats.campaigns = r.error ? 0 : (r.count || 0);
+
+    r = await supabase
+      .from("social_post_drafts")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+    stats.socialDrafts = r.error ? 0 : (r.count || 0);
+
+    var agentRows = await supabase
+      .from("ai_tasks")
+      .select("agent_type")
+      .eq("user_id", req.user.id);
+    var byAgent = {};
+    if (!agentRows.error && Array.isArray(agentRows.data)) {
+      agentRows.data.forEach(function (row) {
+        var t = row.agent_type || "general";
+        byAgent[t] = (byAgent[t] || 0) + 1;
+      });
+    }
+    stats.byAgent = byAgent;
+
+    return res.json({ stats });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/notifications", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
