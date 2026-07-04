@@ -3993,20 +3993,7 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
       return res.status(400).json({ error: "message is required" });
     }
 
-    // 1. Save user message
-    var userInsert = await supabase
-      .from("oracle_messages")
-      .insert({
-        user_id:    req.user.id,
-        role:       "user",
-        content:    message,
-        created_at: nowIso()
-      })
-      .select("*")
-      .single();
-    if (userInsert.error) throw userInsert.error;
-
-    // 2. Load oracle_sync + business_profiles
+    // 1. Load oracle_sync + business_profiles
     var syncResult = await supabase
       .from("oracle_sync")
       .select("*")
@@ -4021,7 +4008,8 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
       .single();
     var businessProfile = profileResult.data || {};
 
-    // 3. Load last 20 oracle_messages oldest-first
+    // 2. Load last 20 oracle_messages oldest-first, then append the current message
+    //    (saving it to the DB happens later and must never block the reply)
     var historyResult = await supabase
       .from("oracle_messages")
       .select("role, content")
@@ -4031,8 +4019,9 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
     var messages = (historyResult.data || []).map(function (row) {
       return { role: row.role, content: row.content };
     });
+    messages.push({ role: "user", content: message });
 
-    // 4. Build system prompt with context block
+    // 3. Build system prompt with context block
     var contextBlock;
     if (oracleSync) {
       contextBlock =
@@ -4065,7 +4054,7 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
 
     var systemPrompt = ORACLE_SYSTEM_PROMPT + contextBlock;
 
-    // 5. Call Claude — prefer sonnet, fall back to haiku on error
+    // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
     try {
       aiResponse = await anthropic.messages.create({
@@ -4084,7 +4073,7 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
       });
     }
 
-    // 6. Extract text + guard empty
+    // 5. Extract text + guard empty
     var aiText = (aiResponse.content || [])
       .filter(function (block) { return block.type === "text"; })
       .map(function (block) { return block.text; })
@@ -4094,21 +4083,43 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
       return res.status(500).json({ error: "The Oracle fell silent. Ask again." });
     }
 
-    // 7. Save assistant reply (soft error)
-    var assistantInsert = await supabase
-      .from("oracle_messages")
-      .insert({
-        user_id:    req.user.id,
-        role:       "assistant",
-        content:    aiText,
-        created_at: nowIso()
-      });
-    if (assistantInsert.error) {
-      console.error("[oracle] Failed to save assistant message:", assistantInsert.error.message);
+    // 6. Return the reply to the user immediately — nothing after this point may
+    //    affect the response. Saving message history is best-effort and happens next.
+    res.json({ reply: aiText });
+
+    // 7. Save user message (soft error — logged only, response already sent)
+    try {
+      var userInsert = await supabase
+        .from("oracle_messages")
+        .insert({
+          user_id:    req.user.id,
+          role:       "user",
+          content:    message,
+          created_at: nowIso()
+        });
+      if (userInsert.error) {
+        console.error("[oracle] Failed to save user message:", userInsert.error.message);
+      }
+    } catch (saveErr) {
+      console.error("[oracle] Failed to save user message:", saveErr.message || saveErr);
     }
 
-    // 8. Return reply
-    return res.json({ reply: aiText });
+    // 8. Save assistant reply (soft error — logged only, response already sent)
+    try {
+      var assistantInsert = await supabase
+        .from("oracle_messages")
+        .insert({
+          user_id:    req.user.id,
+          role:       "assistant",
+          content:    aiText,
+          created_at: nowIso()
+        });
+      if (assistantInsert.error) {
+        console.error("[oracle] Failed to save assistant message:", assistantInsert.error.message);
+      }
+    } catch (saveErr) {
+      console.error("[oracle] Failed to save assistant message:", saveErr.message || saveErr);
+    }
 
   } catch (error) {
     console.error("[oracle] Error:", error.message || error);
