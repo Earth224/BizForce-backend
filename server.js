@@ -4217,6 +4217,43 @@ app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, n
   }
 });
 
+app.post("/api/insights/page", requireAuth, aiLimiter, async function (req, res, next) {
+  try {
+    var page = safeText(req.body.page, 200) || "this page";
+
+    var profileResult = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+    var businessProfile = (profileResult && profileResult.data) || {};
+
+    var contextBlock =
+      "Business Name: "     + (businessProfile.business_name     || "Not provided") + "\n" +
+      "Industry: "          + (businessProfile.industry          || "Not provided") + "\n" +
+      "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
+      "Target Audience: "   + (businessProfile.target_audience   || "Not provided") + "\n" +
+      "Goals: "             + (businessProfile.business_goals    || "Not provided") + "\n" +
+      "Location: "          + (businessProfile.location          || "Not provided");
+
+    var prompt =
+      "You are Termaximus, a confident and insightful business guide woven into the BizForce AI platform.\n\n" +
+      "BUSINESS CONTEXT:\n" + contextBlock + "\n\n" +
+      "The user is currently on the \"" + page + "\" page. " +
+      "Give ONE short, confident, practical Termaximus insight (1-2 sentences) relevant to this page and " +
+      "their business, in Termaximus's voice. No preamble, no greeting — just the insight itself.";
+
+    var result = await callAnthropicText(prompt, 150);
+    var insight = (result && result.text ? result.text.trim() : "") ||
+      "The signs are quiet on this page for now — return once your business profile has more to draw from.";
+
+    return res.json({ insight: insight });
+  } catch (error) {
+    console.error("[insights/page] Error:", error.message || error);
+    return res.json({ insight: "Termaximus is gathering his thoughts — try again in a moment." });
+  }
+});
+
 app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   req.body.agent_type = "seo";
   req.body.task_type = "seo_audit";
