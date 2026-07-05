@@ -4179,6 +4179,95 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
   }
 });
 
+function sumDigits(value) {
+  var digits = String(value).replace(/[^0-9]/g, "");
+  var total = 0;
+  for (var i = 0; i < digits.length; i++) {
+    total += parseInt(digits[i], 10);
+  }
+  return total;
+}
+
+function calculateLifePath(birthDateStr) {
+  if (!birthDateStr) return null;
+
+  var total = sumDigits(birthDateStr);
+  if (!total) return null;
+
+  while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
+    total = sumDigits(total);
+  }
+
+  return total;
+}
+
+var PYTHAGOREAN_MAP = {
+  a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9,
+  j: 1, k: 2, l: 3, m: 4, n: 5, o: 6, p: 7, q: 8, r: 9,
+  s: 1, t: 2, u: 3, v: 4, w: 5, x: 6, y: 7, z: 8
+};
+var VOWELS = { a: true, e: true, i: true, o: true, u: true };
+
+function reduceNumber(total) {
+  while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
+    total = sumDigits(total);
+  }
+  return total;
+}
+
+function calculateNameNumber(name, onlyVowels) {
+  if (!name) return null;
+  var letters = String(name).toLowerCase().replace(/[^a-z]/g, "");
+  if (!letters) return null;
+
+  var total   = 0;
+  var matched = false;
+  for (var i = 0; i < letters.length; i++) {
+    var ch      = letters[i];
+    var isVowel = VOWELS[ch] === true;
+    if (onlyVowels && !isVowel) continue;
+    total  += PYTHAGOREAN_MAP[ch] || 0;
+    matched = true;
+  }
+  if (!matched || !total) return null;
+
+  return reduceNumber(total);
+}
+
+function extractBirthday(birthDateStr) {
+  if (!birthDateStr) return null;
+  var match = String(birthDateStr).match(/-(\d{1,2})$/);
+  if (!match) return null;
+  var day = parseInt(match[1], 10);
+  return isNaN(day) ? null : day;
+}
+
+app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
+  try {
+    var result = await supabase
+      .from("oracle_sync")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+
+    if (result.error || !result.data) {
+      return res.json({});
+    }
+
+    return res.json({
+      birth_date: result.data.birth_date || null,
+      birth_name: result.data.birth_name || null,
+      life_path:  calculateLifePath(result.data.birth_date),
+      expression: calculateNameNumber(result.data.birth_name, false),
+      soul_urge:  calculateNameNumber(result.data.birth_name, true),
+      birthday:   extractBirthday(result.data.birth_date)
+    });
+  } catch (error) {
+    console.error("[oracle/numerology] Error:", error.message || error);
+    return res.json({});
+  }
+});
+
 app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, next) {
   try {
     var name    = String(req.body.birthName || "Seeker").trim().slice(0, 120);
