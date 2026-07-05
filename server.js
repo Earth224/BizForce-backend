@@ -4001,6 +4001,25 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
       .single();
     var oracleSync = syncResult.data || null;
 
+    var numerologyContext = "";
+    if (oracleSync && oracleSync.birth_date) {
+      try {
+        var lifePath   = calculateLifePath(oracleSync.birth_date);
+        var expression = calculateNameNumber(oracleSync.birth_name, false);
+        var soulUrge   = calculateNameNumber(oracleSync.birth_name, true);
+        var birthday   = extractBirthday(oracleSync.birth_date);
+
+        numerologyContext =
+          "\n\nNUMEROLOGICAL SIGNATURE (computed from the seeker's birth data — the energetic architecture beneath them; weave into counsel where fitting, never recited mechanically):\n" +
+          "Life Path: "  + lifePath   + "\n" +
+          "Expression: " + expression + "\n" +
+          "Soul Urge: "  + soulUrge   + "\n" +
+          "Birthday: "   + birthday;
+      } catch (numerologyErr) {
+        numerologyContext = "";
+      }
+    }
+
     var profileResult = await supabase
       .from("business_profiles")
       .select("*")
@@ -4052,7 +4071,7 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
         "Goals: "             + (businessProfile.business_goals    || "Not provided");
     }
 
-    var systemPrompt = ORACLE_SYSTEM_PROMPT + contextBlock;
+    var systemPrompt = ORACLE_SYSTEM_PROMPT + contextBlock + numerologyContext;
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
