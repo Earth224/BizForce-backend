@@ -7415,12 +7415,17 @@ async function annotateLeadsWithSalesPipeline(userId, leads) {
 // filters: min_score, high_intent=true (score >= 60), buyer=true (has a
 // suggested product and score >= 40 — mirrors lead-radar.html's own
 // buyer-vs-competitor heuristic).
+// exclude_contacted=true additionally drops any lead already contacted/
+// replied/converted for this user — opt-in, so the existing "Live Leads"
+// display (which shows every lead with its status badge) is unaffected;
+// an automated conversion loop can pass this to get only fresh candidates.
 app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) {
   try {
     var userId = req.user.id;
     var minScore = Number(req.query.min_score);
     var buyerOnly = String(req.query.buyer || "").toLowerCase() === "true";
     var highIntentOnly = String(req.query.high_intent || "").toLowerCase() === "true";
+    var excludeContacted = String(req.query.exclude_contacted || "").toLowerCase() === "true";
 
     var query = supabase
       .from("bsky_leads")
@@ -7445,6 +7450,13 @@ app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) 
     }
 
     var enrichedLeads = await annotateLeadsWithSalesPipeline(userId, leadsResult.data || []);
+
+    if (excludeContacted) {
+      enrichedLeads = enrichedLeads.filter(function (lead) {
+        return lead.sales_status !== "contacted" && lead.sales_status !== "replied" && lead.sales_status !== "converted";
+      });
+    }
+
     return res.json({ leads: enrichedLeads });
   } catch (error) {
     console.error("[sales/leads] Error:", error.message || error);
