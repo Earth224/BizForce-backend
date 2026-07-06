@@ -7593,6 +7593,116 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   return output;
 }
 
+// Automatic Sales Agent conversion pass — for every user with a business
+// profile, computes their context once, finds their freshest high-intent
+// leads (excluding anyone already contacted/replied/converted), and runs
+// convertSingleLead() on up to 5 of them. NOT wired into any interval yet.
+// Controlled by SALES_AUTOLOOP_DRY_RUN — defaults to dry-run ON unless the
+// env var is exactly the string "false".
+async function runSalesAutoConvert() {
+  var dryRun = process.env.SALES_AUTOLOOP_DRY_RUN !== "false";
+
+  try {
+    var profilesResult = await supabase.from("business_profiles").select("user_id");
+    if (profilesResult.error) {
+      console.error("[SalesAutoConvert] Failed to load business profiles:", profilesResult.error.message);
+      return;
+    }
+
+    var userIds = (profilesResult.data || [])
+      .map(function (row) { return row.user_id; })
+      .filter(Boolean);
+
+    console.log("[SalesAutoConvert] Starting pass — " + (dryRun ? "DRY RUN" : "LIVE") + " — " + userIds.length + " user(s) with a business profile.");
+
+    for (var u = 0; u < userIds.length; u++) {
+      var userId = userIds[u];
+      var convertedCount = 0;
+
+      try {
+        var profileResult = await supabase
+          .from("business_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .single();
+        var businessProfile = profileResult.data || {};
+
+        var liveStats = {};
+        try {
+          liveStats = await getLiveStats(userId);
+        } catch (statsErr) {
+          console.error("[SalesAutoConvert] getLiveStats failed for user " + userId + ":", statsErr.message || statsErr);
+        }
+
+        var agentMemoryResult = await supabase
+          .from("agent_memory")
+          .select("agent_type, memory_type, title, content, created_at")
+          .eq("user_id", userId)
+          .eq("agent_type", "sales")
+          .order("created_at", { ascending: false })
+          .limit(5);
+
+        var memoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
+          return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
+        });
+
+        var sharedSystemPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, businessProfile, liveStats, memoriesForBrain);
+
+        var excludedUris = [];
+        try {
+          var excludedResult = await supabase
+            .from("sales_lead_pipeline")
+            .select("lead_post_uri")
+            .eq("user_id", userId)
+            .in("status", ["contacted", "replied", "converted"]);
+
+          if (!excludedResult.error) {
+            excludedUris = (excludedResult.data || []).map(function (row) { return row.lead_post_uri; });
+          } else {
+            console.error("[SalesAutoConvert] Failed to load already-contacted leads for user " + userId + ":", excludedResult.error.message);
+          }
+        } catch (excludeErr) {
+          console.error("[SalesAutoConvert] Failed to load already-contacted leads for user " + userId + ":", excludeErr.message || excludeErr);
+        }
+
+        var leadsResult = await supabase
+          .from("bsky_leads")
+          .select("*")
+          .eq("status", "scored")
+          .gte("intent_score", 60)
+          .order("intent_score", { ascending: false })
+          .limit(20);
+
+        if (leadsResult.error) {
+          console.error("[SalesAutoConvert] Failed to load leads for user " + userId + ":", leadsResult.error.message);
+          continue;
+        }
+
+        var freshLeads = (leadsResult.data || [])
+          .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
+          .slice(0, 5);
+
+        for (var i = 0; i < freshLeads.length; i++) {
+          try {
+            await convertSingleLead(userId, freshLeads[i], sharedSystemPrompt, dryRun);
+            convertedCount++;
+          } catch (leadErr) {
+            console.error("[SalesAutoConvert] Failed to convert lead " + freshLeads[i].post_uri + " for user " + userId + ":", leadErr.message || leadErr);
+          }
+        }
+
+        console.log("[SalesAutoConvert] user " + userId + ": converted " + convertedCount + " lead(s) — " + (dryRun ? "DRY RUN" : "LIVE"));
+      } catch (userErr) {
+        console.error("[SalesAutoConvert] Error processing user " + userId + ":", userErr.message || userErr);
+      }
+    }
+
+    console.log("[SalesAutoConvert] Pass complete.");
+  } catch (err) {
+    console.error("[SalesAutoConvert] runSalesAutoConvert error:", err.message || err);
+  }
+}
+
 app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var userId = req.user.id;
@@ -7916,3 +8026,5 @@ app.listen(PORT, function () {
   //   console.error("[RedditRadar] startup error:", err.message || err);
   // });
 });
+
+module.exports = { runSalesAutoConvert };
