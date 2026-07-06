@@ -7254,6 +7254,423 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
   }
 });
 
+// ── Sales Agent lead-conversion pipeline ──
+// bsky_leads (Lead Radar's capture table) is a single shared, platform-wide
+// feed with no user_id column — see the comment on migration 027. These
+// routes read that shared pool but track each user's own contacted/drafted/
+// converted progress in the separate sales_lead_pipeline table, scoped
+// strictly by user_id, so Lead Radar's own capture/scoring status is never
+// touched.
+var SALES_LEAD_STATUSES = ["new", "drafted", "contacted", "replied", "converted"];
+
+// Attaches this user's sales_lead_pipeline status/last_draft onto each lead
+// (defaulting to "new" for leads this user hasn't touched yet).
+async function annotateLeadsWithSalesPipeline(userId, leads) {
+  if (!leads.length) return leads;
+
+  var pipelineResult = await supabase
+    .from("sales_lead_pipeline")
+    .select("lead_post_uri, status, last_draft, updated_at")
+    .eq("user_id", userId);
+
+  var pipelineByUri = {};
+  (pipelineResult.error ? [] : (pipelineResult.data || [])).forEach(function (row) {
+    pipelineByUri[row.lead_post_uri] = row;
+  });
+
+  return leads.map(function (lead) {
+    var pipeline = pipelineByUri[lead.post_uri];
+    return Object.assign({}, lead, {
+      sales_status: pipeline ? pipeline.status : "new",
+      sales_last_draft: pipeline ? pipeline.last_draft : null,
+      sales_pipeline_updated_at: pipeline ? pipeline.updated_at : null
+    });
+  });
+}
+
+// GET /api/agents/sales/leads — the Sales Agent's view of Lead Radar's
+// captured leads, annotated with this user's own pipeline status. Optional
+// filters: min_score, high_intent=true (score >= 60), buyer=true (has a
+// suggested product and score >= 40 — mirrors lead-radar.html's own
+// buyer-vs-competitor heuristic).
+app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var minScore = Number(req.query.min_score);
+    var buyerOnly = String(req.query.buyer || "").toLowerCase() === "true";
+    var highIntentOnly = String(req.query.high_intent || "").toLowerCase() === "true";
+
+    var query = supabase
+      .from("bsky_leads")
+      .select("*")
+      .eq("status", "scored")
+      .order("intent_score", { ascending: false })
+      .limit(200);
+
+    if (Number.isFinite(minScore)) {
+      query = query.gte("intent_score", minScore);
+    }
+    if (highIntentOnly) {
+      query = query.gte("intent_score", 60);
+    }
+    if (buyerOnly) {
+      query = query.neq("suggested_product", "none").gte("intent_score", 40);
+    }
+
+    var leadsResult = await query;
+    if (leadsResult.error) {
+      throw leadsResult.error;
+    }
+
+    var enrichedLeads = await annotateLeadsWithSalesPipeline(userId, leadsResult.data || []);
+    return res.json({ leads: enrichedLeads });
+  } catch (error) {
+    console.error("[sales/leads] Error:", error.message || error);
+    next(error);
+  }
+});
+
+// POST /api/agents/sales/convert — generates a ready-to-send conversion
+// package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
+// filtered segment (segment: { min_score, high_intent, buyer }, capped to
+// 10 leads per call). Inherits platform knowledge + the Sales Agent role +
+// this user's business_profile (competitors, website) via
+// buildAgentSystemPrompt, same as every other agent route.
+app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var leadPostUri = safeText(req.body.lead_post_uri, 500);
+    var segment = (req.body.segment && typeof req.body.segment === "object" && !Array.isArray(req.body.segment))
+      ? req.body.segment : null;
+
+    var targetLeads = [];
+
+    if (leadPostUri) {
+      var singleResult = await supabase
+        .from("bsky_leads")
+        .select("*")
+        .eq("post_uri", leadPostUri)
+        .single();
+
+      if (singleResult.error || !singleResult.data) {
+        return res.status(404).json({ error: "Lead not found." });
+      }
+      targetLeads = [singleResult.data];
+    } else if (segment) {
+      var segQuery = supabase
+        .from("bsky_leads")
+        .select("*")
+        .eq("status", "scored")
+        .order("intent_score", { ascending: false })
+        .limit(10);
+
+      var segMinScore = Number(segment.min_score);
+      if (Number.isFinite(segMinScore)) segQuery = segQuery.gte("intent_score", segMinScore);
+      if (segment.high_intent) segQuery = segQuery.gte("intent_score", 60);
+      if (segment.buyer) segQuery = segQuery.neq("suggested_product", "none").gte("intent_score", 40);
+
+      var segResult = await segQuery;
+      if (segResult.error) {
+        throw segResult.error;
+      }
+      targetLeads = segResult.data || [];
+    } else {
+      return res.status(400).json({ error: "Provide lead_post_uri or a segment filter." });
+    }
+
+    if (!targetLeads.length) {
+      return res.status(404).json({ error: "No matching leads found." });
+    }
+
+    var profileResult = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+    var businessProfile = profileResult.data || {};
+
+    var liveStats = {};
+    try {
+      liveStats = await getLiveStats(userId);
+    } catch (statsErr) {
+      console.error("[sales/convert] getLiveStats failed:", statsErr.message || statsErr);
+    }
+
+    var agentMemoryResult = await supabase
+      .from("agent_memory")
+      .select("agent_type, memory_type, title, content, created_at")
+      .eq("user_id", userId)
+      .eq("agent_type", "sales")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    var memoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
+      return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
+    });
+
+    var salesAgentBrain =
+      "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems.";
+
+    var sharedSystemPrompt = buildAgentSystemPrompt(salesAgentBrain, businessProfile, liveStats, memoriesForBrain);
+    var results = [];
+
+    for (var i = 0; i < targetLeads.length; i++) {
+      var lead = targetLeads[i];
+      var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+
+      var leadBlock =
+        "CAPTURED LEAD (from Lead Radar):\n" +
+        "Handle: " + handle + "\n" +
+        "Post: " + (lead.post_text || "") + "\n" +
+        "Matched keyword: " + (lead.matched_keyword || "") + "\n" +
+        "Intent score: " + (lead.intent_score != null ? lead.intent_score : "unscored") + "\n" +
+        "Intent reason: " + (lead.intent_reason || "") + "\n" +
+        "Suggested product interest: " + (lead.suggested_product || "none");
+
+      var taskInstruction =
+        "Write a lead-conversion package for the captured lead above. Return exactly these three labeled sections: " +
+        "OUTREACH MESSAGE — a short, genuine, non-salesy message (2-4 sentences) speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype; " +
+        "OFFER — the specific offer/product from the business profile to present to this lead, tailored to their expressed need, with a one-line reason it fits them; " +
+        "CALL TO ACTION — a clear CTA sentence directing them to the business's website (use the website URL from the business profile above) to take the next step. " +
+        "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad.";
+
+      var finalPrompt =
+        sharedSystemPrompt +
+        "\n\n" + leadBlock +
+        "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
+        "\n\nUSER REQUEST:\nConvert this Lead Radar capture into a ready-to-send outreach message, offer, and CTA.";
+
+      var generation = await callAnthropicText(finalPrompt, 700);
+      var output = generation.text;
+
+      var taskInsert = await supabase
+        .from("ai_tasks")
+        .insert({
+          user_id: userId,
+          agent_type: "sales",
+          prompt: "Sales convert: " + handle,
+          result: output,
+          status: "completed"
+        })
+        .select("*")
+        .single();
+
+      if (taskInsert.error) {
+        console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
+      }
+
+      try {
+        var memTimestamp = nowIso();
+        var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
+
+        var memInsert = await supabase
+          .from("agent_memory")
+          .insert({
+            user_id: userId,
+            agent: "sales",
+            agent_type: "sales",
+            memory_key: "sales_convert_" + (taskInsert.data ? taskInsert.data.id : Date.now()),
+            memory_value: memContent,
+            memory_type: "insight",
+            title: "Converted lead: " + handle,
+            content: memContent,
+            metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri }),
+            created_at: memTimestamp,
+            updated_at: memTimestamp
+          });
+
+        if (memInsert.error) {
+          console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
+        }
+      } catch (memErr) {
+        console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
+      }
+
+      // Bump this user's pipeline status new -> drafted (never downgrade a
+      // lead that's already further along, e.g. already contacted).
+      try {
+        var existingPipeline = await supabase
+          .from("sales_lead_pipeline")
+          .select("status")
+          .eq("user_id", userId)
+          .eq("lead_post_uri", lead.post_uri)
+          .maybeSingle();
+
+        var pipelineTimestamp = nowIso();
+        var draftPreview = truncateOrchestratorPreview(output, 4000);
+
+        if (!existingPipeline.data || existingPipeline.data.status === "new") {
+          var pipelineUpsert = await supabase
+            .from("sales_lead_pipeline")
+            .upsert({
+              user_id: userId,
+              lead_post_uri: lead.post_uri,
+              status: "drafted",
+              last_draft: draftPreview,
+              updated_at: pipelineTimestamp
+            }, { onConflict: "user_id,lead_post_uri" });
+
+          if (pipelineUpsert.error) {
+            console.error("[sales/convert] pipeline upsert failed:", pipelineUpsert.error.message);
+          }
+        } else {
+          var pipelineUpdate = await supabase
+            .from("sales_lead_pipeline")
+            .update({ last_draft: draftPreview, updated_at: pipelineTimestamp })
+            .eq("user_id", userId)
+            .eq("lead_post_uri", lead.post_uri);
+
+          if (pipelineUpdate.error) {
+            console.error("[sales/convert] pipeline update failed:", pipelineUpdate.error.message);
+          }
+        }
+      } catch (pipelineErr) {
+        console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
+      }
+
+      results.push({
+        lead_post_uri: lead.post_uri,
+        handle: handle,
+        conversion: output
+      });
+    }
+
+    return res.json({ success: true, results: results });
+  } catch (error) {
+    console.error("[sales/convert] Error:", error);
+    next(error);
+  }
+});
+
+// POST /api/agents/sales/lead-status — mark a lead contacted/replied/
+// converted (or back to drafted), scoped strictly to the authenticated
+// user_id. Logs the change to ai_tasks and agent_memory (agent_type "sales").
+app.post("/api/agents/sales/lead-status", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var leadPostUri = safeText(req.body.lead_post_uri, 500);
+    var status = String(req.body.status || "").toLowerCase().trim();
+
+    if (!leadPostUri) {
+      return res.status(400).json({ error: "lead_post_uri is required." });
+    }
+    if (SALES_LEAD_STATUSES.indexOf(status) === -1) {
+      return res.status(400).json({ error: "status must be one of: " + SALES_LEAD_STATUSES.join(", ") });
+    }
+
+    var timestamp = nowIso();
+    var upsertResult = await supabase
+      .from("sales_lead_pipeline")
+      .upsert({
+        user_id: userId,
+        lead_post_uri: leadPostUri,
+        status: status,
+        updated_at: timestamp
+      }, { onConflict: "user_id,lead_post_uri" })
+      .select("*")
+      .single();
+
+    if (upsertResult.error) {
+      throw upsertResult.error;
+    }
+
+    try {
+      var taskInsert = await supabase
+        .from("ai_tasks")
+        .insert({
+          user_id: userId,
+          agent_type: "sales",
+          prompt: "Lead status update: " + leadPostUri,
+          result: "Marked as " + status,
+          status: "completed"
+        });
+      if (taskInsert.error) {
+        console.error("[sales/lead-status] ai_tasks insert failed:", taskInsert.error.message);
+      }
+
+      var memTimestamp = nowIso();
+      var memInsert = await supabase
+        .from("agent_memory")
+        .insert({
+          user_id: userId,
+          agent: "sales",
+          agent_type: "sales",
+          memory_key: "sales_lead_status_" + leadPostUri + "_" + Date.now(),
+          memory_value: "Lead marked as " + status,
+          memory_type: "insight",
+          title: "Lead status: " + status,
+          content: "Lead " + leadPostUri + " marked as " + status,
+          metadata: normalizeMemoryMetadata({ source: "sales_lead_status", lead_post_uri: leadPostUri, status: status }),
+          created_at: memTimestamp,
+          updated_at: memTimestamp
+        });
+      if (memInsert.error) {
+        console.error("[sales/lead-status] agent_memory write failed:", memInsert.error.message);
+      }
+    } catch (logErr) {
+      console.error("[sales/lead-status] logging error:", logErr.message || logErr);
+    }
+
+    return res.json({ success: true, pipeline: upsertResult.data });
+  } catch (error) {
+    console.error("[sales/lead-status] Error:", error);
+    next(error);
+  }
+});
+
+// GET /api/agents/sales/pipeline — this user's tracked leads grouped by
+// sales_lead_pipeline status, joined back to bsky_leads for display data.
+// Strictly scoped to the authenticated user_id.
+app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+
+    var pipelineResult = await supabase
+      .from("sales_lead_pipeline")
+      .select("*")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false });
+
+    if (pipelineResult.error) {
+      throw pipelineResult.error;
+    }
+
+    var pipelineRows = pipelineResult.data || [];
+    var postUris = pipelineRows.map(function (row) { return row.lead_post_uri; });
+
+    var leadsByUri = {};
+    if (postUris.length) {
+      var leadsResult = await supabase
+        .from("bsky_leads")
+        .select("*")
+        .in("post_uri", postUris);
+
+      if (!leadsResult.error) {
+        (leadsResult.data || []).forEach(function (lead) { leadsByUri[lead.post_uri] = lead; });
+      }
+    }
+
+    var grouped = {};
+    SALES_LEAD_STATUSES.forEach(function (status) { grouped[status] = []; });
+
+    pipelineRows.forEach(function (row) {
+      var bucket = grouped[row.status] || (grouped[row.status] = []);
+      bucket.push({
+        lead_post_uri: row.lead_post_uri,
+        status: row.status,
+        last_draft: row.last_draft,
+        updated_at: row.updated_at,
+        lead: leadsByUri[row.lead_post_uri] || null
+      });
+    });
+
+    return res.json({ pipeline: grouped });
+  } catch (error) {
+    console.error("[sales/pipeline] Error:", error);
+    next(error);
+  }
+});
+
 app.post("/api/sms/inbound", async function (req, res) {
   var from = (req.body.From || "").trim().replace(/^\+/, "");
   var body = (req.body.Body || "").trim().toUpperCase();
