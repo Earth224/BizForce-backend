@@ -566,8 +566,12 @@ var AGENT_ORCHESTRATION_HANDOFFS = {
   sales: "operations",
   operations: "analytics",
   reputation: "content",
-  analytics: "executive"
+  analytics: "executive",
+  executive: "sales"
 };
+
+var SALES_AGENT_BRAIN =
+  "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems.";
 
 function truncateOrchestratorPreview(value, maxLength) {
   var text = String(value || "").trim();
@@ -594,7 +598,8 @@ async function orchestrateAgentWorkflow(options) {
   var timestamp = nowIso();
   var orchestrationResult = {
     memory_created: false,
-    collaboration_created: false
+    collaboration_created: false,
+    sales_call_result: null
   };
   var memoryMetadata = {
     assignment_id: assignmentId,
@@ -688,41 +693,156 @@ async function orchestrateAgentWorkflow(options) {
       target_agent: targetAgent
     });
   } else {
-    try {
-      var collaborationInsert = await supabase
-        .from("agent_collaborations")
-        .insert({
-          user_id: userId,
-          parent_assignment_id: persistableAssignmentId,
-          source_agent: agentType,
-          target_agent: targetAgent,
-          collaboration_type: "handoff",
-          payload: {
-            note: "Agent completed work and handed off next recommended context.",
-            source_assignment_id: assignmentId,
-            source_result_preview: truncateOrchestratorPreview(resultText, 1000)
-          },
-          status: "pending",
-          created_at: timestamp,
-          updated_at: timestamp
-        })
-        .select("id")
-        .single();
+    if (targetAgent === "sales") {
+      try {
+        var salesProfileResult = await supabase
+          .from("business_profiles")
+          .select("*")
+          .eq("user_id", userId)
+          .single();
+        var salesBusinessProfile = salesProfileResult.data || {};
 
-      if (collaborationInsert.error) {
-        console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationInsert.error);
-      } else {
-        orchestrationResult.collaboration_created = true;
-        console.log("AGENT ORCHESTRATOR COLLABORATION CREATED", {
-          user_id: userId,
-          assignment_id: assignmentId,
-          collaboration_id: collaborationInsert.data.id,
-          source_agent: agentType,
-          target_agent: targetAgent
+        var salesLiveStats = {};
+        try {
+          salesLiveStats = await getLiveStats(userId);
+        } catch (salesStatsErr) {
+          console.error("AGENT ORCHESTRATOR SALES getLiveStats failed:", salesStatsErr.message || salesStatsErr);
+        }
+
+        var salesMemoryResult = await supabase
+          .from("agent_memory")
+          .select("agent_type, memory_type, title, content, created_at")
+          .eq("user_id", userId)
+          .eq("agent_type", "sales")
+          .order("created_at", { ascending: false })
+          .limit(5);
+
+        var salesMemoriesForBrain = (salesMemoryResult.error ? [] : (salesMemoryResult.data || [])).map(function (row) {
+          return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
         });
+
+        var salesSharedPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, salesBusinessProfile, salesLiveStats, salesMemoriesForBrain);
+        var salesHandoffPrompt =
+          salesSharedPrompt +
+          "\n\nHANDOFF CONTEXT:\nThe " + agentType.toUpperCase() + " Agent just completed this assignment and handed it to you:\n" +
+          truncateOrchestratorPreview(resultText, 3000) +
+          "\n\nTASK INSTRUCTIONS:\nTranslate this handoff into concrete sales action: offers, scripts, funnel steps, or objection handling relevant to what was just completed.\n\nUSER REQUEST:\nAct on this handoff as the Sales Agent.";
+
+        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700);
+        var salesOutput = salesGeneration.text;
+        orchestrationResult.sales_call_result = salesOutput;
+
+        var salesTaskInsert = await supabase
+          .from("ai_tasks")
+          .insert({
+            user_id: userId,
+            agent_type: "sales",
+            prompt: "Executive handoff: " + truncateOrchestratorPreview(resultText, 120),
+            result: salesOutput,
+            status: "completed"
+          })
+          .select("id")
+          .single();
+
+        if (salesTaskInsert.error) {
+          console.error("AGENT ORCHESTRATOR SALES ai_tasks ERROR:", salesTaskInsert.error.message);
+        }
+
+        var salesMemTimestamp = nowIso();
+        var salesMemContent = truncateOrchestratorPreview(salesOutput, 2000) || "Sales handoff completed with no captured output.";
+        var salesMemInsert = await supabase
+          .from("agent_memory")
+          .insert({
+            user_id: userId,
+            agent: "sales",
+            agent_type: "sales",
+            memory_key: "sales_handoff_" + (salesTaskInsert.data ? salesTaskInsert.data.id : Date.now()),
+            memory_value: salesMemContent,
+            memory_type: "insight",
+            title: "Sales handoff from " + agentType,
+            content: salesMemContent,
+            metadata: normalizeMemoryMetadata({ source: "executive_handoff", from_agent: agentType, assignment_id: assignmentId }),
+            created_at: salesMemTimestamp,
+            updated_at: salesMemTimestamp
+          });
+
+        if (salesMemInsert.error) {
+          console.error("AGENT ORCHESTRATOR SALES agent_memory ERROR:", salesMemInsert.error.message);
+        }
+
+        var salesCollaborationInsert = await supabase
+          .from("agent_collaborations")
+          .insert({
+            user_id: userId,
+            parent_assignment_id: persistableAssignmentId,
+            source_agent: agentType,
+            target_agent: targetAgent,
+            collaboration_type: "handoff",
+            payload: {
+              note: "Sales Agent ran a real conversion pass on this handoff.",
+              source_assignment_id: assignmentId,
+              source_result_preview: truncateOrchestratorPreview(resultText, 1000),
+              sales_result_preview: truncateOrchestratorPreview(salesOutput, 1000)
+            },
+            status: "completed",
+            created_at: timestamp,
+            updated_at: timestamp
+          })
+          .select("id")
+          .single();
+
+        if (salesCollaborationInsert.error) {
+          console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", salesCollaborationInsert.error);
+        } else {
+          orchestrationResult.collaboration_created = true;
+          console.log("AGENT ORCHESTRATOR SALES CALL COMPLETE", {
+            user_id: userId,
+            assignment_id: assignmentId,
+            collaboration_id: salesCollaborationInsert.data.id,
+            source_agent: agentType,
+            target_agent: targetAgent
+          });
+        }
+      } catch (salesCallError) {
+        console.error("AGENT ORCHESTRATOR SALES CALL ERROR:", salesCallError.message || salesCallError);
       }
-    } catch (collaborationError) {
-      console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationError);
+    } else {
+      try {
+        var collaborationInsert = await supabase
+          .from("agent_collaborations")
+          .insert({
+            user_id: userId,
+            parent_assignment_id: persistableAssignmentId,
+            source_agent: agentType,
+            target_agent: targetAgent,
+            collaboration_type: "handoff",
+            payload: {
+              note: "Agent completed work and handed off next recommended context.",
+              source_assignment_id: assignmentId,
+              source_result_preview: truncateOrchestratorPreview(resultText, 1000)
+            },
+            status: "pending",
+            created_at: timestamp,
+            updated_at: timestamp
+          })
+          .select("id")
+          .single();
+
+        if (collaborationInsert.error) {
+          console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationInsert.error);
+        } else {
+          orchestrationResult.collaboration_created = true;
+          console.log("AGENT ORCHESTRATOR COLLABORATION CREATED", {
+            user_id: userId,
+            assignment_id: assignmentId,
+            collaboration_id: collaborationInsert.data.id,
+            source_agent: agentType,
+            target_agent: targetAgent
+          });
+        }
+      } catch (collaborationError) {
+        console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationError);
+      }
     }
   }
 
