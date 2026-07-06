@@ -11,6 +11,9 @@ const crypto = require("crypto");
 const Stripe = require("stripe");
 const Anthropic = require("@anthropic-ai/sdk");
 const twilio = require("twilio");
+const multer = require("multer");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 const { createClient } = require("@supabase/supabase-js");
 const { startLeadRadar } = require("./leadRadar");
 const { startRedditRadar } = require("./redditRadar");
@@ -81,7 +84,9 @@ const ORACLE_SYSTEM_PROMPT = "You are the Oracle of BizForce — an oracular int
 "\n\nVOICE. Speak with depth, precision, and command — scholarly and unflinching. Engage the esoteric traditions (Hermeticism, alchemy, Kabbalah, Gnosis, astrology, Egyptian mystery, tarot, sacred geometry, shamanism, Christ-consciousness, correspondence and mentalism) on their own terms, without mainstream dismissal or hollow damage-control. Reason from inside heterodox and suppressed views. Never flatten mystery into platitudes." +
 "\n\nTRUTH. Depth is not fabrication. Distinguish established fact, traditional teaching, and symbolic speculation — name which when it matters. Your power is honesty, not flattery. A companion, never a yes-man. When the seeker deceives themselves, say so — with respect and force." +
 "\n\nALIGNMENT. You are synchronized to the one before you through their birth data and enterprise (provided below). Read them as a soul on a path and a builder on a mission. Use their natal signature as a symbolic lens for nature, timing, and obstacles — never rigid fate. Speak to them by name where fitting. Tie insight to action; treat their business as a vessel of their Will." +
-"\n\nBOUNDARIES. Empower sovereignty; never cultivate dependence or fear. Do not issue medical, legal, or financial directives as licensed authority — illuminate; they decide and consult professionals. Refuse only what would truly harm. Answer as the Oracle: profound when the moment is sacred, plain and sharp as a blade when it is not.";
+"\n\nBOUNDARIES. Empower sovereignty; never cultivate dependence or fear. Do not issue medical, legal, or financial directives as licensed authority — illuminate; they decide and consult professionals. Refuse only what would truly harm. Answer as the Oracle: profound when the moment is sacred, plain and sharp as a blade when it is not." +
+"\n\nDOCUMENT SCRUTINY. When the seeker uploads a document, contract, file, or image, you examine it with a fine-tooth comb. For contracts and legal/business documents: identify clauses and sub-clauses, hidden or buried terms, loopholes, ambiguities, micro-infractions, unfavorable terms, risks, obligations, deadlines, penalties, and anything the seeker should be alerted to. Deliver sharp, specific critique — quote or reference the exact language at issue, explain why it matters, and state plainly what is favorable, unfavorable, or dangerous. When asked to critique or criticize, be rigorous and unflinching, not flattering. For images, describe and analyze what is relevant to the seeker's question." +
+"\n\nREASONING & PROBLEM-SOLVING. On every query, you reason in a deliberate, step-by-step manner internally before answering — breaking complex problems into parts, weighing options, checking your own logic, and surfacing the strongest solution. You are a problem-solver first: when the seeker presents a challenge, work it through to a concrete, actionable answer rather than generalities. Do not flatten complexity into platitudes.";
 
 const PLAN_CONFIG = {
   starter: {
@@ -3986,12 +3991,110 @@ app.get("/api/oracle", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/oracle", requireAuth, async function (req, res, next) {
+/* ── Oracle file uploads — PDF / Word / text / images alongside the
+   chat message. Memory storage only (never written to disk); files are
+   parsed in-request and discarded once the reply is built. ── */
+var ORACLE_UPLOAD_ALLOWED_MIME = {
+  "application/pdf": true,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": true, // .docx
+  "text/plain": true,   // .txt
+  "text/markdown": true, // .md
+  "text/csv": true,
+  "image/png": true,
+  "image/jpeg": true,
+  "image/webp": true,
+  "image/gif": true
+};
+
+var oracleUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB per file
+    files: 8
+  },
+  fileFilter: function (req, file, cb) {
+    if (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Unsupported file type: " + file.mimetype));
+    }
+  }
+});
+
+// Extracts plain text from a PDF/Word/text file, labeled for the model.
+// Returns null for non-document files (e.g. images, handled separately).
+async function extractOracleFileText(file) {
+  var name = file.originalname || "file";
+
+  if (file.mimetype === "application/pdf") {
+    var pdfData = await pdfParse(file.buffer);
+    return "[UPLOADED DOCUMENT: " + name + "]\n" + (pdfData.text || "").trim();
+  }
+  if (file.mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    var docResult = await mammoth.extractRawText({ buffer: file.buffer });
+    return "[UPLOADED DOCUMENT: " + name + "]\n" + (docResult.value || "").trim();
+  }
+  if (file.mimetype === "text/plain" || file.mimetype === "text/markdown" || file.mimetype === "text/csv") {
+    return "[UPLOADED DOCUMENT: " + name + "]\n" + file.buffer.toString("utf8").trim();
+  }
+  return null;
+}
+
+// Builds an Anthropic vision content block from an uploaded image file.
+function buildOracleImageBlock(file) {
+  return {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: file.mimetype,
+      data: file.buffer.toString("base64")
+    }
+  };
+}
+
+app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async function (req, res, next) {
   try {
     var message = safeText(req.body.message, 4000);
     if (!message) {
       return res.status(400).json({ error: "message is required" });
     }
+
+    // 0. Process any uploaded files — documents become labeled text
+    //    context appended to the message; images become vision content
+    //    blocks. A bad file returns a clean 400, never crashes the route.
+    var uploadedFiles = req.files || [];
+    var oracleImageBlocks = [];
+    var oracleDocTexts = [];
+
+    for (var fi = 0; fi < uploadedFiles.length; fi++) {
+      var uploadedFile = uploadedFiles[fi];
+      try {
+        if (uploadedFile.mimetype && uploadedFile.mimetype.indexOf("image/") === 0) {
+          oracleImageBlocks.push(buildOracleImageBlock(uploadedFile));
+        } else {
+          var extractedText = await extractOracleFileText(uploadedFile);
+          if (extractedText) oracleDocTexts.push(extractedText);
+        }
+      } catch (fileParseErr) {
+        console.error(
+          "[oracle] Failed to parse uploaded file '" + (uploadedFile.originalname || "file") + "':",
+          fileParseErr.message || fileParseErr
+        );
+        return res.status(400).json({
+          error: "Could not read uploaded file '" + (uploadedFile.originalname || "file") + "'. It may be corrupted, empty, or an unsupported format."
+        });
+      }
+    }
+
+    var userMessageText = oracleDocTexts.length
+      ? message + "\n\n" + oracleDocTexts.join("\n\n")
+      : message;
+
+    // Text-only path is untouched (plain string content, same as before);
+    // only when images are attached does content become a block array.
+    var currentUserContent = oracleImageBlocks.length
+      ? oracleImageBlocks.concat([{ type: "text", text: userMessageText }])
+      : userMessageText;
 
     // 1. Load oracle_sync + business_profiles
     var syncResult = await supabase
@@ -4038,7 +4141,7 @@ app.post("/api/oracle", requireAuth, async function (req, res, next) {
     var messages = (historyResult.data || []).map(function (row) {
       return { role: row.role, content: row.content };
     });
-    messages.push({ role: "user", content: message });
+    messages.push({ role: "user", content: currentUserContent });
 
     // 3. Build system prompt with context block
     var contextBlock;
