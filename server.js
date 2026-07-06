@@ -496,7 +496,8 @@ var MEMORY_AGENT_TYPES = [
   "analytics",
   "operations",
   "reputation",
-  "executive"
+  "executive",
+  "oracle"
 ];
 
 var MEMORY_TYPES = [
@@ -4285,8 +4286,34 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     } catch (statsErr) {
       console.error("[oracle] getLiveStats failed:", statsErr.message || statsErr);
     }
+
+    // This route is exclusively the Oracle, so its agent_memory scope is
+    // always "oracle" — extends the same shared table the other agents use
+    // (see MEMORY_AGENT_TYPES), alongside oracle_messages' own full history.
+    var oracleAgentType = "oracle";
+    var oracleMemoriesForBrain = [];
+    try {
+      var oracleAgentMemoryResult = await supabase
+        .from("agent_memory")
+        .select("agent_type, memory_type, title, content, created_at")
+        .eq("user_id", req.user.id)
+        .eq("agent_type", oracleAgentType)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      oracleMemoriesForBrain = (oracleAgentMemoryResult.error ? [] : (oracleAgentMemoryResult.data || [])).map(function (row) {
+        return {
+          agent_type: row.agent_type,
+          title: row.title || row.memory_type,
+          content: row.content
+        };
+      });
+    } catch (oracleMemoryReadErr) {
+      console.error("[oracle] agent_memory read error:", oracleMemoryReadErr.message || oracleMemoryReadErr);
+    }
+
     var systemPrompt =
-      buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, []) +
+      buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain) +
       contextBlock +
       numerologyContext;
 
@@ -4355,6 +4382,38 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       }
     } catch (saveErr) {
       console.error("[oracle] Failed to save assistant message:", saveErr.message || saveErr);
+    }
+
+    // 9. Write a concise agent_memory row scoped to agent_type "oracle" —
+    //    extends the same central-brain memory table the other agents use
+    //    (soft error — response already sent, never blocks it).
+    if (MEMORY_AGENT_TYPES.indexOf(oracleAgentType) !== -1) {
+      try {
+        var oracleMemoryTimestamp = nowIso();
+        var oracleMemoryContent = truncateOrchestratorPreview(aiText, 2000) || "Oracle reply with no captured content.";
+
+        var oracleMemoryInsert = await supabase
+          .from("agent_memory")
+          .insert({
+            user_id:     req.user.id,
+            agent:       oracleAgentType,
+            agent_type:  oracleAgentType,
+            memory_key:  "oracle_message_" + Date.now(),
+            memory_value: oracleMemoryContent,
+            memory_type: "insight",
+            title:       "Prompt: " + truncateOrchestratorPreview(message, 120),
+            content:     oracleMemoryContent,
+            metadata:    normalizeMemoryMetadata({ source: "oracle_chat" }),
+            created_at:  oracleMemoryTimestamp,
+            updated_at:  oracleMemoryTimestamp
+          });
+
+        if (oracleMemoryInsert.error) {
+          console.error("[oracle] Failed to write agent_memory:", oracleMemoryInsert.error.message);
+        }
+      } catch (oracleMemoryWriteErr) {
+        console.error("[oracle] agent_memory write error:", oracleMemoryWriteErr.message || oracleMemoryWriteErr);
+      }
     }
 
   } catch (error) {
