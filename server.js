@@ -8016,11 +8016,52 @@ async function dripTick() {
 setInterval(dripTick, 300000);
 dripTick();
 
+// Sales Agent auto-conversion timer — Option A: wired directly here in
+// server.js, completely independent of leadRadar.js's radarTick/5-minute
+// cycle (not touching that file at all). Reentrancy guard mirrors
+// leadRadar.js's own radarRunning pattern.
+//
+// SALES_AUTOLOOP_DRY_RUN is not set in .env yet, so runSalesAutoConvert()'s
+// own dryRun check (`process.env.SALES_AUTOLOOP_DRY_RUN !== "false"`)
+// defaults to true — this timer will run in DRY RUN mode (outreach is
+// generated and ai_tasks/agent_memory rows are written, clearly tagged
+// "[DRY RUN]" / status "dry_run", but sales_lead_pipeline is left
+// untouched) until SALES_AUTOLOOP_DRY_RUN=false is explicitly added to
+// the environment.
+var salesAutoConvertRunning = false;
+
+async function salesAutoConvertTick() {
+  if (salesAutoConvertRunning) {
+    console.log("[SalesAutoConvert] Tick skipped — previous run still in progress");
+    return;
+  }
+  salesAutoConvertRunning = true;
+  console.log("[SalesAutoConvert] Tick starting...");
+  try {
+    await runSalesAutoConvert();
+  } catch (err) {
+    console.error("[SalesAutoConvert] Tick error:", err.message || err);
+  } finally {
+    salesAutoConvertRunning = false;
+    console.log("[SalesAutoConvert] Tick finished.");
+  }
+}
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
   });
+
+  // Fire once ~60s after boot (so it doesn't compete with startup load),
+  // then on its own independent 5-minute interval thereafter.
+  setTimeout(function () {
+    salesAutoConvertTick().catch(function (err) {
+      console.error("[SalesAutoConvert] Initial run error:", err.message || err);
+    });
+  }, 60000);
+  setInterval(salesAutoConvertTick, 300000);
+
   // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
   // startRedditRadar().catch(function (err) {
   //   console.error("[RedditRadar] startup error:", err.message || err);
