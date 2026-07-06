@@ -7479,12 +7479,29 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       }
       targetLeads = [singleResult.data];
     } else if (segment) {
+      var excludedUris = [];
+      try {
+        var excludedResult = await supabase
+          .from("sales_lead_pipeline")
+          .select("lead_post_uri")
+          .eq("user_id", userId)
+          .in("status", ["contacted", "replied", "converted"]);
+
+        if (!excludedResult.error) {
+          excludedUris = (excludedResult.data || []).map(function (row) { return row.lead_post_uri; });
+        } else {
+          console.error("[sales/convert] Failed to load already-contacted leads:", excludedResult.error.message);
+        }
+      } catch (excludeErr) {
+        console.error("[sales/convert] Failed to load already-contacted leads:", excludeErr.message || excludeErr);
+      }
+
       var segQuery = supabase
         .from("bsky_leads")
         .select("*")
         .eq("status", "scored")
         .order("intent_score", { ascending: false })
-        .limit(10);
+        .limit(40);
 
       var segMinScore = Number(segment.min_score);
       if (Number.isFinite(segMinScore)) segQuery = segQuery.gte("intent_score", segMinScore);
@@ -7495,7 +7512,9 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       if (segResult.error) {
         throw segResult.error;
       }
-      targetLeads = segResult.data || [];
+      targetLeads = (segResult.data || [])
+        .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
+        .slice(0, 10);
     } else {
       return res.status(400).json({ error: "Provide lead_post_uri or a segment filter." });
     }
