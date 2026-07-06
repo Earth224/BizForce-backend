@@ -2,6 +2,8 @@ require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const { BskyAgent } = require("@atproto/api");
 const Anthropic = require("@anthropic-ai/sdk");
+const { runMastodonRadarOnce } = require("./mastodonRadar");
+const { runYoutubeRadarOnce } = require("./youtubeRadar");
 
 const BLUESKY_IDENTIFIER  = process.env.BLUESKY_IDENTIFIER;
 const BLUESKY_APP_PASSWORD = process.env.BLUESKY_APP_PASSWORD;
@@ -137,6 +139,19 @@ async function radarTick() {
   radarRunning = true;
   try {
     await runLeadRadarOnce();
+
+    try {
+      await runMastodonRadarOnce();
+    } catch (mastodonErr) {
+      console.error("[LeadRadar] MastodonRadar cycle error:", mastodonErr.message || mastodonErr);
+    }
+
+    try {
+      await runYoutubeRadarOnce();
+    } catch (youtubeErr) {
+      console.error("[LeadRadar] YoutubeRadar cycle error:", youtubeErr.message || youtubeErr);
+    }
+
     await scoreNewLeads();
   } catch (err) {
     console.error("[LeadRadar] radarTick error:", err.message || err);

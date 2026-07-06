@@ -17,6 +17,8 @@ const mammoth = require("mammoth");
 const { createClient } = require("@supabase/supabase-js");
 const { buildAgentSystemPrompt } = require("./config/brain");
 const { startLeadRadar } = require("./leadRadar");
+const { runMastodonRadarOnce } = require("./mastodonRadar");
+const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 
 const app = express();
