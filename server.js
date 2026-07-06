@@ -7470,6 +7470,129 @@ app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) 
 // 10 leads per call). Inherits platform knowledge + the Sales Agent role +
 // this user's business_profile (competitors, website) via
 // buildAgentSystemPrompt, same as every other agent route.
+// Runs the Sales Agent's conversion pass for exactly one lead: builds the
+// per-lead prompt, calls the model, and logs the result. When dryRun is
+// true, the ai_tasks/agent_memory rows are still written (clearly tagged
+// "[DRY RUN]" / status "dry_run") but sales_lead_pipeline is left
+// completely untouched, so the same lead can be safely re-run later.
+async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
+  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+
+  var leadBlock =
+    "CAPTURED LEAD (from Lead Radar):\n" +
+    "Handle: " + handle + "\n" +
+    "Post: " + (lead.post_text || "") + "\n" +
+    "Matched keyword: " + (lead.matched_keyword || "") + "\n" +
+    "Intent score: " + (lead.intent_score != null ? lead.intent_score : "unscored") + "\n" +
+    "Intent reason: " + (lead.intent_reason || "") + "\n" +
+    "Suggested product interest: " + (lead.suggested_product || "none");
+
+  var taskInstruction =
+    "Write a lead-conversion package for the captured lead above. Return exactly these three labeled sections: " +
+    "OUTREACH MESSAGE — a short, genuine, non-salesy message (2-4 sentences) speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype; " +
+    "OFFER — the specific offer/product from the business profile to present to this lead, tailored to their expressed need, with a one-line reason it fits them; " +
+    "CALL TO ACTION — a clear CTA sentence directing them to the business's website (use the website URL from the business profile above) to take the next step. " +
+    "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad.";
+
+  var finalPrompt =
+    sharedSystemPrompt +
+    "\n\n" + leadBlock +
+    "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
+    "\n\nUSER REQUEST:\nConvert this Lead Radar capture into a ready-to-send outreach message, offer, and CTA.";
+
+  var generation = await callAnthropicText(finalPrompt, 700);
+  var output = generation.text;
+
+  var taskInsert = await supabase
+    .from("ai_tasks")
+    .insert({
+      user_id: userId,
+      agent_type: "sales",
+      prompt: (dryRun ? "[DRY RUN] " : "") + "Sales convert: " + handle,
+      result: output,
+      status: dryRun ? "dry_run" : "completed"
+    })
+    .select("*")
+    .single();
+
+  if (taskInsert.error) {
+    console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
+  }
+
+  try {
+    var memTimestamp = nowIso();
+    var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
+
+    var memInsert = await supabase
+      .from("agent_memory")
+      .insert({
+        user_id: userId,
+        agent: "sales",
+        agent_type: "sales",
+        memory_key: (dryRun ? "sales_convert_dryrun_" : "sales_convert_") + (taskInsert.data ? taskInsert.data.id : Date.now()),
+        memory_value: memContent,
+        memory_type: "insight",
+        title: (dryRun ? "[DRY RUN] " : "") + "Converted lead: " + handle,
+        content: memContent,
+        metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri, dry_run: dryRun }),
+        created_at: memTimestamp,
+        updated_at: memTimestamp
+      });
+
+    if (memInsert.error) {
+      console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
+    }
+  } catch (memErr) {
+    console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
+  }
+
+  if (!dryRun) {
+    // Bump this user's pipeline status new -> drafted (never downgrade a
+    // lead that's already further along, e.g. already contacted).
+    try {
+      var existingPipeline = await supabase
+        .from("sales_lead_pipeline")
+        .select("status")
+        .eq("user_id", userId)
+        .eq("lead_post_uri", lead.post_uri)
+        .maybeSingle();
+
+      var pipelineTimestamp = nowIso();
+      var draftPreview = truncateOrchestratorPreview(output, 4000);
+
+      if (!existingPipeline.data || existingPipeline.data.status === "new") {
+        var pipelineUpsert = await supabase
+          .from("sales_lead_pipeline")
+          .upsert({
+            user_id: userId,
+            lead_post_uri: lead.post_uri,
+            status: "drafted",
+            last_draft: draftPreview,
+            updated_at: pipelineTimestamp
+          }, { onConflict: "user_id,lead_post_uri" });
+
+        if (pipelineUpsert.error) {
+          console.error("[sales/convert] pipeline upsert failed:", pipelineUpsert.error.message);
+        }
+      } else {
+        var pipelineUpdate = await supabase
+          .from("sales_lead_pipeline")
+          .update({ last_draft: draftPreview, updated_at: pipelineTimestamp })
+          .eq("user_id", userId)
+          .eq("lead_post_uri", lead.post_uri);
+
+        if (pipelineUpdate.error) {
+          console.error("[sales/convert] pipeline update failed:", pipelineUpdate.error.message);
+        }
+      }
+    } catch (pipelineErr) {
+      console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
+    }
+  }
+
+  return output;
+}
+
 app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var userId = req.user.id;
@@ -7570,116 +7693,7 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
     for (var i = 0; i < targetLeads.length; i++) {
       var lead = targetLeads[i];
       var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
-
-      var leadBlock =
-        "CAPTURED LEAD (from Lead Radar):\n" +
-        "Handle: " + handle + "\n" +
-        "Post: " + (lead.post_text || "") + "\n" +
-        "Matched keyword: " + (lead.matched_keyword || "") + "\n" +
-        "Intent score: " + (lead.intent_score != null ? lead.intent_score : "unscored") + "\n" +
-        "Intent reason: " + (lead.intent_reason || "") + "\n" +
-        "Suggested product interest: " + (lead.suggested_product || "none");
-
-      var taskInstruction =
-        "Write a lead-conversion package for the captured lead above. Return exactly these three labeled sections: " +
-        "OUTREACH MESSAGE — a short, genuine, non-salesy message (2-4 sentences) speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype; " +
-        "OFFER — the specific offer/product from the business profile to present to this lead, tailored to their expressed need, with a one-line reason it fits them; " +
-        "CALL TO ACTION — a clear CTA sentence directing them to the business's website (use the website URL from the business profile above) to take the next step. " +
-        "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad.";
-
-      var finalPrompt =
-        sharedSystemPrompt +
-        "\n\n" + leadBlock +
-        "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
-        "\n\nUSER REQUEST:\nConvert this Lead Radar capture into a ready-to-send outreach message, offer, and CTA.";
-
-      var generation = await callAnthropicText(finalPrompt, 700);
-      var output = generation.text;
-
-      var taskInsert = await supabase
-        .from("ai_tasks")
-        .insert({
-          user_id: userId,
-          agent_type: "sales",
-          prompt: "Sales convert: " + handle,
-          result: output,
-          status: "completed"
-        })
-        .select("*")
-        .single();
-
-      if (taskInsert.error) {
-        console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
-      }
-
-      try {
-        var memTimestamp = nowIso();
-        var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
-
-        var memInsert = await supabase
-          .from("agent_memory")
-          .insert({
-            user_id: userId,
-            agent: "sales",
-            agent_type: "sales",
-            memory_key: "sales_convert_" + (taskInsert.data ? taskInsert.data.id : Date.now()),
-            memory_value: memContent,
-            memory_type: "insight",
-            title: "Converted lead: " + handle,
-            content: memContent,
-            metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri }),
-            created_at: memTimestamp,
-            updated_at: memTimestamp
-          });
-
-        if (memInsert.error) {
-          console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
-        }
-      } catch (memErr) {
-        console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
-      }
-
-      // Bump this user's pipeline status new -> drafted (never downgrade a
-      // lead that's already further along, e.g. already contacted).
-      try {
-        var existingPipeline = await supabase
-          .from("sales_lead_pipeline")
-          .select("status")
-          .eq("user_id", userId)
-          .eq("lead_post_uri", lead.post_uri)
-          .maybeSingle();
-
-        var pipelineTimestamp = nowIso();
-        var draftPreview = truncateOrchestratorPreview(output, 4000);
-
-        if (!existingPipeline.data || existingPipeline.data.status === "new") {
-          var pipelineUpsert = await supabase
-            .from("sales_lead_pipeline")
-            .upsert({
-              user_id: userId,
-              lead_post_uri: lead.post_uri,
-              status: "drafted",
-              last_draft: draftPreview,
-              updated_at: pipelineTimestamp
-            }, { onConflict: "user_id,lead_post_uri" });
-
-          if (pipelineUpsert.error) {
-            console.error("[sales/convert] pipeline upsert failed:", pipelineUpsert.error.message);
-          }
-        } else {
-          var pipelineUpdate = await supabase
-            .from("sales_lead_pipeline")
-            .update({ last_draft: draftPreview, updated_at: pipelineTimestamp })
-            .eq("user_id", userId)
-            .eq("lead_post_uri", lead.post_uri);
-
-          if (pipelineUpdate.error) {
-            console.error("[sales/convert] pipeline update failed:", pipelineUpdate.error.message);
-          }
-        }
-      } catch (pipelineErr) {
-        console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
-      }
+      var output = await convertSingleLead(userId, lead, sharedSystemPrompt, false);
 
       results.push({
         lead_post_uri: lead.post_uri,
