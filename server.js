@@ -4648,6 +4648,289 @@ app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, as
   return handleAiTaskRequest(req, res, next);
 });
 
+// Pulls <title>, meta description/keywords, canonical, H1-H6, image alt
+// attributes, JSON-LD structured data, and visible body text out of raw
+// HTML via regex (no DOM/headless browser dependency available here).
+function extractSeoPageData(html) {
+  var raw = String(html || "");
+
+  var titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  var title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : "";
+
+  function metaContent(name) {
+    var tagMatch = raw.match(new RegExp("<meta[^>]+name=[\"']" + name + "[\"'][^>]*>", "i"));
+    if (!tagMatch) return "";
+    var contentMatch = tagMatch[0].match(/content=["']([\s\S]*?)["']/i);
+    return contentMatch ? contentMatch[1].replace(/\s+/g, " ").trim() : "";
+  }
+
+  var metaDescription = metaContent("description");
+  var metaKeywords = metaContent("keywords");
+
+  var canonicalTagMatch = raw.match(/<link[^>]+rel=["']canonical["'][^>]*>/i);
+  var canonical = "";
+  if (canonicalTagMatch) {
+    var hrefMatch = canonicalTagMatch[0].match(/href=["']([\s\S]*?)["']/i);
+    canonical = hrefMatch ? hrefMatch[1].trim() : "";
+  }
+
+  var headings = {};
+  ["h1", "h2", "h3", "h4", "h5", "h6"].forEach(function (tag) {
+    var re = new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "gi");
+    var found = [], match;
+    while ((match = re.exec(raw)) !== null) {
+      var text = match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (text) found.push(text);
+    }
+    headings[tag] = found;
+  });
+
+  var imageAlts = [];
+  var imgRe = /<img\b[^>]*>/gi, imgMatch;
+  while ((imgMatch = imgRe.exec(raw)) !== null) {
+    var tag = imgMatch[0];
+    var altMatch = tag.match(/alt=["']([\s\S]*?)["']/i);
+    var srcMatch = tag.match(/src=["']([\s\S]*?)["']/i);
+    imageAlts.push({
+      src: srcMatch ? srcMatch[1].trim() : "",
+      alt: altMatch ? altMatch[1].trim() : ""
+    });
+  }
+
+  var structuredData = [];
+  var ldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi, ldMatch;
+  while ((ldMatch = ldRe.exec(raw)) !== null) {
+    structuredData.push(ldMatch[1].trim());
+  }
+
+  var bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  var bodyHtml = bodyMatch ? bodyMatch[1] : raw;
+  var visibleText = bodyHtml
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return {
+    title: title,
+    metaDescription: metaDescription,
+    metaKeywords: metaKeywords,
+    canonical: canonical,
+    headings: headings,
+    imageAlts: imageAlts,
+    structuredData: structuredData,
+    visibleText: safeText(visibleText, 8000) || ""
+  };
+}
+
+// Shared marker prefix identifying an ai_tasks row as a completed website
+// optimization run (as opposed to a seo_audit or any other seo task) —
+// written by POST /optimize, read back by GET /optimize-count so the two
+// routes can never drift out of sync with each other.
+var SEO_OPTIMIZE_TASK_PROMPT_PREFIX = "SEO optimize: ";
+
+app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var targetUrl = normalizeUrl(safeText(req.body.website || req.body.url, 500));
+    var brandDescription = safeText(
+      req.body.business_description || req.body.description || req.body.brand_description,
+      2000
+    );
+
+    if (!targetUrl) {
+      return res.status(400).json({ error: "A website URL is required." });
+    }
+
+    var pageData;
+    try {
+      var pageResponse = await fetch(targetUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; BizForceSEOBot/1.0; +https://bizforceai.net)" }
+      });
+      if (!pageResponse.ok) {
+        return res.status(422).json({ error: "Could not fetch that website (HTTP " + pageResponse.status + ")." });
+      }
+      var html = await pageResponse.text();
+      pageData = extractSeoPageData(html);
+    } catch (fetchErr) {
+      console.error("[seo/optimize] Fetch failed:", fetchErr.message || fetchErr);
+      return res.status(422).json({ error: "Could not reach that URL. Check that it is correct and publicly accessible." });
+    }
+
+    var profileResult = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    var businessProfile = profileResult.data || {};
+    if (brandDescription) {
+      businessProfile = Object.assign({}, businessProfile, { description: brandDescription });
+    }
+
+    var liveStats = {};
+    try {
+      liveStats = await getLiveStats(userId);
+    } catch (statsErr) {
+      console.error("[seo/optimize] getLiveStats failed:", statsErr.message || statsErr);
+    }
+
+    var agentMemoryResult = await supabase
+      .from("agent_memory")
+      .select("agent_type, memory_type, title, content, created_at")
+      .eq("user_id", userId)
+      .eq("agent_type", "seo")
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    var memoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
+      return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
+    });
+
+    var seoAgentBrain =
+      "You are the BizForce AI SEO Agent. Produce technical SEO audits, keyword strategies, local SEO plans, content clusters, and ranking action plans.";
+
+    var pageDataBlock =
+      "TARGET WEBSITE:\n" + targetUrl +
+      "\n\nEXTRACTED ON-PAGE DATA (fetched live from the URL above):\n" +
+      "Title tag: " + (pageData.title || "MISSING") +
+      "\nMeta description: " + (pageData.metaDescription || "MISSING") +
+      "\nMeta keywords: " + (pageData.metaKeywords || "Not set") +
+      "\nCanonical tag: " + (pageData.canonical || "MISSING") +
+      "\nH1: " + (pageData.headings.h1.join(" | ") || "MISSING") +
+      "\nH2: " + (pageData.headings.h2.join(" | ") || "None") +
+      "\nH3: " + (pageData.headings.h3.join(" | ") || "None") +
+      "\nH4: " + (pageData.headings.h4.join(" | ") || "None") +
+      "\nH5: " + (pageData.headings.h5.join(" | ") || "None") +
+      "\nH6: " + (pageData.headings.h6.join(" | ") || "None") +
+      "\nImages (" + pageData.imageAlts.length + " found, alt text shown): " +
+        (pageData.imageAlts.length
+          ? pageData.imageAlts.map(function (img, i) {
+              return (i + 1) + ". alt=\"" + (img.alt || "MISSING") + "\"";
+            }).join("; ")
+          : "None found") +
+      "\nStructured data (JSON-LD blocks found: " + pageData.structuredData.length + "): " +
+        (pageData.structuredData.length ? pageData.structuredData.join("\n---\n") : "None found") +
+      "\n\nVISIBLE BODY TEXT (truncated):\n" + (pageData.visibleText || "No visible text extracted.");
+
+    var taskInstruction =
+      "Produce a concrete GOOGLE SEO OPTIMIZATION REPORT for the extracted page above, covering exactly these sections in order: " +
+      "(1) TITLE TAG REWRITE — a rewritten title tag targeting the business's core keywords, under 60 characters, with a one-line reason; " +
+      "(2) META DESCRIPTION REWRITE — a rewritten meta description under 155 characters written to drive clicks; " +
+      "(3) HEADING STRUCTURE FIXES — specific fixes to the H1-H6 hierarchy found above (missing H1, duplicate headings, poor keyword placement); " +
+      "(4) TARGET KEYWORDS & KEYWORD GAPS — primary/secondary keyword recommendations for this business, and specific keyword gaps versus the competitors listed in its business profile; " +
+      "(5) ON-PAGE CONTENT IMPROVEMENTS — concrete rewrites/additions to the visible body text to improve topical depth and ranking; " +
+      "(6) IMAGE ALT-TEXT FIXES — rewritten alt text for any missing or weak alt attributes found above; " +
+      "(7) TECHNICAL SEO ISSUES — missing meta tags, missing/incorrect canonical, broken heading hierarchy, thin content, missing structured data; " +
+      "(8) PRIORITIZED ACTION LIST — a numbered list of the fixes above ordered by ranking impact, highest impact first. " +
+      "Be specific to the actual extracted content above, not generic advice — quote the actual title, headings, and alt text you are replacing.";
+
+    var sharedSystemPrompt = buildAgentSystemPrompt(seoAgentBrain, businessProfile, liveStats, memoriesForBrain);
+    var finalPrompt =
+      sharedSystemPrompt +
+      "\n\n" + pageDataBlock +
+      "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
+      "\n\nUSER REQUEST:\nRun a full Google SEO optimization pass on " + targetUrl +
+      (brandDescription ? " for this business: " + brandDescription : "");
+
+    var pendingInsert = await supabase
+      .from("ai_tasks")
+      .insert({
+        user_id: userId,
+        agent_type: "seo",
+        prompt: SEO_OPTIMIZE_TASK_PROMPT_PREFIX + targetUrl,
+        result: null,
+        status: "processing"
+      })
+      .select("*")
+      .single();
+
+    if (pendingInsert.error) {
+      throw pendingInsert.error;
+    }
+
+    var taskRecord = pendingInsert.data;
+    var generation = await callAnthropicText(finalPrompt, 3000);
+    var output = generation.text;
+
+    var updateResult = await supabase
+      .from("ai_tasks")
+      .update({ result: output, status: "completed", updated_at: nowIso() })
+      .eq("id", taskRecord.id)
+      .eq("user_id", userId);
+
+    if (updateResult.error) {
+      throw updateResult.error;
+    }
+
+    try {
+      var memTimestamp = nowIso();
+      var memContent = truncateOrchestratorPreview(output, 2000) || "SEO optimization completed with no captured output.";
+
+      var memInsert = await supabase
+        .from("agent_memory")
+        .insert({
+          user_id: userId,
+          agent: "seo",
+          agent_type: "seo",
+          memory_key: "seo_optimize_" + taskRecord.id,
+          memory_value: memContent,
+          memory_type: "insight",
+          title: "SEO optimize: " + targetUrl,
+          content: memContent,
+          metadata: normalizeMemoryMetadata({ source: "seo_optimize", task_id: taskRecord.id, url: targetUrl }),
+          created_at: memTimestamp,
+          updated_at: memTimestamp
+        });
+
+      if (memInsert.error) {
+        console.error("[seo/optimize] Failed to write agent_memory:", memInsert.error.message);
+      }
+    } catch (memErr) {
+      console.error("[seo/optimize] agent_memory write error:", memErr.message || memErr);
+    }
+
+    return res.json({
+      success: true,
+      task: Object.assign({}, taskRecord, { result: output, status: "completed" }),
+      report: output,
+      page_data: pageData
+    });
+  } catch (error) {
+    console.error("[seo/optimize] Error:", error);
+    next(error);
+  }
+});
+
+// Personal running total of websites this user has successfully optimized —
+// derived from ai_tasks rather than a separate counter table/column, so
+// there is nothing new to migrate: every completed POST /optimize run above
+// already leaves exactly one row here (agent_type "seo", status
+// "completed", prompt prefixed with SEO_OPTIMIZE_TASK_PROMPT_PREFIX).
+// Strictly scoped to the authenticated user_id.
+app.get("/api/agents/seo/optimize-count", requireAuth, async function (req, res, next) {
+  try {
+    var countResult = await supabase
+      .from("ai_tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id)
+      .eq("agent_type", "seo")
+      .eq("status", "completed")
+      .ilike("prompt", SEO_OPTIMIZE_TASK_PROMPT_PREFIX + "%");
+
+    if (countResult.error) {
+      throw countResult.error;
+    }
+
+    return res.json({ websites_optimized: countResult.count || 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
