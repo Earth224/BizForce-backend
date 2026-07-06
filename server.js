@@ -15,6 +15,7 @@ const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const { createClient } = require("@supabase/supabase-js");
+const { buildAgentSystemPrompt } = require("./config/brain");
 const { startLeadRadar } = require("./leadRadar");
 const { startRedditRadar } = require("./redditRadar");
 
@@ -2689,6 +2690,42 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             throw updateResult.error;
         }
 
+        // Write a concise agent_memory row for this completed task, so the
+        // next call for this user_id + agent_type has something to build on.
+        // Reuses the exact same table/constants/helpers orchestrateAgentWorkflow
+        // writes with (MEMORY_AGENT_TYPES, MEMORY_TYPES via "insight",
+        // truncateOrchestratorPreview, normalizeMemoryMetadata) — this is an
+        // additional write for the ad-hoc task flow, not a duplicate of
+        // orchestrateAgentWorkflow's own assignment-completion memory write.
+        if (MEMORY_AGENT_TYPES.indexOf(agentType) !== -1) {
+          try {
+            var agentMemoryTimestamp = nowIso();
+            var agentMemoryContent = truncateOrchestratorPreview(output, 2000) || "Task completed with no captured output.";
+
+            var agentMemoryInsert = await supabase
+              .from("agent_memory")
+              .insert({
+                user_id: userId,
+                agent: agentType,
+                agent_type: agentType,
+                memory_key: agentType + "_ai_task_" + taskId,
+                memory_value: agentMemoryContent,
+                memory_type: "insight",
+                title: "Prompt: " + truncateOrchestratorPreview(userPrompt, 120),
+                content: agentMemoryContent,
+                metadata: normalizeMemoryMetadata({ source: "ai_task", task_id: taskId, task_type: taskType }),
+                created_at: agentMemoryTimestamp,
+                updated_at: agentMemoryTimestamp
+              });
+
+            if (agentMemoryInsert.error) {
+              console.error("[processAiTask] Failed to write agent_memory:", agentMemoryInsert.error.message);
+            }
+          } catch (agentMemoryErr) {
+            console.error("[processAiTask] agent_memory write error:", agentMemoryErr.message || agentMemoryErr);
+          }
+        }
+
     } catch (error) {
         console.error("PROCESS AI TASK ERROR:", error);
 
@@ -2780,7 +2817,63 @@ app.post("/api/business-profile", requireAuth, async function (req, res) {
   }
 });
 
+// Shared live-stats aggregation — the same counts GET /api/analytics/summary
+// returns, extracted here so both that route and the central brain
+// (buildAgentSystemPrompt) read from one place instead of two. All
+// independent per-table counts run in a single Promise.all batch rather
+// than sequential awaits. Strictly scoped to the given user_id throughout.
+async function getLiveStats(userId) {
+  var results = await Promise.all([
+    supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
+    supabase.from("content_library").select("*", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("content_library").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("type", "blog"),
+    supabase.from("content_library").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("type", "sms"),
+    supabase.from("sms_subscribers").select("*", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("sms_subscribers").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("consent_status", "opted_in"),
+    supabase.from("sms_campaigns").select("*", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("social_post_drafts").select("*", { count: "exact", head: true }).eq("user_id", userId),
+    supabase.from("ai_tasks").select("agent_type").eq("user_id", userId)
+  ]);
 
+  var tasksRunResult       = results[0];
+  var tasksCompletedResult = results[1];
+  var contentItemsResult   = results[2];
+  var blogItemsResult      = results[3];
+  var smsItemsResult       = results[4];
+  var subscribersResult    = results[5];
+  var optedInResult        = results[6];
+  var campaignsResult      = results[7];
+  var socialDraftsResult   = results[8];
+  var agentRowsResult      = results[9];
+
+  if (tasksRunResult.error)       throw tasksRunResult.error;
+  if (tasksCompletedResult.error) throw tasksCompletedResult.error;
+  if (contentItemsResult.error)   throw contentItemsResult.error;
+  if (blogItemsResult.error)      throw blogItemsResult.error;
+  if (smsItemsResult.error)       throw smsItemsResult.error;
+
+  var byAgent = {};
+  if (!agentRowsResult.error && Array.isArray(agentRowsResult.data)) {
+    agentRowsResult.data.forEach(function (row) {
+      var t = row.agent_type || "general";
+      byAgent[t] = (byAgent[t] || 0) + 1;
+    });
+  }
+
+  return {
+    tasksRun: tasksRunResult.count || 0,
+    tasksCompleted: tasksCompletedResult.count || 0,
+    contentItems: contentItemsResult.count || 0,
+    blogItems: blogItemsResult.count || 0,
+    smsItems: smsItemsResult.count || 0,
+    subscribers: subscribersResult.error ? 0 : (subscribersResult.count || 0),
+    optedIn: optedInResult.error ? 0 : (optedInResult.count || 0),
+    campaigns: campaignsResult.error ? 0 : (campaignsResult.count || 0),
+    socialDrafts: socialDraftsResult.error ? 0 : (socialDraftsResult.count || 0),
+    byAgent: byAgent
+  };
+}
 
 async function handleAiTaskRequest(req, res, next) {
   try {
@@ -2821,24 +2914,47 @@ var profileResult = await supabase
 
 var businessProfile = profileResult.data || {};
 
-var businessContext = `
-BUSINESS PROFILE:
-Business Name: ${businessProfile.business_name || "Not Provided"}
-Industry: ${businessProfile.industry || "Not Provided"}
-Website: ${businessProfile.website || "Not Provided"}
-Description: ${businessProfile.description || "Not Provided"}
-Target Audience: ${businessProfile.target_audience || "Not Provided"}
-Goals: ${businessProfile.business_goals || "Not Provided"}
-Services: ${businessProfile.products_services || "Not Provided"}
-Location: ${businessProfile.location || "Not Provided"}
-`;
-    if (memoryResult.error) {
+if (memoryResult.error) {
       throw memoryResult.error;
     }
 
-    var memoryText = (memoryResult.data || []).map(function (task, index) {
-      return "Memory " + (index + 1) + ":\nAgent: " + task.agent_type + "\nPrompt: " + task.prompt + "\nResult: " + task.result;
-    }).join("\n\n");
+    var liveStats = {};
+    try {
+      liveStats = await getLiveStats(userId);
+    } catch (statsErr) {
+      console.error("[handleAiTaskRequest] getLiveStats failed:", statsErr.message || statsErr);
+    }
+
+    var memoriesForBrain = (memoryResult.data || []).map(function (task) {
+      return {
+        agent_type: task.agent_type,
+        title: "Prior task",
+        content: "Prompt: " + task.prompt + " | Result: " + task.result
+      };
+    });
+
+    // Recent agent_memory rows for this user_id + agent_type — the same
+    // table orchestrateAgentWorkflow writes to (extended, not duplicated;
+    // see the write-side comment in processAiTask). A soft read: SELECT
+    // isn't constrained by agent_memory's agent_type CHECK, so this is
+    // safe to run for every agent type even though writes are gated.
+    var agentMemoryResult = await supabase
+      .from("agent_memory")
+      .select("agent_type, memory_type, title, content, created_at")
+      .eq("user_id", userId)
+      .eq("agent_type", agentType)
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    var agentMemoriesForBrain = (agentMemoryResult.error ? [] : (agentMemoryResult.data || [])).map(function (row) {
+      return {
+        agent_type: row.agent_type,
+        title: row.title || row.memory_type,
+        content: row.content
+      };
+    });
+
+    var combinedMemoriesForBrain = agentMemoriesForBrain.concat(memoriesForBrain);
 
     var agentBrains = {
       general: "You are BizForce AI, a senior business execution assistant. Produce clear, practical business outputs.",
@@ -2937,9 +3053,9 @@ Location: ${businessProfile.location || "Not Provided"}
 
    var agentBrain = agentBrains[agentType] || agentBrains["general"];
     var taskInstruction = taskInstructions[taskType] || taskInstructions["general"];
+    var sharedSystemPrompt = buildAgentSystemPrompt(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain);
     var finalPrompt =
-  agentBrain +
-  "\n\nBUSINESS PROFILE:\n" + businessContext +
+  sharedSystemPrompt +
   "\n\nTASK TYPE:\n" + taskType +
   "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
   "\n\nSAFETY RULES:\n" +
@@ -2947,7 +3063,6 @@ Location: ${businessProfile.location || "Not Provided"}
   "- For high-risk actions, return requires_approval true and an approval plan.\n" +
   "- Keep outputs lawful, practical, and business-safe.\n" +
   "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
-  "\n\nPAST MEMORY:\n" + (memoryText || "No prior memory found.") +
   "\n\nUSER REQUEST:\n" + userPrompt;
     var pendingInsert = await supabase
       .from("ai_tasks")
@@ -4143,7 +4258,9 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     });
     messages.push({ role: "user", content: currentUserContent });
 
-    // 3. Build system prompt with context block
+    // 3. Build system prompt — shared platform brain (knowledge + directives
+    //    + business profile, now sourced from buildAgentSystemPrompt) plus
+    //    the Oracle's own seeker-profile and numerology context, unchanged.
     var contextBlock;
     if (oracleSync) {
       contextBlock =
@@ -4156,25 +4273,22 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
         "Path & Focus: "     + (oracleSync.path_focus       || "Not provided") + "\n" +
         (oracleSync.life_details
           ? "\nThe Book of You / life details (deepest personal context — weight this heavily):\n" + oracleSync.life_details + "\n"
-          : "") +
-        "\nENTERPRISE:\n" +
-        "Business Name: "     + (businessProfile.business_name     || "Not provided") + "\n" +
-        "Industry: "          + (businessProfile.industry          || "Not provided") + "\n" +
-        "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
-        "Target Audience: "   + (businessProfile.target_audience   || "Not provided") + "\n" +
-        "Goals: "             + (businessProfile.business_goals    || "Not provided") + "\n" +
-        "Location: "          + (businessProfile.location          || "Not provided");
+          : "");
     } else {
       contextBlock =
-        "\n\nSEEKER PROFILE:\nNo birth data has been provided. The seeker has not yet synchronized. Invite them to do so for deeper alignment, but proceed with what is given.\n\n" +
-        "ENTERPRISE:\n" +
-        "Business Name: "     + (businessProfile.business_name     || "Not provided") + "\n" +
-        "Industry: "          + (businessProfile.industry          || "Not provided") + "\n" +
-        "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
-        "Goals: "             + (businessProfile.business_goals    || "Not provided");
+        "\n\nSEEKER PROFILE:\nNo birth data has been provided. The seeker has not yet synchronized. Invite them to do so for deeper alignment, but proceed with what is given.\n";
     }
 
-    var systemPrompt = ORACLE_SYSTEM_PROMPT + contextBlock + numerologyContext;
+    var oracleLiveStats = {};
+    try {
+      oracleLiveStats = await getLiveStats(req.user.id);
+    } catch (statsErr) {
+      console.error("[oracle] getLiveStats failed:", statsErr.message || statsErr);
+    }
+    var systemPrompt =
+      buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, []) +
+      contextBlock +
+      numerologyContext;
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
@@ -4609,86 +4723,7 @@ app.post("/api/analytics/event", requireAuth, async function (req, res, next) {
 
 app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
   try {
-    var stats = {};
-
-    var r;
-
-    r = await supabase
-      .from("ai_tasks")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id);
-    if (r.error) throw r.error;
-    stats.tasksRun = r.count || 0;
-
-    r = await supabase
-      .from("ai_tasks")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id)
-      .eq("status", "completed");
-    if (r.error) throw r.error;
-    stats.tasksCompleted = r.count || 0;
-
-    r = await supabase
-      .from("content_library")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id);
-    if (r.error) throw r.error;
-    stats.contentItems = r.count || 0;
-
-    r = await supabase
-      .from("content_library")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id)
-      .eq("type", "blog");
-    if (r.error) throw r.error;
-    stats.blogItems = r.count || 0;
-
-    r = await supabase
-      .from("content_library")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id)
-      .eq("type", "sms");
-    if (r.error) throw r.error;
-    stats.smsItems = r.count || 0;
-
-    r = await supabase
-      .from("sms_subscribers")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id);
-    stats.subscribers = r.error ? 0 : (r.count || 0);
-
-    r = await supabase
-      .from("sms_subscribers")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id)
-      .eq("consent_status", "opted_in");
-    stats.optedIn = r.error ? 0 : (r.count || 0);
-
-    r = await supabase
-      .from("sms_campaigns")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id);
-    stats.campaigns = r.error ? 0 : (r.count || 0);
-
-    r = await supabase
-      .from("social_post_drafts")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", req.user.id);
-    stats.socialDrafts = r.error ? 0 : (r.count || 0);
-
-    var agentRows = await supabase
-      .from("ai_tasks")
-      .select("agent_type")
-      .eq("user_id", req.user.id);
-    var byAgent = {};
-    if (!agentRows.error && Array.isArray(agentRows.data)) {
-      agentRows.data.forEach(function (row) {
-        var t = row.agent_type || "general";
-        byAgent[t] = (byAgent[t] || 0) + 1;
-      });
-    }
-    stats.byAgent = byAgent;
-
+    var stats = await getLiveStats(req.user.id);
     return res.json({ stats });
   } catch (error) {
     next(error);
