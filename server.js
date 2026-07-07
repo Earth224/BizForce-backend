@@ -6957,6 +6957,141 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
   }
 });
 
+/* ── Public lead capture (landing pages) ─────────────────────────────────
+   No requireAuth — this is a public, unauthenticated endpoint meant to be
+   called directly from external landing pages. Owner is hardcoded since
+   there is no logged-in BizForce user context for a public visitor. */
+var CAPTURE_OWNER_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+var CAPTURE_SOURCES = ["bluesky", "mastodon", "youtube", "direct", "other"];
+var CAPTURE_BRANDS = ["mrearthrose", "swordvitality", "blacksuncircle", "bizforce"];
+var WELCOME_CAMPAIGN_ID = "c735e5ea-3262-49a7-ab05-7c72971d0ff8";
+
+app.post("/api/capture", async function (req, res) {
+  try {
+    var email = safeText(req.body.email, 255);
+    email = email ? email.toLowerCase() : null;
+
+    var phone = safeText(req.body.phone, 32);
+    var name = safeText(req.body.name, 120);
+
+    if (!email && !phone) {
+      return res.status(400).json({ error: "email or phone required" });
+    }
+
+    var sourceRaw = String(req.body.source || "").toLowerCase().trim();
+    var source = CAPTURE_SOURCES.indexOf(sourceRaw) !== -1 ? sourceRaw : "direct";
+
+    var brandRaw = String(req.body.brand || "").toLowerCase().trim();
+    var brand = CAPTURE_BRANDS.indexOf(brandRaw) !== -1 ? brandRaw : "mrearthrose";
+
+    var smsConsent = !!req.body.sms_consent;
+    var emailConsent = !!req.body.email_consent;
+    var timestamp = nowIso();
+
+    var captureInsert = await supabase
+      .from("lead_captures")
+      .insert({
+        source: source,
+        brand: brand,
+        email: email,
+        phone: phone,
+        name: name,
+        sms_consent: smsConsent,
+        email_consent: emailConsent,
+        consent_ip: req.ip,
+        consent_timestamp: timestamp,
+        status: "new",
+        owner_id: CAPTURE_OWNER_ID
+      })
+      .select("*")
+      .single();
+
+    if (captureInsert.error) {
+      throw captureInsert.error;
+    }
+
+    var smsSynced = false;
+    var enrolled = false;
+
+    if (phone && smsConsent) {
+      var subscriberUpsert = await supabase
+        .from("sms_subscribers")
+        .upsert({
+          user_id: CAPTURE_OWNER_ID,
+          phone_number: phone,
+          customer_name: name || null,
+          consent_status: "opted_in",
+          consent_timestamp: timestamp
+        }, { onConflict: "user_id,phone_number" })
+        .select("id")
+        .single();
+
+      if (!subscriberUpsert.error) {
+        smsSynced = true;
+
+        var subscriberId = subscriberUpsert.data && subscriberUpsert.data.id;
+
+        if (subscriberId) {
+          try {
+            var existingEnrollment = await supabase
+              .from("sms_campaign_enrollments")
+              .select("id")
+              .eq("campaign_id", WELCOME_CAMPAIGN_ID)
+              .eq("subscriber_id", subscriberId)
+              .eq("user_id", CAPTURE_OWNER_ID)
+              .maybeSingle();
+
+            if (existingEnrollment.error) {
+              console.error("[capture] Failed to check existing enrollment:", existingEnrollment.error.message);
+            } else if (existingEnrollment.data) {
+              enrolled = true;
+            } else {
+              var enrollmentInsert = await supabase
+                .from("sms_campaign_enrollments")
+                .insert({
+                  user_id: CAPTURE_OWNER_ID,
+                  campaign_id: WELCOME_CAMPAIGN_ID,
+                  subscriber_id: subscriberId,
+                  current_step: 0,
+                  status: "active",
+                  next_send_at: timestamp,
+                  enrolled_at: timestamp,
+                  created_at: timestamp
+                });
+
+              if (!enrollmentInsert.error) {
+                enrolled = true;
+              } else {
+                console.error("[capture] Enrollment insert failed:", enrollmentInsert.error.message);
+              }
+            }
+          } catch (enrollErr) {
+            console.error("[capture] Enrollment error:", enrollErr.message || enrollErr);
+          }
+        } else {
+          console.error("[capture] sms_subscribers upsert returned no id, skipping enrollment.");
+        }
+
+        var statusUpdate = await supabase
+          .from("lead_captures")
+          .update({ status: enrolled ? "enrolled" : "synced" })
+          .eq("id", captureInsert.data.id);
+
+        if (statusUpdate.error) {
+          console.error("[capture] Failed to update lead_captures status:", statusUpdate.error.message);
+        }
+      } else {
+        console.error("[capture] sms_subscribers upsert failed:", subscriberUpsert.error.message);
+      }
+    }
+
+    return res.status(200).json({ ok: true, captured: true, sms_synced: smsSynced, enrolled: enrolled });
+  } catch (error) {
+    console.error("[capture] Error:", error.message || error);
+    return res.status(500).json({ error: "capture failed" });
+  }
+});
+
 /* ── SMS Campaigns ───────────────────────────────────────────────────────── */
 
 app.get("/api/sms/campaigns", requireAuth, async function (req, res, next) {
