@@ -7033,37 +7033,21 @@ app.post("/api/capture", async function (req, res) {
 
         if (subscriberId) {
           try {
-            var existingEnrollment = await supabase
+            var enrollmentInsert = await supabase
               .from("sms_campaign_enrollments")
-              .select("id")
-              .eq("campaign_id", WELCOME_CAMPAIGN_ID)
-              .eq("subscriber_id", subscriberId)
-              .eq("user_id", CAPTURE_OWNER_ID)
-              .maybeSingle();
+              .insert({
+                user_id: CAPTURE_OWNER_ID,
+                campaign_id: WELCOME_CAMPAIGN_ID,
+                subscriber_id: subscriberId
+              });
 
-            if (existingEnrollment.error) {
-              console.error("[capture] Failed to check existing enrollment:", existingEnrollment.error.message);
-            } else if (existingEnrollment.data) {
+            if (!enrollmentInsert.error) {
+              enrolled = true;
+            } else if (enrollmentInsert.error.code === "23505") {
+              console.log("[capture] Subscriber already enrolled in welcome campaign, skipping.");
               enrolled = true;
             } else {
-              var enrollmentInsert = await supabase
-                .from("sms_campaign_enrollments")
-                .insert({
-                  user_id: CAPTURE_OWNER_ID,
-                  campaign_id: WELCOME_CAMPAIGN_ID,
-                  subscriber_id: subscriberId,
-                  current_step: 0,
-                  status: "active",
-                  next_send_at: timestamp,
-                  enrolled_at: timestamp,
-                  created_at: timestamp
-                });
-
-              if (!enrollmentInsert.error) {
-                enrolled = true;
-              } else {
-                console.error("[capture] Enrollment insert failed:", enrollmentInsert.error.message);
-              }
+              console.error("[capture] Enrollment insert failed:", enrollmentInsert.error.message);
             }
           } catch (enrollErr) {
             console.error("[capture] Enrollment error:", enrollErr.message || enrollErr);
