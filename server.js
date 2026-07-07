@@ -571,7 +571,8 @@ var AGENT_ORCHESTRATION_HANDOFFS = {
 };
 
 var SALES_AGENT_BRAIN =
-  "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems.";
+  "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems." +
+  "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee.";
 
 function truncateOrchestratorPreview(value, maxLength) {
   var text = String(value || "").trim();
@@ -7492,7 +7493,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "OUTREACH MESSAGE — a short, genuine, non-salesy message (2-4 sentences) speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype; " +
     "OFFER — the specific offer/product from the business profile to present to this lead, tailored to their expressed need, with a one-line reason it fits them; " +
     "CALL TO ACTION — a clear CTA sentence directing them to the business's website (use the website URL from the business profile above) to take the next step. " +
-    "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad.";
+    "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad. " +
+    "COMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest tone throughout — gently point to the site rather than making claims.";
 
   var finalPrompt =
     sharedSystemPrompt +
