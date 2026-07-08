@@ -2396,7 +2396,10 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
       return { role: row.role, content: row.content };
     });
 
-    var aiResponse = await anthropic.messages.create({
+    const apiKey = await resolveAnthropicKey(req.user.id);
+    const anthropicClient = new Anthropic({ apiKey: apiKey });
+
+    var aiResponse = await anthropicClient.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1024,
       system: systemPrompt,
@@ -4527,8 +4530,10 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
+    const oracleApiKey = await resolveAnthropicKey(req.user.id);
+    const oracleAnthropicClient = new Anthropic({ apiKey: oracleApiKey });
     try {
-      aiResponse = await anthropic.messages.create({
+      aiResponse = await oracleAnthropicClient.messages.create({
         model:      "claude-sonnet-5",
         max_tokens: 1500,
         system:     systemPrompt,
@@ -4536,7 +4541,7 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       });
     } catch (modelErr) {
       console.error("[oracle] claude-sonnet-4-5 failed, falling back to haiku:", modelErr.message || modelErr);
-      aiResponse = await anthropic.messages.create({
+      aiResponse = await oracleAnthropicClient.messages.create({
         model:      "claude-haiku-4-5-20251001",
         max_tokens: 1500,
         system:     systemPrompt,
@@ -4796,7 +4801,10 @@ app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, n
       "Keep responses to 3–5 sentences of dense, actionable wisdom unless asked to elaborate. " +
       "Never break character.";
 
-    var response = await anthropic.messages.create({
+    const oracleChatApiKey = await resolveAnthropicKey(req.user.id);
+    const oracleChatAnthropicClient = new Anthropic({ apiKey: oracleChatApiKey });
+
+    var response = await oracleChatAnthropicClient.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 512,
       system: systemPrompt,
@@ -7566,7 +7574,10 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
         "Reply:";
     }
 
-    var response = await anthropic.messages.create({
+    const draftReplyApiKey = await resolveAnthropicKey(req.user.id);
+    const draftReplyAnthropicClient = new Anthropic({ apiKey: draftReplyApiKey });
+
+    var response = await draftReplyAnthropicClient.messages.create({
       model:      "claude-haiku-4-5-20251001",
       max_tokens: 300,
       messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
