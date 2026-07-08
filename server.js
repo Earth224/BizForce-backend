@@ -16,7 +16,7 @@ const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const { createClient } = require("@supabase/supabase-js");
 const { buildAgentSystemPrompt } = require("./config/brain");
-const { startLeadRadar } = require("./leadRadar");
+const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
@@ -7584,6 +7584,52 @@ app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) 
   }
 });
 
+// Truncates to Bluesky's 300-grapheme post limit, safely (counts Unicode
+// code points via Array.from so surrogate-pair characters aren't split).
+function truncateToBlueskyLimit(text) {
+  var str = String(text || "");
+  var chars = Array.from(str);
+  if (chars.length <= 300) return str;
+  return chars.slice(0, 297).join("") + "…";
+}
+
+// Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
+// separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
+// pipeline bookkeeping). Defaults OFF: unset or any value other than the
+// exact string "true" means dry-run — this logs what would have been sent
+// and never calls the Bluesky API. Reuses the single authenticated
+// BskyAgent exported by leadRadar.js; never creates a second login/session.
+async function sendBlueskyReply(lead, replyText) {
+  var sendLive = process.env.SALES_SEND_LIVE === "true";
+  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+  var text = truncateToBlueskyLimit(replyText);
+
+  if (!sendLive) {
+    console.log("[SEND DRY] Would reply to " + handle + ": " + text);
+    return { sent: false, reason: "send_dry" };
+  }
+
+  try {
+    var loggedIn = await ensureBskyLogin();
+    if (!loggedIn) {
+      console.error("[SendBluesky] Not logged in, cannot post reply to " + handle);
+      return { sent: false, reason: "post_error", error: "bluesky_login_failed" };
+    }
+
+    var postRef = { uri: lead.post_uri, cid: lead.post_cid };
+    var postResult = await bskyAgent.post({
+      text: text,
+      reply: { root: postRef, parent: postRef },
+      createdAt: new Date().toISOString()
+    });
+
+    return { sent: true, uri: postResult && postResult.uri };
+  } catch (err) {
+    console.error("[SendBluesky] Failed to post reply to " + handle + ":", err.message || err);
+    return { sent: false, reason: "post_error", error: err.message || String(err) };
+  }
+}
+
 // POST /api/agents/sales/convert — generates a ready-to-send conversion
 // package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
 // filtered segment (segment: { min_score, high_intent, buyer }, capped to
@@ -7708,6 +7754,30 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       }
     } catch (pipelineErr) {
       console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
+    }
+
+    // Real Bluesky reply-send — requires BOTH flags: dryRun already false
+    // here (SALES_AUTOLOOP_DRY_RUN / manual convert = "loop live"), and
+    // sendBlueskyReply's own SALES_SEND_LIVE check ("send live"). Mastodon/
+    // YouTube leads are untouched — draft-only for now.
+    if (lead.source === "bluesky") {
+      try {
+        var sendResult = await sendBlueskyReply(lead, output);
+        if (sendResult && sendResult.sent) {
+          var contactedTimestamp = nowIso();
+          var contactedUpdate = await supabase
+            .from("sales_lead_pipeline")
+            .update({ status: "contacted", updated_at: contactedTimestamp })
+            .eq("user_id", userId)
+            .eq("lead_post_uri", lead.post_uri);
+
+          if (contactedUpdate.error) {
+            console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
+          }
+        }
+      } catch (sendErr) {
+        console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
+      }
     }
   }
 

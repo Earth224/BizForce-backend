@@ -251,4 +251,4 @@ async function scoreNewLeads() {
   }
 }
 
-module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads };
+module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, ensureBskyLogin };
