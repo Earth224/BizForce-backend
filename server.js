@@ -7654,21 +7654,45 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "Suggested product interest: " + (lead.suggested_product || "none");
 
   var taskInstruction =
-    "Write a lead-conversion package for the captured lead above. Return exactly these three labeled sections: " +
-    "OUTREACH MESSAGE — a short, genuine, non-salesy message (2-4 sentences) speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype; " +
-    "OFFER — the specific offer/product from the business profile to present to this lead, tailored to their expressed need, with a one-line reason it fits them; " +
-    "CALL TO ACTION — a clear CTA sentence directing them to the business's website (use the website URL from the business profile above) to take the next step. " +
-    "Keep the tone authentic and low-pressure — this is a reply in a social feed, not an ad. " +
-    "COMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest tone throughout — gently point to the site rather than making claims.";
+    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
+    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
+    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. May mention MrEarthRose.com naturally at most once. " +
+    "internal_analysis: the strategy notes, intent score reasoning, offer framing (which product/offer fits and why), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
+    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
 
   var finalPrompt =
     sharedSystemPrompt +
     "\n\n" + leadBlock +
     "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
-    "\n\nUSER REQUEST:\nConvert this Lead Radar capture into a ready-to-send outreach message, offer, and CTA.";
+    "\n\nUSER REQUEST:\nConvert this Lead Radar capture into the JSON conversion package described above.";
 
   var generation = await callAnthropicText(finalPrompt, 700);
   var output = generation.text;
+
+  // Parse the model's strict-JSON response into the clean public reply
+  // (cleanMessage) vs. operator-only strategy notes (analysis). A malformed
+  // response must never fall back to posting the raw blob — cleanMessage
+  // stays null and the lead is simply held as draft-only.
+  var cleanMessage = null;
+  var analysis = null;
+  try {
+    var jsonText = String(output || "").trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    var parsedDraft = JSON.parse(jsonText);
+    cleanMessage = typeof parsedDraft.outreach_message === "string" && parsedDraft.outreach_message.trim()
+      ? parsedDraft.outreach_message.trim()
+      : null;
+    analysis = typeof parsedDraft.internal_analysis === "string" ? parsedDraft.internal_analysis.trim() : null;
+    if (!cleanMessage) {
+      console.warn("[Draft] JSON parse failed, holding lead as draft-only");
+    }
+  } catch (parseErr) {
+    console.warn("[Draft] JSON parse failed, holding lead as draft-only");
+    cleanMessage = null;
+    analysis = null;
+  }
 
   var taskInsert = await supabase
     .from("ai_tasks")
@@ -7725,7 +7749,10 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
         .maybeSingle();
 
       var pipelineTimestamp = nowIso();
-      var draftPreview = truncateOrchestratorPreview(output, 4000);
+      var richDraft = cleanMessage
+        ? cleanMessage + "\n\n---\nInternal notes:\n" + (analysis || "(none)")
+        : output;
+      var draftPreview = truncateOrchestratorPreview(richDraft, 4000);
 
       if (!existingPipeline.data || existingPipeline.data.status === "new") {
         var pipelineUpsert = await supabase
@@ -7759,24 +7786,31 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     // Real Bluesky reply-send — requires BOTH flags: dryRun already false
     // here (SALES_AUTOLOOP_DRY_RUN / manual convert = "loop live"), and
     // sendBlueskyReply's own SALES_SEND_LIVE check ("send live"). Mastodon/
-    // YouTube leads are untouched — draft-only for now.
+    // YouTube leads are untouched — draft-only for now. Only ever sends
+    // cleanMessage (the parsed public reply) — never the raw output blob.
+    // If JSON parsing failed above, cleanMessage is null and the send is
+    // skipped entirely, leaving the lead drafted for manual review.
     if (lead.source === "bluesky") {
-      try {
-        var sendResult = await sendBlueskyReply(lead, output);
-        if (sendResult && sendResult.sent) {
-          var contactedTimestamp = nowIso();
-          var contactedUpdate = await supabase
-            .from("sales_lead_pipeline")
-            .update({ status: "contacted", updated_at: contactedTimestamp })
-            .eq("user_id", userId)
-            .eq("lead_post_uri", lead.post_uri);
+      if (!cleanMessage) {
+        console.warn("[sales/convert] Skipping Bluesky send for " + handle + " — no clean message available.");
+      } else {
+        try {
+          var sendResult = await sendBlueskyReply(lead, cleanMessage);
+          if (sendResult && sendResult.sent) {
+            var contactedTimestamp = nowIso();
+            var contactedUpdate = await supabase
+              .from("sales_lead_pipeline")
+              .update({ status: "contacted", updated_at: contactedTimestamp })
+              .eq("user_id", userId)
+              .eq("lead_post_uri", lead.post_uri);
 
-          if (contactedUpdate.error) {
-            console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
+            if (contactedUpdate.error) {
+              console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
+            }
           }
+        } catch (sendErr) {
+          console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
         }
-      } catch (sendErr) {
-        console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
       }
     }
   }
