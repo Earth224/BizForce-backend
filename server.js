@@ -7630,6 +7630,67 @@ async function sendBlueskyReply(lead, replyText) {
   }
 }
 
+// Truncates to Mastodon's default 500-character post limit.
+function truncateToMastodonLimit(text) {
+  var str = String(text || "");
+  var chars = Array.from(str);
+  if (chars.length <= 500) return str;
+  return chars.slice(0, 497).join("") + "…";
+}
+
+// Mastodon reply-send. Gated behind the SAME SALES_SEND_LIVE flag as
+// Bluesky — defaults OFF. Reads (MastodonRadar) stay unauthenticated and
+// untouched; posting requires a separate MASTODON_ACCESS_TOKEN. Never
+// posts without a captured post_id — older leads captured before that
+// field existed won't have one.
+async function sendMastodonReply(lead, replyText) {
+  var sendLive = process.env.SALES_SEND_LIVE === "true";
+  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+  var text = truncateToMastodonLimit(replyText);
+
+  if (!sendLive) {
+    console.log("[SEND DRY][mastodon] Would reply to " + handle + ": " + text);
+    return { sent: false, reason: "send_dry" };
+  }
+
+  if (!lead.post_id) {
+    console.warn("[SendMastodon] Missing post_id, cannot reply to " + handle);
+    return { sent: false, reason: "missing_post_id" };
+  }
+
+  try {
+    var instanceHost = String(process.env.MASTODON_INSTANCE || "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "");
+    var base = "https://" + instanceHost;
+
+    var response = await fetch(base + "/api/v1/statuses", {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.MASTODON_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        status: text,
+        in_reply_to_id: lead.post_id,
+        visibility: "public"
+      })
+    });
+
+    var responseData = await response.json().catch(function () { return null; });
+
+    if (!response.ok) {
+      console.error("[SendMastodon] Failed to post reply to " + handle + ": HTTP " + response.status, responseData);
+      return { sent: false, reason: "post_error", error: "HTTP " + response.status };
+    }
+
+    return { sent: true, uri: (responseData && (responseData.url || responseData.uri)) || null };
+  } catch (err) {
+    console.error("[SendMastodon] Failed to post reply to " + handle + ":", err.message || err);
+    return { sent: false, reason: "post_error", error: err.message || String(err) };
+  }
+}
+
 // POST /api/agents/sales/convert — generates a ready-to-send conversion
 // package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
 // filtered segment (segment: { min_score, high_intent, buyer }, capped to
@@ -7694,36 +7755,45 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     analysis = null;
   }
 
-  // Attempt the real Bluesky send (if applicable) BEFORE recording any
-  // status below, so the recorded status reflects what actually happened
-  // instead of assuming success the moment a draft is generated. Dry runs
-  // and non-Bluesky leads (mastodon/youtube) never attempt a send.
+  // Attempt the real send (if applicable) BEFORE recording any status
+  // below, so the recorded status reflects what actually happened instead
+  // of assuming success the moment a draft is generated. Dry runs never
+  // attempt a send. Dispatches by lead.source; sources with no sender yet
+  // (youtube, etc.) are draft-only and never reach a sender function.
   var sendResult = null;
-  if (!dryRun && lead.source === "bluesky") {
+  if (!dryRun) {
     if (!cleanMessage) {
-      console.warn("[sales/convert] Skipping Bluesky send for " + handle + " — no clean message available.");
+      console.warn("[sales/convert] Skipping send for " + handle + " — no clean message available.");
       sendResult = { sent: false, reason: "send_dry" };
-    } else {
+    } else if (lead.source === "bluesky") {
       try {
         sendResult = await sendBlueskyReply(lead, cleanMessage);
       } catch (sendErr) {
         console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
         sendResult = { sent: false, reason: "post_error", error: sendErr.message || String(sendErr) };
       }
+    } else if (lead.source === "mastodon") {
+      try {
+        sendResult = await sendMastodonReply(lead, cleanMessage);
+      } catch (sendErr) {
+        console.error("[sales/convert] sendMastodonReply error:", sendErr.message || sendErr);
+        sendResult = { sent: false, reason: "post_error", error: sendErr.message || String(sendErr) };
+      }
+    } else {
+      sendResult = { sent: false, reason: "unsupported_source" };
     }
   }
 
   // ai_tasks.status is what the Live Activity feed reads for its badge —
-  // it must tell the truth: "sent" only when a real Bluesky post
-  // succeeded, "send_failed" when a real attempt errored, "drafted" for
-  // dry runs / no-clean-message holds, and every non-Bluesky lead (they
-  // never send at all yet).
+  // it must tell the truth: "sent" only when a real post succeeded,
+  // "send_failed" when a real attempt errored, "drafted" for dry runs,
+  // no-clean-message holds, and any source with no sender (unsupported_source).
   var conversionStatus;
   if (dryRun) {
     conversionStatus = "dry_run";
-  } else if (lead.source === "bluesky" && sendResult && sendResult.sent) {
+  } else if (sendResult && sendResult.sent) {
     conversionStatus = "sent";
-  } else if (lead.source === "bluesky" && sendResult && sendResult.reason === "post_error") {
+  } else if (sendResult && sendResult.reason === "post_error") {
     conversionStatus = "send_failed";
   } else {
     conversionStatus = "drafted";
@@ -7816,8 +7886,9 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       }
 
       // Only bump to "contacted" (this schema's real-send status) when the
-      // Bluesky send above actually succeeded — never on dry-run or error.
-      if (lead.source === "bluesky" && sendResult && sendResult.sent) {
+      // send above actually succeeded, for any source — never on dry-run
+      // or error.
+      if (sendResult && sendResult.sent) {
         var contactedTimestamp = nowIso();
         var contactedUpdate = await supabase
           .from("sales_lead_pipeline")
