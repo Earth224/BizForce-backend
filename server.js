@@ -7694,6 +7694,41 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     analysis = null;
   }
 
+  // Attempt the real Bluesky send (if applicable) BEFORE recording any
+  // status below, so the recorded status reflects what actually happened
+  // instead of assuming success the moment a draft is generated. Dry runs
+  // and non-Bluesky leads (mastodon/youtube) never attempt a send.
+  var sendResult = null;
+  if (!dryRun && lead.source === "bluesky") {
+    if (!cleanMessage) {
+      console.warn("[sales/convert] Skipping Bluesky send for " + handle + " — no clean message available.");
+      sendResult = { sent: false, reason: "send_dry" };
+    } else {
+      try {
+        sendResult = await sendBlueskyReply(lead, cleanMessage);
+      } catch (sendErr) {
+        console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
+        sendResult = { sent: false, reason: "post_error", error: sendErr.message || String(sendErr) };
+      }
+    }
+  }
+
+  // ai_tasks.status is what the Live Activity feed reads for its badge —
+  // it must tell the truth: "sent" only when a real Bluesky post
+  // succeeded, "send_failed" when a real attempt errored, "drafted" for
+  // dry runs / no-clean-message holds, and every non-Bluesky lead (they
+  // never send at all yet).
+  var conversionStatus;
+  if (dryRun) {
+    conversionStatus = "dry_run";
+  } else if (lead.source === "bluesky" && sendResult && sendResult.sent) {
+    conversionStatus = "sent";
+  } else if (lead.source === "bluesky" && sendResult && sendResult.reason === "post_error") {
+    conversionStatus = "send_failed";
+  } else {
+    conversionStatus = "drafted";
+  }
+
   var taskInsert = await supabase
     .from("ai_tasks")
     .insert({
@@ -7701,7 +7736,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       agent_type: "sales",
       prompt: (dryRun ? "[DRY RUN] " : "") + "Sales convert: " + handle,
       result: output,
-      status: dryRun ? "dry_run" : "completed"
+      status: conversionStatus
     })
     .select("*")
     .single();
@@ -7779,39 +7814,23 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
           console.error("[sales/convert] pipeline update failed:", pipelineUpdate.error.message);
         }
       }
-    } catch (pipelineErr) {
-      console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
-    }
 
-    // Real Bluesky reply-send — requires BOTH flags: dryRun already false
-    // here (SALES_AUTOLOOP_DRY_RUN / manual convert = "loop live"), and
-    // sendBlueskyReply's own SALES_SEND_LIVE check ("send live"). Mastodon/
-    // YouTube leads are untouched — draft-only for now. Only ever sends
-    // cleanMessage (the parsed public reply) — never the raw output blob.
-    // If JSON parsing failed above, cleanMessage is null and the send is
-    // skipped entirely, leaving the lead drafted for manual review.
-    if (lead.source === "bluesky") {
-      if (!cleanMessage) {
-        console.warn("[sales/convert] Skipping Bluesky send for " + handle + " — no clean message available.");
-      } else {
-        try {
-          var sendResult = await sendBlueskyReply(lead, cleanMessage);
-          if (sendResult && sendResult.sent) {
-            var contactedTimestamp = nowIso();
-            var contactedUpdate = await supabase
-              .from("sales_lead_pipeline")
-              .update({ status: "contacted", updated_at: contactedTimestamp })
-              .eq("user_id", userId)
-              .eq("lead_post_uri", lead.post_uri);
+      // Only bump to "contacted" (this schema's real-send status) when the
+      // Bluesky send above actually succeeded — never on dry-run or error.
+      if (lead.source === "bluesky" && sendResult && sendResult.sent) {
+        var contactedTimestamp = nowIso();
+        var contactedUpdate = await supabase
+          .from("sales_lead_pipeline")
+          .update({ status: "contacted", updated_at: contactedTimestamp })
+          .eq("user_id", userId)
+          .eq("lead_post_uri", lead.post_uri);
 
-            if (contactedUpdate.error) {
-              console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
-            }
-          }
-        } catch (sendErr) {
-          console.error("[sales/convert] sendBlueskyReply error:", sendErr.message || sendErr);
+        if (contactedUpdate.error) {
+          console.error("[sales/convert] Failed to mark lead contacted:", contactedUpdate.error.message);
         }
       }
+    } catch (pipelineErr) {
+      console.error("[sales/convert] pipeline tracking error:", pipelineErr.message || pipelineErr);
     }
   }
 
