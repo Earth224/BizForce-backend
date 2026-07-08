@@ -12,6 +12,8 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
+
 const KEYWORDS = [
   "natural energy supplement",
   "low libido",
@@ -192,7 +194,8 @@ async function scoreNewLeads() {
     var leads = data || [];
     console.log("[LeadRadar] scoring " + leads.length + " leads");
 
-    var anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    var apiKey = await resolveAnthropicKey("ea887c6e-e278-4a15-b7e9-cd78a9949b78");
+    var anthropic = new Anthropic({ apiKey: apiKey });
     var scoredCount = 0;
 
     for (var i = 0; i < leads.length; i++) {
