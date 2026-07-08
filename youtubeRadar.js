@@ -40,7 +40,9 @@ async function fetchSearchResults(keyword) {
     "&type=video&order=date&maxResults=4&key=" + YOUTUBE_API_KEY;
   var response = await fetch(url);
   if (!response.ok) {
-    throw new Error("search.list HTTP " + response.status);
+    let errBody = "";
+    try { errBody = await response.text(); } catch (e) {}
+    throw new Error("search.list HTTP " + response.status + " :: " + errBody);
   }
   return response.json();
 }
