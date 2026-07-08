@@ -60,6 +60,7 @@ async function runMastodonRadarOnce() {
         var rows = statuses.map(function (status) {
           return {
             post_uri:        status.url,
+            post_id:         status.id != null ? String(status.id) : null,
             post_cid:        null,
             author_did:      null,
             author_handle:   status.account && status.account.acct,
