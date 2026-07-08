@@ -20,6 +20,7 @@ const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
+const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 
 const app = express();
 
@@ -1748,6 +1749,87 @@ app.put("/api/profile/me", requireAuth, async function (req, res, next) {
     }
 
     return res.json({ profile });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/user/api-key", requireAuth, async function (req, res, next) {
+  try {
+    const apiKey = req.body.api_key;
+
+    if (typeof apiKey !== "string" || !apiKey.trim() || !apiKey.startsWith("sk-ant-")) {
+      return res.status(400).json({ error: "Invalid Anthropic API key format" });
+    }
+
+    const { ciphertext, iv, authTag } = encrypt(apiKey);
+
+    const { error } = await supabase
+      .from("user_api_keys")
+      .upsert(
+        {
+          user_id: req.user.id,
+          provider: "anthropic",
+          ciphertext: ciphertext,
+          iv: iv,
+          auth_tag: authTag,
+          updated_at: nowIso()
+        },
+        { onConflict: "user_id,provider" }
+      );
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ saved: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/user/api-key", requireAuth, async function (req, res, next) {
+  try {
+    const { data: row, error } = await supabase
+      .from("user_api_keys")
+      .select("ciphertext, iv, auth_tag")
+      .eq("user_id", req.user.id)
+      .eq("provider", "anthropic")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!row) {
+      return res.json({ hasKey: false });
+    }
+
+    try {
+      const plaintext = decrypt({ ciphertext: row.ciphertext, iv: row.iv, authTag: row.auth_tag });
+      const masked = "sk-ant-••••••••" + plaintext.slice(-4);
+      return res.json({ hasKey: true, masked: masked });
+    } catch (decryptError) {
+      return res.json({ hasKey: true, masked: null, error: "Stored key could not be read" });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/user/api-key", requireAuth, async function (req, res, next) {
+  try {
+    const { error } = await supabase
+      .from("user_api_keys")
+      .delete()
+      .eq("user_id", req.user.id)
+      .eq("provider", "anthropic");
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ deleted: true });
   } catch (error) {
     next(error);
   }
