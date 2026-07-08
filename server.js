@@ -76,6 +76,8 @@ const supabase = createClient(
   }
 );
 
+const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2024-06-20"
 });
@@ -2685,9 +2687,10 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
-async function callAnthropicText(promptText, maxTokens) {
+async function callAnthropicText(promptText, maxTokens, userId = null) {
+  var apiKey = await resolveAnthropicKey(userId);
   var anthropicClient = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
+    apiKey: apiKey,
     timeout: 120000
   });
 
