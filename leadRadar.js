@@ -161,6 +161,14 @@ async function radarTick() {
 }
 
 async function startLeadRadar() {
+  // Gated behind ENABLE_AUTO_JOBS (defaults OFF) — radarTick chains into
+  // scoreNewLeads(), which calls the Claude API up to 20x per tick, so
+  // neither the initial run nor the recurring interval should fire unless
+  // explicitly opted into.
+  if (process.env.ENABLE_AUTO_JOBS !== "true") {
+    console.log("[startup] radarTick disabled (ENABLE_AUTO_JOBS not true)");
+    return;
+  }
   radarTick().catch(function (err) {
     console.error("[LeadRadar] Initial run error:", err.message || err);
   });

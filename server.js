@@ -8366,13 +8366,20 @@ app.listen(PORT, function () {
   });
 
   // Fire once ~60s after boot (so it doesn't compete with startup load),
-  // then on its own independent 5-minute interval thereafter.
-  setTimeout(function () {
-    salesAutoConvertTick().catch(function (err) {
-      console.error("[SalesAutoConvert] Initial run error:", err.message || err);
-    });
-  }, 60000);
-  setInterval(salesAutoConvertTick, 300000);
+  // then on its own independent 5-minute interval thereafter. Gated behind
+  // ENABLE_AUTO_JOBS (defaults OFF) so this background Claude spend only
+  // happens when explicitly opted into — manual /api/agents/sales/convert
+  // calls are unaffected, since they call convertSingleLead directly.
+  if (process.env.ENABLE_AUTO_JOBS === "true") {
+    setTimeout(function () {
+      salesAutoConvertTick().catch(function (err) {
+        console.error("[SalesAutoConvert] Initial run error:", err.message || err);
+      });
+    }, 60000);
+    setInterval(salesAutoConvertTick, 300000);
+  } else {
+    console.log("[startup] salesAutoConvertTick disabled (ENABLE_AUTO_JOBS not true)");
+  }
 
   // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
   // startRedditRadar().catch(function (err) {
