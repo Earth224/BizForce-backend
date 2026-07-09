@@ -1837,6 +1837,71 @@ app.delete("/api/user/api-key", requireAuth, async function (req, res, next) {
   }
 });
 
+var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
+
+app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
+  try {
+    const { data: row, error } = await supabase
+      .from("user_preferences")
+      .select("termaximus_active, mist_position, notifications_enabled")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!row) {
+      return res.json({
+        termaximus_active: true,
+        mist_position: "top-right",
+        notifications_enabled: true
+      });
+    }
+
+    return res.json({
+      termaximus_active: row.termaximus_active,
+      mist_position: row.mist_position,
+      notifications_enabled: row.notifications_enabled
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { user_id: req.user.id, updated_at: nowIso() };
+
+    if (req.body.termaximus_active !== undefined) {
+      updates.termaximus_active = !!req.body.termaximus_active;
+    }
+
+    if (req.body.mist_position !== undefined) {
+      if (MIST_POSITIONS.indexOf(req.body.mist_position) === -1) {
+        return res.status(400).json({ error: "Invalid mist_position" });
+      }
+      updates.mist_position = req.body.mist_position;
+    }
+
+    if (req.body.notifications_enabled !== undefined) {
+      updates.notifications_enabled = !!req.body.notifications_enabled;
+    }
+
+    const { error } = await supabase
+      .from("user_preferences")
+      .upsert(updates, { onConflict: "user_id" });
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ saved: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/profile/:username", async function (req, res, next) {
   try {
     const username = normalizeUsername(req.params.username);
