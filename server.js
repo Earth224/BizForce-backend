@@ -5774,6 +5774,32 @@ app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
 
 const MARKETPLACE_CATEGORIES = ["consulting","design","development","marketing","sales","strategy","operations","other"];
 
+function sanitizeMedia(rawMedia) {
+  if (!Array.isArray(rawMedia)) {
+    return [];
+  }
+
+  return rawMedia
+    .map(function (entry) {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const url = String(entry.url == null ? "" : entry.url).trim();
+      if (!url || url.indexOf("https://") !== 0) {
+        return null;
+      }
+
+      return {
+        url: url,
+        type: safeText(entry.type, 100) || "",
+        name: safeText(entry.name, 200) || ""
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
 app.get("/api/marketplace/listings", requireAuth, async function (req, res, next) {
   try {
     const category = safeText(req.query.category, 40);
@@ -5819,7 +5845,7 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
       .from("marketplace_listings")
       .insert({
         seller_id: req.user.id, title, description: description || "",
-        price_bfc: priceBfc, category, tags, status: "active",
+        price_bfc: priceBfc, category, tags, media: sanitizeMedia(req.body.media), status: "active",
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -5858,6 +5884,7 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
+    if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media);
     const { data, error } = await supabase
       .from("marketplace_listings")
       .update(updates)
