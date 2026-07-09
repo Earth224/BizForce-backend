@@ -1935,6 +1935,30 @@ app.get("/api/profile/:username", async function (req, res, next) {
   }
 });
 
+app.get("/api/profile/by-id/:userId", requireAuth, async function (req, res, next) {
+  try {
+    const targetUserId = req.params.userId;
+
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("user_id, full_name, business_name, username, logo_url")
+      .eq("user_id", targetUserId)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!profile) {
+      return res.status(404).json({ error: "Profile not found" });
+    }
+
+    return res.json({ profile });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/profile/upload-logo", requireAuth, async function (req, res, next) {
   try {
     const logoUrl = safeText(req.body.logo_url, 1000);
