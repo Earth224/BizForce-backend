@@ -2415,7 +2415,6 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
         sender_id: req.user.id,
         receiver_id: receiverId,
         content,
-        read: false,
         created_at: nowIso()
       })
       .select("*")
