@@ -1512,6 +1512,18 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       read: false
     });
 
+    try {
+      await supabase.from("user_wallets").insert({
+        user_id: user.id, balance: 1000, currency: "BFC", updated_at: nowIso()
+      });
+
+      await supabase.from("wallet_transactions").insert({
+        user_id: user.id, type: "reward", amount: 1000, description: "Welcome bonus", created_at: nowIso()
+      });
+    } catch (walletErr) {
+      console.error("Welcome bonus wallet grant failed:", walletErr.message);
+    }
+
     const token = createToken(user);
 
     return res.status(201).json({
@@ -5727,6 +5739,34 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
 
     if (error) throw error;
     return res.json({ balance: wallet ? wallet.balance : 0, transactions: txns || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
+  try {
+    const recipientId = req.body.recipientId;
+    const amount = req.body.amount;
+
+    if (!recipientId || recipientId === req.user.id) {
+      return res.status(400).json({ error: "Invalid recipient" });
+    }
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive integer" });
+    }
+
+    const { data, error } = await supabase.rpc("bfc_transfer", {
+      p_from: req.user.id,
+      p_to: recipientId,
+      p_amount: amount,
+      p_description: "Transfer"
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({ balance: data });
   } catch (error) { next(error); }
 });
 
