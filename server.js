@@ -5828,6 +5828,27 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
   } catch (error) { next(error); }
 });
 
+app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, res, next) {
+  try {
+    const listingId = req.params.id;
+
+    if (!listingId) {
+      return res.status(400).json({ error: "Listing id is required" });
+    }
+
+    const { data, error } = await supabase.rpc("bfc_buy_listing", {
+      p_buyer: req.user.id,
+      p_listing_id: listingId
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({ balance: data });
+  } catch (error) { next(error); }
+});
+
 app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
