@@ -6091,6 +6091,40 @@ app.delete("/api/marketplace/listings/:id", requireAuth, async function (req, re
   } catch (error) { next(error); }
 });
 
+app.get("/api/marketplace/orders", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("marketplace_orders")
+      .select("*")
+      .or("buyer_id.eq." + req.user.id + ",seller_id.eq." + req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({ orders: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/marketplace/orders/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("marketplace_orders")
+      .select("*")
+      .eq("id", req.params.id)
+      .or("buyer_id.eq." + req.user.id + ",seller_id.eq." + req.user.id)
+      .maybeSingle();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (!data) return res.status(404).json({ error: "Order not found" });
+
+    return res.json({ order: data });
+  } catch (error) { next(error); }
+});
+
 /* ── Crowdfunding ── */
 
 app.get("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
@@ -6186,6 +6220,71 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, async function (
     }
 
     return res.json({ balance: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/crowdfunding/donations", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("campaign_donations")
+      .select("*")
+      .or("donor_id.eq." + req.user.id + ",owner_id.eq." + req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    const donations = data || [];
+    const campaignIds = Array.from(new Set(donations.map(function (d) { return d.campaign_id; }).filter(Boolean)));
+
+    let campaignTitles = {};
+    if (campaignIds.length) {
+      const { data: campaigns, error: campaignsError } = await supabase
+        .from("crowdfunding_campaigns")
+        .select("id, title")
+        .in("id", campaignIds);
+
+      if (campaignsError) {
+        return res.status(400).json({ error: campaignsError.message });
+      }
+
+      (campaigns || []).forEach(function (c) { campaignTitles[c.id] = c.title; });
+    }
+
+    const enriched = donations.map(function (d) {
+      return Object.assign({}, d, { campaign_title: d.campaign_id ? (campaignTitles[d.campaign_id] || null) : null });
+    });
+
+    return res.json({ donations: enriched });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/crowdfunding/donations/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("campaign_donations")
+      .select("*")
+      .eq("id", req.params.id)
+      .or("donor_id.eq." + req.user.id + ",owner_id.eq." + req.user.id)
+      .maybeSingle();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (!data) return res.status(404).json({ error: "Donation not found" });
+
+    let campaignTitle = null;
+    if (data.campaign_id) {
+      const { data: campaign } = await supabase
+        .from("crowdfunding_campaigns")
+        .select("title")
+        .eq("id", data.campaign_id)
+        .maybeSingle();
+      campaignTitle = campaign ? campaign.title : null;
+    }
+
+    return res.json({ donation: Object.assign({}, data, { campaign_title: campaignTitle }) });
   } catch (error) { next(error); }
 });
 
