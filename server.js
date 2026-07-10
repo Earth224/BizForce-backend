@@ -6029,6 +6029,138 @@ app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, async function (
   } catch (error) { next(error); }
 });
 
+/* ── BizDoc ── */
+
+app.get("/api/bizdoc/documents", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("bizdoc_documents")
+      .select("*")
+      .eq("owner_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ documents: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bizdoc/documents/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: document, error } = await supabase
+      .from("bizdoc_documents")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!document) return res.status(404).json({ error: "Document not found" });
+
+    const { data: signatures, error: sigError } = await supabase
+      .from("bizdoc_signatures")
+      .select("*")
+      .eq("document_id", req.params.id)
+      .order("signed_at", { ascending: true });
+    if (sigError) throw sigError;
+
+    return res.json({ document, signatures: signatures || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bizdoc/documents", requireAuth, async function (req, res, next) {
+  try {
+    const templateType = safeText(req.body.template_type, 60);
+    const title         = safeText(req.body.title, 150);
+    const fields         = (req.body.fields && typeof req.body.fields === "object" && !Array.isArray(req.body.fields))
+      ? req.body.fields : {};
+    const partyName      = safeText(req.body.party_name, 150);
+    const partyEmail     = safeText(req.body.party_email, 200);
+
+    if (!templateType) return res.status(400).json({ error: "template_type is required" });
+    if (!title) return res.status(400).json({ error: "Title is required" });
+
+    const { data, error } = await supabase
+      .from("bizdoc_documents")
+      .insert({
+        owner_id: req.user.id, template_type: templateType, title,
+        fields, party_name: partyName, party_email: partyEmail,
+        status: "draft",
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ document: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bizdoc/documents/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
+    if (req.body.fields      !== undefined && typeof req.body.fields === "object" && !Array.isArray(req.body.fields)) {
+      updates.fields = req.body.fields;
+    }
+    if (req.body.party_name  !== undefined) updates.party_name  = safeText(req.body.party_name, 150);
+    if (req.body.party_email !== undefined) updates.party_email = safeText(req.body.party_email, 200);
+    if (req.body.status      !== undefined && ["draft","sent","signed","voided"].includes(req.body.status)) {
+      updates.status = req.body.status;
+    }
+
+    const { data, error } = await supabase
+      .from("bizdoc_documents")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Document not found" });
+    return res.json({ document: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bizdoc/documents/:id/sign", requireAuth, async function (req, res, next) {
+  try {
+    const { data: document, error: docError } = await supabase
+      .from("bizdoc_documents")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .maybeSingle();
+    if (docError) throw docError;
+    if (!document) return res.status(404).json({ error: "Document not found" });
+
+    const signerName    = safeText(req.body.signer_name, 150);
+    const signerEmail   = safeText(req.body.signer_email, 200);
+    const signatureData = safeText(req.body.signature_data, 500000);
+
+    if (!signerName) return res.status(400).json({ error: "signer_name is required" });
+    if (!signatureData) return res.status(400).json({ error: "signature_data is required" });
+
+    const { data: signature, error: sigError } = await supabase
+      .from("bizdoc_signatures")
+      .insert({
+        document_id: req.params.id,
+        signer_id: req.user.id,
+        signer_name: signerName,
+        signer_email: signerEmail,
+        signature_data: signatureData,
+        ip_address: req.headers["x-forwarded-for"] || req.ip,
+        user_agent: req.get("user-agent")
+      })
+      .select("*").single();
+    if (sigError) return res.status(400).json({ error: sigError.message });
+
+    const { data: updatedDocument, error: updateError } = await supabase
+      .from("bizdoc_documents")
+      .update({ status: "signed", updated_at: nowIso() })
+      .eq("id", req.params.id)
+      .select("*")
+      .maybeSingle();
+    if (updateError) throw updateError;
+
+    return res.json({ signature, document: updatedDocument });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
