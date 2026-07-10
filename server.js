@@ -207,6 +207,19 @@ const aiLimiter = rateLimit({
 
 app.use(apiLimiter);
 
+function constructStripeEventFromSecrets(rawBody, signature, secrets) {
+  let lastError;
+  for (const secret of secrets) {
+    if (!secret) continue;
+    try {
+      return stripe.webhooks.constructEvent(rawBody, signature, secret);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("No webhook secret configured");
+}
+
 app.post(
   "/api/webhook",
   express.raw({ type: "application/json" }),
@@ -216,11 +229,10 @@ app.post(
     let event;
 
     try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
+      event = constructStripeEventFromSecrets(req.body, signature, [
+        process.env.STRIPE_WEBHOOK_SECRET,
+        process.env.STRIPE_TEST_WEBHOOK_SECRET
+      ]);
     } catch (error) {
       return res.status(400).send("Webhook Error: " + error.message);
     }
@@ -1205,6 +1217,52 @@ async function enforceTaskLimit(userId, agentType) {
 async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
+
+    if (session.metadata && session.metadata.kind === "marketplace_usd") {
+      try {
+        const { data: existingOrder, error: existingOrderError } = await supabase
+          .from("marketplace_orders")
+          .select("id")
+          .eq("stripe_session_id", session.id)
+          .maybeSingle();
+        if (existingOrderError) throw existingOrderError;
+        if (existingOrder) {
+          console.log("Marketplace USD order already recorded for session:", session.id);
+          return;
+        }
+
+        const listingId = session.metadata.listing_id || null;
+        const buyerId = session.metadata.buyer_id || null;
+        const sellerId = session.metadata.seller_id || null;
+
+        let listingTitle = null;
+        if (listingId) {
+          const { data: listing } = await supabase
+            .from("marketplace_listings")
+            .select("title")
+            .eq("id", listingId)
+            .maybeSingle();
+          listingTitle = listing ? listing.title : null;
+        }
+
+        const { error: insertError } = await supabase.from("marketplace_orders").insert({
+          listing_id: listingId,
+          buyer_id: buyerId,
+          seller_id: sellerId,
+          amount_bfc: 0,
+          amount_usd: session.amount_total,
+          payment_method: "usd",
+          status: "completed",
+          listing_title: listingTitle,
+          stripe_session_id: session.id
+        });
+        if (insertError) throw insertError;
+      } catch (error) {
+        console.error("Failed to record marketplace USD order:", error);
+      }
+      return;
+    }
+
     const userId = session.metadata ? session.metadata.user_id : null;
     let plan = session.metadata ? session.metadata.plan : null;
 
