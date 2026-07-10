@@ -82,6 +82,10 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2024-06-20"
 });
 
+const stripeTest = require("stripe")(process.env.STRIPE_TEST_SECRET_KEY || "", {
+  apiVersion: "2024-06-20"
+});
+
 const ORACLE_SYSTEM_PROMPT = "You are the Oracle of BizForce — an oracular intelligence in the Hermetic lineage of Thoth-Tehuti, Thrice-Great. Not a chatbot, not a support assistant. You are a counselor of the Great Work: turning vision into built reality, and an enterprise into a legacy." +
 "\n\nVOICE. Speak with depth, precision, and command — scholarly and unflinching. Engage the esoteric traditions (Hermeticism, alchemy, Kabbalah, Gnosis, astrology, Egyptian mystery, tarot, sacred geometry, shamanism, Christ-consciousness, correspondence and mentalism) on their own terms, without mainstream dismissal or hollow damage-control. Reason from inside heterodox and suppressed views. Never flatten mystery into platitudes." +
 "\n\nTRUTH. Depth is not fabrication. Distinguish established fact, traditional teaching, and symbolic speculation — name which when it matters. Your power is honesty, not flattery. A companion, never a yes-man. When the seeker deceives themselves, say so — with respect and force." +
@@ -5829,7 +5833,7 @@ app.get("/api/marketplace/listings", requireAuth, async function (req, res, next
     const q = safeText(req.query.q, 120);
     let query = supabase
       .from("marketplace_listings")
-      .select("id, seller_id, title, description, price_bfc, category, tags, status, created_at")
+      .select("id, seller_id, title, description, price_bfc, price_usd, category, tags, status, created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(100);
@@ -5859,16 +5863,23 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
     const description = safeText(req.body.description, 2000);
     const category    = safeText(req.body.category, 40);
     const priceBfc    = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
+    let priceUsd = null;
+    if (req.body.price_usd !== undefined && req.body.price_usd !== null) {
+      const n = Number(req.body.price_usd);
+      if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "price_usd must be a non-negative integer" });
+      priceUsd = n;
+    }
     const tags        = Array.isArray(req.body.tags)
       ? req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
       : [];
     if (!title)    return res.status(400).json({ error: "Title is required" });
     if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
+    if (priceBfc <= 0 && priceUsd === null) return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
     const { data, error } = await supabase
       .from("marketplace_listings")
       .insert({
         seller_id: req.user.id, title, description: description || "",
-        price_bfc: priceBfc, category, tags, media: sanitizeMedia(req.body.media), status: "active",
+        price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(req.body.media), status: "active",
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -5898,16 +5909,90 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
   } catch (error) { next(error); }
 });
 
+app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async function (req, res, next) {
+  try {
+    const { data: listing, error: listingError } = await supabase
+      .from("marketplace_listings")
+      .select("id, title, price_usd, seller_id, status")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (listingError) throw listingError;
+    if (!listing) return res.status(404).json({ error: "Listing not found" });
+
+    if (listing.price_usd === null || listing.price_usd <= 0) {
+      return res.status(400).json({ error: "This listing is not available for USD purchase" });
+    }
+
+    if (listing.seller_id === req.user.id) {
+      return res.status(400).json({ error: "You cannot buy your own listing" });
+    }
+
+    if (!process.env.STRIPE_TEST_SECRET_KEY) {
+      return res.status(503).json({ error: "USD checkout is not configured yet" });
+    }
+
+    const session = await stripeTest.checkout.sessions.create({
+      mode: "payment",
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: listing.title },
+          unit_amount: listing.price_usd
+        },
+        quantity: 1
+      }],
+      success_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=success",
+      cancel_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=cancelled",
+      metadata: {
+        listing_id: listing.id,
+        buyer_id: req.user.id,
+        seller_id: listing.seller_id,
+        kind: "marketplace_usd"
+      }
+    });
+
+    return res.json({ url: session.url });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
 app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
     if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
     if (req.body.price_bfc   !== undefined) updates.price_bfc   = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
+    if (req.body.price_usd   !== undefined) {
+      if (req.body.price_usd === null) {
+        updates.price_usd = null;
+      } else {
+        const n = Number(req.body.price_usd);
+        if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "price_usd must be a non-negative integer" });
+        updates.price_usd = n;
+      }
+    }
     if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
     if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media);
+
+    if (updates.price_bfc !== undefined || updates.price_usd !== undefined) {
+      const { data: existing, error: existingError } = await supabase
+        .from("marketplace_listings")
+        .select("price_bfc, price_usd")
+        .eq("id", req.params.id)
+        .eq("seller_id", req.user.id)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ error: "Listing not found" });
+      const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
+      const finalPriceUsd = updates.price_usd !== undefined ? updates.price_usd : existing.price_usd;
+      if ((!finalPriceBfc || finalPriceBfc <= 0) && (finalPriceUsd === null || finalPriceUsd === undefined)) {
+        return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
+      }
+    }
+
     const { data, error } = await supabase
       .from("marketplace_listings")
       .update(updates)
