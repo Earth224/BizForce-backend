@@ -1218,7 +1218,16 @@ async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
 
-    if (session.metadata && session.metadata.kind === "marketplace_usd") {
+    let meta = (session.metadata && session.metadata.kind) ? session.metadata : {};
+    if (!meta.kind && session.payment_intent) {
+      try {
+        const piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent.id;
+        const pi = await stripeTest.paymentIntents.retrieve(piId);
+        if (pi && pi.metadata) meta = pi.metadata;
+      } catch (e) { console.error("Could not retrieve payment intent metadata:", e); }
+    }
+
+    if (meta.kind === "marketplace_usd") {
       try {
         const { data: existingOrder, error: existingOrderError } = await supabase
           .from("marketplace_orders")
@@ -1231,9 +1240,9 @@ async function handleStripeEvent(event) {
           return;
         }
 
-        const listingId = session.metadata.listing_id || null;
-        const buyerId = session.metadata.buyer_id || null;
-        const sellerId = session.metadata.seller_id || null;
+        const listingId = meta.listing_id || null;
+        const buyerId = meta.buyer_id || null;
+        const sellerId = meta.seller_id || null;
 
         let listingTitle = null;
         if (listingId) {
@@ -6002,10 +6011,18 @@ app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async functi
       success_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=success",
       cancel_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=cancelled",
       metadata: {
-        listing_id: listing.id,
-        buyer_id: req.user.id,
-        seller_id: listing.seller_id,
+        listing_id: String(listing.id),
+        buyer_id: String(req.user.id),
+        seller_id: String(listing.seller_id),
         kind: "marketplace_usd"
+      },
+      payment_intent_data: {
+        metadata: {
+          listing_id: String(listing.id),
+          buyer_id: String(req.user.id),
+          seller_id: String(listing.seller_id),
+          kind: "marketplace_usd"
+        }
       }
     });
 
