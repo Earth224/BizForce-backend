@@ -5931,6 +5931,104 @@ app.delete("/api/marketplace/listings/:id", requireAuth, async function (req, re
   } catch (error) { next(error); }
 });
 
+/* ── Crowdfunding ── */
+
+app.get("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("crowdfunding_campaigns")
+      .select("*")
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ campaigns: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/crowdfunding/my-campaigns", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("crowdfunding_campaigns")
+      .select("*")
+      .eq("owner_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ campaigns: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
+  try {
+    const title       = safeText(req.body.title, 150);
+    const description = safeText(req.body.description, 2000);
+    const category     = safeText(req.body.category, 40);
+    const goalBfc      = req.body.goal_bfc;
+
+    if (!title) return res.status(400).json({ error: "Title is required" });
+    if (!Number.isInteger(goalBfc) || goalBfc <= 0) {
+      return res.status(400).json({ error: "goal_bfc must be a positive integer" });
+    }
+
+    const { data, error } = await supabase
+      .from("crowdfunding_campaigns")
+      .insert({
+        owner_id: req.user.id, title, description: description || "",
+        goal_bfc: goalBfc, category, media: sanitizeMedia(req.body.media),
+        raised_bfc: 0, status: "active",
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ campaign: data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/crowdfunding/campaigns/:id", requireAuth, async function (req, res, next) {
+  try {
+    const updates = { updated_at: nowIso() };
+    if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
+    if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
+    if (req.body.category    !== undefined) updates.category    = safeText(req.body.category, 40);
+    if (req.body.media       !== undefined) updates.media       = sanitizeMedia(req.body.media);
+    if (req.body.status      !== undefined && ["active","paused","completed","cancelled"].includes(req.body.status)) {
+      updates.status = req.body.status;
+    }
+
+    const { data, error } = await supabase
+      .from("crowdfunding_campaigns")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Campaign not found" });
+    return res.json({ campaign: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/crowdfunding/campaigns/:id/donate", requireAuth, async function (req, res, next) {
+  try {
+    const amount = req.body.amount;
+
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "amount must be a positive integer" });
+    }
+
+    const { data, error } = await supabase.rpc("bfc_donate", {
+      p_donor: req.user.id,
+      p_campaign_id: req.params.id,
+      p_amount: amount
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.json({ balance: data });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
