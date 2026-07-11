@@ -5900,7 +5900,7 @@ app.get("/api/marketplace/listings", requireAuth, async function (req, res, next
     const q = safeText(req.query.q, 120);
     let query = supabase
       .from("marketplace_listings")
-      .select("id, seller_id, title, description, price_bfc, price_usd, category, tags, status, created_at")
+      .select("id, seller_id, title, description, price_bfc, price_usd, category, tags, media, status, created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(100);
