@@ -14,6 +14,7 @@ const twilio = require("twilio");
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
+const PDFDocument = require("pdfkit");
 const { createClient } = require("@supabase/supabase-js");
 const { buildAgentSystemPrompt } = require("./config/brain");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
@@ -6417,6 +6418,185 @@ app.post("/api/bizdoc/documents/:id/sign", requireAuth, async function (req, res
     if (updateError) throw updateError;
 
     return res.json({ signature, document: updatedDocument });
+  } catch (error) { next(error); }
+});
+
+/* ── Biz-EBook (manuscript → formatted PDF book) ── */
+
+// Splits manuscript text into { heading, paragraphs[] } chapters.
+// Conservative: only treats a line as a chapter heading when it matches
+// "Chapter <number/roman/word>" (case-insensitive), or is a short all-caps
+// line isolated by blank lines on both sides. If nothing matches, the
+// whole manuscript becomes a single unheaded chapter — nothing is lost.
+function parseManuscriptChapters(manuscriptText) {
+  var normalized = String(manuscriptText || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  var lines = normalized.split("\n");
+
+  var CHAPTER_HEADING_RE = /^chapter\s+([0-9]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b/i;
+
+  function isBlank(line) { return line.trim() === ""; }
+
+  function isAllCapsHeading(trimmed) {
+    if (!trimmed || trimmed.length > 60) return false;
+    if (/[a-z]/.test(trimmed)) return false;   // any lowercase disqualifies it
+    if (!/[A-Z]{2,}/.test(trimmed)) return false; // needs a real word, not just punctuation/numbers
+    return true;
+  }
+
+  function isHeadingCandidate(idx) {
+    var trimmed = lines[idx].trim();
+    if (!trimmed) return false;
+    if (CHAPTER_HEADING_RE.test(trimmed)) return true;
+
+    var prevBlank = idx === 0 || isBlank(lines[idx - 1]);
+    var nextBlank = idx === lines.length - 1 || isBlank(lines[idx + 1]);
+    return prevBlank && nextBlank && isAllCapsHeading(trimmed);
+  }
+
+  function paragraphsFromLines(bodyLines) {
+    return bodyLines.join("\n")
+      .split(/\n\s*\n+/)
+      .map(function (p) { return p.trim(); })
+      .filter(function (p) { return p.length > 0; });
+  }
+
+  var headingIndexes = [];
+  for (var i = 0; i < lines.length; i++) {
+    if (isHeadingCandidate(i)) headingIndexes.push(i);
+  }
+
+  if (headingIndexes.length === 0) {
+    var soleParagraphs = paragraphsFromLines(lines);
+    return soleParagraphs.length ? [{ heading: null, paragraphs: soleParagraphs }] : [];
+  }
+
+  var chapters = [];
+
+  // Front matter before the first detected heading (preface/epigraph/etc.) —
+  // kept as an unheaded chapter so no manuscript content is silently dropped.
+  if (headingIndexes[0] > 0) {
+    var frontParagraphs = paragraphsFromLines(lines.slice(0, headingIndexes[0]));
+    if (frontParagraphs.length) chapters.push({ heading: null, paragraphs: frontParagraphs });
+  }
+
+  for (var h = 0; h < headingIndexes.length; h++) {
+    var startIdx = headingIndexes[h];
+    var endIdx = (h + 1 < headingIndexes.length) ? headingIndexes[h + 1] : lines.length;
+    chapters.push({
+      heading: lines[startIdx].trim(),
+      paragraphs: paragraphsFromLines(lines.slice(startIdx + 1, endIdx))
+    });
+  }
+
+  return chapters;
+}
+
+// Renders manuscript text into a formatted book PDF using pdfkit's built-in
+// fonts (no bundled font files needed) and resolves the finished file as a
+// Buffer. options: { title, author }.
+async function generateBookPdf(manuscriptText, options) {
+  var settings = options || {};
+  var title  = safeText(settings.title, 200) || "Untitled Manuscript";
+  var author = safeText(settings.author, 150) || "Unknown Author";
+
+  var chapters = parseManuscriptChapters(manuscriptText);
+  if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
+
+  return new Promise(function (resolve, reject) {
+    try {
+      var doc = new PDFDocument({
+        size: "LETTER",
+        margins: { top: 72, bottom: 72, left: 72, right: 72 },
+        bufferPages: true
+      });
+
+      var chunks = [];
+      doc.on("data", function (chunk) { chunks.push(chunk); });
+      doc.on("end", function () { resolve(Buffer.concat(chunks)); });
+      doc.on("error", reject);
+
+      // ── Title page ──
+      doc.font("Times-Bold").fontSize(28);
+      doc.moveDown(8);
+      doc.text(title, { align: "center" });
+      doc.moveDown(2);
+      doc.font("Times-Roman").fontSize(16).text("by " + author, { align: "center" });
+
+      // ── Chapters (each starts on its own new page) ──
+      chapters.forEach(function (chapter) {
+        doc.addPage();
+        if (chapter.heading) {
+          doc.font("Times-Bold").fontSize(20).text(chapter.heading, { align: "center" });
+          doc.moveDown(2);
+        } else {
+          doc.moveDown(1);
+        }
+        doc.font("Times-Roman").fontSize(12);
+        chapter.paragraphs.forEach(function (paragraph) {
+          doc.text(paragraph, { align: "justify", lineGap: 4 });
+          doc.moveDown(1);
+        });
+      });
+
+      // ── Page numbers, bottom-centered, skipping the title page ──
+      var pageRange = doc.bufferedPageRange();
+      var bottomMargin = doc.page.margins.bottom;
+      for (var p = pageRange.start; p < pageRange.start + pageRange.count; p++) {
+        if (p === pageRange.start) continue; // no number on the title page
+        doc.switchToPage(p);
+        doc.page.margins.bottom = 0; // let us draw inside the bottom margin
+        doc.font("Helvetica").fontSize(9).text(
+          String(p - pageRange.start),
+          0,
+          doc.page.height - 40,
+          { width: doc.page.width, align: "center" }
+        );
+        doc.page.margins.bottom = bottomMargin;
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// TEMPORARY test route — lets us eyeball generated PDFs before storage
+// exists. Uploads a manuscript, generates the book, and streams the PDF
+// straight back as a download. No Supabase Storage write yet; this route
+// will be replaced by a stored + entitlement-gated download route once
+// the bf-books bucket/table land.
+app.post("/api/bizbook/test-generate", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "A manuscript file (.docx or .txt) is required" });
+    }
+
+    var extracted;
+    try {
+      extracted = await extractOracleFileText(req.file);
+    } catch (fileParseErr) {
+      console.error("[bizbook] Failed to parse uploaded manuscript:", fileParseErr.message || fileParseErr);
+      return res.status(400).json({ error: "Could not read uploaded manuscript. It may be corrupted, empty, or an unsupported format." });
+    }
+    if (!extracted) {
+      return res.status(400).json({ error: "Unsupported file type — upload a .docx or .txt manuscript" });
+    }
+
+    // extractOracleFileText prefixes a "[UPLOADED DOCUMENT: name]" label
+    // meant for LLM context; strip it so it doesn't become the book's
+    // opening line.
+    var manuscriptText = extracted.replace(/^\[UPLOADED DOCUMENT:[^\]]*\]\n/, "");
+
+    var title  = safeText(req.body.title, 200)  || "Untitled Manuscript";
+    var author = safeText(req.body.author, 150) || "Unknown Author";
+
+    var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author });
+
+    var downloadName = title.replace(/[^a-zA-Z0-9._ -]/g, "_").trim().slice(0, 80) || "book";
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=\"" + downloadName + ".pdf\"");
+    return res.send(pdfBuffer);
   } catch (error) { next(error); }
 });
 
