@@ -6624,6 +6624,51 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), asyn
   } catch (error) { next(error); }
 });
 
+app.get("/api/bizbook/books", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("bizbooks")
+      .select("id, title, author, storage_path, status, created_at")
+      .eq("owner_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ books: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bizbook/books/:id/download", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    // ── Entitlement check ──────────────────────────────────────────────
+    // Today: only the owner may download. Extension point for later:
+    // also allow requesters who hold a valid marketplace purchase/order
+    // for this book (e.g. look up a future book-purchase table here and
+    // OR it into `isAuthorized`).
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "You do not have access to this book" });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    const { data: signed, error: signError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(book.storage_path, 60);
+    if (signError || !signed || !signed.signedUrl) {
+      console.error("[bizbook] Failed to create signed download URL:", signError && (signError.message || signError));
+      return res.status(500).json({ error: "Failed to generate download link" });
+    }
+
+    return res.status(200).json({ url: signed.signedUrl, expires_in: 60, title: book.title });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
