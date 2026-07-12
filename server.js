@@ -6561,6 +6561,39 @@ async function generateBookPdf(manuscriptText, options) {
   });
 }
 
+// Renders manuscript text into an EPUB using the same chapter parsing as
+// generateBookPdf, so the two stay symmetric. options: { title, author }.
+async function generateBookEpub(manuscriptText, options) {
+  var settings = options || {};
+  var title  = safeText(settings.title, 200) || "Untitled Manuscript";
+  var author = safeText(settings.author, 150) || "Unknown Author";
+
+  var chapters = parseManuscriptChapters(manuscriptText);
+  if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  var content = chapters.map(function (chapter) {
+    return {
+      title: chapter.heading || "Front Matter",
+      content: chapter.paragraphs.map(function (p) { return "<p>" + escapeHtml(p) + "</p>"; }).join("")
+    };
+  });
+
+  const mod = await import("epub-gen-memory");
+  const epub = mod.default.default || mod.default || mod;
+
+  const buffer = await epub({ title: title, author: author }, content);
+  return buffer;
+}
+
 app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
   try {
     if (!req.file) {
@@ -6605,10 +6638,28 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), asyn
       return res.status(500).json({ error: "Failed to store generated book: " + uploadResult.error.message });
     }
 
+    var epubStoragePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
+    var epubBuffer;
+    var epubUploadFailed = false;
+    try {
+      epubBuffer = await generateBookEpub(manuscriptText, { title: title, author: author });
+      var epubUploadResult = await supabase.storage
+        .from("bf-books")
+        .upload(epubStoragePath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
+      if (epubUploadResult.error) {
+        console.error("[bizbook] EPUB storage upload failed:", epubUploadResult.error.message || epubUploadResult.error);
+        epubUploadFailed = true;
+      }
+    } catch (epubErr) {
+      console.error("[bizbook] EPUB generation failed:", epubErr.message || epubErr);
+      epubUploadFailed = true;
+    }
+
     var { data: book, error: insertError } = await supabase
       .from("bizbooks")
       .insert({
         owner_id: req.user.id, title, author, storage_path: storagePath,
+        storage_path_epub: epubUploadFailed ? null : epubStoragePath,
         status: "ready", created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -6656,6 +6707,24 @@ app.get("/api/bizbook/books/:id/download", requireAuth, async function (req, res
       return res.status(403).json({ error: "You do not have access to this book" });
     }
     // ─────────────────────────────────────────────────────────────────────
+
+    var format = (req.query.format === "epub") ? "epub" : "pdf";
+
+    if (format === "epub") {
+      if (!book.storage_path_epub) {
+        return res.status(404).json({ error: "No EPUB available for this book. Regenerate it to get an EPUB version." });
+      }
+
+      const { data: signedEpub, error: signEpubError } = await supabase.storage
+        .from("bf-books")
+        .createSignedUrl(book.storage_path_epub, 60);
+      if (signEpubError || !signedEpub || !signedEpub.signedUrl) {
+        console.error("[bizbook] Failed to create signed EPUB download URL:", signEpubError && (signEpubError.message || signEpubError));
+        return res.status(500).json({ error: "Failed to generate download link" });
+      }
+
+      return res.status(200).json({ url: signedEpub.signedUrl, expires_in: 60, title: book.title });
+    }
 
     const { data: signed, error: signError } = await supabase.storage
       .from("bf-books")
