@@ -6561,12 +6561,7 @@ async function generateBookPdf(manuscriptText, options) {
   });
 }
 
-// TEMPORARY test route — lets us eyeball generated PDFs before storage
-// exists. Uploads a manuscript, generates the book, and streams the PDF
-// straight back as a download. No Supabase Storage write yet; this route
-// will be replaced by a stored + entitlement-gated download route once
-// the bf-books bucket/table land.
-app.post("/api/bizbook/test-generate", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
+app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "A manuscript file (.docx or .txt) is required" });
@@ -6587,16 +6582,45 @@ app.post("/api/bizbook/test-generate", requireAuth, oracleUpload.single("file"),
     // meant for LLM context; strip it so it doesn't become the book's
     // opening line.
     var manuscriptText = extracted.replace(/^\[UPLOADED DOCUMENT:[^\]]*\]\n/, "");
+    if (!manuscriptText.trim()) {
+      return res.status(400).json({ error: "The uploaded manuscript appears to be empty" });
+    }
 
-    var title  = safeText(req.body.title, 200)  || "Untitled Manuscript";
+    var title = safeText(req.body.title, 200);
+    if (!title) {
+      return res.status(400).json({ error: "A title is required" });
+    }
     var author = safeText(req.body.author, 150) || "Unknown Author";
 
     var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author });
 
-    var downloadName = title.replace(/[^a-zA-Z0-9._ -]/g, "_").trim().slice(0, 80) || "book";
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=\"" + downloadName + ".pdf\"");
-    return res.send(pdfBuffer);
+    var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
+    var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+
+    var uploadResult = await supabase.storage
+      .from("bf-books")
+      .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
+    if (uploadResult.error) {
+      console.error("[bizbook] Storage upload failed:", uploadResult.error.message || uploadResult.error);
+      return res.status(500).json({ error: "Failed to store generated book: " + uploadResult.error.message });
+    }
+
+    var { data: book, error: insertError } = await supabase
+      .from("bizbooks")
+      .insert({
+        owner_id: req.user.id, title, author, storage_path: storagePath,
+        status: "ready", created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (insertError) {
+      console.error(
+        "[bizbook] Failed to record book after successful storage upload (orphaned object at " + storagePath + "):",
+        insertError.message || insertError
+      );
+      return res.status(500).json({ error: "Failed to save book record: " + insertError.message });
+    }
+
+    return res.status(200).json({ book: book });
   } catch (error) { next(error); }
 });
 
