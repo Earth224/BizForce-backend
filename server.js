@@ -5866,7 +5866,7 @@ app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
 
 /* ── Marketplace ── */
 
-const MARKETPLACE_CATEGORIES = ["consulting","design","development","marketing","sales","strategy","operations","other","garage_sale"];
+const MARKETPLACE_CATEGORIES = ["services","artists","garage_sale","bookstore","health_wellness","hair_beauty","clothing","vehicles","labor_trades","other"];
 
 function sanitizeMedia(rawMedia) {
   if (!Array.isArray(rawMedia)) {
