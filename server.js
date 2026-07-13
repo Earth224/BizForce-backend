@@ -6610,15 +6610,18 @@ async function generateBookEpub(manuscriptText, options) {
   return buffer;
 }
 
-app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
+app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "file", maxCount: 1 }, { name: "cover", maxCount: 1 }]), async function (req, res, next) {
   try {
-    if (!req.file) {
+    var manuscriptFile = (req.files && req.files.file && req.files.file[0]) ? req.files.file[0] : null;
+    var coverFile = (req.files && req.files.cover && req.files.cover[0]) ? req.files.cover[0] : null;
+
+    if (!manuscriptFile) {
       return res.status(400).json({ error: "A manuscript file (.docx or .txt) is required" });
     }
 
     var extracted;
     try {
-      extracted = await extractOracleFileText(req.file);
+      extracted = await extractOracleFileText(manuscriptFile);
     } catch (fileParseErr) {
       console.error("[bizbook] Failed to parse uploaded manuscript:", fileParseErr.message || fileParseErr);
       return res.status(400).json({ error: "Could not read uploaded manuscript. It may be corrupted, empty, or an unsupported format." });
@@ -6672,11 +6675,34 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), asyn
       epubUploadFailed = true;
     }
 
+    var coverStoragePath = null;
+    if (coverFile) {
+      try {
+        var COVER_EXT_BY_MIME = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+        var coverExt = (coverFile.originalname && coverFile.originalname.includes(".")
+          ? coverFile.originalname.split(".").pop()
+          : null) || COVER_EXT_BY_MIME[coverFile.mimetype] || "png";
+        var candidateCoverPath = req.user.id + "/" + Date.now() + "_" + safeFileName + "_cover." + coverExt;
+
+        var coverUploadResult = await supabase.storage
+          .from("bf-books")
+          .upload(candidateCoverPath, coverFile.buffer, { contentType: coverFile.mimetype, upsert: false });
+        if (coverUploadResult.error) {
+          console.error("[bizbook] cover upload failed:", coverUploadResult.error.message || coverUploadResult.error);
+        } else {
+          coverStoragePath = candidateCoverPath;
+        }
+      } catch (coverErr) {
+        console.error("[bizbook] cover upload failed:", coverErr.message || coverErr);
+      }
+    }
+
     var { data: book, error: insertError } = await supabase
       .from("bizbooks")
       .insert({
         owner_id: req.user.id, title, author, storage_path: storagePath,
         storage_path_epub: epubUploadFailed ? null : epubStoragePath,
+        cover_path: coverStoragePath,
         status: "ready", created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
