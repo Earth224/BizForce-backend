@@ -6818,6 +6818,64 @@ app.get("/api/bizbook/books/:id/cover", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
+app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover"), async function (req, res, next) {
+  try {
+    var coverFile = req.file || null;
+    if (!coverFile) {
+      return res.status(400).json({ error: "No cover image uploaded." });
+    }
+
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var safeFileName = String(book.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
+
+    var COVER_EXT_BY_MIME = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+    var coverExt = (coverFile.originalname && coverFile.originalname.includes("."))
+      ? coverFile.originalname.split(".").pop()
+      : (COVER_EXT_BY_MIME[coverFile.mimetype] || "png");
+
+    var newCoverPath = req.user.id + "/" + Date.now() + "_" + safeFileName + "_cover." + coverExt;
+
+    var coverUploadResult = await supabase.storage
+      .from("bf-books")
+      .upload(newCoverPath, coverFile.buffer, { contentType: coverFile.mimetype, upsert: false });
+    if (coverUploadResult.error) {
+      console.error("[bizbook] cover upload failed:", coverUploadResult.error.message || coverUploadResult.error);
+      return res.status(500).json({ error: "Failed to upload cover" });
+    }
+
+    const { error: updateError } = await supabase
+      .from("bizbooks")
+      .update({ cover_path: newCoverPath, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id);
+    if (updateError) {
+      console.error("[bizbook] Failed to save new cover_path:", updateError.message || updateError);
+      return res.status(500).json({ error: "Failed to save cover" });
+    }
+
+    if (book.cover_path && book.cover_path !== newCoverPath) {
+      try {
+        await supabase.storage.from("bf-books").remove([book.cover_path]);
+      } catch (cleanupErr) {
+        console.error("[bizbook] Failed to remove old cover (non-fatal):", cleanupErr.message || cleanupErr);
+      }
+    }
+
+    return res.status(200).json({ ok: true, cover_path: newCoverPath });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
