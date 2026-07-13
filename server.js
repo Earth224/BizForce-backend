@@ -6491,13 +6491,29 @@ function parseManuscriptChapters(manuscriptText) {
   return chapters;
 }
 
+// KDP-standard trim sizes, in PDF points (1 inch = 72pt).
+var TRIM_SIZES = {
+  "letter":      { width: 612, height: 792, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "6x9":         { width: 432, height: 648, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "5x8":         { width: 360, height: 576, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "5.25x8":      { width: 378, height: 576, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "5.5x8.5":     { width: 396, height: 612, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "6.14x9.21":   { width: 442, height: 663, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "7x10":        { width: 504, height: 720, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "8x10":        { width: 576, height: 720, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
+  "8.5x11":      { width: 612, height: 792, margins: { top: 72, bottom: 72, left: 72, right: 72 } }
+};
+
 // Renders manuscript text into a formatted book PDF using pdfkit's built-in
 // fonts (no bundled font files needed) and resolves the finished file as a
-// Buffer. options: { title, author }.
+// Buffer. options: { title, author, trimSize }.
 async function generateBookPdf(manuscriptText, options) {
   var settings = options || {};
   var title  = safeText(settings.title, 200) || "Untitled Manuscript";
   var author = safeText(settings.author, 150) || "Unknown Author";
+
+  var trimKey = (settings.trimSize && TRIM_SIZES[settings.trimSize]) ? settings.trimSize : "letter";
+  var trim = TRIM_SIZES[trimKey];
 
   var chapters = parseManuscriptChapters(manuscriptText);
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
@@ -6505,8 +6521,8 @@ async function generateBookPdf(manuscriptText, options) {
   return new Promise(function (resolve, reject) {
     try {
       var doc = new PDFDocument({
-        size: "LETTER",
-        margins: { top: 72, bottom: 72, left: 72, right: 72 },
+        size: [trim.width, trim.height],
+        margins: trim.margins,
         bufferPages: true
       });
 
@@ -6624,8 +6640,9 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.single("file"), asyn
       return res.status(400).json({ error: "A title is required" });
     }
     var author = safeText(req.body.author, 150) || "Unknown Author";
+    var trimSize = (req.body.trimSize && TRIM_SIZES[req.body.trimSize]) ? req.body.trimSize : "letter";
 
-    var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author });
+    var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author, trimSize: trimSize });
 
     var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
     var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
