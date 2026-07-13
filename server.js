@@ -6421,6 +6421,39 @@ app.post("/api/bizdoc/documents/:id/sign", requireAuth, async function (req, res
   } catch (error) { next(error); }
 });
 
+app.delete("/api/bizdoc/documents/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: document, error } = await supabase
+      .from("bizdoc_documents")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!document) return res.status(404).json({ error: "Document not found" });
+
+    const isAuthorized = document.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    try {
+      await supabase.from("bizdoc_signatures").delete().eq("document_id", req.params.id);
+    } catch (sigCleanupErr) {
+      console.log("[bizdoc] signature cleanup failed:", sigCleanupErr.message || sigCleanupErr);
+    }
+
+    const { error: deleteError } = await supabase
+      .from("bizdoc_documents")
+      .delete()
+      .eq("id", req.params.id);
+    if (deleteError) {
+      return res.status(500).json({ error: "Failed to delete document: " + deleteError.message });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 /* ── Biz-EBook (manuscript → formatted PDF book) ── */
 
 // Splits manuscript text into { heading, paragraphs[] } chapters.
