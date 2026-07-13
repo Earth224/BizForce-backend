@@ -6876,6 +6876,42 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
   } catch (error) { next(error); }
 });
 
+app.delete("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    try {
+      var pathsToRemove = [book.storage_path];
+      if (book.storage_path_epub) pathsToRemove.push(book.storage_path_epub);
+      if (book.cover_path) pathsToRemove.push(book.cover_path);
+      await supabase.storage.from("bf-books").remove(pathsToRemove);
+    } catch (cleanupErr) {
+      console.log("[bizbook] delete cleanup failed:", cleanupErr.message || cleanupErr);
+    }
+
+    const { error: deleteError } = await supabase
+      .from("bizbooks")
+      .delete()
+      .eq("id", req.params.id);
+    if (deleteError) {
+      return res.status(500).json({ error: "Failed to delete book: " + deleteError.message });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
