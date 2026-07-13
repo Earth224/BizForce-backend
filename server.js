@@ -6781,6 +6781,43 @@ app.get("/api/bizbook/books/:id/download", requireAuth, async function (req, res
   } catch (error) { next(error); }
 });
 
+app.get("/api/bizbook/books/:id/cover", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    // ── Entitlement check ──────────────────────────────────────────────
+    // Today: only the owner may view the cover. Extension point for later:
+    // also allow requesters who hold a valid marketplace purchase/order
+    // for this book (e.g. look up a future book-purchase table here and
+    // OR it into `isAuthorized`).
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    if (!book.cover_path) {
+      return res.status(404).json({ error: "No cover for this book." });
+    }
+
+    const { data: signedCover, error: signCoverError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(book.cover_path, 60);
+    if (signCoverError || !signedCover || !signedCover.signedUrl) {
+      console.error("[bizbook] Failed to create signed cover URL:", signCoverError && (signCoverError.message || signCoverError));
+      return res.status(500).json({ error: "Failed to generate cover link" });
+    }
+
+    return res.status(200).json({ url: signedCover.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
