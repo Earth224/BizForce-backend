@@ -6741,7 +6741,8 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
       return res.status(400).json({ error: "A title is required" });
     }
     var author = safeText(req.body.author, 150) || "Unknown Author";
-    var trimSize = (req.body.trimSize && TRIM_SIZES[req.body.trimSize]) ? req.body.trimSize : "letter";
+    var requestedTrim = req.body.trim_size || req.body.trimSize;
+    var trimSize = (requestedTrim && TRIM_SIZES[requestedTrim]) ? requestedTrim : "6x9";
 
     var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author, trimSize: trimSize });
 
@@ -6800,7 +6801,7 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
       .insert({
         owner_id: req.user.id, title, author, storage_path: storagePath,
         storage_path_epub: epubUploadFailed ? null : epubStoragePath,
-        cover_path: coverStoragePath,
+        cover_path: coverStoragePath, trim_size: trimSize,
         status: "ready", created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -6820,7 +6821,7 @@ app.get("/api/bizbook/books", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("bizbooks")
-      .select("id, title, author, storage_path, storage_path_epub, cover_path, status, created_at, content")
+      .select("id, title, author, storage_path, storage_path_epub, cover_path, trim_size, status, created_at, content")
       .eq("owner_id", req.user.id)
       .order("created_at", { ascending: false });
     if (error) throw error;
@@ -7027,7 +7028,7 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
 
     var title = book.title || "Untitled";
     var author = book.author || "";
-    var trimSize = "letter"; // bizbooks has no trim column today; default
+    var trimSize = (book.trim_size && TRIM_SIZES[book.trim_size]) ? book.trim_size : "6x9";
 
     var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
 
