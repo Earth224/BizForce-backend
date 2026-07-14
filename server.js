@@ -7006,6 +7006,50 @@ app.put("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+app.put("/api/bizbook/books/:id/cover-design", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    if (req.body.cover_design === undefined || req.body.cover_design === null) {
+      return res.status(400).json({ error: "Missing cover_design" });
+    }
+
+    var coverDesign = req.body.cover_design;
+    if (typeof coverDesign === "string") {
+      try {
+        coverDesign = JSON.parse(coverDesign);
+      } catch (parseErr) {
+        return res.status(400).json({ error: "Invalid cover_design" });
+      }
+    }
+
+    if (JSON.stringify(coverDesign).length > 200 * 1024) {
+      return res.status(413).json({ error: "Cover design too large" });
+    }
+
+    const { error: updateError } = await supabase
+      .from("bizbooks")
+      .update({ cover_design: coverDesign, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id);
+    if (updateError) {
+      return res.status(500).json({ error: "Failed to save cover design: " + updateError.message });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async function (req, res, next) {
   try {
     const { data: book, error } = await supabase
