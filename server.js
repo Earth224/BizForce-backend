@@ -6525,6 +6525,70 @@ function parseManuscriptChapters(manuscriptText) {
   return chapters;
 }
 
+// Converts the manuscript Editor's rich HTML into the same { heading,
+// paragraphs[] }[] shape parseManuscriptChapters returns, but splits on
+// explicit <h1> chapter boundaries instead of the plain-text heuristic —
+// the editor already knows exactly where chapters start, so we don't need
+// to guess.
+function htmlToChapters(html) {
+  function unescapeEntities(s) {
+    return String(s)
+      .replace(/&amp;/g, "&")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, "\"")
+      .replace(/&#39;/g, "'");
+  }
+
+  function stripTags(s) {
+    return unescapeEntities(String(s).replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  }
+
+  function textToParagraphs(segmentHtml) {
+    return segmentHtml.split(/\n+/)
+      .map(function (line) { return stripTags(line); })
+      .filter(function (p) { return p.length > 0; });
+  }
+
+  // Insert line breaks after block-level closers so stripping tags doesn't
+  // fuse adjacent blocks onto one line.
+  var normalized = String(html || "")
+    .replace(/<\/(h1|h2|p|div|li)>/gi, "</$1>\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+
+  var h1Re = /<h1[^>]*>([\s\S]*?)<\/h1>\n?/gi;
+  var starts = [];
+  var match;
+  while ((match = h1Re.exec(normalized)) !== null) {
+    starts.push({ index: match.index, end: h1Re.lastIndex, heading: match[1] });
+  }
+
+  if (starts.length === 0) {
+    return [{ heading: null, paragraphs: textToParagraphs(normalized) }];
+  }
+
+  var chapters = [];
+
+  // Front matter before the first <h1> — same unheaded-chapter convention
+  // parseManuscriptChapters uses for pre-heading content.
+  if (starts[0].index > 0) {
+    var frontParagraphs = textToParagraphs(normalized.slice(0, starts[0].index));
+    if (frontParagraphs.length) chapters.push({ heading: null, paragraphs: frontParagraphs });
+  }
+
+  for (var i = 0; i < starts.length; i++) {
+    var segStart = starts[i].end;
+    var segEnd = (i + 1 < starts.length) ? starts[i + 1].index : normalized.length;
+    chapters.push({
+      heading: stripTags(starts[i].heading),
+      paragraphs: textToParagraphs(normalized.slice(segStart, segEnd))
+    });
+  }
+
+  return chapters;
+}
+
 // KDP-standard trim sizes, in PDF points (1 inch = 72pt).
 var TRIM_SIZES = {
   "letter":      { width: 612, height: 792, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
@@ -6549,7 +6613,7 @@ async function generateBookPdf(manuscriptText, options) {
   var trimKey = (settings.trimSize && TRIM_SIZES[settings.trimSize]) ? settings.trimSize : "letter";
   var trim = TRIM_SIZES[trimKey];
 
-  var chapters = parseManuscriptChapters(manuscriptText);
+  var chapters = (settings.chapters && settings.chapters.length) ? settings.chapters : parseManuscriptChapters(manuscriptText);
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
 
   return new Promise(function (resolve, reject) {
@@ -6618,7 +6682,7 @@ async function generateBookEpub(manuscriptText, options) {
   var title  = safeText(settings.title, 200) || "Untitled Manuscript";
   var author = safeText(settings.author, 150) || "Unknown Author";
 
-  var chapters = parseManuscriptChapters(manuscriptText);
+  var chapters = (settings.chapters && settings.chapters.length) ? settings.chapters : parseManuscriptChapters(manuscriptText);
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
 
   function escapeHtml(s) {
@@ -6936,6 +7000,76 @@ app.put("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
     }
 
     return res.status(200).json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var plainContent = String(book.content || "").replace(/<[^>]+>/g, "").trim();
+    if (!plainContent) {
+      return res.status(400).json({ error: "This book has no content to generate from. Write something in the editor first." });
+    }
+
+    var chapters = htmlToChapters(book.content);
+
+    var title = book.title || "Untitled";
+    var author = book.author || "";
+    var trimSize = "letter"; // bizbooks has no trim column today; default
+
+    var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
+
+    var pdfBuffer = await generateBookPdf("", { title: title, author: author, trimSize: trimSize, chapters: chapters });
+    var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+
+    var uploadResult = await supabase.storage
+      .from("bf-books")
+      .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
+    if (uploadResult.error) {
+      console.error("[bizbook] generate-from-content PDF upload failed:", uploadResult.error.message || uploadResult.error);
+      return res.status(500).json({ error: "Failed to store generated book: " + uploadResult.error.message });
+    }
+
+    var epubStoragePath = null;
+    try {
+      var epubBuffer = await generateBookEpub("", { title: title, author: author, chapters: chapters });
+      var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
+      var epubUploadResult = await supabase.storage
+        .from("bf-books")
+        .upload(epubPath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
+      if (epubUploadResult.error) {
+        console.error("[bizbook] generate-from-content EPUB upload failed:", epubUploadResult.error.message || epubUploadResult.error);
+      } else {
+        epubStoragePath = epubPath;
+      }
+    } catch (epubErr) {
+      console.error("[bizbook] generate-from-content EPUB generation failed:", epubErr.message || epubErr);
+    }
+
+    var updatePayload = { storage_path: storagePath, status: "ready", updated_at: new Date().toISOString() };
+    if (epubStoragePath) updatePayload.storage_path_epub = epubStoragePath;
+
+    const { error: updateError } = await supabase
+      .from("bizbooks")
+      .update(updatePayload)
+      .eq("id", req.params.id);
+    if (updateError) {
+      return res.status(500).json({ error: "Failed to save generated book: " + updateError.message });
+    }
+
+    return res.status(200).json({ ok: true, storage_path: storagePath, has_epub: !!epubStoragePath });
   } catch (error) { next(error); }
 });
 
