@@ -6823,7 +6823,7 @@ app.get("/api/bizbook/books", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("bizbooks")
-      .select("id, title, author, storage_path, storage_path_epub, cover_path, trim_size, status, created_at, content")
+      .select("id, title, author, storage_path, storage_path_epub, cover_path, trim_size, status, created_at, content, cover_design")
       .eq("owner_id", req.user.id)
       .order("created_at", { ascending: false });
     if (error) throw error;
