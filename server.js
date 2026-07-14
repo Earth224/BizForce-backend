@@ -6327,21 +6327,21 @@ app.get("/api/bizdoc/documents/:id", requireAuth, async function (req, res, next
 
 app.post("/api/bizdoc/documents", requireAuth, async function (req, res, next) {
   try {
-    const templateType = safeText(req.body.template_type, 60);
+    const templateType = safeText(req.body.template_type, 60) || "blank";
     const title         = safeText(req.body.title, 150);
     const fields         = (req.body.fields && typeof req.body.fields === "object" && !Array.isArray(req.body.fields))
       ? req.body.fields : {};
     const partyName      = safeText(req.body.party_name, 150);
     const partyEmail     = safeText(req.body.party_email, 200);
+    const content         = (req.body.content !== undefined && req.body.content !== null) ? req.body.content : null;
 
-    if (!templateType) return res.status(400).json({ error: "template_type is required" });
     if (!title) return res.status(400).json({ error: "Title is required" });
 
     const { data, error } = await supabase
       .from("bizdoc_documents")
       .insert({
         owner_id: req.user.id, template_type: templateType, title,
-        fields, party_name: partyName, party_email: partyEmail,
+        fields, party_name: partyName, party_email: partyEmail, content,
         status: "draft",
         created_at: nowIso(), updated_at: nowIso()
       })
@@ -6363,6 +6363,7 @@ app.put("/api/bizdoc/documents/:id", requireAuth, async function (req, res, next
     if (req.body.status      !== undefined && ["draft","sent","signed","voided"].includes(req.body.status)) {
       updates.status = req.body.status;
     }
+    if (req.body.content     !== undefined) updates.content     = req.body.content;
 
     const { data, error } = await supabase
       .from("bizdoc_documents")
