@@ -7159,6 +7159,166 @@ app.delete("/api/bizbook/books/:id", requireAuth, async function (req, res, next
   } catch (error) { next(error); }
 });
 
+/* ── Cover Wraps (standalone reusable book-cover-wrap designs) ── */
+
+function coverWrapValidateDesignField(value, fieldName) {
+  // Returns { ok: true, value } or { ok: false, status, error }.
+  if (value === undefined) return { ok: true, value: undefined };
+  var parsed = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch (parseErr) {
+      return { ok: false, status: 400, error: "Invalid " + fieldName };
+    }
+  }
+  if (JSON.stringify(parsed).length > 200 * 1024) {
+    return { ok: false, status: 413, error: "Design too large" };
+  }
+  return { ok: true, value: parsed };
+}
+
+app.get("/api/cover-wraps", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("cover_wraps")
+      .select("id, name, trim_size, page_count, paper_stock, front_design, created_at, updated_at")
+      .eq("owner_id", req.user.id)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ wraps: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/cover-wraps", requireAuth, async function (req, res, next) {
+  try {
+    var name = safeText(req.body.name, 150) || "Untitled Cover";
+    var trimSize = (req.body.trim_size && TRIM_SIZES[req.body.trim_size]) ? req.body.trim_size : "6x9";
+    var paperStock = safeText(req.body.paper_stock, 60) || "white";
+    var pageCount = (Number.isInteger(req.body.page_count)) ? req.body.page_count : null;
+
+    var frontResult = coverWrapValidateDesignField(req.body.front_design, "front_design");
+    if (!frontResult.ok) return res.status(frontResult.status).json({ error: frontResult.error });
+    var spineResult = coverWrapValidateDesignField(req.body.spine_design, "spine_design");
+    if (!spineResult.ok) return res.status(spineResult.status).json({ error: spineResult.error });
+    var backResult = coverWrapValidateDesignField(req.body.back_design, "back_design");
+    if (!backResult.ok) return res.status(backResult.status).json({ error: backResult.error });
+
+    const { data, error } = await supabase
+      .from("cover_wraps")
+      .insert({
+        owner_id: req.user.id, name, trim_size: trimSize, paper_stock: paperStock, page_count: pageCount,
+        front_design: frontResult.value !== undefined ? frontResult.value : null,
+        spine_design: spineResult.value !== undefined ? spineResult.value : null,
+        back_design: backResult.value !== undefined ? backResult.value : null,
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (error) throw error;
+    return res.status(201).json({ wrap: data });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/cover-wraps/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover wrap not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    return res.json({ wrap: wrap });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/cover-wraps/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover wrap not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var payload = { updated_at: new Date().toISOString() };
+
+    if (req.body.name !== undefined) payload.name = safeText(req.body.name, 150) || "Untitled Cover";
+    if (req.body.trim_size !== undefined) {
+      payload.trim_size = (req.body.trim_size && TRIM_SIZES[req.body.trim_size]) ? req.body.trim_size : "6x9";
+    }
+    if (req.body.page_count !== undefined) {
+      payload.page_count = Number.isInteger(req.body.page_count) ? req.body.page_count : null;
+    }
+    if (req.body.paper_stock !== undefined) payload.paper_stock = safeText(req.body.paper_stock, 60) || "white";
+
+    var frontResult = coverWrapValidateDesignField(req.body.front_design, "front_design");
+    if (!frontResult.ok) return res.status(frontResult.status).json({ error: frontResult.error });
+    if (frontResult.value !== undefined) payload.front_design = frontResult.value;
+
+    var spineResult = coverWrapValidateDesignField(req.body.spine_design, "spine_design");
+    if (!spineResult.ok) return res.status(spineResult.status).json({ error: spineResult.error });
+    if (spineResult.value !== undefined) payload.spine_design = spineResult.value;
+
+    var backResult = coverWrapValidateDesignField(req.body.back_design, "back_design");
+    if (!backResult.ok) return res.status(backResult.status).json({ error: backResult.error });
+    if (backResult.value !== undefined) payload.back_design = backResult.value;
+
+    const { error: updateError } = await supabase
+      .from("cover_wraps")
+      .update(payload)
+      .eq("id", req.params.id);
+    if (updateError) {
+      return res.status(500).json({ error: "Failed to save cover wrap: " + updateError.message });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/cover-wraps/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover wrap not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    // TODO: a wrap's design JSON may reference a background image uploaded
+    // to bf-books storage; storage cleanup for that reference is a later
+    // concern — deleting the row is enough for now.
+
+    const { error: deleteError } = await supabase
+      .from("cover_wraps")
+      .delete()
+      .eq("id", req.params.id);
+    if (deleteError) {
+      return res.status(500).json({ error: "Failed to delete cover wrap: " + deleteError.message });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
