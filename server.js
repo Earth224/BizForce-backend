@@ -6755,7 +6755,7 @@ app.get("/api/bizbook/books", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("bizbooks")
-      .select("id, title, author, storage_path, storage_path_epub, cover_path, status, created_at")
+      .select("id, title, author, storage_path, storage_path_epub, cover_path, status, created_at, content")
       .eq("owner_id", req.user.id)
       .order("created_at", { ascending: false });
     if (error) throw error;
@@ -6906,6 +6906,35 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
     }
 
     return res.status(200).json({ ok: true, cover_path: newCoverPath });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data: book, error } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+
+    const isAuthorized = book.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var content = (req.body.content === undefined || req.body.content === null) ? "" : req.body.content;
+
+    const { error: updateError } = await supabase
+      .from("bizbooks")
+      .update({ content: content, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id);
+    if (updateError) {
+      return res.status(500).json({ error: "Failed to save book: " + updateError.message });
+    }
+
+    return res.status(200).json({ ok: true });
   } catch (error) { next(error); }
 });
 
