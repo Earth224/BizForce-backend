@@ -6626,7 +6626,7 @@ async function generateBookPdf(manuscriptText, options) {
 
       var chunks = [];
       doc.on("data", function (chunk) { chunks.push(chunk); });
-      doc.on("end", function () { resolve(Buffer.concat(chunks)); });
+      doc.on("end", function () { resolve({ buffer: Buffer.concat(chunks), pageCount: pageRange.count }); });
       doc.on("error", reject);
 
       // ── Title page ──
@@ -6744,7 +6744,9 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
     var requestedTrim = req.body.trim_size || req.body.trimSize;
     var trimSize = (requestedTrim && TRIM_SIZES[requestedTrim]) ? requestedTrim : "6x9";
 
-    var pdfBuffer = await generateBookPdf(manuscriptText, { title: title, author: author, trimSize: trimSize });
+    var pdfResult = await generateBookPdf(manuscriptText, { title: title, author: author, trimSize: trimSize });
+    var pdfBuffer = pdfResult.buffer;
+    var pageCount = (pdfResult && typeof pdfResult.pageCount === "number") ? pdfResult.pageCount : null;
 
     var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
     var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
@@ -6801,7 +6803,7 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
       .insert({
         owner_id: req.user.id, title, author, storage_path: storagePath,
         storage_path_epub: epubUploadFailed ? null : epubStoragePath,
-        cover_path: coverStoragePath, trim_size: trimSize,
+        cover_path: coverStoragePath, trim_size: trimSize, page_count: pageCount,
         status: "ready", created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
@@ -7032,7 +7034,9 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
 
     var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
 
-    var pdfBuffer = await generateBookPdf("", { title: title, author: author, trimSize: trimSize, chapters: chapters });
+    var pdfResult = await generateBookPdf("", { title: title, author: author, trimSize: trimSize, chapters: chapters });
+    var pdfBuffer = pdfResult.buffer;
+    var pageCount = (pdfResult && typeof pdfResult.pageCount === "number") ? pdfResult.pageCount : null;
     var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
 
     var uploadResult = await supabase.storage
@@ -7061,6 +7065,7 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
 
     var updatePayload = { storage_path: storagePath, status: "ready", updated_at: new Date().toISOString() };
     if (epubStoragePath) updatePayload.storage_path_epub = epubStoragePath;
+    updatePayload.page_count = pageCount;
 
     const { error: updateError } = await supabase
       .from("bizbooks")
