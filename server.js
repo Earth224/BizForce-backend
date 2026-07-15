@@ -7319,6 +7319,88 @@ app.delete("/api/cover-wraps/:id", requireAuth, async function (req, res, next) 
   } catch (error) { next(error); }
 });
 
+app.post("/api/cover-wraps/:id/bg-image", requireAuth, oracleUpload.single("bg_image"), async function (req, res, next) {
+  try {
+    var bgFile = req.file || null;
+    if (!bgFile) {
+      return res.status(400).json({ error: "No image uploaded." });
+    }
+
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var safeName = String(wrap.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "cover";
+    var EXT_BY_MIME = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+    var ext = (bgFile.originalname && bgFile.originalname.includes("."))
+      ? bgFile.originalname.split(".").pop()
+      : (EXT_BY_MIME[bgFile.mimetype] || "png");
+    var newPath = req.user.id + "/wrap_" + req.params.id + "_" + Date.now() + "_" + safeName + "." + ext;
+
+    var uploadResult = await supabase.storage
+      .from("bf-books")
+      .upload(newPath, bgFile.buffer, { contentType: bgFile.mimetype, upsert: false });
+    if (uploadResult.error) {
+      console.error("[cover-wraps] bg-image upload failed:", uploadResult.error.message || uploadResult.error);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+
+    var oldBgImage = wrap.front_design && wrap.front_design.bgImage;
+    if (typeof oldBgImage === "string" && oldBgImage.length > 0
+        && !oldBgImage.startsWith("blob:") && !oldBgImage.startsWith("http")
+        && oldBgImage !== newPath) {
+      try {
+        await supabase.storage.from("bf-books").remove([oldBgImage]);
+      } catch (cleanupErr) {
+        console.error("[cover-wraps] Failed to remove old bg-image (non-fatal):", cleanupErr.message || cleanupErr);
+      }
+    }
+
+    return res.status(200).json({ ok: true, path: newPath });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/cover-wraps/:id/bg-image", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var bgPath = wrap.front_design && wrap.front_design.bgImage;
+    if (!bgPath || typeof bgPath !== "string" || bgPath.startsWith("blob:") || bgPath.startsWith("http")) {
+      return res.status(404).json({ error: "No background image for this cover." });
+    }
+
+    const { data: signedBg, error: signError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(bgPath, 60);
+    if (signError || !signedBg || !signedBg.signedUrl) {
+      console.error("[cover-wraps] Failed to create signed bg-image URL:", signError && (signError.message || signError));
+      return res.status(500).json({ error: "Failed to generate image link" });
+    }
+
+    return res.status(200).json({ url: signedBg.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
