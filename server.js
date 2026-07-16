@@ -6680,18 +6680,111 @@ function parseInlineRuns(segmentHtml) {
   }
 }
 
+// Matches a whole <img ...> tag (self-closing or not) so it can be pulled
+// out of a line before the remaining text reaches parseInlineRuns — img was
+// never in that function's INLINE_TAGS whitelist and is handled entirely
+// separately here instead.
+var IMG_TAG_RE = /<img\b([^>]*)>/gi;
+var IMG_ATTR_RE = /([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+
+function parseImgAttrString(attrString) {
+  var attrs = {};
+  var m;
+  IMG_ATTR_RE.lastIndex = 0;
+  while ((m = IMG_ATTR_RE.exec(attrString)) !== null) {
+    attrs[m[1].toLowerCase()] = (m[2] !== undefined ? m[2] : m[3]) || "";
+  }
+  return attrs;
+}
+
+// Turns one <img>'s attribute string into an { type:"image", ... } paragraph
+// object the PDF renderer knows how to draw, or null if the tag can't be
+// safely embedded — no data-path, or a blob:/http(s) src standing in for one
+// (never a real bf-books storage path, so there'd be nothing to download).
+// width/crop are read from the same inline style + data-crop* attrs the
+// editor (bizdoc.html) writes when a user resizes/crops an image.
+function imgTagToParagraph(attrString) {
+  var attrs = parseImgAttrString(attrString);
+  var path = attrs["data-path"];
+  if (!path || typeof path !== "string") return null;
+  path = unescapeEntities(path).trim();
+  if (!path || path.indexOf("blob:") === 0 || path.indexOf("http://") === 0 || path.indexOf("https://") === 0) return null;
+
+  var widthPx = null, widthPct = null;
+  var wMatch = /(?:^|;)\s*width\s*:\s*([0-9.]+)\s*(px|%)/i.exec(attrs.style || "");
+  if (wMatch) {
+    var wVal = parseFloat(wMatch[1]);
+    if (!isNaN(wVal)) {
+      if (wMatch[2].toLowerCase() === "px") widthPx = wVal;
+      else widthPct = wVal;
+    }
+  }
+
+  function cropFrac(name, fallback) {
+    var v = parseFloat(attrs[name]);
+    return isNaN(v) ? fallback : Math.max(0, Math.min(1, v));
+  }
+  var cropW = parseFloat(attrs["data-cropw"]);
+  var cropH = parseFloat(attrs["data-croph"]);
+  cropW = (cropW > 0 && cropW <= 1) ? cropW : 1;
+  cropH = (cropH > 0 && cropH <= 1) ? cropH : 1;
+
+  return {
+    type: "image",
+    path: path,
+    widthPx: widthPx,
+    widthPct: widthPct,
+    cropX: cropFrac("data-cropx", 0),
+    cropY: cropFrac("data-cropy", 0),
+    cropW: cropW,
+    cropH: cropH
+  };
+}
+
+// Splits one normalized line into an ordered sequence of paragraph entries:
+// text runs (parseInlineRuns, unchanged) interleaved with standalone image
+// objects for each <img> found — so "some text <img> more text" becomes
+// three separate paragraphs in document order instead of the image being
+// silently dropped.
+function lineToParagraphs(line) {
+  var out = [];
+  var lastIndex = 0;
+  var m;
+  IMG_TAG_RE.lastIndex = 0;
+  while ((m = IMG_TAG_RE.exec(line)) !== null) {
+    var textBefore = line.slice(lastIndex, m.index);
+    if (textBefore.trim()) {
+      var runsBefore = parseInlineRuns(textBefore);
+      if (runsBefore && runsBefore.length > 0) out.push(runsBefore);
+    }
+    var imgPara = imgTagToParagraph(m[1] || "");
+    if (imgPara) out.push(imgPara);
+    lastIndex = IMG_TAG_RE.lastIndex;
+  }
+  var textAfter = line.slice(lastIndex);
+  if (textAfter.trim()) {
+    var runsAfter = parseInlineRuns(textAfter);
+    if (runsAfter && runsAfter.length > 0) out.push(runsAfter);
+  }
+  return out;
+}
+
 // Converts the manuscript Editor's rich HTML into the same { heading,
 // paragraphs[] }[] shape parseManuscriptChapters returns, but splits on
 // explicit <h1> chapter boundaries instead of the plain-text heuristic —
 // the editor already knows exactly where chapters start, so we don't need
-// to guess. Each paragraph is now a runs array from parseInlineRuns (or,
-// on parse failure, the plain fallback string it returns) — headings stay
-// plain strings via stripTags.
+// to guess. Each paragraph is a runs array from parseInlineRuns (or, on
+// parse failure, the plain fallback string it returns), or an
+// { type:"image", ... } object for each <img data-path> found (see
+// imgTagToParagraph/lineToParagraphs) — headings stay plain strings via
+// stripTags.
 function htmlToChapters(html) {
   function textToParagraphs(segmentHtml) {
-    return segmentHtml.split(/\n+/)
-      .map(function (line) { return parseInlineRuns(line); })
-      .filter(function (p) { return p && p.length > 0; });
+    var paragraphs = [];
+    segmentHtml.split(/\n+/).forEach(function (line) {
+      paragraphs = paragraphs.concat(lineToParagraphs(line));
+    });
+    return paragraphs;
   }
 
   // Insert line breaks after block-level closers so stripping tags doesn't
@@ -6834,62 +6927,165 @@ async function generateBookPdf(manuscriptText, options) {
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
 
   return new Promise(function (resolve, reject) {
+    var doc;
+    var pageRange;
     try {
-      var doc = new PDFDocument({
+      doc = new PDFDocument({
         size: [trim.width, trim.height],
         margins: trim.margins,
         bufferPages: true
       });
-
-      var chunks = [];
-      doc.on("data", function (chunk) { chunks.push(chunk); });
-      doc.on("end", function () { resolve({ buffer: Buffer.concat(chunks), pageCount: pageRange.count }); });
-      doc.on("error", reject);
-
-      // ── Title page ──
-      doc.font("Times-Bold").fontSize(28);
-      doc.moveDown(8);
-      doc.text(title, { align: "center" });
-      doc.moveDown(2);
-      doc.font("Times-Roman").fontSize(16).text("by " + author, { align: "center" });
-
-      // ── Chapters (each starts on its own new page) ──
-      chapters.forEach(function (chapter) {
-        doc.addPage();
-        if (chapter.heading) {
-          doc.font("Times-Bold").fontSize(20).text(chapter.heading, { align: "center" });
-          doc.moveDown(2);
-        } else {
-          doc.moveDown(1);
-        }
-        doc.font("Times-Roman").fontSize(12);
-        chapter.paragraphs.forEach(function (paragraph) {
-          renderParagraphRuns(doc, paragraph, { align: "justify", lineGap: 4 });
-          doc.moveDown(1);
-        });
-      });
-
-      // ── Page numbers, bottom-centered, skipping the title page ──
-      var pageRange = doc.bufferedPageRange();
-      var bottomMargin = doc.page.margins.bottom;
-      for (var p = pageRange.start; p < pageRange.start + pageRange.count; p++) {
-        if (p === pageRange.start) continue; // no number on the title page
-        doc.switchToPage(p);
-        doc.page.margins.bottom = 0; // let us draw inside the bottom margin
-        doc.font("Helvetica").fontSize(9).text(
-          String(p - pageRange.start),
-          0,
-          doc.page.height - 40,
-          { width: doc.page.width, align: "center" }
-        );
-        doc.page.margins.bottom = bottomMargin;
-      }
-
-      doc.end();
     } catch (err) {
-      reject(err);
+      return reject(err);
     }
+
+    var chunks = [];
+    doc.on("data", function (chunk) { chunks.push(chunk); });
+    doc.on("end", function () { resolve({ buffer: Buffer.concat(chunks), pageCount: pageRange.count }); });
+    doc.on("error", reject);
+
+    // The rest of the draw needs to await per-image byte fetches (inline
+    // manuscript images), so it's wrapped in an async IIFE rather than
+    // running directly in this (necessarily synchronous) Promise executor —
+    // a plain async executor would let a post-await throw fall through as
+    // an unhandled rejection instead of calling reject().
+    (async function () {
+      try {
+        // ── Title page ──
+        doc.font("Times-Bold").fontSize(28);
+        doc.moveDown(8);
+        doc.text(title, { align: "center" });
+        doc.moveDown(2);
+        doc.font("Times-Roman").fontSize(16).text("by " + author, { align: "center" });
+
+        var contentWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+
+        // ── Chapters (each starts on its own new page) ──
+        for (var ci = 0; ci < chapters.length; ci++) {
+          var chapter = chapters[ci];
+          doc.addPage();
+          if (chapter.heading) {
+            doc.font("Times-Bold").fontSize(20).text(chapter.heading, { align: "center" });
+            doc.moveDown(2);
+          } else {
+            doc.moveDown(1);
+          }
+          doc.font("Times-Roman").fontSize(12);
+          for (var pi = 0; pi < chapter.paragraphs.length; pi++) {
+            var paragraph = chapter.paragraphs[pi];
+            if (paragraph && typeof paragraph === "object" && !Array.isArray(paragraph) && paragraph.type === "image") {
+              await drawInlineImage(doc, paragraph, contentWidth);
+              continue;
+            }
+            renderParagraphRuns(doc, paragraph, { align: "justify", lineGap: 4 });
+            doc.moveDown(1);
+          }
+        }
+
+        // ── Page numbers, bottom-centered, skipping the title page ──
+        pageRange = doc.bufferedPageRange();
+        var bottomMargin = doc.page.margins.bottom;
+        for (var p = pageRange.start; p < pageRange.start + pageRange.count; p++) {
+          if (p === pageRange.start) continue; // no number on the title page
+          doc.switchToPage(p);
+          doc.page.margins.bottom = 0; // let us draw inside the bottom margin
+          doc.font("Helvetica").fontSize(9).text(
+            String(p - pageRange.start),
+            0,
+            doc.page.height - 40,
+            { width: doc.page.width, align: "center" }
+          );
+          doc.page.margins.bottom = bottomMargin;
+        }
+
+        doc.end();
+      } catch (err) {
+        reject(err);
+      }
+    })();
   });
+}
+
+// Draws one { type:"image", ... } paragraph (from htmlToChapters) into the
+// PDF at the current doc.y, advancing doc.y past it so following text flows
+// below. Crop math mirrors generateCoverWrapPdf's (zoom the image up so the
+// [cropX,cropY,cropX+cropW,cropY+cropH] sub-rectangle fills the frame,
+// clipped to the frame). Uses pdfkit's own doc.openImage() to read the
+// image's natural pixel dimensions (PNG/JPEG only — same formats doc.image()
+// itself supports) rather than pulling in an extra dependency; neither
+// image-size nor sharp is in package.json, and this needs no new install.
+// Any failure (download, unsupported format, draw) is logged and skipped —
+// one bad image must never fail the whole book.
+async function drawInlineImage(doc, para, contentWidth) {
+  var buf;
+  try {
+    const { data: blob, error: dlErr } = await supabase.storage.from("bf-books").download(para.path);
+    if (dlErr || !blob) {
+      console.warn("[book-pdf] Failed to download inline image:", para.path, dlErr && (dlErr.message || dlErr));
+      return;
+    }
+    buf = Buffer.from(await blob.arrayBuffer());
+  } catch (fetchErr) {
+    console.warn("[book-pdf] Failed to fetch inline image:", para.path, fetchErr && (fetchErr.message || fetchErr));
+    return;
+  }
+
+  var natural;
+  try {
+    natural = doc.openImage(buf);
+  } catch (parseErr) {
+    console.warn("[book-pdf] Failed to parse inline image (unsupported format?):", para.path, parseErr && (parseErr.message || parseErr));
+    return;
+  }
+  if (!natural || !natural.width || !natural.height) return;
+
+  var drawWidth;
+  if (para.widthPx) {
+    drawWidth = para.widthPx * 72 / 96;
+  } else if (para.widthPct) {
+    drawWidth = contentWidth * (para.widthPct / 100);
+  } else {
+    drawWidth = contentWidth * 0.6;
+  }
+  drawWidth = Math.max(1, Math.min(contentWidth, drawWidth));
+
+  var cropW = (para.cropW > 0 && para.cropW <= 1) ? para.cropW : 1;
+  var cropH = (para.cropH > 0 && para.cropH <= 1) ? para.cropH : 1;
+  var cropX = (typeof para.cropX === "number") ? para.cropX : 0;
+  var cropY = (typeof para.cropY === "number") ? para.cropY : 0;
+  var isFullCrop = (cropX === 0 && cropY === 0 && cropW === 1 && cropH === 1);
+
+  var drawHeight = drawWidth * (natural.height / natural.width) * (cropH / cropW);
+
+  var GAP = 8;
+  if (doc.y + GAP + drawHeight > doc.page.height - doc.page.margins.bottom) {
+    doc.addPage();
+  }
+
+  doc.y += GAP;
+  var x = doc.page.margins.left + (contentWidth - drawWidth) / 2;
+  var y = doc.y;
+
+  try {
+    if (isFullCrop) {
+      doc.image(buf, x, y, { width: drawWidth });
+    } else {
+      doc.save();
+      doc.rect(x, y, drawWidth, drawHeight).clip();
+      var drawnW = drawWidth / cropW;
+      var drawnH = drawHeight / cropH;
+      var drawnX = x - (cropX / cropW) * drawWidth;
+      var drawnY = y - (cropY / cropH) * drawHeight;
+      doc.image(buf, drawnX, drawnY, { width: drawnW, height: drawnH });
+      doc.restore();
+    }
+  } catch (drawErr) {
+    console.warn("[book-pdf] Failed to draw inline image:", para.path, drawErr && (drawErr.message || drawErr));
+    return;
+  }
+
+  doc.x = doc.page.margins.left;
+  doc.y = y + drawHeight + GAP;
 }
 
 // Maps a frontend font-stack string plus bold/italic to one of pdfkit's
