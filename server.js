@@ -6602,6 +6602,11 @@ var TRIM_SIZES = {
   "8.5x11":      { width: 612, height: 792, margins: { top: 72, bottom: 72, left: 72, right: 72 } }
 };
 
+// Per-page thickness in inches, mirrored from the frontend's PAPER_THICKNESS
+// (bizdoc.html) so spine width can be computed server-side. Unknown stock
+// falls back to white.
+var PAPER_THICKNESS = { white: 0.002252, cream: 0.0025, color: 0.002347 };
+
 // Renders manuscript text into a formatted book PDF using pdfkit's built-in
 // fonts (no bundled font files needed) and resolves the finished file as a
 // Buffer. options: { title, author, trimSize }.
@@ -6667,6 +6672,117 @@ async function generateBookPdf(manuscriptText, options) {
         );
         doc.page.margins.bottom = bottomMargin;
       }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// Maps a frontend font-stack string plus bold/italic to one of pdfkit's
+// built-in standard-14 fonts (no bundled font files needed), case-insensitive.
+function mapFontToStandard(fontFamily, bold, italic) {
+  var stack = (fontFamily || "").toLowerCase();
+  var family;
+  if (stack.indexOf("mono") !== -1 || stack.indexOf("courier") !== -1) {
+    family = "Courier";
+  } else if (stack.indexOf("sans") !== -1 || stack.indexOf("arial") !== -1 || stack.indexOf("helvetica") !== -1 || stack.indexOf("verdana") !== -1 || stack.indexOf("segoe") !== -1 || stack.indexOf("roboto") !== -1) {
+    family = "Helvetica";
+  } else {
+    family = "Times";
+  }
+  if (family === "Courier") {
+    if (bold && italic) return "Courier-BoldOblique";
+    if (bold) return "Courier-Bold";
+    if (italic) return "Courier-Oblique";
+    return "Courier";
+  }
+  if (family === "Helvetica") {
+    if (bold && italic) return "Helvetica-BoldOblique";
+    if (bold) return "Helvetica-Bold";
+    if (italic) return "Helvetica-Oblique";
+    return "Helvetica";
+  }
+  if (bold && italic) return "Times-BoldItalic";
+  if (bold) return "Times-Bold";
+  if (italic) return "Times-Italic";
+  return "Times-Roman";
+}
+
+// Renders a cover-wrap design (back|spine|front) into a print-ready,
+// full-bleed PDF using pdfkit. Pure function — no network/Supabase calls;
+// the caller resolves the background image to a Buffer first (or passes
+// null). options: { trimKey, pageCount, paperStock, name, bgImageBuffer }.
+async function generateCoverWrapPdf(design, opts) {
+  var settings = opts || {};
+  var trimKey = (settings.trimKey && TRIM_SIZES[settings.trimKey]) ? settings.trimKey : "letter";
+  var trim = TRIM_SIZES[trimKey];
+  var pageCount = settings.pageCount || 0;
+  var thickness = PAPER_THICKNESS[settings.paperStock] || PAPER_THICKNESS.white;
+
+  var spinePt = pageCount * thickness * 72;
+  var bleedPt = 9; // 0.125in
+  var contentW = trim.width + spinePt + trim.width; // back | spine | front, no bleed
+  var contentH = trim.height;
+  var fullW = contentW + 2 * bleedPt;
+  var fullH = contentH + 2 * bleedPt;
+
+  return new Promise(function (resolve, reject) {
+    try {
+      var doc = new PDFDocument({ size: [fullW, fullH], margin: 0 });
+
+      var chunks = [];
+      doc.on("data", function (chunk) { chunks.push(chunk); });
+      doc.on("end", function () { resolve(Buffer.concat(chunks)); });
+      doc.on("error", reject);
+
+      // ── Background color, bleeds to the outer edge ──
+      doc.rect(0, 0, fullW, fullH).fill((design && design.bgColor) || "#ffffff");
+
+      // ── Background image: object-fit:cover + pan/zoom, full bleed ──
+      if (settings.bgImageBuffer) {
+        var boxX = 0, boxY = 0, boxW = fullW, boxH = fullH;
+        var s = Math.max(1, Math.min(4, (design && design.bgScale) || 1));
+        var txPt = (((design && design.bgOffsetX) || 0) / 100) * boxW;
+        var tyPt = (((design && design.bgOffsetY) || 0) / 100) * boxH;
+        var drawW = boxW * s;
+        var drawH = boxH * s;
+        var centerX = boxW / 2 + txPt;
+        var centerY = boxH / 2 + tyPt;
+        var drawX = centerX - drawW / 2;
+        var drawY = centerY - drawH / 2;
+
+        doc.save();
+        doc.rect(boxX, boxY, boxW, boxH).clip();
+        doc.image(settings.bgImageBuffer, drawX, drawY, { cover: [drawW, drawH] });
+        doc.restore();
+      }
+
+      // ── Text layers ──
+      // v1: every layer is drawn centered on its point regardless of its
+      // `align` value (left/center/right) — align is not applied here yet.
+      var layers = (design && design.textLayers) || [];
+      layers.forEach(function (layer) {
+        var text = layer && layer.text;
+        if (!text) return;
+
+        var centerX = bleedPt + ((layer.xPct || 0) / 100) * contentW;
+        var centerY = bleedPt + ((layer.yPct || 0) / 100) * contentH;
+        var fontSizePt = ((layer.fontSizePct || 0) / 100) * contentH;
+
+        doc.font(mapFontToStandard(layer.fontFamily, layer.bold, layer.italic));
+        doc.fontSize(fontSizePt);
+        doc.fillColor(layer.color || "#111111");
+
+        var textW = doc.widthOfString(text);
+        var textH = doc.currentLineHeight();
+
+        doc.save();
+        doc.rotate(layer.rotation || 0, { origin: [centerX, centerY] });
+        doc.text(text, centerX - textW / 2, centerY - textH / 2, { lineBreak: false });
+        doc.restore();
+      });
 
       doc.end();
     } catch (err) {
@@ -7398,6 +7514,56 @@ app.get("/api/cover-wraps/:id/bg-image", requireAuth, async function (req, res, 
     }
 
     return res.status(200).json({ url: signedBg.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/cover-wraps/:id/export-pdf", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover wrap not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var design = wrap.front_design;
+    if (typeof design === "string") {
+      try { design = JSON.parse(design); } catch (parseErr) { design = null; }
+    }
+    if (!design || typeof design !== "object") {
+      return res.status(400).json({ error: "No design to export" });
+    }
+
+    var bgImageBuffer = null;
+    if (design.bgImage && typeof design.bgImage === "string" && !design.bgImage.startsWith("blob:") && !design.bgImage.startsWith("http")) {
+      try {
+        const { data: blob, error: dlErr } = await supabase.storage.from("bf-books").download(design.bgImage);
+        if (!dlErr && blob) bgImageBuffer = Buffer.from(await blob.arrayBuffer());
+      } catch (bgErr) {
+        console.warn("[cover-wraps] Failed to load background image for export:", bgErr && (bgErr.message || bgErr));
+      }
+    }
+
+    const pdf = await generateCoverWrapPdf(design, {
+      trimKey: wrap.trim_size,
+      pageCount: wrap.page_count || 0,
+      paperStock: wrap.paper_stock || "white",
+      name: wrap.name,
+      bgImageBuffer: bgImageBuffer
+    });
+
+    var safeFileName = (wrap.name || "cover").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "cover";
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=\"" + safeFileName + "-print.pdf\"");
+    res.setHeader("Content-Length", pdf.length);
+    res.end(pdf);
   } catch (error) { next(error); }
 });
 
