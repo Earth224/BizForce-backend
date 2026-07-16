@@ -7469,7 +7469,8 @@ app.post("/api/bizbook/books/create-from-content", requireAuth, async function (
       .from("bizbooks")
       .insert({
         owner_id: req.user.id, title: title, author: author, content: content,
-        trim_size: trimSize, status: "draft", created_at: nowIso(), updated_at: nowIso()
+        trim_size: trimSize, status: "draft", storage_path: "",
+        created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
     if (insertError) {
