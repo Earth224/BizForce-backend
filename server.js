@@ -8005,6 +8005,66 @@ app.post("/api/cover-wraps/:id/export-pdf", requireAuth, async function (req, re
   } catch (error) { next(error); }
 });
 
+/* ── Editor inline images (Biz-EBook / BizDoc rich-text editor) ──
+   Generic image storage for images inserted directly into editor content —
+   not tied to a specific book/document id, since one editor session can
+   insert many images and an image can conceptually be reused. Mirrors the
+   cover-wraps bg-image upload + layer-image signed-URL resolve pattern. */
+
+app.post("/api/editor/image", requireAuth, oracleUpload.single("image"), async function (req, res, next) {
+  try {
+    var imgFile = req.file || null;
+    if (!imgFile) {
+      return res.status(400).json({ error: "No image uploaded." });
+    }
+
+    var EDITOR_IMAGE_EXT_BY_MIME = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" };
+    if (!EDITOR_IMAGE_EXT_BY_MIME[imgFile.mimetype]) {
+      return res.status(400).json({ error: "Unsupported image type: " + imgFile.mimetype });
+    }
+
+    var ext = (imgFile.originalname && imgFile.originalname.includes("."))
+      ? imgFile.originalname.split(".").pop()
+      : EDITOR_IMAGE_EXT_BY_MIME[imgFile.mimetype];
+    var newPath = req.user.id + "/editorimg_" + Date.now() + "_" + Math.floor(Math.random() * 100000) + "." + ext;
+
+    var uploadResult = await supabase.storage
+      .from("bf-books")
+      .upload(newPath, imgFile.buffer, { contentType: imgFile.mimetype, upsert: false });
+    if (uploadResult.error) {
+      console.error("[editor] image upload failed:", uploadResult.error.message || uploadResult.error);
+      return res.status(500).json({ error: "Failed to upload image" });
+    }
+
+    return res.status(200).json({ ok: true, path: newPath });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/editor/image", requireAuth, async function (req, res, next) {
+  try {
+    // Not tied to a specific book/document, so there's no design/content to
+    // cross-check membership against like the cover layer-image route does
+    // — the owner-id path prefix IS the whole security boundary here. Every
+    // upload above is stored under req.user.id + "/", so a path outside
+    // that prefix can never belong to the requesting user.
+    var imagePath = req.query.path;
+    if (!imagePath || typeof imagePath !== "string" || imagePath.startsWith("blob:") || imagePath.startsWith("http")
+        || imagePath.indexOf(req.user.id + "/") !== 0) {
+      return res.status(400).json({ error: "Invalid path" });
+    }
+
+    const { data: signedImage, error: signError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(imagePath, 60);
+    if (signError || !signedImage || !signedImage.signedUrl) {
+      console.error("[editor] Failed to create signed image URL:", signError && (signError.message || signError));
+      return res.status(500).json({ error: "Failed to generate image link" });
+    }
+
+    return res.status(200).json({ url: signedImage.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
 /* ── Digital Cards ── */
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
