@@ -7517,6 +7517,43 @@ app.get("/api/cover-wraps/:id/bg-image", requireAuth, async function (req, res, 
   } catch (error) { next(error); }
 });
 
+app.get("/api/cover-wraps/:id/region-bg-image", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var region = req.query.region;
+    if (region !== "back" && region !== "spine" && region !== "front") {
+      return res.status(400).json({ error: "Invalid region" });
+    }
+
+    var bgPath = wrap.front_design && wrap.front_design.regions && wrap.front_design.regions[region] && wrap.front_design.regions[region].bgImage;
+    if (!bgPath || typeof bgPath !== "string" || bgPath.startsWith("blob:") || bgPath.startsWith("http")) {
+      return res.status(404).json({ error: "No background image for this region." });
+    }
+
+    const { data: signedBg, error: signError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(bgPath, 60);
+    if (signError || !signedBg || !signedBg.signedUrl) {
+      console.error("[cover-wraps] Failed to create signed region bg-image URL:", signError && (signError.message || signError));
+      return res.status(500).json({ error: "Failed to generate image link" });
+    }
+
+    return res.status(200).json({ url: signedBg.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/cover-wraps/:id/export-pdf", requireAuth, async function (req, res, next) {
   try {
     const { data: wrap, error } = await supabase
