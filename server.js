@@ -7598,6 +7598,74 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
   } catch (error) { next(error); }
 });
 
+// Attaches a saved cover_wrap's already-stored front image to a book's
+// cover_path directly — no re-upload. The front image is whichever of
+// front_design.regions.front.bgImage (a front-region-specific override) or
+// front_design.bgImage (the flat whole-wrap base) is set, preferring the
+// region override since it's the more specific asset. Since cover_path is
+// just a bf-books storage path (see the upload route above), pointing it
+// at an existing path makes it resolve/display identically to an uploaded
+// cover — no change needed anywhere else.
+// Deliberately does NOT delete the book's previous cover_path (unlike the
+// upload route): that file may itself be a wrap's shared background image
+// rather than a book-exclusive upload, and deleting it here could destroy
+// a cover_wraps row's own asset out from under it.
+// bizbooks has no cover_wrap_id column (checked server.js + every
+// supabase/migrations/*.sql — no matches) and this task explicitly excludes
+// a migration, so the wrap linkage isn't persisted; wrapLinked:false tells
+// the frontend to keep wrapId itself (already has it) for the print flow
+// via the existing POST /api/cover-wraps/:id/export-pdf route.
+app.post("/api/bizbook/books/:id/cover-from-wrap", requireAuth, async function (req, res, next) {
+  try {
+    var wrapId = req.body && req.body.wrapId;
+    if (!wrapId || typeof wrapId !== "string") {
+      return res.status(400).json({ error: "wrapId is required" });
+    }
+
+    const { data: book, error: bookError } = await supabase
+      .from("bizbooks")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (bookError) throw bookError;
+    if (!book) return res.status(404).json({ error: "Book not found" });
+    if (book.owner_id !== req.user.id) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    const { data: wrap, error: wrapError } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", wrapId)
+      .maybeSingle();
+    if (wrapError) throw wrapError;
+    if (!wrap) return res.status(404).json({ error: "Cover wrap not found" });
+    if (wrap.owner_id !== req.user.id) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var frontDesign = wrap.front_design || {};
+    var frontPath = (frontDesign.regions && frontDesign.regions.front && frontDesign.regions.front.bgImage) || frontDesign.bgImage || null;
+
+    if (!frontPath || typeof frontPath !== "string" || frontPath.indexOf("blob:") === 0 || frontPath.indexOf("http://") === 0 || frontPath.indexOf("https://") === 0) {
+      return res.status(400).json({ error: "This cover has no front image to use — add a background image to the cover first." });
+    }
+
+    const { data: updatedBook, error: updateError } = await supabase
+      .from("bizbooks")
+      .update({ cover_path: frontPath, updated_at: new Date().toISOString() })
+      .eq("id", req.params.id)
+      .select("*")
+      .single();
+    if (updateError) {
+      console.error("[bizbook] Failed to attach cover from wrap:", updateError.message || updateError);
+      return res.status(500).json({ error: "Failed to attach cover" });
+    }
+
+    return res.status(200).json({ ok: true, book: updatedBook, wrapId: wrapId, wrapLinked: false });
+  } catch (error) { next(error); }
+});
+
 app.put("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
   try {
     const { data: book, error } = await supabase
