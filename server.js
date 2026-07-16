@@ -7259,6 +7259,46 @@ async function generateCoverWrapPdf(design, opts) {
   });
 }
 
+// Renders one paragraph into its chapter-HTML fragment. Text/runs paragraphs
+// render exactly as before (wrapped in <p>, via runsToInlineHtml). An
+// { type:"image", ... } paragraph (Block C) instead becomes a standalone
+// centered <img> pointing at a short-lived signed URL: epub-gen-memory
+// fetches whatever URL it finds in an <img src> at build time and packages
+// the bytes into the EPUB itself (see its fetchable.js — http(s) or file://
+// only, no buffer/data-URI intake), so a signed URL is the only thing it
+// can actually consume here. EPUB is reflowable and has no simple way to
+// pixel-crop like the PDF's clip+offset does, so for v1 a cropped image
+// just renders in full here — only generateBookPdf/drawInlineImage honors
+// crop. A failed signing attempt skips the image (console.warn) rather
+// than failing the whole book.
+async function paragraphToEpubHtml(paragraph) {
+  if (paragraph && typeof paragraph === "object" && !Array.isArray(paragraph) && paragraph.type === "image") {
+    var signedUrl;
+    try {
+      const { data: signedImage, error: signErr } = await supabase.storage.from("bf-books").createSignedUrl(paragraph.path, 300);
+      if (signErr || !signedImage || !signedImage.signedUrl) {
+        console.warn("[book-epub] Failed to sign inline image URL:", paragraph.path, signErr && (signErr.message || signErr));
+        return "";
+      }
+      signedUrl = signedImage.signedUrl;
+    } catch (signCatchErr) {
+      console.warn("[book-epub] Failed to sign inline image URL:", paragraph.path, signCatchErr && (signCatchErr.message || signCatchErr));
+      return "";
+    }
+
+    var styleParts = ["display:block", "margin:0.5em auto", "max-width:100%"];
+    if (paragraph.widthPct) {
+      styleParts.push("width:" + paragraph.widthPct + "%");
+    } else if (paragraph.widthPx) {
+      styleParts.push("width:" + paragraph.widthPx + "px");
+    }
+
+    return '<p style="text-align:center;"><img src="' + signedUrl + '" alt="" style="' + styleParts.join("; ") + ';" /></p>';
+  }
+
+  return "<p>" + runsToInlineHtml(paragraph) + "</p>";
+}
+
 // Renders manuscript text into an EPUB using the same chapter parsing as
 // generateBookPdf, so the two stay symmetric. options: { title, author }.
 async function generateBookEpub(manuscriptText, options) {
@@ -7269,12 +7309,18 @@ async function generateBookEpub(manuscriptText, options) {
   var chapters = (settings.chapters && settings.chapters.length) ? settings.chapters : parseManuscriptChapters(manuscriptText);
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
 
-  var content = chapters.map(function (chapter) {
-    return {
+  var content = [];
+  for (var ci = 0; ci < chapters.length; ci++) {
+    var chapter = chapters[ci];
+    var htmlParts = [];
+    for (var pi = 0; pi < chapter.paragraphs.length; pi++) {
+      htmlParts.push(await paragraphToEpubHtml(chapter.paragraphs[pi]));
+    }
+    content.push({
       title: chapter.heading || "Front Matter",
-      content: chapter.paragraphs.map(function (p) { return "<p>" + runsToInlineHtml(p) + "</p>"; }).join("")
-    };
-  });
+      content: htmlParts.join("")
+    });
+  }
 
   const mod = await import("epub-gen-memory");
   const epub = mod.default.default || mod.default || mod;
