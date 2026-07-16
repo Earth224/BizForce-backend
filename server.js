@@ -7851,6 +7851,50 @@ app.get("/api/cover-wraps/:id/region-bg-image", requireAuth, async function (req
   } catch (error) { next(error); }
 });
 
+// Signed URL for one foreground image-layer image. Image layers are an
+// arbitrary-length array (not fixed region names like region-bg-image), so
+// the path is passed directly as a query param instead of a region key —
+// which means it has to be validated as belonging to this owner AND to
+// this specific wrap's design, not just trusted as-is.
+app.get("/api/cover-wraps/:id/layer-image", requireAuth, async function (req, res, next) {
+  try {
+    const { data: wrap, error } = await supabase
+      .from("cover_wraps")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!wrap) return res.status(404).json({ error: "Cover not found" });
+
+    const isAuthorized = wrap.owner_id === req.user.id;
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    var imagePath = req.query.path;
+    if (!imagePath || typeof imagePath !== "string" || imagePath.startsWith("blob:") || imagePath.startsWith("http")
+        || imagePath.indexOf(req.user.id + "/") !== 0) {
+      return res.status(400).json({ error: "Invalid path" });
+    }
+
+    var imageLayers = (wrap.front_design && Array.isArray(wrap.front_design.imageLayers)) ? wrap.front_design.imageLayers : [];
+    var belongsToDesign = imageLayers.some(function (layer) { return layer && layer.src === imagePath; });
+    if (!belongsToDesign) {
+      return res.status(404).json({ error: "Image not found in this cover." });
+    }
+
+    const { data: signedLayer, error: signError } = await supabase.storage
+      .from("bf-books")
+      .createSignedUrl(imagePath, 60);
+    if (signError || !signedLayer || !signedLayer.signedUrl) {
+      console.error("[cover-wraps] Failed to create signed layer-image URL:", signError && (signError.message || signError));
+      return res.status(500).json({ error: "Failed to generate image link" });
+    }
+
+    return res.status(200).json({ url: signedLayer.signedUrl, expires_in: 60 });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/cover-wraps/:id/export-pdf", requireAuth, async function (req, res, next) {
   try {
     const { data: wrap, error } = await supabase
