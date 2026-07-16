@@ -7442,6 +7442,99 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
   } catch (error) { next(error); }
 });
 
+// Creates a new bizbooks row directly from editor HTML (no manuscript file
+// upload) — the Layer 3 template/draft-start flow. Mirrors generate-from-
+// content's chapter-parsing + PDF/EPUB generation, but INSERTs a fresh row
+// instead of updating one. Empty starter content is valid (a blank/template
+// start with nothing written yet) — the row is created either way; PDF/EPUB
+// generation only runs when there's real content, and a generation failure
+// never fails the request since the row (with content) already exists and
+// can be regenerated later via generate-from-content.
+app.post("/api/bizbook/books/create-from-content", requireAuth, async function (req, res, next) {
+  try {
+    var title = safeText(req.body.title, 200);
+    if (!title) {
+      return res.status(400).json({ error: "Book title is required" });
+    }
+    var author = safeText(req.body.author, 150) || "";
+    var requestedTrim = req.body.trimSize || req.body.trim_size;
+    var trimSize = (requestedTrim && TRIM_SIZES[requestedTrim]) ? requestedTrim : "letter";
+    var content = (req.body.content === undefined || req.body.content === null) ? "" : String(req.body.content);
+
+    // "draft" is a new status value for bizbooks (existing rows only ever
+    // use "ready") — chosen because it's not "ready", so the frontend's
+    // status-badge logic (added for the color-coded card badge) renders it
+    // as the gold "pending" state until generation actually succeeds.
+    var { data: book, error: insertError } = await supabase
+      .from("bizbooks")
+      .insert({
+        owner_id: req.user.id, title: title, author: author, content: content,
+        trim_size: trimSize, status: "draft", created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("*").single();
+    if (insertError) {
+      return res.status(500).json({ error: "Failed to create book: " + insertError.message });
+    }
+
+    var plainContent = content.replace(/<[^>]+>/g, "").trim();
+    if (!plainContent) {
+      return res.status(200).json({ book: book });
+    }
+
+    try {
+      var chapters = htmlToChapters(content);
+      var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
+
+      var pdfResult = await generateBookPdf("", { title: title, author: author, trimSize: trimSize, chapters: chapters });
+      var pdfBuffer = pdfResult.buffer;
+      var pageCount = (pdfResult && typeof pdfResult.pageCount === "number") ? pdfResult.pageCount : null;
+      var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+
+      var uploadResult = await supabase.storage
+        .from("bf-books")
+        .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: false });
+      if (uploadResult.error) {
+        console.error("[bizbook] create-from-content PDF upload failed:", uploadResult.error.message || uploadResult.error);
+        return res.status(200).json({ book: book });
+      }
+
+      var epubStoragePath = null;
+      try {
+        var epubBuffer = await generateBookEpub("", { title: title, author: author, chapters: chapters });
+        var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
+        var epubUploadResult = await supabase.storage
+          .from("bf-books")
+          .upload(epubPath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
+        if (epubUploadResult.error) {
+          console.error("[bizbook] create-from-content EPUB upload failed:", epubUploadResult.error.message || epubUploadResult.error);
+        } else {
+          epubStoragePath = epubPath;
+        }
+      } catch (epubErr) {
+        console.error("[bizbook] create-from-content EPUB generation failed:", epubErr.message || epubErr);
+      }
+
+      var updatePayload = { storage_path: storagePath, status: "ready", page_count: pageCount, updated_at: new Date().toISOString() };
+      if (epubStoragePath) updatePayload.storage_path_epub = epubStoragePath;
+
+      var { data: updatedBook, error: updateError } = await supabase
+        .from("bizbooks")
+        .update(updatePayload)
+        .eq("id", book.id)
+        .select("*").single();
+      if (updateError) {
+        console.error("[bizbook] create-from-content failed to save generated book:", updateError.message || updateError);
+        return res.status(200).json({ book: book });
+      }
+
+      return res.status(200).json({ book: updatedBook });
+    } catch (genErr) {
+      console.error("[bizbook] create-from-content generation failed:", genErr.message || genErr);
+      return res.status(200).json({ book: book });
+    }
+  } catch (error) { next(error); }
+});
+
 app.delete("/api/bizbook/books/:id", requireAuth, async function (req, res, next) {
   try {
     const { data: book, error } = await supabase
