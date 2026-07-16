@@ -6525,30 +6525,173 @@ function parseManuscriptChapters(manuscriptText) {
   return chapters;
 }
 
+// Shared HTML helpers used by both chapter-parsing paths, parseInlineRuns,
+// and the EPUB content builder.
+function unescapeEntities(s) {
+  return String(s)
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function stripTags(s) {
+  return unescapeEntities(String(s).replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+// Parses one paragraph's inner HTML into an array of inline-formatted runs:
+// [{ text, bold, italic, underline, color, fontFamily }, ...]. There's no
+// DOM available server-side, so this is a regex tokenizer over a small
+// whitelist of inline tags (<b>/<strong>, <i>/<em>, <u>, <span>, <font>)
+// plus their style/attribute equivalents (font-weight, font-style,
+// text-decoration, color, font-family) rather than a real parser. A new
+// run is emitted whenever the active style set changes; any tag outside
+// the whitelist is stepped over without emitting markup (its text still
+// flows into the surrounding run). Deliberately defensive — on any
+// failure this falls back to the plain stripped string for the whole
+// paragraph so one malformed paragraph can never break a chapter.
+function parseInlineRuns(segmentHtml) {
+  try {
+    var html = String(segmentHtml || "");
+    // Matches ANY tag (not just whitelisted ones) so non-whitelisted tags
+    // (<p>, <div>, <li>, headings, or anything unrecognized) are consumed
+    // as a tag token rather than leaking their raw "tagname>" text into a
+    // run — the whitelist check happens below, per-token.
+    var tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>|([^<]+)/g;
+    var attrRe = /([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    var INLINE_TAGS = { b: 1, strong: 1, i: 1, em: 1, u: 1, span: 1, font: 1 };
+
+    function styleFromAttrs(attrString) {
+      var style = {};
+      var m;
+      attrRe.lastIndex = 0;
+      while ((m = attrRe.exec(attrString)) !== null) {
+        var name = m[1].toLowerCase();
+        var value = (m[2] !== undefined ? m[2] : m[3]) || "";
+        if (name === "style") {
+          value.split(";").forEach(function (decl) {
+            var parts = decl.split(":");
+            if (parts.length < 2) return;
+            var prop = parts[0].trim().toLowerCase();
+            var val = parts.slice(1).join(":").trim();
+            if (!val) return;
+            if (prop === "font-weight") {
+              var n = parseInt(val, 10);
+              if (val.toLowerCase() === "bold" || (!isNaN(n) && n >= 700)) style.bold = true;
+            } else if (prop === "font-style" && val.toLowerCase() === "italic") {
+              style.italic = true;
+            } else if (prop === "text-decoration" && val.toLowerCase().indexOf("underline") !== -1) {
+              style.underline = true;
+            } else if (prop === "color") {
+              style.color = val;
+            } else if (prop === "font-family") {
+              style.fontFamily = val.replace(/^["']|["']$/g, "");
+            }
+          });
+        } else if (name === "color") {
+          style.color = value;
+        } else if (name === "face") {
+          style.fontFamily = value;
+        }
+      }
+      return style;
+    }
+
+    var stack = [{ bold: false, italic: false, underline: false, color: null, fontFamily: null }];
+    var runs = [];
+    var buffer = "";
+
+    function flush() {
+      if (!buffer) return;
+      var text = unescapeEntities(buffer).replace(/\s+/g, " ");
+      buffer = "";
+      if (!text.trim()) return;
+      var s = stack[stack.length - 1];
+      runs.push({
+        text: text,
+        bold: !!s.bold,
+        italic: !!s.italic,
+        underline: !!s.underline,
+        color: s.color || null,
+        fontFamily: s.fontFamily || null
+      });
+    }
+
+    var match;
+    tagRe.lastIndex = 0;
+    while ((match = tagRe.exec(html)) !== null) {
+      if (match[4] !== undefined) {
+        buffer += match[4];
+        continue;
+      }
+      var closing = match[1] === "/";
+      var tag = match[2].toLowerCase();
+
+      if (!INLINE_TAGS[tag]) {
+        // Non-whitelisted tag (<p>, <div>, <li>, headings, etc.) — step
+        // over it: flush as a soft text boundary, but emit no markup and
+        // touch neither the style stack (opens) nor pop it (closes), since
+        // this tag never pushed a frame in the first place.
+        flush();
+        continue;
+      }
+
+      if (closing) {
+        flush();
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+
+      flush();
+      var base = stack[stack.length - 1];
+      var next = {
+        bold: base.bold, italic: base.italic, underline: base.underline,
+        color: base.color, fontFamily: base.fontFamily
+      };
+      if (tag === "b" || tag === "strong") next.bold = true;
+      if (tag === "i" || tag === "em") next.italic = true;
+      if (tag === "u") next.underline = true;
+
+      var fromAttrs = styleFromAttrs(match[3] || "");
+      if (fromAttrs.bold) next.bold = true;
+      if (fromAttrs.italic) next.italic = true;
+      if (fromAttrs.underline) next.underline = true;
+      if (fromAttrs.color) next.color = fromAttrs.color;
+      if (fromAttrs.fontFamily) next.fontFamily = fromAttrs.fontFamily;
+
+      stack.push(next);
+    }
+    flush();
+
+    return runs.filter(function (r) { return r.text.trim().length > 0; });
+  } catch (err) {
+    return stripTags(segmentHtml);
+  }
+}
+
 // Converts the manuscript Editor's rich HTML into the same { heading,
 // paragraphs[] }[] shape parseManuscriptChapters returns, but splits on
 // explicit <h1> chapter boundaries instead of the plain-text heuristic —
 // the editor already knows exactly where chapters start, so we don't need
-// to guess.
+// to guess. Each paragraph is now a runs array from parseInlineRuns (or,
+// on parse failure, the plain fallback string it returns) — headings stay
+// plain strings via stripTags.
 function htmlToChapters(html) {
-  function unescapeEntities(s) {
-    return String(s)
-      .replace(/&amp;/g, "&")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, "\"")
-      .replace(/&#39;/g, "'");
-  }
-
-  function stripTags(s) {
-    return unescapeEntities(String(s).replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-  }
-
   function textToParagraphs(segmentHtml) {
     return segmentHtml.split(/\n+/)
-      .map(function (line) { return stripTags(line); })
-      .filter(function (p) { return p.length > 0; });
+      .map(function (line) { return parseInlineRuns(line); })
+      .filter(function (p) { return p && p.length > 0; });
   }
 
   // Insert line breaks after block-level closers so stripping tags doesn't
@@ -6589,6 +6732,32 @@ function htmlToChapters(html) {
   return chapters;
 }
 
+// A chapter's paragraph is either a legacy plain string (parseManuscriptChapters,
+// always) or a runs array (htmlToChapters, when parseInlineRuns succeeds) —
+// every consumer of chapter.paragraphs must handle both via these two helpers.
+function runsToPlainText(paragraph) {
+  if (typeof paragraph === "string") return paragraph;
+  if (!Array.isArray(paragraph)) return "";
+  return paragraph.map(function (run) { return (run && run.text) ? run.text : ""; }).join("");
+}
+
+function runsToInlineHtml(paragraph) {
+  if (typeof paragraph === "string") return escapeHtml(paragraph);
+  if (!Array.isArray(paragraph)) return "";
+  return paragraph.map(function (run) {
+    if (!run || !run.text) return "";
+    var html = escapeHtml(run.text);
+    var styleParts = [];
+    if (run.color) styleParts.push("color:" + escapeHtml(String(run.color)));
+    if (run.fontFamily) styleParts.push("font-family:" + escapeHtml(String(run.fontFamily)));
+    if (styleParts.length) html = '<span style="' + styleParts.join(";") + '">' + html + "</span>";
+    if (run.underline) html = "<u>" + html + "</u>";
+    if (run.italic) html = "<em>" + html + "</em>";
+    if (run.bold) html = "<strong>" + html + "</strong>";
+    return html;
+  }).join("");
+}
+
 // KDP-standard trim sizes, in PDF points (1 inch = 72pt).
 var TRIM_SIZES = {
   "letter":      { width: 612, height: 792, margins: { top: 72, bottom: 72, left: 72, right: 72 } },
@@ -6610,6 +6779,49 @@ var PAPER_THICKNESS = { white: 0.002252, cream: 0.0025, color: 0.002347 };
 // Renders manuscript text into a formatted book PDF using pdfkit's built-in
 // fonts (no bundled font files needed) and resolves the finished file as a
 // Buffer. options: { title, author, trimSize }.
+var HEX_COLOR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+// Renders one chapter.paragraphs entry into doc, handling both shapes: a
+// plain string (parseManuscriptChapters, or htmlToChapters's parse-failure
+// fallback) renders exactly as before; a runs array (htmlToChapters) is
+// rendered as one continuous paragraph via pdfkit's continued-text
+// mechanism, switching font/size/color/underline per run. options carries
+// the paragraph-level text options (align/lineGap) that must stay applied
+// on every run so wrapping/justification stays consistent — pdfkit reads
+// them off the run that starts the text, but reapplying them to each
+// continued call is harmless and keeps this robust to pdfkit's internals.
+function renderParagraphRuns(doc, paragraph, options) {
+  var baseOptions = options || {};
+
+  if (typeof paragraph === "string") {
+    if (!paragraph) return;
+    doc.text(paragraph, baseOptions);
+    return;
+  }
+
+  if (!Array.isArray(paragraph) || !paragraph.length) return;
+
+  var runs = paragraph.filter(function (run) { return run && run.text; });
+  if (!runs.length) return;
+
+  runs.forEach(function (run, idx) {
+    var font = mapFontToStandard(run.fontFamily, run.bold, run.italic);
+    doc.font(font);
+    doc.fontSize(12);
+
+    var color = (typeof run.color === "string" && HEX_COLOR_RE.test(run.color)) ? run.color : "#000000";
+    doc.fillColor(color);
+
+    var runOptions = Object.assign({}, baseOptions, {
+      continued: idx < runs.length - 1,
+      underline: !!run.underline
+    });
+    doc.text(run.text, runOptions);
+  });
+
+  doc.fillColor("#000000");
+}
+
 async function generateBookPdf(manuscriptText, options) {
   var settings = options || {};
   var title  = safeText(settings.title, 200) || "Untitled Manuscript";
@@ -6652,7 +6864,7 @@ async function generateBookPdf(manuscriptText, options) {
         }
         doc.font("Times-Roman").fontSize(12);
         chapter.paragraphs.forEach(function (paragraph) {
-          doc.text(paragraph, { align: "justify", lineGap: 4 });
+          renderParagraphRuns(doc, paragraph, { align: "justify", lineGap: 4 });
           doc.moveDown(1);
         });
       });
@@ -6801,19 +7013,10 @@ async function generateBookEpub(manuscriptText, options) {
   var chapters = (settings.chapters && settings.chapters.length) ? settings.chapters : parseManuscriptChapters(manuscriptText);
   if (!chapters.length) chapters = [{ heading: null, paragraphs: [""] }];
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   var content = chapters.map(function (chapter) {
     return {
       title: chapter.heading || "Front Matter",
-      content: chapter.paragraphs.map(function (p) { return "<p>" + escapeHtml(p) + "</p>"; }).join("")
+      content: chapter.paragraphs.map(function (p) { return "<p>" + runsToInlineHtml(p) + "</p>"; }).join("")
     };
   });
 
