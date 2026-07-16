@@ -8660,6 +8660,27 @@ app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
     if (updates.font_style && !BFP_FONTS.includes(updates.font_style)) {
       updates.font_style = "modern";
     }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "username")) {
+      const username = normalizeUsername(req.body.username);
+
+      if (!username) {
+        updates.username = null;
+      } else {
+        const { data: existing } = await supabase
+          .from("bf_profiles")
+          .select("id, user_id")
+          .eq("username", username)
+          .maybeSingle();
+
+        if (existing && existing.user_id !== req.user.id) {
+          return res.status(409).json({ error: "that username is already taken" });
+        }
+
+        updates.username = username;
+      }
+    }
+
     const { data, error } = await supabase.from("bf_profiles")
       .upsert(updates, { onConflict: "user_id" }).select("*").single();
     if (error) throw error;
