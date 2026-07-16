@@ -6940,6 +6940,27 @@ async function generateCoverWrapPdf(design, opts) {
   var fullW = contentW + 2 * bleedPt;
   var fullH = contentH + 2 * bleedPt;
 
+  // Pre-fetch foreground image-layer bytes before the synchronous pdfkit
+  // drawing pass below — that Promise executor isn't async, so arbitrary-
+  // length per-layer downloads have to happen out here first. Mirrors the
+  // same download→Buffer pattern the route uses for the background image.
+  // A failed download is logged and skipped, never fatal to the export.
+  var imageLayers = (design && Array.isArray(design.imageLayers)) ? design.imageLayers : [];
+  var imageLayerBuffers = {};
+  for (var ili = 0; ili < imageLayers.length; ili++) {
+    var srcLayer = imageLayers[ili];
+    var src = srcLayer && srcLayer.src;
+    if (!src || typeof src !== "string" || src.indexOf("blob:") === 0 || src.indexOf("http") === 0) continue;
+    try {
+      const { data: layerBlob, error: layerDlErr } = await supabase.storage.from("bf-books").download(src);
+      if (!layerDlErr && layerBlob) {
+        imageLayerBuffers[srcLayer.id] = Buffer.from(await layerBlob.arrayBuffer());
+      }
+    } catch (layerFetchErr) {
+      console.warn("[cover-wraps] Failed to load image layer for export:", srcLayer && srcLayer.id, layerFetchErr && (layerFetchErr.message || layerFetchErr));
+    }
+  }
+
   return new Promise(function (resolve, reject) {
     try {
       var doc = new PDFDocument({ size: [fullW, fullH], margin: 0 });
@@ -6970,6 +6991,45 @@ async function generateCoverWrapPdf(design, opts) {
         doc.image(settings.bgImageBuffer, drawX, drawY, { cover: [drawW, drawH] });
         doc.restore();
       }
+
+      // ── Foreground image layers: above background, below text — matches
+      // the on-screen z-order (background z-index 0, image layers 1, text 2).
+      // Position/size use the same bleedPt + contentW/contentH convention
+      // the text layers use below, so images and text align. Crop mirrors
+      // the on-screen CSS math exactly: zoom the image up so the
+      // [cropX,cropY,cropX+cropW,cropY+cropH] sub-rectangle fills the frame,
+      // clipped to the frame's own bounds.
+      imageLayers.forEach(function (layer) {
+        var buf = imageLayerBuffers[layer && layer.id];
+        if (!buf) return;
+        try {
+          var centerX = bleedPt + ((layer.xPct || 0) / 100) * contentW;
+          var centerY = bleedPt + ((layer.yPct || 0) / 100) * contentH;
+          var frameW = ((layer.widthPct || 0) / 100) * contentW;
+          var frameH = ((layer.heightPct || 0) / 100) * contentH;
+          var frameX = centerX - frameW / 2;
+          var frameY = centerY - frameH / 2;
+
+          var cropW = (typeof layer.cropW === "number" && layer.cropW > 0) ? layer.cropW : 1;
+          var cropH = (typeof layer.cropH === "number" && layer.cropH > 0) ? layer.cropH : 1;
+          var cropX = typeof layer.cropX === "number" ? layer.cropX : 0;
+          var cropY = typeof layer.cropY === "number" ? layer.cropY : 0;
+
+          var drawnW = frameW / cropW;
+          var drawnH = frameH / cropH;
+          var drawnX = -(cropX / cropW) * frameW;
+          var drawnY = -(cropY / cropH) * frameH;
+
+          doc.save();
+          doc.rotate(layer.rotation || 0, { origin: [centerX, centerY] });
+          doc.translate(frameX, frameY);
+          doc.rect(0, 0, frameW, frameH).clip();
+          doc.image(buf, drawnX, drawnY, { width: drawnW, height: drawnH });
+          doc.restore();
+        } catch (drawErr) {
+          console.warn("[cover-wraps] Failed to draw image layer:", layer && layer.id, drawErr && (drawErr.message || drawErr));
+        }
+      });
 
       // ── Text layers ──
       // v1: every layer is drawn centered on its point regardless of its
