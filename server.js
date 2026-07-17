@@ -8775,13 +8775,27 @@ app.post("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
   try {
     const name = safeText(req.body.name, 200);
     if (!name) return res.status(400).json({ error: "name is required" });
+
+    const listingKind = req.body.listing_kind !== undefined ? req.body.listing_kind : "good";
+    if (!["good","service"].includes(listingKind)) {
+      return res.status(400).json({ error: "listing_kind must be 'good' or 'service'" });
+    }
+    const status = req.body.status !== undefined ? req.body.status : "active";
+    if (!["active","draft"].includes(status)) {
+      return res.status(400).json({ error: "status must be 'active' or 'draft'" });
+    }
+
     const row = {
-      user_id:     req.user.id,
+      user_id:      req.user.id,
       name,
-      description: safeText(req.body.description, 2000),
-      price:       req.body.price != null && req.body.price !== "" ? Number(req.body.price) : null,
-      image_url:   safeText(req.body.image_url, 500),
-      buy_link:    safeText(req.body.buy_link, 500)
+      description:  safeText(req.body.description, 2000),
+      price:        req.body.price != null && req.body.price !== "" ? Number(req.body.price) : null,
+      image_url:    safeText(req.body.image_url, 500),
+      buy_link:     safeText(req.body.buy_link, 500),
+      listing_kind: listingKind,
+      category:     safeText(req.body.category, 80),
+      status:       status,
+      currency:     safeText(req.body.currency, 10) || "USD"
     };
     const { data, error } = await supabase.from("profile_products").insert(row).select("*").single();
     if (error) throw error;
@@ -8791,12 +8805,19 @@ app.post("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
 
 app.put("/api/bfp/pproducts/:id", requireAuth, async function (req, res, next) {
   try {
-    const allowed = ["name","description","price","image_url","buy_link"];
+    const allowed = ["name","description","price","image_url","buy_link","listing_kind","category","status","currency"];
     const updates = {};
     for (const key of allowed) {
       if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
     }
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: "nothing to update" });
+    if (Object.prototype.hasOwnProperty.call(updates, "listing_kind") && !["good","service"].includes(updates.listing_kind)) {
+      return res.status(400).json({ error: "listing_kind must be 'good' or 'service'" });
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "status") && !["active","draft"].includes(updates.status)) {
+      return res.status(400).json({ error: "status must be 'active' or 'draft'" });
+    }
+    updates.updated_at = nowIso();
     const { data, error } = await supabase.from("profile_products")
       .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
     if (error) throw error;
