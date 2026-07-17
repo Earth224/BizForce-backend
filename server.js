@@ -9056,6 +9056,64 @@ app.get("/api/bfp/artists/browse", async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+// Public single-seller storefront — the seller's full public identity plus
+// products/services/portfolio/music/videos in one response, resolved by
+// username handle (case-insensitive), no auth required. Manual per-table
+// queries (not PostgREST embeds), since none of profile_products/
+// profile_portfolio/bf_music_tracks/bf_videos have a declared FK to
+// bf_profiles. Honors the seller's own show_* visibility toggles by
+// zeroing out the corresponding section(s) rather than omitting them from
+// the response shape — there's no separate show_services toggle, so
+// show_products gates both the products and services arrays.
+app.get("/api/bfp/seller/:handle", async function (req, res, next) {
+  try {
+    const handle = safeText(req.params.handle, 60);
+    if (!handle) return res.status(404).json({ error: "seller not found" });
+
+    const { data: seller, error: sellerError } = await supabase
+      .from("bf_profiles")
+      .select("user_id, username, display_name, avatar_url, banner_url, tagline, bio, accent_color, font_style, location, website, social_links, skills, show_products, show_portfolio, show_music, show_card, show_videos")
+      .ilike("username", handle)
+      .maybeSingle();
+    if (sellerError) throw sellerError;
+    if (!seller) return res.status(404).json({ error: "seller not found" });
+
+    const userId = seller.user_id;
+
+    const [productsRes, portfolioRes, musicRes, videosRes] = await Promise.all([
+      supabase.from("profile_products").select("*").eq("user_id", userId),
+      supabase.from("profile_portfolio").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
+      supabase.from("bf_music_tracks").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
+      supabase.from("bf_videos").select("*").eq("user_id", userId).order("sort_order", { ascending: true })
+    ]);
+    if (productsRes.error) throw productsRes.error;
+    if (portfolioRes.error) throw portfolioRes.error;
+    if (musicRes.error) throw musicRes.error;
+    if (videosRes.error) throw videosRes.error;
+
+    const allListings = productsRes.data || [];
+    const products = seller.show_products
+      ? allListings.filter(function (p) { return p.listing_kind === "good" && p.status === "active"; })
+      : [];
+    const services = seller.show_products
+      ? allListings.filter(function (p) { return p.listing_kind === "service" && p.status === "active"; })
+      : [];
+
+    const portfolio = seller.show_portfolio ? (portfolioRes.data || []) : [];
+    const music     = seller.show_music     ? (musicRes.data || [])     : [];
+    const videos    = seller.show_videos    ? (videosRes.data || [])    : [];
+
+    return res.json({
+      seller: seller,
+      products: products,
+      services: services,
+      portfolio: portfolio,
+      music: music,
+      videos: videos
+    });
+  } catch (error) { next(error); }
+});
+
 // ── Music CRUD ────────────────────────────────────────────────────────────────
 app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
   try {
