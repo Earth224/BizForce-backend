@@ -8834,6 +8834,44 @@ app.delete("/api/bfp/pproducts/:id", requireAuth, async function (req, res, next
   } catch (error) { next(error); }
 });
 
+// Public marketplace browse — every active service listing across all
+// users, no auth required. Joins in each seller's public identity from
+// bf_profiles by user_id via a manual second query (not a PostgREST embed)
+// since profile_products was never migrated and has no declared FK to
+// bf_profiles for PostgREST to discover. A service whose seller has no
+// bf_profiles row still comes back, just with seller: null.
+app.get("/api/bfp/services/browse", async function (req, res, next) {
+  try {
+    const { data: services, error: servicesError } = await supabase
+      .from("profile_products")
+      .select("id, user_id, name, description, price, currency, image_url, buy_link, category, created_at")
+      .eq("listing_kind", "service")
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+    if (servicesError) throw servicesError;
+
+    const userIds = [...new Set((services || []).map(function (s) { return s.user_id; }))];
+    var sellerById = {};
+    if (userIds.length) {
+      const { data: sellers, error: sellersError } = await supabase
+        .from("bf_profiles")
+        .select("user_id, username, display_name, avatar_url")
+        .in("user_id", userIds);
+      if (sellersError) throw sellersError;
+      (sellers || []).forEach(function (s) { sellerById[s.user_id] = s; });
+    }
+
+    const result = (services || []).map(function (s) {
+      const seller = sellerById[s.user_id];
+      return Object.assign({}, s, {
+        seller: seller ? { username: seller.username, display_name: seller.display_name, avatar_url: seller.avatar_url } : null
+      });
+    });
+
+    return res.json({ services: result });
+  } catch (error) { next(error); }
+});
+
 // ── Portfolio CRUD ────────────────────────────────────────────────────────────
 app.get("/api/bfp/portfolio", requireAuth, async function (req, res, next) {
   try {
