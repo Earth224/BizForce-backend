@@ -8999,6 +8999,63 @@ app.delete("/api/bfp/pportfolio/:id", requireAuth, async function (req, res, nex
   } catch (error) { next(error); }
 });
 
+// Public marketplace browse — one entry per seller who has at least one
+// profile_portfolio work, no auth required. Joins in each seller's public
+// identity from bf_profiles by user_id via a manual second query (not a
+// PostgREST embed) since profile_portfolio was never migrated and has no
+// declared FK to bf_profiles for PostgREST to discover. This route speaks
+// in terms of sellers (not individual works), so an orphan user_id with
+// portfolio works but no bf_profiles row is skipped entirely rather than
+// surfaced with a null seller.
+app.get("/api/bfp/artists/browse", async function (req, res, next) {
+  try {
+    const { data: works, error: worksError } = await supabase
+      .from("profile_portfolio")
+      .select("id, user_id, title, description, image_url, url, category, sort_order")
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (worksError) throw worksError;
+
+    const userIds = [...new Set((works || []).map(function (w) { return w.user_id; }))];
+    if (!userIds.length) return res.json({ artists: [] });
+
+    const { data: sellers, error: sellersError } = await supabase
+      .from("bf_profiles")
+      .select("user_id, username, display_name, avatar_url, banner_url, tagline, bio")
+      .in("user_id", userIds);
+    if (sellersError) throw sellersError;
+
+    var sellerById = {};
+    (sellers || []).forEach(function (s) { sellerById[s.user_id] = s; });
+
+    var worksByUser = {};
+    (works || []).forEach(function (w) {
+      if (!worksByUser[w.user_id]) worksByUser[w.user_id] = [];
+      worksByUser[w.user_id].push(w);
+    });
+
+    var artists = Object.keys(worksByUser)
+      .filter(function (userId) { return !!sellerById[userId]; })
+      .map(function (userId) {
+        const seller = sellerById[userId];
+        const userWorks = worksByUser[userId];
+        return {
+          username:     seller.username,
+          display_name: seller.display_name,
+          avatar_url:   seller.avatar_url,
+          banner_url:   seller.banner_url,
+          tagline:      seller.tagline,
+          works:        userWorks.slice(0, 6),
+          work_count:   userWorks.length
+        };
+      });
+
+    artists.sort(function (a, b) { return b.work_count - a.work_count; });
+
+    return res.json({ artists: artists });
+  } catch (error) { next(error); }
+});
+
 // ── Music CRUD ────────────────────────────────────────────────────────────────
 app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
   try {
