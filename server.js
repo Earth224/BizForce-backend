@@ -2755,6 +2755,31 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
   }
 });
 
+app.get("/api/agents/:type", requireAuth, async function (req, res, next) {
+  try {
+    const type = String(req.params.type || "").toLowerCase().trim();
+
+    const { data, error } = await supabase
+      .from("ai_agents")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .eq("type", type)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "agent not found" });
+    }
+
+    return res.json({ agent: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/agents", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const type = String(req.body.type || "").toLowerCase();
