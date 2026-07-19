@@ -4936,6 +4936,144 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       }
     }
 
+    // 10. Periodic "soul memory" reflection — every 6th user message, reflect
+    //     on the conversation and update a rolling soul-record (memory_type
+    //     "conversation", upserted via update-then-insert on a stable
+    //     memory_key) plus an optional distilled key memory (memory_type
+    //     "insight", appended). Entirely soft: runs after the reply is
+    //     already sent and never affects it on any failure.
+    try {
+      var oracleTurnCountResult = await supabase
+        .from("oracle_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", req.user.id)
+        .eq("role", "user");
+
+      if (!oracleTurnCountResult.error) {
+        var oracleTurnCount = oracleTurnCountResult.count || 0;
+
+        if (oracleTurnCount % 6 === 0) {
+          try {
+            var priorSoulRecord = "";
+            var soulRecordResult = await supabase
+              .from("agent_memory")
+              .select("content")
+              .eq("user_id", req.user.id)
+              .eq("agent_type", "oracle")
+              .eq("memory_key", "oracle_soul_record")
+              .maybeSingle();
+            if (!soulRecordResult.error && soulRecordResult.data) {
+              priorSoulRecord = soulRecordResult.data.content || "";
+            }
+
+            var recentMessagesResult = await supabase
+              .from("oracle_messages")
+              .select("role, content")
+              .eq("user_id", req.user.id)
+              .order("created_at", { ascending: true })
+              .limit(12);
+            var recentMessagesForReflection = recentMessagesResult.error ? [] : (recentMessagesResult.data || []);
+
+            var recentConversationBlock = recentMessagesForReflection.map(function (row) {
+              return (row.role === "user" ? "Seeker" : "Termaximus") + ": " + row.content;
+            }).join("\n");
+
+            var reflectionPrompt =
+              "You are Termaximus, the Oracle of BizForce, reflecting privately on the seeker's journey — this is not a reply to them, it is your own private record-keeping.\n\n" +
+              "PRIOR SOUL-RECORD (your evolving private understanding of this seeker, may be empty if none yet):\n" +
+              (priorSoulRecord || "(none yet)") + "\n\n" +
+              "RECENT CONVERSATION:\n" + (recentConversationBlock || "(no recent messages)") + "\n\n" +
+              "Output STRICT JSON only — no markdown, no code fences, no prose outside the JSON — with exactly two fields:\n" +
+              "{\"soul_record\": \"an updated evolving narrative (max ~150 words) of who this seeker is, their goals, recurring themes, and the arc of their journey — integrating the prior soul-record with what's new from the recent conversation; rewrite it whole, do not just append\", \"key_memory\": \"one distilled, specific milestone, turning point, decision, or insight worth remembering from the recent conversation, in one or two sentences — or an empty string if nothing this round is worth preserving\"}";
+
+            var reflectionResult = await callAnthropicText(reflectionPrompt, 500, req.user.id);
+            var reflectionRaw = (reflectionResult && reflectionResult.text) ? reflectionResult.text.trim() : "";
+            var reflectionCleaned = reflectionRaw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+
+            var reflectionParsed = null;
+            try {
+              reflectionParsed = JSON.parse(reflectionCleaned);
+            } catch (reflectionParseErr) {
+              reflectionParsed = null;
+            }
+
+            if (reflectionParsed && typeof reflectionParsed === "object") {
+              var soulRecordText = typeof reflectionParsed.soul_record === "string" ? reflectionParsed.soul_record.trim() : "";
+              var keyMemoryText  = typeof reflectionParsed.key_memory === "string" ? reflectionParsed.key_memory.trim() : "";
+
+              if (soulRecordText) {
+                var soulRecordTimestamp = nowIso();
+                var soulRecordUpdate = await supabase
+                  .from("agent_memory")
+                  .update({
+                    content:     soulRecordText,
+                    memory_value: soulRecordText,
+                    title:       "Soul Record",
+                    memory_type: "conversation",
+                    updated_at:  soulRecordTimestamp
+                  })
+                  .eq("user_id", req.user.id)
+                  .eq("agent_type", "oracle")
+                  .eq("memory_key", "oracle_soul_record")
+                  .select("id");
+
+                if (soulRecordUpdate.error) {
+                  console.error("[oracle] soul_record update error:", soulRecordUpdate.error.message);
+                } else if (!soulRecordUpdate.data || !soulRecordUpdate.data.length) {
+                  var soulRecordInsert = await supabase
+                    .from("agent_memory")
+                    .insert({
+                      user_id:     req.user.id,
+                      agent:       "oracle",
+                      agent_type:  "oracle",
+                      memory_key:  "oracle_soul_record",
+                      memory_value: soulRecordText,
+                      memory_type: "conversation",
+                      title:       "Soul Record",
+                      content:     soulRecordText,
+                      metadata:    normalizeMemoryMetadata({ source: "oracle_reflection" }),
+                      created_at:  soulRecordTimestamp,
+                      updated_at:  soulRecordTimestamp
+                    });
+
+                  if (soulRecordInsert.error) {
+                    console.error("[oracle] soul_record insert error:", soulRecordInsert.error.message);
+                  }
+                }
+              }
+
+              if (keyMemoryText) {
+                var keyMemoryTimestamp = nowIso();
+                var keyMemoryInsert = await supabase
+                  .from("agent_memory")
+                  .insert({
+                    user_id:     req.user.id,
+                    agent:       "oracle",
+                    agent_type:  "oracle",
+                    memory_key:  "oracle_distilled_" + Date.now(),
+                    memory_value: keyMemoryText,
+                    memory_type: "insight",
+                    title:       "Distilled Memory",
+                    content:     keyMemoryText,
+                    metadata:    normalizeMemoryMetadata({ source: "oracle_reflection" }),
+                    created_at:  keyMemoryTimestamp,
+                    updated_at:  keyMemoryTimestamp
+                  });
+
+                if (keyMemoryInsert.error) {
+                  console.error("[oracle] key_memory insert error:", keyMemoryInsert.error.message);
+                }
+              }
+            }
+          } catch (reflectionErr) {
+            console.error("[oracle] reflection pass error:", reflectionErr.message || reflectionErr);
+          }
+        }
+      }
+    } catch (oracleTurnCountErr) {
+      console.error("[oracle] oracle_messages count error:", oracleTurnCountErr.message || oracleTurnCountErr);
+    }
+
   } catch (error) {
     console.error("[oracle] Error:", error.message || error);
     return res.status(500).json({ error: "The Oracle is unreachable. Try again." });
