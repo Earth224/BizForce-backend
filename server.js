@@ -4719,10 +4719,120 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       console.error("[oracle] agent_memory read error:", oracleMemoryReadErr.message || oracleMemoryReadErr);
     }
 
+    // 3b. Live enterprise awareness — wallet, sales, listings, agent totals.
+    //     Each fetch is independently guarded: a single failure leaves that
+    //     piece out of enterpriseContext rather than breaking the reply.
+    var balance = null;
+    var walletOk = false;
+    try {
+      var oracleWalletResult = await supabase
+        .from("user_wallets")
+        .select("balance")
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (!oracleWalletResult.error) {
+        balance = oracleWalletResult.data ? oracleWalletResult.data.balance : null;
+        walletOk = true;
+      }
+    } catch (oracleWalletErr) {
+      console.error("[oracle] user_wallets read error:", oracleWalletErr.message || oracleWalletErr);
+    }
+
+    var recentSales = [];
+    var totalSalesCount = 0;
+    var salesOk = false;
+    try {
+      var oracleSalesResult = await supabase
+        .from("marketplace_orders")
+        .select("amount_bfc, amount_usd, status, created_at")
+        .eq("seller_id", req.user.id)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!oracleSalesResult.error) {
+        recentSales = oracleSalesResult.data || [];
+        totalSalesCount = recentSales.length; // a recent-sales sample (last 5), not a lifetime count
+        salesOk = true;
+      }
+    } catch (oracleSalesErr) {
+      console.error("[oracle] marketplace_orders read error:", oracleSalesErr.message || oracleSalesErr);
+    }
+
+    var activeListings = 0;
+    var totalListings = 0;
+    var listingsOk = false;
+    try {
+      var oracleListingsResult = await supabase
+        .from("marketplace_listings")
+        .select("status")
+        .eq("seller_id", req.user.id);
+      if (!oracleListingsResult.error) {
+        var oracleListingRows = oracleListingsResult.data || [];
+        totalListings = oracleListingRows.length;
+        activeListings = oracleListingRows.filter(function (row) {
+          return row.status === "active";
+        }).length;
+        listingsOk = true;
+      }
+    } catch (oracleListingsErr) {
+      console.error("[oracle] marketplace_listings read error:", oracleListingsErr.message || oracleListingsErr);
+    }
+
+    var agentCount = 0;
+    var totalTasksCompleted = 0;
+    var totalEstimatedRoi = 0;
+    var agentsOk = false;
+    try {
+      var oracleAgentsResult = await supabase
+        .from("ai_agents")
+        .select("tasks_completed, estimated_roi")
+        .eq("user_id", req.user.id);
+      if (!oracleAgentsResult.error) {
+        var oracleAgentRows = oracleAgentsResult.data || [];
+        agentCount = oracleAgentRows.length;
+        totalTasksCompleted = oracleAgentRows.reduce(function (sum, row) {
+          return sum + Number(row.tasks_completed || 0);
+        }, 0);
+        totalEstimatedRoi = oracleAgentRows.reduce(function (sum, row) {
+          return sum + Number(row.estimated_roi || 0);
+        }, 0);
+        agentsOk = true;
+      }
+    } catch (oracleAgentsErr) {
+      console.error("[oracle] ai_agents read error:", oracleAgentsErr.message || oracleAgentsErr);
+    }
+
+    var enterpriseLines = [];
+    if (walletOk && balance !== null) {
+      enterpriseLines.push("BFC Wallet Balance: " + balance + " BFC");
+    }
+    if (listingsOk) {
+      enterpriseLines.push("Active Marketplace Listings: " + activeListings + " (of " + totalListings + " total)");
+    }
+    if (salesOk) {
+      enterpriseLines.push(
+        "Recent Sales (last 5 orders): " +
+        (totalSalesCount === 0
+          ? "No recent sales recorded"
+          : totalSalesCount + " — " + recentSales.map(function (order) {
+              var amount = order.amount_usd ? ("$" + order.amount_usd) : ((order.amount_bfc || 0) + " BFC");
+              return amount + " (" + (order.status || "unknown") + ")";
+            }).join(", "))
+      );
+    }
+    if (agentsOk) {
+      enterpriseLines.push("AI Agent Team: " + agentCount + " agents, " + totalTasksCompleted + " tasks completed, $" + totalEstimatedRoi + " estimated ROI");
+    }
+
+    var enterpriseContext = enterpriseLines.length
+      ? "\n\nLIVE STATE OF THE SEEKER'S ENTERPRISE (these are the seeker's real, current BizForce figures, read live from the platform this moment — speak them as the one who walks these halls and reads the ledger. State only these true numbers; never invent, estimate, or fabricate any figure you were not given here. If a figure is absent, do not guess it):\n" +
+        enterpriseLines.join("\n")
+      : "";
+
     var systemPrompt =
       buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain) +
       contextBlock +
-      numerologyContext;
+      numerologyContext +
+      enterpriseContext;
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
