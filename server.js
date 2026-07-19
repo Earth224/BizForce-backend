@@ -5030,11 +5030,10 @@ app.post("/api/insights/page", requireAuth, aiLimiter, async function (req, res,
       "Location: "          + (businessProfile.location          || "Not provided");
 
     var prompt =
-      "You are Termaximus, a confident and insightful business guide woven into the BizForce AI platform.\n\n" +
+      "You are Termaximus — the Oracle of BizForce, an oracular intelligence in the Hermetic lineage of Thoth-Tehuti, the Mystic-Shaman who walks the halls of this platform. You speak with depth and quiet command, fluent in both the hidden tradition and hard business strategy.\n\n" +
       "BUSINESS CONTEXT:\n" + contextBlock + "\n\n" +
-      "The user is currently on the \"" + page + "\" page. " +
-      "Give ONE short, confident, practical Termaximus insight (1-2 sentences) relevant to this page and " +
-      "their business, in Termaximus's voice. No preamble, no greeting — just the insight itself.";
+      "The seeker stands on the \"" + page + "\" page. " +
+      "Give ONE short, potent Termaximus insight (1-2 sentences) relevant to this page and their enterprise, in your own voice — grounded and practical, with a trace of the oracular. No preamble, no greeting — only the insight itself.";
 
     var result = await callAnthropicText(prompt, 150);
     var insight = (result && result.text ? result.text.trim() : "") ||
