@@ -4958,6 +4958,144 @@ app.get("/api/oracle/sync", requireAuth, async function (req, res, next) {
   }
 });
 
+app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
+  try {
+    var invocationSyncResult = await supabase
+      .from("oracle_sync")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+
+    if (invocationSyncResult.error || !invocationSyncResult.data) {
+      return res.json({ invocation: null });
+    }
+
+    var invocationSync = invocationSyncResult.data;
+    var personalDay = calculatePersonalDay(invocationSync.birth_date);
+    var invocationBirthName = invocationSync.birth_name || "Seeker";
+
+    // Live enterprise state — the same four independently-guarded fetches
+    // used inside POST /api/oracle, duplicated here since that block is
+    // inline-only there and not factored into a shared helper.
+    var invocationBalance = null;
+    var invocationWalletOk = false;
+    try {
+      var invocationWalletResult = await supabase
+        .from("user_wallets")
+        .select("balance")
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (!invocationWalletResult.error) {
+        invocationBalance = invocationWalletResult.data ? invocationWalletResult.data.balance : null;
+        invocationWalletOk = true;
+      }
+    } catch (invocationWalletErr) {
+      console.error("[oracle/invocation] user_wallets read error:", invocationWalletErr.message || invocationWalletErr);
+    }
+
+    var invocationActiveListings = 0;
+    var invocationTotalListings = 0;
+    var invocationListingsOk = false;
+    try {
+      var invocationListingsResult = await supabase
+        .from("marketplace_listings")
+        .select("status")
+        .eq("seller_id", req.user.id);
+      if (!invocationListingsResult.error) {
+        var invocationListingRows = invocationListingsResult.data || [];
+        invocationTotalListings = invocationListingRows.length;
+        invocationActiveListings = invocationListingRows.filter(function (row) {
+          return row.status === "active";
+        }).length;
+        invocationListingsOk = true;
+      }
+    } catch (invocationListingsErr) {
+      console.error("[oracle/invocation] marketplace_listings read error:", invocationListingsErr.message || invocationListingsErr);
+    }
+
+    var invocationRecentSalesCount = 0;
+    var invocationSalesOk = false;
+    try {
+      var invocationSalesResult = await supabase
+        .from("marketplace_orders")
+        .select("id")
+        .eq("seller_id", req.user.id)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!invocationSalesResult.error) {
+        invocationRecentSalesCount = (invocationSalesResult.data || []).length;
+        invocationSalesOk = true;
+      }
+    } catch (invocationSalesErr) {
+      console.error("[oracle/invocation] marketplace_orders read error:", invocationSalesErr.message || invocationSalesErr);
+    }
+
+    var invocationAgentCount = 0;
+    var invocationTotalTasksCompleted = 0;
+    var invocationTotalEstimatedRoi = 0;
+    var invocationAgentsOk = false;
+    try {
+      var invocationAgentsResult = await supabase
+        .from("ai_agents")
+        .select("tasks_completed, estimated_roi")
+        .eq("user_id", req.user.id);
+      if (!invocationAgentsResult.error) {
+        var invocationAgentRows = invocationAgentsResult.data || [];
+        invocationAgentCount = invocationAgentRows.length;
+        invocationTotalTasksCompleted = invocationAgentRows.reduce(function (sum, row) {
+          return sum + Number(row.tasks_completed || 0);
+        }, 0);
+        invocationTotalEstimatedRoi = invocationAgentRows.reduce(function (sum, row) {
+          return sum + Number(row.estimated_roi || 0);
+        }, 0);
+        invocationAgentsOk = true;
+      }
+    } catch (invocationAgentsErr) {
+      console.error("[oracle/invocation] ai_agents read error:", invocationAgentsErr.message || invocationAgentsErr);
+    }
+
+    var invocationSummaryParts = [];
+    if (invocationWalletOk && invocationBalance !== null) {
+      invocationSummaryParts.push("Wallet: " + invocationBalance + " BFC");
+    }
+    if (invocationListingsOk) {
+      invocationSummaryParts.push("Active listings: " + invocationActiveListings);
+    }
+    if (invocationSalesOk) {
+      invocationSummaryParts.push("Recent sales: " + invocationRecentSalesCount);
+    }
+    if (invocationAgentsOk) {
+      invocationSummaryParts.push(
+        "Agents: " + invocationAgentCount + ", " + invocationTotalTasksCompleted +
+        " tasks, $" + invocationTotalEstimatedRoi + " ROI"
+      );
+    }
+    var invocationEnterpriseSummary = invocationSummaryParts.length
+      ? invocationSummaryParts.join(". ") + "."
+      : "No live enterprise figures available today.";
+
+    var invocationPrompt =
+      "You are Termaximus, the Oracle of BizForce, greeting the seeker " + invocationBirthName + " as they arrive. " +
+      (personalDay !== null ? "Today their personal day number is " + personalDay + ". " : "") +
+      "The live state of their enterprise: " + invocationEnterpriseSummary + " " +
+      "Speak a SHORT daily invocation — 2 to 4 sentences, in your own voice: acknowledge them by name" +
+      (personalDay !== null ? ", name the energy or theme of their personal day number briefly," : ",") +
+      " and ground it in one real, specific observation about their enterprise state today. " +
+      "Clean plain prose, no markdown symbols, no headers, no lists, no preamble — just the invocation itself.";
+
+    try {
+      var invocationResult = await callAnthropicText(invocationPrompt, 200, req.user.id);
+      var invocationText = (invocationResult && invocationResult.text ? invocationResult.text.trim() : "") || null;
+      return res.json({ invocation: invocationText });
+    } catch (invocationAiErr) {
+      console.error("[oracle/invocation] Anthropic call failed:", invocationAiErr.message || invocationAiErr);
+      return res.json({ invocation: null });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
   try {
     var birth_name       = safeText(req.body.birth_name,        120);
@@ -5055,6 +5193,22 @@ function extractBirthday(birthDateStr) {
   if (!match) return null;
   var day = parseInt(match[1], 10);
   return isNaN(day) ? null : day;
+}
+
+function calculatePersonalDay(birthDateStr) {
+  if (!birthDateStr) return null;
+  var match = String(birthDateStr).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return null;
+  var birthMonth = parseInt(match[2], 10);
+  var birthDay   = parseInt(match[3], 10);
+  if (isNaN(birthMonth) || isNaN(birthDay)) return null;
+
+  var today = new Date();
+  var todayMonth = today.getMonth() + 1;
+  var todayDay   = today.getDate();
+
+  var total = todayMonth + todayDay + birthMonth + birthDay;
+  return reduceNumber(total);
 }
 
 app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
