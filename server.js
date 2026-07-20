@@ -4701,20 +4701,51 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     var oracleAgentType = "oracle";
     var oracleMemoriesForBrain = [];
     try {
-      var oracleAgentMemoryResult = await supabase
+      // Soul-record first (leads the memory block), then the most recent
+      // distilled memories, then a few raw conversation memories — the
+      // soul-record and distilled memories now carry the important context,
+      // so fewer raw rows are needed than the old single-fetch, limit-5
+      // approach.
+      var oracleSoulRecordResult = await supabase
         .from("agent_memory")
-        .select("agent_type, memory_type, title, content, created_at")
+        .select("agent_type, title, content")
         .eq("user_id", req.user.id)
         .eq("agent_type", oracleAgentType)
+        .eq("memory_key", "oracle_soul_record")
+        .maybeSingle();
+
+      var oracleDistilledResult = await supabase
+        .from("agent_memory")
+        .select("agent_type, title, content")
+        .eq("user_id", req.user.id)
+        .eq("agent_type", oracleAgentType)
+        .like("memory_key", "oracle_distilled_%")
         .order("created_at", { ascending: false })
         .limit(5);
 
-      oracleMemoriesForBrain = (oracleAgentMemoryResult.error ? [] : (oracleAgentMemoryResult.data || [])).map(function (row) {
-        return {
-          agent_type: row.agent_type,
-          title: row.title || row.memory_type,
-          content: row.content
-        };
+      var oracleRecentRawResult = await supabase
+        .from("agent_memory")
+        .select("agent_type, title, content")
+        .eq("user_id", req.user.id)
+        .eq("agent_type", oracleAgentType)
+        .like("memory_key", "oracle_message_%")
+        .order("created_at", { ascending: false })
+        .limit(3);
+
+      if (!oracleSoulRecordResult.error && oracleSoulRecordResult.data) {
+        oracleMemoriesForBrain.push({
+          agent_type: oracleSoulRecordResult.data.agent_type,
+          title: oracleSoulRecordResult.data.title,
+          content: oracleSoulRecordResult.data.content
+        });
+      }
+
+      (oracleDistilledResult.error ? [] : (oracleDistilledResult.data || [])).forEach(function (row) {
+        oracleMemoriesForBrain.push({ agent_type: row.agent_type, title: row.title, content: row.content });
+      });
+
+      (oracleRecentRawResult.error ? [] : (oracleRecentRawResult.data || [])).forEach(function (row) {
+        oracleMemoriesForBrain.push({ agent_type: row.agent_type, title: row.title, content: row.content });
       });
     } catch (oracleMemoryReadErr) {
       console.error("[oracle] agent_memory read error:", oracleMemoryReadErr.message || oracleMemoryReadErr);
