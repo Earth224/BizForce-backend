@@ -6617,6 +6617,50 @@ app.get("/api/marketplace/orders/:id", requireAuth, async function (req, res, ne
   } catch (error) { next(error); }
 });
 
+app.get("/api/purchases", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("marketplace_orders")
+      .select("id, listing_id, listing_title, amount_usd, amount_bfc, status, is_digital, delivered_at, created_at")
+      .eq("buyer_id", req.user.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    return res.json({ purchases: data || [] });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/purchases/:orderId/download", requireAuth, async function (req, res, next) {
+  try {
+    const { data: order, error: orderError } = await supabase
+      .from("marketplace_orders")
+      .select("id, listing_id, buyer_id, is_digital")
+      .eq("id", req.params.orderId)
+      .eq("buyer_id", req.user.id)
+      .maybeSingle();
+    if (orderError) throw orderError;
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (order.is_digital !== true) return res.status(403).json({ error: "This purchase has no digital download" });
+
+    const { data: listing, error: listingError } = await supabase
+      .from("marketplace_listings")
+      .select("digital_file_path, digital_file_name")
+      .eq("id", order.listing_id)
+      .maybeSingle();
+    if (listingError) throw listingError;
+    if (!listing || !listing.digital_file_path) return res.status(404).json({ error: "Digital file not found" });
+
+    const { data: signedDigital, error: signDigitalError } = await supabase.storage
+      .from("bf-digital-goods")
+      .createSignedUrl(listing.digital_file_path, 604800);
+    if (signDigitalError || !signedDigital || !signedDigital.signedUrl) {
+      console.error("[digital-delivery] Failed to create signed URL:", signDigitalError && (signDigitalError.message || signDigitalError));
+      return res.status(500).json({ error: "Could not generate download link" });
+    }
+
+    return res.json({ url: signedDigital.signedUrl, fileName: listing.digital_file_name || null });
+  } catch (error) { next(error); }
+});
+
 /* ── Crowdfunding ── */
 
 app.get("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
