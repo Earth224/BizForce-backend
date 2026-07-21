@@ -5370,11 +5370,29 @@ var CHALDEAN_MAP = {
 };
 var SOUL_VOWELS = { a: true, e: true, i: true, o: true, u: true, y: true };
 
+// Western Kabbalistic gematria — standard Hebrew-letter transliteration
+// values used for Latin-alphabet Kabbalah numerology.
+var HEBREW_GEMATRIA_MAP = {
+  a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 3, h: 5, i: 10,
+  j: 10, k: 20, l: 30, m: 40, n: 50, o: 70, p: 80, q: 100, r: 200,
+  s: 300, t: 400, u: 6, v: 6, w: 6, x: 60, y: 10, z: 7
+};
+
 function reduceNumber(total) {
   while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
     total = sumDigits(total);
   }
   return total;
+}
+
+// Full digital-root reduction with no master-number preservation — used by
+// systems (Vedic) that always resolve to a single digit 1-9.
+function reduceFully(total) {
+  var n = total;
+  while (n > 9) {
+    n = sumDigits(n);
+  }
+  return n;
 }
 
 function calculateNameNumber(name, onlyVowels) {
@@ -5502,6 +5520,121 @@ function computeDivineTriangle(birthName, birthDateStr) {
   };
 }
 
+// Western Kabbalistic gematria numerology: sums the full name's letters via
+// the standard Hebrew-gematria transliteration values (HEBREW_GEMATRIA_MAP),
+// reusing computeNameNumbers for the split — "heart" is its vowel-only sum
+// (soul urge) and "foundation" is its consonant-only sum (personality),
+// each master-preserving-reduced the same way the other systems are.
+function computeKabbalah(birthName) {
+  var gematria = computeNameNumbers(birthName, HEBREW_GEMATRIA_MAP, reduceNumber);
+  if (gematria.expression == null) {
+    return { gematriaTotal: null, reduced: null, heart: null, foundation: null };
+  }
+
+  var letters = String(birthName || "").toLowerCase().replace(/[^a-z]/g, "");
+  var gematriaTotal = 0;
+  for (var i = 0; i < letters.length; i++) {
+    gematriaTotal += HEBREW_GEMATRIA_MAP[letters[i]] || 0;
+  }
+
+  return {
+    gematriaTotal: gematriaTotal,
+    reduced:       gematria.expression,
+    heart:         gematria.soulUrge,
+    foundation:    gematria.personality
+  };
+}
+
+// Vedic (Indian) planetary rulerships by psychic/Moolank number.
+var VEDIC_PLANETARY_RULERS = {
+  1: "Sun", 2: "Moon", 3: "Jupiter", 4: "Rahu", 5: "Mercury",
+  6: "Venus", 7: "Ketu", 8: "Saturn", 9: "Mars"
+};
+
+// Vedic (Indian) numerology: psychicNumber (Moolank) and destinyNumber
+// (Bhagyank) always fully reduce to a single digit 1-9 — this system has
+// no master-number concept, unlike the Western systems above — so they use
+// reduceFully rather than reduceNumber. Name numerology in the Vedic
+// tradition is Chaldean-based, so nameNumber reuses computeNameNumbers
+// with CHALDEAN_MAP.
+function computeVedic(birthName, birthDateStr) {
+  var match = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return null;
+
+  var year  = parseInt(match[1], 10);
+  var month = parseInt(match[2], 10);
+  var day   = parseInt(match[3], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+
+  var psychicNumber = reduceFully(day);
+  var destinyNumber = reduceFully(day + month + year);
+  var nameNumber    = computeNameNumbers(birthName, CHALDEAN_MAP, reduceFully).expression;
+
+  return {
+    psychicNumber:  psychicNumber,
+    destinyNumber:  destinyNumber,
+    nameNumber:     nameNumber,
+    planetaryRuler: VEDIC_PLANETARY_RULERS[psychicNumber] || null
+  };
+}
+
+// Chinese Lo Shu grid — classic 3x3 magic-square layout:
+//   4 9 2
+//   3 5 7
+//   8 1 6
+// The 8 lines below are its 3 rows, 3 columns, and 2 diagonals. A line
+// whose three numbers are ALL present in the birth date is an "arrow of
+// strength"; a line whose three numbers are ALL absent is an "arrow of
+// weakness". Only the four lines that cross the center (5) carry widely
+// agreed traditional names; the other four are labeled by their numbers.
+var LO_SHU_LINES = [
+  { cells: [4, 9, 2], label: null },
+  { cells: [3, 5, 7], label: "Arrow of Compassion" },
+  { cells: [8, 1, 6], label: null },
+  { cells: [4, 3, 8], label: null },
+  { cells: [9, 5, 1], label: "Arrow of Determination" },
+  { cells: [2, 7, 6], label: null },
+  { cells: [4, 5, 6], label: "Arrow of Will Power" },
+  { cells: [2, 5, 8], label: "Arrow of Intellect" }
+];
+
+function computeLoShu(birthDateStr) {
+  var digits = String(birthDateStr || "").replace(/[^0-9]/g, "");
+  if (!digits) return null;
+
+  var grid = {};
+  for (var n = 1; n <= 9; n++) grid[String(n)] = 0;
+
+  for (var i = 0; i < digits.length; i++) {
+    var d = parseInt(digits[i], 10);
+    if (d >= 1 && d <= 9) grid[String(d)]++;
+  }
+
+  var presentNumbers = [];
+  var missingNumbers = [];
+  for (var k = 1; k <= 9; k++) {
+    if (grid[String(k)] > 0) presentNumbers.push(k); else missingNumbers.push(k);
+  }
+
+  var arrowsOfStrength = [];
+  var arrowsOfWeakness = [];
+  LO_SHU_LINES.forEach(function (line) {
+    var allPresent = line.cells.every(function (c) { return grid[String(c)] > 0; });
+    var allMissing = line.cells.every(function (c) { return grid[String(c)] === 0; });
+    var label = (line.label || "Arrow") + " (" + line.cells.join("-") + ")";
+    if (allPresent) arrowsOfStrength.push(label);
+    if (allMissing) arrowsOfWeakness.push(label);
+  });
+
+  return {
+    grid:             grid,
+    presentNumbers:   presentNumbers,
+    missingNumbers:   missingNumbers,
+    arrowsOfStrength: arrowsOfStrength,
+    arrowsOfWeakness: arrowsOfWeakness
+  };
+}
+
 // Multi-system numerology engine. lifePath is date-derived and identical
 // across Western systems (Pythagorean/Chaldean), so it's computed once via
 // the existing calculateLifePath and reused across both system objects.
@@ -5525,7 +5658,10 @@ function computeAllNumerology(birthName, birthDate) {
       soulUrge:    chaldeanNames.soulUrge,
       personality: chaldeanNames.personality
     },
-    divineTriangle: computeDivineTriangle(birthName, birthDate)
+    divineTriangle: computeDivineTriangle(birthName, birthDate),
+    kabbalah: computeKabbalah(birthName),
+    vedic: computeVedic(birthName, birthDate),
+    chinese: computeLoShu(birthDate)
   };
 }
 
