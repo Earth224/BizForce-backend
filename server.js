@@ -4663,19 +4663,29 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     var numerologyContext = "";
     if (oracleSync && oracleSync.birth_date) {
       try {
-        var lifePath   = calculateLifePath(oracleSync.birth_date);
-        var expression = calculateNameNumber(oracleSync.birth_name, false);
-        var soulUrge   = calculateNameNumber(oracleSync.birth_name, true);
-        var birthday   = extractBirthday(oracleSync.birth_date);
+        // Full six-system numerology + quantum-synthesis convergence, so
+        // Termaximus can draw on all of it for deeper soul-purpose insight.
+        var numerologySystemsForChat = computeAllNumerology(oracleSync.birth_name, oracleSync.birth_date);
+        var quantumSynthesisForChat  = computeQuantumSynthesis(numerologySystemsForChat);
+        numerologyContext = buildEnrichedNumerologyContext(numerologySystemsForChat, quantumSynthesisForChat);
+      } catch (enrichedNumerologyErr) {
+        // Fall back to the original Pythagorean-only signature — the
+        // reply must never break because the multi-system synthesis failed.
+        try {
+          var lifePath   = calculateLifePath(oracleSync.birth_date);
+          var expression = calculateNameNumber(oracleSync.birth_name, false);
+          var soulUrge   = calculateNameNumber(oracleSync.birth_name, true);
+          var birthday   = extractBirthday(oracleSync.birth_date);
 
-        numerologyContext =
-          "\n\nNUMEROLOGICAL SIGNATURE (computed from the seeker's birth data — the energetic architecture beneath them; weave into counsel where fitting, never recited mechanically):\n" +
-          "Life Path: "  + lifePath   + "\n" +
-          "Expression: " + expression + "\n" +
-          "Soul Urge: "  + soulUrge   + "\n" +
-          "Birthday: "   + birthday;
-      } catch (numerologyErr) {
-        numerologyContext = "";
+          numerologyContext =
+            "\n\nNUMEROLOGICAL SIGNATURE (computed from the seeker's birth data — the energetic architecture beneath them; weave into counsel where fitting, never recited mechanically):\n" +
+            "Life Path: "  + lifePath   + "\n" +
+            "Expression: " + expression + "\n" +
+            "Soul Urge: "  + soulUrge   + "\n" +
+            "Birthday: "   + birthday;
+        } catch (basicNumerologyErr) {
+          numerologyContext = "";
+        }
       }
     }
 
@@ -5665,6 +5675,248 @@ function computeAllNumerology(birthName, birthDate) {
   };
 }
 
+// "Quantum Numerology" — a synthesis layer OVER the six computed systems,
+// not a new letter-system of its own. It looks for convergence (a core
+// number recurring across independently-derived systems), surfaces any
+// master numbers and karmic-debt signals found anywhere in the systems
+// object, and names the single most-convergent number plus the Divine
+// Triangle apex as anchor points. The actual interpretation of what these
+// mean is left to Termaximus — this only surfaces the raw pattern.
+function computeQuantumSynthesis(systems) {
+  systems = systems || {};
+
+  function uniqueNumbers(list) {
+    var seen = {};
+    var out = [];
+    list.forEach(function (n) {
+      if (n === null || n === undefined) return;
+      var key = String(n);
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push(n);
+    });
+    return out;
+  }
+
+  // --- Convergences: which distinct systems agree on the same core number.
+  // Each system contributes at most one vote per number (its own repeats
+  // don't inflate the count) — "convergence" means multiple SYSTEMS agree,
+  // not multiple fields within one system. ---
+  var systemNumberSets = {
+    pythagorean: systems.pythagorean
+      ? uniqueNumbers([systems.pythagorean.lifePath, systems.pythagorean.expression, systems.pythagorean.soulUrge])
+      : [],
+    chaldean: systems.chaldean
+      ? uniqueNumbers([systems.chaldean.expression, systems.chaldean.soulUrge])
+      : [],
+    vedic: systems.vedic
+      ? uniqueNumbers([systems.vedic.destinyNumber, systems.vedic.psychicNumber])
+      : [],
+    divineTriangle: systems.divineTriangle
+      ? uniqueNumbers([systems.divineTriangle.apex])
+      : [],
+    kabbalah: systems.kabbalah
+      ? uniqueNumbers([systems.kabbalah.reduced])
+      : []
+  };
+
+  var numberToSystems = {};
+  Object.keys(systemNumberSets).forEach(function (systemName) {
+    systemNumberSets[systemName].forEach(function (num) {
+      var key = String(num);
+      if (!numberToSystems[key]) numberToSystems[key] = [];
+      numberToSystems[key].push(systemName);
+    });
+  });
+
+  var convergences = Object.keys(numberToSystems)
+    .map(function (key) {
+      return { number: Number(key), count: numberToSystems[key].length, systems: numberToSystems[key] };
+    })
+    .filter(function (entry) { return entry.count >= 2; })
+    .sort(function (a, b) { return b.count - a.count || a.number - b.number; });
+
+  // --- Master numbers (11/22/33) anywhere across the systems ---
+  var numericFields = [];
+  function pushField(system, field, value) {
+    if (value !== null && value !== undefined) numericFields.push({ system: system, field: field, value: value });
+  }
+  if (systems.pythagorean) {
+    pushField("pythagorean", "lifePath", systems.pythagorean.lifePath);
+    pushField("pythagorean", "expression", systems.pythagorean.expression);
+    pushField("pythagorean", "soulUrge", systems.pythagorean.soulUrge);
+    pushField("pythagorean", "personality", systems.pythagorean.personality);
+  }
+  if (systems.chaldean) {
+    pushField("chaldean", "lifePath", systems.chaldean.lifePath);
+    pushField("chaldean", "expression", systems.chaldean.expression);
+    pushField("chaldean", "soulUrge", systems.chaldean.soulUrge);
+    pushField("chaldean", "personality", systems.chaldean.personality);
+  }
+  if (systems.divineTriangle) {
+    var dtFields = systems.divineTriangle;
+    if (Array.isArray(dtFields.base)) {
+      pushField("divineTriangle", "base[month]", dtFields.base[0]);
+      pushField("divineTriangle", "base[day]", dtFields.base[1]);
+      pushField("divineTriangle", "base[year]", dtFields.base[2]);
+    }
+    if (Array.isArray(dtFields.secondRow)) {
+      pushField("divineTriangle", "secondRow[0]", dtFields.secondRow[0]);
+      pushField("divineTriangle", "secondRow[1]", dtFields.secondRow[1]);
+    }
+    pushField("divineTriangle", "apex", dtFields.apex);
+  }
+  if (systems.kabbalah) {
+    pushField("kabbalah", "reduced", systems.kabbalah.reduced);
+    pushField("kabbalah", "heart", systems.kabbalah.heart);
+    pushField("kabbalah", "foundation", systems.kabbalah.foundation);
+  }
+  if (systems.vedic) {
+    pushField("vedic", "destinyNumber", systems.vedic.destinyNumber);
+    pushField("vedic", "psychicNumber", systems.vedic.psychicNumber);
+    pushField("vedic", "nameNumber", systems.vedic.nameNumber);
+  }
+
+  var masterNumbers = numericFields
+    .filter(function (f) { return f.value === 11 || f.value === 22 || f.value === 33; })
+    .map(function (f) { return { number: f.value, system: f.system, field: f.field }; });
+
+  // --- Karmic debt (13/14/16/19) — best-effort. A karmic-debt number
+  // always fully disappears once reduced to a final single digit or
+  // master number (13→4, 14→5, 16→7, 19→1), so it can only be recovered
+  // from a genuine pre-reduction raw total. Of everything in `systems`,
+  // only Kabbalah's gematriaTotal retains that raw value here, so it's
+  // the only one walked for a karmic-debt number in transit; the other
+  // systems store solely their final reduced numbers. ---
+  var KARMIC_DEBT_NUMBERS = { 13: true, 14: true, 16: true, 19: true };
+
+  function karmicDebtChain(rawTotal) {
+    if (rawTotal === null || rawTotal === undefined || isNaN(rawTotal)) return [];
+    var hits  = [];
+    var seen  = {};
+    var n     = rawTotal;
+    var guard = 0;
+    while (guard < 10) {
+      guard++;
+      if (KARMIC_DEBT_NUMBERS[n] && !seen[n]) { hits.push(n); seen[n] = true; }
+      if (n <= 9 || n === 11 || n === 22 || n === 33) break;
+      var next = sumDigits(n);
+      if (next === n) break;
+      n = next;
+    }
+    return hits;
+  }
+
+  var karmicDebtFound = [];
+  if (systems.kabbalah && systems.kabbalah.gematriaTotal != null) {
+    karmicDebtChain(systems.kabbalah.gematriaTotal).forEach(function (n) {
+      karmicDebtFound.push({ number: n, source: "kabbalah gematria total (raw, pre-reduction)" });
+    });
+  }
+
+  var karmicDebt = {
+    found: karmicDebtFound,
+    karmicLessons: (systems.divineTriangle && systems.divineTriangle.karmicLessons) || [],
+    note: "Best-effort: karmic debt (13/14/16/19) can only be reliably detected from a pre-reduction raw total. Of the systems here, only Kabbalah's gematriaTotal retains that raw value, so only it is walked for a karmic debt in transit."
+  };
+
+  // --- Soul thread — names the anchor numbers only; interpretation is Termaximus's job ---
+  var soulThreadParts = [];
+  if (convergences.length) {
+    soulThreadParts.push(
+      "Core Soul Frequency: " + convergences[0].number +
+      " (converges across " + convergences[0].systems.join(", ") + ")"
+    );
+  }
+  if (systems.divineTriangle && systems.divineTriangle.apex != null) {
+    soulThreadParts.push("Life-Purpose Apex: " + systems.divineTriangle.apex);
+  }
+
+  return {
+    convergences:  convergences,
+    masterNumbers: masterNumbers,
+    karmicDebt:    karmicDebt,
+    soulThread:    soulThreadParts.join(". ")
+  };
+}
+
+// Builds the enriched, multi-system numerology context string fed into
+// Termaximus's system prompt: a brief per-system summary plus the Divine
+// Triangle apex/karmic lessons and the quantum-synthesis convergences, so
+// he can speak to what recurs across the seeker's six independent
+// numerological signatures rather than just one system in isolation.
+function buildEnrichedNumerologyContext(systems, quantum) {
+  var lines = [];
+  lines.push(
+    "\n\nNUMEROLOGICAL SIGNATURE — multi-system (computed from the seeker's birth data across six independent numerological traditions; this is their full energetic architecture — weave into counsel where fitting, never recited mechanically as a list. Numbers that converge across multiple systems below reveal the deepest soul purpose):"
+  );
+
+  if (systems.pythagorean) {
+    var p = systems.pythagorean;
+    lines.push(
+      "Pythagorean (Western): Life Path " + p.lifePath + ", Expression " + p.expression +
+      ", Soul Urge " + p.soulUrge + ", Personality " + p.personality + ", Birthday " + p.birthday + "."
+    );
+  }
+  if (systems.chaldean) {
+    var c = systems.chaldean;
+    lines.push(
+      "Chaldean (Ancient Babylonian): Life Path " + c.lifePath + ", Expression " + c.expression +
+      ", Soul Urge " + c.soulUrge + ", Personality " + c.personality + "."
+    );
+  }
+  if (systems.divineTriangle) {
+    var dt = systems.divineTriangle;
+    lines.push(
+      "Divine Triangle: base " + (dt.base || []).join("-") + ", apex " + dt.apex +
+      ((dt.karmicLessons && dt.karmicLessons.length)
+        ? ", karmic lessons " + dt.karmicLessons.join(", ")
+        : ", no karmic lessons") + "."
+    );
+  }
+  if (systems.kabbalah) {
+    var k = systems.kabbalah;
+    lines.push(
+      "Kabbalah (Hebrew Gematria): reduced " + k.reduced +
+      " (heart " + k.heart + ", foundation " + k.foundation + ")."
+    );
+  }
+  if (systems.vedic) {
+    var v = systems.vedic;
+    lines.push(
+      "Vedic (Indian): psychic number " + v.psychicNumber + " (ruled by " + v.planetaryRuler + ")" +
+      ", destiny number " + v.destinyNumber + ", name number " + v.nameNumber + "."
+    );
+  }
+  if (systems.chinese) {
+    var ch = systems.chinese;
+    lines.push(
+      "Chinese (Lo Shu): present numbers " + (ch.presentNumbers || []).join(", ") +
+      "; missing " + (ch.missingNumbers || []).join(", ") + "."
+    );
+  }
+
+  if (quantum) {
+    if (quantum.convergences && quantum.convergences.length) {
+      lines.push(
+        "Quantum convergence — numbers recurring across multiple independent systems (the soul's dominant frequencies): " +
+        quantum.convergences.map(function (cv) { return cv.number + " (in " + cv.systems.join(", ") + ")"; }).join("; ") + "."
+      );
+    }
+    if (quantum.masterNumbers && quantum.masterNumbers.length) {
+      lines.push(
+        "Master numbers present: " +
+        quantum.masterNumbers.map(function (m) { return m.number + " (" + m.system + " " + m.field + ")"; }).join("; ") + "."
+      );
+    }
+    if (quantum.soulThread) {
+      lines.push(quantum.soulThread + ".");
+    }
+  }
+
+  return lines.join("\n");
+}
+
 app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
   try {
     var result = await supabase
@@ -5677,6 +5929,8 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       return res.json({});
     }
 
+    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date);
+
     return res.json({
       birth_date: result.data.birth_date || null,
       birth_name: result.data.birth_name || null,
@@ -5684,7 +5938,8 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       expression: calculateNameNumber(result.data.birth_name, false),
       soul_urge:  calculateNameNumber(result.data.birth_name, true),
       birthday:   extractBirthday(result.data.birth_date),
-      systems: computeAllNumerology(result.data.birth_name, result.data.birth_date)
+      systems: numerologySystems,
+      quantum: computeQuantumSynthesis(numerologySystems)
     });
   } catch (error) {
     console.error("[oracle/numerology] Error:", error.message || error);
