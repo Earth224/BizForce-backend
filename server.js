@@ -5362,6 +5362,14 @@ var PYTHAGOREAN_MAP = {
 };
 var VOWELS = { a: true, e: true, i: true, o: true, u: true };
 
+// Chaldean values (1-8 only — no letter carries 9 in this system).
+var CHALDEAN_MAP = {
+  a: 1, b: 2, c: 3, d: 4, e: 5, f: 8, g: 3, h: 5, i: 1,
+  j: 1, k: 2, l: 3, m: 4, n: 5, o: 7, p: 8, q: 1, r: 2,
+  s: 3, t: 4, u: 6, v: 6, w: 6, x: 5, y: 1, z: 7
+};
+var SOUL_VOWELS = { a: true, e: true, i: true, o: true, u: true, y: true };
+
 function reduceNumber(total) {
   while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
     total = sumDigits(total);
@@ -5412,6 +5420,115 @@ function calculatePersonalDay(birthDateStr) {
   return reduceNumber(total);
 }
 
+// Computes Expression/Destiny (all letters), Soul Urge (vowels — A E I O U Y),
+// and Personality (consonants) for a name under a given letter-value map,
+// each master-preserving-reduced via reducerFn. System-agnostic: pass
+// PYTHAGOREAN_MAP or CHALDEAN_MAP (or any future map) to reuse this as-is.
+function computeNameNumbers(name, letterMap, reducerFn) {
+  var letters = String(name || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!letters) return { expression: null, soulUrge: null, personality: null };
+
+  var expressionTotal = 0, expressionMatched = false;
+  var soulTotal        = 0, soulMatched        = false;
+  var personalityTotal = 0, personalityMatched = false;
+
+  for (var i = 0; i < letters.length; i++) {
+    var ch    = letters[i];
+    var value = letterMap[ch] || 0;
+    if (!value) continue;
+
+    expressionTotal += value;
+    expressionMatched = true;
+
+    if (SOUL_VOWELS[ch] === true) {
+      soulTotal += value;
+      soulMatched = true;
+    } else {
+      personalityTotal += value;
+      personalityMatched = true;
+    }
+  }
+
+  return {
+    expression:  expressionMatched ? reducerFn(expressionTotal) : null,
+    soulUrge:    soulMatched       ? reducerFn(soulTotal)       : null,
+    personality: personalityMatched ? reducerFn(personalityTotal) : null
+  };
+}
+
+// Divine Triangle / Javane & Bunker method: builds the birth-date pyramid
+// (month/day/year reduced to the base row, combined upward through a
+// second row to a single apex, each step master-preserving) plus an
+// Inclusion Table tallying how often each digit 1-9 appears across the
+// full birth name under PYTHAGOREAN_MAP — the digits absent from that
+// table are the Karmic Lessons in this system.
+function computeDivineTriangle(birthName, birthDateStr) {
+  var match = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return null;
+
+  var year  = parseInt(match[1], 10);
+  var month = parseInt(match[2], 10);
+  var day   = parseInt(match[3], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+
+  var b1 = reduceNumber(month);
+  var b2 = reduceNumber(day);
+  var b3 = reduceNumber(year);
+
+  var s1   = reduceNumber(b1 + b2);
+  var s2   = reduceNumber(b2 + b3);
+  var apex = reduceNumber(s1 + s2);
+
+  var inclusionTable = {};
+  for (var n = 1; n <= 9; n++) inclusionTable[String(n)] = 0;
+
+  var letters = String(birthName || "").toLowerCase().replace(/[^a-z]/g, "");
+  for (var i = 0; i < letters.length; i++) {
+    var value = PYTHAGOREAN_MAP[letters[i]];
+    if (value) inclusionTable[String(value)]++;
+  }
+
+  var karmicLessons = [];
+  for (var k = 1; k <= 9; k++) {
+    if (inclusionTable[String(k)] === 0) karmicLessons.push(k);
+  }
+
+  return {
+    base: [b1, b2, b3],
+    secondRow: [s1, s2],
+    apex: apex,
+    inclusionTable: inclusionTable,
+    karmicLessons: karmicLessons
+  };
+}
+
+// Multi-system numerology engine. lifePath is date-derived and identical
+// across Western systems (Pythagorean/Chaldean), so it's computed once via
+// the existing calculateLifePath and reused across both system objects.
+function computeAllNumerology(birthName, birthDate) {
+  var lifePath = calculateLifePath(birthDate);
+
+  var pythagoreanNames = computeNameNumbers(birthName, PYTHAGOREAN_MAP, reduceNumber);
+  var chaldeanNames    = computeNameNumbers(birthName, CHALDEAN_MAP, reduceNumber);
+
+  return {
+    pythagorean: {
+      lifePath:    lifePath,
+      expression:  pythagoreanNames.expression,
+      soulUrge:    pythagoreanNames.soulUrge,
+      personality: pythagoreanNames.personality,
+      birthday:    extractBirthday(birthDate)
+    },
+    chaldean: {
+      lifePath:    lifePath,
+      expression:  chaldeanNames.expression,
+      soulUrge:    chaldeanNames.soulUrge,
+      personality: chaldeanNames.personality
+    },
+    divineTriangle: computeDivineTriangle(birthName, birthDate)
+  };
+}
+
 app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
   try {
     var result = await supabase
@@ -5430,7 +5547,8 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       life_path:  calculateLifePath(result.data.birth_date),
       expression: calculateNameNumber(result.data.birth_name, false),
       soul_urge:  calculateNameNumber(result.data.birth_name, true),
-      birthday:   extractBirthday(result.data.birth_date)
+      birthday:   extractBirthday(result.data.birth_date),
+      systems: computeAllNumerology(result.data.birth_name, result.data.birth_date)
     });
   } catch (error) {
     console.error("[oracle/numerology] Error:", error.message || error);
