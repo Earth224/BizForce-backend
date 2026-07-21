@@ -6431,6 +6431,9 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
     const tags        = Array.isArray(req.body.tags)
       ? req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
       : [];
+    const digitalFilePath = safeText(req.body.digital_file_path, 500) || null;
+    const isDigital = (req.body.is_digital === true && !!digitalFilePath);
+    const digitalFileName = isDigital ? (safeText(req.body.digital_file_name, 200) || null) : null;
     if (!title)    return res.status(400).json({ error: "Title is required" });
     if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
     if (priceBfc <= 0 && priceUsd === null) return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
@@ -6439,11 +6442,32 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
       .insert({
         seller_id: req.user.id, title, description: description || "",
         price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(req.body.media), status: "active",
+        is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
         created_at: nowIso(), updated_at: nowIso()
       })
       .select("*").single();
     if (error) throw error;
     return res.status(201).json({ listing: data });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/marketplace/upload-digital", requireAuth, oracleUpload.single("file"), async function (req, res, next) {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "No file uploaded" });
+
+    const safeFileName = (file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
+    const storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName;
+
+    const uploadResult = await supabase.storage
+      .from("bf-digital-goods")
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadResult.error) {
+      console.error("[marketplace] Digital file upload failed:", uploadResult.error.message || uploadResult.error);
+      return res.status(500).json({ error: "Failed to store digital file: " + uploadResult.error.message });
+    }
+
+    return res.json({ path: storagePath, fileName: file.originalname || null });
   } catch (error) { next(error); }
 });
 
