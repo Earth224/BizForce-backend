@@ -1250,27 +1250,59 @@ async function handleStripeEvent(event) {
         const sellerId = meta.seller_id || null;
 
         let listingTitle = null;
+        let listingIsDigital = false;
+        let listingDigitalFilePath = null;
         if (listingId) {
           const { data: listing } = await supabase
             .from("marketplace_listings")
-            .select("title")
+            .select("title, is_digital, digital_file_path")
             .eq("id", listingId)
             .maybeSingle();
           listingTitle = listing ? listing.title : null;
+          listingIsDigital = listing ? !!listing.is_digital : false;
+          listingDigitalFilePath = listing ? listing.digital_file_path : null;
         }
 
-        const { error: insertError } = await supabase.from("marketplace_orders").insert({
-          listing_id: listingId,
-          buyer_id: buyerId,
-          seller_id: sellerId,
-          amount_bfc: 0,
-          amount_usd: session.amount_total,
-          payment_method: "usd",
-          status: "completed",
-          listing_title: listingTitle,
-          stripe_session_id: session.id
-        });
+        const { data: insertedOrder, error: insertError } = await supabase
+          .from("marketplace_orders")
+          .insert({
+            listing_id: listingId,
+            buyer_id: buyerId,
+            seller_id: sellerId,
+            amount_bfc: 0,
+            amount_usd: session.amount_total,
+            payment_method: "usd",
+            status: "completed",
+            listing_title: listingTitle,
+            stripe_session_id: session.id
+          })
+          .select("id")
+          .single();
         if (insertError) throw insertError;
+
+        // ── Digital-good delivery (soft: never break order completion) ──
+        try {
+          if (listingIsDigital && typeof listingDigitalFilePath === "string" && listingDigitalFilePath.length > 0) {
+            const { data: signedDigital, error: signDigitalError } = await supabase.storage
+              .from("bf-digital-goods")
+              .createSignedUrl(listingDigitalFilePath, 604800);
+            if (signDigitalError || !signedDigital || !signedDigital.signedUrl) {
+              console.error("[digital-delivery] Failed to create signed URL:", signDigitalError && (signDigitalError.message || signDigitalError));
+            } else {
+              const { error: deliveryUpdateError } = await supabase
+                .from("marketplace_orders")
+                .update({
+                  is_digital: true,
+                  download_url: signedDigital.signedUrl,
+                  delivered_at: nowIso()
+                })
+                .eq("id", insertedOrder.id);
+              if (deliveryUpdateError) throw deliveryUpdateError;
+            }
+          }
+        } catch (digitalError) {
+          console.error("[digital-delivery] " + (digitalError && digitalError.message ? digitalError.message : digitalError));
+        }
       } catch (error) {
         console.error("Failed to record marketplace USD order:", error);
       }
