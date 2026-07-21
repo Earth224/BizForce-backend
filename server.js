@@ -16,6 +16,9 @@ const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const PDFDocument = require("pdfkit");
 const { createClient } = require("@supabase/supabase-js");
+const Astronomy = require("astronomy-engine");
+const cityTimezones = require("city-timezones");
+const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt } = require("./config/brain");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
@@ -5169,6 +5172,29 @@ app.get("/api/oracle/sync", requireAuth, async function (req, res, next) {
   }
 });
 
+app.get("/api/oracle/natal", requireAuth, async function (req, res, next) {
+  try {
+    var result = await supabase
+      .from("oracle_sync")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+
+    if (result.error || !result.data || !result.data.birth_date) {
+      return res.json({ available: false, reason: "no_birth_data" });
+    }
+
+    var chart = computeNatalChart(
+      result.data.birth_date,
+      result.data.birth_time,
+      result.data.birth_place
+    );
+    return res.json(chart);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
@@ -5915,6 +5941,133 @@ function buildEnrichedNumerologyContext(systems, quantum) {
   }
 
   return lines.join("\n");
+}
+
+// Natal chart engine — ported as-is from the validated test-natal.js smoke
+// test (geocode -> UTC, ten geocentric planets via GeoVector+Ecliptic,
+// obliquity, GAST, RAMC, Midheaven, Ascendant, whole-sign houses). The
+// formulas here must stay identical to test-natal.js; do not "improve" them.
+var NATAL_PLANET_NAMES = [
+  "Sun", "Moon", "Mercury", "Venus", "Mars",
+  "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"
+];
+var NATAL_SIGNS = [
+  "Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+  "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"
+];
+
+function natalWrapDeg(d) {
+  var w = d % 360;
+  if (w < 0) w += 360;
+  return w;
+}
+
+function natalSignAndDegree(lonDeg) {
+  var idx = Math.floor(lonDeg / 30);
+  var deg = lonDeg - idx * 30;
+  return { sign: NATAL_SIGNS[idx], degree: Math.round(deg * 100) / 100 };
+}
+
+function computeNatalChart(birthDate, birthTime, birthPlace) {
+  var matches = cityTimezones.findFromCityStateProvince(String(birthPlace || ""));
+  if (!matches.length) {
+    return { available: false, reason: "place_unresolved" };
+  }
+  var resolved = matches[0];
+
+  var dateParts = String(birthDate).split("-").map(Number);
+  var timeKnown = !!(birthTime && String(birthTime).trim());
+  var timeParts = timeKnown ? String(birthTime).split(":").map(Number) : [12, 0];
+
+  // ── STEP 1 — resolve place + local time to true UTC ────────────────────
+  var localDateTime = DateTime.fromObject(
+    {
+      year: dateParts[0], month: dateParts[1], day: dateParts[2],
+      hour: timeParts[0], minute: timeParts[1]
+    },
+    { zone: resolved.timezone }
+  );
+
+  var utcDateTime = localDateTime.toUTC();
+  var utcDate     = utcDateTime.toJSDate();
+
+  // ── STEP 2 — ten planets, geocentric ecliptic longitude ────────────────
+  var planetLongitudes = {};
+  NATAL_PLANET_NAMES.forEach(function (name) {
+    var vec = Astronomy.GeoVector(Astronomy.Body[name], utcDate, true);
+    var ecl = Astronomy.Ecliptic(vec);
+    planetLongitudes[name] = ecl.elon;
+  });
+
+  var planets = NATAL_PLANET_NAMES.map(function (name) {
+    var lon = planetLongitudes[name];
+    var sd  = natalSignAndDegree(lon);
+    return { name: name, sign: sd.sign, degree: sd.degree, longitude: lon };
+  });
+
+  var midheaven = null;
+  var ascendant = null;
+  var houses    = null;
+
+  // Midheaven/Ascendant/houses REQUIRE an exact birth time — never faked.
+  if (timeKnown) {
+    // ── STEP 3 — obliquity of the ecliptic ────────────────────────────────
+    var T = Astronomy.MakeTime(utcDate).ut / 36525;
+    var obliquityDeg =
+      23.439291 -
+      0.0130042 * T -
+      0.00000016 * T * T +
+      0.000000504 * T * T * T;
+
+    // ── STEP 4 — sidereal time / RAMC ─────────────────────────────────────
+    var gastHours = Astronomy.SiderealTime(utcDate);
+    var gastDeg   = gastHours * 15;
+    var ramcDeg   = natalWrapDeg(gastDeg + resolved.lng);
+
+    // ── STEP 5 — Midheaven and Ascendant ──────────────────────────────────
+    var DEG2RAD = Math.PI / 180;
+    var RAD2DEG = 180 / Math.PI;
+
+    var e = obliquityDeg * DEG2RAD;
+    var r = ramcDeg * DEG2RAD;
+    var p = resolved.lat * DEG2RAD;
+
+    var mcDeg = natalWrapDeg(Math.atan2(Math.sin(r), Math.cos(r) * Math.cos(e)) * RAD2DEG);
+    var ascDeg = natalWrapDeg(
+      Math.atan2(
+        Math.cos(r),
+        -(Math.sin(r) * Math.cos(e) + Math.tan(p) * Math.sin(e))
+      ) * RAD2DEG
+    );
+
+    var mcSd  = natalSignAndDegree(mcDeg);
+    midheaven = { sign: mcSd.sign, degree: mcSd.degree, longitude: mcDeg };
+
+    var ascSd = natalSignAndDegree(ascDeg);
+    ascendant = { sign: ascSd.sign, degree: ascSd.degree, longitude: ascDeg };
+
+    // ── STEP 6 — whole-sign houses ─────────────────────────────────────────
+    var ascSignIndex = Math.floor(ascDeg / 30);
+    houses = [];
+    for (var n = 1; n <= 12; n++) {
+      var signIndex = (ascSignIndex + n - 1) % 12;
+      houses.push({ house: n, sign: NATAL_SIGNS[signIndex], longitude: signIndex * 30 });
+    }
+  }
+
+  return {
+    available:     true,
+    timeKnown:     timeKnown,
+    moonUncertain: !timeKnown,
+    utc:           utcDateTime.toISO(),
+    latitude:      resolved.lat,
+    longitude:     resolved.lng,
+    timezone:      resolved.timezone,
+    planets:       planets,
+    midheaven:     midheaven,
+    ascendant:     ascendant,
+    houses:        houses
+  };
 }
 
 app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
