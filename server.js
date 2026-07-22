@@ -5195,6 +5195,52 @@ app.get("/api/oracle/natal", requireAuth, async function (req, res, next) {
   }
 });
 
+// ── Public moon phase — astronomy only, no user data, no auth needed ──
+app.get("/api/moon", async function (req, res) {
+  var date = new Date();
+  try {
+    var phaseAngle = Astronomy.MoonPhase(date);
+    var illuminatedFraction = Astronomy.Illumination(Astronomy.Body.Moon, date).phase_fraction;
+    var waxing = phaseAngle < 180;
+
+    var phaseName;
+    if (phaseAngle <= 8 || phaseAngle >= 352) {
+      phaseName = "New Moon";
+    } else if (Math.abs(phaseAngle - 90) <= 8) {
+      phaseName = "First Quarter";
+    } else if (Math.abs(phaseAngle - 180) <= 8) {
+      phaseName = "Full Moon";
+    } else if (Math.abs(phaseAngle - 270) <= 8) {
+      phaseName = "Last Quarter";
+    } else if (phaseAngle < 90) {
+      phaseName = "Waxing Crescent";
+    } else if (phaseAngle < 180) {
+      phaseName = "Waxing Gibbous";
+    } else if (phaseAngle < 270) {
+      phaseName = "Waning Gibbous";
+    } else {
+      phaseName = "Waning Crescent";
+    }
+
+    return res.json({
+      phaseAngle: phaseAngle,
+      illuminatedFraction: illuminatedFraction,
+      waxing: waxing,
+      phaseName: phaseName,
+      date: date.toISOString()
+    });
+  } catch (error) {
+    return res.json({
+      phaseAngle: null,
+      illuminatedFraction: null,
+      waxing: true,
+      phaseName: null,
+      date: date.toISOString(),
+      error: true
+    });
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
