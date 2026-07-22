@@ -5606,6 +5606,103 @@ function blueprintLettersOf(name) {
   return String(name || "").toLowerCase().replace(/[^a-z]/g, "").split("");
 }
 
+var DIVINE_TRIANGLE_SQUARE_OF_LINE = {
+  AB: "youth", BC: "youth", CD: "youth",
+  DE: "power", EF: "power", FG: "power",
+  GH: "wisdom", HI: "wisdom", IA: "wisdom"
+};
+
+var DIVINE_TRIANGLE_SIDE_OF_SQUARE = {
+  youth: "AD", power: "DG", wisdom: "AG"
+};
+
+// Divine Triangle MAJOR and MINOR life-event processes — ports the logic
+// proven against the book's published results for Ada Wynn Lunt in
+// test-processes.js verbatim; do not re-derive here. Every "selected
+// number" has a DISPLAY form (unreduced/reduced, the experience TYPE
+// shown) and an ARITHMETIC form (that number's reduced value further
+// reduced to a single digit via reduceFully, used only to compute ages).
+function computeDivineTriangleProcesses(blueprint) {
+  var lines    = blueprint.lines;
+  var interior = blueprint.interior;
+  var centers  = blueprint.centers;
+
+  function lineById(lineId) {
+    return lines.filter(function (l) { return l.id === lineId; })[0];
+  }
+
+  function ageRangeOf(lineId) {
+    var line  = lineById(lineId);
+    var parts = String(line.ageRange).split("-");
+    return { younger: parseInt(parts[0], 10), older: parseInt(parts[1], 10) };
+  }
+
+  var major = PERIMETER_LINES.map(function (perimeterLine) {
+    var lineId = perimeterLine.id;
+    var range  = ageRangeOf(lineId);
+    var square = DIVINE_TRIANGLE_SQUARE_OF_LINE[lineId];
+    var interiorKey = DIVINE_TRIANGLE_SIDE_OF_SQUARE[square];
+
+    var center       = centers[square];
+    var triangleSide = interior[interiorKey];
+    var lifeLesson   = centers.triangle;
+
+    var d1 = reduceFully(center.reduced);
+    var d2 = reduceFully(triangleSide.reduced);
+    var d3 = reduceFully(lifeLesson.reduced);
+
+    var centerType = { unreduced: center.unreduced, reduced: center.reduced };
+    var sideType   = { unreduced: triangleSide.unreduced, reduced: triangleSide.reduced };
+    var lessonType = { unreduced: lifeLesson.unreduced, reduced: lifeLesson.reduced };
+
+    return {
+      lineId: lineId,
+      ageRange: perimeterLine.ageRange,
+      square: square,
+      results: [
+        { age: range.younger + d1, type: centerType, step: "squareCenter" },
+        { age: range.older   - d1, type: centerType, step: "squareCenter" },
+        { age: range.younger + d2, type: sideType,   step: "triangleSide" },
+        { age: range.older   - d2, type: sideType,   step: "triangleSide" },
+        { age: range.younger + d3, type: lessonType, step: "lifeLesson" },
+        { age: range.older   - d3, type: lessonType, step: "lifeLesson" }
+      ]
+    };
+  });
+
+  var minor = PERIMETER_LINES.map(function (perimeterLine) {
+    var lineId = perimeterLine.id;
+    var range  = ageRangeOf(lineId);
+    var square = DIVINE_TRIANGLE_SQUARE_OF_LINE[lineId];
+    var interiorKey = DIVINE_TRIANGLE_SIDE_OF_SQUARE[square];
+
+    var line = lineById(lineId);
+    var dL   = line.reduced;
+
+    var center       = centers[square];
+    var triangleSide = interior[interiorKey];
+
+    var youngerAge = range.younger + dL;
+    var olderAge   = range.older   - dL;
+
+    var youngerValue   = dL + center.unreduced;
+    var youngerReduced = reduceNumber(youngerValue);
+
+    var olderValue   = dL + triangleSide.unreduced;
+    var olderReduced = reduceNumber(olderValue);
+
+    return {
+      lineId: lineId,
+      results: [
+        { age: youngerAge, type: { unreduced: youngerValue, reduced: youngerReduced }, position: "younger" },
+        { age: olderAge,   type: { unreduced: olderValue,   reduced: olderReduced },   position: "older" }
+      ]
+    };
+  });
+
+  return { major: major, minor: minor };
+}
+
 function computeDivineTriangleBlueprint(birthName, birthDateStr) {
   var nameParts      = splitBirthName(birthName);
   var firstLetters   = blueprintLettersOf(nameParts.first);
@@ -5684,7 +5781,7 @@ function computeDivineTriangleBlueprint(birthName, birthDateStr) {
   var wisdomUnreduced   = sum(wisdomSides);
   var triangleUnreduced = sum(triangleSides);
 
-  return {
+  var blueprint = {
     lines: lines,
     xMarkers: xMarkers,
     interior: interior,
@@ -5695,6 +5792,8 @@ function computeDivineTriangleBlueprint(birthName, birthDateStr) {
       triangle: { sides: triangleSides, unreduced: triangleUnreduced, reduced: reduceNumber(triangleUnreduced) } /* Life Lesson Number */
     }
   };
+  blueprint.processes = computeDivineTriangleProcesses(blueprint);
+  return blueprint;
 }
 
 // Western Kabbalistic gematria numerology: sums the full name's letters via
