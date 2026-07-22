@@ -5414,6 +5414,16 @@ var HEBREW_GEMATRIA_MAP = {
   s: 300, t: 400, u: 6, v: 6, w: 6, x: 60, y: 10, z: 7
 };
 
+// Full alphabet-ordinal value (A=1..Z=26) — used by the Divine Triangle
+// blueprint, which does NOT use the Pythagorean 1-9 wheel for letters.
+var ORDINAL_MAP = {};
+(function () {
+  var alphabet = "abcdefghijklmnopqrstuvwxyz";
+  for (var i = 0; i < alphabet.length; i++) {
+    ORDINAL_MAP[alphabet[i]] = i + 1;
+  }
+}());
+
 function reduceNumber(total) {
   while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
     total = sumDigits(total);
@@ -5556,6 +5566,137 @@ function computeDivineTriangle(birthName, birthDateStr) {
   };
 }
 
+// Splits the free-text birth_name into { first, middle } for the Divine
+// Triangle blueprint, which uses only the first and middle name(s) and
+// never the surname (a family vibration, not the individual's). Split on
+// whitespace: first token = first name, LAST token = surname (excluded),
+// everything between = middle. Punctuation is stripped per token.
+function splitBirthName(fullName) {
+  var tokens = String(fullName || "")
+    .split(/\s+/)
+    .map(function (t) { return t.replace(/[^a-zA-Z]/g, ""); })
+    .filter(Boolean);
+
+  if (tokens.length === 0) return { first: "", middle: "" };
+  if (tokens.length === 1) return { first: tokens[0], middle: "" };
+  if (tokens.length === 2) return { first: tokens[0], middle: "" };
+
+  var first  = tokens[0];
+  var middle = tokens.slice(1, tokens.length - 1).join(" ");
+  return { first: first, middle: middle };
+}
+
+// Divine Triangle BLUEPRINT (full Javane & Bunker structure) — ports the
+// logic proven against the book's worked example (Ada Wynn Lunt, b.
+// 1940-11-12) in test-blueprint.js verbatim; do not re-derive here.
+// 9 perimeter lines, each spanning 9 years of life.
+var PERIMETER_LINES = [
+  { id: "AB", ageRange: "0-9" },
+  { id: "BC", ageRange: "9-18" },
+  { id: "CD", ageRange: "18-27" },
+  { id: "DE", ageRange: "27-36" },
+  { id: "EF", ageRange: "36-45" },
+  { id: "FG", ageRange: "45-54" },
+  { id: "GH", ageRange: "54-63" },
+  { id: "HI", ageRange: "63-72" },
+  { id: "IA", ageRange: "72-81" }
+];
+
+function blueprintLettersOf(name) {
+  return String(name || "").toLowerCase().replace(/[^a-z]/g, "").split("");
+}
+
+function computeDivineTriangleBlueprint(birthName, birthDateStr) {
+  var nameParts      = splitBirthName(birthName);
+  var firstLetters   = blueprintLettersOf(nameParts.first);
+  var middleLetters  = blueprintLettersOf(nameParts.middle);
+
+  if (!firstLetters.length) return null;
+
+  // First name, then middle name, then cycle back through the FIRST name
+  // (repeating) until all 9 lines are filled.
+  var sequence = firstLetters.concat(middleLetters);
+  var cycleIndex = 0;
+  while (sequence.length < 9) {
+    sequence.push(firstLetters[cycleIndex % firstLetters.length]);
+    cycleIndex++;
+  }
+  sequence = sequence.slice(0, 9);
+
+  var lines = PERIMETER_LINES.map(function (line, idx) {
+    var letter  = sequence[idx];
+    var ordinal = ORDINAL_MAP[letter] || 0;
+    return {
+      id: line.id,
+      ageRange: line.ageRange,
+      letter: letter,
+      ordinal: ordinal,
+      reduced: reduceFully(ordinal)
+    };
+  });
+
+  // X-markers: the corner where each name's last letter lands.
+  var firstNameEndIndex  = firstLetters.length;
+  var middleNameEndIndex = firstLetters.length + middleLetters.length;
+
+  function cornerAtLineEnd(lineCount1Based) {
+    if (lineCount1Based < 1 || lineCount1Based > 9) return null;
+    var lineId = PERIMETER_LINES[lineCount1Based - 1].id;
+    return lineId.charAt(1);
+  }
+
+  var xMarkers = {
+    firstNameEnd:  cornerAtLineEnd(firstNameEndIndex),
+    middleNameEnd: middleLetters.length ? cornerAtLineEnd(middleNameEndIndex) : null
+  };
+
+  // ── Birthdate placement — 3 interior lines ──
+  var dateMatch = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!dateMatch) return null;
+  var year  = parseInt(dateMatch[1], 10);
+  var month = parseInt(dateMatch[2], 10);
+  var day   = parseInt(dateMatch[3], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+
+  var interior = {
+    AD: { label: "Month", unreduced: month, reduced: reduceFully(month) },
+    DG: { label: "Day",   unreduced: day,   reduced: reduceFully(day) },
+    AG: { label: "Year",  unreduced: sumDigits(year), reduced: reduceFully(sumDigits(year)) }
+  };
+
+  // ── Four center totals — sum the UNREDUCED value of each side (each
+  // perimeter line's letter ORDINAL, each interior line's two-digit
+  // intermediate), then reduce MASTER-PRESERVING for the "/X" figure. ──
+  function lineOrdinal(lineId) {
+    var found = lines.filter(function (l) { return l.id === lineId; })[0];
+    return found ? found.ordinal : 0;
+  }
+
+  function sum(arr) { return arr.reduce(function (a, b) { return a + b; }, 0); }
+
+  var youthSides    = [lineOrdinal("AB"), lineOrdinal("BC"), lineOrdinal("CD"), interior.AD.unreduced];
+  var powerSides    = [lineOrdinal("DE"), lineOrdinal("EF"), lineOrdinal("FG"), interior.DG.unreduced];
+  var wisdomSides   = [lineOrdinal("GH"), lineOrdinal("HI"), lineOrdinal("IA"), interior.AG.unreduced];
+  var triangleSides = [interior.AD.unreduced, interior.DG.unreduced, interior.AG.unreduced];
+
+  var youthUnreduced    = sum(youthSides);
+  var powerUnreduced    = sum(powerSides);
+  var wisdomUnreduced   = sum(wisdomSides);
+  var triangleUnreduced = sum(triangleSides);
+
+  return {
+    lines: lines,
+    xMarkers: xMarkers,
+    interior: interior,
+    centers: {
+      youth:    { sides: youthSides,    unreduced: youthUnreduced,    reduced: reduceNumber(youthUnreduced) },
+      power:    { sides: powerSides,    unreduced: powerUnreduced,    reduced: reduceNumber(powerUnreduced) },
+      wisdom:   { sides: wisdomSides,   unreduced: wisdomUnreduced,   reduced: reduceNumber(wisdomUnreduced) },
+      triangle: { sides: triangleSides, unreduced: triangleUnreduced, reduced: reduceNumber(triangleUnreduced) } /* Life Lesson Number */
+    }
+  };
+}
+
 // Western Kabbalistic gematria numerology: sums the full name's letters via
 // the standard Hebrew-gematria transliteration values (HEBREW_GEMATRIA_MAP),
 // reusing computeNameNumbers for the split — "heart" is its vowel-only sum
@@ -5695,6 +5836,7 @@ function computeAllNumerology(birthName, birthDate) {
       personality: chaldeanNames.personality
     },
     divineTriangle: computeDivineTriangle(birthName, birthDate),
+    divineTriangleBlueprint: computeDivineTriangleBlueprint(birthName, birthDate),
     kabbalah: computeKabbalah(birthName),
     vedic: computeVedic(birthName, birthDate),
     chinese: computeLoShu(birthDate)
