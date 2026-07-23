@@ -6337,7 +6337,7 @@ function computeQuantumSynthesis(systems) {
   var karmicDebt = {
     found: karmicDebtFound,
     karmicLessons: (systems.divineTriangle && systems.divineTriangle.karmicLessons) || [],
-    note: "Best-effort: karmic debt (13/14/16/19) can only be reliably detected from a pre-reduction raw total. Of the systems here, only Kabbalah's gematriaTotal retains that raw value, so only it is walked for a karmic debt in transit."
+    note: "Best-effort: karmic debt (13/14/16/19) can only be reliably detected from a pre-reduction raw total. Of the systems here, only the transliterated Kabbalah system's gematriaTotal retains that raw value, so only it is walked for a karmic debt in transit."
   };
 
   // --- Soul thread — names the anchor numbers only; interpretation is Termaximus's job ---
@@ -6397,7 +6397,7 @@ function buildEnrichedNumerologyContext(systems, quantum) {
   if (systems.kabbalah) {
     var k = systems.kabbalah;
     lines.push(
-      "Kabbalah (Hebrew Gematria): reduced " + k.reduced +
+      "Kabbalah (transliterated, Latin-letter): reduced " + k.reduced +
       " (heart " + k.heart + ", foundation " + k.foundation + ")."
     );
   }
