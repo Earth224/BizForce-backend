@@ -5384,6 +5384,7 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
     var birth_name        = safeText(req.body.birth_name,         120);
     var birth_name_arabic = safeText(req.body.birth_name_arabic,  120);
     var birth_name_greek  = safeText(req.body.birth_name_greek,   120);
+    var birth_name_hebrew = safeText(req.body.birth_name_hebrew,  120);
     var birth_date        = safeText(req.body.birth_date,          20);
     var birth_time        = safeText(req.body.birth_time,          20);
     var birth_place       = safeText(req.body.birth_place,        200);
@@ -5402,6 +5403,7 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
         birth_name:        birth_name,
         birth_name_arabic: birth_name_arabic || null,
         birth_name_greek:  birth_name_greek  || null,
+        birth_name_hebrew: birth_name_hebrew || null,
         birth_date:        birth_date,
         birth_time:        birth_time       || null,
         birth_place:       birth_place      || null,
@@ -5994,6 +5996,67 @@ function computeIsopsephy(birthNameGreek, birthNameLatin) {
   };
 }
 
+// Hebrew gematria letter values -- mispar hechrachi (standard absolute
+// value), the conventional reckoning used across Kabbalistic and Talmudic
+// sources. An alternate convention, mispar gadol, gives the five final
+// (sofit) forms their own larger values (500-900) instead of normalizing
+// them to their base letter; this codebase uses the standard values.
+// Keyed by Hebrew Unicode letter. Verified against the three most
+// widely-cited anchors: חי (chai, "life") = 18, אמת (emet, "truth") = 441,
+// and שלום (shalom) = 376.
+var HEBREW_LETTER_MAP = {
+  'א': 1,   'ב': 2,   'ג': 3,   'ד': 4,   'ה': 5,
+  'ו': 6,   'ז': 7,   'ח': 8,   'ט': 9,
+  'י': 10,  'כ': 20,  'ל': 30,  'מ': 40,  'נ': 50,
+  'ס': 60,  'ע': 70,  'פ': 80,  'צ': 90,
+  'ק': 100, 'ר': 200, 'ש': 300, 'ת': 400
+};
+
+// Final (sofit) forms normalized to their base letter -- standard gematria
+// gives them the same value as the non-final form, not a distinct one.
+var HEBREW_FINAL_NORMALIZE = {
+  'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ'
+};
+
+// Hebrew gematria computed from actual Hebrew script -- deliberately
+// separate from computeKabbalah above, which computes a DIFFERENT,
+// pre-existing "Kabbalah" system from a Latin transliteration of
+// birthName via HEBREW_GEMATRIA_MAP (an a-z letter-value table). That
+// system stays untouched so nothing depending on it breaks; this is
+// registered as its own additional system (hebrewGematria) alongside it.
+// Same refusal-to-fabricate stance as computeAbjad/computeIsopsephy: no
+// Latin fallback, since ט (9) and ת (400) both transliterate to "t", כ (20)
+// and ק (100) both become "k", and ס (60) and שׂ both become "s".
+function computeHebrewGematria(birthNameHebrew) {
+  var raw = String(birthNameHebrew || "");
+  // Strip niqqud/vowel points and cantillation marks (U+0591-U+05C7)
+  // before summing -- they carry no gematria value of their own.
+  var stripped = raw.replace(/[֑-ׇ]/g, "");
+
+  var total = 0;
+  var matched = false;
+  for (var i = 0; i < stripped.length; i++) {
+    var ch = stripped[i];
+    var normalized = HEBREW_FINAL_NORMALIZE[ch] || ch;
+    var value = HEBREW_LETTER_MAP[normalized];
+    if (value) {
+      total += value;
+      matched = true;
+    }
+  }
+
+  if (!matched) {
+    return { total: null, reduced: null, available: false, source: "no_hebrew_name" };
+  }
+
+  return {
+    total:     total,
+    reduced:   reduceNumber(total),
+    available: true,
+    source:    "hebrew"
+  };
+}
+
 // Vedic (Indian) planetary rulerships by psychic/Moolank number.
 var VEDIC_PLANETARY_RULERS = {
   1: "Sun", 2: "Moon", 3: "Jupiter", 4: "Rahu", 5: "Mercury",
@@ -6087,7 +6150,7 @@ function computeLoShu(birthDateStr) {
 // Multi-system numerology engine. lifePath is date-derived and identical
 // across Western systems (Pythagorean/Chaldean), so it's computed once via
 // the existing calculateLifePath and reused across both system objects.
-function computeAllNumerology(birthName, birthDate, birthNameArabic, birthNameGreek) {
+function computeAllNumerology(birthName, birthDate, birthNameArabic, birthNameGreek, birthNameHebrew) {
   var lifePath = calculateLifePath(birthDate);
 
   var pythagoreanNames = computeNameNumbers(birthName, PYTHAGOREAN_MAP, reduceNumber);
@@ -6110,6 +6173,7 @@ function computeAllNumerology(birthName, birthDate, birthNameArabic, birthNameGr
     divineTriangle: computeDivineTriangle(birthName, birthDate),
     divineTriangleBlueprint: computeDivineTriangleBlueprint(birthName, birthDate),
     kabbalah: computeKabbalah(birthName),
+    hebrewGematria: computeHebrewGematria(birthNameHebrew),
     abjad: computeAbjad(birthNameArabic, birthName),
     isopsephy: computeIsopsephy(birthNameGreek, birthName),
     vedic: computeVedic(birthName, birthDate),
@@ -6170,6 +6234,9 @@ function computeQuantumSynthesis(systems) {
     // Same "only contributes when available" behavior as abjad above.
     isopsephy: systems.isopsephy
       ? uniqueNumbers([systems.isopsephy.reduced])
+      : [],
+    hebrewGematria: systems.hebrewGematria
+      ? uniqueNumbers([systems.hebrewGematria.reduced])
       : []
   };
 
@@ -6509,13 +6576,14 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       return res.json({});
     }
 
-    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date, result.data.birth_name_arabic, result.data.birth_name_greek);
+    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date, result.data.birth_name_arabic, result.data.birth_name_greek, result.data.birth_name_hebrew);
 
     return res.json({
       birth_date: result.data.birth_date || null,
       birth_name: result.data.birth_name || null,
       birth_name_arabic: result.data.birth_name_arabic || null,
       birth_name_greek: result.data.birth_name_greek || null,
+      birth_name_hebrew: result.data.birth_name_hebrew || null,
       life_path:  calculateLifePath(result.data.birth_date),
       expression: calculateNameNumber(result.data.birth_name, false),
       soul_urge:  calculateNameNumber(result.data.birth_name, true),
