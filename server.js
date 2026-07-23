@@ -5381,13 +5381,14 @@ app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
 
 app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
   try {
-    var birth_name       = safeText(req.body.birth_name,        120);
-    var birth_date       = safeText(req.body.birth_date,         20);
-    var birth_time       = safeText(req.body.birth_time,         20);
-    var birth_place      = safeText(req.body.birth_place,       200);
-    var current_location = safeText(req.body.current_location,  200);
-    var path_focus       = safeText(req.body.path_focus,        500);
-    var life_details     = safeText(req.body.life_details,     8000);
+    var birth_name        = safeText(req.body.birth_name,         120);
+    var birth_name_arabic = safeText(req.body.birth_name_arabic,  120);
+    var birth_date        = safeText(req.body.birth_date,          20);
+    var birth_time        = safeText(req.body.birth_time,          20);
+    var birth_place       = safeText(req.body.birth_place,        200);
+    var current_location  = safeText(req.body.current_location,   200);
+    var path_focus        = safeText(req.body.path_focus,         500);
+    var life_details      = safeText(req.body.life_details,      8000);
 
     if (!birth_name || !birth_date) {
       return res.status(400).json({ error: "birth_name and birth_date are required" });
@@ -5396,15 +5397,16 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
     var result = await supabase
       .from("oracle_sync")
       .upsert({
-        user_id:          req.user.id,
-        birth_name:       birth_name,
-        birth_date:       birth_date,
-        birth_time:       birth_time       || null,
-        birth_place:      birth_place      || null,
-        current_location: current_location || null,
-        path_focus:       path_focus       || null,
-        life_details:     life_details     || null,
-        updated_at:       nowIso()
+        user_id:           req.user.id,
+        birth_name:        birth_name,
+        birth_name_arabic: birth_name_arabic || null,
+        birth_date:        birth_date,
+        birth_time:        birth_time       || null,
+        birth_place:       birth_place      || null,
+        current_location:  current_location || null,
+        path_focus:        path_focus       || null,
+        life_details:      life_details     || null,
+        updated_at:        nowIso()
       }, { onConflict: "user_id" });
 
     if (result.error) throw result.error;
@@ -5867,6 +5869,74 @@ function computeKabbalah(birthName) {
   };
 }
 
+// Arabic ʿIlm al-Ḥurūf (Abjad) letter values -- Eastern/Mashriqi ordering
+// (Abjad Hawwaz), the sequence used across the Arab East, as opposed to the
+// Western Maghrebi ordering, which assigns the same 28 letters different
+// values. Keyed by the base Arabic Unicode letter. Verified against the two
+// universally-cited anchors: الله (Allah) = 66, and the Basmala
+// (بسم الله الرحمن الرحيم) = 786.
+var ARABIC_ABJAD_MAP = {
+  'ا': 1,   'ب': 2,   'ج': 3,   'د': 4,   'ه': 5,
+  'و': 6,   'ز': 7,   'ح': 8,   'ط': 9,   'ي': 10,
+  'ك': 20,  'ل': 30,  'م': 40,  'ن': 50,  'س': 60,
+  'ع': 70,  'ف': 80,  'ص': 90,  'ق': 100, 'ر': 200,
+  'ش': 300, 'ت': 400, 'ث': 500, 'خ': 600, 'ذ': 700,
+  'ض': 800, 'ظ': 900, 'غ': 1000
+};
+
+// Orthographic variants normalized to the base letter they carry the same
+// Abjad value as: hamza-seated alifs (أ إ آ ٱ) -> ا; ta marbuta (ة), a
+// historical variant of ه, -> ه; alif maksura (ى) -> ي; waw/ya with hamza
+// (ؤ ئ) -> their seat letter. Bare hamza (ء), when it appears as its own
+// letter rather than seated on a carrier, is treated as alif (1) rather
+// than skipped -- the more common convention for a standalone hamza.
+var ARABIC_LETTER_NORMALIZE = {
+  'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ٱ': 'ا',
+  'ة': 'ه',
+  'ى': 'ي',
+  'ؤ': 'و',
+  'ئ': 'ي',
+  'ء': 'ا'
+};
+
+// Abjad numerology -- deliberately keyed to birthNameArabic ONLY.
+// birthNameLatin is accepted (matching the shape callers naturally have on
+// hand) but never used to compute a value: falling back to a Latin
+// transliteration would produce a number that looks as authoritative as a
+// real Abjad reading while actually being arbitrary, since one English
+// letter maps to multiple Arabic letters with different values (s -> س=60
+// or ص=90) and several Arabic letters (ط ع ذ ظ) have no clean Latin
+// equivalent at all. No Arabic name on file means no reading, full stop.
+function computeAbjad(birthNameArabic, birthNameLatin) {
+  var raw = String(birthNameArabic || "");
+  // Strip tashkeel/diacritics (fatha, damma, kasra, shadda, sukun, etc.)
+  // before summing -- they carry no Abjad value of their own.
+  var stripped = raw.replace(/[ً-ٟ]/g, "");
+
+  var total = 0;
+  var matched = false;
+  for (var i = 0; i < stripped.length; i++) {
+    var ch = stripped[i];
+    var normalized = ARABIC_LETTER_NORMALIZE[ch] || ch;
+    var value = ARABIC_ABJAD_MAP[normalized];
+    if (value) {
+      total += value;
+      matched = true;
+    }
+  }
+
+  if (!matched) {
+    return { total: null, reduced: null, available: false, source: "no_arabic_name" };
+  }
+
+  return {
+    total:     total,
+    reduced:   reduceNumber(total),
+    available: true,
+    source:    "arabic"
+  };
+}
+
 // Vedic (Indian) planetary rulerships by psychic/Moolank number.
 var VEDIC_PLANETARY_RULERS = {
   1: "Sun", 2: "Moon", 3: "Jupiter", 4: "Rahu", 5: "Mercury",
@@ -5960,7 +6030,7 @@ function computeLoShu(birthDateStr) {
 // Multi-system numerology engine. lifePath is date-derived and identical
 // across Western systems (Pythagorean/Chaldean), so it's computed once via
 // the existing calculateLifePath and reused across both system objects.
-function computeAllNumerology(birthName, birthDate) {
+function computeAllNumerology(birthName, birthDate, birthNameArabic) {
   var lifePath = calculateLifePath(birthDate);
 
   var pythagoreanNames = computeNameNumbers(birthName, PYTHAGOREAN_MAP, reduceNumber);
@@ -5983,6 +6053,7 @@ function computeAllNumerology(birthName, birthDate) {
     divineTriangle: computeDivineTriangle(birthName, birthDate),
     divineTriangleBlueprint: computeDivineTriangleBlueprint(birthName, birthDate),
     kabbalah: computeKabbalah(birthName),
+    abjad: computeAbjad(birthNameArabic, birthName),
     vedic: computeVedic(birthName, birthDate),
     chinese: computeLoShu(birthDate)
   };
@@ -6369,11 +6440,12 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       return res.json({});
     }
 
-    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date);
+    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date, result.data.birth_name_arabic);
 
     return res.json({
       birth_date: result.data.birth_date || null,
       birth_name: result.data.birth_name || null,
+      birth_name_arabic: result.data.birth_name_arabic || null,
       life_path:  calculateLifePath(result.data.birth_date),
       expression: calculateNameNumber(result.data.birth_name, false),
       soul_urge:  calculateNameNumber(result.data.birth_name, true),
