@@ -6018,6 +6018,15 @@ var HEBREW_FINAL_NORMALIZE = {
   'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ'
 };
 
+// Mispar gadol -- the alternate convention noted (but not used) above: the
+// five sofit finals take their OWN larger values instead of being
+// normalized to their base letter. Deliberately does NOT normalize finals
+// the way HEBREW_FINAL_NORMALIZE does; sits alongside standard mispar
+// hechrachi (computeHebrewGematria) as a second reading, not a replacement.
+var MISPAR_GADOL_FINALS = {
+  'ך': 500, 'ם': 600, 'ן': 700, 'ף': 800, 'ץ': 900
+};
+
 // Hebrew gematria computed from actual Hebrew script -- deliberately
 // separate from computeKabbalah above, which computes a DIFFERENT,
 // pre-existing "Kabbalah" system from a Latin transliteration of
@@ -6054,6 +6063,38 @@ function computeHebrewGematria(birthNameHebrew) {
     reduced:   reduceNumber(total),
     available: true,
     source:    "hebrew"
+  };
+}
+
+// Mispar gadol reading of the same Hebrew name -- same niqqud/cantillation
+// stripping as computeHebrewGematria, but the five sofit finals are looked
+// up in MISPAR_GADOL_FINALS first (their own larger value) rather than
+// normalized to their base letter via HEBREW_FINAL_NORMALIZE.
+function computeMisparGadol(birthNameHebrew) {
+  var raw = String(birthNameHebrew || "");
+  var stripped = raw.replace(/[֑-ׇ]/g, "");
+
+  var total = 0;
+  var matched = false;
+  for (var i = 0; i < stripped.length; i++) {
+    var ch = stripped[i];
+    var value = MISPAR_GADOL_FINALS[ch];
+    if (value == null) value = HEBREW_LETTER_MAP[ch];
+    if (value) {
+      total += value;
+      matched = true;
+    }
+  }
+
+  if (!matched) {
+    return { total: null, reduced: null, available: false, source: "no_hebrew_name" };
+  }
+
+  return {
+    total:     total,
+    reduced:   reduceNumber(total),
+    available: true,
+    source:    "hebrew_gadol"
   };
 }
 
@@ -6174,6 +6215,7 @@ function computeAllNumerology(birthName, birthDate, birthNameArabic, birthNameGr
     divineTriangleBlueprint: computeDivineTriangleBlueprint(birthName, birthDate),
     kabbalah: computeKabbalah(birthName),
     hebrewGematria: computeHebrewGematria(birthNameHebrew),
+    misparGadol: computeMisparGadol(birthNameHebrew),
     abjad: computeAbjad(birthNameArabic, birthName),
     isopsephy: computeIsopsephy(birthNameGreek, birthName),
     vedic: computeVedic(birthName, birthDate),
