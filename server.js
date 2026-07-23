@@ -6101,6 +6101,13 @@ function computeQuantumSynthesis(systems) {
       : [],
     kabbalah: systems.kabbalah
       ? uniqueNumbers([systems.kabbalah.reduced])
+      : [],
+    // Only contributes when an Arabic name was actually on file --
+    // uniqueNumbers already drops null/undefined, so an unavailable Abjad
+    // reading (reduced: null) naturally casts zero votes rather than
+    // needing an explicit systems.abjad.available check here.
+    abjad: systems.abjad
+      ? uniqueNumbers([systems.abjad.reduced])
       : []
   };
 
