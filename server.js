@@ -6387,6 +6387,166 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
   }
 });
 
+// ── Calendar events (reminders/anniversaries/birthdays/vacations) ──
+// Anchored to jdn (Julian Day Number), the universal pivot the
+// multi-calendar engine in oracle.html/mychart.html already uses, so one
+// event row renders correctly under any of the 11 calendars regardless of
+// which one was active when it was created. See
+// supabase/migrations/043_calendar_events.sql for the table.
+var CALENDAR_EVENT_TYPES = ["reminder", "anniversary", "birthday", "vacation", "other"];
+
+app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
+  try {
+    var startJdn = req.query.startJdn !== undefined ? Number(req.query.startJdn) : null;
+    var endJdn = req.query.endJdn !== undefined ? Number(req.query.endJdn) : null;
+
+    if (startJdn !== null && !Number.isFinite(startJdn)) {
+      return res.status(400).json({ error: "startJdn must be a number" });
+    }
+    if (endJdn !== null && !Number.isFinite(endJdn)) {
+      return res.status(400).json({ error: "endJdn must be a number" });
+    }
+
+    var query = supabase
+      .from("calendar_events")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("jdn", { ascending: true });
+
+    if (startJdn !== null) {
+      query = query.gte("jdn", startJdn);
+    }
+    if (endJdn !== null) {
+      query = query.lte("jdn", endJdn);
+    }
+
+    var { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ events: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
+  try {
+    var jdn = Number(req.body.jdn);
+    var title = safeText(req.body.title, 200);
+    var eventType = safeText(req.body.event_type, 30) || "other";
+
+    if (!Number.isFinite(jdn)) {
+      return res.status(400).json({ error: "jdn is required and must be a number" });
+    }
+    if (!title) {
+      return res.status(400).json({ error: "title is required" });
+    }
+    if (CALENDAR_EVENT_TYPES.indexOf(eventType) === -1) {
+      return res.status(400).json({ error: "event_type must be one of: " + CALENDAR_EVENT_TYPES.join(", ") });
+    }
+
+    var { data, error } = await supabase
+      .from("calendar_events")
+      .insert({
+        user_id: req.user.id,
+        jdn: jdn,
+        title: title,
+        event_type: eventType,
+        notes: safeText(req.body.notes, 5000),
+        recurring: !!req.body.recurring
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ event: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/calendar/events/:id", requireAuth, async function (req, res, next) {
+  try {
+    var allowed = ["title", "notes", "event_type", "recurring", "jdn"];
+    var updates = {};
+
+    for (var i = 0; i < allowed.length; i++) {
+      var key = allowed[i];
+      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
+        updates[key] = req.body[key];
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "title")) {
+      updates.title = safeText(updates.title, 200);
+      if (!updates.title) {
+        return res.status(400).json({ error: "title cannot be empty" });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "notes")) {
+      updates.notes = safeText(updates.notes, 5000);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "event_type")) {
+      if (CALENDAR_EVENT_TYPES.indexOf(updates.event_type) === -1) {
+        return res.status(400).json({ error: "event_type must be one of: " + CALENDAR_EVENT_TYPES.join(", ") });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "jdn")) {
+      updates.jdn = Number(updates.jdn);
+      if (!Number.isFinite(updates.jdn)) {
+        return res.status(400).json({ error: "jdn must be a number" });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "recurring")) {
+      updates.recurring = !!updates.recurring;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No updatable fields provided" });
+    }
+
+    var { data, error } = await supabase
+      .from("calendar_events")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ event: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/calendar/events/:id", requireAuth, async function (req, res, next) {
+  try {
+    var { error } = await supabase
+      .from("calendar_events")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id);
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, next) {
   try {
     var name    = String(req.body.birthName || "Seeker").trim().slice(0, 120);
