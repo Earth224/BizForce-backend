@@ -5383,6 +5383,7 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
   try {
     var birth_name        = safeText(req.body.birth_name,         120);
     var birth_name_arabic = safeText(req.body.birth_name_arabic,  120);
+    var birth_name_greek  = safeText(req.body.birth_name_greek,   120);
     var birth_date        = safeText(req.body.birth_date,          20);
     var birth_time        = safeText(req.body.birth_time,          20);
     var birth_place       = safeText(req.body.birth_place,        200);
@@ -5400,6 +5401,7 @@ app.post("/api/oracle/sync", requireAuth, async function (req, res, next) {
         user_id:           req.user.id,
         birth_name:        birth_name,
         birth_name_arabic: birth_name_arabic || null,
+        birth_name_greek:  birth_name_greek  || null,
         birth_date:        birth_date,
         birth_time:        birth_time       || null,
         birth_place:       birth_place      || null,
@@ -5937,6 +5939,61 @@ function computeAbjad(birthNameArabic, birthNameLatin) {
   };
 }
 
+// Greek isopsephy letter values -- each of the 24 modern letters plus the
+// three archaic numeral-only letters retained for counting (stigma/
+// digamma, koppa, sampi) that fill the gaps the standard alphabet leaves
+// at 6, 90, and 900. Keyed by lowercase Greek Unicode letter. Verified
+// against the two most widely-cited anchors: Ἰησοῦς (Jesus) = 888, and
+// ἀμήν (amen) = 99.
+var GREEK_ISOPSEPHY_MAP = {
+  'α': 1,   'β': 2,   'γ': 3,   'δ': 4,   'ε': 5,
+  'ϛ': 6,   'ζ': 7,   'η': 8,   'θ': 9,
+  'ι': 10,  'κ': 20,  'λ': 30,  'μ': 40,  'ν': 50,
+  'ξ': 60,  'ο': 70,  'π': 80,  'ϟ': 90,
+  'ρ': 100, 'σ': 200, 'τ': 300, 'υ': 400, 'φ': 500,
+  'χ': 600, 'ψ': 700, 'ω': 800, 'ϡ': 900
+};
+
+// Isopsephy numerology -- deliberately keyed to birthNameGreek ONLY, same
+// refusal-to-fabricate stance as computeAbjad above. birthNameLatin is
+// accepted (matching the shape callers naturally have on hand) but never
+// used to compute a value: η (8) and ε (5) both transliterate to "e", and
+// ω (800) and ο (70) both become "o", so a Latin-derived total would look
+// as authoritative as a real isopsephy reading while actually being
+// arbitrary. No Greek name on file means no reading, full stop.
+function computeIsopsephy(birthNameGreek, birthNameLatin) {
+  var raw = String(birthNameGreek || "").toLowerCase();
+  // Final sigma (word-final ς) carries the same value as medial σ (200) --
+  // normalize it before summing so word position doesn't matter.
+  raw = raw.replace(/ς/g, 'σ');
+  // NFD-decompose so accented/breathed letters (ά, ἀ, ή, ῦ, etc.) split
+  // into their base letter plus combining marks, then strip the marks
+  // (U+0300-U+036F) before summing -- accent and breathing carry no
+  // isopsephy value of their own.
+  var normalized = raw.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+  var total = 0;
+  var matched = false;
+  for (var i = 0; i < normalized.length; i++) {
+    var value = GREEK_ISOPSEPHY_MAP[normalized[i]];
+    if (value) {
+      total += value;
+      matched = true;
+    }
+  }
+
+  if (!matched) {
+    return { total: null, reduced: null, available: false, source: "no_greek_name" };
+  }
+
+  return {
+    total:     total,
+    reduced:   reduceNumber(total),
+    available: true,
+    source:    "greek"
+  };
+}
+
 // Vedic (Indian) planetary rulerships by psychic/Moolank number.
 var VEDIC_PLANETARY_RULERS = {
   1: "Sun", 2: "Moon", 3: "Jupiter", 4: "Rahu", 5: "Mercury",
@@ -6030,7 +6087,7 @@ function computeLoShu(birthDateStr) {
 // Multi-system numerology engine. lifePath is date-derived and identical
 // across Western systems (Pythagorean/Chaldean), so it's computed once via
 // the existing calculateLifePath and reused across both system objects.
-function computeAllNumerology(birthName, birthDate, birthNameArabic) {
+function computeAllNumerology(birthName, birthDate, birthNameArabic, birthNameGreek) {
   var lifePath = calculateLifePath(birthDate);
 
   var pythagoreanNames = computeNameNumbers(birthName, PYTHAGOREAN_MAP, reduceNumber);
@@ -6054,6 +6111,7 @@ function computeAllNumerology(birthName, birthDate, birthNameArabic) {
     divineTriangleBlueprint: computeDivineTriangleBlueprint(birthName, birthDate),
     kabbalah: computeKabbalah(birthName),
     abjad: computeAbjad(birthNameArabic, birthName),
+    isopsephy: computeIsopsephy(birthNameGreek, birthName),
     vedic: computeVedic(birthName, birthDate),
     chinese: computeLoShu(birthDate)
   };
@@ -6108,6 +6166,10 @@ function computeQuantumSynthesis(systems) {
     // needing an explicit systems.abjad.available check here.
     abjad: systems.abjad
       ? uniqueNumbers([systems.abjad.reduced])
+      : [],
+    // Same "only contributes when available" behavior as abjad above.
+    isopsephy: systems.isopsephy
+      ? uniqueNumbers([systems.isopsephy.reduced])
       : []
   };
 
@@ -6447,12 +6509,13 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
       return res.json({});
     }
 
-    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date, result.data.birth_name_arabic);
+    var numerologySystems = computeAllNumerology(result.data.birth_name, result.data.birth_date, result.data.birth_name_arabic, result.data.birth_name_greek);
 
     return res.json({
       birth_date: result.data.birth_date || null,
       birth_name: result.data.birth_name || null,
       birth_name_arabic: result.data.birth_name_arabic || null,
+      birth_name_greek: result.data.birth_name_greek || null,
       life_path:  calculateLifePath(result.data.birth_date),
       expression: calculateNameNumber(result.data.birth_name, false),
       soul_urge:  calculateNameNumber(result.data.birth_name, true),
