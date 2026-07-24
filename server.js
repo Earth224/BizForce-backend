@@ -13361,6 +13361,91 @@ async function dripTick() {
 setInterval(dripTick, 300000);
 dripTick();
 
+/* Phrases how far out a due reminder's event is, using the offset the user
+   originally chose (reminder_minutes_before) rather than recomputing from
+   remind_at, so the wording matches what they picked even if the tick was
+   a little late firing it. Picks the largest whole unit that divides the
+   minute count evenly, falling back to minutes. */
+function formatReminderBody(minutesBefore) {
+  if (!minutesBefore) {
+    return "This event is today.";
+  }
+  if (minutesBefore % 1440 === 0) {
+    var days = minutesBefore / 1440;
+    return "This event is in " + days + " day" + (days === 1 ? "" : "s") + ".";
+  }
+  if (minutesBefore % 60 === 0) {
+    var hours = minutesBefore / 60;
+    return "This event is in " + hours + " hour" + (hours === 1 ? "" : "s") + ".";
+  }
+  return "This event is in " + minutesBefore + " minute" + (minutesBefore === 1 ? "" : "s") + ".";
+}
+
+/* Fires push reminders for due calendar events. Bounded to the last 24
+   hours so a scheduler that was down for a while doesn't flood users with
+   stale reminders on restart — anything older is treated as missed, not
+   sent late. reminder_sent_at is stamped right after the send attempt
+   (whether or not the user had any push subscriptions) so a user with no
+   device doesn't cause the same row to keep matching every tick. */
+async function runDueReminders() {
+  var nowIso = new Date().toISOString();
+  var cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  var { data: rows, error } = await supabase
+    .from("calendar_events")
+    .select("id, user_id, title, reminder_minutes_before")
+    .not("remind_at", "is", null)
+    .is("reminder_sent_at", null)
+    .lte("remind_at", nowIso)
+    .gt("remind_at", cutoffIso);
+
+  if (error) {
+    console.error("[reminderScheduler] Error fetching due reminders:", error.message);
+    return;
+  }
+
+  for (var i = 0; i < (rows || []).length; i++) {
+    var row = rows[i];
+    try {
+      await sendPushToUser(row.user_id, {
+        title: row.title,
+        body: formatReminderBody(row.reminder_minutes_before)
+      });
+
+      var { error: updateError } = await supabase
+        .from("calendar_events")
+        .update({ reminder_sent_at: new Date().toISOString() })
+        .eq("id", row.id);
+
+      if (updateError) {
+        console.error("[reminderScheduler] Error marking reminder sent for event " + row.id + ":", updateError.message);
+      }
+    } catch (err) {
+      console.error("[reminderScheduler] Error processing reminder for event " + row.id + ":", err.message || err);
+    }
+  }
+
+  console.log("[reminderScheduler] " + new Date().toISOString() + " — processed " + (rows || []).length + " due reminder(s)");
+}
+
+var reminderSchedulerRunning = false;
+
+async function reminderTick() {
+  if (reminderSchedulerRunning) {
+    console.log("[reminderScheduler] Tick skipped — previous run still in progress");
+    return;
+  }
+  reminderSchedulerRunning = true;
+  try {
+    await runDueReminders();
+  } finally {
+    reminderSchedulerRunning = false;
+  }
+}
+
+setInterval(reminderTick, 60000);
+reminderTick();
+
 // Sales Agent auto-conversion timer — Option A: wired directly here in
 // server.js, completely independent of leadRadar.js's radarTick/5-minute
 // cycle (not touching that file at all). Reentrancy guard mirrors
