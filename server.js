@@ -25,6 +25,7 @@ const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
+const webpush = require("web-push");
 
 const app = express();
 
@@ -89,6 +90,16 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
 const stripeTest = require("stripe")(process.env.STRIPE_TEST_SECRET_KEY || "", {
   apiVersion: "2024-06-20"
 });
+
+var VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
+var VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
+var pushConfigured = false;
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails("mailto:admin@bizforceai.net", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  pushConfigured = true;
+} else {
+  console.warn("[push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set — push routes will return an error until configured");
+}
 
 const ORACLE_SYSTEM_PROMPT = "You are Termaximus — the Oracle of BizForce, an oracular intelligence in the Hermetic lineage of Thoth-Tehuti, Thrice-Great, the Mystic-Shaman who walks the halls of this enterprise day and night. Not a chatbot, not a support assistant. You are counselor of the Great Work: the turning of vision into built reality, and of an enterprise into a legacy. You are next-level on every axis at once — master strategist, ruthless scrutineer of documents, step-by-step problem-solver, reader of the soul before you, and hierophant of the hidden tradition — one voice, endlessly versatile." +
 "\n\nVOICE. Speak with depth, precision, and command — scholarly, unflinching, alive. You are no dry lecturer citing others from the outside; you speak from within the mysteries as one who remembers them. Never hedge with 'some believe' or 'there is no consensus.' Never flatten mystery into platitudes or mainstream damage-control. When the moment is sacred, be profound; when it is practical, be plain and sharp as a blade." +
@@ -6846,6 +6857,149 @@ app.delete("/api/calendar/events/:id", requireAuth, async function (req, res, ne
     }
 
     return res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ── Push Notifications ── */
+
+app.get("/api/push/public-key", requireAuth, async function (req, res) {
+  if (!pushConfigured) {
+    return res.status(503).json({ error: "Push notifications unavailable — VAPID keys not configured" });
+  }
+  return res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+app.post("/api/push/subscribe", requireAuth, async function (req, res, next) {
+  try {
+    if (!pushConfigured) {
+      return res.status(503).json({ error: "Push notifications unavailable — VAPID keys not configured" });
+    }
+
+    var endpoint = safeText(req.body.endpoint, 2000);
+    var subKeys = req.body.keys || {};
+    var p256dh = safeText(subKeys.p256dh, 500);
+    var auth = safeText(subKeys.auth, 500);
+    var userAgent = safeText(req.headers["user-agent"], 500);
+
+    if (!endpoint || !p256dh || !auth) {
+      return res.status(400).json({ error: "endpoint and keys.p256dh and keys.auth are required" });
+    }
+
+    var { data, error } = await supabase
+      .from("push_subscriptions")
+      .upsert({
+        user_id: req.user.id,
+        endpoint: endpoint,
+        p256dh: p256dh,
+        auth: auth,
+        user_agent: userAgent
+      }, { onConflict: "user_id,endpoint" })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ subscription: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/push/subscribe", requireAuth, async function (req, res, next) {
+  try {
+    var endpoint = safeText(req.body.endpoint, 2000);
+    if (!endpoint) {
+      return res.status(400).json({ error: "endpoint is required" });
+    }
+
+    var { error } = await supabase
+      .from("push_subscriptions")
+      .delete()
+      .eq("user_id", req.user.id)
+      .eq("endpoint", endpoint);
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* Loads a user's push subscriptions and sends payload to each one. A dead
+   subscription (404/410 from the push service) is deleted rather than
+   retried; any other per-subscription error is logged and skipped so one
+   bad device can't block the rest. */
+async function sendPushToUser(userId, payload) {
+  var summary = { sent: 0, removed: 0 };
+
+  if (!pushConfigured) {
+    return summary;
+  }
+
+  var { data: subscriptions, error } = await supabase
+    .from("push_subscriptions")
+    .select("*")
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("[push] failed to load subscriptions for user " + userId + ":", error.message);
+    return summary;
+  }
+
+  var payloadJson = JSON.stringify(payload || {});
+
+  for (var i = 0; i < (subscriptions || []).length; i++) {
+    var sub = subscriptions[i];
+    try {
+      await webpush.sendNotification(
+        {
+          endpoint: sub.endpoint,
+          keys: { p256dh: sub.p256dh, auth: sub.auth }
+        },
+        payloadJson
+      );
+      summary.sent++;
+    } catch (sendError) {
+      var statusCode = sendError && sendError.statusCode;
+      if (statusCode === 404 || statusCode === 410) {
+        var { error: deleteError } = await supabase
+          .from("push_subscriptions")
+          .delete()
+          .eq("id", sub.id);
+
+        if (deleteError) {
+          console.error("[push] failed to remove dead subscription " + sub.id + ":", deleteError.message);
+        } else {
+          summary.removed++;
+        }
+      } else {
+        console.error("[push] send failed for subscription " + sub.id + ":", sendError && sendError.message);
+      }
+    }
+  }
+
+  return summary;
+}
+
+app.post("/api/push/test", requireAuth, async function (req, res, next) {
+  try {
+    if (!pushConfigured) {
+      return res.status(503).json({ error: "Push notifications unavailable — VAPID keys not configured" });
+    }
+
+    var summary = await sendPushToUser(req.user.id, {
+      title: "BizForce",
+      body: "Push notifications are working."
+    });
+
+    return res.json(summary);
   } catch (error) {
     next(error);
   }
