@@ -6900,6 +6900,91 @@ app.delete("/api/calendar/events/:id", requireAuth, async function (req, res, ne
   }
 });
 
+/* ── Inner I.Q Test Results ── */
+
+app.post("/api/inner-iq/results", requireAuth, async function (req, res, next) {
+  try {
+    if (typeof req.body.taker_name !== "string" || !req.body.taker_name.trim()) {
+      return res.status(400).json({ error: "taker_name is required" });
+    }
+    var takerName = req.body.taker_name.trim().slice(0, 60);
+
+    var takerKind = req.body.taker_kind === "guest" ? "guest" : "self";
+
+    var cognitive = null;
+    if (req.body.cognitive !== undefined && req.body.cognitive !== null) {
+      if (typeof req.body.cognitive !== "object" || Array.isArray(req.body.cognitive)) {
+        return res.status(400).json({ error: "cognitive must be an object" });
+      }
+      cognitive = req.body.cognitive;
+    }
+
+    var personality = null;
+    if (req.body.personality !== undefined && req.body.personality !== null) {
+      if (typeof req.body.personality !== "object" || Array.isArray(req.body.personality)) {
+        return res.status(400).json({ error: "personality must be an object" });
+      }
+      personality = req.body.personality;
+    }
+
+    var { data, error } = await supabase
+      .from("inner_iq_results")
+      .insert({
+        user_id: req.user.id,
+        taker_name: takerName,
+        taker_kind: takerKind,
+        cognitive: cognitive,
+        personality: personality
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ result: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/inner-iq/results", requireAuth, async function (req, res, next) {
+  try {
+    var { data, error } = await supabase
+      .from("inner_iq_results")
+      .select("id, taker_name, taker_kind, cognitive, personality, created_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ results: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/inner-iq/results/:id", requireAuth, async function (req, res, next) {
+  try {
+    var { error } = await supabase
+      .from("inner_iq_results")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id);
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* ── Push Notifications ── */
 
 app.get("/api/push/public-key", requireAuth, async function (req, res) {
