@@ -6645,7 +6645,16 @@ app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
 // event row renders correctly under any of the 11 calendars regardless of
 // which one was active when it was created. See
 // supabase/migrations/043_calendar_events.sql for the table.
-var CALENDAR_EVENT_TYPES = ["reminder", "anniversary", "birthday", "vacation", "other"];
+var CALENDAR_EVENT_TYPES = ["reminder", "anniversary", "birthday", "vacation", "work", "personal", "other"];
+
+// Which calendar system an annually-recurring event repeats in -- see the
+// migration 047 column comment. Matches the calendars the frontend's
+// multi-calendar engine (oracle.html/mychart.html/calendar.html) supports.
+var CALENDAR_RECUR_CALENDARS = [
+  "gregorian", "hijri", "hebrew", "persian", "zoroastrian", "coptic",
+  "ethiopic", "indianNational", "buddhist", "japanese", "egyptian",
+  "chinese", "mayan"
+];
 
 app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
   try {
@@ -6689,6 +6698,10 @@ app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
     var jdn = Number(req.body.jdn);
     var title = safeText(req.body.title, 200);
     var eventType = safeText(req.body.event_type, 30) || "other";
+    var recurCalendar = safeText(req.body.recur_calendar, 30);
+    if (!recurCalendar || CALENDAR_RECUR_CALENDARS.indexOf(recurCalendar) === -1) {
+      recurCalendar = "gregorian";
+    }
 
     if (!Number.isFinite(jdn)) {
       return res.status(400).json({ error: "jdn is required and must be a number" });
@@ -6708,7 +6721,8 @@ app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
         title: title,
         event_type: eventType,
         notes: safeText(req.body.notes, 5000),
-        recurring: !!req.body.recurring
+        recurring: !!req.body.recurring,
+        recur_calendar: recurCalendar
       })
       .select("*")
       .single();
@@ -6725,7 +6739,7 @@ app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
 
 app.patch("/api/calendar/events/:id", requireAuth, async function (req, res, next) {
   try {
-    var allowed = ["title", "notes", "event_type", "recurring", "jdn"];
+    var allowed = ["title", "notes", "event_type", "recurring", "jdn", "recur_calendar"];
     var updates = {};
 
     for (var i = 0; i < allowed.length; i++) {
@@ -6757,6 +6771,11 @@ app.patch("/api/calendar/events/:id", requireAuth, async function (req, res, nex
     }
     if (Object.prototype.hasOwnProperty.call(updates, "recurring")) {
       updates.recurring = !!updates.recurring;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "recur_calendar")) {
+      if (CALENDAR_RECUR_CALENDARS.indexOf(updates.recur_calendar) === -1) {
+        return res.status(400).json({ error: "recur_calendar must be one of: " + CALENDAR_RECUR_CALENDARS.join(", ") });
+      }
     }
 
     if (Object.keys(updates).length === 0) {
