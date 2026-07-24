@@ -6667,6 +6667,33 @@ var CALENDAR_RECUR_CALENDARS = [
   "chinese", "mayan"
 ];
 
+// Validates a remind_at sent by the client: must be a non-empty string
+// that Date can actually parse, otherwise treated as "no reminder" rather
+// than storing an unparseable timestamp. Normalized to an ISO string so
+// Postgres gets a clean timestamptz regardless of the input format.
+function parseRemindAt(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  var parsed = new Date(value);
+  if (isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString();
+}
+
+// reminder_minutes_before is purely informational (remind_at is the source
+// of truth for when the reminder fires -- see migration 049), so any
+// non-finite or negative value is treated as "not set" rather than
+// rejected outright.
+function parseReminderMinutesBefore(value) {
+  var n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return null;
+  }
+  return Math.floor(n);
+}
+
 app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
   try {
     var startJdn = req.query.startJdn !== undefined ? Number(req.query.startJdn) : null;
@@ -6766,7 +6793,9 @@ app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
         event_type: eventType,
         notes: safeText(req.body.notes, 5000),
         recurring: !!req.body.recurring,
-        recur_calendar: recurCalendar
+        recur_calendar: recurCalendar,
+        remind_at: parseRemindAt(req.body.remind_at),
+        reminder_minutes_before: parseReminderMinutesBefore(req.body.reminder_minutes_before)
       })
       .select("*")
       .single();
@@ -6783,7 +6812,7 @@ app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
 
 app.patch("/api/calendar/events/:id", requireAuth, async function (req, res, next) {
   try {
-    var allowed = ["title", "notes", "event_type", "recurring", "jdn", "recur_calendar"];
+    var allowed = ["title", "notes", "event_type", "recurring", "jdn", "recur_calendar", "remind_at", "reminder_minutes_before"];
     var updates = {};
 
     for (var i = 0; i < allowed.length; i++) {
@@ -6820,6 +6849,15 @@ app.patch("/api/calendar/events/:id", requireAuth, async function (req, res, nex
       if (CALENDAR_RECUR_CALENDARS.indexOf(updates.recur_calendar) === -1) {
         return res.status(400).json({ error: "recur_calendar must be one of: " + CALENDAR_RECUR_CALENDARS.join(", ") });
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "remind_at")) {
+      updates.remind_at = parseRemindAt(updates.remind_at);
+      // A reminder that's being set or rescheduled should be able to fire
+      // again, even if this same row already fired and was stamped sent.
+      updates.reminder_sent_at = null;
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "reminder_minutes_before")) {
+      updates.reminder_minutes_before = parseReminderMinutesBefore(updates.reminder_minutes_before);
     }
 
     if (Object.keys(updates).length === 0) {
