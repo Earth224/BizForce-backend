@@ -6687,7 +6687,40 @@ app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json({ events: data });
+    var events = data;
+
+    // A recurring event's expansion onto its anniversaries happens
+    // client-side (calendar.html), but that expansion has nothing to work
+    // with unless the ORIGINAL row is actually fetched -- a birthday
+    // stored years ago would never be returned when browsing this year,
+    // since its stored jdn falls outside [startJdn, endJdn]. So whenever a
+    // range is actually being requested, union in every one of this
+    // user's recurring events regardless of their stored jdn, via a
+    // second scoped query merged here rather than a single .or() filter --
+    // correctness over a single round trip, and a user's recurring events
+    // are few. When neither startJdn nor endJdn was given, the query above
+    // already returns everything, so there's nothing to add.
+    if (startJdn !== null || endJdn !== null) {
+      var { data: recurringData, error: recurringError } = await supabase
+        .from("calendar_events")
+        .select("*")
+        .eq("user_id", req.user.id)
+        .eq("recurring", true);
+
+      if (recurringError) {
+        throw recurringError;
+      }
+
+      var byId = {};
+      events.forEach(function (ev) { byId[ev.id] = ev; });
+      recurringData.forEach(function (ev) { byId[ev.id] = ev; });
+
+      events = Object.keys(byId)
+        .map(function (id) { return byId[id]; })
+        .sort(function (a, b) { return a.jdn - b.jdn; });
+    }
+
+    return res.json({ events: events });
   } catch (error) {
     next(error);
   }
