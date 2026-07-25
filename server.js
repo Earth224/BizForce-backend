@@ -1523,22 +1523,30 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       return res.status(400).json({ error: "Business name is required" });
     }
 
-    const { data: existingUser } = await supabase
+    const { data: existingUser, error: existingUserError } = await supabase
       .from("users")
       .select("id")
       .eq("email", email)
       .maybeSingle();
+
+    if (existingUserError) {
+      throw existingUserError;
+    }
 
     if (existingUser) {
       return res.status(409).json({ error: "Email already registered" });
     }
 
     if (website) {
-      const { data: existingWebsite } = await supabase
+      const { data: existingWebsite, error: existingWebsiteError } = await supabase
         .from("profiles")
         .select("id")
         .eq("website", website)
         .maybeSingle();
+
+      if (existingWebsiteError) {
+        throw existingWebsiteError;
+      }
 
       if (existingWebsite) {
         return res.status(409).json({ error: "Business website already registered" });
@@ -1551,11 +1559,15 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
     while (true) {
       const candidate = suffix === 0 ? username : username + "-" + suffix;
 
-      const { data: existingProfile } = await supabase
+      const { data: existingProfile, error: existingProfileError } = await supabase
         .from("profiles")
         .select("id")
         .eq("username", candidate)
         .maybeSingle();
+
+      if (existingProfileError) {
+        throw existingProfileError;
+      }
 
       if (!existingProfile) {
         username = candidate;
