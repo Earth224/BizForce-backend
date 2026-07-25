@@ -1603,6 +1603,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .insert({
+        id: user.id,
         user_id: user.id,
         email,
         full_name: fullName,
