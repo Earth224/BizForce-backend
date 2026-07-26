@@ -1288,6 +1288,7 @@ async function handleStripeEvent(event) {
             payment_method: "usd",
             status: "completed",
             listing_title: listingTitle,
+            is_digital: listingIsDigital,
             stripe_session_id: session.id
           })
           .select("id")
@@ -8207,6 +8208,10 @@ app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async functi
 
     if (listing.price_usd === null || listing.price_usd <= 0) {
       return res.status(400).json({ error: "This listing is not available for USD purchase" });
+    }
+
+    if (listing.status !== "active") {
+      return res.status(409).json({ error: "This listing is no longer available for purchase (status: " + listing.status + ")" });
     }
 
     if (listing.seller_id === req.user.id) {
