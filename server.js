@@ -11348,7 +11348,10 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
     const userId = seller.user_id;
 
     const [productsRes, portfolioRes, musicRes, videosRes] = await Promise.all([
-      supabase.from("profile_products").select("*").eq("user_id", userId),
+      supabase.from("marketplace_listings")
+        .select("id, title, description, category, price_usd, media, listing_kind")
+        .eq("seller_id", userId)
+        .eq("status", "active"),
       supabase.from("profile_portfolio").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
       supabase.from("bf_music_tracks").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
       supabase.from("bf_videos").select("*").eq("user_id", userId).order("sort_order", { ascending: true })
@@ -11359,11 +11362,24 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
     if (videosRes.error) throw videosRes.error;
 
     const allListings = productsRes.data || [];
+    const mapListing = function (l) {
+      const media = Array.isArray(l.media) ? l.media : [];
+      return {
+        id: l.id,
+        name: l.title,
+        description: l.description,
+        image_url: (media.length > 0 && media[0] && media[0].url) ? media[0].url : null,
+        category: l.category,
+        currency: "USD",
+        price: l.price_usd == null ? null : l.price_usd / 100,
+        is_purchasable: true
+      };
+    };
     const products = seller.show_products
-      ? allListings.filter(function (p) { return p.listing_kind === "good" && p.status === "active"; })
+      ? allListings.filter(function (l) { return l.listing_kind !== "service"; }).map(mapListing)
       : [];
     const services = seller.show_products
-      ? allListings.filter(function (p) { return p.listing_kind === "service" && p.status === "active"; })
+      ? allListings.filter(function (l) { return l.listing_kind === "service"; }).map(mapListing)
       : [];
 
     const portfolio = seller.show_portfolio ? (portfolioRes.data || []) : [];
