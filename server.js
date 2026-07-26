@@ -2822,7 +2822,24 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
         agents = seeded || [];
       } catch (seedFailure) {
         console.error("[agents] seeding failed:", seedFailure.message || seedFailure);
+
         agents = data || [];
+
+        try {
+          const { data: recovered, error: recoveryError } = await supabase
+            .from("ai_agents")
+            .select("*")
+            .eq("user_id", req.user.id)
+            .order("created_at", { ascending: true });
+
+          if (recoveryError) {
+            throw recoveryError;
+          }
+
+          agents = recovered || [];
+        } catch (recoveryFailure) {
+          console.error("[agents] recovery read failed:", recoveryFailure.message || recoveryFailure);
+        }
       }
     }
 
