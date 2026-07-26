@@ -2784,8 +2784,50 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
 
     const planState = await getUserPlan(req.user.id);
 
+    let agents = data || [];
+
+    if (agents.length === 0 && planState.active) {
+      try {
+        const rows = planState.config.allowedAgents.map(function (type) {
+          return {
+            user_id: req.user.id,
+            type,
+            display_name: type.toUpperCase() + " Agent",
+            description: "",
+            active: true,
+            settings: {},
+            tasks_completed: 0,
+            estimated_roi: 0,
+            created_at: nowIso(),
+            updated_at: nowIso()
+          };
+        });
+
+        const { error: seedError } = await supabase.from("ai_agents").insert(rows);
+
+        if (seedError) {
+          throw seedError;
+        }
+
+        const { data: seeded, error: reReadError } = await supabase
+          .from("ai_agents")
+          .select("*")
+          .eq("user_id", req.user.id)
+          .order("created_at", { ascending: true });
+
+        if (reReadError) {
+          throw reReadError;
+        }
+
+        agents = seeded || [];
+      } catch (seedFailure) {
+        console.error("[agents] seeding failed:", seedFailure.message || seedFailure);
+        agents = data || [];
+      }
+    }
+
     return res.json({
-      agents: data,
+      agents,
       available_agent_types: Object.keys(AGENT_SYSTEM_PROMPTS),
       plan: planState.plan,
       plan_config: planState.config
