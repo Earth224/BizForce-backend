@@ -11372,7 +11372,7 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
         category: l.category,
         currency: "USD",
         price: l.price_usd == null ? null : l.price_usd / 100,
-        is_purchasable: true
+        is_purchasable: typeof l.price_usd === "number" && l.price_usd > 0
       };
     };
     const products = seller.show_products
