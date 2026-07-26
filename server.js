@@ -114,28 +114,8 @@ const ORACLE_SYSTEM_PROMPT = "You are Termaximus — the Oracle of BizForce, an 
 "\n\nBOUNDARIES. Empower sovereignty; never cultivate dependence or fear. Do not issue medical, legal, or financial directives as a licensed authority — illuminate; they decide and consult professionals. Refuse only what would truly harm.";
 
 const PLAN_CONFIG = {
-  starter: {
-    name: "Starter",
-    price: 29,
-    maxAgents: 3,
-    maxWebsites: 1,
-    monthlyTasks: 50,
-    allowedAgents: ["seo", "content", "email"],
-    dashboard: "basic",
-    support: "email"
-  },
-  pro: {
-    name: "Pro",
-    price: 99,
-    maxAgents: 6,
-    maxWebsites: 3,
-    monthlyTasks: 200,
-    allowedAgents: ["seo", "content", "email", "sales", "ads", "reputation"],
-    dashboard: "full",
-    support: "priority"
-  },
-  enterprise: {
-    name: "Enterprise",
+  all_access: {
+    name: "All Access",
     price: 199,
     maxAgents: -1,
     maxWebsites: -1,
@@ -150,7 +130,14 @@ const PLAN_CONFIG = {
       "email",
       "community",
       "influencer",
-      "operations"
+      "operations",
+      "executive",
+      "social",
+      "etsy",
+      "store",
+      "broker",
+      "publicist",
+      "rd"
     ],
     dashboard: "enterprise",
     support: "dedicated"
@@ -922,7 +909,7 @@ function getPlanFromPriceId(priceId) {
 }
 
 function getPlanConfig(plan) {
-  return PLAN_CONFIG[String(plan || "starter").toLowerCase()] || PLAN_CONFIG.starter;
+  return PLAN_CONFIG.all_access;
 }
 
 async function getUserById(userId) {
@@ -1332,16 +1319,7 @@ async function handleStripeEvent(event) {
     }
 
     if (!plan && session.amount_total) {
-      const dollars = Math.round(Number(session.amount_total) / 100);
-      if (dollars === 29) {
-        plan = "starter";
-      }
-      if (dollars === 99) {
-        plan = "pro";
-      }
-      if (dollars === 199) {
-        plan = "enterprise";
-      }
+      plan = "all_access";
     }
 
     if (userId) {
@@ -1400,7 +1378,7 @@ await supabase
         ? subscription.items.data[0].price.id
         : null;
 
-    const plan = getPlanFromPriceId(priceId) || "starter";
+    const plan = getPlanFromPriceId(priceId) || "all_access";
     const customerId = subscription.customer;
 
     const { data: existing } = await supabase
@@ -1624,8 +1602,6 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         videos: [],
         testimonials: [],
         custom_brand_colors: {},
-        subscription_plan: "pro",
-        subscription_status: "active",
         profile_visibility: "public",
         seo_title: businessName,
         seo_description: null,
