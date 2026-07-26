@@ -2840,7 +2840,7 @@ app.post("/api/agents", requireAuth, requireActiveSubscription, async function (
       .insert({
         user_id: req.user.id,
         type,
-        display_name: displayName || PLAN_CONFIG.enterprise.allowedAgents.includes(type) ? displayName || type.toUpperCase() + " Agent" : type.toUpperCase() + " Agent",
+        display_name: displayName || type.toUpperCase() + " Agent",
         description: safeText(req.body.description, 500),
         active: true,
         settings: req.body.settings || {},
