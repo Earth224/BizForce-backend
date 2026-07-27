@@ -146,7 +146,7 @@ const PLAN_CONFIG = {
 
 const STRIPE_PRICE_TO_PLAN = {};
 if (process.env.STRIPE_STARTER_PRICE_ID) {
-  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_STARTER_PRICE_ID] = "starter";
+  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_STARTER_PRICE_ID] = "all_access";
 }
 if (process.env.STRIPE_PRO_PRICE_ID) {
   STRIPE_PRICE_TO_PLAN[process.env.STRIPE_PRO_PRICE_ID] = "pro";
@@ -7921,6 +7921,11 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
     const priceId = process.env.STRIPE_STARTER_PRICE_ID;
+
+    if (!priceId) {
+      console.error("Stripe checkout error: STRIPE_STARTER_PRICE_ID is not set");
+      return res.status(500).json({ error: "Stripe checkout is not configured: STRIPE_STARTER_PRICE_ID is unset" });
+    }
 
     const { data: existingSub } = await supabase
       .from("subscriptions")
