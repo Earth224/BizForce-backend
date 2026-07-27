@@ -3078,6 +3078,136 @@ const PROPOSAL_EXECUTORS = {
       created: true,
       already_published: false
     };
+  },
+
+  // Edits an existing listing from the proposal payload. Validation mirrors
+  // PUT /api/marketplace/listings/:id, except that anything the route would
+  // silently drop is a hard error here — a proposal that says it will change
+  // the category must either change it or fail loudly, never report success
+  // for a change it quietly discarded.
+  update_listing: async function (proposal) {
+    const payload = proposal.payload || {};
+
+    const listingId = safeText(payload.listing_id, 100);
+    if (!listingId) {
+      throw new Error("update_listing: payload.listing_id is required");
+    }
+
+    // Scoped by seller_id from the proposal row, never from the payload — this
+    // is what stops a proposal from editing another seller's listing.
+    const { data: existing, error: existingError } = await supabase
+      .from("marketplace_listings")
+      .select("*")
+      .eq("id", listingId)
+      .eq("seller_id", proposal.user_id)
+      .maybeSingle();
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    if (!existing) {
+      throw new Error("update_listing: listing " + listingId + " was not found, or is not owned by this seller");
+    }
+
+    const updates = {};
+
+    if (payload.title !== undefined) {
+      const title = safeText(payload.title, 150);
+      if (!title) {
+        throw new Error("update_listing: payload.title cannot be empty");
+      }
+      updates.title = title;
+    }
+
+    if (payload.description !== undefined) {
+      updates.description = safeText(payload.description, 2000) || "";
+    }
+
+    if (payload.price_bfc !== undefined) {
+      updates.price_bfc = Math.max(0, Math.round(Number(payload.price_bfc) || 0));
+    }
+
+    if (payload.price_usd !== undefined) {
+      if (payload.price_usd === null) {
+        updates.price_usd = null;
+      } else {
+        const n = Number(payload.price_usd);
+        if (!Number.isInteger(n) || n < 0) {
+          throw new Error("update_listing: payload.price_usd must be a non-negative integer number of cents, or null");
+        }
+        updates.price_usd = n;
+      }
+    }
+
+    if (payload.category !== undefined) {
+      const category = safeText(payload.category, 40);
+      if (!MARKETPLACE_CATEGORIES.includes(category)) {
+        throw new Error("update_listing: '" + String(payload.category) + "' is not a valid category. Allowed: " + MARKETPLACE_CATEGORIES.join(", "));
+      }
+      updates.category = category;
+    }
+
+    if (payload.status !== undefined) {
+      const status = safeText(payload.status, 20);
+      if (["active", "paused", "sold"].indexOf(status) === -1) {
+        throw new Error("update_listing: '" + String(payload.status) + "' is not a valid status. Allowed: active, paused, sold");
+      }
+      updates.status = status;
+    }
+
+    if (payload.tags !== undefined) {
+      if (!Array.isArray(payload.tags)) {
+        throw new Error("update_listing: payload.tags must be an array");
+      }
+      updates.tags = payload.tags.map(function (t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
+    }
+
+    const changedFields = Object.keys(updates);
+    if (!changedFields.length) {
+      throw new Error("update_listing: the proposal contained no changes to apply");
+    }
+
+    // Same cross-field guard as the route: a listing may never end up with
+    // neither a positive BFC price nor a USD price.
+    const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
+    const finalPriceUsd = updates.price_usd !== undefined ? updates.price_usd : existing.price_usd;
+    if ((!finalPriceBfc || finalPriceBfc <= 0) && (finalPriceUsd === null || finalPriceUsd === undefined)) {
+      throw new Error("update_listing: listing must keep a positive price_bfc, a non-null price_usd, or both");
+    }
+
+    // Snapshot only the fields actually being changed, so the proposal record
+    // carries everything needed to reverse this edit.
+    const previous = {};
+    changedFields.forEach(function (field) {
+      previous[field] = existing[field];
+    });
+
+    updates.updated_at = nowIso();
+
+    const { data: updated, error: updateError } = await supabase
+      .from("marketplace_listings")
+      .update(updates)
+      .eq("id", listingId)
+      .eq("seller_id", proposal.user_id)
+      .select("*")
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    const changed = {};
+    changedFields.forEach(function (field) {
+      changed[field] = updated[field];
+    });
+
+    return {
+      listing_id: updated.id,
+      title: updated.title,
+      previous: previous,
+      changed: changed
+    };
   }
 };
 
