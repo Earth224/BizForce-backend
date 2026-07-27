@@ -14281,12 +14281,13 @@ async function runStoreProposalPass() {
 
     try {
       // Don't stack proposals on a queue the seller hasn't worked through yet.
+      // Counts every pending proposal regardless of action type — a queue of
+      // update_listing proposals is just as unworked as one of publish_listing.
       var pendingResult = await supabase
         .from("agent_proposals")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
-        .eq("status", "pending")
-        .eq("action_type", "publish_listing");
+        .eq("status", "pending");
 
       if (pendingResult.error) {
         console.error("[StoreProposals] Failed to count pending proposals for user " + userId + ":", pendingResult.error.message);
@@ -14294,7 +14295,7 @@ async function runStoreProposalPass() {
       }
 
       if ((pendingResult.count || 0) > 0) {
-        console.log("[StoreProposals] user " + userId + ": skipped — queue is not empty (" + pendingResult.count + " pending)");
+        console.log("[StoreProposals] user " + userId + ": skipped — seller has " + pendingResult.count + " pending proposal(s)");
         continue;
       }
 
