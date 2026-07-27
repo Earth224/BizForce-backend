@@ -4728,7 +4728,7 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       try {
         // Full six-system numerology + quantum-synthesis convergence, so
         // Termaximus can draw on all of it for deeper soul-purpose insight.
-        var numerologySystemsForChat = computeAllNumerology(oracleSync.birth_name, oracleSync.birth_date);
+        var numerologySystemsForChat = computeAllNumerology(oracleSync.birth_name, oracleSync.birth_date, oracleSync.birth_name_arabic, oracleSync.birth_name_greek, oracleSync.birth_name_hebrew);
         var quantumSynthesisForChat  = computeQuantumSynthesis(numerologySystemsForChat);
         numerologyContext = buildEnrichedNumerologyContext(numerologySystemsForChat, quantumSynthesisForChat);
       } catch (enrichedNumerologyErr) {
@@ -4974,19 +4974,19 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
     const oracleApiKey = await resolveAnthropicKey(req.user.id);
-    const oracleAnthropicClient = new Anthropic({ apiKey: oracleApiKey });
+    const oracleAnthropicClient = new Anthropic({ apiKey: oracleApiKey, timeout: 300000 });
     try {
       aiResponse = await oracleAnthropicClient.messages.create({
         model:      "claude-sonnet-5",
-        max_tokens: 1500,
+        max_tokens: 8000,
         system:     systemPrompt,
         messages:   messages
       });
     } catch (modelErr) {
-      console.error("[oracle] claude-sonnet-4-5 failed, falling back to haiku:", modelErr.message || modelErr);
+      console.error("[oracle] claude-sonnet-5 failed, falling back to haiku:", modelErr.message || modelErr);
       aiResponse = await oracleAnthropicClient.messages.create({
         model:      "claude-haiku-4-5-20251001",
-        max_tokens: 1500,
+        max_tokens: 8000,
         system:     systemPrompt,
         messages:   messages
       });
