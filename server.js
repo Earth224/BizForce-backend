@@ -2982,6 +2982,197 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── Phase 3 approval gate — agents propose, a human approves, then the
+   proposal executes. Action types are registered in PROPOSAL_EXECUTORS
+   ONLY once a real capability is wired behind them. An action_type with no
+   entry here must fail loudly (status failed, HTTP 501) — never report
+   success for work that was never performed. ── */
+
+const PROPOSAL_EXECUTORS = {};
+
+app.post("/api/proposals", requireAuth, async function (req, res, next) {
+  try {
+    const agentType  = safeText(req.body.agent_type, 40);
+    const actionType = safeText(req.body.action_type, 80);
+    const title      = safeText(req.body.title, 200);
+
+    if (!agentType || !actionType || !title) {
+      return res.status(400).json({ error: "agent_type, action_type and title are required" });
+    }
+
+    const { data, error } = await supabase
+      .from("agent_proposals")
+      .insert({
+        user_id:       req.user.id,
+        agent_type:    agentType,
+        action_type:   actionType,
+        title,
+        target:        safeText(req.body.target, 500),
+        payload:       req.body.payload || {},
+        cost_amount:   req.body.cost_amount != null ? Number(req.body.cost_amount) : 0,
+        cost_currency: safeText(req.body.cost_currency, 10) || "USD",
+        reversible:    Boolean(req.body.reversible),
+        reasoning:     safeText(req.body.reasoning, 2000),
+        status:        "pending",
+        created_at:    nowIso()
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ proposal: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/proposals", requireAuth, async function (req, res, next) {
+  try {
+    var query = supabase
+      .from("agent_proposals")
+      .select("*")
+      .eq("user_id", req.user.id);
+
+    const status = safeText(req.query.status, 20);
+    if (status) {
+      query = query.eq("status", status);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ proposals: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("agent_proposals")
+      .update({
+        status:     "rejected",
+        decided_at: nowIso()
+      })
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .eq("status", "pending")
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(409).json({ error: "Proposal not found or no longer pending" });
+    }
+
+    return res.json({ proposal: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
+  try {
+    // Claim the proposal first: pending -> executing in a single conditional
+    // update, so two concurrent approvals cannot both execute it.
+    const { data: claimed, error: claimError } = await supabase
+      .from("agent_proposals")
+      .update({
+        status:     "executing",
+        decided_at: nowIso()
+      })
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .eq("status", "pending")
+      .select("*")
+      .maybeSingle();
+
+    if (claimError) {
+      throw claimError;
+    }
+
+    if (!claimed) {
+      return res.status(409).json({ error: "Proposal not found or no longer pending" });
+    }
+
+    const executor = PROPOSAL_EXECUTORS[claimed.action_type];
+
+    if (!executor) {
+      const { data: unexecuted, error: unexecutedError } = await supabase
+        .from("agent_proposals")
+        .update({
+          status:          "failed",
+          execution_error: "No executor is registered for action type '" + claimed.action_type + "'. Nothing was executed."
+        })
+        .eq("id", claimed.id)
+        .select("*")
+        .maybeSingle();
+
+      if (unexecutedError) {
+        throw unexecutedError;
+      }
+
+      return res.status(501).json({
+        error: "No executor is registered for action type '" + claimed.action_type + "'. Nothing was executed.",
+        proposal: unexecuted
+      });
+    }
+
+    // The executor sees only the stored row — never anything from this
+    // request body, which the approver could otherwise use to alter the
+    // action after it was proposed.
+    var executionResult;
+    try {
+      executionResult = await executor(claimed);
+    } catch (executorErr) {
+      const { data: failed, error: failedError } = await supabase
+        .from("agent_proposals")
+        .update({
+          status:          "failed",
+          execution_error: (executorErr && executorErr.message) ? executorErr.message : String(executorErr)
+        })
+        .eq("id", claimed.id)
+        .select("*")
+        .maybeSingle();
+
+      if (failedError) {
+        throw failedError;
+      }
+
+      return res.status(500).json({ error: "Proposal execution failed", proposal: failed });
+    }
+
+    const { data: executed, error: executedError } = await supabase
+      .from("agent_proposals")
+      .update({
+        status:           "executed",
+        executed_at:      nowIso(),
+        execution_result: executionResult === undefined ? null : executionResult
+      })
+      .eq("id", claimed.id)
+      .select("*")
+      .maybeSingle();
+
+    if (executedError) {
+      throw executedError;
+    }
+
+    return res.json({ proposal: executed });
+  } catch (error) {
+    next(error);
+  }
+});
+
 async function callAnthropicText(promptText, maxTokens, userId = null) {
   var apiKey = await resolveAnthropicKey(userId);
   var anthropicClient = new Anthropic({
