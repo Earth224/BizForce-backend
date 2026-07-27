@@ -10886,7 +10886,7 @@ app.delete("/api/flyers/:id", requireAuth, async function (req, res, next) {
 });
 
 // ════════════════════════════════════════════════════════
-//  PROFILE PAGE  (bf_profiles, bf_products, bf_portfolio, bf_music_tracks)
+//  PROFILE PAGE  (bf_profiles, bf_music_tracks)
 // ════════════════════════════════════════════════════════
 
 const BFP_FONTS = ["modern", "classic", "technical"];
@@ -10991,69 +10991,6 @@ app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
 });
 
 // ── Products CRUD ─────────────────────────────────────────────────────────────
-app.get("/api/bfp/products", requireAuth, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase.from("bf_products")
-      .select("*").eq("user_id", req.user.id).order("created_at", { ascending: false });
-    if (error) throw error;
-    return res.json({ products: data });
-  } catch (error) { next(error); }
-});
-
-app.get("/api/bfp/products/public/:userId", async function (req, res, next) {
-  try {
-    const { data, error } = await supabase.from("bf_products")
-      .select("*").eq("user_id", req.params.userId).eq("status","active")
-      .order("created_at", { ascending: false });
-    if (error) throw error;
-    return res.json({ products: data });
-  } catch (error) { next(error); }
-});
-
-app.post("/api/bfp/products", requireAuth, async function (req, res, next) {
-  try {
-    const name = safeText(req.body.name, 200);
-    if (!name) return res.status(400).json({ error: "name is required" });
-    const row = {
-      user_id:     req.user.id,
-      name,
-      description: safeText(req.body.description, 2000),
-      price:       req.body.price != null ? Number(req.body.price) : null,
-      currency:    safeText(req.body.currency, 10) || "USD",
-      image_url:   safeText(req.body.image_url, 500),
-      category:    safeText(req.body.category, 80),
-      status:      ["active","draft"].includes(req.body.status) ? req.body.status : "active"
-    };
-    const { data, error } = await supabase.from("bf_products").insert(row).select("*").single();
-    if (error) throw error;
-    return res.status(201).json({ product: data });
-  } catch (error) { next(error); }
-});
-
-app.put("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
-  try {
-    const allowed = ["name","description","price","currency","image_url","category","status"];
-    const updates = { updated_at: nowIso() };
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
-    }
-    if (updates.status && !["active","draft"].includes(updates.status)) delete updates.status;
-    const { data, error } = await supabase.from("bf_products")
-      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
-    if (error) throw error;
-    return res.json({ product: data });
-  } catch (error) { next(error); }
-});
-
-app.delete("/api/bfp/products/:id", requireAuth, async function (req, res, next) {
-  try {
-    const { error } = await supabase.from("bf_products")
-      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
-    if (error) throw error;
-    return res.json({ success: true });
-  } catch (error) { next(error); }
-});
-
 // ── profile_products CRUD ─────────────────────────────────────────────────────
 app.get("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
   try {
@@ -11175,69 +11112,6 @@ app.get("/api/bfp/services/browse", async function (req, res, next) {
 });
 
 // ── Portfolio CRUD ────────────────────────────────────────────────────────────
-app.get("/api/bfp/portfolio", requireAuth, async function (req, res, next) {
-  try {
-    const { data, error } = await supabase.from("bf_portfolio")
-      .select("*").eq("user_id", req.user.id).order("sort_order").order("created_at");
-    if (error) throw error;
-    return res.json({ items: data });
-  } catch (error) { next(error); }
-});
-
-app.get("/api/bfp/portfolio/public/:userId", async function (req, res, next) {
-  try {
-    const { data, error } = await supabase.from("bf_portfolio")
-      .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
-    if (error) throw error;
-    return res.json({ items: data });
-  } catch (error) { next(error); }
-});
-
-app.post("/api/bfp/portfolio", requireAuth, async function (req, res, next) {
-  try {
-    const title = safeText(req.body.title, 200);
-    if (!title) return res.status(400).json({ error: "title is required" });
-    const { data: existing } = await supabase.from("bf_portfolio")
-      .select("sort_order").eq("user_id", req.user.id)
-      .order("sort_order", { ascending: false }).limit(1).maybeSingle();
-    const row = {
-      user_id:     req.user.id,
-      title,
-      description: safeText(req.body.description, 2000),
-      image_url:   safeText(req.body.image_url, 500),
-      url:         safeText(req.body.url, 500),
-      category:    safeText(req.body.category, 80),
-      sort_order:  existing ? existing.sort_order + 1 : 0
-    };
-    const { data, error } = await supabase.from("bf_portfolio").insert(row).select("*").single();
-    if (error) throw error;
-    return res.status(201).json({ item: data });
-  } catch (error) { next(error); }
-});
-
-app.put("/api/bfp/portfolio/:id", requireAuth, async function (req, res, next) {
-  try {
-    const allowed = ["title","description","image_url","url","category","sort_order"];
-    const updates = { updated_at: nowIso() };
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key];
-    }
-    const { data, error } = await supabase.from("bf_portfolio")
-      .update(updates).eq("id", req.params.id).eq("user_id", req.user.id).select("*").single();
-    if (error) throw error;
-    return res.json({ item: data });
-  } catch (error) { next(error); }
-});
-
-app.delete("/api/bfp/portfolio/:id", requireAuth, async function (req, res, next) {
-  try {
-    const { error } = await supabase.from("bf_portfolio")
-      .delete().eq("id", req.params.id).eq("user_id", req.user.id);
-    if (error) throw error;
-    return res.json({ success: true });
-  } catch (error) { next(error); }
-});
-
 // ── profile_portfolio CRUD ────────────────────────────────────────────────────
 app.get("/api/bfp/pportfolio", requireAuth, async function (req, res, next) {
   try {
