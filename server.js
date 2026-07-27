@@ -5429,6 +5429,7 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     var oracleSync = syncResult.data || null;
 
     var numerologyContext = "";
+    var natalContext = "";
     if (oracleSync && oracleSync.birth_date) {
       try {
         // Full six-system numerology + quantum-synthesis convergence, so
@@ -5454,6 +5455,68 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
         } catch (basicNumerologyErr) {
           numerologyContext = "";
         }
+      }
+
+      // Real computed ephemeris positions, so Termaximus reads the sky rather
+      // than inferring it from the raw birth strings. Same rule as the
+      // numerology block above — the reply must never break because an
+      // enrichment failed.
+      try {
+        var natalChart = computeNatalChart(
+          oracleSync.birth_date,
+          oracleSync.birth_time,
+          oracleSync.birth_place
+        );
+
+        if (!natalChart || !natalChart.available) {
+          natalContext =
+            "\n\nNATAL CHART: UNAVAILABLE. The chart could not be computed (reason: " +
+            String((natalChart && natalChart.reason) || "unknown") +
+            "). Treat the chart as genuinely unavailable, not merely unmentioned. Do not infer, " +
+            "guess, or describe planetary positions, angles, or houses as if they were known.";
+        } else {
+          var natalDegree = function (value) {
+            var n = Number(value);
+            return isFinite(n) ? n.toFixed(2) + "°" : String(value);
+          };
+
+          var natalLines = [];
+          natalLines.push("\n\nNATAL CHART (computed from the seeker's birth data using the astronomy-engine ephemeris):");
+          natalLines.push("Timezone: " + String(natalChart.timezone || "unknown"));
+          natalLines.push("UTC instant: " + String(natalChart.utc || "unknown"));
+          natalLines.push("");
+          natalLines.push("Planets:");
+          (natalChart.planets || []).forEach(function (p) {
+            natalLines.push("  " + String(p.name) + ": " + String(p.sign) + " " + natalDegree(p.degree));
+          });
+
+          if (natalChart.timeKnown) {
+            natalLines.push("");
+            natalLines.push("Angles:");
+            if (natalChart.ascendant) {
+              natalLines.push("  Ascendant: " + String(natalChart.ascendant.sign) + " " + natalDegree(natalChart.ascendant.degree));
+            }
+            if (natalChart.midheaven) {
+              natalLines.push("  Midheaven: " + String(natalChart.midheaven.sign) + " " + natalDegree(natalChart.midheaven.degree));
+            }
+            natalLines.push("");
+            natalLines.push("Whole-sign houses:");
+            (natalChart.houses || []).forEach(function (h) {
+              natalLines.push("  House " + String(h.house) + ": " + String(h.sign));
+            });
+            natalLines.push("");
+            natalLines.push("These are computed positions. You may reference them directly, and you must never contradict them or reinvent them.");
+          } else {
+            natalLines.push("");
+            natalLines.push("BIRTH TIME UNKNOWN — READ THIS BEFORE USING THE CHART. The seeker did not provide a birth time. The planetary positions above were computed against a NOON DEFAULT for the birth date. The Moon therefore carries real uncertainty: it moves roughly 13 degrees per day, so its sign may be wrong. The Ascendant, the Midheaven, and the twelve houses were DELIBERATELY NOT COMPUTED. Do not infer them, do not guess them, do not estimate them, and never describe them as if they were known. If the seeker asks about their rising sign or houses, say plainly that an exact birth time is required and invite them to provide it.");
+            natalLines.push("");
+            natalLines.push("The planetary positions above are computed. You may reference them directly, and you must never contradict them or reinvent them.");
+          }
+
+          natalContext = natalLines.join("\n");
+        }
+      } catch (natalErr) {
+        natalContext = "";
       }
     }
 
@@ -5674,6 +5737,7 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain) +
       contextBlock +
       numerologyContext +
+      natalContext +
       enterpriseContext;
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
