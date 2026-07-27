@@ -1326,7 +1326,7 @@ async function handleStripeEvent(event) {
       await supabase.from("subscriptions").upsert(
         {
           user_id: userId,
-          plan: plan || "starter",
+          plan: plan || "all_access",
           status: "active",
           stripe_customer_id: session.customer || null,
           stripe_subscription_id: session.subscription || null,
@@ -1343,7 +1343,7 @@ async function handleStripeEvent(event) {
       await supabase
         .from("profiles")
         .update({
-          subscription_plan: plan || "starter",
+          subscription_plan: plan || "all_access",
           subscription_status: "active",
           stripe_customer_id: session.customer || null,
           updated_at: nowIso()
