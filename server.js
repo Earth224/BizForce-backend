@@ -14007,6 +14007,84 @@ async function salesAutoConvertTick() {
   }
 }
 
+// Store Agent daily proposal pass — mirrors the salesAutoConvertTick pattern
+// above: its own reentrancy guard, its own timer, no shared scheduler. Every
+// proposal it creates lands in agent_proposals as "pending" and executes only
+// once a human approves it, so this job never acts on the marketplace itself.
+async function runStoreProposalPass() {
+  var totalUsers = 0;
+  var totalCreated = 0;
+
+  var subsResult = await supabase
+    .from("subscriptions")
+    .select("user_id")
+    .eq("status", "active");
+
+  if (subsResult.error) {
+    console.error("[StoreProposals] Failed to load active subscriptions:", subsResult.error.message);
+    return;
+  }
+
+  var userIds = (subsResult.data || [])
+    .map(function (row) { return row.user_id; })
+    .filter(Boolean);
+
+  totalUsers = userIds.length;
+  console.log("[StoreProposals] Pass starting — " + totalUsers + " active subscriber(s) considered.");
+
+  for (var i = 0; i < userIds.length; i++) {
+    var userId = userIds[i];
+
+    try {
+      // Don't stack proposals on a queue the seller hasn't worked through yet.
+      var pendingResult = await supabase
+        .from("agent_proposals")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("status", "pending")
+        .eq("action_type", "publish_listing");
+
+      if (pendingResult.error) {
+        console.error("[StoreProposals] Failed to count pending proposals for user " + userId + ":", pendingResult.error.message);
+        continue;
+      }
+
+      if ((pendingResult.count || 0) > 0) {
+        console.log("[StoreProposals] user " + userId + ": skipped — queue is not empty (" + pendingResult.count + " pending)");
+        continue;
+      }
+
+      var result = await generateStoreProposalsForUser(userId);
+      var created = (result && result.generated) || 0;
+      totalCreated += created;
+      console.log("[StoreProposals] user " + userId + ": generated " + created + " proposal(s)");
+    } catch (userErr) {
+      console.error("[StoreProposals] Error processing user " + userId + ":", userErr.message || userErr);
+    }
+  }
+
+  console.log("[StoreProposals] Pass complete — " + totalUsers + " user(s) considered, " + totalCreated + " proposal(s) created.");
+}
+
+var storeProposalPassRunning = false;
+
+async function storeProposalTick() {
+  if (storeProposalPassRunning) {
+    console.log("[StoreProposals] Tick skipped — previous run still in progress");
+    return;
+  }
+  storeProposalPassRunning = true;
+  console.log("[StoreProposals] Tick starting...");
+  try {
+    await runStoreProposalPass();
+  } catch (err) {
+    console.error("[StoreProposals] Tick error:", err.message || err);
+  } finally {
+    storeProposalPassRunning = false;
+    console.log("[StoreProposals] Tick finished.");
+  }
+}
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   startLeadRadar().catch(function (err) {
@@ -14027,6 +14105,20 @@ app.listen(PORT, function () {
     setInterval(salesAutoConvertTick, 300000);
   } else {
     console.log("[startup] salesAutoConvertTick disabled (ENABLE_AUTO_JOBS not true)");
+  }
+
+  // Daily Store Agent proposal pass. Double-gated: ENABLE_AUTO_JOBS turns on
+  // background jobs at all, ENABLE_STORE_PROPOSAL_JOB opts into this one
+  // specifically, so it can stay off while the sales loop runs.
+  if (process.env.ENABLE_AUTO_JOBS === "true" && process.env.ENABLE_STORE_PROPOSAL_JOB === "true") {
+    setTimeout(function () {
+      storeProposalTick().catch(function (err) {
+        console.error("[StoreProposals] Initial run error:", err.message || err);
+      });
+    }, 300000);
+    setInterval(storeProposalTick, 86400000);
+  } else {
+    console.log("[startup] storeProposalTick disabled (requires ENABLE_AUTO_JOBS=true and ENABLE_STORE_PROPOSAL_JOB=true)");
   }
 
   // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
