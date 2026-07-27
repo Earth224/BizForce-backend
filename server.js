@@ -7942,13 +7942,13 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
       metadata: {
         user_id: req.user.id,
         email: req.user.email,
-        plan: "starter"
+        plan: "all_access"
       },
       subscription_data: {
         metadata: {
           user_id: req.user.id,
           email: req.user.email,
-          plan: "starter"
+          plan: "all_access"
         }
       },
       success_url: FRONTEND_URL + "/dashboard.html?subscribed=1",
