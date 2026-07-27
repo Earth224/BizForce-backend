@@ -7920,7 +7920,7 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
 });
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
-    const priceId = process.env.STRIPE_STARTER_PRICE_ID || "price_1TRu8o157b9npvGC2y4uYNqv";
+    const priceId = process.env.STRIPE_STARTER_PRICE_ID;
 
     const { data: existingSub } = await supabase
       .from("subscriptions")
