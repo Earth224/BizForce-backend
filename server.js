@@ -2988,7 +2988,98 @@ app.delete("/api/agents/:id", requireAuth, async function (req, res, next) {
    entry here must fail loudly (status failed, HTTP 501) — never report
    success for work that was never performed. ── */
 
-const PROPOSAL_EXECUTORS = {};
+const PROPOSAL_EXECUTORS = {
+  // Publishes a marketplace listing from the proposal payload. Validation here
+  // mirrors POST /api/marketplace/listings exactly — an agent must not be able
+  // to create a listing the seller-facing route would have rejected.
+  // MARKETPLACE_CATEGORIES, safeText, sanitizeMedia and nowIso are defined
+  // further down the file; this body only runs at call time.
+  publish_listing: async function (proposal) {
+    const payload = proposal.payload || {};
+
+    const title = safeText(payload.title, 150);
+    if (!title) {
+      throw new Error("publish_listing: payload.title is required");
+    }
+
+    const category = safeText(payload.category, 40);
+    if (!MARKETPLACE_CATEGORIES.includes(category)) {
+      throw new Error("publish_listing: payload.category must be one of " + MARKETPLACE_CATEGORIES.join(", "));
+    }
+
+    const priceBfc = Math.max(0, Math.round(Number(payload.price_bfc) || 0));
+
+    let priceUsd = null;
+    if (payload.price_usd !== undefined && payload.price_usd !== null) {
+      const n = Number(payload.price_usd);
+      if (!Number.isInteger(n) || n < 0) {
+        throw new Error("publish_listing: payload.price_usd must be a non-negative integer number of cents, or null");
+      }
+      priceUsd = n;
+    }
+
+    if (priceBfc <= 0 && priceUsd === null) {
+      throw new Error("publish_listing: listing must have a positive price_bfc, a non-null price_usd, or both");
+    }
+
+    const description = safeText(payload.description, 2000) || "";
+    const tags = Array.isArray(payload.tags)
+      ? payload.tags.map(function (t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
+      : [];
+
+    const { data, error } = await supabase
+      .from("marketplace_listings")
+      .insert({
+        seller_id: proposal.user_id, title, description,
+        price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(payload.media), status: "active",
+        source_proposal_id: proposal.id,
+        created_at: nowIso(), updated_at: nowIso()
+      })
+      .select("id, title, status")
+      .single();
+
+    if (error) {
+      // 23505 on the partial unique index means this proposal already published
+      // a listing — a retried approval, not a failure. Return the existing row
+      // rather than throwing, so the proposal is not marked failed after the
+      // work was in fact done.
+      const conflictText = String(error.message || "") + " " + String(error.details || "") + " " + String(error.constraint || "");
+      if (error.code === "23505" && conflictText.indexOf("source_proposal_id") !== -1) {
+        const { data: existing, error: existingError } = await supabase
+          .from("marketplace_listings")
+          .select("id, title, status")
+          .eq("source_proposal_id", proposal.id)
+          .maybeSingle();
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        if (!existing) {
+          throw new Error("publish_listing: proposal " + proposal.id + " reported a duplicate listing, but no listing with that source_proposal_id could be read back");
+        }
+
+        return {
+          listing_id: existing.id,
+          title: existing.title,
+          status: existing.status,
+          created: false,
+          already_published: true
+        };
+      }
+
+      throw error;
+    }
+
+    return {
+      listing_id: data.id,
+      title: data.title,
+      status: data.status,
+      created: true,
+      already_published: false
+    };
+  }
+};
 
 app.post("/api/proposals", requireAuth, async function (req, res, next) {
   try {
