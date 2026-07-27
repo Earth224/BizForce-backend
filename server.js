@@ -10990,7 +10990,6 @@ app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
-// ── Products CRUD ─────────────────────────────────────────────────────────────
 // ── profile_products CRUD ─────────────────────────────────────────────────────
 app.get("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
   try {
@@ -11111,7 +11110,6 @@ app.get("/api/bfp/services/browse", async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
-// ── Portfolio CRUD ────────────────────────────────────────────────────────────
 // ── profile_portfolio CRUD ────────────────────────────────────────────────────
 app.get("/api/bfp/pportfolio", requireAuth, async function (req, res, next) {
   try {
