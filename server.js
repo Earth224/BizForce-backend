@@ -3264,6 +3264,166 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
   }
 });
 
+app.post("/api/agents/store/generate-proposals", requireAuth, async function (req, res, next) {
+  try {
+    const { data: listings, error: listingsError } = await supabase
+      .from("marketplace_listings")
+      .select("title, category, price_usd, status")
+      .eq("seller_id", req.user.id)
+      .limit(50);
+
+    if (listingsError) {
+      throw listingsError;
+    }
+
+    const { data: pending, error: pendingError } = await supabase
+      .from("agent_proposals")
+      .select("title")
+      .eq("user_id", req.user.id)
+      .eq("status", "pending")
+      .eq("action_type", "publish_listing");
+
+    if (pendingError) {
+      throw pendingError;
+    }
+
+    const existingListings = listings || [];
+    const pendingProposals = pending || [];
+
+    // One normalized set of everything already listed or already awaiting a
+    // decision, so the agent is told not to propose it and a proposal that
+    // slips through anyway is dropped below.
+    const takenTitles = {};
+    existingListings.forEach(function (l) {
+      const key = String(l.title || "").trim().toLowerCase();
+      if (key) takenTitles[key] = true;
+    });
+    pendingProposals.forEach(function (p) {
+      const key = String(p.title || "").trim().toLowerCase();
+      if (key) takenTitles[key] = true;
+    });
+
+    const catalogLines = existingListings.length
+      ? existingListings.map(function (l) {
+          return "- " + String(l.title || "(untitled)") + " [" + String(l.category || "uncategorized") + "]";
+        }).join("\n")
+      : "(this seller has no listings yet)";
+
+    const pendingLines = pendingProposals.length
+      ? pendingProposals.map(function (p) { return "- " + String(p.title || ""); }).join("\n")
+      : "(none)";
+
+    const promptText = AGENT_SYSTEM_PROMPTS.store +
+      "\n\nThis seller's existing marketplace listings:\n" + catalogLines +
+      "\n\nProposals already awaiting this seller's approval (do not repeat these):\n" + pendingLines +
+      "\n\nAllowed categories (use one of these exactly): " + MARKETPLACE_CATEGORIES.join(", ") +
+      "\n\nPropose at most three new digital or service listings that fill genuine gaps in this catalog. " +
+      "Do not duplicate, rename, or lightly reword anything already listed or already proposed above — " +
+      "each proposal must be a distinct offering the seller does not yet have. " +
+      "If the catalog has no real gaps worth filling, return fewer proposals, or an empty array." +
+      "\n\nRespond with a JSON array only. No prose, no explanation, no markdown code fences. " +
+      "Each element must have exactly these keys:\n" +
+      '  "title": a short listing title\n' +
+      '  "description": one or two sentences describing the listing\n' +
+      '  "category": one of the allowed categories above\n' +
+      '  "price_usd": an integer number of CENTS (e.g. 4900 for $49.00), greater than zero\n' +
+      '  "reasoning": why this listing fits a gap in this particular catalog';
+
+    const completion = await callAnthropicText(promptText, 2000, req.user.id);
+
+    // Strip a leading/trailing markdown fence before parsing — models add one
+    // even when told not to.
+    let raw = String((completion && completion.text) || "").trim();
+    raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[agents/store/generate-proposals] Unparseable agent response:", raw.slice(0, 500));
+      return res.status(502).json({ error: "The Store Agent returned an unreadable response. No proposals were created." });
+    }
+
+    if (!Array.isArray(parsed)) {
+      console.error("[agents/store/generate-proposals] Agent response was not an array:", raw.slice(0, 500));
+      return res.status(502).json({ error: "The Store Agent returned an unreadable response. No proposals were created." });
+    }
+
+    const candidates = [];
+    parsed.forEach(function (item) {
+      if (candidates.length >= 3) return;
+      if (!item || typeof item !== "object") return;
+
+      const title = safeText(item.title, 150);
+      if (!title) return;
+
+      const category = safeText(item.category, 40);
+      if (!MARKETPLACE_CATEGORIES.includes(category)) return;
+
+      const priceUsd = Number(item.price_usd);
+      if (!Number.isInteger(priceUsd) || priceUsd <= 0) return;
+
+      const key = title.trim().toLowerCase();
+      if (takenTitles[key]) return;
+      takenTitles[key] = true;
+
+      candidates.push({
+        title,
+        description: safeText(item.description, 2000) || "",
+        category,
+        price_usd: priceUsd,
+        reasoning: safeText(item.reasoning, 2000)
+      });
+    });
+
+    if (!candidates.length) {
+      return res.json({
+        proposals: [],
+        generated: 0,
+        message: "The Store Agent found no new listings worth proposing for this catalog."
+      });
+    }
+
+    const rows = candidates.map(function (c) {
+      return {
+        user_id:       req.user.id,
+        agent_type:    "store",
+        action_type:   "publish_listing",
+        title:         "Publish " + c.title,
+        target:        "marketplace_listings",
+        payload: {
+          title:       c.title,
+          description: c.description,
+          category:    c.category,
+          price_usd:   c.price_usd
+        },
+        cost_amount:   0,
+        cost_currency: "USD",
+        reversible:    true,
+        reasoning:     c.reasoning,
+        status:        "pending",
+        created_at:    nowIso()
+      };
+    });
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("agent_proposals")
+      .insert(rows)
+      .select("*");
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    return res.status(201).json({
+      proposals: inserted || [],
+      generated: (inserted || []).length
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 async function callAnthropicText(promptText, maxTokens, userId = null) {
   var apiKey = await resolveAnthropicKey(userId);
   var anthropicClient = new Anthropic({
