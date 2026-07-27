@@ -3399,7 +3399,7 @@ const STORE_AGENT_UNREADABLE = "The Store Agent returned an unreadable response.
 async function generateStoreProposalsForUser(userId) {
   const { data: listings, error: listingsError } = await supabase
     .from("marketplace_listings")
-    .select("title, category, price_usd, status")
+    .select("id, title, description, category, price_usd, price_bfc, tags, status")
     .eq("seller_id", userId)
     .limit(50);
 
@@ -3436,9 +3436,22 @@ async function generateStoreProposalsForUser(userId) {
     if (key) takenTitles[key] = true;
   });
 
+  // Indexed by id so an update_listing proposal can be checked against a real
+  // listing this seller owns, and so its title can be read back at insert time.
+  const listingsById = {};
+  existingListings.forEach(function (l) {
+    if (l && l.id) listingsById[String(l.id)] = l;
+  });
+
   const catalogLines = existingListings.length
     ? existingListings.map(function (l) {
-        return "- " + String(l.title || "(untitled)") + " [" + String(l.category || "uncategorized") + "]";
+        return "- id=" + String(l.id) +
+          " | title=" + JSON.stringify(String(l.title || "")) +
+          " | category=" + String(l.category || "uncategorized") +
+          " | description=" + JSON.stringify(String(l.description || "")) +
+          " | price_usd=" + (l.price_usd === null || l.price_usd === undefined ? "null" : String(l.price_usd)) +
+          " | price_bfc=" + String(l.price_bfc === null || l.price_bfc === undefined ? 0 : l.price_bfc) +
+          " | status=" + String(l.status || "");
       }).join("\n")
     : "(this seller has no listings yet)";
 
@@ -3450,17 +3463,30 @@ async function generateStoreProposalsForUser(userId) {
     "\n\nThis seller's existing marketplace listings:\n" + catalogLines +
     "\n\nProposals already awaiting this seller's approval (do not repeat these):\n" + pendingLines +
     "\n\nAllowed categories (use one of these exactly): " + MARKETPLACE_CATEGORIES.join(", ") +
-    "\n\nPropose at most three new digital or service listings that fill genuine gaps in this catalog. " +
-    "Do not duplicate, rename, or lightly reword anything already listed or already proposed above — " +
-    "each proposal must be a distinct offering the seller does not yet have. " +
-    "If the catalog has no real gaps worth filling, return fewer proposals, or an empty array." +
+    "\n\nPropose at most THREE changes in total, of two possible kinds:" +
+    "\n\n1. \"publish_listing\" — a genuinely new digital or service listing that fills a real gap " +
+    "in this catalog. Do not duplicate, rename, or lightly reword anything already listed or already " +
+    "proposed above; each must be a distinct offering the seller does not yet have." +
+    "\n\n2. \"update_listing\" — a repair to an existing listing that is incomplete or unclear: " +
+    "no price, a placeholder or empty description, a title that does not describe what is being sold, " +
+    "a wrong category, or a status that does not match the listing's state." +
+    "\n\nWhen an existing listing is clearly broken, PREFER repairing it over adding a new one. " +
+    "If nothing is broken and there are no real gaps, return fewer proposals, or an empty array." +
     "\n\nRespond with a JSON array only. No prose, no explanation, no markdown code fences. " +
-    "Each element must have exactly these keys:\n" +
+    "Every element must have a \"kind\" key of either \"publish_listing\" or \"update_listing\"." +
+    "\n\nFor kind \"publish_listing\" the element must have:\n" +
     '  "title": a short listing title\n' +
     '  "description": one or two sentences describing the listing\n' +
     '  "category": one of the allowed categories above\n' +
     '  "price_usd": an integer number of CENTS (e.g. 4900 for $49.00), greater than zero\n' +
-    '  "reasoning": why this listing fits a gap in this particular catalog';
+    '  "reasoning": why this listing fits a gap in this particular catalog\n' +
+    "\nFor kind \"update_listing\" the element must have:\n" +
+    '  "listing_id": the id of an existing listing, copied exactly from the catalog above\n' +
+    '  "reasoning": what is wrong with that listing and why this change fixes it\n' +
+    "  plus ONLY the fields you want to change, chosen from:\n" +
+    '    "title", "description", "category", "price_usd" (integer CENTS), "price_bfc" (integer), ' +
+    '"tags" (array of strings), "status" (one of: active, paused, sold)\n' +
+    "  Omit every field you are not changing. Do not repeat a field with its current value.";
 
   const completion = await callAnthropicText(promptText, 2000, userId);
 
@@ -3482,31 +3508,111 @@ async function generateStoreProposalsForUser(userId) {
     throw new Error(STORE_AGENT_UNREADABLE);
   }
 
+  const LISTING_STATUSES = ["active", "paused", "sold"];
+  const proposedUpdateIds = {};
+
   const candidates = [];
   parsed.forEach(function (item) {
     if (candidates.length >= 3) return;
     if (!item || typeof item !== "object") return;
 
-    const title = safeText(item.title, 150);
-    if (!title) return;
+    const kind = safeText(item.kind, 40);
 
-    const category = safeText(item.category, 40);
-    if (!MARKETPLACE_CATEGORIES.includes(category)) return;
+    if (kind === "publish_listing") {
+      const title = safeText(item.title, 150);
+      if (!title) return;
 
-    const priceUsd = Number(item.price_usd);
-    if (!Number.isInteger(priceUsd) || priceUsd <= 0) return;
+      const category = safeText(item.category, 40);
+      if (!MARKETPLACE_CATEGORIES.includes(category)) return;
 
-    const key = title.trim().toLowerCase();
-    if (takenTitles[key]) return;
-    takenTitles[key] = true;
+      const priceUsd = Number(item.price_usd);
+      if (!Number.isInteger(priceUsd) || priceUsd <= 0) return;
 
-    candidates.push({
-      title,
-      description: safeText(item.description, 2000) || "",
-      category,
-      price_usd: priceUsd,
-      reasoning: safeText(item.reasoning, 2000)
-    });
+      // The duplicate-title guard applies to new listings only — an update
+      // names an existing title by design.
+      const key = title.trim().toLowerCase();
+      if (takenTitles[key]) return;
+      takenTitles[key] = true;
+
+      candidates.push({
+        kind: "publish_listing",
+        title,
+        description: safeText(item.description, 2000) || "",
+        category,
+        price_usd: priceUsd,
+        reasoning: safeText(item.reasoning, 2000)
+      });
+      return;
+    }
+
+    if (kind === "update_listing") {
+      const listingId = safeText(item.listing_id, 100);
+      if (!listingId) return;
+
+      const target = listingsById[listingId];
+      if (!target) return;
+
+      // One update per listing per response.
+      if (proposedUpdateIds[listingId]) return;
+
+      const changes = {};
+
+      if (item.title !== undefined) {
+        const t = safeText(item.title, 150);
+        if (!t) return;
+        changes.title = t;
+      }
+
+      if (item.description !== undefined) {
+        changes.description = safeText(item.description, 2000) || "";
+      }
+
+      if (item.category !== undefined) {
+        const c = safeText(item.category, 40);
+        if (!MARKETPLACE_CATEGORIES.includes(c)) return;
+        changes.category = c;
+      }
+
+      if (item.status !== undefined) {
+        const s = safeText(item.status, 20);
+        if (LISTING_STATUSES.indexOf(s) === -1) return;
+        changes.status = s;
+      }
+
+      if (item.price_usd !== undefined) {
+        if (item.price_usd === null) {
+          changes.price_usd = null;
+        } else {
+          const n = Number(item.price_usd);
+          if (!Number.isInteger(n) || n < 0) return;
+          changes.price_usd = n;
+        }
+      }
+
+      if (item.price_bfc !== undefined) {
+        changes.price_bfc = Math.max(0, Math.round(Number(item.price_bfc) || 0));
+      }
+
+      if (item.tags !== undefined) {
+        if (!Array.isArray(item.tags)) return;
+        changes.tags = item.tags.map(function (t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
+      }
+
+      if (!Object.keys(changes).length) return;
+
+      proposedUpdateIds[listingId] = true;
+
+      candidates.push({
+        kind: "update_listing",
+        listing_id: listingId,
+        existing_title: String(target.title || ""),
+        changes: changes,
+        reasoning: safeText(item.reasoning, 2000)
+      });
+      return;
+    }
+
+    // Any other kind is dropped.
   });
 
   if (!candidates.length) {
@@ -3518,18 +3624,11 @@ async function generateStoreProposalsForUser(userId) {
   }
 
   const rows = candidates.map(function (c) {
-    return {
+    const row = {
       user_id:       userId,
       agent_type:    "store",
-      action_type:   "publish_listing",
-      title:         "Publish " + c.title,
+      action_type:   c.kind,
       target:        "marketplace_listings",
-      payload: {
-        title:       c.title,
-        description: c.description,
-        category:    c.category,
-        price_usd:   c.price_usd
-      },
       cost_amount:   0,
       cost_currency: "USD",
       reversible:    true,
@@ -3537,6 +3636,21 @@ async function generateStoreProposalsForUser(userId) {
       status:        "pending",
       created_at:    nowIso()
     };
+
+    if (c.kind === "update_listing") {
+      row.title = "Update " + c.existing_title;
+      row.payload = Object.assign({ listing_id: c.listing_id }, c.changes);
+      return row;
+    }
+
+    row.title = "Publish " + c.title;
+    row.payload = {
+      title:       c.title,
+      description: c.description,
+      category:    c.category,
+      price_usd:   c.price_usd
+    };
+    return row;
   });
 
   const { data: inserted, error: insertError } = await supabase
