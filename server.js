@@ -3278,7 +3278,7 @@ app.post("/api/agents/store/generate-proposals", requireAuth, async function (re
 
     const { data: pending, error: pendingError } = await supabase
       .from("agent_proposals")
-      .select("title")
+      .select("payload")
       .eq("user_id", req.user.id)
       .eq("status", "pending")
       .eq("action_type", "publish_listing");
@@ -3298,8 +3298,10 @@ app.post("/api/agents/store/generate-proposals", requireAuth, async function (re
       const key = String(l.title || "").trim().toLowerCase();
       if (key) takenTitles[key] = true;
     });
+    // A proposal's own title is "Publish <listing title>", so the comparable
+    // value is the listing title inside its payload.
     pendingProposals.forEach(function (p) {
-      const key = String(p.title || "").trim().toLowerCase();
+      const key = String((p.payload && p.payload.title) || "").trim().toLowerCase();
       if (key) takenTitles[key] = true;
     });
 
@@ -3310,7 +3312,7 @@ app.post("/api/agents/store/generate-proposals", requireAuth, async function (re
       : "(this seller has no listings yet)";
 
     const pendingLines = pendingProposals.length
-      ? pendingProposals.map(function (p) { return "- " + String(p.title || ""); }).join("\n")
+      ? pendingProposals.map(function (p) { return "- " + String((p.payload && p.payload.title) || "(untitled)"); }).join("\n")
       : "(none)";
 
     const promptText = AGENT_SYSTEM_PROMPTS.store +
