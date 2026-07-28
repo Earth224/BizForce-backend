@@ -3966,7 +3966,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +
       "\n\nRequirements:\n" +
-      "- At least 800 words.\n" +
+      "- Between 800 and 1200 words. Do not exceed 1200 — a draft that runs longer gets cut off mid-sentence and thrown away.\n" +
       "- Clean HTML using ONLY these tags: h2, h3, p, ul, li, strong, a. No h1 — the page renders the title separately.\n" +
       "- Near the end, a frequently asked questions section with AT LEAST THREE question-shaped h3 headings. " +
       "These target the People Also Ask results, so phrase them the way a person would ask.\n" +
@@ -3997,17 +3997,33 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       '  "reasoning": why this question was chosen and what search intent it captures';
 
     // Sonnet rather than the Haiku default — a long-form structured article is
-    // the most demanding writing task in this file.
-    const completion = await callAnthropicText(promptText, 16000, req.user.id, "claude-sonnet-5");
+    // the most demanding writing task in this file. 32000 rather than 16000
+    // because 16000 was not enough: a verbose draft ran past the ceiling and
+    // came back as JSON that simply stopped, which is unparseable and gets
+    // thrown away after the model has already done all the work.
+    const completion = await callAnthropicText(promptText, 32000, req.user.id, "claude-sonnet-5");
 
     let raw = String((completion && completion.text) || "").trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+    // The API says outright why generation ended. "max_tokens" here means
+    // truncation, full stop — no more guessing at it from the shape of a log.
+    const stopReason = (completion && completion.stopReason) || "";
 
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch (parseErr) {
-      console.error("[agents/seo/generate-post] Unparseable agent response:", raw.slice(0, 500));
+      // The head of the response only ever showed that it started correctly.
+      // A truncated article is well-formed right up to the point it stops, so
+      // the tail is where the evidence is. JSON.stringify keeps it on one log
+      // line with the newlines visible.
+      console.error(
+        "[agents/seo/generate-post] Unparseable agent response:" +
+        " stop_reason=" + (stopReason || "(none)") +
+        " length=" + raw.length +
+        " tail(300)=" + JSON.stringify(raw.slice(-300))
+      );
       return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
     }
 
