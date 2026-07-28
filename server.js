@@ -3512,6 +3512,60 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
       throw executedError;
     }
 
+    // The work is done and the result is recorded. Everything below is the
+    // agent's own tally, which had never been written — ai_agents rows all read
+    // tasks_completed 0 no matter how much an agent had executed, so the
+    // dashboard reported that nothing had ever happened.
+    //
+    // It is wrapped in its own try/catch on purpose: a counter that fails to
+    // move must never fail an execution that already happened, and must never
+    // change the response. A missed tally is recoverable; a lost record of real
+    // work is not.
+    try {
+      // already_published means the executor found a duplicate and handed back
+      // the row that was already live instead of doing anything. That is a
+      // replay of work counted the first time, not a new task.
+      const isReplay = !!(executionResult && executionResult.already_published);
+
+      if (!isReplay) {
+        // agent_proposals carries no agent_id, so ownership resolves through
+        // (user_id, agent_type). That pair is unique on ai_agents (migration
+        // 052), so it names exactly one row rather than every agent of a type.
+        // Both values come from the claimed proposal row — never from the
+        // payload, which the proposer controls.
+        const { data: agentRow, error: agentReadError } = await supabase
+          .from("ai_agents")
+          .select("id, tasks_completed")
+          .eq("user_id", claimed.user_id)
+          .eq("type", claimed.agent_type)
+          .maybeSingle();
+
+        if (agentReadError) {
+          console.error("[proposals/approve] could not read agent row to increment tasks_completed:", agentReadError.message);
+        } else if (!agentRow) {
+          // No agent row of this type for this user — nothing to tally against.
+          console.error("[proposals/approve] no ai_agents row for user " + claimed.user_id + " type '" + claimed.agent_type + "'; tasks_completed not incremented");
+        } else {
+          // Read-then-write, matching incrementTaskUsage — this codebase has no
+          // atomic increment helper to reuse. estimated_roi is left alone.
+          const { error: agentUpdateError } = await supabase
+            .from("ai_agents")
+            .update({
+              tasks_completed: Number(agentRow.tasks_completed || 0) + 1,
+              updated_at: nowIso()
+            })
+            .eq("id", agentRow.id)
+            .eq("user_id", claimed.user_id);
+
+          if (agentUpdateError) {
+            console.error("[proposals/approve] tasks_completed not incremented for agent " + agentRow.id + ":", agentUpdateError.message);
+          }
+        }
+      }
+    } catch (counterErr) {
+      console.error("[proposals/approve] tasks_completed increment failed:", (counterErr && counterErr.message) ? counterErr.message : counterErr);
+    }
+
     return res.json({ proposal: executed });
   } catch (error) {
     next(error);
