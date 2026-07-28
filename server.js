@@ -12371,6 +12371,76 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+// ── Public blog — published posts only, no auth ───────────────────────────────
+// Both routes resolve the handle through bf_profiles.user_id (NOT bf_profiles.id,
+// which is that table's own primary key and matches nothing in content_library).
+
+app.get("/api/blog/:handle/:slug", async function (req, res, next) {
+  try {
+    const handle = safeText(req.params.handle, 60);
+    const slug = safeText(req.params.slug, 100);
+    if (!handle || !slug) return res.status(404).json({ error: "post not found" });
+
+    const { data: seller, error: sellerError } = await supabase
+      .from("bf_profiles")
+      .select("user_id, username, display_name")
+      .ilike("username", handle)
+      .maybeSingle();
+    if (sellerError) throw sellerError;
+    if (!seller) return res.status(404).json({ error: "seller not found" });
+
+    const { data: post, error: postError } = await supabase
+      .from("content_library")
+      .select("id, title, slug, body, meta_description, keyword, internal_links, published_at")
+      .eq("user_id", seller.user_id)
+      .eq("type", "blog")
+      .eq("status", "published")
+      .eq("slug", slug)
+      .maybeSingle();
+    if (postError) throw postError;
+    if (!post) return res.status(404).json({ error: "post not found" });
+
+    return res.json({
+      handle: seller.username,
+      display_name: seller.display_name,
+      post: post
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/blog/:handle", async function (req, res, next) {
+  try {
+    const handle = safeText(req.params.handle, 60);
+    if (!handle) return res.status(404).json({ error: "seller not found" });
+
+    const { data: seller, error: sellerError } = await supabase
+      .from("bf_profiles")
+      .select("user_id, username, display_name")
+      .ilike("username", handle)
+      .maybeSingle();
+    if (sellerError) throw sellerError;
+    if (!seller) return res.status(404).json({ error: "seller not found" });
+
+    // No body on the index — this route only lists posts.
+    const { data: posts, error: postsError } = await supabase
+      .from("content_library")
+      .select("id, title, slug, meta_description, published_at")
+      .eq("user_id", seller.user_id)
+      .eq("type", "blog")
+      .eq("status", "published")
+      .not("slug", "is", null)
+      .order("published_at", { ascending: false })
+      .limit(50);
+    if (postsError) throw postsError;
+
+    return res.json({
+      handle: seller.username,
+      display_name: seller.display_name,
+      posts: posts || []
+    });
+  } catch (error) { next(error); }
+});
+
 // ── Music CRUD ────────────────────────────────────────────────────────────────
 app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
   try {
