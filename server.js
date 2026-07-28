@@ -3221,7 +3221,9 @@ const PROPOSAL_EXECUTORS = {
       throw new Error("publish_blog_post: payload.title is required");
     }
 
-    const body = String(payload.body === undefined || payload.body === null ? "" : payload.body).trim();
+    // Sanitize first, so the 300-character floor measures surviving content
+    // and the row that reaches the database is already clean.
+    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body)).trim();
     if (!body) {
       throw new Error("publish_blog_post: payload.body is required");
     }
@@ -9165,6 +9167,66 @@ app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
 /* ── Marketplace ── */
 
 const MARKETPLACE_CATEGORIES = ["services","artists","garage_sale","bookstore","health_wellness","hair_beauty","clothing","vehicles","labor_trades","other"];
+
+// Strict allowlist sanitizer for agent-authored blog HTML. Everything is
+// rebuilt from scratch rather than filtered: a tag survives only if it is on
+// BLOG_ALLOWED_TAGS, and an attribute survives only if it is href on an anchor
+// pointing somewhere we permit. Nothing is matched against a list of "bad"
+// things, so an attack we did not think of is dropped by default.
+const BLOG_ALLOWED_TAGS = ["h2", "h3", "p", "ul", "ol", "li", "strong", "em", "a"];
+const BLOG_DROP_WITH_CONTENT = ["script", "style", "iframe", "object", "embed", "form", "input", "svg", "link"];
+
+function blogSafeHref(value) {
+  const v = String(value == null ? "" : value).trim();
+  if (!v) return null;
+  // Allowlist of shapes: site-relative, or an explicit http(s) URL. Anything
+  // else — javascript:, data:, vbscript:, a bare word — is dropped.
+  if (v.charAt(0) === "/") return v;
+  if (/^https?:\/\//i.test(v)) return v;
+  return null;
+}
+
+function sanitizeBlogHtml(html) {
+  let out = String(html == null ? "" : html);
+
+  // 1. Remove dangerous elements together with everything inside them.
+  BLOG_DROP_WITH_CONTENT.forEach(function (tag) {
+    out = out.replace(new RegExp("<" + tag + "\\b[\\s\\S]*?<\\/" + tag + "\\s*>", "gi"), "");
+    // Void or unclosed forms of the same elements (<input>, <link>, a stray <script>).
+    out = out.replace(new RegExp("<\\/?" + tag + "\\b[^>]*>", "gi"), "");
+  });
+
+  // 2. Comments can hide markup from a reviewer reading the source.
+  out = out.replace(/<!--[\s\S]*?-->/g, "");
+
+  // 3. Rebuild every remaining tag. Anything not allowed is dropped while its
+  //    inner text is kept, so removing a <div> does not delete the paragraph.
+  out = out.replace(/<\/?([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>/g, function (match, rawName, rawAttrs) {
+    const tag = String(rawName).toLowerCase();
+    if (BLOG_ALLOWED_TAGS.indexOf(tag) === -1) return "";
+
+    if (match.charAt(1) === "/") return "</" + tag + ">";
+    if (tag !== "a") return "<" + tag + ">";
+
+    let href = null;
+    const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+    let m;
+    while ((m = attrRe.exec(String(rawAttrs || "")))) {
+      const name = String(m[1]).toLowerCase();
+      // Final guard: no event handler ever survives, whatever its casing.
+      if (name.indexOf("on") === 0) continue;
+      if (name !== "href") continue;
+      const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : ""));
+      const safe = blogSafeHref(value);
+      if (safe) href = safe;
+    }
+
+    if (!href) return "<a>";
+    return '<a href="' + href.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '">';
+  });
+
+  return out;
+}
 
 function sanitizeMedia(rawMedia) {
   if (!Array.isArray(rawMedia)) {
