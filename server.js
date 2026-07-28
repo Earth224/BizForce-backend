@@ -3885,7 +3885,9 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       '  "internal_links": an array of the post slugs and listing ids this post links to\n' +
       '  "reasoning": why this question was chosen and what search intent it captures';
 
-    const completion = await callAnthropicText(promptText, 8000, req.user.id);
+    // Sonnet rather than the Haiku default — a long-form structured article is
+    // the most demanding writing task in this file.
+    const completion = await callAnthropicText(promptText, 8000, req.user.id, "claude-sonnet-5");
 
     let raw = String((completion && completion.text) || "").trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -3974,7 +3976,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
   }
 });
 
-async function callAnthropicText(promptText, maxTokens, userId = null) {
+async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001") {
   var apiKey = await resolveAnthropicKey(userId);
   var anthropicClient = new Anthropic({
     apiKey: apiKey,
@@ -3987,7 +3989,7 @@ async function callAnthropicText(promptText, maxTokens, userId = null) {
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       var response = await anthropicClient.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: model,
         max_tokens: maxTokens,
         messages: [
           {
