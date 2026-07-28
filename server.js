@@ -9629,7 +9629,7 @@ app.get("/api/marketplace/listings", requireAuth, async function (req, res, next
     const q = safeText(req.query.q, 120);
     let query = supabase
       .from("marketplace_listings")
-      .select("id, seller_id, title, description, price_bfc, price_usd, category, tags, media, status, created_at")
+      .select("id, slug, seller_id, title, description, price_bfc, price_usd, category, tags, media, status, created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(100);
@@ -12751,7 +12751,7 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
 
     const [productsRes, portfolioRes, musicRes, videosRes] = await Promise.all([
       supabase.from("marketplace_listings")
-        .select("id, title, description, category, price_usd, media, listing_kind")
+        .select("id, slug, title, description, category, price_usd, media, listing_kind")
         .eq("seller_id", userId)
         .eq("status", "active"),
       supabase.from("profile_portfolio").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
@@ -12768,6 +12768,10 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       const media = Array.isArray(l.media) ? l.media : [];
       return {
         id: l.id,
+        // This card is the only route into a listing page, so it needs the
+        // readable form of the link. Null on rows created before slugs existed
+        // — the caller falls back to id, which the listing route still resolves.
+        slug: l.slug == null ? null : l.slug,
         name: l.title,
         description: l.description,
         image_url: (media.length > 0 && media[0] && media[0].url) ? media[0].url : null,
