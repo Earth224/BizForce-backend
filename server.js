@@ -3865,6 +3865,80 @@ app.post("/api/agents/store/generate-proposals", requireAuth, async function (re
   }
 });
 
+// The SEO writer used to answer in JSON, which meant embedding a whole HTML
+// article inside a JSON string value. Every quote in every href had to be
+// escaped and every newline in the markup had to be encoded, and one missed
+// escape threw the entire article away at JSON.parse. That is a lot of
+// fragility to buy nothing: the article is the payload, so hand it over as
+// text and put the structure around it instead of inside it.
+//
+// Markers sit alone on a line. Three hyphens, a caps field name, three
+// hyphens — a shape that does not occur in prose or in the tag set the writer
+// is allowed to emit. BODY is declared last so the article simply runs to the
+// end of the response and needs no terminator.
+const SEO_POST_MARKERS = [
+  { key: "title",            marker: "---TITLE---",            required: true },
+  { key: "slug",             marker: "---SLUG---",             required: true },
+  { key: "meta_description", marker: "---META_DESCRIPTION---", required: false },
+  { key: "keyword",          marker: "---KEYWORD---",          required: false },
+  { key: "internal_links",   marker: "---INTERNAL_LINKS---",   required: false },
+  { key: "reasoning",        marker: "---REASONING---",        required: false },
+  { key: "body",             marker: "---BODY---",             required: true }
+];
+
+// Throws with a message naming the specific marker at fault. The caller logs
+// that message, so a future failure explains itself instead of needing to be
+// deduced from the shape of the response.
+function parseSeoPostResponse(rawText) {
+  const text = String(rawText == null ? "" : rawText);
+  const located = [];
+
+  SEO_POST_MARKERS.forEach(function (field) {
+    // Alone on its own line. \r is tolerated so a CRLF response still parses.
+    const re = new RegExp("^[ \\t]*" + field.marker + "[ \\t\\r]*$", "m");
+    const match = re.exec(text);
+    if (!match) {
+      throw new Error("marker " + field.marker + " was not found in the response");
+    }
+    located.push({ key: field.key, start: match.index, end: match.index + match[0].length });
+  });
+
+  // Sorted by where they actually appear, not by the order they were declared,
+  // so a section always ends at whatever marker comes next. When BODY is last
+  // — as instructed — its section runs to the end of the response.
+  located.sort(function (a, b) { return a.start - b.start; });
+
+  const sections = {};
+  located.forEach(function (entry, index) {
+    const next = located[index + 1];
+    sections[entry.key] = text.slice(entry.end, next ? next.start : text.length).trim();
+  });
+
+  SEO_POST_MARKERS.forEach(function (field) {
+    if (field.required && !sections[field.key]) {
+      throw new Error("the " + field.marker + " section was empty");
+    }
+  });
+
+  // One comma-separated line. Empty entries are dropped rather than becoming
+  // blank hrefs downstream.
+  const links = sections.internal_links
+    ? sections.internal_links.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
+    : [];
+
+  // Empty optional sections are handed back as undefined so the validation
+  // below treats them exactly as it treated an absent JSON key.
+  return {
+    title:            sections.title,
+    slug:             sections.slug,
+    meta_description: sections.meta_description || undefined,
+    keyword:          sections.keyword || undefined,
+    internal_links:   links.length ? links : undefined,
+    reasoning:        sections.reasoning || undefined,
+    body:             sections.body
+  };
+}
+
 app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res, next) {
   try {
     const topic = safeText(req.body.topic, 200);
@@ -3987,14 +4061,27 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
       "It must genuinely and completely answer the question — a reader who finds it should leave satisfied " +
       "whether or not they buy. Do not write a sales page." +
-      "\n\nRespond with a JSON object only. No prose, no explanation, no markdown code fences. Keys:\n" +
-      '  "title": the post title\n' +
-      '  "slug": lowercase letters, digits and hyphens only — no spaces, no uppercase, no leading or trailing hyphen\n' +
-      '  "meta_description": the search-result snippet, UNDER 160 characters\n' +
-      '  "keyword": the long-tail question-shaped keyword this post targets\n' +
-      '  "body": the full post as HTML, following the tag rules above\n' +
-      '  "internal_links": an array of the hrefs this post links to, each one the exact root-relative path used in the body, beginning with a forward slash\n' +
-      '  "reasoning": why this question was chosen and what search intent it captures';
+      "\n\nRespond in the delimited plain-text format below. This is NOT JSON. " +
+      "Do not quote the sections, do not escape anything, do not wrap the response in markdown code fences, " +
+      "and write no prose before the first marker or after the article.\n" +
+      "Each marker below sits alone on its own line, written exactly as shown. " +
+      "The section that follows a marker runs until the next marker. Emit every marker, once each, in this order.\n\n" +
+      "---TITLE---\n" +
+      "the post title\n" +
+      "---SLUG---\n" +
+      "lowercase letters, digits and hyphens only — no spaces, no uppercase, no leading or trailing hyphen\n" +
+      "---META_DESCRIPTION---\n" +
+      "the search-result snippet, UNDER 160 characters\n" +
+      "---KEYWORD---\n" +
+      "the long-tail question-shaped keyword this post targets\n" +
+      "---INTERNAL_LINKS---\n" +
+      "every href you used in the article, comma-separated on ONE line, each beginning with a forward slash\n" +
+      "---REASONING---\n" +
+      "why this question was chosen and what search intent it captures\n" +
+      "---BODY---\n" +
+      "the full post as HTML, following the tag rules above. Write the HTML exactly as it should appear — " +
+      "real double quotes around every href, real line breaks between elements, nothing escaped. " +
+      "This section is last: everything after this marker is the article, so write it straight through to the end.";
 
     // Sonnet rather than the Haiku default — a long-form structured article is
     // the most demanding writing task in this file. 32000 rather than 16000
@@ -4012,23 +4099,19 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
     let parsed;
     try {
-      parsed = JSON.parse(raw);
+      parsed = parseSeoPostResponse(raw);
     } catch (parseErr) {
-      // The head of the response only ever showed that it started correctly.
-      // A truncated article is well-formed right up to the point it stops, so
-      // the tail is where the evidence is. JSON.stringify keeps it on one log
-      // line with the newlines visible.
+      // reason= first, because it is the answer. Logging stop_reason, length
+      // and tail without the actual failure message is what turned the last
+      // one of these into three rounds of guessing. The tail still earns its
+      // place — JSON.stringify keeps it on one log line with newlines visible.
       console.error(
         "[agents/seo/generate-post] Unparseable agent response:" +
+        " reason=" + ((parseErr && parseErr.message) ? parseErr.message : String(parseErr)) +
         " stop_reason=" + (stopReason || "(none)") +
         " length=" + raw.length +
         " tail(300)=" + JSON.stringify(raw.slice(-300))
       );
-      return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
-    }
-
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      console.error("[agents/seo/generate-post] Agent response was not a JSON object:", raw.slice(0, 500));
       return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
     }
 
