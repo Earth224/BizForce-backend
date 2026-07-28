@@ -3208,6 +3208,110 @@ const PROPOSAL_EXECUTORS = {
       previous: previous,
       changed: changed
     };
+  },
+
+  // Publishes a blog post into content_library. The row goes straight to
+  // status "published" because the approval gate IS the editorial review —
+  // by the time this runs a human has already read the proposal.
+  publish_blog_post: async function (proposal) {
+    const payload = proposal.payload || {};
+
+    const title = safeText(payload.title, 200);
+    if (!title) {
+      throw new Error("publish_blog_post: payload.title is required");
+    }
+
+    const body = String(payload.body === undefined || payload.body === null ? "" : payload.body).trim();
+    if (!body) {
+      throw new Error("publish_blog_post: payload.body is required");
+    }
+    if (body.length < 300) {
+      throw new Error("publish_blog_post: payload.body is only " + body.length + " characters; a post under 300 characters is not worth publishing");
+    }
+
+    const slug = safeText(payload.slug, 100);
+    if (!slug) {
+      throw new Error("publish_blog_post: payload.slug is required");
+    }
+    // Lowercase letters, digits and hyphens only, no leading or trailing hyphen.
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      throw new Error("publish_blog_post: '" + slug + "' is not a valid slug. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen");
+    }
+
+    const metaDescription = payload.meta_description !== undefined ? safeText(payload.meta_description, 300) : null;
+    const keyword = payload.keyword !== undefined ? safeText(payload.keyword, 100) : null;
+    const sourceUrl = payload.source_url !== undefined ? safeText(payload.source_url, 500) : null;
+
+    let internalLinks = null;
+    if (payload.internal_links !== undefined && payload.internal_links !== null) {
+      if (!Array.isArray(payload.internal_links)) {
+        throw new Error("publish_blog_post: payload.internal_links must be an array");
+      }
+      internalLinks = payload.internal_links
+        .map(function (link) { return safeText(link, 500); })
+        .filter(Boolean)
+        .slice(0, 10);
+    }
+
+    const { data, error } = await supabase
+      .from("content_library")
+      .insert({
+        user_id:          proposal.user_id,
+        type:             "blog",
+        title:            title,
+        slug:             slug,
+        body:             body,
+        meta_description: metaDescription,
+        keyword:          keyword,
+        source_url:       sourceUrl,
+        internal_links:   internalLinks,
+        status:           "published",
+        published_at:     nowIso(),
+        created_at:       nowIso()
+      })
+      .select("id, title, slug")
+      .single();
+
+    if (error) {
+      // 23505 on the per-author slug index means this author already published
+      // under this slug — a retried approval, not a failure. Return the post
+      // that is already live rather than marking the proposal failed.
+      const conflictText = String(error.message || "") + " " + String(error.details || "") + " " + String(error.constraint || "");
+      if (error.code === "23505" && conflictText.indexOf("slug") !== -1) {
+        const { data: existing, error: existingError } = await supabase
+          .from("content_library")
+          .select("id, title, slug")
+          .eq("user_id", proposal.user_id)
+          .eq("slug", slug)
+          .maybeSingle();
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        if (!existing) {
+          throw new Error("publish_blog_post: slug '" + slug + "' reported as already taken, but no post with that slug could be read back for this author");
+        }
+
+        return {
+          post_id: existing.id,
+          title: existing.title,
+          slug: existing.slug,
+          created: false,
+          already_published: true
+        };
+      }
+
+      throw error;
+    }
+
+    return {
+      post_id: data.id,
+      title: data.title,
+      slug: data.slug,
+      created: true,
+      already_published: false
+    };
   }
 };
 
