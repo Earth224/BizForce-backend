@@ -3853,8 +3853,27 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       throw slugError;
     }
 
+    // The author's public handle is what turns a post slug into a real path.
+    // Without it there is no valid /blog/... href to hand the model, so existing
+    // posts are withheld as link targets entirely rather than offered in a shape
+    // the model would have to guess the rest of.
+    let authorHandle = null;
+    try {
+      const { data: authorProfile, error: authorProfileError } = await supabase
+        .from("bf_profiles")
+        .select("username")
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (!authorProfileError && authorProfile) {
+        authorHandle = safeText(authorProfile.username, 60) || null;
+      }
+    } catch (handleError) {
+      authorHandle = null;
+    }
+
     const existingListings = listings || [];
     const publishedPosts = published || [];
+    const linkablePosts = authorHandle ? publishedPosts : [];
 
     const takenSlugs = {};
     (slugRows || []).forEach(function (r) {
@@ -3862,22 +3881,28 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       if (s) takenSlugs[s] = true;
     });
 
+    // Link targets are handed over as the finished path, leading slash already
+    // attached, so the model copies a string instead of assembling one. It was
+    // assembling them wrong — bare slugs and bare ids that the sanitizer's
+    // allowlist then had to repair or discard.
     const listingLines = existingListings.length
       ? existingListings.map(function (l) {
-          return "- id=" + String(l.id) +
+          return "- href=/listing/" + String(l.id) +
             " | title=" + JSON.stringify(String(l.title || "")) +
             " | category=" + String(l.category || "uncategorized") +
             " | description=" + JSON.stringify(String(l.description || "").slice(0, 300));
         }).join("\n")
       : "(this seller has no listings yet)";
 
-    const postLines = publishedPosts.length
-      ? publishedPosts.map(function (p) {
-          return "- slug=" + String(p.slug) +
+    const postLines = linkablePosts.length
+      ? linkablePosts.map(function (p) {
+          return "- href=/blog/" + authorHandle + "/" + String(p.slug) +
             " | title=" + JSON.stringify(String(p.title || "")) +
             " | keyword=" + JSON.stringify(String(p.keyword || ""));
         }).join("\n")
-      : "(no posts published yet — this is the first)";
+      : (authorHandle
+          ? "(no posts published yet — this is the first)"
+          : "(none available as link targets — do not link to any blog post)");
 
     const promptText = AGENT_SYSTEM_PROMPTS.seo +
       "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines +
@@ -3891,8 +3916,20 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       "- Clean HTML using ONLY these tags: h2, h3, p, ul, li, strong, a. No h1 — the page renders the title separately.\n" +
       "- Near the end, a frequently asked questions section with AT LEAST THREE question-shaped h3 headings. " +
       "These target the People Also Ask results, so phrase them the way a person would ask.\n" +
-      "- Link naturally to up to THREE of the existing posts above, using their slugs as hrefs.\n" +
-      "- Link to EXACTLY ONE of the seller's listings as the money page.\n" +
+      (linkablePosts.length
+        ? "- Link naturally to up to THREE of the existing posts above, copying each href exactly as it is written above.\n"
+        : "- Do not link to any other blog post — none are available as link targets.\n") +
+      "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n" +
+      "\nHREF FORMAT — follow this exactly, it is not negotiable:\n" +
+      "- EVERY href in the article must be root-relative. It MUST begin with a forward slash.\n" +
+      "- A bare slug, a bare id, or a relative path is WRONG and that link will be thrown away. " +
+      'href="how-long-does-a-mobile-detail-take" is WRONG. href="b8cfbc31-21a4-401d-9cea-cea5eae4f460" is WRONG. ' +
+      'href="/blog/somehandle/how-long-does-a-mobile-detail-take" and href="/listing/b8cfbc31-21a4-401d-9cea-cea5eae4f460" are right.\n' +
+      "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
+      (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n") +
+      "- A link to a money page is written as /listing/ then the listing id.\n" +
+      "- Every link target available to you is listed above with its complete href already written out. " +
+      "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n" +
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
       "It must genuinely and completely answer the question — a reader who finds it should leave satisfied " +
       "whether or not they buy. Do not write a sales page." +
@@ -3902,7 +3939,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       '  "meta_description": the search-result snippet, UNDER 160 characters\n' +
       '  "keyword": the long-tail question-shaped keyword this post targets\n' +
       '  "body": the full post as HTML, following the tag rules above\n' +
-      '  "internal_links": an array of the post slugs and listing ids this post links to\n' +
+      '  "internal_links": an array of the hrefs this post links to, each one the exact root-relative path used in the body, beginning with a forward slash\n' +
       '  "reasoning": why this question was chosen and what search intent it captures';
 
     // Sonnet rather than the Haiku default — a long-form structured article is
