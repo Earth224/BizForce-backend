@@ -12503,6 +12503,46 @@ app.get("/api/blog/:handle", async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+// Public single-listing read — the money-page target for blog posts. Active
+// listings only, and seller_id is used to resolve the handle then dropped so
+// it never reaches a public response. The authenticated marketplace routes
+// above are untouched; this cannot shadow them because
+// GET /api/marketplace/listings is a shorter path that Express matches
+// separately.
+app.get("/api/marketplace/listings/:id", async function (req, res, next) {
+  try {
+    const listingId = safeText(req.params.id, 100);
+    if (!listingId) return res.status(404).json({ error: "listing not found" });
+
+    const { data: listing, error: listingError } = await supabase
+      .from("marketplace_listings")
+      .select("id, title, description, category, price_usd, price_bfc, tags, media, is_digital, status, seller_id, created_at")
+      .eq("id", listingId)
+      .eq("status", "active")
+      .maybeSingle();
+    if (listingError) throw listingError;
+    if (!listing) return res.status(404).json({ error: "listing not found" });
+
+    // A seller without a bf_profiles row is fine — the listing still renders,
+    // the handle is simply null.
+    const { data: seller, error: sellerError } = await supabase
+      .from("bf_profiles")
+      .select("username, display_name")
+      .eq("user_id", listing.seller_id)
+      .maybeSingle();
+    if (sellerError) throw sellerError;
+
+    const publicListing = Object.assign({}, listing);
+    delete publicListing.seller_id;
+
+    return res.json({
+      listing: publicListing,
+      handle: seller ? seller.username : null,
+      display_name: seller ? seller.display_name : null
+    });
+  } catch (error) { next(error); }
+});
+
 // ── Music CRUD ────────────────────────────────────────────────────────────────
 app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
   try {
