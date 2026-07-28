@@ -3942,7 +3942,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // The money pages — every post has to route traffic to one of these.
     const { data: listings, error: listingsError } = await supabase
       .from("marketplace_listings")
-      .select("id, title, category, description")
+      .select("id, title, slug, category, description")
       .eq("seller_id", req.user.id)
       .limit(20);
 
@@ -4009,9 +4009,13 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // attached, so the model copies a string instead of assembling one. It was
     // assembling them wrong — bare slugs and bare ids that the sanitizer's
     // allowlist then had to repair or discard.
+    // The slug is the readable form of the money link, but a row created outside
+    // the two insert paths can still have a null slug. The uuid resolves on the
+    // same route, so fall back to it rather than emit /listing/null.
     const listingLines = existingListings.length
       ? existingListings.map(function (l) {
-          return "- href=/listing/" + String(l.id) +
+          const listingPathSegment = String(l.slug || "").trim() || String(l.id);
+          return "- href=/listing/" + listingPathSegment +
             " | title=" + JSON.stringify(String(l.title || "")) +
             " | category=" + String(l.category || "uncategorized") +
             " | description=" + JSON.stringify(String(l.description || "").slice(0, 300));
