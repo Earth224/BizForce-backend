@@ -3887,7 +3887,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
     // Sonnet rather than the Haiku default — a long-form structured article is
     // the most demanding writing task in this file.
-    const completion = await callAnthropicText(promptText, 8000, req.user.id, "claude-sonnet-5");
+    const completion = await callAnthropicText(promptText, 16000, req.user.id, "claude-sonnet-5");
 
     let raw = String((completion && completion.text) || "").trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -3978,9 +3978,13 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
 async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001") {
   var apiKey = await resolveAnthropicKey(userId);
+  // Haiku keeps the original 120s budget so no existing caller changes. A
+  // non-default model is here because the task is large — Sonnet writing
+  // 16000 tokens takes far longer than Haiku ever does.
+  var callTimeout = model === "claude-haiku-4-5-20251001" ? 120000 : 300000;
   var anthropicClient = new Anthropic({
     apiKey: apiKey,
-    timeout: 120000
+    timeout: callTimeout
   });
 
   var maxAttempts = 3;
