@@ -3027,16 +3027,12 @@ const PROPOSAL_EXECUTORS = {
       ? payload.tags.map(function (t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
       : [];
 
-    const { data, error } = await supabase
-      .from("marketplace_listings")
-      .insert({
-        seller_id: proposal.user_id, title, description,
-        price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(payload.media), status: "active",
-        source_proposal_id: proposal.id,
-        created_at: nowIso(), updated_at: nowIso()
-      })
-      .select("id, title, status")
-      .single();
+    const { data, error } = await insertListingWithSlug({
+      seller_id: proposal.user_id, title, description,
+      price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(payload.media), status: "active",
+      source_proposal_id: proposal.id,
+      created_at: nowIso(), updated_at: nowIso()
+    }, "id, title, status");
 
     if (error) {
       // 23505 on the partial unique index means this proposal already published
@@ -9376,6 +9372,85 @@ app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
 
 const MARKETPLACE_CATEGORIES = ["services","artists","garage_sale","bookstore","health_wellness","hair_beauty","clothing","vehicles","labor_trades","other"];
 
+// A listing's public URL is /listing/<slug>, so the read route has to tell a
+// slug from an id. Anything uuid-shaped is looked up by id, which is what the
+// two already-published blog posts carrying uuid money links depend on.
+const LISTING_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const LISTING_SLUG_MAX_ATTEMPTS = 3;
+
+// The same rules migration 057 used to backfill existing rows, so a listing
+// created today gets the slug it would have got had it existed then:
+// lowercase, spaces and underscores to hyphens, drop anything that is not a
+// lowercase letter, digit or hyphen, collapse hyphen runs, trim the ends, and
+// fall back to 'listing' when a title reduces to nothing.
+function slugifyListingTitle(title) {
+  const base = String(title == null ? "" : title)
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return base || "listing";
+}
+
+function randomListingSlugSuffix() {
+  // Base 36 is already within the slug charset. Padded so the suffix is always
+  // six characters even when Math.random() returns a short representation.
+  return Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+}
+
+// Slugs are unique table-wide, so a collision is a 23505 on
+// marketplace_listings_slug_key specifically. It must never be confused with
+// the 23505 on marketplace_listings_source_proposal_id_key that publish_listing
+// treats as an already-published proposal — hence matching the index name
+// rather than the error code alone. The two names are disjoint: neither
+// contains the other's discriminator.
+function isListingSlugConflict(error) {
+  if (!error || error.code !== "23505") {
+    return false;
+  }
+
+  const text = (
+    String(error.message || "") + " " +
+    String(error.details || "") + " " +
+    String(error.constraint || "")
+  ).toLowerCase();
+
+  return text.indexOf("marketplace_listings_slug_key") !== -1 || text.indexOf("(slug)") !== -1;
+}
+
+// The single insert path for marketplace_listings. Rather than querying for
+// taken slugs first — which races anyway — it inserts and lets the unique
+// index arbitrate, retrying with a random suffix on a slug collision only.
+//
+// Any other error, including a source_proposal_id conflict, is handed straight
+// back to the caller untouched so existing error handling runs exactly as it
+// did before.
+async function insertListingWithSlug(row, selectColumns) {
+  const baseSlug = slugifyListingTitle(row.title);
+
+  for (var attempt = 1; attempt <= LISTING_SLUG_MAX_ATTEMPTS; attempt++) {
+    const slug = attempt === 1 ? baseSlug : baseSlug + "-" + randomListingSlugSuffix();
+
+    const result = await supabase
+      .from("marketplace_listings")
+      .insert(Object.assign({}, row, { slug: slug }))
+      .select(selectColumns)
+      .single();
+
+    if (!result.error || !isListingSlugConflict(result.error)) {
+      return result;
+    }
+  }
+
+  throw new Error(
+    "Could not assign a unique slug for listing title '" + String(row.title || "") +
+    "' after " + LISTING_SLUG_MAX_ATTEMPTS + " attempts. The listing was not created."
+  );
+}
+
 // Strict allowlist sanitizer for agent-authored blog HTML. Everything is
 // rebuilt from scratch rather than filtered: a tag survives only if it is on
 // BLOG_ALLOWED_TAGS, and an attribute survives only if it is href on an anchor
@@ -9541,15 +9616,12 @@ app.post("/api/marketplace/listings", requireAuth, async function (req, res, nex
     if (!title)    return res.status(400).json({ error: "Title is required" });
     if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
     if (priceBfc <= 0 && priceUsd === null) return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
-    const { data, error } = await supabase
-      .from("marketplace_listings")
-      .insert({
-        seller_id: req.user.id, title, description: description || "",
-        price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(req.body.media), status: "active",
-        is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
-        created_at: nowIso(), updated_at: nowIso()
-      })
-      .select("*").single();
+    const { data, error } = await insertListingWithSlug({
+      seller_id: req.user.id, title, description: description || "",
+      price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(req.body.media), status: "active",
+      is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
+      created_at: nowIso(), updated_at: nowIso()
+    }, "*");
     if (error) throw error;
     return res.status(201).json({ listing: data });
   } catch (error) { next(error); }
@@ -12747,15 +12819,22 @@ app.get("/api/blog/:handle", async function (req, res, next) {
 // separately.
 app.get("/api/marketplace/listings/:id", async function (req, res, next) {
   try {
-    const listingId = safeText(req.params.id, 100);
-    if (!listingId) return res.status(404).json({ error: "listing not found" });
+    const listingKey = safeText(req.params.id, 100);
+    if (!listingKey) return res.status(404).json({ error: "listing not found" });
 
-    const { data: listing, error: listingError } = await supabase
+    // Uuid in, id lookup — byte for byte what this route did before slugs
+    // existed, which is what the two published posts carrying uuid money links
+    // rely on. Anything else is treated as a slug.
+    let listingQuery = supabase
       .from("marketplace_listings")
       .select("id, title, description, category, price_usd, price_bfc, tags, media, is_digital, status, seller_id, created_at")
-      .eq("id", listingId)
-      .eq("status", "active")
-      .maybeSingle();
+      .eq("status", "active");
+
+    listingQuery = LISTING_ID_UUID.test(listingKey)
+      ? listingQuery.eq("id", listingKey)
+      : listingQuery.eq("slug", listingKey);
+
+    const { data: listing, error: listingError } = await listingQuery.maybeSingle();
     if (listingError) throw listingError;
     if (!listing) return res.status(404).json({ error: "listing not found" });
 
