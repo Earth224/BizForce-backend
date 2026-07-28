@@ -3221,9 +3221,27 @@ const PROPOSAL_EXECUTORS = {
       throw new Error("publish_blog_post: payload.title is required");
     }
 
+    // The author's public handle lets the sanitizer repair bare-slug internal
+    // links into /blog/<handle>/<slug>. Best effort only: an author with no
+    // bf_profiles row still publishes, they just lose those links the same way
+    // they would have been lost before.
+    let authorHandle = null;
+    try {
+      const { data: authorProfile, error: authorProfileError } = await supabase
+        .from("bf_profiles")
+        .select("username")
+        .eq("user_id", proposal.user_id)
+        .maybeSingle();
+      if (!authorProfileError && authorProfile) {
+        authorHandle = safeText(authorProfile.username, 60) || null;
+      }
+    } catch (handleError) {
+      authorHandle = null;
+    }
+
     // Sanitize first, so the 300-character floor measures surviving content
     // and the row that reaches the database is already clean.
-    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body)).trim();
+    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle).trim();
     if (!body) {
       throw new Error("publish_blog_post: payload.body is required");
     }
@@ -9176,6 +9194,34 @@ const MARKETPLACE_CATEGORIES = ["services","artists","garage_sale","bookstore","
 const BLOG_ALLOWED_TAGS = ["h2", "h3", "p", "ul", "ol", "li", "strong", "em", "a"];
 const BLOG_DROP_WITH_CONTENT = ["script", "style", "iframe", "object", "embed", "form", "input", "svg", "link"];
 
+// The SEO model does not reliably emit the leading slash on internal links —
+// it writes href="how-does-x-work" or a bare listing uuid. Those fail the
+// allowlist below and get stripped, leaving an anchor pointing nowhere in an
+// otherwise fine-looking post. Repair the two shapes we can recognize BEFORE
+// the allowlist runs; the allowlist still has the final say, so anything that
+// does not normalize into a real path is dropped exactly as it is today.
+const BLOG_HREF_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BLOG_HREF_BARE_SLUG = /^[a-z0-9-]+$/;
+
+function normalizeBlogHref(value, authorHandle) {
+  const v = String(value == null ? "" : value).trim();
+  if (!v) return v;
+
+  // Already a shape the allowlist accepts — never rewrite it.
+  if (v.charAt(0) === "/") return v;
+  if (/^https?:\/\//i.test(v)) return v;
+
+  if (BLOG_HREF_UUID.test(v)) return "/listing/" + v;
+
+  // A bare slug is only resolvable if we know whose blog it belongs to. With
+  // no handle we do not guess — the link falls through and gets stripped.
+  if (authorHandle && BLOG_HREF_BARE_SLUG.test(v)) {
+    return "/blog/" + authorHandle + "/" + v;
+  }
+
+  return v;
+}
+
 function blogSafeHref(value) {
   const v = String(value == null ? "" : value).trim();
   if (!v) return null;
@@ -9186,7 +9232,7 @@ function blogSafeHref(value) {
   return null;
 }
 
-function sanitizeBlogHtml(html) {
+function sanitizeBlogHtml(html, authorHandle) {
   let out = String(html == null ? "" : html);
 
   // 1. Remove dangerous elements together with everything inside them.
@@ -9217,7 +9263,7 @@ function sanitizeBlogHtml(html) {
       if (name.indexOf("on") === 0) continue;
       if (name !== "href") continue;
       const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : ""));
-      const safe = blogSafeHref(value);
+      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle));
       if (safe) href = safe;
     }
 
