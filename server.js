@@ -3791,6 +3791,189 @@ app.post("/api/agents/store/generate-proposals", requireAuth, async function (re
   }
 });
 
+app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res, next) {
+  try {
+    const topic = safeText(req.body.topic, 200);
+
+    // The money pages — every post has to route traffic to one of these.
+    const { data: listings, error: listingsError } = await supabase
+      .from("marketplace_listings")
+      .select("id, title, category, description")
+      .eq("seller_id", req.user.id)
+      .limit(20);
+
+    if (listingsError) {
+      throw listingsError;
+    }
+
+    // Already-live posts, available as internal link targets.
+    const { data: published, error: publishedError } = await supabase
+      .from("content_library")
+      .select("id, title, slug, keyword")
+      .eq("user_id", req.user.id)
+      .eq("type", "blog")
+      .eq("status", "published")
+      .not("slug", "is", null)
+      .order("published_at", { ascending: false })
+      .limit(20);
+
+    if (publishedError) {
+      throw publishedError;
+    }
+
+    // Every slug this author has used, published or not — a draft still owns
+    // its slug under the per-author unique index.
+    const { data: slugRows, error: slugError } = await supabase
+      .from("content_library")
+      .select("slug")
+      .eq("user_id", req.user.id)
+      .not("slug", "is", null);
+
+    if (slugError) {
+      throw slugError;
+    }
+
+    const existingListings = listings || [];
+    const publishedPosts = published || [];
+
+    const takenSlugs = {};
+    (slugRows || []).forEach(function (r) {
+      const s = String(r.slug || "").trim().toLowerCase();
+      if (s) takenSlugs[s] = true;
+    });
+
+    const listingLines = existingListings.length
+      ? existingListings.map(function (l) {
+          return "- id=" + String(l.id) +
+            " | title=" + JSON.stringify(String(l.title || "")) +
+            " | category=" + String(l.category || "uncategorized") +
+            " | description=" + JSON.stringify(String(l.description || "").slice(0, 300));
+        }).join("\n")
+      : "(this seller has no listings yet)";
+
+    const postLines = publishedPosts.length
+      ? publishedPosts.map(function (p) {
+          return "- slug=" + String(p.slug) +
+            " | title=" + JSON.stringify(String(p.title || "")) +
+            " | keyword=" + JSON.stringify(String(p.keyword || ""));
+        }).join("\n")
+      : "(no posts published yet — this is the first)";
+
+    const promptText = AGENT_SYSTEM_PROMPTS.seo +
+      "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines +
+      "\n\nThis seller's already-published posts (available as internal links):\n" + postLines +
+      (topic ? "\n\nThe seller asked for a post on this topic: " + topic : "\n\nNo topic was given — choose one yourself from the catalog above.") +
+      "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
+      "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
+      "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +
+      "\n\nRequirements:\n" +
+      "- At least 800 words.\n" +
+      "- Clean HTML using ONLY these tags: h2, h3, p, ul, li, strong, a. No h1 — the page renders the title separately.\n" +
+      "- Near the end, a frequently asked questions section with AT LEAST THREE question-shaped h3 headings. " +
+      "These target the People Also Ask results, so phrase them the way a person would ask.\n" +
+      "- Link naturally to up to THREE of the existing posts above, using their slugs as hrefs.\n" +
+      "- Link to EXACTLY ONE of the seller's listings as the money page.\n" +
+      "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
+      "It must genuinely and completely answer the question — a reader who finds it should leave satisfied " +
+      "whether or not they buy. Do not write a sales page." +
+      "\n\nRespond with a JSON object only. No prose, no explanation, no markdown code fences. Keys:\n" +
+      '  "title": the post title\n' +
+      '  "slug": lowercase letters, digits and hyphens only — no spaces, no uppercase, no leading or trailing hyphen\n' +
+      '  "meta_description": the search-result snippet, UNDER 160 characters\n' +
+      '  "keyword": the long-tail question-shaped keyword this post targets\n' +
+      '  "body": the full post as HTML, following the tag rules above\n' +
+      '  "internal_links": an array of the post slugs and listing ids this post links to\n' +
+      '  "reasoning": why this question was chosen and what search intent it captures';
+
+    const completion = await callAnthropicText(promptText, 8000, req.user.id);
+
+    let raw = String((completion && completion.text) || "").trim();
+    raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("[agents/seo/generate-post] Unparseable agent response:", raw.slice(0, 500));
+      return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
+    }
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.error("[agents/seo/generate-post] Agent response was not a JSON object:", raw.slice(0, 500));
+      return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
+    }
+
+    // One post is being generated, so there is nothing to fall back to — a
+    // failed check is a 422 naming the problem, not a silent drop.
+    const title = safeText(parsed.title, 200);
+    if (!title) {
+      return res.status(422).json({ error: "The SEO Agent returned a post with no title." });
+    }
+
+    const body = String(parsed.body === undefined || parsed.body === null ? "" : parsed.body).trim();
+    if (body.length < 800) {
+      return res.status(422).json({ error: "The SEO Agent returned a post body of only " + body.length + " characters; at least 800 are required." });
+    }
+
+    const slug = safeText(parsed.slug, 100);
+    if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      return res.status(422).json({ error: "The SEO Agent returned an invalid slug: '" + String(parsed.slug) + "'. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen." });
+    }
+
+    if (takenSlugs[slug.toLowerCase()]) {
+      return res.status(422).json({ error: "The SEO Agent returned the slug '" + slug + "', which this author has already used." });
+    }
+
+    const metaDescription = parsed.meta_description !== undefined ? safeText(parsed.meta_description, 300) : null;
+    const keyword = parsed.keyword !== undefined ? safeText(parsed.keyword, 100) : null;
+
+    let internalLinks = null;
+    if (parsed.internal_links !== undefined && parsed.internal_links !== null) {
+      if (!Array.isArray(parsed.internal_links)) {
+        return res.status(422).json({ error: "The SEO Agent returned internal_links that is not an array." });
+      }
+      internalLinks = parsed.internal_links
+        .map(function (link) { return safeText(link, 500); })
+        .filter(Boolean)
+        .slice(0, 10);
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("agent_proposals")
+      .insert({
+        user_id:       req.user.id,
+        agent_type:    "seo",
+        action_type:   "publish_blog_post",
+        title:         "Publish " + title,
+        target:        "content_library",
+        payload: {
+          title:            title,
+          slug:             slug,
+          body:             body,
+          meta_description: metaDescription,
+          keyword:          keyword,
+          internal_links:   internalLinks
+        },
+        cost_amount:   0,
+        cost_currency: "USD",
+        reversible:    true,
+        reasoning:     safeText(parsed.reasoning, 2000),
+        status:        "pending",
+        created_at:    nowIso()
+      })
+      .select("*")
+      .single();
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    return res.status(201).json({ proposal: inserted });
+  } catch (error) {
+    next(error);
+  }
+});
+
 async function callAnthropicText(promptText, maxTokens, userId = null) {
   var apiKey = await resolveAnthropicKey(userId);
   var anthropicClient = new Anthropic({
