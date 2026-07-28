@@ -3235,9 +3235,29 @@ const PROPOSAL_EXECUTORS = {
       authorHandle = null;
     }
 
+    // The seller's listing slugs are what let the sanitizer tell a bare money
+    // link apart from a bare blog link — the two are the same shape. Best
+    // effort on the same terms as the handle above: any failure leaves the set
+    // empty, and an empty set means bare values fall through to the blog rule
+    // exactly as they did before this lookup existed. Publishing never blocks
+    // on it.
+    let listingSlugs = [];
+    try {
+      const { data: listingSlugRows, error: listingSlugsError } = await supabase
+        .from("marketplace_listings")
+        .select("slug")
+        .eq("seller_id", proposal.user_id)
+        .not("slug", "is", null);
+      if (!listingSlugsError && Array.isArray(listingSlugRows)) {
+        listingSlugs = listingSlugRows.map(function (r) { return r && r.slug; });
+      }
+    } catch (listingSlugsFetchError) {
+      listingSlugs = [];
+    }
+
     // Sanitize first, so the 300-character floor measures surviving content
     // and the row that reaches the database is already clean.
-    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle).trim();
+    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle, listingSlugs).trim();
     if (!body) {
       throw new Error("publish_blog_post: payload.body is required");
     }
@@ -4055,7 +4075,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       'href="/blog/somehandle/how-long-does-a-mobile-detail-take" and href="/listing/b8cfbc31-21a4-401d-9cea-cea5eae4f460" are right.\n' +
       "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
       (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n") +
-      "- A link to a money page is written as /listing/ then the listing id.\n" +
+      "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n" +
       "- Every link target available to you is listed above with its complete href already written out. " +
       "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n" +
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
@@ -9472,7 +9492,26 @@ const BLOG_DROP_WITH_CONTENT = ["script", "style", "iframe", "object", "embed", 
 const BLOG_HREF_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BLOG_HREF_BARE_SLUG = /^[a-z0-9-]+$/;
 
-function normalizeBlogHref(value, authorHandle) {
+// Callers hand over listing slugs as an array or a Set; everything downstream
+// wants one lowercase-keyed Set, and a missing argument has to mean "know
+// nothing" rather than blow up.
+function toListingSlugSet(listingSlugs) {
+  const set = new Set();
+  if (!listingSlugs) return set;
+
+  const values = typeof listingSlugs.forEach === "function"
+    ? listingSlugs
+    : [];
+
+  values.forEach(function (entry) {
+    const s = String(entry == null ? "" : entry).trim().toLowerCase();
+    if (s) set.add(s);
+  });
+
+  return set;
+}
+
+function normalizeBlogHref(value, authorHandle, listingSlugs) {
   const v = String(value == null ? "" : value).trim();
   if (!v) return v;
 
@@ -9481,6 +9520,20 @@ function normalizeBlogHref(value, authorHandle) {
   if (/^https?:\/\//i.test(v)) return v;
 
   if (BLOG_HREF_UUID.test(v)) return "/listing/" + v;
+
+  // A listing slug and a blog post slug are the same shape, so nothing about
+  // the string itself tells them apart — only the seller's actual listing
+  // slugs can. They are checked BEFORE the blog rule on purpose: a bare value
+  // naming a real listing is the money link, and sending it to /blog/<handle>/
+  // would publish a healthy-looking anchor pointing at a post that does not
+  // exist. That failure is silent, which makes it worse than a stripped link.
+  // Knowing no listing slugs falls straight through to the blog rule below,
+  // which is exactly the behaviour that shipped before this check existed.
+  const known = listingSlugs && typeof listingSlugs.has === "function" ? listingSlugs : null;
+  const lower = v.toLowerCase();
+  if (known && known.has(lower)) {
+    return "/listing/" + lower;
+  }
 
   // A bare slug is only resolvable if we know whose blog it belongs to. With
   // no handle we do not guess — the link falls through and gets stripped.
@@ -9501,8 +9554,9 @@ function blogSafeHref(value) {
   return null;
 }
 
-function sanitizeBlogHtml(html, authorHandle) {
+function sanitizeBlogHtml(html, authorHandle, listingSlugs) {
   let out = String(html == null ? "" : html);
+  const knownListingSlugs = toListingSlugSet(listingSlugs);
 
   // 1. Remove dangerous elements together with everything inside them.
   BLOG_DROP_WITH_CONTENT.forEach(function (tag) {
@@ -9532,7 +9586,7 @@ function sanitizeBlogHtml(html, authorHandle) {
       if (name.indexOf("on") === 0) continue;
       if (name !== "href") continue;
       const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : ""));
-      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle));
+      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle, knownListingSlugs));
       if (safe) href = safe;
     }
 
