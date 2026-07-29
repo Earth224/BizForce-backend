@@ -226,6 +226,11 @@ const COMPLIANCE_PROFILES = {
   supplement_vitality: {
     label: "Dietary supplement / topical cosmetic — FDA structure-function and FTC substantiation rules",
 
+    // Text the finished article must contain verbatim. Same constant the prompt
+    // instructs with and the scanner strips, so all three read from one
+    // definition. A profile with nothing to require simply omits this field.
+    requiredText: COMPLIANCE_DISCLAIMER,
+
     prompt:
       "This product is a dietary supplement or a topical cosmetic. It is NOT a drug, and nothing you write may " +
       "describe it as one.\n\n" +
@@ -263,8 +268,12 @@ const COMPLIANCE_PROFILES = {
         rule: "names a medical condition or disease — a supplement may not identify a condition it is for, in any context"
       },
       {
-        pattern: /\bED\b/i,
-        rule: "uses the medical abbreviation ED — naming the condition, abbreviated or not, is a disease claim"
+        // The only case-sensitive pattern in the table. Case-insensitive \bED\b
+        // also matches the given name "Ed", which is an ordinary word in prose;
+        // the medical abbreviation is written in capitals in every real usage,
+        // so requiring them costs no coverage and removes the collision.
+        pattern: /\bED\b|(?<![A-Za-z0-9])E\.D\.?(?![A-Za-z0-9])/,
+        rule: "uses the medical abbreviation ED or E.D. — naming the condition, abbreviated or not, is a disease claim"
       },
       {
         pattern: SUPPLEMENT_TREATMENT_FORWARD,
@@ -303,6 +312,19 @@ const COMPLIANCE_PROFILES = {
 };
 
 const COMPLIANCE_PROFILE_NAMES = Object.keys(COMPLIANCE_PROFILES);
+
+// Collapses every run of whitespace to a single space so a sentence the model
+// wrapped across lines still compares equal. Only whitespace is forgiven — a
+// changed, dropped or reordered word still fails, which is the point.
+function normalizeComplianceWhitespace(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+}
+
+function complianceRequiredTextPresent(profile, text) {
+  const required = profile && profile.requiredText ? normalizeComplianceWhitespace(profile.requiredText) : "";
+  if (!required) return true;
+  return normalizeComplianceWhitespace(text).indexOf(required) !== -1;
+}
 
 // Returns [{ rule, matched }] for every banned pattern that fires, capped at
 // `limit`. The required disclaimer is removed first: it is the one sentence in
@@ -4210,7 +4232,16 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     }
 
     const publishedPosts = published || [];
-    const linkablePosts = authorHandle ? publishedPosts : [];
+
+    // External mode gets no blog link targets at all. These posts live on this
+    // platform, and linking to them from an article published on someone else's
+    // site pushes authority the wrong way and reads as an unrelated outbound
+    // link to a crawler and a reader alike. Link targets are not scoped per
+    // property yet — until content_library records which site a post belongs
+    // to, there is no way to offer the right ones, so an external post gets
+    // none rather than wrong ones. The slug-collision query above is unaffected
+    // and still sees every slug this author owns.
+    const linkablePosts = (authorHandle && !externalMode) ? publishedPosts : [];
 
     const takenSlugs = {};
     (slugRows || []).forEach(function (r) {
@@ -4269,7 +4300,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
             " | title=" + JSON.stringify(String(p.title || "")) +
             " | keyword=" + JSON.stringify(String(p.keyword || ""));
         }).join("\n")
-      : (authorHandle
+      : ((authorHandle && !externalMode)
           ? "(no posts published yet — this is the first)"
           : "(none available as link targets — do not link to any blog post)");
 
@@ -4420,6 +4451,24 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
           violations: violations.map(function (v) {
             return { matched: v.matched, rule: v.rule };
           })
+        });
+      }
+
+      // The banned patterns say what may not appear. This says what must.
+      // Checked against the body alone: the disclaimer belongs in the article,
+      // not in a meta description that would only leak it into search results.
+      if (!complianceRequiredTextPresent(complianceProfile, body)) {
+        console.warn(
+          "[agents/seo/generate-post] Compliance rejection:" +
+          " profile=" + complianceProfileName +
+          " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
+          " rules=" + JSON.stringify(["required disclaimer text is missing from the post body"])
+        );
+
+        return res.status(422).json({
+          error: "The SEO Agent returned a post that is missing the disclaimer required by the '" + complianceProfileName + "' compliance profile. No post was created.",
+          compliance_profile: complianceProfileName,
+          required_text: complianceProfile.requiredText
         });
       }
     }
