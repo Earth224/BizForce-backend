@@ -3959,15 +3959,38 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
   try {
     const topic = safeText(req.body.topic, 200);
 
-    // The money pages — every post has to route traffic to one of these.
-    const { data: listings, error: listingsError } = await supabase
-      .from("marketplace_listings")
-      .select("id, title, slug, category, description")
-      .eq("seller_id", req.user.id)
-      .limit(20);
+    // External mode. The post is being written for a property that is not this
+    // seller's marketplace, so the money page is a URL the caller names rather
+    // than a listing row. money_url is the switch: without it every line below
+    // behaves exactly as it did before these four fields existed.
+    const moneyUrl    = safeText(req.body.money_url, 500);
+    const moneyAnchor = safeText(req.body.money_anchor, 120);
+    const siteName    = safeText(req.body.site_name, 80);
+    const siteContext = safeText(req.body.site_context, 600);
 
-    if (listingsError) {
-      throw listingsError;
+    if (moneyUrl && !/^https?:\/\//i.test(moneyUrl)) {
+      return res.status(422).json({ error: "money_url must be a complete absolute URL beginning with http:// or https://." });
+    }
+
+    const externalMode = Boolean(moneyUrl);
+
+    // The money pages — every post has to route traffic to one of these.
+    // Skipped entirely in external mode: the caller already named the money
+    // page, so the catalog would be dead weight in the prompt and a second
+    // candidate for the model to link instead.
+    let existingListings = [];
+    if (!externalMode) {
+      const { data: listings, error: listingsError } = await supabase
+        .from("marketplace_listings")
+        .select("id, title, slug, category, description")
+        .eq("seller_id", req.user.id)
+        .limit(20);
+
+      if (listingsError) {
+        throw listingsError;
+      }
+
+      existingListings = listings || [];
     }
 
     // Already-live posts, available as internal link targets.
@@ -4015,7 +4038,6 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       authorHandle = null;
     }
 
-    const existingListings = listings || [];
     const publishedPosts = published || [];
     const linkablePosts = authorHandle ? publishedPosts : [];
 
@@ -4032,15 +4054,32 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // The slug is the readable form of the money link, but a row created outside
     // the two insert paths can still have a null slug. The uuid resolves on the
     // same route, so fall back to it rather than emit /listing/null.
-    const listingLines = existingListings.length
-      ? existingListings.map(function (l) {
-          const listingPathSegment = String(l.slug || "").trim() || String(l.id);
-          return "- href=/listing/" + listingPathSegment +
-            " | title=" + JSON.stringify(String(l.title || "")) +
-            " | category=" + String(l.category || "uncategorized") +
-            " | description=" + JSON.stringify(String(l.description || "").slice(0, 300));
-        }).join("\n")
-      : "(this seller has no listings yet)";
+    const listingLines = externalMode
+      ? null
+      : (existingListings.length
+        ? existingListings.map(function (l) {
+            const listingPathSegment = String(l.slug || "").trim() || String(l.id);
+            return "- href=/listing/" + listingPathSegment +
+              " | title=" + JSON.stringify(String(l.title || "")) +
+              " | category=" + String(l.category || "uncategorized") +
+              " | description=" + JSON.stringify(String(l.description || "").slice(0, 300));
+          }).join("\n")
+        : "(this seller has no listings yet)");
+
+    // The external money page stands in for the catalog, handed over as the
+    // finished absolute URL for the same reason the listing hrefs are handed
+    // over as finished paths: the model copies a string instead of building one.
+    const moneySection = externalMode
+      ? "\n\nThe money page this post must send traffic to (an external page, not a marketplace listing):\n" +
+        "- url=" + moneyUrl +
+        (moneyAnchor ? "\n- suggested anchor text=" + JSON.stringify(moneyAnchor) : "")
+      : "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines;
+
+    // Who the post is for. Emitted only when the caller said — an empty
+    // heading would read to the model as a brand with nothing to say about it.
+    const audienceSection =
+      (siteName ? "\n\nThis post is being written for: " + siteName : "") +
+      (siteContext ? "\n\nAbout this property, its voice and its audience:\n" + siteContext : "");
 
     const postLines = linkablePosts.length
       ? linkablePosts.map(function (p) {
@@ -4053,9 +4092,14 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
           : "(none available as link targets — do not link to any blog post)");
 
     const promptText = AGENT_SYSTEM_PROMPTS.seo +
-      "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines +
+      moneySection +
       "\n\nThis seller's already-published posts (available as internal links):\n" + postLines +
-      (topic ? "\n\nThe seller asked for a post on this topic: " + topic : "\n\nNo topic was given — choose one yourself from the catalog above.") +
+      (topic
+        ? "\n\nThe seller asked for a post on this topic: " + topic
+        : (externalMode
+            ? "\n\nNo topic was given — choose one yourself, working back from what the money page above sells."
+            : "\n\nNo topic was given — choose one yourself from the catalog above.")) +
+      audienceSection +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +
@@ -4067,7 +4111,11 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       (linkablePosts.length
         ? "- Link naturally to up to THREE of the existing posts above, copying each href exactly as it is written above.\n"
         : "- Do not link to any other blog post — none are available as link targets.\n") +
-      "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n" +
+      (externalMode
+        ? "- Link to the money page above EXACTLY ONCE, copying its URL character for character.\n"
+        : (existingListings.length
+            ? "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n"
+            : "- Do not link to any money page — none is available.\n")) +
       "\nHREF FORMAT — follow this exactly, it is not negotiable:\n" +
       "- EVERY href in the article must be root-relative. It MUST begin with a forward slash.\n" +
       "- A bare slug, a bare id, or a relative path is WRONG and that link will be thrown away. " +
@@ -4075,7 +4123,11 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       'href="/blog/somehandle/how-long-does-a-mobile-detail-take" and href="/listing/b8cfbc31-21a4-401d-9cea-cea5eae4f460" are right.\n' +
       "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
       (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n") +
-      "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n" +
+      (externalMode
+        ? "- The money link is the ONE exception to the root-relative rule above: it is a complete absolute URL beginning with https, " +
+          "not a path. Copy it exactly as it is given above — do not shorten it, do not drop the domain, " +
+          "and do not convert it into a root-relative path beginning with a forward slash.\n"
+        : "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n") +
       "- Every link target available to you is listed above with its complete href already written out. " +
       "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n" +
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
@@ -4147,6 +4199,14 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       return res.status(422).json({ error: "The SEO Agent returned a post body of only " + body.length + " characters; at least 800 are required." });
     }
 
+    // In external mode the money link IS the post. Nothing downstream checks
+    // for one — the sanitizer passes any absolute URL through untouched and
+    // never asks whether the required one is present — so this is the only
+    // place it can be caught.
+    if (externalMode && body.indexOf(moneyUrl) === -1) {
+      return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " anywhere in the post. No post was created." });
+    }
+
     const slug = safeText(parsed.slug, 100);
     if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       return res.status(422).json({ error: "The SEO Agent returned an invalid slug: '" + String(parsed.slug) + "'. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen." });
@@ -4170,6 +4230,22 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
         .slice(0, 10);
     }
 
+    const proposalPayload = {
+      title:            title,
+      slug:             slug,
+      body:             body,
+      meta_description: metaDescription,
+      keyword:          keyword,
+      internal_links:   internalLinks
+    };
+
+    // Seventh key only in external mode. Left absent rather than written null
+    // so an internal-path proposal is byte-identical to the ones already
+    // sitting pending in the table.
+    if (externalMode) {
+      proposalPayload.money_url = moneyUrl;
+    }
+
     const { data: inserted, error: insertError } = await supabase
       .from("agent_proposals")
       .insert({
@@ -4178,14 +4254,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
         action_type:   "publish_blog_post",
         title:         "Publish " + title,
         target:        "content_library",
-        payload: {
-          title:            title,
-          slug:             slug,
-          body:             body,
-          meta_description: metaDescription,
-          keyword:          keyword,
-          internal_links:   internalLinks
-        },
+        payload:       proposalPayload,
         cost_amount:   0,
         cost_currency: "USD",
         reversible:    true,
