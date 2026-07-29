@@ -3560,7 +3560,7 @@ const PROPOSAL_EXECUTORS = {
       if (error.code === "23505" && conflictText.indexOf("slug") !== -1) {
         const { data: existing, error: existingError } = await supabase
           .from("content_library")
-          .select("id, title, slug")
+          .select("id, title, slug, status")
           .eq("user_id", proposal.user_id)
           .eq("slug", slug)
           .maybeSingle();
@@ -3573,10 +3573,22 @@ const PROPOSAL_EXECUTORS = {
           throw new Error("publish_blog_post: slug '" + slug + "' reported as already taken, but no post with that slug could be read back for this author");
         }
 
+        // The row that is already there may be a draft from an earlier external
+        // run, so visibility is read off the row rather than assumed from the
+        // fact that it exists. Only "published" is publicly served; "draft" and
+        // "used" are not.
+        //
+        // No external_post here on purpose. Nothing on the row records why it
+        // was created — a draft is also what every other content_library insert
+        // path produces by default — and this proposal's own money_url describes
+        // this attempt, not the earlier one that actually wrote the row. It
+        // cannot be determined honestly, so it is left out rather than guessed.
         return {
           post_id: existing.id,
           title: existing.title,
           slug: existing.slug,
+          status: existing.status,
+          publicly_visible: existing.status === "published",
           created: false,
           already_published: true
         };
