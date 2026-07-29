@@ -482,6 +482,31 @@ function safeText(value, maxLength) {
   return String(value).trim().slice(0, maxLength || 5000);
 }
 
+// The canonical form of a content_library.site value: a bare lowercase
+// hostname, no scheme, no path, no leading www. This is the ONLY place a site
+// value is produced, so every row stores the same shape and an equality filter
+// on it always matches — "https://www.SwordVitality.com/products/x" and
+// "http://swordvitality.com" both reduce to "swordvitality.com".
+//
+// Returns null for anything it cannot parse rather than throwing, so a caller
+// can decide what an unparseable URL means instead of catching.
+function canonicalSiteHost(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw) return null;
+
+  let host;
+  try {
+    host = new URL(raw).hostname;
+  } catch (parseError) {
+    return null;
+  }
+
+  host = String(host || "").trim().toLowerCase();
+  if (host.indexOf("www.") === 0) host = host.slice(4);
+
+  return host || null;
+}
+
 var ASSIGNMENT_STATUSES = ["pending", "in_progress", "completed", "failed"];
 
 function normalizeJsonbArray(value) {
@@ -3461,6 +3486,13 @@ const PROPOSAL_EXECUTORS = {
     const keyword = payload.keyword !== undefined ? safeText(payload.keyword, 100) : null;
     const sourceUrl = payload.source_url !== undefined ? safeText(payload.source_url, 500) : null;
 
+    // Which property this post was written for. Null — absent, or an internal
+    // post — means this platform, which is what every row predating this column
+    // already is. external_url and external_published_at are deliberately not
+    // written here: they describe what happens to the post after this row
+    // exists, and nothing in this pass puts it live anywhere.
+    const site = payload.site !== undefined ? safeText(payload.site, 200) : null;
+
     let internalLinks = null;
     if (payload.internal_links !== undefined && payload.internal_links !== null) {
       if (!Array.isArray(payload.internal_links)) {
@@ -3545,6 +3577,7 @@ const PROPOSAL_EXECUTORS = {
         keyword:          keyword,
         source_url:       sourceUrl,
         internal_links:   internalLinks,
+        site:             site,
         status:           postStatus,
         published_at:     externalPost ? null : nowIso(),
         created_at:       nowIso()
@@ -4237,6 +4270,19 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
     const externalMode = Boolean(moneyUrl);
 
+    // The property this post belongs to, derived once and used for both the
+    // stored proposal and the link-target query below. money_url already passed
+    // the http/https shape gate above, so a null here is a genuine parse
+    // failure rather than a missing field — storing a null site for a request
+    // that plainly is external would silently file the post under this
+    // platform.
+    const externalSite = externalMode ? canonicalSiteHost(moneyUrl) : null;
+    if (externalMode && !externalSite) {
+      return res.status(422).json({
+        error: "money_url '" + moneyUrl + "' could not be parsed into a hostname. Give a complete URL such as https://example.com/product."
+      });
+    }
+
     // Opt-in regulated-category rules. Naming a profile that does not exist is
     // rejected rather than ignored: silently writing uncontrolled content for a
     // caller who asked for a compliance profile is the whole failure this
@@ -4268,16 +4314,44 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       existingListings = listings || [];
     }
 
-    // Already-live posts, available as internal link targets.
-    const { data: published, error: publishedError } = await supabase
+    // Link targets, scoped to the property this post is being written for. A
+    // post is only a usable target if it is reachable from where this article
+    // will live, and the two modes mean different things by "reachable".
+    //
+    // Internal: written for this platform (site is null) and actually served
+    // here (status published). The site condition is stated explicitly rather
+    // than left to the status filter to imply — an external post is a draft
+    // today, but that is the executor's choice, not a rule this query should
+    // depend on.
+    //
+    // External: same property, and published on it. Deliberately NOT filtered
+    // on status "published": an external post is stored here as a draft by
+    // design and always will be, so requiring published would return nothing,
+    // every time, and this whole feature would look like it simply did not
+    // work. external_url is the real signal — it is set only once the post is
+    // live on that property, and a post without one has no address to link to.
+    let publishedQuery = supabase
       .from("content_library")
-      .select("id, title, slug, keyword")
+      .select("id, title, slug, keyword, external_url")
       .eq("user_id", req.user.id)
       .eq("type", "blog")
-      .eq("status", "published")
-      .not("slug", "is", null)
-      .order("published_at", { ascending: false })
-      .limit(20);
+      .not("slug", "is", null);
+
+    if (externalMode) {
+      publishedQuery = publishedQuery
+        .eq("site", externalSite)
+        .not("external_url", "is", null)
+        // published_at describes going live HERE and is null on these rows, so
+        // it sorts nothing. created_at is always set.
+        .order("created_at", { ascending: false });
+    } else {
+      publishedQuery = publishedQuery
+        .eq("status", "published")
+        .is("site", null)
+        .order("published_at", { ascending: false });
+    }
+
+    const { data: published, error: publishedError } = await publishedQuery.limit(20);
 
     if (publishedError) {
       throw publishedError;
@@ -4315,15 +4389,14 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
     const publishedPosts = published || [];
 
-    // External mode gets no blog link targets at all. These posts live on this
-    // platform, and linking to them from an article published on someone else's
-    // site pushes authority the wrong way and reads as an unrelated outbound
-    // link to a crawler and a reader alike. Link targets are not scoped per
-    // property yet — until content_library records which site a post belongs
-    // to, there is no way to offer the right ones, so an external post gets
-    // none rather than wrong ones. The slug-collision query above is unaffected
-    // and still sees every slug this author owns.
-    const linkablePosts = (authorHandle && !externalMode) ? publishedPosts : [];
+    // Internal links are built as /blog/<handle>/<slug>, so without a handle
+    // there is no valid path and the targets are withheld. External links carry
+    // their own complete external_url and need no handle at all. The
+    // slug-collision query above is unaffected either way and still sees every
+    // slug this author owns, across every property.
+    const linkablePosts = externalMode
+      ? publishedPosts
+      : (authorHandle ? publishedPosts : []);
 
     const takenSlugs = {};
     (slugRows || []).forEach(function (r) {
@@ -4376,15 +4449,24 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
         complianceProfile.prompt
       : "";
 
+    // Both shapes are finished hrefs the model copies rather than assembles.
+    // The external one is the post's own external_url, because /blog/<handle>/
+    // <slug> does not serve these posts — they are drafts here and live only on
+    // the property they were written for.
     const postLines = linkablePosts.length
       ? linkablePosts.map(function (p) {
-          return "- href=/blog/" + authorHandle + "/" + String(p.slug) +
+          const href = externalMode
+            ? String(p.external_url)
+            : "/blog/" + authorHandle + "/" + String(p.slug);
+          return "- href=" + href +
             " | title=" + JSON.stringify(String(p.title || "")) +
             " | keyword=" + JSON.stringify(String(p.keyword || ""));
         }).join("\n")
-      : ((authorHandle && !externalMode)
-          ? "(no posts published yet — this is the first)"
-          : "(none available as link targets — do not link to any blog post)");
+      : (externalMode
+          ? "(no other posts on this property are available to link to)"
+          : (authorHandle
+              ? "(no posts published yet — this is the first)"
+              : "(none available as link targets — do not link to any blog post)"));
 
     const promptText = AGENT_SYSTEM_PROMPTS.seo +
       moneySection +
@@ -4592,6 +4674,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // sitting pending in the table.
     if (externalMode) {
       proposalPayload.money_url = moneyUrl;
+      proposalPayload.site = externalSite;
     }
 
     // Recorded so the executor can re-run the same check against the same
