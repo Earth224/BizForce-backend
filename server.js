@@ -175,6 +175,165 @@ const AGENT_SYSTEM_PROMPTS = {
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations."
 };
 
+// ---------------------------------------------------------------------------
+// Compliance profiles.
+//
+// A profile is a regulated content category. It carries the rules the writer
+// is told to follow AND the patterns that verify it actually did, because the
+// prompt is a request and the patterns are the control — a model that ignores
+// an instruction must still not be able to publish the claim.
+//
+// A false negative here is a regulatory exposure, so the patterns deliberately
+// over-match: they catch a claim being disclaimed as readily as one being made.
+// A rejected safe article costs one regeneration; a published drug claim on a
+// supplement is an FDA warning letter or an FTC action.
+// ---------------------------------------------------------------------------
+
+// Required verbatim at the end of every article written under a supplement
+// profile. It is also the one place the banned language is legitimate, so the
+// scanner strips this exact sentence before matching — see
+// findComplianceViolations. Defined once so the prompt and the scanner can
+// never disagree about its wording.
+const COMPLIANCE_DISCLAIMER =
+  "These statements have not been evaluated by the Food and Drug Administration. " +
+  "This product is not intended to diagnose, treat, cure, or prevent any disease.";
+
+// Condition names are banned outright wherever they appear. The same list also
+// serves as the proximity target for treatment verbs, widened with the generic
+// nouns a claim can hide behind ("treats this condition").
+const SUPPLEMENT_CONDITIONS =
+  "erectile dysfunction|impotence|impotent|premature ejaculation|low testosterone|" +
+  "hypogonadism|infertility|infertile|prostate cancer|diabetes|hypertension|heart disease";
+const SUPPLEMENT_CLAIM_TARGETS =
+  SUPPLEMENT_CONDITIONS + "|disease|condition|disorder|symptoms|dysfunction";
+// The specified list is the minimum. Inflected forms are added because the
+// reverse-direction pattern below is mostly passive voice — "that condition is
+// treated by" is the same claim as "treats that condition", and a list without
+// the past participles would miss every one of them.
+const SUPPLEMENT_TREATMENT_VERBS =
+  "cure|cures|cured|curing|treat|treats|treated|treating|heal|heals|healed|healing|" +
+  "reverse|reverses|reversed|reversing|prevent|prevents|prevented|preventing|remedy|remedies";
+
+// Roughly forty characters either side. Both directions are needed: "treats
+// erectile dysfunction" and "erectile dysfunction is treated by" are the same
+// claim written two ways.
+const SUPPLEMENT_TREATMENT_FORWARD = new RegExp(
+  "\\b(?:" + SUPPLEMENT_TREATMENT_VERBS + ")\\b[\\s\\S]{0,40}?\\b(?:" + SUPPLEMENT_CLAIM_TARGETS + ")\\b", "i");
+const SUPPLEMENT_TREATMENT_REVERSE = new RegExp(
+  "\\b(?:" + SUPPLEMENT_CLAIM_TARGETS + ")\\b[\\s\\S]{0,40}?\\b(?:" + SUPPLEMENT_TREATMENT_VERBS + ")\\b", "i");
+
+const COMPLIANCE_PROFILES = {
+  supplement_vitality: {
+    label: "Dietary supplement / topical cosmetic — FDA structure-function and FTC substantiation rules",
+
+    prompt:
+      "This product is a dietary supplement or a topical cosmetic. It is NOT a drug, and nothing you write may " +
+      "describe it as one.\n\n" +
+      "You MAY explain how an ingredient supports the normal, healthy function of the body — circulation, energy, " +
+      "stamina, confidence, general wellbeing. That is the only kind of benefit language permitted, and it must stay " +
+      "about supporting function that is already normal.\n\n" +
+      "You must NEVER:\n" +
+      "- Say or imply that this product diagnoses, treats, cures, prevents, reverses or remedies any disease, " +
+      "condition or medical problem. Not directly, not by suggestion, not by implication.\n" +
+      "- Name, reference, compare this product to, or position it as an alternative to any prescription medication. " +
+      "Do not name such a drug even to say the product is unlike it.\n" +
+      "- Name a medical condition as something this product addresses, helps with, is for, or is used for. Do not " +
+      "name the condition at all.\n" +
+      "- Claim approval, registration, endorsement or evaluation by the FDA or any government agency.\n" +
+      "- Guarantee a result, promise a specific outcome, or state that any result is typical.\n" +
+      "- Claim the product has no side effects, is completely safe, is risk-free, or is safe for everyone.\n" +
+      "- Claim a permanent or structural physical change of any kind.\n" +
+      "- Cite clinical proof, studies, trials, research or doctor recommendation. No specific named source has been " +
+      "supplied to you, so there is nothing you could honestly cite. Do not invent one.\n" +
+      "- Include a customer testimonial, a before-and-after, or any narrative of someone's results.\n\n" +
+      "What the article SHOULD be: genuinely educational. Write about the ingredients and what they are, their " +
+      "traditional and historical use, general wellness and lifestyle context, and an honest, complete answer to the " +
+      "question the reader actually asked. A reader should finish it better informed whether or not they ever buy " +
+      "anything.\n\n" +
+      "The article MUST end with a final paragraph containing this sentence, word for word, exactly as written here:\n" +
+      COMPLIANCE_DISCLAIMER,
+
+    banned: [
+      {
+        pattern: /\b(?:viagra|cialis|levitra|stendra|sildenafil|tadalafil|vardenafil|avanafil)\b/i,
+        rule: "names a prescription medication — a supplement may never reference, compare itself to, or invoke a drug"
+      },
+      {
+        pattern: new RegExp("\\b(?:" + SUPPLEMENT_CONDITIONS + ")\\b", "i"),
+        rule: "names a medical condition or disease — a supplement may not identify a condition it is for, in any context"
+      },
+      {
+        pattern: /\bED\b/i,
+        rule: "uses the medical abbreviation ED — naming the condition, abbreviated or not, is a disease claim"
+      },
+      {
+        pattern: SUPPLEMENT_TREATMENT_FORWARD,
+        rule: "places a treatment verb (cure, treat, heal, reverse, prevent, remedy) next to a disease, condition or disorder — this is a drug claim"
+      },
+      {
+        pattern: SUPPLEMENT_TREATMENT_REVERSE,
+        rule: "places a disease, condition or disorder next to a treatment verb (cure, treat, heal, reverse, prevent, remedy) — this is a drug claim"
+      },
+      {
+        pattern: /\b(?:fda[\s-]?(?:approved|registered)|approved by the fda|registered with the fda)\b/i,
+        rule: "claims FDA approval or registration — the FDA does not approve or register dietary supplements"
+      },
+      {
+        pattern: /\b(?:clinically proven|medically proven|doctor[\s-]?recommended|physician[\s-]?recommended)\b/i,
+        rule: "claims clinical proof or medical endorsement without a named substantiating source — an FTC substantiation violation"
+      },
+      {
+        pattern: /(?:\bno side effects\b|\bzero side effects\b|\bwithout side effects\b|\bcompletely safe\b|\btotally safe\b|\b100\s*%\s*safe\b|\brisk[\s-]?free\b|\bsafe for everyone\b)/i,
+        rule: "makes an absolute safety claim — no product is risk-free or safe for every person"
+      },
+      {
+        pattern: /\b(?:guaranteed results|results guaranteed|guaranteed to work|guaranteed to increase)\b/i,
+        rule: "guarantees a result — an outcome may never be promised or described as typical"
+      },
+      {
+        pattern: /\b(?:permanently increase|permanent results|permanent growth|add inches|gain inches|grow larger|increase size|enlarge)\b/i,
+        rule: "claims a permanent or structural physical change — a supplement may only support normal function"
+      },
+      {
+        pattern: /\b(?:natural viagra|herbal viagra|alternative to viagra|works like viagra|better than viagra|without a prescription|prescription strength|pharmaceutical grade)\b/i,
+        rule: "frames the product as a drug substitute or as prescription-equivalent — this makes it an unapproved drug claim"
+      }
+    ]
+  }
+};
+
+const COMPLIANCE_PROFILE_NAMES = Object.keys(COMPLIANCE_PROFILES);
+
+// Returns [{ rule, matched }] for every banned pattern that fires, capped at
+// `limit`. The required disclaimer is removed first: it is the one sentence in
+// the article where "treat, cure, or prevent any disease" is not only allowed
+// but mandatory, and leaving it in would make every compliant article fail.
+function findComplianceViolations(profile, text, limit) {
+  const max = limit || 5;
+  let scanned = String(text == null ? "" : text);
+  scanned = scanned.split(COMPLIANCE_DISCLAIMER).join(" ");
+
+  const violations = [];
+  const seen = {};
+
+  (profile && profile.banned ? profile.banned : []).forEach(function (entry) {
+    if (violations.length >= max) return;
+
+    // No /g on any pattern, so exec carries no state between calls.
+    const match = entry.pattern.exec(scanned);
+    if (!match) return;
+
+    const matched = String(match[0]).trim().slice(0, 120);
+    const key = entry.rule + "||" + matched.toLowerCase();
+    if (seen[key]) return;
+
+    seen[key] = true;
+    violations.push({ rule: entry.rule, matched: matched });
+  });
+
+  return violations;
+}
+
 app.set("trust proxy", 1);
 
 app.use(
@@ -3974,6 +4133,18 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
 
     const externalMode = Boolean(moneyUrl);
 
+    // Opt-in regulated-category rules. Naming a profile that does not exist is
+    // rejected rather than ignored: silently writing uncontrolled content for a
+    // caller who asked for a compliance profile is the whole failure this
+    // feature exists to prevent.
+    const complianceProfileName = safeText(req.body.compliance_profile, 60);
+    if (complianceProfileName && !Object.prototype.hasOwnProperty.call(COMPLIANCE_PROFILES, complianceProfileName)) {
+      return res.status(422).json({
+        error: "Unknown compliance_profile '" + complianceProfileName + "'. Valid profiles are: " + COMPLIANCE_PROFILE_NAMES.join(", ") + "."
+      });
+    }
+    const complianceProfile = complianceProfileName ? COMPLIANCE_PROFILES[complianceProfileName] : null;
+
     // The money pages — every post has to route traffic to one of these.
     // Skipped entirely in external mode: the caller already named the money
     // page, so the catalog would be dead weight in the prompt and a second
@@ -4081,6 +4252,17 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       (siteName ? "\n\nThis post is being written for: " + siteName : "") +
       (siteContext ? "\n\nAbout this property, its voice and its audience:\n" + siteContext : "");
 
+    // Sits between who the post is for and how to write it, so the writer has
+    // the audience in mind before it reads the rules and the rules in mind
+    // before it reads the brief. The heading states the consequence because an
+    // instruction the model treats as advisory is worth nothing here.
+    const complianceSection = complianceProfile
+      ? "\n\nMANDATORY CONTENT RULES — " + complianceProfile.label + "\n" +
+        "These are not style preferences. They are legal requirements for this product category. " +
+        "A post that violates ANY of them is discarded in full and never published, no matter how good the rest of it is.\n\n" +
+        complianceProfile.prompt
+      : "";
+
     const postLines = linkablePosts.length
       ? linkablePosts.map(function (p) {
           return "- href=/blog/" + authorHandle + "/" + String(p.slug) +
@@ -4100,6 +4282,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
             ? "\n\nNo topic was given — choose one yourself, working back from what the money page above sells."
             : "\n\nNo topic was given — choose one yourself from the catalog above.")) +
       audienceSection +
+      complianceSection +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +
@@ -4209,6 +4392,38 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " anywhere in the post. No post was created." });
     }
 
+    // The control, as opposed to the instruction. Title, meta description and
+    // body are scanned together — a claim in the search snippet is published
+    // just as publicly as one in the article.
+    if (complianceProfile) {
+      const complianceText = [
+        safeText(parsed.title, 200) || "",
+        parsed.meta_description !== undefined ? (safeText(parsed.meta_description, 300) || "") : "",
+        body
+      ].join("\n\n");
+
+      const violations = findComplianceViolations(complianceProfile, complianceText, 5);
+
+      if (violations.length) {
+        // One line per rejection, machine-greppable, so a pattern that keeps
+        // firing shows up as a trend instead of as scattered 422s.
+        console.warn(
+          "[agents/seo/generate-post] Compliance rejection:" +
+          " profile=" + complianceProfileName +
+          " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
+          " rules=" + JSON.stringify(violations.map(function (v) { return v.rule; }))
+        );
+
+        return res.status(422).json({
+          error: "The SEO Agent returned a post that violates the '" + complianceProfileName + "' compliance profile. No post was created.",
+          compliance_profile: complianceProfileName,
+          violations: violations.map(function (v) {
+            return { matched: v.matched, rule: v.rule };
+          })
+        });
+      }
+    }
+
     const slug = safeText(parsed.slug, 100);
     if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
       return res.status(422).json({ error: "The SEO Agent returned an invalid slug: '" + String(parsed.slug) + "'. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen." });
@@ -4246,6 +4461,13 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // sitting pending in the table.
     if (externalMode) {
       proposalPayload.money_url = moneyUrl;
+    }
+
+    // Recorded so the executor can re-run the same check against the same
+    // profile at publish time, when the proposal is finally acted on. Absent
+    // when no profile is active, on the same terms as money_url.
+    if (complianceProfile) {
+      proposalPayload.compliance_profile = complianceProfileName;
     }
 
     const { data: inserted, error: insertError } = await supabase
