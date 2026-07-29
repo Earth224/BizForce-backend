@@ -251,11 +251,31 @@ const COMPLIANCE_PROFILES = {
       "- Cite clinical proof, studies, trials, research or doctor recommendation. No specific named source has been " +
       "supplied to you, so there is nothing you could honestly cite. Do not invent one.\n" +
       "- Include a customer testimonial, a before-and-after, or any narrative of someone's results.\n\n" +
+      "REGULATORY CATEGORIES — be accurate about these or leave them out entirely.\n" +
+      "A dietary supplement is taken by mouth. That is part of the definition, not a detail. A product applied " +
+      "to the skin is a cosmetic or a drug, and it is NEVER a dietary supplement — do not call a topical " +
+      "product a supplement, and do not apply supplement rules to one. \"Topical supplement\" is not a " +
+      "category and \"topical supplement labeling regulations\" are not a body of rules that exists.\n" +
+      "Do not invent regulatory categories, frameworks, agencies or rule names, and do not blend two real ones " +
+      "into a plausible-sounding third. If the article says anything at all about how a product is regulated, " +
+      "that statement must be accurate about which framework actually applies. If you are not certain which " +
+      "one applies, write nothing about regulation — saying nothing is always acceptable here. An article that " +
+      "exists to satisfy these rules is the worst possible place to be confidently wrong about them.\n\n" +
       "What the article SHOULD be: genuinely educational. Write about the ingredients and what they are, their " +
       "traditional and historical use, general wellness and lifestyle context, and an honest, complete answer to the " +
       "question the reader actually asked. A reader should finish it better informed whether or not they ever buy " +
       "anything.\n\n" +
-      "The article MUST end with a final paragraph containing this sentence, word for word, exactly as written here:\n" +
+      "THE DISCLAIMER — this is a formatting requirement, not a stylistic preference.\n" +
+      "The FDA requires this disclaimer to be prominently displayed and set apart from the surrounding text. " +
+      "A disclaimer welded onto the end of a closing paragraph of marketing prose is not set apart from " +
+      "anything, and it does not satisfy the requirement no matter how exactly the sentence itself is quoted.\n" +
+      "- It is the FINAL element of the article. Nothing comes after it.\n" +
+      "- It is its OWN standalone paragraph — a single <p> element containing the sentence below and NOTHING " +
+      "ELSE.\n" +
+      "- No lead-in clause before it and no trailing sentence after it, inside that paragraph.\n" +
+      "- Do NOT combine it with your concluding thought. The conclusion is a separate paragraph that ends " +
+      "before this one begins.\n" +
+      "Word for word, exactly as written here:\n" +
       COMPLIANCE_DISCLAIMER,
 
     banned: [
@@ -4562,7 +4582,16 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       "---KEYWORD---\n" +
       "the long-tail question-shaped keyword this post targets\n" +
       "---INTERNAL_LINKS---\n" +
-      "every href you used in the article, comma-separated on ONE line, each beginning with a forward slash\n" +
+      // Scoped the way the HREF FORMAT block above already is. The unscoped
+      // wording asked for hrefs "each beginning with a forward slash", which in
+      // external mode describes none of them — so the model obeyed it by
+      // emitting nothing, and internal_links came back null on a post that had
+      // a link in its body.
+      (externalMode
+        ? "every href you used in the article, comma-separated on ONE line. Each one is either a root-relative " +
+          "path beginning with a forward slash or a complete absolute URL beginning with https, and BOTH kinds " +
+          "belong in this list — list every href you used, whichever shape it has\n"
+        : "every href you used in the article, comma-separated on ONE line, each beginning with a forward slash\n") +
       "---REASONING---\n" +
       "why this question was chosen and what search intent it captures\n" +
       "---BODY---\n" +
