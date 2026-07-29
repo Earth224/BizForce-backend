@@ -14571,7 +14571,9 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
       .select("*")
       .eq("campaign_id", campaignId)
       .eq("user_id", req.user.id)
-      .order("created_at", { ascending: false });
+      // enrolled_at, not created_at — this table has no created_at column, so
+      // the old ordering made PostgREST reject the query outright.
+      .order("enrolled_at", { ascending: false });
 
     if (error) {
       console.error("[sms/campaigns/enrollments] Supabase error:", error.message);
