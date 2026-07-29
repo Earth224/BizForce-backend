@@ -3463,9 +3463,17 @@ const PROPOSAL_EXECUTORS = {
       listingSlugs = [];
     }
 
+    // Read here rather than at the status decision further down, because the
+    // sanitizer needs it: whether this post is for an external property changes
+    // how a bare slug is treated. Both the body and internal_links below are
+    // cleaned with this same flag, so the two cannot end up disagreeing about
+    // which links survived.
+    const moneyUrl = safeText(payload.money_url, 500);
+    const externalPost = Boolean(moneyUrl);
+
     // Sanitize first, so the 300-character floor measures surviving content
     // and the row that reaches the database is already clean.
-    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle, listingSlugs).trim();
+    const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle, listingSlugs, externalPost).trim();
     if (!body) {
       throw new Error("publish_blog_post: payload.body is required");
     }
@@ -3501,7 +3509,7 @@ const PROPOSAL_EXECUTORS = {
       // The last write before the row exists, using the same handle and listing
       // slugs the body was just sanitized with — so this is correct even for a
       // proposal created before the normalizer was applied at generation time.
-      internalLinks = normalizeInternalLinkList(payload.internal_links, authorHandle, listingSlugs, 10);
+      internalLinks = normalizeInternalLinkList(payload.internal_links, authorHandle, listingSlugs, 10, externalPost);
     }
 
     // Every gate below runs before the insert. Throwing here means the approval
@@ -3547,7 +3555,6 @@ const PROPOSAL_EXECUTORS = {
     // An external post exists to send traffic to exactly one page. The
     // sanitizer passes absolute http(s) hrefs through untouched so this should
     // hold, but it is the last point at which its absence is catchable.
-    const moneyUrl = safeText(payload.money_url, 500);
     if (moneyUrl && body.indexOf(moneyUrl) === -1) {
       throw new Error(
         "publish_blog_post: the money link " + moneyUrl +
@@ -3561,8 +3568,8 @@ const PROPOSAL_EXECUTORS = {
     // more history — and rank us for the client's content. Storing it as a
     // draft keeps the record without ever serving it: every public blog route
     // filters on status "published", so a draft is excluded everywhere by
-    // construction rather than by remembering to exclude it.
-    const externalPost = Boolean(moneyUrl);
+    // construction rather than by remembering to exclude it. externalPost is
+    // read above the body sanitize, which needs it too.
     const postStatus = externalPost ? "draft" : "published";
 
     const { data, error } = await supabase
@@ -4495,18 +4502,24 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
             ? "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n"
             : "- Do not link to any money page — none is available.\n")) +
       "\nHREF FORMAT — follow this exactly, it is not negotiable:\n" +
-      "- EVERY link to a blog post or a marketplace listing must be root-relative. It MUST begin with a forward slash.\n" +
+      (externalMode
+        ? "- EVERY link to a marketplace listing must be root-relative. It MUST begin with a forward slash.\n"
+        : "- EVERY link to a blog post or a marketplace listing must be root-relative. It MUST begin with a forward slash.\n") +
       "- A bare slug, a bare id, or a relative path is WRONG and that link will be thrown away. " +
       'href="how-long-does-a-mobile-detail-take" is WRONG. href="b8cfbc31-21a4-401d-9cea-cea5eae4f460" is WRONG. ' +
       'href="/blog/somehandle/how-long-does-a-mobile-detail-take" and href="/listing/b8cfbc31-21a4-401d-9cea-cea5eae4f460" are right.\n' +
-      "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
-      (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n") +
+      (externalMode
+        ? "- A link to another post on this property is a complete absolute URL, copied exactly as it is listed above.\n"
+        : "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
+          (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n")) +
       (externalMode
         ? "- The money link is a complete absolute URL beginning with https. Copy it exactly as it is given above — " +
           "do not shorten it, do not drop the domain, and do not convert it into a path.\n"
         : "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n") +
       "- Every internal link target available to you is listed above with its complete href already written out. " +
-      "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n" +
+      (externalMode
+        ? "Copy that string verbatim. Do not rebuild it and do not shorten it.\n"
+        : "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n") +
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
       "It must genuinely and completely answer the question — a reader who finds it should leave satisfied " +
       "whether or not they buy. Do not write a sales page." +
@@ -4660,7 +4673,8 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
         parsed.internal_links,
         authorHandle,
         existingListings.map(function (l) { return l && l.slug; }),
-        10
+        10,
+        externalMode
       );
     }
 
@@ -10022,7 +10036,10 @@ function toListingSlugSet(listingSlugs) {
   return set;
 }
 
-function normalizeBlogHref(value, authorHandle, listingSlugs) {
+// isExternalPost: this article is being published on someone else's property.
+// It changes exactly one rule — the bare-slug blog repair at the bottom — and
+// nothing else. Omitted or false gives the original behaviour in full.
+function normalizeBlogHref(value, authorHandle, listingSlugs, isExternalPost) {
   const v = String(value == null ? "" : value).trim();
   if (!v) return v;
 
@@ -10048,7 +10065,16 @@ function normalizeBlogHref(value, authorHandle, listingSlugs) {
 
   // A bare slug is only resolvable if we know whose blog it belongs to. With
   // no handle we do not guess — the link falls through and gets stripped.
-  if (authorHandle && BLOG_HREF_BARE_SLUG.test(v)) {
+  //
+  // And never on an external post. Repairing a bare slug there manufactures a
+  // root-relative path pointing back at THIS platform, inside an article built
+  // to earn authority for someone else's site — which the export panel then
+  // rewrites into a live absolute link back to us. Falling through means the
+  // allowlist drops it, and a missing link is strictly better than a confident
+  // link pointing the wrong way. The /listing/ repairs above are deliberately
+  // left alone: those are this platform's money pages, which is exactly where
+  // an external article is supposed to send people.
+  if (!isExternalPost && authorHandle && BLOG_HREF_BARE_SLUG.test(v)) {
     return "/blog/" + authorHandle + "/" + v;
   }
 
@@ -10077,18 +10103,18 @@ function blogSafeHref(value) {
 // Anything the allowlist rejects is dropped rather than stored pointing
 // nowhere. Absolute http(s) URLs pass through both helpers untouched, so an
 // external money URL survives exactly as written.
-function normalizeInternalLinkList(links, authorHandle, listingSlugs, maxEntries) {
+function normalizeInternalLinkList(links, authorHandle, listingSlugs, maxEntries, isExternalPost) {
   const knownListingSlugs = toListingSlugSet(listingSlugs);
 
   return links
     .map(function (link) { return safeText(link, 500); })
     .filter(Boolean)
-    .map(function (link) { return blogSafeHref(normalizeBlogHref(link, authorHandle, knownListingSlugs)); })
+    .map(function (link) { return blogSafeHref(normalizeBlogHref(link, authorHandle, knownListingSlugs, isExternalPost)); })
     .filter(Boolean)
     .slice(0, maxEntries || 10);
 }
 
-function sanitizeBlogHtml(html, authorHandle, listingSlugs) {
+function sanitizeBlogHtml(html, authorHandle, listingSlugs, isExternalPost) {
   let out = String(html == null ? "" : html);
   const knownListingSlugs = toListingSlugSet(listingSlugs);
 
@@ -10120,7 +10146,7 @@ function sanitizeBlogHtml(html, authorHandle, listingSlugs) {
       if (name.indexOf("on") === 0) continue;
       if (name !== "href") continue;
       const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : ""));
-      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle, knownListingSlugs));
+      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle, knownListingSlugs, isExternalPost));
       if (safe) href = safe;
     }
 
