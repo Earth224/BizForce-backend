@@ -3387,9 +3387,11 @@ const PROPOSAL_EXECUTORS = {
     };
   },
 
-  // Publishes a blog post into content_library. The row goes straight to
-  // status "published" because the approval gate IS the editorial review —
-  // by the time this runs a human has already read the proposal.
+  // Publishes a blog post into content_library. A post written for this
+  // platform goes straight to status "published" because the approval gate IS
+  // the editorial review — by the time this runs a human has already read the
+  // proposal. A post written for an external site is stored as a draft
+  // instead; see the status decision below the validation gates.
   publish_blog_post: async function (proposal) {
     const payload = proposal.payload || {};
 
@@ -3470,6 +3472,67 @@ const PROPOSAL_EXECUTORS = {
         .slice(0, 10);
     }
 
+    // Every gate below runs before the insert. Throwing here means the approval
+    // is marked failed and nothing was written — never published-and-warned.
+
+    // The generator checked the model's raw output. This checks what is
+    // actually about to be stored: sanitizeBlogHtml rewrites hrefs and strips
+    // tags, so the published body is not the string the generator validated,
+    // and the published body is the one a regulator would read.
+    const complianceProfileName = safeText(payload.compliance_profile, 60);
+    if (complianceProfileName) {
+      // A profile that has been renamed or removed since the proposal was
+      // created cannot be verified, and unverifiable is not the same as clean.
+      if (!Object.prototype.hasOwnProperty.call(COMPLIANCE_PROFILES, complianceProfileName)) {
+        throw new Error(
+          "publish_blog_post: this proposal names compliance profile '" + complianceProfileName +
+          "', which no longer exists. Nothing was published, because the content could not be checked against it"
+        );
+      }
+
+      const complianceProfile = COMPLIANCE_PROFILES[complianceProfileName];
+      const complianceText = [title, metaDescription || "", body].join("\n\n");
+      const violations = findComplianceViolations(complianceProfile, complianceText, 5);
+
+      if (violations.length) {
+        throw new Error(
+          "publish_blog_post: the sanitized post violates the '" + complianceProfileName +
+          "' compliance profile and was not published. " +
+          violations.map(function (v) {
+            return "matched " + JSON.stringify(v.matched) + " — " + v.rule;
+          }).join("; ")
+        );
+      }
+
+      if (!complianceRequiredTextPresent(complianceProfile, body)) {
+        throw new Error(
+          "publish_blog_post: the sanitized post is missing the disclaimer required by the '" + complianceProfileName +
+          "' compliance profile and was not published. The post must contain, word for word: " + complianceProfile.requiredText
+        );
+      }
+    }
+
+    // An external post exists to send traffic to exactly one page. The
+    // sanitizer passes absolute http(s) hrefs through untouched so this should
+    // hold, but it is the last point at which its absence is catchable.
+    const moneyUrl = safeText(payload.money_url, 500);
+    if (moneyUrl && body.indexOf(moneyUrl) === -1) {
+      throw new Error(
+        "publish_blog_post: the money link " + moneyUrl +
+        " is not present in the sanitized post body. Nothing was published, because an external post without its money link has no purpose"
+      );
+    }
+
+    // An external post must never be served from this platform's own blog. The
+    // same article on two domains is a duplicate, and search engines resolving
+    // that duplication would most likely favour this platform — more pages,
+    // more history — and rank us for the client's content. Storing it as a
+    // draft keeps the record without ever serving it: every public blog route
+    // filters on status "published", so a draft is excluded everywhere by
+    // construction rather than by remembering to exclude it.
+    const externalPost = Boolean(moneyUrl);
+    const postStatus = externalPost ? "draft" : "published";
+
     const { data, error } = await supabase
       .from("content_library")
       .insert({
@@ -3482,8 +3545,8 @@ const PROPOSAL_EXECUTORS = {
         keyword:          keyword,
         source_url:       sourceUrl,
         internal_links:   internalLinks,
-        status:           "published",
-        published_at:     nowIso(),
+        status:           postStatus,
+        published_at:     externalPost ? null : nowIso(),
         created_at:       nowIso()
       })
       .select("id, title, slug")
@@ -3522,10 +3585,17 @@ const PROPOSAL_EXECUTORS = {
       throw error;
     }
 
+    // The approval response says plainly whether anything became publicly
+    // visible. An external draft is a real, successful execution — it is just
+    // not a publication, and reporting it as one would be a lie the approver
+    // acts on.
     return {
       post_id: data.id,
       title: data.title,
       slug: data.slug,
+      status: postStatus,
+      publicly_visible: !externalPost,
+      external_post: externalPost,
       created: true,
       already_published: false
     };
