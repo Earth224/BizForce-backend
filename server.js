@@ -14893,6 +14893,105 @@ app.delete("/api/content-library/:id", requireAuth, async function (req, res, ne
   }
 });
 
+// Marks a post as live on the external property it was written for, or clears
+// that mark. Migration 058 added external_url and external_published_at and
+// nothing has ever written either one, which is not cosmetic: the SEO
+// generator's link-target query in external mode filters on external_url is not
+// null, so with no writer that branch can never return a row and every external
+// post is generated with no links to its siblings. This is the missing writer.
+//
+// A new route rather than a field on an existing one because content_library
+// has no update route to extend — POST creates, GET lists, POST /empty and
+// DELETE /:id remove. There is no partial-update path here to carry this.
+app.post("/api/content-library/:id/external-published", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var id     = req.params.id;
+
+    // Three cases, distinguished deliberately. An absent field is a malformed
+    // request. An explicit null is "clear the mark" — the post came down, or
+    // the URL was wrong and there is no replacement to hand yet; without it the
+    // only way back out of a wrong URL would be deleting the post. A string is
+    // the mark itself.
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, "external_url")) {
+      return res.status(422).json({
+        error: "external_url is required. Send the URL where the post went live, or null to clear the mark."
+      });
+    }
+
+    var clearing    = req.body.external_url === null;
+    var externalUrl = clearing ? null : safeText(req.body.external_url, 500);
+
+    if (!clearing && (!externalUrl || !/^https?:\/\//i.test(externalUrl))) {
+      return res.status(422).json({
+        error: "external_url must be a complete absolute URL beginning with http:// or https://."
+      });
+    }
+
+    // Read before write, for something the scoped update cannot give on its
+    // own: the site gate below needs the stored value, and an update that
+    // matched nothing is otherwise indistinguishable from one that matched and
+    // changed nothing. The user_id filter is repeated on the update itself —
+    // this read is not the authorization, it is the diagnosis.
+    var { data: existing, error: readError } = await supabase
+      .from("content_library")
+      .select("id, site")
+      .eq("id", id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (readError) {
+      console.error("[POST /api/content-library/:id/external-published] Supabase read error:", readError.message);
+      return res.status(500).json({ error: readError.message });
+    }
+
+    if (!existing) {
+      return res.status(404).json({ error: "No such post." });
+    }
+
+    // A post with no site was written for this platform. It has no external
+    // property it could have gone live on, so no URL here could be true, and
+    // marking it would also make it visible to the external link-target query
+    // as a sibling of posts it has nothing to do with. Gated on the marking
+    // path only: clearing a post that was never marked is already a no-op.
+    if (!clearing && !existing.site) {
+      return res.status(422).json({
+        error: "This post has no site value. It was written for this platform, not an external property, so it cannot be marked as published on one."
+      });
+    }
+
+    // Both columns always move together — a URL with no timestamp, or a
+    // timestamp with no URL, is a row no reader knows how to interpret.
+    // external_published_at is derived here rather than accepted from the
+    // caller because it records when the mark was made, which the caller is not
+    // the authority on. Re-marking overwrites both, by design: someone who
+    // pasted the wrong URL fixes it by sending the right one.
+    var { data, error } = await supabase
+      .from("content_library")
+      .update({
+        external_url:          externalUrl,
+        external_published_at: clearing ? null : new Date().toISOString()
+      })
+      .eq("id", id)
+      .eq("user_id", userId)
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("[POST /api/content-library/:id/external-published] Supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    // The whole row back, in the same { entry } shape POST /api/content-library
+    // already returns, so the caller re-renders from this response instead of
+    // refetching the library to see one field change.
+    return res.json({ success: true, entry: data });
+  } catch (err) {
+    console.error("[POST /api/content-library/:id/external-published] Error:", err.message || err);
+    next(err);
+  }
+});
+
 app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) {
   try {
     var postText        = String(req.body.post_text        || "").trim();
