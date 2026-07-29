@@ -3498,10 +3498,10 @@ const PROPOSAL_EXECUTORS = {
       if (!Array.isArray(payload.internal_links)) {
         throw new Error("publish_blog_post: payload.internal_links must be an array");
       }
-      internalLinks = payload.internal_links
-        .map(function (link) { return safeText(link, 500); })
-        .filter(Boolean)
-        .slice(0, 10);
+      // The last write before the row exists, using the same handle and listing
+      // slugs the body was just sanitized with — so this is correct even for a
+      // proposal created before the normalizer was applied at generation time.
+      internalLinks = normalizeInternalLinkList(payload.internal_links, authorHandle, listingSlugs, 10);
     }
 
     // Every gate below runs before the insert. Throwing here means the approval
@@ -4654,10 +4654,14 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       if (!Array.isArray(parsed.internal_links)) {
         return res.status(422).json({ error: "The SEO Agent returned internal_links that is not an array." });
       }
-      internalLinks = parsed.internal_links
-        .map(function (link) { return safeText(link, 500); })
-        .filter(Boolean)
-        .slice(0, 10);
+      // Same handle and listing slugs the executor will sanitize the body with,
+      // so the proposal already carries the hrefs the published row will have.
+      internalLinks = normalizeInternalLinkList(
+        parsed.internal_links,
+        authorHandle,
+        existingListings.map(function (l) { return l && l.slug; }),
+        10
+      );
     }
 
     const proposalPayload = {
@@ -10059,6 +10063,29 @@ function blogSafeHref(value) {
   if (v.charAt(0) === "/") return v;
   if (/^https?:\/\//i.test(v)) return v;
   return null;
+}
+
+// internal_links is a record of the hrefs in the body, so it has to agree with
+// the body. It never did: the body went through normalizeBlogHref then
+// blogSafeHref, while this array went through safeText alone. That is how a
+// stored bare uuid ended up sitting beside a body carrying the repaired
+// /listing/<slug> path for the same link — the row disagreed with itself.
+//
+// Same two helpers, same order, same inputs as the body. An entry that
+// normalizes to a valid href is stored in its NORMALIZED form, because storing
+// the raw value while the body carries the repaired one is the whole bug.
+// Anything the allowlist rejects is dropped rather than stored pointing
+// nowhere. Absolute http(s) URLs pass through both helpers untouched, so an
+// external money URL survives exactly as written.
+function normalizeInternalLinkList(links, authorHandle, listingSlugs, maxEntries) {
+  const knownListingSlugs = toListingSlugSet(listingSlugs);
+
+  return links
+    .map(function (link) { return safeText(link, 500); })
+    .filter(Boolean)
+    .map(function (link) { return blogSafeHref(normalizeBlogHref(link, authorHandle, knownListingSlugs)); })
+    .filter(Boolean)
+    .slice(0, maxEntries || 10);
 }
 
 function sanitizeBlogHtml(html, authorHandle, listingSlugs) {
