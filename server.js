@@ -4117,18 +4117,17 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
             ? "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n"
             : "- Do not link to any money page — none is available.\n")) +
       "\nHREF FORMAT — follow this exactly, it is not negotiable:\n" +
-      "- EVERY href in the article must be root-relative. It MUST begin with a forward slash.\n" +
+      "- EVERY link to a blog post or a marketplace listing must be root-relative. It MUST begin with a forward slash.\n" +
       "- A bare slug, a bare id, or a relative path is WRONG and that link will be thrown away. " +
       'href="how-long-does-a-mobile-detail-take" is WRONG. href="b8cfbc31-21a4-401d-9cea-cea5eae4f460" is WRONG. ' +
       'href="/blog/somehandle/how-long-does-a-mobile-detail-take" and href="/listing/b8cfbc31-21a4-401d-9cea-cea5eae4f460" are right.\n' +
       "- A link to another blog post is written as /blog/ then the author handle then / then the post slug" +
       (authorHandle ? ". For this author the handle is " + authorHandle + ", so the shape is /blog/" + authorHandle + "/<post-slug>.\n" : ".\n") +
       (externalMode
-        ? "- The money link is the ONE exception to the root-relative rule above: it is a complete absolute URL beginning with https, " +
-          "not a path. Copy it exactly as it is given above — do not shorten it, do not drop the domain, " +
-          "and do not convert it into a root-relative path beginning with a forward slash.\n"
+        ? "- The money link is a complete absolute URL beginning with https. Copy it exactly as it is given above — " +
+          "do not shorten it, do not drop the domain, and do not convert it into a path.\n"
         : "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n") +
-      "- Every link target available to you is listed above with its complete href already written out. " +
+      "- Every internal link target available to you is listed above with its complete href already written out. " +
       "Copy that string verbatim. Do not rebuild it, do not shorten it, do not drop the leading slash.\n" +
       "\nThis seller cannot advertise on ad platforms. This post is the traffic channel. " +
       "It must genuinely and completely answer the question — a reader who finds it should leave satisfied " +
@@ -4156,10 +4155,13 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       "This section is last: everything after this marker is the article, so write it straight through to the end.";
 
     // Sonnet rather than the Haiku default — a long-form structured article is
-    // the most demanding writing task in this file. 32000 rather than 16000
-    // because 16000 was not enough: a verbose draft ran past the ceiling and
-    // came back as JSON that simply stopped, which is unparseable and gets
-    // thrown away after the model has already done all the work.
+    // the most demanding writing task in this file, and it has to hold the
+    // marker format and the href rules together across a thousand words.
+    // 32000 rather than 16000 because 16000 was not enough: a verbose draft ran
+    // past the ceiling. BODY is written last, so hitting the ceiling either
+    // cuts the article off mid-sentence or stops before ---BODY--- arrives at
+    // all, and the second one throws the whole response away after the model
+    // has already done all the work. stopReason below names that case outright.
     const completion = await callAnthropicText(promptText, 32000, req.user.id, "claude-sonnet-5");
 
     let raw = String((completion && completion.text) || "").trim();
