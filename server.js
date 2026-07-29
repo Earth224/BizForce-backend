@@ -507,6 +507,31 @@ function canonicalSiteHost(value) {
   return host || null;
 }
 
+// The canonical form of an sms_subscribers.phone_number value: eleven digits,
+// US country code first, no plus and no punctuation. This is the ONLY place a
+// phone value is produced, so every row stores the same shape and an equality
+// filter on it always matches — "(917) 325-2291", "917 325 2291", "+19173252291"
+// and "9173252291" all reduce to "19173252291".
+//
+// Digits-only rather than +1 E.164, deliberately, because of what already
+// exists: the inbound Twilio handler strips a leading plus off From before it
+// matches, so it is already comparing against a digits-only string, and one of
+// the two live subscriber rows is already stored in exactly this form. Picking
+// this shape means the opt-out path starts matching with no change to that
+// handler, and the smaller half of the eventual backfill.
+//
+// Returns null for anything outside the US pattern rather than guessing, so a
+// caller can decide what an unreadable number means instead of storing a shape
+// no lookup will ever match.
+function canonicalPhone(value) {
+  const digits = String(value == null ? "" : value).replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.charAt(0) === "1") return digits;
+  if (digits.length === 10) return "1" + digits;
+
+  return null;
+}
+
 var ASSIGNMENT_STATUSES = ["pending", "in_progress", "completed", "failed"];
 
 function normalizeJsonbArray(value) {
@@ -14134,18 +14159,28 @@ app.post("/api/sms/send", requireAuth, async function (req, res, next) {
        most one row and asks only about the caller's own subscribers rather than
        about someone else's opt-out.
 
-       The match is exact-string TODAY, which is the same weakness the inbound
-       handler has: a number stored as "917 325 2291" will not match a request
-       for 19173252291, so an opted-out person can still be reachable through a
-       formatting difference. Deliberately not fixed here — normalization is the
-       next commit and repairs both call sites at once. Until it lands, read
-       this gate as catching opt-outs whose stored format happens to match, not
-       as catching all of them. */
+       The destination is canonicalized before the lookup so that a request for
+       "(917) 325-2291" finds a row stored as 19173252291 — the request side of
+       the formatting gap is closed. canonicalPhone returning null (an
+       international destination, say) keeps the old exact-string lookup rather
+       than skipping the gate: a weaker match still beats no match, and this is
+       the route that puts a message on a real phone.
+
+       What is still NOT closed, precisely: only the incoming number is
+       canonicalized. The equality runs against the string sitting in the row,
+       and nothing rewrites that at query time, so a subscriber stored as
+       "917 325 2291" is still not found by this gate — if they opted out, this
+       route will still send to them. That is not a residual edge case, it is
+       every row not already in canonical form, and only the backfill removes
+       it. Until that runs, read this gate as catching opt-outs whose stored
+       format is canonical, not as catching all of them. */
+    var toCanonical = canonicalPhone(to);
+
     var consentLookup = await supabase
       .from("sms_subscribers")
       .select("id, consent_status")
       .eq("user_id", req.user.id)
-      .eq("phone_number", to)
+      .eq("phone_number", toCanonical || to)
       .maybeSingle();
 
     /* Fail closed. An unverifiable consent state is not a verified opt-in, and
@@ -14221,12 +14256,23 @@ app.get("/api/sms/subscribers", requireAuth, async function (req, res, next) {
 
 app.post("/api/sms/subscribers", requireAuth, async function (req, res, next) {
   try {
-    var phone   = ((req.body.phone   || "") + "").trim();
+    var phoneRaw = ((req.body.phone   || "") + "").trim();
     var name    = safeText(req.body.name,    120) || null;
     var consent = req.body.consent !== undefined ? !!req.body.consent : false;
 
-    if (!phone) {
+    if (!phoneRaw) {
       return res.status(400).json({ error: "Phone is required" });
+    }
+
+    /* Rejected rather than stored as typed. A row written in a shape
+       canonicalPhone would not produce is a row the opt-out handler and the
+       consent gate cannot find by equality, so accepting it here is accepting
+       a subscriber who cannot be unsubscribed. */
+    var phone = canonicalPhone(phoneRaw);
+    if (!phone) {
+      return res.status(400).json({
+        error: "Phone number could not be read as a valid US phone number: " + phoneRaw
+      });
     }
 
     console.log("[sms/subscribers/add] User " + req.user.id + " → adding " + phone);
@@ -14265,11 +14311,36 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
 
     var rows    = [];
     var skipped = 0;
+    var rejected = [];
 
-    list.forEach(function (entry) {
-      var phone = ((entry.phone || "") + "").trim();
+    /* One bad number skips that entry and the rest of the batch proceeds,
+       rather than rejecting the whole upload. Two reasons: this route already
+       drops entries with no phone at all and keeps going, so all-or-nothing
+       would contradict a contract callers already depend on; and a bulk import
+       is typically a pasted list where one typo would otherwise throw away
+       every good row with it.
+
+       The cost of that choice, stated plainly: the caller who fixes the typo
+       and re-uploads the whole list hits the unique index on
+       (user_id, phone_number) and the retry fails as a duplicate. Which is why
+       every dropped entry is named in `rejected` below with its index and what
+       was received — the caller needs enough to re-submit only the fixes, and
+       a bare count is not enough to do that. */
+    list.forEach(function (entry, index) {
+      var phoneRaw = ((entry.phone || "") + "").trim();
+      if (!phoneRaw) {
+        skipped++;
+        rejected.push({ index: index, phone: phoneRaw, reason: "Phone is required" });
+        return;
+      }
+      var phone = canonicalPhone(phoneRaw);
       if (!phone) {
         skipped++;
+        rejected.push({
+          index: index,
+          phone: phoneRaw,
+          reason: "Phone number could not be read as a valid US phone number: " + phoneRaw
+        });
         return;
       }
       var name    = safeText(entry.name, 120) || null;
@@ -14285,7 +14356,7 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
     console.log("[sms/subscribers/bulk] User " + req.user.id + " → inserting " + rows.length + ", skipping " + skipped);
 
     if (rows.length === 0) {
-      return res.json({ inserted: 0, skipped: skipped });
+      return res.status(400).json({ inserted: 0, skipped: skipped, rejected: rejected });
     }
 
     var { error } = await supabase
@@ -14297,7 +14368,7 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
       return res.status(500).json({ error: error.message });
     }
 
-    return res.json({ inserted: rows.length, skipped: skipped });
+    return res.json({ inserted: rows.length, skipped: skipped, rejected: rejected });
 
   } catch (error) {
     console.error("[sms/subscribers/bulk] Error:", error.message || error);
@@ -14319,11 +14390,32 @@ app.post("/api/capture", async function (req, res) {
     var email = safeText(req.body.email, 255);
     email = email ? email.toLowerCase() : null;
 
-    var phone = safeText(req.body.phone, 32);
+    var phoneRaw = safeText(req.body.phone, 32);
     var name = safeText(req.body.name, 120);
 
-    if (!email && !phone) {
+    if (!email && !phoneRaw) {
       return res.status(400).json({ error: "email or phone required" });
+    }
+
+    /* Canonicalized before either write below, and this is the call site where
+       it changes an outcome rather than just a stored shape: the upsert further
+       down targets onConflict "user_id,phone_number", so the conflict is only
+       detected when the incoming string matches the stored one byte for byte.
+       A visitor who submitted "(917) 325-2291" on Monday and "917-325-2291" on
+       Tuesday used to produce two subscriber rows and two welcome-campaign
+       enrollments — the same person, texted the welcome sequence twice.
+       Canonicalizing here is what makes onConflict actually collapse them.
+
+       Phone stays optional (email-only capture is valid), so this rejects only
+       a phone that was supplied and could not be read. */
+    var phone = null;
+    if (phoneRaw) {
+      phone = canonicalPhone(phoneRaw);
+      if (!phone) {
+        return res.status(400).json({
+          error: "Phone number could not be read as a valid US phone number: " + phoneRaw
+        });
+      }
     }
 
     var sourceRaw = String(req.body.source || "").toLowerCase().trim();
@@ -15685,7 +15777,32 @@ app.post("/api/sms/inbound", async function (req, res) {
     return res.status(403).type("text/plain").send("Forbidden");
   }
 
-  var from = (req.body.From || "").trim().replace(/^\+/, "");
+  /* Canonicalized so an incoming +1 number lines up with canonically stored
+     rows — but a failed canonicalization must never cost someone their STOP.
+     An international number, a short code, anything outside the US pattern:
+     canonicalPhone returns null for all of them, and refusing to look those up
+     would mean silently dropping a real opt-out because of a format rule. So
+     null falls back to the old strip-the-plus behaviour and attempts the match
+     anyway. A number that fails both is a number nobody unsubscribed.
+
+     What this does NOT fix: it canonicalizes the incoming side only. The
+     comparison still runs against whatever string is in the row, and nothing
+     rewrites that at query time — a subscriber stored as "917 325 2291" is
+     still unreachable by this update and still will not be opted out. Only the
+     backfill fixes those rows. Read the MATCHED NO ROWS warnings below as
+     naming exactly that population. */
+  var fromRaw = (req.body.From || "").trim();
+  var from    = canonicalPhone(fromRaw);
+
+  if (!from) {
+    from = fromRaw.replace(/^\+/, "");
+    if (fromRaw) {
+      console.warn("[sms/inbound] Non-canonical From (" + fromRaw + ") — outside the US phone " +
+        "pattern, so falling back to the raw plus-stripped number for the match. " +
+        "The opt-out is still being attempted; it is not being dropped.");
+    }
+  }
+
   var body = (req.body.Body || "").trim().toUpperCase();
 
   var STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
