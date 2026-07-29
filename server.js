@@ -10099,6 +10099,14 @@ function normalizeBlogHref(value, authorHandle, listingSlugs, isExternalPost) {
 function blogSafeHref(value) {
   const v = String(value == null ? "" : value).trim();
   if (!v) return null;
+  // A leading double slash is protocol-relative: it names a host, not a path.
+  // Treating it as a path would let an arbitrary external origin through a
+  // check that only inspects path shape — //evil.example/blog/x is not this
+  // platform's /blog/, and the external-mode drop, which matches a single
+  // leading slash, never sees it. Rejected in both modes: it is neither of the
+  // two shapes below, and a published post has no use for one.
+  if (v.charAt(0) === "/" && v.charAt(1) === "/") return null;
+
   // Allowlist of shapes: site-relative, or an explicit http(s) URL. Anything
   // else — javascript:, data:, vbscript:, a bare word — is dropped.
   if (v.charAt(0) === "/") return v;
