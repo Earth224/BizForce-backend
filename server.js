@@ -10043,6 +10043,21 @@ function normalizeBlogHref(value, authorHandle, listingSlugs, isExternalPost) {
   const v = String(value == null ? "" : value).trim();
   if (!v) return v;
 
+  // An external post must never carry a link to this platform's blog, however
+  // the model wrote it. This sits ABOVE the root-relative passthrough on
+  // purpose: that line returns any "/..." value immediately, which is exactly
+  // what let an explicitly written /blog/<handle>/<slug> survive while the
+  // bare-slug form was already being dropped. Returning null hands the
+  // allowlist nothing to accept.
+  //
+  // Matched on path shape, not on this author's handle — the model can name
+  // any handle, and the path is what makes the link point here. "/blogging" is
+  // not a match; "/blog" and "/blog/..." are.
+  //
+  // /listing/ paths are deliberately untouched: those are this platform's
+  // money pages, which is where an external article is meant to send people.
+  if (isExternalPost && /^\/blog(?:\/|$)/i.test(v)) return null;
+
   // Already a shape the allowlist accepts — never rewrite it.
   if (v.charAt(0) === "/") return v;
   if (/^https?:\/\//i.test(v)) return v;
