@@ -15558,27 +15558,124 @@ app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, nex
   }
 });
 
+/* Twilio's inbound SMS webhook — STOP and START handling.
+
+   There is no requireAuth here and there cannot be: Twilio has no BizForce
+   session to present. The request signature is therefore the only thing that
+   proves a request came from Twilio, and it matters more on this route than on
+   a read endpoint because START, YES and UNSTOP opt a number back IN. Without
+   validation, anyone who can reach this URL can manufacture a consent record —
+   and a consent record is precisely what this platform would produce as its
+   defense in a TCPA dispute.
+
+   The signature is an HMAC over the exact URL Twilio called plus the posted
+   parameters, so the URL has to be reconstructed as Twilio saw it. Behind
+   Railway's proxy that works because app.set("trust proxy", 1) is set above:
+   req.protocol then reports the X-Forwarded-Proto https rather than the http of
+   the internal hop, and Railway passes the public hostname through in Host.
+   TWILIO_WEBHOOK_URL overrides the reconstruction for the case where that does
+   not hold — a custom domain, or a proxy that rewrites Host and moves the
+   original to X-Forwarded-Host. That case is worth an escape hatch because a
+   URL mismatch fails every genuine request rather than some of them, so the
+   rejection log below always names the URL used and where it came from.
+
+   req.body is the flat map of strings the validator hashes: express.urlencoded
+   is registered globally above this route, and the express.raw parser is scoped
+   as a route argument to the Stripe webhook, so it does not shadow this one. */
 app.post("/api/sms/inbound", async function (req, res) {
+  var authToken     = (process.env.TWILIO_AUTH_TOKEN   || "").trim();
+  var configuredUrl = (process.env.TWILIO_WEBHOOK_URL  || "").trim();
+  var signature     = req.get("X-Twilio-Signature") || "";
+  var webhookUrl    = configuredUrl || (req.protocol + "://" + req.get("host") + req.originalUrl);
+  var urlSource     = configuredUrl ? "TWILIO_WEBHOOK_URL" : "reconstructed from proxy headers";
+
+  /* Fail closed. Skipping validation when the token is absent would leave a
+     misconfigured deploy silently unprotected, which is the same state this
+     route was in before — so an unset token rejects everything and says so. */
+  if (!authToken) {
+    console.error("[sms/inbound] REJECTED (misconfiguration) — TWILIO_AUTH_TOKEN is not set, " +
+      "so no request can be validated and every inbound STOP/START is being refused. " +
+      "This is a deploy problem, not an attack. url=" + webhookUrl);
+    return res.status(403).type("text/plain").send("Forbidden");
+  }
+
+  if (!signature) {
+    console.error("[sms/inbound] REJECTED (unsigned) — no X-Twilio-Signature header. " +
+      "Twilio always sends one, so this request did not come from Twilio. " +
+      "ip=" + req.ip + " url=" + webhookUrl);
+    return res.status(403).type("text/plain").send("Forbidden");
+  }
+
+  var signatureValid = false;
+  try {
+    signatureValid = twilio.validateRequest(authToken, signature, webhookUrl, req.body || {});
+  } catch (validationError) {
+    console.error("[sms/inbound] REJECTED — signature validation threw: " +
+      (validationError.message || validationError) +
+      ". url=" + webhookUrl + " (" + urlSource + ")");
+    return res.status(403).type("text/plain").send("Forbidden");
+  }
+
+  /* Logged with the URL and its provenance because those separate the two
+     causes: if every request fails this check, the url below does not match
+     what is configured in the Twilio console and the fix is configuration; if
+     only some fail, the failing ones are forged. Parameter names are logged,
+     not values — the values include the sender's number. */
+  if (!signatureValid) {
+    console.error("[sms/inbound] REJECTED (bad signature) — url=" + webhookUrl +
+      " (" + urlSource + ") ip=" + req.ip +
+      " params=" + Object.keys(req.body || {}).sort().join(",") +
+      ". Every request failing means the url does not match the Twilio console; " +
+      "some requests failing means those requests are forged.");
+    return res.status(403).type("text/plain").send("Forbidden");
+  }
+
   var from = (req.body.From || "").trim().replace(/^\+/, "");
   var body = (req.body.Body || "").trim().toUpperCase();
 
   var STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
   var START_WORDS = ["START", "YES", "UNSTOP"];
 
+  /* Both branches capture error and count. A Supabase update matching zero rows
+     is not an error, so discarding the result made a STOP that matched nothing
+     indistinguishable from one that worked: the subscriber stayed opted in, the
+     drip engine kept sending, and nothing was written down. */
   if (from) {
     if (STOP_WORDS.indexOf(body) !== -1) {
-      await supabase
+      var optOut = await supabase
         .from("sms_subscribers")
-        .update({ consent_status: "opted_out" })
+        .update({ consent_status: "opted_out" }, { count: "exact" })
         .eq("phone_number", from);
+
+      if (optOut.error) {
+        console.error("[sms/inbound] OPT-OUT FAILED for " + from + " — " + optOut.error.message +
+          ". The subscriber is still opted in and the drip engine will keep sending to them.");
+      } else if (!optOut.count) {
+        console.warn("[sms/inbound] OPT-OUT MATCHED NO ROWS for " + from +
+          " — the carrier delivered a STOP and it was applied to nobody. " +
+          "Anyone stored under a differently formatted version of this number is still opted in.");
+      } else {
+        console.log("[sms/inbound] Opted out " + from + " — rows updated: " + optOut.count);
+      }
     } else if (START_WORDS.indexOf(body) !== -1) {
-      await supabase
+      var optIn = await supabase
         .from("sms_subscribers")
-        .update({ consent_status: "opted_in" })
+        .update({ consent_status: "opted_in" }, { count: "exact" })
         .eq("phone_number", from);
+
+      if (optIn.error) {
+        console.error("[sms/inbound] OPT-IN FAILED for " + from + " — " + optIn.error.message);
+      } else if (!optIn.count) {
+        console.warn("[sms/inbound] OPT-IN MATCHED NO ROWS for " + from +
+          " — a START was accepted and applied to nobody.");
+      } else {
+        console.log("[sms/inbound] Opted in " + from + " — rows updated: " + optIn.count);
+      }
     }
   }
 
+  /* Always 200 past validation. Twilio retries a non-200, and a retry storm
+     over a database problem helps nobody — the logs above carry the failure. */
   res.set("Content-Type", "text/xml");
   return res.status(200).send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
 });
