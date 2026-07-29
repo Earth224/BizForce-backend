@@ -14122,6 +14122,61 @@ app.post("/api/sms/send", requireAuth, async function (req, res, next) {
       return res.status(400).json({ error: "Both 'to' and 'message' are required" });
     }
 
+    /* Consent gate. This is the only route in this file that actually reaches
+       Twilio — runDripEngine is hardcoded DRY_RUN and sends nothing — and until
+       now it took the destination straight from the request body and never
+       looked it up, so it could text someone who had replied STOP. That is the
+       violation the inbound opt-out handler exists to prevent, reached through
+       a different door.
+
+       Scoped to req.user.id: requireAuth guarantees req.user, and
+       sms_subscribers is unique on (user_id, phone_number), so this matches at
+       most one row and asks only about the caller's own subscribers rather than
+       about someone else's opt-out.
+
+       The match is exact-string TODAY, which is the same weakness the inbound
+       handler has: a number stored as "917 325 2291" will not match a request
+       for 19173252291, so an opted-out person can still be reachable through a
+       formatting difference. Deliberately not fixed here — normalization is the
+       next commit and repairs both call sites at once. Until it lands, read
+       this gate as catching opt-outs whose stored format happens to match, not
+       as catching all of them. */
+    var consentLookup = await supabase
+      .from("sms_subscribers")
+      .select("id, consent_status")
+      .eq("user_id", req.user.id)
+      .eq("phone_number", to)
+      .maybeSingle();
+
+    /* Fail closed. An unverifiable consent state is not a verified opt-in, and
+       this is the one route where being wrong about that puts a real message on
+       a real phone. */
+    if (consentLookup.error) {
+      console.error("[sms/send] Consent lookup FAILED for " + to + " — " + consentLookup.error.message +
+        ". Refusing the send: consent could not be verified.");
+      return res.status(500).json({
+        error: "Could not verify consent for this number — the subscriber lookup failed, so the message was not sent."
+      });
+    }
+
+    var subscriber = consentLookup.data;
+
+    if (subscriber && subscriber.consent_status === "opted_out") {
+      console.error("[sms/send] BLOCKED — user " + req.user.id + " attempted to message " + to +
+        ", which has opted out. An application trying to message an opted-out number is a defect in that application.");
+      return res.status(403).json({
+        error: "This number has opted out and cannot be messaged."
+      });
+    }
+
+    /* Not a refusal: this route predates the subscriber table and has uses that
+       do not go through it, so refusing would break them. The warning is how we
+       find out how it is actually being used. */
+    if (!subscriber) {
+      console.warn("[sms/send] NO CONSENT RECORD — user " + req.user.id + " is sending to " + to +
+        ", which has no row in sms_subscribers. Sent without a consent record on file.");
+    }
+
     console.log("[sms/send] User " + req.user.id + " → sending SMS to " + to);
 
     var client = twilio(accountSid, authToken);
