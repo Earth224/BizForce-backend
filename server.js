@@ -8879,11 +8879,41 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
     return { available: false, reason: "date_invalid", dateReason: parsedDate.reason };
   }
 
-  var matches = cityTimezones.findFromCityStateProvince(String(birthPlace || ""));
-  if (!matches.length) {
+  // Place second. resolvePlace is total — it never throws, for any birthPlace
+  // whatsoever — so the String(birthPlace || "") coercion this replaces is gone
+  // rather than moved: that coercion existed only to stop
+  // findFromCityStateProvince throwing on a non-string, and it did so by turning
+  // a caller bug into the empty string, which the package then matched against
+  // all 7329 records. resolvePlace rejects a non-string outright instead.
+  var place = resolvePlace(birthPlace);
+
+  if (place.confidence === "unresolved") {
+    // Reason string deliberately unchanged from the line this replaces. The
+    // frontend already branches on "place_unresolved"; place.reason
+    // (invalid_input / absent / no_match) is the finer detail and is not
+    // surfaced here, because doing so would change a contract this task is not
+    // scoped to change.
     return { available: false, reason: "place_unresolved" };
   }
-  var resolved = matches[0];
+
+  if (place.confidence === "ambiguous") {
+    // A deliberate refusal, and the substantive behaviour change in this wiring.
+    // The old code took matches[0] unconditionally — dataset order, not
+    // relevance — so "London" silently became London Ontario and produced an
+    // Ascendant that was confidently, unrecoverably wrong. More than one real
+    // place matching what someone typed is not something this function can
+    // resolve on their behalf; the candidates go back so a human can choose.
+    return {
+      available:  false,
+      reason:     "place_ambiguous",
+      candidates: place.candidates,
+      query:      place.query
+    };
+  }
+
+  // Exactly one candidate survived filtering and no part of the query was
+  // discarded to get it. Safe to proceed.
+  var resolved = place.candidates[0];
 
   var parsedTime = parseBirthTime(birthTime);
   var timeKnown  = parsedTime.known;
@@ -8926,7 +8956,7 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
     // ── STEP 4 — sidereal time / RAMC ─────────────────────────────────────
     var gastHours = Astronomy.SiderealTime(utcDate);
     var gastDeg   = gastHours * 15;
-    var ramcDeg   = natalWrapDeg(gastDeg + resolved.lng);
+    var ramcDeg   = natalWrapDeg(gastDeg + resolved.longitude);
 
     // ── STEP 5 — Midheaven and Ascendant ──────────────────────────────────
     var DEG2RAD = Math.PI / 180;
@@ -8934,7 +8964,7 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
 
     var e = obliquityDeg * DEG2RAD;
     var r = ramcDeg * DEG2RAD;
-    var p = resolved.lat * DEG2RAD;
+    var p = resolved.latitude * DEG2RAD;
 
     var mcDeg = natalWrapDeg(Math.atan2(Math.sin(r), Math.cos(r) * Math.cos(e)) * RAD2DEG);
     var ascDeg = natalWrapDeg(
@@ -8964,9 +8994,10 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
     timeKnown:     timeKnown,
     moonUncertain: !timeKnown,
     utc:           utcDateTime.toISO(),
-    latitude:      resolved.lat,
-    longitude:     resolved.lng,
+    latitude:      resolved.latitude,
+    longitude:     resolved.longitude,
     timezone:      resolved.timezone,
+    placeLabel:    resolved.label,
     planets:       planets,
     midheaven:     midheaven,
     ascendant:     ascendant,
