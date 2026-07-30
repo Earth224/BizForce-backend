@@ -7363,9 +7363,28 @@ function sumDigits(value) {
 }
 
 function calculateLifePath(birthDateStr) {
-  if (!birthDateStr) return null;
+  // requireEphemerisRange: false — summing calendar digits carries no ephemeris
+  // constraint. See calculatePersonalDay.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
 
-  var total = sumDigits(birthDateStr);
+  // Canonical YYYYMMDD, zero-padded. Zero-padding cannot change a digit sum, so
+  // every plain date produces the identical total sumDigits(birthDateStr) produced
+  // before — "1990-6-15" and "1990-06-15" were already the same sum.
+  //
+  // What DOES change, deliberately, is a stored ISO timestamp. The old code strip
+  // ran over the whole string, so "1984-04-22T00:00:00Z" summed the time's digits
+  // too and yielded a different life path from "1984-04-22" for the same birth.
+  // Only the date may contribute to it.
+  //
+  // NOTE: computeLoShu builds this identical string. The two must stay in step; if
+  // one changes, change both.
+  var canonicalDigits =
+    String(parsed.year) +
+    String(parsed.month).padStart(2, "0") +
+    String(parsed.day).padStart(2, "0");
+
+  var total = sumDigits(canonicalDigits);
   if (!total) return null;
 
   while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
@@ -7445,11 +7464,15 @@ function calculateNameNumber(name, onlyVowels) {
 }
 
 function extractBirthday(birthDateStr) {
-  if (!birthDateStr) return null;
-  var match = String(birthDateStr).match(/-(\d{1,2})$/);
-  if (!match) return null;
-  var day = parseInt(match[1], 10);
-  return isNaN(day) ? null : day;
+  // requireEphemerisRange: false — see calculatePersonalDay.
+  //
+  // The regex this replaces, /-(\d{1,2})$/, matched a hyphen and one or two digits
+  // at the END of the string and never looked at the year or month. It read
+  // "2023-02-30" as day 30 — a day February does not have — and it would have read
+  // "widget-12" as day 12, since nothing required the rest to be a date.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
+  return parsed.day;
 }
 
 function calculatePersonalDay(birthDateStr) {
@@ -8088,7 +8111,20 @@ var LO_SHU_LINES = [
 ];
 
 function computeLoShu(birthDateStr) {
-  var digits = String(birthDateStr || "").replace(/[^0-9]/g, "");
+  // requireEphemerisRange: false — see calculatePersonalDay.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
+
+  // Canonical YYYYMMDD, zero-padded — the identical string calculateLifePath
+  // builds, and the two must stay in step. Replaces a blanket non-digit strip that
+  // also absorbed the digits of any trailing time portion, so a stored ISO
+  // timestamp used to populate the grid with cells the birth date never justified.
+  // The added zero for a single-digit month or day is inert here: the counting loop
+  // below already ignores anything outside 1-9.
+  var digits =
+    String(parsed.year) +
+    String(parsed.month).padStart(2, "0") +
+    String(parsed.day).padStart(2, "0");
   if (!digits) return null;
 
   var grid = {};
