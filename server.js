@@ -8436,6 +8436,91 @@ function natalSignAndDegree(lonDeg) {
   return { sign: NATAL_SIGNS[idx], degree: Math.round(deg * 100) / 100 };
 }
 
+// Parses a stored birth_date into a real calendar date, or reports why it could
+// not. Pure and total, on the same terms as parseBirthTime below: any value at
+// all is accepted and an object is always returned, never a throw — null,
+// undefined, numbers, arrays, objects and symbols included.
+//
+// Unlike birth time, there is NO default and no fallback. Noon-local is a
+// defensible stand-in for a missing time because it costs at most twelve hours on
+// the slow bodies, and the caller flags it. A guessed date has no such bound — it
+// moves every planet, potentially by years — so an unusable date means no chart.
+//
+// Format: four-digit year, hyphen, one or two digit month, hyphen, one or two
+// digit day, with surrounding whitespace trimmed. An optional trailing portion
+// introduced by "T" or a space is matched and discarded, so a stored ISO
+// timestamp such as "1984-04-22T00:00:00Z" parses as its date. That tolerance
+// mirrors the unanchored /^(\d{4})-(\d{1,2})-(\d{1,2})/ used by
+// calculatePersonalDay, computeDivineTriangle, computeDivineTriangleBlueprint and
+// computeVedic, so the numerology engines and this function agree on which
+// strings are dates and which are not.
+//
+// Slash-separated dates are rejected rather than interpreted. "04/22/1984" is
+// April 22nd to a US reader and cannot be anything else, but "04/05/1984" is
+// April 5th or May 4th with nothing in the string to decide, and a silent guess
+// puts a birth chart a month out with no way to notice. Rejecting is the only
+// honest option; two-digit years are rejected for the same reason, since "84"
+// could be 1884 or 1984.
+function parseBirthDate(raw) {
+  function reject(reason) {
+    return { valid: false, year: null, month: null, day: null, reason: reason };
+  }
+
+  // Type-checked before any coercion, for the reason spelled out in
+  // parseBirthTime: String(value) throws for a Symbol and for any object with a
+  // hostile toString, so "never throws" cannot survive coercing first.
+  if (raw === null || raw === undefined) {
+    return reject("absent");
+  }
+  if (typeof raw !== "string") {
+    return reject("unparseable");
+  }
+
+  var trimmed = raw.trim();
+  if (!trimmed) {
+    return reject("absent");
+  }
+
+  // Anchored at both ends, with the trailing time portion explicitly matched
+  // rather than merely left unanchored. The four regexes named above would also
+  // accept "1984-04-22XYZ"; this does not, which is a deliberate tightening in
+  // the safe direction.
+  var match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/);
+  if (!match) {
+    return reject("unparseable");
+  }
+
+  var year  = parseInt(match[1], 10);
+  var month = parseInt(match[2], 10);
+  var day   = parseInt(match[3], 10);
+
+  if (month < 1 || month > 12) {
+    return reject("impossible_date");
+  }
+
+  // Full Gregorian rule, not the divisible-by-four shortcut: 1900 is NOT a leap
+  // year (divisible by 100, not by 400) and 2000 IS. Both fall inside the
+  // supported year band, so the shortcut would be wrong on real stored data.
+  var isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  var monthLengths = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  if (day < 1 || day > monthLengths[month - 1]) {
+    return reject("impossible_date");
+  }
+
+  // Checked AFTER calendar validity, so "1500-02-30" reports impossible_date
+  // rather than year_out_of_range. Both are true of it, and the calendar fault is
+  // the more useful one to report: fixing only the year would leave a date that
+  // still does not exist. The band itself is a real limit, not caution —
+  // astronomy-engine's accuracy degrades outside roughly these years, and the
+  // city-timezones dataset has nothing meaningful to say about zones there.
+  if (year < 1700 || year > 2200) {
+    return reject("year_out_of_range");
+  }
+
+  return { valid: true, year: year, month: month, day: day, reason: null };
+}
+
 // Parses a stored birth_time into an hour and minute, or reports that it could
 // not be read. Pure and total: it accepts any value whatsoever and always
 // returns an object — it never throws, for null, undefined, numbers, arrays,
@@ -8544,20 +8629,27 @@ function computeEclipticLongitudes(utcDate) {
 }
 
 function computeNatalChart(birthDate, birthTime, birthPlace) {
+  // Date first, ahead of the place lookup. Without a usable date there is no
+  // chart to compute at all, so there is nothing to be gained by resolving a
+  // timezone before checking it — and no default is ever substituted here.
+  var parsedDate = parseBirthDate(birthDate);
+  if (!parsedDate.valid) {
+    return { available: false, reason: "date_invalid", dateReason: parsedDate.reason };
+  }
+
   var matches = cityTimezones.findFromCityStateProvince(String(birthPlace || ""));
   if (!matches.length) {
     return { available: false, reason: "place_unresolved" };
   }
   var resolved = matches[0];
 
-  var dateParts  = String(birthDate).split("-").map(Number);
   var parsedTime = parseBirthTime(birthTime);
   var timeKnown  = parsedTime.known;
 
   // ── STEP 1 — resolve place + local time to true UTC ────────────────────
   var localDateTime = DateTime.fromObject(
     {
-      year: dateParts[0], month: dateParts[1], day: dateParts[2],
+      year: parsedDate.year, month: parsedDate.month, day: parsedDate.day,
       hour: parsedTime.hour, minute: parsedTime.minute
     },
     { zone: resolved.timezone }
