@@ -7231,6 +7231,180 @@ app.get("/api/places/resolve", async function (req, res, next) {
   }
 });
 
+// ── Create a birth record ────────────────────────────────────────────────
+//
+// requireAuth, like every other write route in this file. Guest checkout and
+// Etsy intake will need this same handler without a session — birth_records
+// deliberately allows a null user_id for exactly that (see migration 066) — but
+// widening an authenticated route later is safe, whereas shipping an open write
+// path and narrowing it afterwards is not. Authenticated-only is the starting
+// point, not the end state.
+//
+// No route-level rate limiter, matching every other non-auth, non-AI write here:
+// apiLimiter is applied globally at app.use, and authLimiter and aiLimiter are
+// reserved for credential and model-call routes respectively.
+//
+// SECURITY — the client cannot supply coordinates. latitude, longitude,
+// timezone and place_label are never read from req.body under any name. They
+// come only from a candidate object that resolvePlace produced during THIS
+// request, and the client's sole influence over which one is place_id, which
+// must equal the id of a candidate in that freshly-computed set. A body
+// carrying its own latitude is not rejected, it is simply never consulted —
+// there is no code path from req.body to a stored coordinate.
+app.post("/api/birth-records", requireAuth, async function (req, res, next) {
+  try {
+    var userId     = req.user.id;
+    var birthName  = safeText(req.body.birth_name, 200);
+    var label      = safeText(req.body.label, 100) || "self";
+    var placeQuery = req.body.place_query;
+
+    // ── 1. Date, with the ephemeris band ENFORCED ──────────────────────────
+    // No options argument, so requireEphemerisRange stays on. This row is chart
+    // input and the 1700-2200 band is a real accuracy limit; the numerology
+    // engines opt out of it because digit-summing needs no ephemeris, and that
+    // asymmetry is deliberate. Migration 066 mirrors this same band as a CHECK
+    // constraint, so an out-of-band date would fail at insert even if this
+    // check were ever removed.
+    var parsedDate = parseBirthDate(req.body.birth_date);
+    if (!parsedDate.valid) {
+      return res.status(400).json({ error: "date_invalid", reason: parsedDate.reason });
+    }
+
+    // ── 2. Time, where a rejection is NOT an error ─────────────────────────
+    // An unreadable or absent birth time stores null and the chart suppresses
+    // the Ascendant, Midheaven and houses — exactly what computeNatalChart
+    // already does with its timeKnown gate. Refusing the whole record over a
+    // missing time would deny someone a planetary chart they can legitimately
+    // have.
+    var parsedTime = parseBirthTime(req.body.birth_time);
+    var birthTime  = parsedTime.known
+      ? String(parsedTime.hour).padStart(2, "0") + ":" + String(parsedTime.minute).padStart(2, "0")
+      : null;
+
+    // ── 3. Place ───────────────────────────────────────────────────────────
+    var place = resolvePlace(placeQuery);
+
+    if (place.confidence === "unresolved") {
+      return res.status(400).json({ error: "place_unresolved", reason: place.reason });
+    }
+
+    // Only a non-empty string counts as a choice. A place_id of the wrong type
+    // cannot equal any candidate id, so treating it as absent lands the request
+    // on the exact/ambiguous branches below rather than on a confusing 409 —
+    // and an ambiguous query still refuses there, so nothing is waved through.
+    var placeId = typeof req.body.place_id === "string" ? req.body.place_id.trim() : "";
+
+    var chosen;
+    var placeConfidence;
+
+    if (placeId) {
+      chosen = null;
+      place.candidates.forEach(function (candidate) {
+        if (candidate.id === placeId) {
+          chosen = candidate;
+        }
+      });
+
+      if (!chosen) {
+        // The id the client chose is not in the set this request produced. The
+        // dataset or the ranking has moved under them, so the honest answer is
+        // to re-offer the current set rather than guess which one they meant.
+        return res.status(409).json({
+          error:      "place_ambiguous",
+          candidates: place.candidates,
+          query:      place.query
+        });
+      }
+
+      // 'chosen' rather than 'exact' even when the query resolved unambiguously:
+      // the column records how the coordinates were ARRIVED at, and a client
+      // that named an id made a selection regardless of how few options it had.
+      placeConfidence = "chosen";
+    } else if (place.confidence === "exact") {
+      chosen = place.candidates[0];
+      placeConfidence = "exact";
+    } else {
+      // 409 rather than 400: nothing about the request is malformed. It is a
+      // well-formed request the server cannot answer alone, and the client is
+      // expected to resend it with a place_id.
+      return res.status(409).json({
+        error:      "place_ambiguous",
+        candidates: place.candidates,
+        query:      place.query
+      });
+    }
+
+    // ── 4. Insert ──────────────────────────────────────────────────────────
+    // birth_date is rebuilt from the VALIDATED fields rather than passed
+    // through from the body, for the same reason canonicalDateDigits exists:
+    // parseBirthDate accepts a trailing time portion, so "1984-04-22T17:45:00Z"
+    // validates, and only the date part of it may reach a date column.
+    //
+    // id, created_at and updated_at are all omitted — the column defaults cover
+    // the first two and the birth_records_set_updated_at trigger covers the
+    // third.
+    var insertResult = await supabase
+      .from("birth_records")
+      .insert({
+        user_id:          userId,
+        birth_name:       birthName,
+        birth_date:       String(parsedDate.year) + "-" +
+                          String(parsedDate.month).padStart(2, "0") + "-" +
+                          String(parsedDate.day).padStart(2, "0"),
+        birth_time:       birthTime,
+        // The RAW string, not place.query. Migration 066's column comment
+        // specifies that this column preserves exactly what the person typed,
+        // and normalisation is lossy — "Vallejo, California" normalises to
+        // "Vallejo California" and the comma is unrecoverable. The normalised
+        // form can always be recomputed from the raw by calling resolvePlace,
+        // so storing the raw costs nothing and keeps the diagnostic record the
+        // comment describes: a wrong resolution is only investigable if the
+        // original string survives. resolvePlace above is still called with the
+        // raw body value; only what is STORED differs. Safe against the NOT NULL
+        // constraint because a place_query that was absent, non-string or
+        // whitespace-only has already returned 400 by this point.
+        place_query:      safeText(placeQuery, 200),
+        place_label:      chosen.label,
+        latitude:         chosen.latitude,
+        longitude:        chosen.longitude,
+        timezone:         chosen.timezone,
+        place_confidence: placeConfidence,
+        label:            label
+      })
+      .select("id, place_label, place_confidence")
+      .single();
+
+    if (insertResult.error) {
+      // 23505 on birth_records_user_label_uniq means this account already has a
+      // record under this label. Reported, never merged: an upsert here would
+      // silently overwrite a stored birth time or a chosen place with whatever
+      // the retry happened to carry, and a chart that changes underneath its
+      // owner is indistinguishable from a bug. The caller decides whether to
+      // pick a new label or update the existing row.
+      //
+      // Constraint text is checked alongside the code, following the 23505
+      // handling on the content_library slug index above, so an unrelated
+      // unique violation on this table is not mislabelled.
+      var conflictText = String(insertResult.error.message || "") + " " +
+        String(insertResult.error.details || "") + " " +
+        String(insertResult.error.constraint || "");
+      if (insertResult.error.code === "23505" && conflictText.indexOf("label") !== -1) {
+        return res.status(409).json({ error: "label_exists", label: label });
+      }
+      throw insertResult.error;
+    }
+
+    return res.status(201).json({
+      id:               insertResult.data.id,
+      place_label:      insertResult.data.place_label,
+      place_confidence: insertResult.data.place_confidence,
+      timeKnown:        parsedTime.known
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
