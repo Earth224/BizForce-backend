@@ -7231,6 +7231,117 @@ app.get("/api/places/resolve", async function (req, res, next) {
   }
 });
 
+// ── Public chart preview — computes, stores nothing ──────────────────────
+//
+// Public for the same reason /api/places/resolve above is: it reads nothing
+// belonging to anyone and writes nothing belonging to anyone. Guest checkout and
+// Etsy intake need a chart before there is an account to attach one to, and this
+// is the route that gives them one. No route-level rate limiter, matching the
+// resolve route — the global apiLimiter at app.use covers it.
+//
+// The distinction from POST /api/birth-records, which this route deliberately
+// does NOT do: that one is authenticated and PERSISTS the resolved coordinates,
+// freezing them so a chart cannot drift when the geocoding dataset changes. This
+// one is ephemeral. Nothing is written, so nothing is frozen, and a preview
+// recomputed next year could legitimately differ. That is the trade for not
+// requiring a session, and it is why this is a preview rather than a record.
+//
+// SECURITY — the client cannot supply coordinates. latitude, longitude, timezone
+// and place_label are never read from req.body under any name. They come only
+// from a candidate object resolvePlace produced during THIS request, and the
+// client's only influence over which one is place_id, which must equal the id of
+// a candidate in that freshly-computed set. A body carrying its own latitude is
+// not rejected — it is simply never consulted. There is no code path from
+// req.body to a coordinate.
+//
+// The birth data is deliberately never logged. It arrives unauthenticated, and a
+// birth date, time and place together identify a person about as precisely as
+// anything in this system; writing that to stdout on a public route would be a
+// disclosure with none of the storage guarantees the database side carries.
+app.post("/api/charts/preview", async function (req, res, next) {
+  try {
+    // Hard cap before any work at all. This route is public and every call that
+    // reaches resolvePlace scans the whole 7329-record dataset, so a non-string
+    // or an over-long query is refused at the door rather than paid for. typeof
+    // rather than truthiness: an array or object body value would otherwise
+    // reach the length test and read wrongly. resolvePlace would answer
+    // invalid_input for all of these anyway — this is about not doing the work.
+    var placeQuery = req.body.place_query;
+    if (typeof placeQuery !== "string" || placeQuery.length > 120) {
+      return res.status(400).json({ error: "place_unresolved", reason: "invalid_input" });
+    }
+
+    // ── 1. Date, ephemeris band ENFORCED ───────────────────────────────────
+    // No options argument, so requireEphemerisRange stays on. This is chart
+    // input and the 1700-2200 band is a real accuracy limit, not caution.
+    var parsedDate = parseBirthDate(req.body.birth_date);
+    if (!parsedDate.valid) {
+      return res.status(400).json({ error: "date_invalid", reason: parsedDate.reason });
+    }
+
+    // ── 2. Time, where a rejection is NOT an error ─────────────────────────
+    // An unreadable or absent birth time yields a chart with the Ascendant,
+    // Midheaven and houses withheld rather than no chart at all — the planetary
+    // positions are still correct without a time, and refusing the whole
+    // request would deny someone a reading they can legitimately have.
+    var parsedTime = parseBirthTime(req.body.birth_time);
+
+    // ── 3. Place ───────────────────────────────────────────────────────────
+    var place = resolvePlace(placeQuery);
+
+    if (place.confidence === "unresolved") {
+      return res.status(400).json({ error: "place_unresolved", reason: place.reason });
+    }
+
+    // Only a non-empty string counts as a choice. A place_id of the wrong type
+    // cannot equal any candidate id, so treating it as absent lands the request
+    // on the exact/ambiguous branches below — where an ambiguous query still
+    // refuses, so nothing is waved through.
+    var placeId = typeof req.body.place_id === "string" ? req.body.place_id.trim() : "";
+
+    var chosen;
+
+    if (placeId) {
+      chosen = null;
+      place.candidates.forEach(function (candidate) {
+        if (candidate.id === placeId) {
+          chosen = candidate;
+        }
+      });
+
+      if (!chosen) {
+        // The id the client named is not in the set this request produced, so
+        // the offered options have moved underneath them. Re-offer the current
+        // set rather than guess which one they meant.
+        return res.status(409).json({
+          error:      "place_ambiguous",
+          candidates: place.candidates,
+          query:      place.query
+        });
+      }
+    } else if (place.confidence === "exact") {
+      chosen = place.candidates[0];
+    } else {
+      // 409 rather than 400: nothing about the request is malformed. It is a
+      // well-formed request the server cannot answer alone, and the client is
+      // expected to resend it with a place_id.
+      return res.status(409).json({
+        error:      "place_ambiguous",
+        candidates: place.candidates,
+        query:      place.query
+      });
+    }
+
+    // ── 4. Compute, and hand it straight back ──────────────────────────────
+    // computeNatalFromResolved is pure — no database, no network, no place
+    // resolution — so there is nothing to undo and nothing to clean up. The
+    // result is returned unchanged; this route adds no fields of its own.
+    return res.json(computeNatalFromResolved(parsedDate, parsedTime, chosen));
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Create a birth record ────────────────────────────────────────────────
 //
 // requireAuth, like every other write route in this file. Guest checkout and
