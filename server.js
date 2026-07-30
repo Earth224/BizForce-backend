@@ -7368,23 +7368,7 @@ function calculateLifePath(birthDateStr) {
   var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
   if (!parsed.valid) return null;
 
-  // Canonical YYYYMMDD, zero-padded. Zero-padding cannot change a digit sum, so
-  // every plain date produces the identical total sumDigits(birthDateStr) produced
-  // before — "1990-6-15" and "1990-06-15" were already the same sum.
-  //
-  // What DOES change, deliberately, is a stored ISO timestamp. The old code strip
-  // ran over the whole string, so "1984-04-22T00:00:00Z" summed the time's digits
-  // too and yielded a different life path from "1984-04-22" for the same birth.
-  // Only the date may contribute to it.
-  //
-  // NOTE: computeLoShu builds this identical string. The two must stay in step; if
-  // one changes, change both.
-  var canonicalDigits =
-    String(parsed.year) +
-    String(parsed.month).padStart(2, "0") +
-    String(parsed.day).padStart(2, "0");
-
-  var total = sumDigits(canonicalDigits);
+  var total = sumDigits(canonicalDateDigits(parsed));
   if (!total) return null;
 
   while (total > 9 && total !== 11 && total !== 22 && total !== 33) {
@@ -8115,16 +8099,7 @@ function computeLoShu(birthDateStr) {
   var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
   if (!parsed.valid) return null;
 
-  // Canonical YYYYMMDD, zero-padded — the identical string calculateLifePath
-  // builds, and the two must stay in step. Replaces a blanket non-digit strip that
-  // also absorbed the digits of any trailing time portion, so a stored ISO
-  // timestamp used to populate the grid with cells the birth date never justified.
-  // The added zero for a single-digit month or day is inert here: the counting loop
-  // below already ignores anything outside 1-9.
-  var digits =
-    String(parsed.year) +
-    String(parsed.month).padStart(2, "0") +
-    String(parsed.day).padStart(2, "0");
+  var digits = canonicalDateDigits(parsed);
   if (!digits) return null;
 
   var grid = {};
@@ -8585,6 +8560,36 @@ function parseBirthDate(raw, options) {
   }
 
   return { valid: true, year: year, month: month, day: day, reason: null };
+}
+
+// The canonical digit string for a parsed birth date: four-digit year, then month
+// zero-padded to two digits, then day zero-padded to two digits, concatenated with
+// no separators. "1990-6-15" and "1990-06-15" both become "19900615".
+//
+// Takes a parseBirthDate result whose valid is true. Pure — no database, no
+// network, no parsing, no validation. It does not check valid, and it is not
+// defensive about its input: a caller that passes a rejected result gets
+// "nullnullnull"-shaped nonsense rather than an error, so checking valid first is
+// the caller's job. Both current callers do.
+//
+// Why the digit-summing engines must go through this rather than over the raw
+// stored string, which is what they did before:
+//
+//   Only the DATE may contribute digits. The old implementations stripped
+//   non-digits from the whole value, so a stored ISO timestamp fed the clock into
+//   the result — "1984-04-22 17:45" summed 1+7+4+5 on top of the date and reached
+//   life path 11, a master number, where the date alone gives 3. That 11 was an
+//   artifact of the storage format, not a fact about the birth.
+//
+//   Zero-padding is inert, which is what makes the switch safe. Adding a "0"
+//   cannot change a digit sum, so calculateLifePath is unaffected by it; and
+//   computeLoShu's counting loop already ignores everything outside 1-9, so the
+//   padding zero never reaches its grid. Every plain date therefore yields exactly
+//   what it yielded before.
+function canonicalDateDigits(parsed) {
+  return String(parsed.year) +
+    String(parsed.month).padStart(2, "0") +
+    String(parsed.day).padStart(2, "0");
 }
 
 // Parses a stored birth_time into an hour and minute, or reports that it could
