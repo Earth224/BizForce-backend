@@ -7405,6 +7405,120 @@ app.post("/api/birth-records", requireAuth, async function (req, res, next) {
   }
 });
 
+// ── Chart from a stored birth record, using its FROZEN coordinates ───────
+//
+// This route is why migration 066 stores latitude, longitude and timezone on the
+// row instead of re-deriving them at chart time, and why computeNatalFromResolved
+// was split out of computeNatalChart. It deliberately does NOT resolve a place:
+//
+//   Re-resolving would make a stored chart mutable. The city-timezones dataset is
+//   a pinned dependency today, but a version bump that shifts a city centroid by a
+//   few hundred metres would silently move an Ascendant that a customer has
+//   already been given. A chart that changes underneath its owner is
+//   indistinguishable from a bug.
+//
+//   Re-resolving would also REFUSE rows that are perfectly well resolved. A row
+//   whose place_query was "Springfield" carries place_confidence 'chosen' and a
+//   specific set of coordinates because a human already picked one; feeding that
+//   query back through resolvePlace returns ambiguous and no chart at all. The
+//   ambiguity was settled at write time and must not be re-litigated on read.
+//
+// So: no resolvePlace, no computeNatalChart, no cityTimezones anywhere below.
+// The stored columns ARE the resolution.
+app.get("/api/birth-records/:id/chart", requireAuth, async function (req, res, next) {
+  try {
+    var userId   = req.user.id;
+    var recordId = String(req.params.id || "").trim();
+
+    // A malformed id is answered with the same 404 as a missing one rather than a
+    // 400. Two reasons: a uuid column rejects a non-uuid at the database with
+    // 22P02, which would surface as a 500 for what is really just a bad path
+    // segment; and not_found is the only lookup failure this route defines, so
+    // adding a second shape would mean a caller has two ways to learn nothing.
+    if (!isValidUuid(recordId)) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    // Scoped by BOTH id and user_id in one query. That is what makes another
+    // account's row indistinguishable from a row that does not exist: the filter
+    // simply does not match, maybeSingle returns no data, and the answer is 404.
+    // Reading the row first and comparing user_id afterwards would be a 403 —
+    // and a 403 confirms the id is real, which is exactly the leak to avoid.
+    //
+    // Columns listed explicitly rather than select("*"): contact_email lives on
+    // this table and no part of a chart response needs it.
+    var result = await supabase
+      .from("birth_records")
+      .select("id, label, birth_name, birth_date, birth_time, place_query, place_label, place_confidence, latitude, longitude, timezone")
+      .eq("id", recordId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    var record = result.data;
+
+    // Nothing to compute from. Migration 066's birth_records_place_resolution_check
+    // guarantees latitude, longitude and timezone are ALL null whenever
+    // place_confidence is 'unresolved', so this is not a defensive guess about the
+    // row's shape — the constraint makes the two states exactly equivalent.
+    if (record.place_confidence === "unresolved") {
+      return res.status(409).json({ error: "place_unresolved" });
+    }
+
+    // Band ENFORCED, no options argument — this is chart input. A failure here is
+    // NOT a bad request: POST /api/birth-records validates the date through this
+    // same helper before writing, and birth_records_birth_date_range_check mirrors
+    // the band in the database. A stored date that fails both means the row is
+    // corrupt, which is a server fault and reported as one.
+    var parsedDate = parseBirthDate(record.birth_date);
+    if (!parsedDate.valid) {
+      return res.status(500).json({ error: "stored_date_invalid", reason: parsedDate.reason });
+    }
+
+    // birth_time is a Postgres `time` column and arrives as "17:45:00" through
+    // PostgREST, which is why parseBirthTime accepts a seconds component. A null
+    // or unreadable time is not an error: the chart proceeds and withholds the
+    // Ascendant, Midheaven and houses, exactly as it does everywhere else.
+    var parsedTime = parseBirthTime(record.birth_time);
+
+    // Number() on the coordinates, not because they are expected to be strings but
+    // because the consequence of one being a string is silent and severe: RAMC is
+    // computed as gastDeg + longitude, and "+" on a string concatenates instead of
+    // adding, which would produce a plausible-looking chart with a wrong
+    // Ascendant. numeric(9,6) is serialised as a JSON number today; this keeps
+    // that from being load-bearing.
+    var resolved = {
+      latitude:  Number(record.latitude),
+      longitude: Number(record.longitude),
+      timezone:  record.timezone,
+      label:     record.place_label
+    };
+
+    var chart = computeNatalFromResolved(parsedDate, parsedTime, resolved);
+
+    // Record identity merged in at the top level, after the chart keys, so a
+    // client holding this response knows which row produced it and what the place
+    // resolution was based on — place_query in particular, because a chart from a
+    // 'chosen' row is only interpretable alongside what was originally typed.
+    chart.recordId        = record.id;
+    chart.label           = record.label;
+    chart.birthName       = record.birth_name;
+    chart.placeQuery      = record.place_query;
+    chart.placeConfidence = record.place_confidence;
+
+    return res.json(chart);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
