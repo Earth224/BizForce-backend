@@ -8436,6 +8436,91 @@ function natalSignAndDegree(lonDeg) {
   return { sign: NATAL_SIGNS[idx], degree: Math.round(deg * 100) / 100 };
 }
 
+// Parses a stored birth_time into an hour and minute, or reports that it could
+// not be read. Pure and total: it accepts any value whatsoever and always
+// returns an object — it never throws, for null, undefined, numbers, arrays,
+// objects or symbols.
+//
+// Why this exists. birth_time is `text` in oracle_sync (migration 041) with no
+// check constraint, and POST /api/oracle/sync only length-clamps it through
+// safeText, so any string at all can reach the database and therefore this
+// function. The two lines this replaces tested truthiness only, then split on
+// ":" and mapped Number over the result, which produced three different
+// behaviours for three shapes of bad input:
+//
+//   "morning"  -> hour NaN, and DateTime.fromObject THREW InvalidArgumentError,
+//                 surfacing as a 500 from GET /api/oracle/natal with nothing in
+//                 the response naming birth time as the cause
+//   "25:00"    -> no throw, but an invalid DateTime, so utc came back null
+//                 inside a response still marked available: true
+//   "14"       -> silently accepted as 14:00 by relying on Luxon defaulting an
+//                 undefined minute to 0
+//
+// All three are now one rejection with a reason. On rejection the returned hour
+// and minute are the same noon-local default the old code used, so callers need
+// no separate branch; `known` is what decides whether the angles may be derived
+// from that value.
+function parseBirthTime(raw) {
+  function reject(reason) {
+    return { known: false, hour: 12, minute: 0, reason: reason };
+  }
+
+  // Type-checked BEFORE any coercion, not after. String(value) throws for a
+  // Symbol and for any object with a hostile toString, and "never throws" has to
+  // hold for every input rather than only the plausible ones. A non-string is a
+  // caller bug rather than an unreadable time, so it is reported as unparseable
+  // instead of being coerced into a value that might accidentally look valid —
+  // String(["17:45"]) is "17:45", and silently honouring that would hide the bug.
+  if (raw === null || raw === undefined) {
+    return reject("absent");
+  }
+  if (typeof raw !== "string") {
+    return reject("unparseable");
+  }
+
+  // Every whitespace character removed, not merely trimmed, so "5 : 45 pm" and
+  // "5:45PM" both parse. Lowercased so the meridiem compare is case-insensitive.
+  var normalized = raw.replace(/\s+/g, "").toLowerCase();
+
+  if (!normalized) {
+    return reject("absent");
+  }
+
+  // Minute is exactly two digits. That is what rejects "7:5pm" and what rejects a
+  // bare "14", which has no separator at all. The meridiem is optional and the
+  // pattern is anchored at both ends, so trailing junk cannot slip through.
+  var match = normalized.match(/^(\d{1,2}):(\d{2})(am|pm)?$/);
+  if (!match) {
+    return reject("unparseable");
+  }
+
+  var hour     = parseInt(match[1], 10);
+  var minute   = parseInt(match[2], 10);
+  var meridiem = match[3] || null;
+
+  if (minute > 59) {
+    return reject("unparseable");
+  }
+
+  if (meridiem) {
+    // 12-hour clock: 1 to 12 only, so "0:30am" is rejected rather than guessed
+    // at. 12:30 am is 00:30 and 12:30 pm is 12:30.
+    if (hour < 1 || hour > 12) {
+      return reject("unparseable");
+    }
+    if (meridiem === "am") {
+      hour = hour === 12 ? 0 : hour;
+    } else {
+      hour = hour === 12 ? 12 : hour + 12;
+    }
+  } else if (hour > 23) {
+    // 24-hour clock: 0 to 23.
+    return reject("unparseable");
+  }
+
+  return { known: true, hour: hour, minute: minute, reason: null };
+}
+
 // Geocentric ecliptic longitude, in degrees, for each of the ten bodies in
 // NATAL_PLANET_NAMES at a single instant. Extracted verbatim from the loop that
 // used to sit inline in computeNatalChart's STEP 2 — same bodies, same
@@ -8465,15 +8550,15 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
   }
   var resolved = matches[0];
 
-  var dateParts = String(birthDate).split("-").map(Number);
-  var timeKnown = !!(birthTime && String(birthTime).trim());
-  var timeParts = timeKnown ? String(birthTime).split(":").map(Number) : [12, 0];
+  var dateParts  = String(birthDate).split("-").map(Number);
+  var parsedTime = parseBirthTime(birthTime);
+  var timeKnown  = parsedTime.known;
 
   // ── STEP 1 — resolve place + local time to true UTC ────────────────────
   var localDateTime = DateTime.fromObject(
     {
       year: dateParts[0], month: dateParts[1], day: dateParts[2],
-      hour: timeParts[0], minute: timeParts[1]
+      hour: parsedTime.hour, minute: parsedTime.minute
     },
     { zone: resolved.timezone }
   );
@@ -8551,7 +8636,13 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
     planets:       planets,
     midheaven:     midheaven,
     ascendant:     ascendant,
-    houses:        houses
+    houses:        houses,
+    // Why these are separate from timeKnown rather than folded into it: a client
+    // needs to distinguish "no birth time was ever supplied" from "one was
+    // supplied and could not be read", because only the second is a data problem
+    // someone can go and fix. timeReason carries which.
+    timeAssumed:   !parsedTime.known,
+    timeReason:    parsedTime.reason
   };
 }
 
