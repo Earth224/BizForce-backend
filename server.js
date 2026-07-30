@@ -7453,12 +7453,13 @@ function extractBirthday(birthDateStr) {
 }
 
 function calculatePersonalDay(birthDateStr) {
-  if (!birthDateStr) return null;
-  var match = String(birthDateStr).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return null;
-  var birthMonth = parseInt(match[2], 10);
-  var birthDay   = parseInt(match[3], 10);
-  if (isNaN(birthMonth) || isNaN(birthDay)) return null;
+  // requireEphemerisRange: false — this sums calendar digits and touches no
+  // ephemeris, so the 1700-2200 accuracy band that computeNatalChart needs must
+  // not reach it. Impossible dates are still rejected.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
+  var birthMonth = parsed.month;
+  var birthDay   = parsed.day;
 
   var today = new Date();
   var todayMonth = today.getMonth() + 1;
@@ -7511,13 +7512,14 @@ function computeNameNumbers(name, letterMap, reducerFn) {
 // full birth name under PYTHAGOREAN_MAP — the digits absent from that
 // table are the Karmic Lessons in this system.
 function computeDivineTriangle(birthName, birthDateStr) {
-  var match = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return null;
+  // requireEphemerisRange: false — see calculatePersonalDay. Digit-summing a date
+  // carries no ephemeris constraint.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
 
-  var year  = parseInt(match[1], 10);
-  var month = parseInt(match[2], 10);
-  var day   = parseInt(match[3], 10);
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  var year  = parsed.year;
+  var month = parsed.month;
+  var day   = parsed.day;
 
   var b1 = reduceNumber(month);
   var b2 = reduceNumber(day);
@@ -7732,12 +7734,13 @@ function computeDivineTriangleBlueprint(birthName, birthDateStr) {
   };
 
   // ── Birthdate placement — 3 interior lines ──
-  var dateMatch = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (!dateMatch) return null;
-  var year  = parseInt(dateMatch[1], 10);
-  var month = parseInt(dateMatch[2], 10);
-  var day   = parseInt(dateMatch[3], 10);
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  // requireEphemerisRange: false — see calculatePersonalDay. Digit-summing a date
+  // carries no ephemeris constraint.
+  var parsedDate = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsedDate.valid) return null;
+  var year  = parsedDate.year;
+  var month = parsedDate.month;
+  var day   = parsedDate.day;
 
   var interior = {
     AD: { label: "Month", unreduced: month, reduced: reduceFully(month) },
@@ -8043,13 +8046,14 @@ var VEDIC_PLANETARY_RULERS = {
 // tradition is Chaldean-based, so nameNumber reuses computeNameNumbers
 // with CHALDEAN_MAP.
 function computeVedic(birthName, birthDateStr) {
-  var match = String(birthDateStr || "").match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (!match) return null;
+  // requireEphemerisRange: false — see calculatePersonalDay. Digit-summing a date
+  // carries no ephemeris constraint.
+  var parsed = parseBirthDate(birthDateStr, { requireEphemerisRange: false });
+  if (!parsed.valid) return null;
 
-  var year  = parseInt(match[1], 10);
-  var month = parseInt(match[2], 10);
-  var day   = parseInt(match[3], 10);
-  if (isNaN(year) || isNaN(month) || isNaN(day)) return null;
+  var year  = parsed.year;
+  var month = parsed.month;
+  var day   = parsed.day;
 
   var psychicNumber = reduceFully(day);
   var destinyNumber = reduceFully(day + month + year);
@@ -8461,7 +8465,22 @@ function natalSignAndDegree(lonDeg) {
 // puts a birth chart a month out with no way to notice. Rejecting is the only
 // honest option; two-digit years are rejected for the same reason, since "84"
 // could be 1884 or 1984.
-function parseBirthDate(raw) {
+//
+// The optional second argument controls ONLY the year band, nothing else:
+//
+//   parseBirthDate(raw)                                  band enforced
+//   parseBirthDate(raw, {})                              band enforced
+//   parseBirthDate(raw, { requireEphemerisRange: false }) band skipped
+//
+// The band is the default because the original caller is computeNatalChart, where
+// it is a genuine accuracy limit. It is opt-out-able because the numerology
+// engines — calculatePersonalDay, computeDivineTriangle,
+// computeDivineTriangleBlueprint and computeVedic — only sum the digits of a
+// date, and digit-summing has no ephemeris in it. There is no reason a seeker born
+// in 1650 should be denied a Divine Triangle because astronomy-engine cannot place
+// Neptune that year. With the band skipped, "year_out_of_range" is unreachable;
+// every other rejection, including the full Gregorian leap rule, still applies.
+function parseBirthDate(raw, options) {
   function reject(reason) {
     return { valid: false, year: null, month: null, day: null, reason: reason };
   }
@@ -8508,13 +8527,24 @@ function parseBirthDate(raw) {
     return reject("impossible_date");
   }
 
+  // Opt-out gate for the band below. Enforced unless the caller passed an object
+  // that explicitly carries requireEphemerisRange === false. Absent options, a
+  // non-object, null (whose typeof is "object", hence the truthiness test first),
+  // an object lacking the key, and any value other than exactly false all leave
+  // the band ON — so every pre-existing call site is unaffected by this parameter
+  // existing at all. Compared with === false rather than by truthiness, so a
+  // stray 0, "" or undefined cannot quietly switch off an accuracy guard.
+  var requireEphemerisRange = !(
+    options && typeof options === "object" && options.requireEphemerisRange === false
+  );
+
   // Checked AFTER calendar validity, so "1500-02-30" reports impossible_date
   // rather than year_out_of_range. Both are true of it, and the calendar fault is
   // the more useful one to report: fixing only the year would leave a date that
   // still does not exist. The band itself is a real limit, not caution —
   // astronomy-engine's accuracy degrades outside roughly these years, and the
   // city-timezones dataset has nothing meaningful to say about zones there.
-  if (year < 1700 || year > 2200) {
+  if (requireEphemerisRange && (year < 1700 || year > 2200)) {
     return reject("year_out_of_range");
   }
 
