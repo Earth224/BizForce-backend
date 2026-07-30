@@ -26,6 +26,7 @@ const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const webpush = require("web-push");
+const cron = require("node-cron");
 
 const app = express();
 
@@ -9831,6 +9832,55 @@ app.post("/api/admin/flag/:userId", requireAuth, requireAdmin, async function (r
   }
 });
 
+// Manual trigger for the daily Store Agent pass, so it can be tested without
+// waiting for 6am Pacific.
+//
+// Admin-only, via the requireAdmin that already exists in this codebase and
+// backs every other /api/admin/* route — it checks req.user.role === "admin", so
+// this reuses the one notion of privilege here rather than inventing a second.
+// The scoping is not cosmetic: this runs a pass across every opted-in user and
+// spends each of their Claude budgets, so it is a platform-wide operation that an
+// ordinary authenticated seller must not be able to fire.
+//
+// Registered here, inside the admin cluster, because the catch-all 404 handler
+// further down the file would shadow it if it were declared next to the pass code
+// it calls. The functions it calls are declarations and hoist, so being above
+// them is fine.
+//
+// It deliberately does NOT claim the day through job_runs. A test run that
+// claimed would write last_run_on = today, and the real 6am cron would then find
+// the day taken and skip — the test would suppress the very thing it was meant to
+// exercise. The trade is that this can run alongside a scheduled pass on the same
+// day, which is acceptable for a deliberate, manually invoked admin action. The
+// in-memory guard is still taken, so two manual runs cannot overlap in one
+// process.
+app.post("/api/admin/store-proposals/run", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    if (storeProposalPassRunning) {
+      return res.status(409).json({ error: "A store proposal pass is already running" });
+    }
+
+    storeProposalPassRunning = true;
+    console.log("[StoreProposals] MANUAL run triggered by admin " + req.user.id + " — job_runs claim deliberately not taken, today's scheduled claim is left intact");
+
+    try {
+      const summary = await runStoreProposalPass();
+      console.log("[StoreProposals] MANUAL run finished.");
+      return res.json({
+        ok:      true,
+        manual:  true,
+        claimed: false,
+        users:   (summary && summary.users) || 0,
+        created: (summary && summary.created) || 0
+      });
+    } finally {
+      storeProposalPassRunning = false;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* ── Certifications ── */
 
 app.get("/api/certifications/earned", requireAuth, async function (req, res, next) {
@@ -16139,42 +16189,203 @@ async function salesAutoConvertTick() {
   }
 }
 
-// Store Agent daily proposal pass — mirrors the salesAutoConvertTick pattern
-// above: its own reentrancy guard, its own timer, no shared scheduler. Every
-// proposal it creates lands in agent_proposals as "pending" and executes only
-// once a human approves it, so this job never acts on the marketplace itself.
+// Store Agent daily proposal pass. No longer the salesAutoConvertTick pattern
+// the comment here used to describe: that pattern is a boot-relative
+// setInterval, and this job is now a wall-clock cron schedule with a durable
+// per-day claim in public.job_runs, because a boot-relative daily timer on
+// Railway follows deploys instead of the clock. The in-process reentrancy guard
+// is kept alongside the claim, not replaced by it.
+//
+// Every proposal it creates lands in agent_proposals as "pending" and executes
+// only once a human approves it, so this job never acts on the marketplace
+// itself.
+var STORE_PROPOSAL_JOB_NAME = "daily_store_proposals";
+
+// The schedule's timezone, and also the timezone the claim day is computed in.
+// Those two must be the same string or the claim boundary and the fire time drift
+// apart. An IANA zone name rather than a fixed offset, so PST/PDT is handled
+// automatically — "UTC-8" would fire an hour late for eight months of the year.
+var STORE_PROPOSAL_TIMEZONE = "America/Los_Angeles";
+
+// Local calendar day in the job's own timezone, formatted as the date literal
+// job_runs.last_run_on compares against. Deliberately NOT new Date()
+// .toISOString().slice(0,10): that is the UTC day, and at 6am Pacific the UTC
+// day is already tomorrow's for part of the year. The claim would then roll over
+// mid-evening local time and a second pass could run the same local day.
+function storeProposalClaimDay() {
+  return DateTime.now().setZone(STORE_PROPOSAL_TIMEZONE).toFormat("yyyy-MM-dd");
+}
+
+// Claim today for this job, atomically, and return true only if this process won
+// it. See the table comment on public.job_runs (migration 064) for the intent.
+//
+// 064 specifies the claim as a single statement:
+//   insert ... on conflict (job_name) do update ... where last_run_on is
+//   distinct from current_date
+// That statement cannot be issued from this repo. There is no DATABASE_URL and
+// no pg driver here — the only database access is the PostgREST service-role
+// client, and PostgREST's upsert cannot attach a WHERE clause to its DO UPDATE
+// arm. So the claim is expressed as the two atomic statements PostgREST can
+// send, which together carry the same guarantee:
+//
+//   1. INSERT. The primary key on job_name means exactly one process can create
+//      the row. A 23505 unique violation is not an error here, it means the row
+//      already exists — fall through to step 2.
+//   2. Conditional UPDATE ... where last_run_on is distinct from today,
+//      returning the affected rows. A single UPDATE is atomic, and under READ
+//      COMMITTED a concurrent updater re-evaluates the WHERE against the newly
+//      committed row, so the loser matches zero rows rather than overwriting.
+//
+// Neither step can produce two winners, which is the property 064 wanted. What
+// it does not preserve is 064's one-round-trip form; that needs a SQL function
+// and a migration to define it, which is a schema change and not this change.
+async function claimStoreProposalDay() {
+  var today = storeProposalClaimDay();
+
+  var insertResult = await supabase
+    .from("job_runs")
+    .insert({
+      job_name:    STORE_PROPOSAL_JOB_NAME,
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .select("job_name");
+
+  if (!insertResult.error) {
+    return true;
+  }
+
+  // 23505 = unique_violation. Anything else is a real failure, and a failure to
+  // read the claim must not be treated as holding it.
+  if (insertResult.error.code !== "23505") {
+    console.error("[StoreProposals] Claim insert failed:", insertResult.error.message);
+    return false;
+  }
+
+  var updateResult = await supabase
+    .from("job_runs")
+    .update({
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .eq("job_name", STORE_PROPOSAL_JOB_NAME)
+    // is distinct from today, spelled for PostgREST: a null last_run_on has
+    // never claimed and must win. Plain neq would drop the null row, because
+    // null <> date is null and not true.
+    .or("last_run_on.is.null,last_run_on.neq." + today)
+    .select("job_name");
+
+  if (updateResult.error) {
+    console.error("[StoreProposals] Claim update failed:", updateResult.error.message);
+    return false;
+  }
+
+  return (updateResult.data || []).length > 0;
+}
+
+// Close out the row this process claimed. Called on both the success and the
+// failure path, so a run never leaves started_at set with finished_at null —
+// 064 notes that state is indistinguishable from a run still in progress, and
+// this table has no heartbeat to tell them apart.
+async function finishStoreProposalRun(errorMessage) {
+  var patch = { finished_at: nowIso() };
+
+  if (errorMessage) {
+    patch.last_error = String(errorMessage).slice(0, 2000);
+  }
+
+  var result = await supabase
+    .from("job_runs")
+    .update(patch)
+    .eq("job_name", STORE_PROPOSAL_JOB_NAME);
+
+  if (result.error) {
+    console.error("[StoreProposals] Failed to record run completion:", result.error.message);
+  }
+}
+
+// The pass body. Split out from the claim so the manual trigger route can run
+// exactly this work without touching job_runs and consuming the real cron's
+// claim for the day.
 async function runStoreProposalPass() {
   var totalUsers = 0;
   var totalCreated = 0;
 
-  var subsResult = await supabase
-    .from("subscriptions")
+  // Consent, not billing. This used to read subscriptions where status =
+  // 'active', which is whether a card is being charged — not whether the seller
+  // asked an agent to act for them. An inner filter on enabled = true is what
+  // makes a user with no agent_autonomy row excluded rather than defaulted in;
+  // migration 064's header is explicit that a left join coalescing to true would
+  // silently restore the old behaviour.
+  var autonomyResult = await supabase
+    .from("agent_autonomy")
     .select("user_id")
-    .eq("status", "active");
+    .eq("agent_type", "store")
+    .eq("enabled", true);
 
-  if (subsResult.error) {
-    console.error("[StoreProposals] Failed to load active subscriptions:", subsResult.error.message);
-    return;
+  if (autonomyResult.error) {
+    console.error("[StoreProposals] Failed to load store autonomy opt-ins:", autonomyResult.error.message);
+    return { users: 0, created: 0 };
   }
 
-  var userIds = (subsResult.data || [])
+  var seenUserIds = {};
+  var userIds = (autonomyResult.data || [])
     .map(function (row) { return row.user_id; })
-    .filter(Boolean);
+    .filter(function (id) {
+      if (!id || seenUserIds[id]) return false;
+      seenUserIds[id] = true;
+      return true;
+    });
 
   totalUsers = userIds.length;
-  console.log("[StoreProposals] Pass starting — " + totalUsers + " active subscriber(s) considered.");
+  console.log("[StoreProposals] Pass starting — " + totalUsers + " user(s) opted into store autonomy.");
 
   for (var i = 0; i < userIds.length; i++) {
     var userId = userIds[i];
 
     try {
+      // BYOK gate, and the reason it is checked here rather than relied on
+      // downstream: resolveAnthropicKey never throws and never returns null. On
+      // any miss — no row, wrong provider, failed decrypt — it silently returns
+      // process.env.ANTHROPIC_API_KEY. For a single interactive request that
+      // fallback is a feature. For an unattended pass across every opted-in
+      // user it means the platform account quietly funds everyone's autonomous
+      // spend, and the only place that shows up is the Anthropic invoice.
+      //
+      // Filtered on provider as well as user_id because user_api_keys is unique
+      // on (user_id, provider) with provider defaulting to 'anthropic'
+      // (migration 029). A user holding only some other provider's key has a
+      // row but no Anthropic key, and user_id alone would wave them through.
+      var keyResult = await supabase
+        .from("user_api_keys")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("provider", "anthropic");
+
+      if (keyResult.error) {
+        console.error("[StoreProposals] Failed to check stored API key for user " + userId + ":", keyResult.error.message);
+        continue;
+      }
+
+      if ((keyResult.count || 0) === 0) {
+        console.warn("[StoreProposals] user " + userId + ": skipped — no stored Anthropic key; autonomy requires the user's own key rather than the platform key");
+        continue;
+      }
+
       // Don't stack proposals on a queue the seller hasn't worked through yet.
-      // Counts every pending proposal regardless of action type — a queue of
-      // update_listing proposals is just as unworked as one of publish_listing.
+      // Scoped to this agent: while store is the only agent writing proposals an
+      // unscoped count behaves identically, but the night a second agent starts
+      // proposing, one untouched store proposal would silence every other agent
+      // for that user.
       var pendingResult = await supabase
         .from("agent_proposals")
         .select("id", { count: "exact", head: true })
         .eq("user_id", userId)
+        .eq("agent_type", "store")
         .eq("status", "pending");
 
       if (pendingResult.error) {
@@ -16183,7 +16394,27 @@ async function runStoreProposalPass() {
       }
 
       if ((pendingResult.count || 0) > 0) {
-        console.log("[StoreProposals] user " + userId + ": skipped — seller has " + pendingResult.count + " pending proposal(s)");
+        console.log("[StoreProposals] user " + userId + ": skipped — seller has " + pendingResult.count + " pending store proposal(s)");
+        continue;
+      }
+
+      // No catalogue, no paid call. generateStoreProposalsForUser will happily
+      // run with an empty listing set, passing "(this seller has no listings
+      // yet)" into the prompt — a billed Claude call with nothing to reason
+      // about. Keyed on seller_id, which is what marketplace_listings uses for
+      // its owner column; it has no user_id.
+      var listingResult = await supabase
+        .from("marketplace_listings")
+        .select("id", { count: "exact", head: true })
+        .eq("seller_id", userId);
+
+      if (listingResult.error) {
+        console.error("[StoreProposals] Failed to count listings for user " + userId + ":", listingResult.error.message);
+        continue;
+      }
+
+      if ((listingResult.count || 0) === 0) {
+        console.log("[StoreProposals] user " + userId + ": skipped — no marketplace listings to reason about");
         continue;
       }
 
@@ -16197,11 +16428,17 @@ async function runStoreProposalPass() {
   }
 
   console.log("[StoreProposals] Pass complete — " + totalUsers + " user(s) considered, " + totalCreated + " proposal(s) created.");
+
+  return { users: totalUsers, created: totalCreated };
 }
 
 var storeProposalPassRunning = false;
 
 async function storeProposalTick() {
+  // Cheap first check, kept as-is. It only sees this process's own memory, so it
+  // cannot stop a redeployed container repeating a pass the previous one ran —
+  // that is what the job_runs claim below is for — but it costs nothing and
+  // stops a pass overlapping itself here.
   if (storeProposalPassRunning) {
     console.log("[StoreProposals] Tick skipped — previous run still in progress");
     return;
@@ -16209,7 +16446,25 @@ async function storeProposalTick() {
   storeProposalPassRunning = true;
   console.log("[StoreProposals] Tick starting...");
   try {
-    await runStoreProposalPass();
+    // Claimed once per pass, before any user is enumerated — the claim is for
+    // the day, not for a user.
+    var claimed = await claimStoreProposalDay();
+
+    if (!claimed) {
+      console.log("[StoreProposals] Tick skipped — " + STORE_PROPOSAL_JOB_NAME + " already claimed for " + storeProposalClaimDay() + " (another process or an earlier run today)");
+      return;
+    }
+
+    // Past this point the row has started_at set and finished_at null, so every
+    // exit from here has to close it out — including a throw.
+    try {
+      await runStoreProposalPass();
+      await finishStoreProposalRun(null);
+    } catch (passErr) {
+      var message = passErr && (passErr.message || String(passErr));
+      console.error("[StoreProposals] Pass error:", message);
+      await finishStoreProposalRun(message);
+    }
   } catch (err) {
     console.error("[StoreProposals] Tick error:", err.message || err);
   } finally {
@@ -16243,13 +16498,27 @@ app.listen(PORT, function () {
   // Daily Store Agent proposal pass. Double-gated: ENABLE_AUTO_JOBS turns on
   // background jobs at all, ENABLE_STORE_PROPOSAL_JOB opts into this one
   // specifically, so it can stay off while the sales loop runs.
+  //
+  // A wall-clock schedule, not an interval. setInterval(fn, 86400000) means "24
+  // hours after this process booted", and on Railway every deploy replaces the
+  // process, so the schedule followed deploys rather than the clock: deploy twice
+  // in a day and the pass could run twice or, across frequent deploys, never
+  // reach 24 hours and never fire at all. 6am America/Los_Angeles so proposals
+  // are waiting at the start of the day rather than landing mid-afternoon, which
+  // is where a UTC-scheduled 6am job would put them locally.
+  //
+  // There is no boot-time run any more. A setTimeout firing the pass five
+  // minutes after every deploy is precisely the repeat-firing the job_runs claim
+  // exists to prevent; testing goes through POST /api/admin/store-proposals/run.
   if (process.env.ENABLE_AUTO_JOBS === "true" && process.env.ENABLE_STORE_PROPOSAL_JOB === "true") {
-    setTimeout(function () {
+    cron.schedule("0 6 * * *", function () {
       storeProposalTick().catch(function (err) {
-        console.error("[StoreProposals] Initial run error:", err.message || err);
+        console.error("[StoreProposals] Scheduled run error:", err.message || err);
       });
-    }, 300000);
-    setInterval(storeProposalTick, 86400000);
+    }, {
+      timezone: STORE_PROPOSAL_TIMEZONE
+    });
+    console.log("[startup] storeProposalTick scheduled — 06:00 " + STORE_PROPOSAL_TIMEZONE + " daily, claimed through job_runs." + STORE_PROPOSAL_JOB_NAME);
   } else {
     console.log("[startup] storeProposalTick disabled (requires ENABLE_AUTO_JOBS=true and ENABLE_STORE_PROPOSAL_JOB=true)");
   }
