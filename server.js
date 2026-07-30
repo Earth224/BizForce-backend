@@ -9871,7 +9871,13 @@ app.post("/api/admin/store-proposals/run", requireAuth, requireAdmin, async func
         manual:  true,
         claimed: false,
         users:   (summary && summary.users) || 0,
-        created: (summary && summary.created) || 0
+        created: (summary && summary.created) || 0,
+        // Surfaced rather than swallowed: this is the testing path, so a run that
+        // completed while failing some users has to say so in the response. The
+        // scheduled path records the same information in job_runs.last_error,
+        // which this route deliberately does not touch.
+        failed:  (summary && summary.failed) || 0,
+        first_failure: (summary && summary.firstFailure) || null
       });
     } finally {
       storeProposalPassRunning = false;
@@ -16314,6 +16320,22 @@ async function finishStoreProposalRun(errorMessage) {
 async function runStoreProposalPass() {
   var totalUsers = 0;
   var totalCreated = 0;
+  // Per-user failures are counted rather than thrown. Each user's work is
+  // independent, the day's claim is already taken by the time this runs, and
+  // there is no retry until tomorrow — so letting one user's transient query
+  // error abort the loop would deny every remaining user their proposals for a
+  // full day. They still have to be visible, though: the caller reads these and
+  // records them in job_runs.last_error, so a partially failed pass does not
+  // close as clean.
+  var failedUsers = 0;
+  var firstFailure = null;
+
+  function noteUserFailure(userId, detail) {
+    failedUsers += 1;
+    if (!firstFailure) {
+      firstFailure = "user " + userId + ": " + detail;
+    }
+  }
 
   // Consent, not billing. This used to read subscriptions where status =
   // 'active', which is whether a card is being charged — not whether the seller
@@ -16327,9 +16349,14 @@ async function runStoreProposalPass() {
     .eq("agent_type", "store")
     .eq("enabled", true);
 
+  // Thrown, not returned. This is the pass's own query failing, so nothing can
+  // proceed and there is no partial result to report. Returning an empty summary
+  // here would have the tick write finished_at with no last_error, and the day is
+  // already claimed by that point — so tomorrow's investigation would find a row
+  // that is indistinguishable from a genuinely empty pass, on a day the job
+  // cannot retry. A query error is a failure and has to read as one.
   if (autonomyResult.error) {
-    console.error("[StoreProposals] Failed to load store autonomy opt-ins:", autonomyResult.error.message);
-    return { users: 0, created: 0 };
+    throw new Error("Failed to load store autonomy opt-ins: " + autonomyResult.error.message);
   }
 
   var seenUserIds = {};
@@ -16368,6 +16395,7 @@ async function runStoreProposalPass() {
 
       if (keyResult.error) {
         console.error("[StoreProposals] Failed to check stored API key for user " + userId + ":", keyResult.error.message);
+        noteUserFailure(userId, "stored API key check failed: " + keyResult.error.message);
         continue;
       }
 
@@ -16390,6 +16418,7 @@ async function runStoreProposalPass() {
 
       if (pendingResult.error) {
         console.error("[StoreProposals] Failed to count pending proposals for user " + userId + ":", pendingResult.error.message);
+        noteUserFailure(userId, "pending proposal count failed: " + pendingResult.error.message);
         continue;
       }
 
@@ -16410,6 +16439,7 @@ async function runStoreProposalPass() {
 
       if (listingResult.error) {
         console.error("[StoreProposals] Failed to count listings for user " + userId + ":", listingResult.error.message);
+        noteUserFailure(userId, "listing count failed: " + listingResult.error.message);
         continue;
       }
 
@@ -16423,13 +16453,21 @@ async function runStoreProposalPass() {
       totalCreated += created;
       console.log("[StoreProposals] user " + userId + ": generated " + created + " proposal(s)");
     } catch (userErr) {
-      console.error("[StoreProposals] Error processing user " + userId + ":", userErr.message || userErr);
+      var userMessage = (userErr && (userErr.message || String(userErr))) || "unknown error";
+      console.error("[StoreProposals] Error processing user " + userId + ":", userMessage);
+      noteUserFailure(userId, userMessage);
     }
   }
 
-  console.log("[StoreProposals] Pass complete — " + totalUsers + " user(s) considered, " + totalCreated + " proposal(s) created.");
+  console.log("[StoreProposals] Pass complete — " + totalUsers + " user(s) considered, " +
+    totalCreated + " proposal(s) created, " + failedUsers + " user(s) failed.");
 
-  return { users: totalUsers, created: totalCreated };
+  return {
+    users:        totalUsers,
+    created:      totalCreated,
+    failed:       failedUsers,
+    firstFailure: firstFailure
+  };
 }
 
 var storeProposalPassRunning = false;
@@ -16458,8 +16496,20 @@ async function storeProposalTick() {
     // Past this point the row has started_at set and finished_at null, so every
     // exit from here has to close it out — including a throw.
     try {
-      await runStoreProposalPass();
-      await finishStoreProposalRun(null);
+      var summary = await runStoreProposalPass();
+
+      // A pass that completed but failed some users is not a clean run. Those
+      // failures are deliberately not thrown inside the pass, so that one user's
+      // error does not deny everyone else their proposals on a day that cannot
+      // retry — but they still have to land in last_error, or a partial failure
+      // closes looking identical to a successful pass.
+      if (summary && summary.failed > 0) {
+        await finishStoreProposalRun(
+          summary.failed + " of " + summary.users + " user(s) failed; first: " + summary.firstFailure
+        );
+      } else {
+        await finishStoreProposalRun(null);
+      }
     } catch (passErr) {
       var message = passErr && (passErr.message || String(passErr));
       console.error("[StoreProposals] Pass error:", message);
