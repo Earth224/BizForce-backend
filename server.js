@@ -8699,6 +8699,177 @@ function computeEclipticLongitudes(utcDate) {
   return longitudes;
 }
 
+// Resolves a free-text birth place into a ranked, filtered candidate list, or
+// reports that it could not be resolved. Pure and total: it accepts any value
+// whatsoever and always returns an object — it never throws, for null,
+// undefined, numbers, booleans, arrays, objects or symbols. No database, no
+// network, no date logic; the only thing it reads is the city-timezones dataset
+// bundled in node_modules.
+//
+// Standalone for now. computeNatalChart still does its own one-line lookup and
+// is deliberately untouched by this change; wiring the two together is a
+// separate task.
+//
+// Why this is not just findFromCityStateProvince. Four properties of that
+// function, all confirmed against the installed package (city-timezones 1.3.4,
+// 7329 records) rather than its documentation:
+//
+//   It THROWS on truthy non-strings. Its matcher calls searchString.split(" "),
+//   so a number, boolean, array or object reaches .split and dies with
+//   "searchString.split is not a function". Hence the typeof gate below, for
+//   the same reason parseBirthTime and parseBirthDate type-check before
+//   coercing: "never throws" has to hold for every input, not the plausible ones.
+//
+//   It matches EVERYTHING for a whitespace-only string. The matcher requires
+//   every space-separated token of the query to be a substring of the record;
+//   "   " splits into empty tokens, every one of which is a substring of every
+//   record, so all 7329 come back. The emptiness check below is load-bearing,
+//   not decoration.
+//
+//   It returns records with no usable timezone. 48 of the 7329 carry
+//   timezone: null — Antarctic stations and similar. A record with no zone
+//   cannot produce a chart, so those are dropped before ranking rather than
+//   surfaced and failed later. (The brief called this "missing or empty
+//   string"; the dataset actually stores null. The guard below accepts a
+//   non-empty string and so covers missing, null and "" alike.)
+//
+//   Its ordering is dataset order, not relevance. "London" returns London
+//   Ontario first and the London with eight million people fourth; "Tokyo"
+//   returns Hachioji first, because Hachioji's province is Tokyo. Ranking
+//   exact city hits above substring hits, then by population, is what fixes
+//   both.
+//
+// The confidence value is the whole point of the return shape: "exact" is the
+// only value a caller may act on without asking the person to confirm.
+function resolvePlace(query) {
+  function unresolved(reason, normalized) {
+    return { confidence: "unresolved", candidates: [], query: normalized, reason: reason };
+  }
+
+  // Type-checked BEFORE any coercion. String(value) throws for a Symbol and for
+  // any object with a hostile toString, so coercing first would forfeit the
+  // never-throws guarantee at the first line.
+  //
+  // Note that null and undefined are invalid_input here, NOT absent — this
+  // differs from parseBirthDate and parseBirthTime, where they are absent. It is
+  // what the spec for this function asks for: absent is reserved below for a
+  // string that normalises away to nothing. The query returned alongside
+  // invalid_input is "" because normalisation never ran, which keeps that field
+  // a string for every possible input.
+  if (typeof query !== "string") {
+    return unresolved("invalid_input", "");
+  }
+
+  // Commas become spaces rather than being deleted, so "Springfield,Illinois"
+  // with no space becomes two tokens instead of the single glued token
+  // "springfieldillinois". That distinction matters: the raw package matches
+  // "Springfield, Illinois" only by accident — it joins the record's fields with
+  // a comma internally, so the user's comma happens to land on a separator — and
+  // returns nothing at all for the unspaced form. Normalising the comma out
+  // makes both forms take the same path.
+  var normalized = query.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+
+  if (!normalized) {
+    return unresolved("absent", normalized);
+  }
+
+  var tokens     = normalized.split(" ");
+  var firstToken = tokens[0].toLowerCase();
+
+  // Safe to call now: normalized is a non-empty string, which is the only shape
+  // findFromCityStateProvince handles without throwing or matching the world.
+  var matches       = cityTimezones.findFromCityStateProvince(normalized);
+  var usedFirstToken = false;
+
+  // Retry on the city alone when the full phrase found nothing. This is what
+  // rescues "London, UK" — the dataset spells that country "United Kingdom" and
+  // has no "UK" anywhere, so every token has to match and none of them do. The
+  // retry is recorded because it means part of what the person typed was thrown
+  // away, and a result reached that way can never be reported as exact.
+  if (!matches.length && tokens.length > 1) {
+    matches = cityTimezones.findFromCityStateProvince(tokens[0]);
+    usedFirstToken = true;
+  }
+
+  var usable = matches.filter(function (record) {
+    // Non-empty string covers missing, null and "" in one test.
+    if (typeof record.timezone !== "string" || record.timezone === "") {
+      return false;
+    }
+    // Number.isFinite, not isNaN: it rejects NaN, Infinity, null and any string
+    // without coercing. No record in the current dataset fails this; it guards
+    // against a future data revision, since a non-finite coordinate would reach
+    // the house maths as silent nonsense rather than as an error.
+    return Number.isFinite(record.lat) && Number.isFinite(record.lng);
+  });
+
+  // Sorted on a copy of the package's own array. filter() above already returned
+  // a fresh array, so this cannot disturb the module-level cityMapping that
+  // every other lookup in the process shares.
+  usable.sort(function (a, b) {
+    // Key 1 — an exact city hit outranks a mere substring hit. city_ascii rather
+    // than city, so an accented record is still reachable from unaccented typing.
+    var aExact = String(a.city_ascii).toLowerCase() === firstToken ? 1 : 0;
+    var bExact = String(b.city_ascii).toLowerCase() === firstToken ? 1 : 0;
+    if (aExact !== bExact) {
+      return bExact - aExact;
+    }
+    // Key 2 — population descending. Non-finite populations sort last instead of
+    // returning NaN from the comparator, which would leave the order undefined.
+    var aPop = Number.isFinite(a.pop) ? a.pop : -Infinity;
+    var bPop = Number.isFinite(b.pop) ? b.pop : -Infinity;
+    return bPop - aPop;
+  });
+
+  var candidates = usable.slice(0, 10).map(function (record) {
+    var province = typeof record.province === "string" && record.province !== ""
+      ? record.province
+      : null;
+
+    // label uses record.city — the display spelling, accents intact — while the
+    // city field below is city_ascii. 115 records differ between the two.
+    var labelParts = [record.city];
+    if (province) {
+      labelParts.push(province);
+    }
+    labelParts.push(record.country);
+
+    return {
+      id:         String(record.lat) + "," + String(record.lng),
+      label:      labelParts.join(", "),
+      city:       record.city_ascii,
+      province:   province,
+      country:    record.country,
+      latitude:   record.lat,
+      longitude:  record.lng,
+      timezone:   record.timezone,
+      population: record.pop
+    };
+  });
+
+  // Nothing survived. Checked before the retry rule below, because "ambiguous
+  // with zero candidates" would be a shape no caller could do anything with, and
+  // because reason is only ever non-null on unresolved.
+  if (!candidates.length) {
+    return unresolved("no_match", normalized);
+  }
+
+  // A retry means the answer was reached by discarding part of what the person
+  // typed, so it always requires confirmation however few candidates came back.
+  // Otherwise one survivor is exact and several are ambiguous. Counted off
+  // usable rather than candidates so the cap cannot turn eleven candidates into
+  // a different verdict than ten — though at those sizes both are ambiguous
+  // anyway.
+  var confidence;
+  if (usedFirstToken) {
+    confidence = "ambiguous";
+  } else {
+    confidence = usable.length === 1 ? "exact" : "ambiguous";
+  }
+
+  return { confidence: confidence, candidates: candidates, query: normalized, reason: null };
+}
+
 function computeNatalChart(birthDate, birthTime, birthPlace) {
   // Date first, ahead of the place lookup. Without a usable date there is no
   // chart to compute at all, so there is nothing to be gained by resolving a
