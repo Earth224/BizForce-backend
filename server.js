@@ -8436,6 +8436,28 @@ function natalSignAndDegree(lonDeg) {
   return { sign: NATAL_SIGNS[idx], degree: Math.round(deg * 100) / 100 };
 }
 
+// Geocentric ecliptic longitude, in degrees, for each of the ten bodies in
+// NATAL_PLANET_NAMES at a single instant. Extracted verbatim from the loop that
+// used to sit inline in computeNatalChart's STEP 2 — same bodies, same
+// aberration flag (the third GeoVector argument, true), same ecl.elon read, no
+// rounding. The formulas must stay identical to test-natal.js; do not "improve"
+// them.
+//
+// Pure by construction: takes a JavaScript Date already in UTC and returns a
+// plain object. It performs no database or network access, no timezone
+// resolution and no date parsing — the caller is responsible for having already
+// converted local birth time to UTC, because this function cannot tell a
+// correctly-converted Date from an incorrect one.
+function computeEclipticLongitudes(utcDate) {
+  var longitudes = {};
+  NATAL_PLANET_NAMES.forEach(function (name) {
+    var vec = Astronomy.GeoVector(Astronomy.Body[name], utcDate, true);
+    var ecl = Astronomy.Ecliptic(vec);
+    longitudes[name] = ecl.elon;
+  });
+  return longitudes;
+}
+
 function computeNatalChart(birthDate, birthTime, birthPlace) {
   var matches = cityTimezones.findFromCityStateProvince(String(birthPlace || ""));
   if (!matches.length) {
@@ -8460,12 +8482,7 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
   var utcDate     = utcDateTime.toJSDate();
 
   // ── STEP 2 — ten planets, geocentric ecliptic longitude ────────────────
-  var planetLongitudes = {};
-  NATAL_PLANET_NAMES.forEach(function (name) {
-    var vec = Astronomy.GeoVector(Astronomy.Body[name], utcDate, true);
-    var ecl = Astronomy.Ecliptic(vec);
-    planetLongitudes[name] = ecl.elon;
-  });
+  var planetLongitudes = computeEclipticLongitudes(utcDate);
 
   var planets = NATAL_PLANET_NAMES.map(function (name) {
     var lon = planetLongitudes[name];
