@@ -8875,9 +8875,40 @@ function parseBirthTime(raw) {
   }
 
   // Minute is exactly two digits. That is what rejects "7:5pm" and what rejects a
-  // bare "14", which has no separator at all. The meridiem is optional and the
-  // pattern is anchored at both ends, so trailing junk cannot slip through.
-  var match = normalized.match(/^(\d{1,2}):(\d{2})(am|pm)?$/);
+  // bare "14", which has no separator at all. The pattern is anchored at both
+  // ends, so trailing junk cannot slip through.
+  //
+  // The tail is an alternation, and that is what keeps a 12-hour string from
+  // carrying a seconds component or an offset:
+  //
+  //   (am|pm)                          the 12-hour branch, nothing may follow
+  //   (?::(\d{2})(?:\.\d+)?)?          optional :SS with optional .fraction
+  //   (?:z|[+-]\d{2}(?::?\d{2})?)?     optional Z, or ±HH, ±HHMM or ±HH:MM
+  //
+  // Both halves of the second branch are optional, so a bare "17:45" still
+  // matches it exactly as before. "5:45:00 pm" matches neither and is rejected,
+  // which is correct: a wall clock written with a meridiem never carries seconds
+  // or a UTC offset, so that string is malformed rather than merely unusual.
+  //
+  // Why the seconds and offset are accepted at all: birth_records.birth_time is a
+  // Postgres `time` column, and PostgREST serialises it as "17:45:00". Before
+  // this, reading a correctly stored birth time back through this parser returned
+  // unparseable, and the chart silently withheld the Ascendant, Midheaven and
+  // houses from someone whose time was recorded perfectly well. "00:00:00" — a
+  // real birth at midnight — failed the same way.
+  //
+  // The seconds are matched and then DISCARDED, never rounded. A stored
+  // "17:45:59" reads back as 17:45, the same wall-clock minute that was written;
+  // rounding it to 17:46 would hand back a time nobody entered.
+  //
+  // The offset is likewise matched and IGNORED, never applied. This function
+  // reports a wall-clock time, and which zone that time belongs to is resolved
+  // separately from the birth place. Applying an offset here would double-convert
+  // — computeNatalFromResolved already interprets this hour and minute in the
+  // resolved zone before converting to UTC.
+  var match = normalized.match(
+    /^(\d{1,2}):(\d{2})(?:(am|pm)|(?::(\d{2})(?:\.\d+)?)?(?:z|[+-]\d{2}(?::?\d{2})?)?)$/
+  );
   if (!match) {
     return reject("unparseable");
   }
@@ -8885,8 +8916,26 @@ function parseBirthTime(raw) {
   var hour     = parseInt(match[1], 10);
   var minute   = parseInt(match[2], 10);
   var meridiem = match[3] || null;
+  // match[4] is the seconds group. Range-checked below, then discarded — its
+  // value never reaches the returned hour and minute.
 
   if (minute > 59) {
+    return reject("unparseable");
+  }
+
+  // Seconds are discarded, so this is not protecting the returned value — an
+  // out-of-range seconds value could not corrupt it. It is refusing a string
+  // that is already malformed. Silently dropping the invalid part of an input is
+  // precisely the failure mode this parser exists to prevent: the two lines it
+  // replaced turned "25:00" into an invalid DateTime inside a response still
+  // marked available: true, and ":60" is the same shape of problem one field
+  // over. A caller that sends it has a bug worth hearing about.
+  //
+  // This cannot fire on a value from the database path the seconds support was
+  // added for. Postgres normalises '17:45:60'::time to 17:46:00 at write time,
+  // so anything read back through PostgREST already carries valid seconds. A
+  // string reaching here with :60 came from somewhere else.
+  if (match[4] && parseInt(match[4], 10) > 59) {
     return reject("unparseable");
   }
 
