@@ -7173,6 +7173,64 @@ app.get("/api/moon", async function (req, res) {
   }
 });
 
+// ── Public place lookup — dataset only, no user data, no auth needed ──
+//
+// Public for the same reason /api/moon above is: it reads nothing belonging to
+// anyone. The place chooser has to work during guest checkout and Etsy order
+// intake, where there is no session to require.
+//
+// Always HTTP 200, including when nothing matched. An unresolvable place is a
+// normal answer to a lookup question, not a failure of the request, and
+// answering with a 4xx would push the frontend into branching on status codes
+// when the whole point of the payload is that it branches on confidence.
+app.get("/api/places/resolve", async function (req, res, next) {
+  try {
+    var q = req.query.q;
+
+    // Two cheap rejections ahead of resolvePlace, because this route is public
+    // and every call that reaches the package scans all 7329 records.
+    //
+    // typeof rather than a truthiness or null test: Express 4's default query
+    // parser is the extended one, so ?q[]=x arrives as an array and ?q[a]=1 as
+    // an object. Both have a .length or lack one in ways a bare length check
+    // reads wrongly — an array of two elements would sail past a > 120 test and
+    // reach the scan. resolvePlace would still answer invalid_input for them, so
+    // this is about not paying for the scan, not about safety.
+    //
+    // Note that ?q= (present but empty) deliberately does NOT land here. It is a
+    // string, so it goes through to resolvePlace and comes back as "absent" —
+    // the person typed nothing, which is a different fact from the parameter
+    // never having been sent, and the frontend can tell the two apart.
+    if (typeof q !== "string" || q.length > 120) {
+      return res.json({
+        confidence: "unresolved",
+        candidates: [],
+        query:      "",
+        reason:     "invalid_input"
+      });
+    }
+
+    // No database read, no session lookup, and the query is deliberately not
+    // logged: it is a birth place, which is personal data, and this route is
+    // reachable without authentication.
+    return res.json(resolvePlace(q));
+  } catch (error) {
+    // Unreachable as written — resolvePlace is total and there is nothing else
+    // here that can throw — but kept so an unexpected throw becomes a handled
+    // 500 through the shared error handler rather than an unhandled rejection.
+    // Express 4 does not catch async handler rejections on its own, so without
+    // this the process, not the request, is what would be at risk.
+    //
+    // This is the one place the route follows the surrounding routes rather
+    // than /api/moon, which swallows its own error and answers 200 with
+    // error: true. A 200 fallback is right for the moon, whose response is
+    // decorative and always renderable; it would be wrong here, because a
+    // fabricated "unresolved" would be indistinguishable from a real one and
+    // would send someone to correct a birth place that was never the problem.
+    next(error);
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
@@ -8776,6 +8834,10 @@ function resolvePlace(query) {
   var tokens     = normalized.split(" ");
   var firstToken = tokens[0].toLowerCase();
 
+  // Used by ranking key 1 below. Kept separate from firstToken, which the retry
+  // still needs.
+  var normalizedLower = normalized.toLowerCase();
+
   // Safe to call now: normalized is a non-empty string, which is the only shape
   // findFromCityStateProvince handles without throwing or matching the world.
   var matches       = cityTimezones.findFromCityStateProvince(normalized);
@@ -8803,14 +8865,35 @@ function resolvePlace(query) {
     return Number.isFinite(record.lat) && Number.isFinite(record.lng);
   });
 
+  // Key 1's test — a whole-token prefix match of the record's city against the
+  // query. city_ascii rather than city, so an accented record is still reachable
+  // from unaccented typing.
+  //
+  // This compares against the WHOLE normalised query, not its first token, which
+  // is what it used to do. Comparing against the first token meant a multi-word
+  // city could never earn the bonus at all: "La Plata Ciudad de Buenos Aires
+  // Argentina" has "la" as its first token, which equals no city on earth, so
+  // every candidate scored zero here and ranking fell through to population
+  // alone — handing La Plata (440,388) to Mar del Plata (554,916), and Santa Fe
+  // to Rosario. 1291 of the 7329 records have a multi-word city name and were
+  // all structurally unable to win this bonus.
+  //
+  // The trailing space in the prefix test is what keeps the match on a token
+  // boundary: without it "San" would earn the bonus on "Santa Fe Santa Fe
+  // Argentina", since "santa fe..." does begin with the letters "san".
+  function earnsCityBonus(record) {
+    var cityLower = String(record.city_ascii).toLowerCase();
+    return normalizedLower === cityLower ||
+      normalizedLower.indexOf(cityLower + " ") === 0;
+  }
+
   // Sorted on a copy of the package's own array. filter() above already returned
   // a fresh array, so this cannot disturb the module-level cityMapping that
   // every other lookup in the process shares.
   usable.sort(function (a, b) {
-    // Key 1 — an exact city hit outranks a mere substring hit. city_ascii rather
-    // than city, so an accented record is still reachable from unaccented typing.
-    var aExact = String(a.city_ascii).toLowerCase() === firstToken ? 1 : 0;
-    var bExact = String(b.city_ascii).toLowerCase() === firstToken ? 1 : 0;
+    // Key 1 — a city the query actually names outranks a mere substring hit.
+    var aExact = earnsCityBonus(a) ? 1 : 0;
+    var bExact = earnsCityBonus(b) ? 1 : 0;
     if (aExact !== bExact) {
       return bExact - aExact;
     }
