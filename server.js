@@ -9127,52 +9127,31 @@ function resolvePlace(query) {
   return { confidence: confidence, candidates: candidates, query: normalized, reason: null };
 }
 
-function computeNatalChart(birthDate, birthTime, birthPlace) {
-  // Date first, ahead of the place lookup. Without a usable date there is no
-  // chart to compute at all, so there is nothing to be gained by resolving a
-  // timezone before checking it — and no default is ever substituted here.
-  var parsedDate = parseBirthDate(birthDate);
-  if (!parsedDate.valid) {
-    return { available: false, reason: "date_invalid", dateReason: parsedDate.reason };
-  }
-
-  // Place second. resolvePlace is total — it never throws, for any birthPlace
-  // whatsoever — so the String(birthPlace || "") coercion this replaces is gone
-  // rather than moved: that coercion existed only to stop
-  // findFromCityStateProvince throwing on a non-string, and it did so by turning
-  // a caller bug into the empty string, which the package then matched against
-  // all 7329 records. resolvePlace rejects a non-string outright instead.
-  var place = resolvePlace(birthPlace);
-
-  if (place.confidence === "unresolved") {
-    // Reason string deliberately unchanged from the line this replaces. The
-    // frontend already branches on "place_unresolved"; place.reason
-    // (invalid_input / absent / no_match) is the finer detail and is not
-    // surfaced here, because doing so would change a contract this task is not
-    // scoped to change.
-    return { available: false, reason: "place_unresolved" };
-  }
-
-  if (place.confidence === "ambiguous") {
-    // A deliberate refusal, and the substantive behaviour change in this wiring.
-    // The old code took matches[0] unconditionally — dataset order, not
-    // relevance — so "London" silently became London Ontario and produced an
-    // Ascendant that was confidently, unrecoverably wrong. More than one real
-    // place matching what someone typed is not something this function can
-    // resolve on their behalf; the candidates go back so a human can choose.
-    return {
-      available:  false,
-      reason:     "place_ambiguous",
-      candidates: place.candidates,
-      query:      place.query
-    };
-  }
-
-  // Exactly one candidate survived filtering and no part of the query was
-  // discarded to get it. Safe to proceed.
-  var resolved = place.candidates[0];
-
-  var parsedTime = parseBirthTime(birthTime);
+// The astronomy, and nothing else. Everything computeNatalChart used to do once
+// the place was resolved and the time parsed now lives here, unchanged: local
+// time to UTC, the ten planetary longitudes, obliquity, sidereal time, RAMC,
+// Midheaven, Ascendant, the whole-sign houses, and the assembly of the fifteen-key
+// success object.
+//
+// Why it exists separately. computeNatalChart takes raw strings and resolves a
+// place from them, which is exactly wrong for a caller that already HAS
+// coordinates — birth_records stores latitude, longitude and timezone frozen at
+// the moment they were resolved, precisely so a chart built from that row is not
+// re-geocoded years later against a dataset that may have moved. Going back
+// through resolvePlace to reach the maths would defeat the point of freezing
+// them, and for a stored row whose place_query is ambiguous it would refuse
+// outright — the coordinates are already known and there is nothing to
+// disambiguate.
+//
+// Pure: no database, no network, no place resolution, no date or time parsing.
+//
+// It does NOT validate its arguments, the same posture canonicalDateDigits takes.
+// parsedDate must be a parseBirthDate result whose valid is true, parsedTime a
+// parseBirthTime result, and resolved an object carrying latitude, longitude,
+// timezone and label. A caller that passes a rejected parsedDate gets
+// nonsense-shaped output rather than an error; checking first is the caller's
+// job, and both current callers do.
+function computeNatalFromResolved(parsedDate, parsedTime, resolved) {
   var timeKnown  = parsedTime.known;
 
   // ── STEP 1 — resolve place + local time to true UTC ────────────────────
@@ -9266,6 +9245,58 @@ function computeNatalChart(birthDate, birthTime, birthPlace) {
     timeAssumed:   !parsedTime.known,
     timeReason:    parsedTime.reason
   };
+}
+
+// Raw stored strings in, chart out. A thin wrapper now: it validates the date,
+// resolves the place, parses the time, and hands the three results to
+// computeNatalFromResolved above. Every early return, reason string and key of
+// the success object is exactly what it was before the astronomy moved out.
+function computeNatalChart(birthDate, birthTime, birthPlace) {
+  // Date first, ahead of the place lookup. Without a usable date there is no
+  // chart to compute at all, so there is nothing to be gained by resolving a
+  // timezone before checking it — and no default is ever substituted here.
+  var parsedDate = parseBirthDate(birthDate);
+  if (!parsedDate.valid) {
+    return { available: false, reason: "date_invalid", dateReason: parsedDate.reason };
+  }
+
+  // Place second. resolvePlace is total — it never throws, for any birthPlace
+  // whatsoever — so the String(birthPlace || "") coercion this replaces is gone
+  // rather than moved: that coercion existed only to stop
+  // findFromCityStateProvince throwing on a non-string, and it did so by turning
+  // a caller bug into the empty string, which the package then matched against
+  // all 7329 records. resolvePlace rejects a non-string outright instead.
+  var place = resolvePlace(birthPlace);
+
+  if (place.confidence === "unresolved") {
+    // Reason string deliberately unchanged from the line this replaces. The
+    // frontend already branches on "place_unresolved"; place.reason
+    // (invalid_input / absent / no_match) is the finer detail and is not
+    // surfaced here, because doing so would change a contract this task is not
+    // scoped to change.
+    return { available: false, reason: "place_unresolved" };
+  }
+
+  if (place.confidence === "ambiguous") {
+    // A deliberate refusal, and the substantive behaviour change in this wiring.
+    // The old code took matches[0] unconditionally — dataset order, not
+    // relevance — so "London" silently became London Ontario and produced an
+    // Ascendant that was confidently, unrecoverably wrong. More than one real
+    // place matching what someone typed is not something this function can
+    // resolve on their behalf; the candidates go back so a human can choose.
+    return {
+      available:  false,
+      reason:     "place_ambiguous",
+      candidates: place.candidates,
+      query:      place.query
+    };
+  }
+
+  var parsedTime = parseBirthTime(birthTime);
+
+  // Exactly one candidate survived filtering and no part of the query was
+  // discarded to get it. Safe to proceed.
+  return computeNatalFromResolved(parsedDate, parsedTime, place.candidates[0]);
 }
 
 app.get("/api/oracle/numerology", requireAuth, async function (req, res) {
