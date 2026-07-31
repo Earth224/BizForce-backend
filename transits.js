@@ -66,25 +66,89 @@ function lonAt(body, time) {
   return Astronomy.Ecliptic(vec).elon;
 }
 
-// Root-find the instant the aspect is exact inside [t1, t2].
-// Guards against the antipodal wrap producing a false sign change.
-function findExact(body, natalLon, angle, branch, t1, t2) {
+// Root-find the instant the aspect is exact inside a bracket already known to
+// contain a sign change. f1 and f2 are passed in because the caller computed
+// them from the sampled timeline; recomputing them here would undo the point of
+// sampling.
+//
+// CRITICAL: Astronomy.Search CANNOT be trusted to report absence. It fits a
+// quadratic and returns null when the fit does not land inside the bracket,
+// which is indistinguishable from "no crossing here". Measured: the bracket
+// 2026-09-09..2026-09-19 for Saturn trine a natal Uranus at 253.0320 carries a
+// genuine sign change from +0.1258 to -0.5760, and Search returns null on it.
+// Narrow the same bracket by five days and it returns the answer at once.
+//
+// An earlier version of this file treated that null as "no transit" and
+// silently dropped real events - six of twenty-two on one test chart, including
+// a Saturn trine six weeks out. Losing a transit is worse than any other failure
+// this module can have, because the output still looks complete.
+//
+// So: Search for speed, and bisection whenever it declines. Bisection cannot
+// fail on a bracketed sign change - it only halves - and at roughly twelve
+// iterations for one-minute precision over a three-day bracket it costs
+// nothing. The caller has already proven the sign change exists; this function's
+// only job is to locate it, never to second-guess whether it is there.
+function findExactBracketed(body, natalLon, angle, branch, t1, t2, f1, f2) {
   var f = function (t) {
     return offsetFromAspect(lonAt(body, t), natalLon, angle, branch);
   };
-  var f1 = f(t1), f2 = f(t2);
-  if (f1 === 0) return t1;
-  if ((f1 < 0) === (f2 < 0)) return null;
-  if (Math.abs(f1 - f2) > 180) return null; // wrap artefact, not a real crossing
-  return Astronomy.Search(f, t1, t2, { dt_tolerance_seconds: 60, init_f1: f1, init_f2: f2 });
+
+  var found = Astronomy.Search(f, t1, t2, {
+    dt_tolerance_seconds: 60,
+    init_f1: f1,
+    init_f2: f2
+  });
+  if (found) return found;
+
+  return bisectExact(f, t1, t2, f1, f2);
+}
+
+// Plain bisection to one-minute precision. Total by construction: given
+// endpoints of opposite sign it always returns an instant between them.
+function bisectExact(f, t1, t2, f1, f2) {
+  var lo = t1, hi = t2, fLo = f1;
+  var toleranceDays = 60 / 86400;
+
+  for (var i = 0; i < 60 && (hi.tt - lo.tt) > toleranceDays; i++) {
+    var mid = lo.AddDays((hi.tt - lo.tt) / 2);
+    var fMid = f(mid);
+    if (fMid === 0) return mid;
+    if ((fMid < 0) === (fLo < 0)) {
+      lo = mid;
+      fLo = fMid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo.AddDays((hi.tt - lo.tt) / 2);
 }
 
 /**
- * @param natalLongitudes  { Sun: deg, Moon: deg, ... } from computeEclipticLongitudes
+ * @param natalLongitudes  { Sun: deg, ... } from computeEclipticLongitudes
  * @param nowUtc           Date
  * @param opts.forwardDays how far ahead to search for exact hits (default 180)
  * @param opts.transiting  which bodies transit (default: all but Moon)
  * @param opts.natalTargets which natal points receive (default: all ten)
+ *
+ * COST. The obvious implementation — for every (body, target, aspect, branch),
+ * walk forward and root-find — recomputes each body's longitude roughly ninety
+ * times over, once per target x aspect x branch combination. Measured at 54,194
+ * GeoVector evaluations for one report, about 1.3 seconds, of which well under
+ * a hundredth was distinct work.
+ *
+ * A body's position at a given instant does not depend on which natal point or
+ * aspect is being tested. So each body's longitude is sampled ONCE across the
+ * window, and every combination then scans that array for sign changes in pure
+ * arithmetic. Astronomy.Search runs only inside a bracket already known to
+ * contain a crossing.
+ *
+ * This matters beyond speed. computeTransitReport is synchronous, and Node is
+ * single-threaded: a 1.3-second synchronous call does not make one route slow,
+ * it stops the entire process, and every other in-flight request waits behind
+ * it. Sampling also lets the step be made FINER rather than coarser, since
+ * samples are now nearly free — which closes the real correctness risk, a
+ * retrograde station sitting so close to an exact aspect that both crossings
+ * fall inside one coarse step and neither is found.
  */
 function computeTransits(natalLongitudes, nowUtc, opts) {
   opts = opts || {};
@@ -93,15 +157,39 @@ function computeTransits(natalLongitudes, nowUtc, opts) {
   var targets = opts.natalTargets || NATAL_PLANET_NAMES;
 
   var t0 = Astronomy.MakeTime(nowUtc);
-  var tEnd = t0.AddDays(forwardDays);
   var results = [];
 
   transiting.forEach(function (body) {
     var speed = BODY_SPEED[body];
-    // Step must be well under the time it takes to cross the whole orb, or an
-    // exact hit can be stepped over entirely. Half an orb-width of motion.
-    var step = Math.max(0.25, Math.min(10, speed.daysPerDegree * 1.5));
-    var lonNow = lonAt(body, t0);
+
+    // Half a degree of the body's own motion, clamped. Fine enough that a
+    // retrograde loop tight against an exact aspect still produces two distinct
+    // bracketed crossings; coarse enough that a slow planet over a year is a
+    // few hundred samples rather than tens of thousands.
+    var step = Math.max(0.25, Math.min(3, speed.daysPerDegree * 0.5));
+
+    // Sample the body once across the whole window. Everything below reads this
+    // array and never touches the ephemeris again except inside a bracket.
+    var times = [];
+    var lons = [];
+    for (var d = 0; d <= forwardDays; d += step) {
+      var t = t0.AddDays(d);
+      times.push(t);
+      lons.push(lonAt(body, t));
+    }
+    if (times[times.length - 1].tt < t0.AddDays(forwardDays).tt) {
+      var tLast = t0.AddDays(forwardDays);
+      times.push(tLast);
+      lons.push(lonAt(body, tLast));
+    }
+
+    var lonNow = lons[0];
+
+    // One extra evaluation per body, not per combination, for applying vs
+    // separating. Sampled at a fixed small fraction of the body's own motion so
+    // a slow planet is not judged on a change beneath floating-point noise.
+    var probeTime = t0.AddDays(Math.max(0.02, speed.daysPerDegree * 0.05));
+    var lonProbe = lonAt(body, probeTime);
 
     targets.forEach(function (target) {
       var natalLon = natalLongitudes[target];
@@ -111,27 +199,26 @@ function computeTransits(natalLongitudes, nowUtc, opts) {
           var offNow = offsetFromAspect(lonNow, natalLon, aspect.angle, branch);
           var absOff = Math.abs(offNow);
 
-          // Scan forward for every exact hit in the window. Retrograde motion
-          // can produce two or three passes over the same aspect; each one is
-          // a separate event and the multi-pass case is the one people pay to
-          // understand.
+          // Scan the precomputed timeline for sign changes. Pure arithmetic on
+          // an array already in memory. Retrograde motion can carry a body over
+          // the same aspect two or three times; each crossing is its own
+          // bracket and its own event.
           var hits = [];
-          var t = t0;
-          while (t.tt < tEnd.tt && hits.length < 5) {
-            var tNext = t.AddDays(step);
-            if (tNext.tt > tEnd.tt) tNext = tEnd;
-            var hit = findExact(body, natalLon, aspect.angle, branch, t, tNext);
+          for (var i = 0; i < lons.length - 1; i++) {
+            var f1 = offsetFromAspect(lons[i], natalLon, aspect.angle, branch);
+            var f2 = offsetFromAspect(lons[i + 1], natalLon, aspect.angle, branch);
+            if (f1 === 0) { hits.push(times[i]); continue; }
+            if ((f1 < 0) === (f2 < 0)) continue;
+            if (Math.abs(f1 - f2) > 180) continue; // antipodal wrap, not a crossing
+            var hit = findExactBracketed(body, natalLon, aspect.angle, branch,
+                                         times[i], times[i + 1], f1, f2);
             if (hit) hits.push(hit);
-            if (tNext.tt === tEnd.tt) break;
-            t = tNext;
+            if (hits.length >= 5) break;
           }
 
           if (absOff > aspect.orb && hits.length === 0) return;
 
-          // Applying vs separating: sample the offset a short interval later.
-          // Shrinking magnitude means the aspect is closing.
-          var probe = t0.AddDays(Math.max(0.02, speed.daysPerDegree * 0.05));
-          var offLater = offsetFromAspect(lonAt(body, probe), natalLon, aspect.angle, branch);
+          var offLater = offsetFromAspect(lonProbe, natalLon, aspect.angle, branch);
           var motion = Math.abs(offLater) < absOff ? "applying" : "separating";
 
           results.push({
