@@ -26,6 +26,8 @@ const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
+const transits = require("./transits");
+const createTtlCache = require("./lib/ttlCache");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -443,6 +445,17 @@ const chartEmailLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many chart emails from this address. Try again in an hour." }
 });
+
+// One transit report is roughly 1.3 seconds of ephemeris arithmetic — hundreds
+// of GeoVector evaluations plus a root-find per aspect. It is also completely
+// deterministic: the same natal longitudes on the same UTC date always yield the
+// same report, and losing it costs nothing but that second and a third.
+//
+// So it is cached in process and NEVER persisted. A report is arithmetic, not
+// state; writing it to Postgres would buy durability nobody needs and cost a
+// migration, a schema surface and a staleness question. A cold cache after a
+// redeploy costs one recomputation.
+const transitCache = createTtlCache({ maxEntries: 500, ttlMs: 24 * 60 * 60 * 1000 });
 
 app.use(apiLimiter);
 
@@ -1678,6 +1691,27 @@ async function requireActiveSubscription(req, res, next) {
   } catch (error) {
     next(error);
   }
+}
+
+// Gates NOTHING today. It calls next() unconditionally, on every request, for
+// every user. That is deliberate and it is the whole point of the function.
+//
+// The $29.99 chart tier does not exist yet — no price, no plan row, no checkout
+// path. Building it is the next open item, not part of this change.
+//
+// requireActiveSubscription is deliberately NOT used here. That middleware gates
+// the $199 platform plan, which is a different product on a different funnel;
+// someone who bought a chart reading has no platform subscription and must not
+// be asked for one, and someone on the platform plan has not thereby bought a
+// chart. Reusing it would silently entitle the wrong people and refuse the right
+// ones.
+//
+// This function is the single place the chart entitlement check will go. It is
+// in the middleware chain now, ahead of the check existing, so that adding the
+// gate later is a one-line change in one known location rather than a search
+// through every chart route for the places a check was supposed to be.
+async function requireChartEntitlement(req, res, next) {
+  next();
 }
 
 async function getMonthlyUsage(userId) {
@@ -8888,6 +8922,105 @@ app.get("/api/birth-records/:id/chart", requireAuth, async function (req, res, n
   }
 });
 
+// ── Transits against a stored birth record ───────────────────────────────
+//
+// Everything the /chart route above says about frozen coordinates applies here
+// unchanged, and for the same reason: the natal side of a transit is the stored
+// resolution, never a fresh one. So this route mirrors that one exactly — same
+// 404 for a malformed id, same query scoped by id AND user_id, same 409 for an
+// unresolved place, same 500 for a stored date that no longer parses. Two routes
+// reading the same row must fail the same way, or a caller learns that a record
+// exists from one and that it does not from the other.
+//
+// It does NOT return the natal chart. The chart has its own endpoint and
+// duplicating it here would create two places a chart can be read from, which is
+// two places it can be read from DIFFERENTLY once either one grows a field. What
+// goes back is the record's identity and the report, nothing else.
+//
+// requireChartEntitlement gates nothing today — see its definition. It is in the
+// chain so the gate has one place to land.
+app.get("/api/birth-records/:id/transits", requireAuth, requireChartEntitlement, async function (req, res, next) {
+  try {
+    var userId   = req.user.id;
+    var recordId = String(req.params.id || "").trim();
+
+    // Same 404-not-400 reasoning as the /chart route: a non-uuid would reach the
+    // database as 22P02 and surface as a 500, and not_found is the only lookup
+    // failure either route defines.
+    if (!isValidUuid(recordId)) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    // Scoped by BOTH id and user_id, so another account's row is indistinguishable
+    // from one that does not exist. Same named columns as /chart — contact_email
+    // is on this table and no part of a transit response needs it.
+    var result = await supabase
+      .from("birth_records")
+      .select("id, label, birth_name, birth_date, birth_time, place_query, place_label, place_confidence, latitude, longitude, timezone")
+      .eq("id", recordId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (!result.data) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    var record = result.data;
+
+    if (record.place_confidence === "unresolved") {
+      return res.status(409).json({ error: "place_unresolved" });
+    }
+
+    // A stored date that fails the band is a corrupt row, not a bad request —
+    // POST /api/birth-records validated it through this same helper before
+    // writing. Server fault, reported as one.
+    var parsedDate = parseBirthDate(record.birth_date);
+    if (!parsedDate.valid) {
+      return res.status(500).json({ error: "stored_date_invalid", reason: parsedDate.reason });
+    }
+
+    var parsedTime = parseBirthTime(record.birth_time);
+
+    // Number() for the same reason as /chart: a coordinate arriving as a string
+    // would concatenate rather than add inside the RAMC computation and produce a
+    // plausible-looking chart with a wrong Ascendant.
+    var resolved = {
+      latitude:  Number(record.latitude),
+      longitude: Number(record.longitude),
+      timezone:  record.timezone,
+      label:     record.place_label
+    };
+
+    var chart = computeNatalFromResolved(parsedDate, parsedTime, resolved);
+
+    // The natal side of the report is read back out of the chart just computed,
+    // never recomputed, so the two can never disagree.
+    var natalLongitudes = natalLongitudesFromChart(chart);
+    if (!natalLongitudes) {
+      return res.status(500).json({ error: "chart_unavailable" });
+    }
+
+    // new Date() rather than a client-supplied instant: transits are "what is in
+    // effect now", and letting a caller name the moment would make this a
+    // different product with a different cache key space.
+    var report = getTransitReport(natalLongitudes, new Date());
+
+    return res.json({
+      recordId:   record.id,
+      label:      record.label,
+      computedAt: report.computedAt,
+      active:     report.active,
+      events:     report.events
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
@@ -10461,6 +10594,70 @@ function computeEclipticLongitudes(utcDate) {
     longitudes[name] = ecl.elon;
   });
   return longitudes;
+}
+
+// The ten natal longitudes a transit report runs against, read back OUT of a
+// chart that has already been computed rather than recomputed from a Date.
+//
+// That is the whole reason this exists. Recomputing would mean two independent
+// paths to the same numbers, and two paths can disagree — a different UTC
+// conversion, a different aberration flag, a rounding introduced on one side.
+// A transit report that disagrees with the chart it is presented beside is worse
+// than no report, because both look authoritative. Reusing chart.planets makes
+// disagreement structurally impossible.
+//
+// Returns null rather than a partial object when there is nothing to read: a
+// falsy chart, a chart that reported available:false, or a planets field that is
+// not an array. The caller decides what a null means for its response.
+function natalLongitudesFromChart(chart) {
+  if (!chart || chart.available !== true || !Array.isArray(chart.planets)) {
+    return null;
+  }
+
+  var longitudes = {};
+  chart.planets.forEach(function (planet) {
+    longitudes[planet.name] = planet.longitude;
+  });
+  return longitudes;
+}
+
+// The cache key. Ten longitudes at four decimal places, in NATAL_PLANET_NAMES
+// order, then the UTC calendar date.
+//
+// It deliberately contains NO user id, NO record id and no personal data of any
+// kind. Two consequences, both wanted:
+//
+//   Two people born at the same instant in the same place share an entry, which
+//   is correct — their transits ARE identical, and keying by user id would
+//   compute the same report twice and store it twice.
+//
+//   The key discloses nothing if it ends up in a log line, a stats dump or an
+//   error message. A row of longitudes is not a person; it does not identify
+//   whose chart it is, and it cannot be resolved back to an account.
+//
+// Four decimals is roughly 0.36 arcseconds, far finer than any difference that
+// changes a report, so two keys that differ describe genuinely different charts.
+// The date is the UTC calendar day rather than the instant: a report is a
+// day-scale product, and keying to the second would guarantee a permanent miss.
+function transitCacheKey(natalLongitudes, whenUtc) {
+  var parts = NATAL_PLANET_NAMES.map(function (name) {
+    return Number(natalLongitudes[name]).toFixed(4);
+  });
+  return parts.join(",") + "|" + whenUtc.toISOString().slice(0, 10);
+}
+
+// The only way a route should reach a transit report. Synchronous throughout:
+// computeTransitReport is pure arithmetic with no I/O, so making this async
+// would add a microtask and an await to every call site and buy nothing.
+//
+// getOrCompute runs the producer only on a miss, so the 1.3-second cost is paid
+// once per distinct chart per UTC day. If the producer throws, nothing is cached
+// and the error propagates unchanged to the caller's catch.
+function getTransitReport(natalLongitudes, whenUtc) {
+  var key = transitCacheKey(natalLongitudes, whenUtc);
+  return transitCache.getOrCompute(key, function () {
+    return transits.computeTransitReport(natalLongitudes, whenUtc);
+  });
 }
 
 // Resolves a free-text birth place into a ranked, filtered candidate list, or
