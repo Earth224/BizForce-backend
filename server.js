@@ -7881,6 +7881,359 @@ app.post("/api/contacts/capture", async function (req, res, next) {
   }
 });
 
+// Degrees inside a sign run 0 to 29.99, so this FLOORS rather than rounds — the
+// same rule and the same reason as formatDegree in chart.html: rounding 29.96 up
+// produces "30.0°", a position no planet can hold, contradicting the sign printed
+// beside it. A planet at 29.96 is in the 29th degree by the traditional ordinal
+// reckoning, so truncation is also the more faithful reading.
+function formatChartDegree(value) {
+  var n = Number(value);
+  return (isFinite(n) ? (Math.floor(n * 10) / 10).toFixed(1) : "?") + "°";
+}
+
+// The chart email, in both parts. Returns { html, text } carrying the same
+// content — the plain-text alternative is not a courtesy, it is what renders in
+// clients that refuse HTML and what several spam filters weigh a message against
+// when only one part is present.
+//
+// Everything is inline. No external image, no web font, no stylesheet, no
+// tracking pixel — partly because Gmail strips most of it anyway, and partly
+// because a remote image in an email is a read receipt the recipient did not
+// agree to. escapeHtml on every interpolated value: the reading is model output
+// and the sign names come from the dataset, and neither is trusted markup.
+function buildChartEmail(parts) {
+  var reading   = parts.reading || "";
+  var sun       = parts.sun;
+  var moon      = parts.moon;
+  var rising    = parts.rising;
+  var timeKnown = !!parts.timeKnown;
+  var planets   = parts.planets || [];
+  var place     = parts.place || "";
+
+  var risingText = rising ? rising.sign : "Needs birth time";
+
+  // Model output arrives as prose with blank lines between paragraphs. Split on
+  // those rather than emitting one wall of text, and escape each piece.
+  var paragraphs = String(reading).split(/\n\s*\n/).map(function (p) {
+    return String(p).replace(/\s+/g, " ").trim();
+  }).filter(function (p) { return p.length > 0; });
+
+  var readingHtml = paragraphs.map(function (p) {
+    return '<p style="margin:0 0 14px;font-size:15px;line-height:1.7;color:#e8e8ff;">' +
+      escapeHtml(p) + '</p>';
+  }).join("");
+
+  var bigThree = [
+    { key: "Sun",    val: sun  ? sun.sign  : "—" },
+    { key: "Moon",   val: moon ? moon.sign : "—" },
+    { key: "Rising", val: risingText }
+  ].map(function (cell) {
+    var absent = cell.key === "Rising" && !rising;
+    return '<td align="center" style="padding:12px 8px;">' +
+      '<div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:rgba(232,232,255,0.5);">' +
+        escapeHtml(cell.key) + '</div>' +
+      '<div style="margin-top:5px;font-size:' + (absent ? "13px" : "18px") +
+        ';font-weight:700;color:' + (absent ? "rgba(232,232,255,0.4)" : "#34d399") + ';">' +
+        escapeHtml(cell.val) + '</div>' +
+    '</td>';
+  }).join("");
+
+  var planetRows = planets.map(function (p) {
+    var retro = p.retrograde
+      ? ' <span style="color:#fbbf24;font-weight:700;">R</span>'
+      : "";
+    return '<tr>' +
+      '<td style="padding:7px 4px;border-bottom:1px solid rgba(232,232,255,0.08);' +
+        'font-size:14px;color:#34d399;font-weight:600;">' + escapeHtml(p.name) + '</td>' +
+      '<td style="padding:7px 4px;border-bottom:1px solid rgba(232,232,255,0.08);' +
+        'font-size:14px;color:#22d3ee;">' + escapeHtml(p.sign) + retro + '</td>' +
+      '<td align="right" style="padding:7px 4px;border-bottom:1px solid rgba(232,232,255,0.08);' +
+        'font-size:14px;color:rgba(232,232,255,0.7);">' + escapeHtml(formatChartDegree(p.degree)) + '</td>' +
+    '</tr>';
+  }).join("");
+
+  var html =
+    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1.0">' +
+    '<title>Your birth chart</title></head>' +
+    '<body style="margin:0;padding:0;background:#070b18;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
+      'style="background:#070b18;padding:28px 12px;">' +
+      '<tr><td align="center">' +
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
+          'style="max-width:560px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',' +
+          'Roboto,Helvetica,Arial,sans-serif;">' +
+
+          '<tr><td style="padding-bottom:6px;font-size:20px;font-weight:700;color:#fbbf24;">' +
+            'Your birth chart</td></tr>' +
+          '<tr><td style="padding-bottom:18px;font-size:13px;color:rgba(232,232,255,0.55);">' +
+            escapeHtml(place) + '</td></tr>' +
+
+          '<tr><td style="padding:4px 0 18px;">' +
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
+              'style="background:rgba(10,4,20,0.7);border:1px solid rgba(34,211,238,0.22);' +
+              'border-radius:10px;"><tr>' + bigThree + '</tr></table>' +
+          '</td></tr>' +
+
+          '<tr><td style="padding-bottom:8px;">' + readingHtml + '</td></tr>' +
+
+          '<tr><td style="padding-top:10px;padding-bottom:6px;font-size:11px;' +
+            'letter-spacing:1.5px;text-transform:uppercase;color:rgba(232,232,255,0.45);">' +
+            'Placements</td></tr>' +
+          '<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">' +
+            planetRows + '</table></td></tr>' +
+
+          (timeKnown ? "" :
+            '<tr><td style="padding-top:14px;font-size:12px;line-height:1.6;' +
+              'color:rgba(232,232,255,0.45);">The rising sign, midheaven and houses need an ' +
+              'exact birth time. Everything above is unaffected — the planets and their ' +
+              'signs are the same whether or not the time is known.</td></tr>') +
+
+        '</table>' +
+      '</td></tr>' +
+    '</table></body></html>';
+
+  var textLines = [];
+  textLines.push("YOUR BIRTH CHART");
+  textLines.push(place);
+  textLines.push("");
+  textLines.push("Sun: "    + (sun  ? sun.sign  : "—"));
+  textLines.push("Moon: "   + (moon ? moon.sign : "—"));
+  textLines.push("Rising: " + risingText);
+  textLines.push("");
+  textLines.push(paragraphs.join("\n\n"));
+  textLines.push("");
+  textLines.push("PLACEMENTS");
+  planets.forEach(function (p) {
+    textLines.push("  " + p.name + " in " + p.sign + " " + formatChartDegree(p.degree) +
+      (p.retrograde ? " (retrograde)" : ""));
+  });
+  if (!timeKnown) {
+    textLines.push("");
+    textLines.push("The rising sign, midheaven and houses need an exact birth time. " +
+      "Everything above is unaffected - the planets and their signs are the same " +
+      "whether or not the time is known.");
+  }
+
+  return { html: html, text: textLines.join("\n") };
+}
+
+// ── Email a chart reading ────────────────────────────────────────────────
+//
+// Public, matching /api/charts/preview and /api/contacts/capture above: this is
+// reached from chart.html after someone has given an address, and there is no
+// session at that point. No route-level limiter — the global apiLimiter covers
+// it, as it does the other two.
+//
+// SECURITY — the same rule as /api/charts/preview. latitude, longitude, timezone
+// and place_label are never read from req.body under any name. Coordinates come
+// only from a candidate resolvePlace produced during THIS request.
+//
+// CONSENT IS NOT DECIDED HERE. sendEmail is called WITHOUT skipConsentCheck, so
+// the ledger decides. That is deliberate and it is the whole reason this route
+// takes a contact_id rather than an email address: a route that accepted an
+// address would be a route that could mail anyone, and the gate in sendEmail
+// would have nothing to check against.
+app.post("/api/charts/email", async function (req, res, next) {
+  try {
+    // ── 1. The contact ─────────────────────────────────────────────────────
+    // Required before any work. Without it there is nobody to check consent
+    // for, nobody to attribute the send to, and no unsubscribe token to build.
+    var contactId = typeof req.body.contact_id === "string" ? req.body.contact_id.trim() : "";
+    if (!contactId) {
+      return res.status(400).json({ error: "contact_required" });
+    }
+
+    // ── 2. The chart — the same sequence /api/charts/preview runs ───────────
+    // Mirrored deliberately rather than approximated: same hard cap, same band,
+    // same time handling, same place branches, same status codes and same
+    // response shapes. Two routes computing charts differently is how one of
+    // them quietly starts producing a different Ascendant.
+    var placeQuery = req.body.place_query;
+    if (typeof placeQuery !== "string" || placeQuery.length > 120) {
+      return res.status(400).json({ error: "place_unresolved", reason: "invalid_input" });
+    }
+
+    var parsedDate = parseBirthDate(req.body.birth_date);
+    if (!parsedDate.valid) {
+      return res.status(400).json({ error: "date_invalid", reason: parsedDate.reason });
+    }
+
+    var parsedTime = parseBirthTime(req.body.birth_time);
+
+    var place = resolvePlace(placeQuery);
+
+    if (place.confidence === "unresolved") {
+      return res.status(400).json({ error: "place_unresolved", reason: place.reason });
+    }
+
+    var placeId = typeof req.body.place_id === "string" ? req.body.place_id.trim() : "";
+
+    var chosen;
+
+    if (placeId) {
+      chosen = null;
+      place.candidates.forEach(function (candidate) {
+        if (candidate.id === placeId) {
+          chosen = candidate;
+        }
+      });
+
+      if (!chosen) {
+        return res.status(409).json({
+          error:      "place_ambiguous",
+          candidates: place.candidates,
+          query:      place.query
+        });
+      }
+    } else if (place.confidence === "exact") {
+      chosen = place.candidates[0];
+    } else {
+      return res.status(409).json({
+        error:      "place_ambiguous",
+        candidates: place.candidates,
+        query:      place.query
+      });
+    }
+
+    var chart = computeNatalFromResolved(parsedDate, parsedTime, chosen);
+
+    // ── 3. The recipient ───────────────────────────────────────────────────
+    // Read from the database, never from the body. The caller names a contact;
+    // the server decides what address that means.
+    var contactLookup = await supabase
+      .from("contacts")
+      .select("id, email, name")
+      .eq("id", contactId)
+      .maybeSingle();
+
+    if (contactLookup.error) {
+      throw contactLookup.error;
+    }
+
+    if (!contactLookup.data || !contactLookup.data.email) {
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    var contact = contactLookup.data;
+
+    // ── 4. The reading ─────────────────────────────────────────────────────
+    var planets  = chart.planets || [];
+    var sun      = planets.filter(function (p) { return p.name === "Sun"; })[0]  || null;
+    var moon     = planets.filter(function (p) { return p.name === "Moon"; })[0] || null;
+    var rising   = chart.timeKnown && chart.ascendant ? chart.ascendant : null;
+    var retro    = planets.filter(function (p) { return p.retrograde; });
+
+    var planetLines = planets.map(function (p) {
+      return p.name + " in " + p.sign + " at " + formatChartDegree(p.degree) +
+        (p.retrograde ? " (retrograde)" : "");
+    }).join("\n");
+
+    // Termaximus, the same voice the Oracle chat route establishes — the
+    // Hermetic lineage of Thoth-Tehuti rather than a horoscope column. The
+    // constraints below exist because the failure modes of a generated reading
+    // are specific and known: inventing a placement nobody supplied, guessing a
+    // rising sign when no birth time was given, and producing three unconnected
+    // paragraphs instead of one synthesis.
+    var systemPrompt =
+      "You are Termaximus — the Oracle of BizForce, an oracular intelligence in the Hermetic lineage of Thoth-Tehuti, Thrice-Great. " +
+      "You are writing a natal chart reading directly to the person whose chart it is. Address them as \"you\" throughout. " +
+      "Write 200 to 300 words. " +
+      "Speak from the Hermetic and Theosophical tradition — correspondence, the planes, the soul's descent into incarnation — not pop astrology and not horoscope-column generalities. " +
+      "Reference the EXACT placements you are given: the sun sign, the moon sign, the rising sign, and any retrograde planets. " +
+      "Say something specific about how the sun, moon and rising interact with one another as a single configuration. Do NOT write three separate paragraphs about three separate placements — the synthesis is the reading. " +
+      "NEVER invent a placement that was not supplied to you. If a planet, sign or degree is not in the data below, it does not exist for the purposes of this reading. " +
+      "If the rising sign is absent because no birth time was given, say plainly that the rising sign cannot be determined without a birth time, and do not guess at it or work around it. " +
+      "No bullet points. No headings. No markdown of any kind. Plain prose only. " +
+      "Speak with depth and conviction. Never hedge, never flatten mystery into platitudes, never flatter.";
+
+    var userMessage =
+      "Sun: "  + (sun  ? sun.sign  + " at " + formatChartDegree(sun.degree)  : "unavailable") + "\n" +
+      "Moon: " + (moon ? moon.sign + " at " + formatChartDegree(moon.degree) : "unavailable") + "\n" +
+      "Rising: " + (rising
+        ? rising.sign + " at " + formatChartDegree(rising.degree)
+        : "UNAVAILABLE — no birth time was given, so the rising sign cannot be determined") + "\n" +
+      "Birth time known: " + (chart.timeKnown ? "yes" : "no") + "\n\n" +
+      "All placements:\n" + planetLines + "\n\n" +
+      "Retrograde: " + (retro.length
+        ? retro.map(function (p) { return p.name; }).join(", ")
+        : "none") + "\n\n" +
+      "Write the reading.";
+
+    var reading = null;
+
+    try {
+      // resolveAnthropicKey with CAPTURE_OWNER_ID, the same pattern leadRadar.js
+      // uses for a job with no logged-in user: the resolver falls back to the
+      // platform key when that account has none stored. Client construction and
+      // model string match the Oracle chat route exactly.
+      var chartReadingApiKey = await resolveAnthropicKey(CAPTURE_OWNER_ID);
+      var chartReadingAnthropicClient = new Anthropic({ apiKey: chartReadingApiKey });
+
+      var response = await chartReadingAnthropicClient.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMessage }]
+      });
+
+      reading = response && response.content && response.content[0] && response.content[0].text;
+      reading = typeof reading === "string" ? reading.trim() : null;
+    } catch (readingError) {
+      console.error("[charts/email] reading generation failed for contact " + contactId +
+        " — " + ((readingError && readingError.message) || readingError));
+      reading = null;
+    }
+
+    // An empty or failed reading sends NOTHING. A chart email whose reading is
+    // blank is worse than no email: it spends the one message this person
+    // expected, it cannot be un-sent, and it teaches them the product does not
+    // work. Better to fail loudly to the caller and let them retry.
+    if (!reading) {
+      return res.json({ ok: true, sent: false, reason: "reading_failed" });
+    }
+
+    // ── 5. The message ─────────────────────────────────────────────────────
+    var built = buildChartEmail({
+      reading:   reading,
+      sun:       sun,
+      moon:      moon,
+      rising:    rising,
+      timeKnown: !!chart.timeKnown,
+      planets:   planets,
+      place:     chosen.label
+    });
+
+    // ── 6. Send, WITHOUT skipConsentCheck ──────────────────────────────────
+    // This person submitted an address to a capture form, which wrote a granted
+    // row into consent_events. If that row is missing or has since been revoked,
+    // the send must not happen — and deciding that here rather than in sendEmail
+    // would put a second consent rule in a second place.
+    var sendResult = await sendEmail({
+      contactId: contactId,
+      to:        contact.email,
+      subject:   "Your birth chart",
+      html:      built.html,
+      text:      built.text,
+      template:  "chart_reading"
+    });
+
+    // ── 7. The answer ──────────────────────────────────────────────────────
+    // Neither the address nor the reading comes back. The address because this
+    // route is public and echoing it would confirm which contact ids map to
+    // which mailboxes; the reading because it was written for the message, and
+    // returning it here would let a caller harvest readings without ever
+    // sending one.
+    return res.json({
+      ok:     true,
+      sent:   !!sendResult.sent,
+      reason: sendResult.sent ? null : (sendResult.reason || null)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Unsubscribe ──────────────────────────────────────────────────────────
 //
 // Two routes over one behaviour: POST for machines, GET for people. Both public,
