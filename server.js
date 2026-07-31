@@ -446,6 +446,34 @@ const chartEmailLimiter = rateLimit({
   message: { error: "Too many chart emails from this address. Try again in an hour." }
 });
 
+// POST /api/charts/preview, and nothing else. Until now that route was covered
+// only by the global apiLimiter — 300 requests per 15 minutes, a bound written
+// for reads, back when the route did nothing but resolve a place and turn a
+// crank. It now runs a transit report on a cache miss, which is real ephemeris
+// arithmetic on a route that needs no session.
+//
+// Twenty per 15 minutes is a limit on people rather than on load. Someone
+// casting charts for themselves, a partner, three children and both parents is
+// well inside it; nobody who is using this the way it is meant to be used needs
+// a twenty-first chart in a quarter of an hour.
+//
+// No keyGenerator: express-rate-limit already keys on req.ip, and req.ip is the
+// client address rather than Railway's edge because app.set("trust proxy", 1) is
+// set at the top of this file. Restating the default here would add a line that
+// can drift from it without adding a guarantee.
+//
+// The message is an object, so express sends it as JSON — { error } is the shape
+// every route in this file uses for a failure. Same reasoning chartEmailLimiter
+// gives above: this route is called from a browser with fetch, where the
+// library's plain-text default reads as a parse error rather than a refusal.
+const chartPreviewLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many chart previews from this address. Try again shortly." }
+});
+
 // One transit report is roughly 60 milliseconds of ephemeris arithmetic. It is
 // also completely deterministic: the same natal longitudes on the same UTC date
 // always yield the same report, so a cached entry and a fresh computation are
@@ -7677,8 +7705,10 @@ app.get("/api/places/resolve", async function (req, res, next) {
 // Public for the same reason /api/places/resolve above is: it reads nothing
 // belonging to anyone and writes nothing belonging to anyone. Guest checkout and
 // Etsy intake need a chart before there is an account to attach one to, and this
-// is the route that gives them one. No route-level rate limiter, matching the
-// resolve route — the global apiLimiter at app.use covers it.
+// is the route that gives them one. It carries its own rate limiter,
+// chartPreviewLimiter, unlike the resolve route: this one does ephemeris work on
+// a cache miss, and the global apiLimiter's 300 per 15 minutes was a bound
+// written for reads.
 //
 // The distinction from POST /api/birth-records, which this route deliberately
 // does NOT do: that one is authenticated and PERSISTS the resolved coordinates,
@@ -7699,7 +7729,7 @@ app.get("/api/places/resolve", async function (req, res, next) {
 // birth date, time and place together identify a person about as precisely as
 // anything in this system; writing that to stdout on a public route would be a
 // disclosure with none of the storage guarantees the database side carries.
-app.post("/api/charts/preview", async function (req, res, next) {
+app.post("/api/charts/preview", chartPreviewLimiter, async function (req, res, next) {
   try {
     // Hard cap before any work at all. This route is public and every call that
     // reaches resolvePlace scans the whole 7329-record dataset, so a non-string
@@ -7773,11 +7803,55 @@ app.post("/api/charts/preview", async function (req, res, next) {
       });
     }
 
-    // ── 4. Compute, and hand it straight back ──────────────────────────────
+    // ── 4. Compute ─────────────────────────────────────────────────────────
     // computeNatalFromResolved is pure — no database, no network, no place
     // resolution — so there is nothing to undo and nothing to clean up. The
-    // result is returned unchanged; this route adds no fields of its own.
-    return res.json(computeNatalFromResolved(parsedDate, parsedTime, chosen));
+    // chart itself is returned unchanged; this route adds exactly ONE field of
+    // its own, transitTeaser, and nothing else. Every natal key keeps its value
+    // and its meaning, so a client that predates the teaser reads this response
+    // exactly as it always did.
+    var chart = computeNatalFromResolved(parsedDate, parsedTime, chosen);
+
+    // ── 5. The teaser ──────────────────────────────────────────────────────
+    // The natal chart is free and stays free. It is the lead magnet, and it is
+    // also not an honest thing to bill monthly for: a natal chart never changes,
+    // and charging rent on a static document is a subscription that gives back
+    // nothing after the first day.
+    //
+    // Transits DO change. That is why transits are the product and this is only
+    // a teaser for it.
+    //
+    // What it gives away is counts and exactly one date. A date is the thing a
+    // person cannot produce for themselves — it is the whole difference between
+    // "something is happening" and knowing when — and one real date is what
+    // proves the other twenty-one are real too. What it withholds is everything
+    // else: no active list, no second event, no orbs. Those are the product.
+    var natalLongitudes = natalLongitudesFromChart(chart);
+
+    if (!natalLongitudes) {
+      // No longitudes to run transits against. The chart is still a chart and
+      // is still worth returning; the teaser is simply absent, and null says
+      // that plainly rather than leaving the key off and making a client guess
+      // whether it forgot to look.
+      chart.transitTeaser = null;
+      return res.json(chart);
+    }
+
+    var report = getTransitReport(natalLongitudes, new Date());
+
+    chart.transitTeaser = {
+      activeCount: report.active.length,
+      eventCount:  report.events.length,
+      windowDays:  365,
+      nextEvent:   report.events.length === 0 ? null : {
+        date:       report.events[0].date,
+        transiting: report.events[0].transiting,
+        natal:      report.events[0].natal,
+        aspect:     report.events[0].aspect
+      }
+    };
+
+    return res.json(chart);
   } catch (error) {
     next(error);
   }
