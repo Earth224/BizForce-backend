@@ -7969,13 +7969,13 @@ function buildChartEmail(parts) {
           '<tr><td style="padding-bottom:18px;font-size:13px;color:rgba(232,232,255,0.55);">' +
             escapeHtml(place) + '</td></tr>' +
 
+          '<tr><td style="padding-bottom:8px;">' + readingHtml + '</td></tr>' +
+
           '<tr><td style="padding:4px 0 18px;">' +
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" ' +
               'style="background:rgba(10,4,20,0.7);border:1px solid rgba(34,211,238,0.22);' +
               'border-radius:10px;"><tr>' + bigThree + '</tr></table>' +
           '</td></tr>' +
-
-          '<tr><td style="padding-bottom:8px;">' + readingHtml + '</td></tr>' +
 
           '<tr><td style="padding-top:10px;padding-bottom:6px;font-size:11px;' +
             'letter-spacing:1.5px;text-transform:uppercase;color:rgba(232,232,255,0.45);">' +
@@ -7997,11 +7997,11 @@ function buildChartEmail(parts) {
   textLines.push("YOUR BIRTH CHART");
   textLines.push(place);
   textLines.push("");
+  textLines.push(paragraphs.join("\n\n"));
+  textLines.push("");
   textLines.push("Sun: "    + (sun  ? sun.sign  : "—"));
   textLines.push("Moon: "   + (moon ? moon.sign : "—"));
   textLines.push("Rising: " + risingText);
-  textLines.push("");
-  textLines.push(paragraphs.join("\n\n"));
   textLines.push("");
   textLines.push("PLACEMENTS");
   planets.forEach(function (p) {
@@ -8143,6 +8143,8 @@ app.post("/api/charts/email", async function (req, res, next) {
       "Reference the EXACT placements you are given: the sun sign, the moon sign, the rising sign, and any retrograde planets. " +
       "Say something specific about how the sun, moon and rising interact with one another as a single configuration. Do NOT write three separate paragraphs about three separate placements — the synthesis is the reading. " +
       "NEVER invent a placement that was not supplied to you. If a planet, sign or degree is not in the data below, it does not exist for the purposes of this reading. " +
+      "The retrograde list you are given is CLOSED and COMPLETE. Every planet not named in it is direct. Never describe a direct planet as retrograde, near-retrograde, stationing, retrograde-adjacent, or any similar hedge — those are not astrological conditions and inventing one is the same fault as inventing a placement. If a planet is not in the retrograde list, it is moving forward, and you may say so plainly or not mention its motion at all. " +
+      "Do not use the word \"monad\" more than once, and do not open with \"Behold\" or any other archaic summons. The register is authority, not costume. " +
       "If the rising sign is absent because no birth time was given, say plainly that the rising sign cannot be determined without a birth time, and do not guess at it or work around it. " +
       "No bullet points. No headings. No markdown of any kind. Plain prose only. " +
       "Speak with depth and conviction. Never hedge, never flatten mystery into platitudes, never flatter.";
