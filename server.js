@@ -414,6 +414,36 @@ const aiLimiter = rateLimit({
   legacyHeaders: false
 });
 
+// POST /api/charts/email, and nothing else. That route is public, and unlike
+// every other public route here a single call spends real money twice: a Sonnet
+// generation and an outbound message, both billed to one account that did not
+// make the request. The global apiLimiter allows 300 requests per 15 minutes,
+// which is 1200 paid generations an hour from one address — a bound written for
+// reads, applied to the one route where a request has a unit cost.
+//
+// Five an hour is a limit on people rather than on load. Someone casts their
+// chart and mails it once, occasionally twice if the first attempt went to a
+// typo'd address. There is no honest sixth.
+//
+// No keyGenerator: express-rate-limit already keys on req.ip, and req.ip is the
+// client address rather than Railway's edge because app.set("trust proxy", 1) is
+// set at the top of this file. Restating the default here would add a line that
+// can drift from it without adding a guarantee.
+//
+// The message is an object, so express sends it as JSON — { error } is the shape
+// every route in this file uses for a failure, including the terminal error
+// handler. The other three limiters set no message at all and fall back to the
+// library's plain-text default; this one answers a public route that a browser
+// calls with fetch, where a text/html body reads as a parse error rather than a
+// refusal.
+const chartEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many chart emails from this address. Try again in an hour." }
+});
+
 app.use(apiLimiter);
 
 function constructStripeEventFromSecrets(rawBody, signature, secrets) {
@@ -8034,7 +8064,7 @@ function buildChartEmail(parts) {
 // takes a contact_id rather than an email address: a route that accepted an
 // address would be a route that could mail anyone, and the gate in sendEmail
 // would have nothing to check against.
-app.post("/api/charts/email", async function (req, res, next) {
+app.post("/api/charts/email", chartEmailLimiter, async function (req, res, next) {
   try {
     // ── 1. The contact ─────────────────────────────────────────────────────
     // Required before any work. Without it there is nobody to check consent
@@ -8116,6 +8146,63 @@ app.post("/api/charts/email", async function (req, res, next) {
     }
 
     var contact = contactLookup.data;
+
+    // ── 3b. Freshness, and it is a cost gate rather than a consent one ──────
+    //
+    // This route exists for one moment: someone submits the gate on chart.html
+    // and is mailed their chart straight away. Every legitimate call is seconds
+    // old. A contact whose most recent consent event is days back is not in that
+    // flow — nobody is sitting on chart.html waiting for that message.
+    //
+    // That matters because a contact id is the ONLY input this endpoint
+    // authenticates on, and it is handed to the browser by
+    // POST /api/contacts/capture. Replaying one is the cheapest abuse available
+    // here: no account, no token, no consent record to forge — just the same id
+    // posted again, and each replay spends a Sonnet generation and an outbound
+    // message on the platform account. The rate limiter bounds how fast that can
+    // be done from one address; this bounds how long a captured id stays worth
+    // replaying at all.
+    //
+    // Deliberately NOT a consent check. sendEmail still decides consent, from
+    // this same ledger, and still refuses a revoked contact — see step 6. This
+    // asks a different question: not "may we mail them" but "did they ask for
+    // this in the last day". Both have to pass, and neither substitutes for the
+    // other.
+    //
+    // Placed before the generation rather than before the chart computation:
+    // computeNatalFromResolved is pure local arithmetic and costs nothing, while
+    // everything below this point costs money.
+    var freshness = await supabase
+      .from("consent_events")
+      .select("occurred_at")
+      .eq("contact_id", contactId)
+      .eq("channel", "email")
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+
+    var latestConsentAt = !freshness.error && freshness.data && freshness.data[0]
+      ? freshness.data[0].occurred_at
+      : null;
+
+    // A lookup that failed, a contact with no event at all, and an unparseable
+    // timestamp are all treated as stale — the same fail-closed posture
+    // sendEmail takes when its own consent query errors. None of the three is
+    // evidence that someone is on the page right now, and being wrong in this
+    // direction costs one retry, while being wrong in the other pays for a
+    // generation on every replayed id.
+    if (freshness.error) {
+      console.error("[charts/email] consent freshness lookup failed for contact " +
+        contactId + " — " + freshness.error.message +
+        ". Treating the contact as stale and generating nothing.");
+    }
+
+    var latestConsentMs = latestConsentAt ? Date.parse(latestConsentAt) : NaN;
+    var consentIsFresh = isFinite(latestConsentMs) &&
+      (Date.now() - latestConsentMs) <= 24 * 60 * 60 * 1000;
+
+    if (!consentIsFresh) {
+      return res.json({ ok: true, sent: false, reason: "stale_contact" });
+    }
 
     // ── 4. The reading ─────────────────────────────────────────────────────
     var planets  = chart.planets || [];
@@ -8305,7 +8392,93 @@ async function recordEmailUnsubscribe(contactId, req) {
   return !insert.error;
 }
 
-// The one-click endpoint. This is what Gmail calls, unattended.
+// The unsubscribe page, in both states. One shell so the two cannot drift
+// apart stylistically — same palette, same layout, same absence of anything
+// that would make an outbound request.
+//
+// Inline CSS only, on the Corporate Noir palette. No stylesheet, no script, no
+// font, no image, no analytics. A page reached by unsubscribing must not be the
+// page that reports the unsubscribe to a third party. The confirm control is a
+// plain form for the same reason it is not a fetch(): a page reached from an
+// email has to work with scripts disabled.
+function renderUnsubscribePage(innerHtml) {
+  return '<!DOCTYPE html>' +
+    '<html lang="en">' +
+    '<head>' +
+      '<meta charset="UTF-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+      '<meta name="robots" content="noindex, nofollow">' +
+      '<title>Unsubscribe</title>' +
+    '</head>' +
+    '<body style="margin:0;min-height:100vh;background:#070b18;color:#e8e8ff;' +
+      'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;' +
+      'display:flex;align-items:center;justify-content:center;padding:24px;">' +
+      '<div style="max-width:440px;text-align:center;">' +
+        innerHtml +
+      '</div>' +
+    '</body>' +
+    '</html>';
+}
+
+// What the GET renders: an ask, not a report. Nothing has happened yet at this
+// point and the page must not imply otherwise.
+//
+// escapeHtml on the token because it is reflected straight back into an
+// attribute and arrives from the query string, so it is attacker-chosen text.
+// The token is echoed even when it failed verification — see the GET handler
+// for why an invalid token must be indistinguishable from a valid one.
+function renderUnsubscribeConfirmPage(token) {
+  return renderUnsubscribePage(
+    '<h1 style="margin:0;font-size:1.25rem;font-weight:700;">Unsubscribe</h1>' +
+    '<form method="post" action="/api/unsubscribe" style="margin:20px 0 0;">' +
+      '<input type="hidden" name="token" value="' + escapeHtml(token) + '">' +
+      '<button type="submit" style="appearance:none;border:0;cursor:pointer;' +
+        'padding:12px 22px;border-radius:8px;background:#34d399;color:#070b18;' +
+        'font-size:0.95rem;font-weight:700;font-family:inherit;">' +
+        'Confirm unsubscribe' +
+      '</button>' +
+    '</form>'
+  );
+}
+
+// What the POST renders once the revocation has been recorded — the same
+// confirmation this page has always shown.
+function renderUnsubscribedPage() {
+  return renderUnsubscribePage(
+    '<div style="font-size:2rem;line-height:1;color:#34d399;">&#10003;</div>' +
+    '<h1 style="margin:14px 0 0;font-size:1.25rem;font-weight:700;">You have been unsubscribed</h1>' +
+    '<p style="margin:12px 0 0;font-size:0.9rem;line-height:1.6;color:rgba(232,232,255,0.65);">' +
+      'You will not receive any further email from us. Nothing else is needed &mdash; ' +
+      'you can close this page.' +
+    '</p>' +
+    '<p style="margin:20px 0 0;font-size:0.75rem;line-height:1.6;color:rgba(232,232,255,0.4);">' +
+      'If you did not mean to do this, replying to any earlier message will reach us.' +
+    '</p>'
+  );
+}
+
+// Whether to answer this POST with a page or with JSON.
+//
+// A raw substring test on the header rather than req.accepts("html"), and the
+// difference decides the route's correctness: req.accepts("html") returns a
+// match for "*​/*", which is what an unattended one-click caller is most likely
+// to send, and answering Gmail with a full HTML document instead of { ok: true }
+// would break the machine contract this endpoint exists to satisfy. Only a
+// caller that explicitly names text/html — every browser form submission does —
+// gets the page.
+function wantsHtmlResponse(req) {
+  return String(req.get("Accept") || "").toLowerCase().indexOf("text/html") !== -1;
+}
+
+// The one-click endpoint. This is what Gmail calls, unattended, and it is also
+// what the confirm button on the GET page submits to.
+//
+// NO CONFIRMATION STEP HERE, and that is a specification requirement rather
+// than a preference. RFC 8058 one-click works by POSTing to the
+// List-Unsubscribe-Post URL with no human present; an "are you sure?" between
+// this request and the revocation fails it outright, because there is nobody to
+// answer and the sender is then marked as not honouring unsubscribes. The
+// confirmation lives on the GET, which is the request a person actually made.
 app.post("/api/unsubscribe", async function (req, res, next) {
   try {
     var contactId = verifyUnsubscribeToken(req.body && req.body.token);
@@ -8323,6 +8496,13 @@ app.post("/api/unsubscribe", async function (req, res, next) {
     //   gives them a problem they cannot solve, and reporting it to an automated
     //   caller gives it a reason to retry something that will never succeed.
     if (!contactId) {
+      // Same answer as success, in whichever form the caller asked for. A
+      // browser that submitted a mangled token sees the confirmation rather
+      // than an error it could do nothing about.
+      if (wantsHtmlResponse(req)) {
+        res.set("Content-Type", "text/html; charset=utf-8");
+        return res.status(200).send(renderUnsubscribedPage());
+      }
       return res.json({ ok: true });
     }
 
@@ -8333,59 +8513,59 @@ app.post("/api/unsubscribe", async function (req, res, next) {
     // they asked twice, both times are recorded, and current consent is still
     // read as the most recent action. Suppressing the duplicate would discard
     // evidence that someone had to ask twice.
+    //
+    // A person who pressed the button gets a page; a machine gets the JSON body
+    // it has always got. The revocation above is identical either way — only the
+    // representation differs.
+    if (wantsHtmlResponse(req)) {
+      res.set("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(renderUnsubscribedPage());
+    }
+
     return res.json({ ok: true });
   } catch (error) {
     next(error);
   }
 });
 
-// What a person actually clicks. Same effect, human-readable answer.
+// What a person actually clicks. RENDERS ONLY — THIS ROUTE WRITES NOTHING.
+//
+// It used to record the revocation itself, and that was wrong for a reason that
+// has nothing to do with the person holding the link. Link scanners, mail
+// security gateways and inbox preview services follow every URL in a message
+// before it is ever displayed, so an unsubscribe that happens on GET happens
+// when a filter reads the mail — not when the recipient decides. The recipient
+// is then unsubscribed by their own employer's infrastructure, silently, and
+// nothing distinguishes that from a real request afterwards, because the two
+// are the same GET.
+//
+// So the state change moved to the POST, which those scanners do not issue, and
+// this route does the one thing a GET is allowed to do: show a page and wait to
+// be asked. The button below is the ask.
 app.get("/api/unsubscribe", async function (req, res, next) {
   try {
-    var contactId = verifyUnsubscribeToken(req.query && req.query.token);
+    // Verified but not acted on. The result is deliberately discarded: it
+    // decides nothing here, because a valid and an invalid token render the
+    // same page, and calling it at all is what keeps that equivalence honest
+    // rather than accidental.
+    verifyUnsubscribeToken(req.query && req.query.token);
 
-    if (contactId) {
-      await recordEmailUnsubscribe(contactId, req);
-    }
+    // Typed check before it reaches the page: Express 4's extended query parser
+    // turns ?token[]=x into an array and ?token[a]=1 into an object, and neither
+    // belongs in a value attribute. Anything that is not a string becomes the
+    // empty string, which round-trips to the POST as a token that fails
+    // verification — which renders the confirmation, exactly as any other bad
+    // token does.
+    var token = typeof (req.query && req.query.token) === "string" ? req.query.token : "";
 
     // The SAME page for a valid token and a forged one. A distinct error page
     // would be the same oracle the POST avoids, readable by anyone who can open
     // a URL — and it would strand a person whose link was mangled by their mail
     // client on a page telling them their unsubscribe failed, with nothing to do
-    // about it. Everyone sees the confirmation; the ledger records what it can.
-    //
-    // Inline CSS only, on the Corporate Noir palette. No stylesheet, no script,
-    // no font, no image, no analytics — nothing that would make an outbound
-    // request. A page reached by unsubscribing must not be the page that reports
-    // the unsubscribe to a third party.
-    var html =
-      '<!DOCTYPE html>' +
-      '<html lang="en">' +
-      '<head>' +
-        '<meta charset="UTF-8">' +
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
-        '<meta name="robots" content="noindex, nofollow">' +
-        '<title>Unsubscribed</title>' +
-      '</head>' +
-      '<body style="margin:0;min-height:100vh;background:#070b18;color:#e8e8ff;' +
-        'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;' +
-        'display:flex;align-items:center;justify-content:center;padding:24px;">' +
-        '<div style="max-width:440px;text-align:center;">' +
-          '<div style="font-size:2rem;line-height:1;color:#34d399;">&#10003;</div>' +
-          '<h1 style="margin:14px 0 0;font-size:1.25rem;font-weight:700;">You have been unsubscribed</h1>' +
-          '<p style="margin:12px 0 0;font-size:0.9rem;line-height:1.6;color:rgba(232,232,255,0.65);">' +
-            'You will not receive any further email from us. Nothing else is needed &mdash; ' +
-            'you can close this page.' +
-          '</p>' +
-          '<p style="margin:20px 0 0;font-size:0.75rem;line-height:1.6;color:rgba(232,232,255,0.4);">' +
-            'If you did not mean to do this, replying to any earlier message will reach us.' +
-          '</p>' +
-        '</div>' +
-      '</body>' +
-      '</html>';
-
+    // about it. Everyone sees the same ask; the ledger records what it can once
+    // the button is pressed.
     res.set("Content-Type", "text/html; charset=utf-8");
-    return res.status(200).send(html);
+    return res.status(200).send(renderUnsubscribeConfirmPage(token));
   } catch (error) {
     next(error);
   }
