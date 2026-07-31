@@ -9425,6 +9425,70 @@ function resolvePlace(query) {
 // timezone and label. A caller that passes a rejected parsedDate gets
 // nonsense-shaped output rather than an error; checking first is the caller's
 // job, and both current callers do.
+// Which of the ten bodies are retrograde at a given instant, as an object
+// mapping each name in NATAL_PLANET_NAMES to true or false.
+//
+// Retrograde is apparent, not real: nothing reverses its orbit. A planet looks
+// to move backwards through the zodiac when Earth overtakes it, and the
+// observable that defines it is simply that geocentric ecliptic longitude is
+// DECREASING. So this samples computeEclipticLongitudes twice and reads the
+// sign of the change — no separate model, no table, and no risk of disagreeing
+// with the longitudes the chart itself reports, because it is derived from
+// exactly the same function.
+//
+// Six hours is the step. It has to be long enough that the movement exceeds the
+// noise in a differenced quantity, and short enough that a planet cannot pass
+// through a station and out the other side within it. The slowest bodies here
+// move on the order of arcseconds per hour, which is still orders of magnitude
+// above the resolution of the underlying ephemeris, and no planet stations
+// twice inside a quarter of a day. A body sampled within minutes of its own
+// station may be reported either way — that is inherent to a finite difference,
+// not a defect in the step, and at a station the planet is by definition barely
+// moving in either direction.
+//
+// Pure: no database, no network, no date parsing. It reads the clock only
+// through the Date it is handed.
+function computeRetrograde(utcDate) {
+  var before = computeEclipticLongitudes(utcDate);
+  var after  = computeEclipticLongitudes(new Date(utcDate.getTime() + 6 * 60 * 60 * 1000));
+
+  var retrograde = {};
+
+  NATAL_PLANET_NAMES.forEach(function (name) {
+    // The Sun and Moon are NEVER retrograde as seen from Earth, and that is
+    // returned as a fact rather than computed. The Sun's apparent motion IS
+    // Earth's own orbit, so it cannot be overtaken; the Moon orbits Earth
+    // directly and always eastward. Hardcoding them is not a shortcut past
+    // arithmetic that would otherwise work — it is the correct answer, and it
+    // removes any chance that a rounding artifact near a wrap reports an
+    // astronomically impossible "Sun retrograde" to someone reading their
+    // chart. Both bodies move fast enough (roughly 1 and 13 degrees a day)
+    // that the difference below would be unambiguous anyway; this simply
+    // makes the guarantee absolute instead of probable.
+    if (name === "Sun" || name === "Moon") {
+      retrograde[name] = false;
+      return;
+    }
+
+    var delta = after[name] - before[name];
+
+    // The 360-degree wrap, normalised into -180..+180 BEFORE the sign is read.
+    // A planet crossing 359.9 -> 0.1 has moved FORWARD by 0.2 degrees, but the
+    // raw subtraction gives -359.8 and would report it retrograde. The same
+    // fault in reverse turns a genuinely retrograde crossing of 0 into a
+    // +359.8. Every body passes 0 degrees Aries eventually, so this is not an
+    // edge case that might never be reached — it is one every planet is
+    // guaranteed to hit, and the naive version is simply wrong whenever it
+    // does. Normalising is what makes the comparison mean "which way did it
+    // actually go" rather than "which number is bigger".
+    delta = ((delta + 180) % 360 + 360) % 360 - 180;
+
+    retrograde[name] = delta < 0;
+  });
+
+  return retrograde;
+}
+
 function computeNatalFromResolved(parsedDate, parsedTime, resolved) {
   var timeKnown  = parsedTime.known;
 
@@ -9443,10 +9507,22 @@ function computeNatalFromResolved(parsedDate, parsedTime, resolved) {
   // ── STEP 2 — ten planets, geocentric ecliptic longitude ────────────────
   var planetLongitudes = computeEclipticLongitudes(utcDate);
 
+  // Same utcDate the longitudes above come from, so the retrograde flag always
+  // describes the instant the chart describes. Called once for all ten bodies
+  // rather than per planet — it samples the whole set on each of its two
+  // instants, so a call inside the map below would recompute the entire
+  // ephemeris twenty times over.
+  var planetRetrograde = computeRetrograde(utcDate);
+
   var planets = NATAL_PLANET_NAMES.map(function (name) {
     var lon = planetLongitudes[name];
     var sd  = natalSignAndDegree(lon);
-    return { name: name, sign: sd.sign, degree: sd.degree, longitude: lon };
+    // retrograde is APPENDED. name, sign, degree and longitude keep their
+    // values and their order, so a client reading the old four sees no change.
+    return {
+      name: name, sign: sd.sign, degree: sd.degree, longitude: lon,
+      retrograde: planetRetrograde[name]
+    };
   });
 
   var midheaven = null;
