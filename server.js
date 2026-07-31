@@ -7342,6 +7342,210 @@ app.post("/api/charts/preview", async function (req, res, next) {
   }
 });
 
+// ── Public contact capture — writes the contacts spine ───────────────────
+//
+// Public for the same reason /api/charts/preview and /api/places/resolve above
+// are: a landing page has no session, and requiring one would mean nobody could
+// ever be captured. No route-level rate limiter, matching those two — the global
+// apiLimiter at app.use covers it.
+//
+// This is the first route that writes public.contacts and public.consent_events
+// (migration 069). It does NOT replace POST /api/capture, which keeps writing
+// lead_captures and sms_subscribers exactly as before. The two run side by side
+// until the backfill and the cutover are done, and neither knows about the other.
+//
+// EMAIL ONLY, deliberately. The contacts table accepts a phone, and this route
+// refuses to read one: an SMS consent event carries TCPA exposure that an email
+// one does not, and the phone path needs canonicalPhone, the format constraint
+// and a decision about what a 'granted' sms event means relative to the existing
+// sms_subscribers.consent_status. None of that is settled, so this route does
+// not pretend it is.
+//
+// SECURITY — the caller decides nothing about attribution or consent. owner_id,
+// phone, sms_consent and email_consent are never read from req.body under any
+// name. owner_id comes from the server-side constant; the consent event is
+// written by this handler because the submission itself IS the grant. A body
+// carrying its own owner_id is not rejected, it is simply never consulted.
+//
+// NO EMAIL IS SENT. There is no email capability in this repo — no dependency,
+// no send call, no configuration. Recording consent and acting on it are
+// different things, and only the first exists today.
+app.post("/api/contacts/capture", async function (req, res, next) {
+  try {
+    // ── 1. Validate before touching the database ───────────────────────────
+    // The regex is character for character contacts_email_shape_check from
+    // migration 069. That is the point of it being here: the database must never
+    // be the thing that rejects a submission this route accepted, because a
+    // constraint violation surfaces as a 500 and tells the person nothing. Two
+    // copies of one rule, and they have to move together — widening the
+    // constraint without widening this leaves addresses the route refuses and
+    // the database would have taken.
+    //
+    // 254 characters is the RFC 5321 limit on a full address. The column is
+    // unbounded text, so this is the route's own bound rather than a mirror.
+    var emailRaw = req.body.email;
+    if (typeof emailRaw !== "string" || emailRaw.length > 254) {
+      return res.status(400).json({ error: "email_invalid" });
+    }
+
+    // ── 2. Lowercased and trimmed before anything looks at it ──────────────
+    // contacts_owner_email_uniq is on lower(email), so a row stored as
+    // "Person@Example.com" collides with "person@example.com" on read but not on
+    // write — the index would see them as one and the insert would see them as
+    // two. Storing the lowercased form is what keeps those two views agreeing.
+    var email = emailRaw.trim().toLowerCase();
+
+    if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+      return res.status(400).json({ error: "email_invalid" });
+    }
+
+    var name     = safeText(req.body.name, 120);
+    var source   = safeText(req.body.source, 40)   || "direct";
+    var brand    = safeText(req.body.brand, 40)    || "bizforce";
+    var pageUrl  = safeText(req.body.page_url, 500);
+    var userAgent = safeText(req.get("User-Agent"), 500);
+
+    // req.ip, the same mechanism POST /api/capture uses for consent_ip. It is
+    // the proxy-aware value because app.set("trust proxy", 1) is set at the top
+    // of this file — without that it would be Railway's edge address on every
+    // request, which is evidence of nothing.
+    var ipAddress = req.ip;
+
+    // CAPTURE_OWNER_ID is the constant POST /api/capture already uses, read
+    // rather than redeclared so there is one value to change when it stops being
+    // a literal. It is assigned further down this file than this route is
+    // defined, which is safe: `var` hoists the binding to module scope and the
+    // assignment runs during module evaluation, long before any request reaches
+    // this handler.
+    var ownerId = CAPTURE_OWNER_ID;
+
+    // ── 3. Find or create the contact ──────────────────────────────────────
+    var existing = await supabase
+      .from("contacts")
+      .select("id, name")
+      .eq("owner_id", ownerId)
+      .eq("email", email)
+      .maybeSingle();
+
+    if (existing.error) {
+      throw existing.error;
+    }
+
+    var contactId = null;
+
+    if (existing.data) {
+      contactId = existing.data.id;
+
+      var updates = { last_seen: nowIso() };
+
+      // A name already on the row is never overwritten. The stored one may have
+      // been corrected by hand, or supplied on a form that asked for it properly;
+      // a later capture from a form that asked for less must not degrade it.
+      // Filling a null is a gain, replacing a value is a guess.
+      if (name && !existing.data.name) {
+        updates.name = name;
+      }
+
+      var contactUpdate = await supabase
+        .from("contacts")
+        .update(updates)
+        .eq("id", contactId);
+
+      if (contactUpdate.error) {
+        throw contactUpdate.error;
+      }
+    } else {
+      var contactInsert = await supabase
+        .from("contacts")
+        .insert({
+          owner_id: ownerId,
+          email:    email,
+          name:     name,
+          source:   source,
+          brand:    brand
+        })
+        .select("id")
+        .single();
+
+      if (contactInsert.error) {
+        // 23505 on contacts_owner_email_uniq means another request inserted this
+        // same address between the select above and this insert. That is not an
+        // error, it is two people submitting the same form at once — or one
+        // person double-clicking. Re-select and carry on, so BOTH requests write
+        // their consent event rather than one of them 500ing.
+        //
+        // Constraint text is checked alongside the code, following the 23505
+        // handling on the content_library slug index and POST /api/birth-records,
+        // so an unrelated unique violation is not mistaken for this one.
+        var conflictText = String(contactInsert.error.message || "") + " " +
+          String(contactInsert.error.details || "") + " " +
+          String(contactInsert.error.constraint || "");
+
+        if (contactInsert.error.code === "23505" && conflictText.indexOf("email") !== -1) {
+          var raced = await supabase
+            .from("contacts")
+            .select("id")
+            .eq("owner_id", ownerId)
+            .eq("email", email)
+            .maybeSingle();
+
+          if (raced.error) {
+            throw raced.error;
+          }
+          if (!raced.data) {
+            // The unique index reported this address as taken and it cannot be
+            // read back. Something is wrong that a retry will not fix.
+            throw contactInsert.error;
+          }
+
+          contactId = raced.data.id;
+        } else {
+          throw contactInsert.error;
+        }
+      } else {
+        contactId = contactInsert.data.id;
+      }
+    }
+
+    // ── 4. The consent event ───────────────────────────────────────────────
+    // Written on every submission, including for a contact that already exists.
+    // That is the ledger working as designed: someone who submits the form again
+    // has granted consent again, and the row records that it happened a second
+    // time from a second address on a second page. Collapsing repeats would turn
+    // the ledger back into a flag.
+    //
+    // occurred_at is deliberately not set — the column default is now(), and the
+    // moment the row is written IS the moment consent was given for a live
+    // capture. Only a backfill from historical data has cause to set it
+    // explicitly, which is what 069's column comment records.
+    var consentInsert = await supabase
+      .from("consent_events")
+      .insert({
+        contact_id: contactId,
+        channel:    "email",
+        action:     "granted",
+        source:     source,
+        page_url:   pageUrl,
+        ip_address: ipAddress,
+        user_agent: userAgent
+      });
+
+    if (consentInsert.error) {
+      throw consentInsert.error;
+    }
+
+    // ── 5. The same answer either way ──────────────────────────────────────
+    // Identical for a new contact and a returning one, on purpose. A route that
+    // said "already subscribed" for a known address would answer a question
+    // nobody is entitled to ask: anyone could submit addresses one at a time and
+    // learn which belong to real customers. The email is not echoed back for the
+    // same reason — nothing here confirms an address to a caller who guessed it.
+    return res.json({ ok: true, contact_id: contactId });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Create a birth record ────────────────────────────────────────────────
 //
 // requireAuth, like every other write route in this file. Guest checkout and
