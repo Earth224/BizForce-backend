@@ -1144,6 +1144,104 @@ function createToken(user) {
   );
 }
 
+// ── Unsubscribe tokens ──────────────────────────────────────────────────────
+//
+// A token proving the bearer holds an unsubscribe link this system generated.
+// Shape: "<contact id>.<base64url hmac>".
+//
+// WHY A SIGNED TOKEN RATHER THAN THE EMAIL ADDRESS IN THE URL.
+//
+// The obvious design is /unsubscribe?email=someone@example.com, and it is wrong
+// in three separate ways:
+//
+//   Anyone can unsubscribe anyone. The parameter is the entire authorisation, so
+//   editing the address in the URL bar silently opts out a stranger. There is no
+//   way to tell that apart from a real unsubscribe afterwards, because the two
+//   requests are identical.
+//
+//   It leaks the address into places it cannot be recalled from. A URL ends up
+//   in browser history, in the Referer header sent to anything the landing page
+//   loads, in server access logs, and in any analytics on the page. An address
+//   put in a query string has been published to every one of those.
+//
+//   It cannot be revoked or scoped. A guessable URL works forever for anyone who
+//   sees it; a signed token is bound to one contact and proves the link came
+//   from us.
+//
+// The token proves provenance and reveals nothing: a uuid and a digest. It is
+// deliberately NOT a JWT — no expiry, because an unsubscribe link at the bottom
+// of a two-year-old email must still work, and an expired unsubscribe is a
+// compliance failure rather than a security improvement. It is keyed on
+// JWT_SECRET because that secret already exists and is already the thing whose
+// compromise would be total; adding a second secret would add a second thing to
+// rotate without reducing anything.
+function makeUnsubscribeToken(contactId) {
+  var digest = crypto
+    .createHmac("sha256", process.env.JWT_SECRET)
+    .update("unsub:" + contactId)
+    .digest("base64url");
+
+  return contactId + "." + digest;
+}
+
+// Returns the contact id when the signature checks out, null otherwise.
+//
+// Total: it accepts any value whatsoever and never throws — null, undefined,
+// numbers, arrays, objects and symbols included. That matters more here than in
+// most helpers, because both callers are public routes reachable by anyone, and
+// the input is a string an attacker chooses. A throw would be a 500 that
+// distinguishes malformed tokens from merely wrong ones.
+function verifyUnsubscribeToken(token) {
+  // Type-checked before any coercion, the same posture parseBirthTime and
+  // parseBirthDate take: String(value) throws for a Symbol and for any object
+  // with a hostile toString, so coercing first would forfeit the guarantee on
+  // the first line.
+  if (typeof token !== "string") {
+    return null;
+  }
+
+  var dot = token.indexOf(".");
+  if (dot <= 0 || dot === token.length - 1) {
+    return null;
+  }
+
+  var contactId = token.slice(0, dot);
+  var provided  = token.slice(dot + 1);
+
+  try {
+    var expected = crypto
+      .createHmac("sha256", process.env.JWT_SECRET)
+      .update("unsub:" + contactId)
+      .digest("base64url");
+
+    var providedBuf = Buffer.from(provided, "utf8");
+    var expectedBuf = Buffer.from(expected, "utf8");
+
+    // Length is checked BEFORE timingSafeEqual, which throws a RangeError on
+    // buffers of different lengths rather than returning false. Comparing
+    // lengths first is not itself a leak: the digest length is fixed and public,
+    // so a wrong length is not a secret being disclosed, it is a malformed token.
+    if (providedBuf.length !== expectedBuf.length) {
+      return null;
+    }
+
+    // timingSafeEqual rather than ===. String comparison short-circuits on the
+    // first differing byte, so the time it takes reveals how much of the digest
+    // was correct, and an attacker can walk a forged digest one character at a
+    // time. This comparison takes the same time regardless.
+    if (!crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+      return null;
+    }
+
+    return contactId;
+  } catch (error) {
+    // Nothing in the block above should throw once the length guard is in place,
+    // but an unset JWT_SECRET makes createHmac throw and that must not become a
+    // 500 on a public route.
+    return null;
+  }
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -7541,6 +7639,141 @@ app.post("/api/contacts/capture", async function (req, res, next) {
     // learn which belong to real customers. The email is not echoed back for the
     // same reason — nothing here confirms an address to a caller who guessed it.
     return res.json({ ok: true, contact_id: contactId });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Unsubscribe ──────────────────────────────────────────────────────────
+//
+// Two routes over one behaviour: POST for machines, GET for people. Both public,
+// both writing the same revoked row into consent_events, neither requiring a
+// login or a confirmation step.
+//
+// THESE EXIST BEFORE ANY EMAIL IS SENT, ON PURPOSE. The unsubscribe link is
+// inside the first message, so it has to work before the first message goes out
+// — building the send path first means the earliest recipients hold links that
+// 404, which is the one failure a mailing cannot recover from afterwards.
+//
+// NO CONFIRMATION INTERSTITIAL, and this is a specification requirement rather
+// than a preference. RFC 8058 one-click unsubscribe, which Gmail and Yahoo both
+// require of bulk senders, works by POSTing to the List-Unsubscribe-Post URL
+// with no human present. An "are you sure?" page fails that outright: there is
+// nobody to answer it, and the sender is marked as not honouring unsubscribes.
+// The GET has no interstitial either, for the plainer reason that a person who
+// clicked unsubscribe has already said what they want.
+//
+// NOTHING IS EVER DELETED OR UPDATED HERE. A revocation is an append to the
+// ledger in 069, which is what lets "unsubscribed on the 3rd, resubscribed on
+// the 20th, unsubscribed again in March" be a true and complete answer. Deleting
+// the contact would destroy the consent evidence along with it; updating a flag
+// would produce the exact drift 069 was built to make impossible.
+
+// A revoked consent row, shared by both routes so the two cannot diverge.
+// Failures are logged and swallowed rather than surfaced: see the callers for
+// why an unsubscribe must never report failure to the person unsubscribing.
+async function recordEmailUnsubscribe(contactId, req) {
+  var insert = await supabase
+    .from("consent_events")
+    .insert({
+      contact_id: contactId,
+      channel:    "email",
+      action:     "revoked",
+      source:     "unsubscribe_link",
+      ip_address: req.ip,
+      user_agent: safeText(req.get("User-Agent"), 500)
+    });
+
+  if (insert.error) {
+    console.error("[unsubscribe] FAILED to record revocation for contact " + contactId +
+      " — " + insert.error.message + ". This person asked to stop receiving email and " +
+      "the ledger does not know it. They will keep being sent to.");
+  }
+
+  return !insert.error;
+}
+
+// The one-click endpoint. This is what Gmail calls, unattended.
+app.post("/api/unsubscribe", async function (req, res, next) {
+  try {
+    var contactId = verifyUnsubscribeToken(req.body && req.body.token);
+
+    // A bad token answers 200, not 400. Two reasons, and the second is the one
+    // that decides it:
+    //
+    //   A 4xx is an oracle. Anyone could submit tokens and learn which are valid
+    //   from the status code alone — and a valid token is a contact id, which
+    //   means a 400/200 split turns this route into a way to enumerate whether a
+    //   given contact exists.
+    //
+    //   Nobody can act on the difference. The person unsubscribing cannot fix a
+    //   malformed token; they did not construct it. Reporting the failure to them
+    //   gives them a problem they cannot solve, and reporting it to an automated
+    //   caller gives it a reason to retry something that will never succeed.
+    if (!contactId) {
+      return res.json({ ok: true });
+    }
+
+    await recordEmailUnsubscribe(contactId, req);
+
+    // 200 whether or not the insert succeeded, and 200 on a second revocation of
+    // an already-revoked contact. A second revoked row is the ledger working:
+    // they asked twice, both times are recorded, and current consent is still
+    // read as the most recent action. Suppressing the duplicate would discard
+    // evidence that someone had to ask twice.
+    return res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// What a person actually clicks. Same effect, human-readable answer.
+app.get("/api/unsubscribe", async function (req, res, next) {
+  try {
+    var contactId = verifyUnsubscribeToken(req.query && req.query.token);
+
+    if (contactId) {
+      await recordEmailUnsubscribe(contactId, req);
+    }
+
+    // The SAME page for a valid token and a forged one. A distinct error page
+    // would be the same oracle the POST avoids, readable by anyone who can open
+    // a URL — and it would strand a person whose link was mangled by their mail
+    // client on a page telling them their unsubscribe failed, with nothing to do
+    // about it. Everyone sees the confirmation; the ledger records what it can.
+    //
+    // Inline CSS only, on the Corporate Noir palette. No stylesheet, no script,
+    // no font, no image, no analytics — nothing that would make an outbound
+    // request. A page reached by unsubscribing must not be the page that reports
+    // the unsubscribe to a third party.
+    var html =
+      '<!DOCTYPE html>' +
+      '<html lang="en">' +
+      '<head>' +
+        '<meta charset="UTF-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
+        '<meta name="robots" content="noindex, nofollow">' +
+        '<title>Unsubscribed</title>' +
+      '</head>' +
+      '<body style="margin:0;min-height:100vh;background:#070b18;color:#e8e8ff;' +
+        'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;' +
+        'display:flex;align-items:center;justify-content:center;padding:24px;">' +
+        '<div style="max-width:440px;text-align:center;">' +
+          '<div style="font-size:2rem;line-height:1;color:#34d399;">&#10003;</div>' +
+          '<h1 style="margin:14px 0 0;font-size:1.25rem;font-weight:700;">You have been unsubscribed</h1>' +
+          '<p style="margin:12px 0 0;font-size:0.9rem;line-height:1.6;color:rgba(232,232,255,0.65);">' +
+            'You will not receive any further email from us. Nothing else is needed &mdash; ' +
+            'you can close this page.' +
+          '</p>' +
+          '<p style="margin:20px 0 0;font-size:0.75rem;line-height:1.6;color:rgba(232,232,255,0.4);">' +
+            'If you did not mean to do this, replying to any earlier message will reach us.' +
+          '</p>' +
+        '</div>' +
+      '</body>' +
+      '</html>';
+
+    res.set("Content-Type", "text/html; charset=utf-8");
+    return res.status(200).send(html);
   } catch (error) {
     next(error);
   }
