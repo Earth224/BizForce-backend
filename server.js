@@ -8171,7 +8171,27 @@ app.post("/api/charts/email", async function (req, res, next) {
       var chartReadingAnthropicClient = new Anthropic({ apiKey: chartReadingApiKey });
 
       var response = await chartReadingAnthropicClient.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        // Sonnet here, Haiku everywhere else in this file, and the difference is
+        // deliberate rather than drift.
+        //
+        // The other Anthropic calls are conversational turns or background
+        // classification — an Oracle reply the seeker can push back on, a lead
+        // scored on a scale of 0 to 100, a draft the user edits before sending.
+        // Each of those is cheap to get slightly wrong because there is another
+        // turn, another lead, another draft right behind it.
+        //
+        // This one is the product. It runs ONCE per person, arrives in their
+        // inbox with no opportunity to revise it, and is the only thing most
+        // recipients will ever read from us. Two hundred and fifty words of
+        // interpretive prose that synthesises three placements into one reading
+        // is exactly the kind of writing where the model tier is visible to a
+        // reader who is not looking for it — and it is what the subscription is
+        // ultimately sold on. The cost difference is per-person, not per-message,
+        // which is the cheapest place in this system to spend it.
+        //
+        // Not a new model to this codebase: the summarisation call at the oracle
+        // route above already runs claude-sonnet-5.
+        model: "claude-sonnet-5",
         max_tokens: 1024,
         system: systemPrompt,
         messages: [{ role: "user", content: userMessage }]
