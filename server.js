@@ -1418,8 +1418,37 @@ async function sendEmail(options) {
     // The mailto form is deliberately omitted. It is permitted by the RFC and
     // would require an inbox that is monitored and parsed; there is none, and a
     // published unsubscribe address nobody reads is worse than no address.
-    var unsubscribeUrl = "https://dynamic-prosperity-production-5382.up.railway.app" +
-      "/api/unsubscribe?token=" + makeUnsubscribeToken(contactId);
+    // Built from the module constant FRONTEND_URL so the one link an email is
+    // legally required to carry sits on the brand's own host. This matters more
+    // now than it did: the GET no longer unsubscribes on sight, it renders a
+    // page with a button, so the recipient has to look at the address bar and
+    // decide to press it. A *.up.railway.app subdomain asking someone to click
+    // a button reads as phishing, and the people most likely to check where a
+    // link goes are exactly the ones deciding whether to report the message as
+    // spam instead.
+    //
+    // NO FALLBACK BRANCH, and the reason is that the link does not depend on an
+    // env var being set. It resolves because bizforceai.net proxies
+    // /unsubscribe through to this API — the proxy is what makes the address
+    // work, not the configuration. So the constant's own default of
+    // "https://bizforceai.net" is already the correct value when FRONTEND_URL is
+    // unset, and a second fallback to the Railway host would ship a link that
+    // reads as phishing in exchange for nothing.
+    //
+    // Read through the constant rather than process.env directly, so there is
+    // one definition of what the frontend is. Two reads of the same variable
+    // with two different defaults is how the same deployment ends up disagreeing
+    // with itself about its own address.
+    //
+    // Trailing slashes are stripped before the path is appended, so
+    // "https://bizforceai.net/" and "https://bizforceai.net" produce the same
+    // URL rather than one carrying a double slash.
+    //
+    // Note the path. FRONTEND_URL points at the frontend, which serves
+    // /unsubscribe; this API serves /api/unsubscribe. The paths differ by
+    // origin and that is deliberate — the same route reached two ways.
+    var unsubscribeUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+      "/unsubscribe?token=" + makeUnsubscribeToken(contactId);
 
     var resend = new Resend(apiKey);
 
