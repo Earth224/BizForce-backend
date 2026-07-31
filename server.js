@@ -446,15 +446,28 @@ const chartEmailLimiter = rateLimit({
   message: { error: "Too many chart emails from this address. Try again in an hour." }
 });
 
-// One transit report is roughly 1.3 seconds of ephemeris arithmetic — hundreds
-// of GeoVector evaluations plus a root-find per aspect. It is also completely
-// deterministic: the same natal longitudes on the same UTC date always yield the
-// same report, and losing it costs nothing but that second and a third.
+// One transit report is roughly 60 milliseconds of ephemeris arithmetic. It is
+// also completely deterministic: the same natal longitudes on the same UTC date
+// always yield the same report, so a cached entry and a fresh computation are
+// interchangeable by construction.
 //
-// So it is cached in process and NEVER persisted. A report is arithmetic, not
-// state; writing it to Postgres would buy durability nobody needs and cost a
-// migration, a schema surface and a staleness question. A cold cache after a
-// redeploy costs one recomputation.
+// WHY THIS CACHE IS STILL HERE, stated honestly. It was written when a report
+// cost 1.3 seconds, and at that price it was mandatory — without it the route
+// was unshippable. Commit e0b2003 took the same report to about 60ms, and at
+// that price this is an optimization rather than a necessity. It is kept because
+// it is already built, costs nothing to keep, and removes repeat work for the
+// common case of one person reloading their own reading several times in a
+// sitting.
+//
+// It is NO LONGER LOAD-BEARING, and nothing downstream should assume it is.
+// Ripping it out would make the route slower and would not make it broken. Any
+// future code that only works because a report happens to be cached is relying
+// on something this comment explicitly disclaims.
+//
+// Still NEVER persisted. A report is arithmetic, not state; writing it to
+// Postgres would buy durability nobody needs and cost a migration, a schema
+// surface and a staleness question. A cold cache after a redeploy costs one
+// recomputation, which is now 60ms.
 const transitCache = createTtlCache({ maxEntries: 500, ttlMs: 24 * 60 * 60 * 1000 });
 
 app.use(apiLimiter);
@@ -10650,7 +10663,14 @@ function transitCacheKey(natalLongitudes, whenUtc) {
 // computeTransitReport is pure arithmetic with no I/O, so making this async
 // would add a microtask and an await to every call site and buy nothing.
 //
-// getOrCompute runs the producer only on a miss, so the 1.3-second cost is paid
+// That reasoning is STRONGER since e0b2003, not weaker. At the old 1.3 seconds a
+// synchronous call was a real stall on the event loop and the argument for
+// staying sync was a trade. At roughly 60 milliseconds it is comfortably
+// non-blocking — in the same range as the JSON serialisation and the database
+// round trip already on this path — so there is nothing left to trade away and
+// no yielding variant worth writing.
+//
+// getOrCompute runs the producer only on a miss, so even that ~60ms is paid
 // once per distinct chart per UTC day. If the producer throws, nothing is cached
 // and the error propagates unchanged to the caller's catch.
 function getTransitReport(natalLongitudes, whenUtc) {
