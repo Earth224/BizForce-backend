@@ -18,6 +18,7 @@ const PDFDocument = require("pdfkit");
 const { createClient } = require("@supabase/supabase-js");
 const Astronomy = require("astronomy-engine");
 const cityTimezones = require("city-timezones");
+const { Resend } = require("resend");
 const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt } = require("./config/brain");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
@@ -1239,6 +1240,242 @@ function verifyUnsubscribeToken(token) {
     // but an unset JWT_SECRET makes createHmac throw and that must not become a
     // 500 on a public route.
     return null;
+  }
+}
+
+// ── Email sending ───────────────────────────────────────────────────────────
+//
+// THE ONLY WAY MAIL LEAVES THIS SYSTEM. Every future send path goes through this
+// function, and that is the point of it: consent is checked in one place, the
+// deliverability ledger is written in one place, and the unsubscribe headers are
+// attached in one place. A second send path that called Resend directly would
+// bypass all three at once, and nothing downstream would show anything wrong
+// until someone complained.
+//
+// Total: it never throws. Every caller gets a result object, because a send
+// failure is an ordinary outcome — a provider outage, a revoked contact, an
+// unconfigured environment — and a route that has to wrap this in a try/catch to
+// stay up is a route that will eventually forget to.
+//
+// The order below is deliberate and each step guards the next:
+//   0. no API key      -> nothing configured, nothing attempted
+//   1. no consent      -> not sent, and NOT logged (it was never a send)
+//   2. ledger insert   -> if this fails, nothing is sent
+//   3. provider call   -> outcome written back onto the row
+async function sendEmail(options) {
+  var opts        = options || {};
+  var contactId   = opts.contactId;
+  var to          = opts.to;
+  var subject     = opts.subject;
+  var html        = opts.html;
+  var text        = opts.text;
+  var template    = opts.template;
+  var fromEmail   = "BizForce AI <hello@mail.bizforceai.net>";
+
+  var sendRowId = null;
+
+  try {
+    // ── 0. Configuration, before anything else ──────────────────────────────
+    // Checked ahead of the consent query so an unconfigured environment does no
+    // database work at all. A developer running this locally without a key gets
+    // not_configured rather than a consent lookup that succeeds and a provider
+    // call that fails.
+    var apiKey = (process.env.RESEND_API_KEY || "").trim();
+    if (!apiKey) {
+      return { sent: false, reason: "not_configured" };
+    }
+
+    // ── 1. Consent ──────────────────────────────────────────────────────────
+    // Derived, never read from a flag: the current state is the action of the
+    // most recent row for this contact on this channel. That is the whole design
+    // of consent_events in migration 069, and this is the first code to rely on
+    // it. The index consent_events_contact_channel_time_idx exists for exactly
+    // this query.
+    //
+    // NO ROW AT ALL IS TREATED AS NO CONSENT, not as permission. A contact who
+    // has never granted anything must not receive marketing mail merely because
+    // nothing says they refused — absence of a revocation is not consent, and
+    // defaulting the other way is how a system mails people who never opted in.
+    //
+    // skipConsentCheck is for TRANSACTIONAL mail only: a password reset, a
+    // receipt, an order confirmation. Those are sent because of something the
+    // person just did, not because they are on a list, and consent has no
+    // bearing on them — someone who unsubscribed from marketing still gets their
+    // password reset. MARKETING MAIL MUST NEVER PASS IT. If a caller is unsure
+    // which kind it is sending, it is marketing.
+    //
+    // contactId is required either way. skipConsentCheck skips the CHECK, not
+    // the attribution: an unattributed send cannot be counted against a person,
+    // cannot be unsubscribed from, and leaves a ledger row pointing at nobody.
+    if (!contactId) {
+      return { sent: false, reason: "no_contact" };
+    }
+
+    if (opts.skipConsentCheck !== true) {
+      var consent = await supabase
+        .from("consent_events")
+        .select("action")
+        .eq("contact_id", contactId)
+        .eq("channel", "email")
+        .order("occurred_at", { ascending: false })
+        .limit(1);
+
+      if (consent.error) {
+        // A consent check that could not run is not a consent check that passed.
+        console.error("[sendEmail] consent lookup failed for contact " + contactId +
+          " — " + consent.error.message + ". Treating as no consent and not sending.");
+        return { sent: false, reason: "no_consent" };
+      }
+
+      var latest = consent.data && consent.data[0];
+      if (!latest || latest.action !== "granted") {
+        return { sent: false, reason: "no_consent" };
+      }
+    }
+
+    // ── 2. The ledger row, BEFORE the provider call ─────────────────────────
+    // Written first so a send that vanishes leaves a queued row behind rather
+    // than no trace, which is what migration 070's table comment describes.
+    //
+    // A FAILED INSERT STOPS THE SEND. That is not caution, it is the ledger
+    // being load bearing: an unrecorded send cannot be counted toward a bounce
+    // rate, cannot be attributed to a template, and cannot be produced when
+    // someone asks what we sent them. Mail that cannot be accounted for is worse
+    // than mail that was not sent.
+    var logInsert = await supabase
+      .from("email_sends")
+      .insert({
+        contact_id: contactId,
+        to_email:   to,
+        from_email: fromEmail,
+        subject:    subject,
+        template:   template,
+        provider:   "resend",
+        status:     "queued"
+      })
+      .select("id")
+      .single();
+
+    if (logInsert.error || !logInsert.data) {
+      console.error("[sendEmail] could not write the email_sends row for contact " +
+        contactId + " — " + ((logInsert.error && logInsert.error.message) || "no row returned") +
+        ". Refusing to send: an unrecorded send cannot be counted or defended.");
+      return { sent: false, reason: "log_failed" };
+    }
+
+    sendRowId = logInsert.data.id;
+
+    // ── 3. The provider call ────────────────────────────────────────────────
+    // BOTH unsubscribe headers, and they are required TOGETHER for RFC 8058
+    // one-click. Neither works alone:
+    //
+    //   List-Unsubscribe on its own is what senders have used for twenty years.
+    //   A mailbox provider treats the URL as an ordinary link — it may surface an
+    //   unsubscribe affordance, but it will not credit the sender with one-click
+    //   support, because nothing promises that a POST to that URL is safe and
+    //   unattended.
+    //
+    //   List-Unsubscribe-Post on its own does nothing whatsoever. It declares
+    //   that one-click is supported without saying where to send it. There is no
+    //   URL to POST to and the header is ignored.
+    //
+    // Together they tell Gmail and Yahoo that a POST to that exact URL, with no
+    // human present and no confirmation step, unsubscribes the recipient — which
+    // is precisely what POST /api/unsubscribe does. Both providers require this
+    // of bulk senders, and the absence of it is counted against the sending
+    // domain's reputation whether or not anyone ever clicks.
+    //
+    // The mailto form is deliberately omitted. It is permitted by the RFC and
+    // would require an inbox that is monitored and parsed; there is none, and a
+    // published unsubscribe address nobody reads is worse than no address.
+    var unsubscribeUrl = "https://dynamic-prosperity-production-5382.up.railway.app" +
+      "/api/unsubscribe?token=" + makeUnsubscribeToken(contactId);
+
+    var resend = new Resend(apiKey);
+
+    var result = await resend.emails.send({
+      from:    fromEmail,
+      to:      to,
+      subject: subject,
+      html:    html,
+      text:    text,
+      headers: {
+        "List-Unsubscribe":      "<" + unsubscribeUrl + ">",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
+      }
+    });
+
+    // The SDK reports provider-side failures on the result rather than by
+    // throwing, so a returned error has to be read as carefully as a caught one.
+    if (result && result.error) {
+      await markSendFailed(sendRowId, result.error.message || String(result.error));
+      return { sent: false, reason: "provider_error" };
+    }
+
+    // ── 4. Outcome written back ─────────────────────────────────────────────
+    // status 'sent' means the provider ACCEPTED it, not that it was delivered.
+    // The gap between those two is what 'bounced' exists to record, and it is
+    // written later by a webhook that does not exist yet.
+    var providerId = (result && result.data && result.data.id) || null;
+
+    var sentUpdate = await supabase
+      .from("email_sends")
+      .update({
+        status:      "sent",
+        provider_id: providerId,
+        sent_at:     nowIso()
+      })
+      .eq("id", sendRowId);
+
+    if (sentUpdate.error) {
+      // The mail went out. The row saying so did not update, which leaves a
+      // queued row for a message that was actually accepted — worth knowing
+      // about, but not worth telling the caller the send failed when it did not.
+      console.error("[sendEmail] mail was accepted by the provider but the " +
+        "email_sends row " + sendRowId + " could not be updated — " +
+        sentUpdate.error.message + ". The row is stuck at queued and the provider " +
+        "id is lost, so a bounce webhook will not match it.");
+    }
+
+    return { sent: true, id: sendRowId };
+  } catch (error) {
+    // Anything unexpected: a network failure inside the SDK, a malformed
+    // argument, a thrown provider error. If a ledger row exists it is marked
+    // failed so it does not sit at queued forever pretending to be in flight.
+    console.error("[sendEmail] unexpected failure for contact " + contactId +
+      " — " + ((error && error.message) || error));
+
+    if (sendRowId) {
+      await markSendFailed(sendRowId, (error && error.message) || String(error));
+    }
+
+    return { sent: false, reason: "provider_error" };
+  }
+}
+
+// Marks a send row failed. Separate so both the returned-error path and the
+// thrown-error path write the same thing, and swallowing its own failure so a
+// logging problem can never become the reason a caller sees an exception.
+async function markSendFailed(sendRowId, message) {
+  try {
+    var update = await supabase
+      .from("email_sends")
+      .update({
+        status:        "failed",
+        // 500 characters, matching the bound every other free-text field in this
+        // file carries through safeText. A provider stack trace can run to
+        // kilobytes and none of it after the first line is diagnostic.
+        error_message: String(message == null ? "" : message).slice(0, 500)
+      })
+      .eq("id", sendRowId);
+
+    if (update.error) {
+      console.error("[sendEmail] could not mark send " + sendRowId + " as failed — " +
+        update.error.message + ". The row is stuck at queued.");
+    }
+  } catch (error) {
+    console.error("[sendEmail] threw while marking send " + sendRowId + " as failed — " +
+      ((error && error.message) || error));
   }
 }
 
