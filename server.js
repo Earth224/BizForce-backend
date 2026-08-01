@@ -179,6 +179,41 @@ if (process.env.STRIPE_CHART_ANNUAL_PRICE_ID) {
   STRIPE_PRICE_TO_PLAN[process.env.STRIPE_CHART_ANNUAL_PRICE_ID] = "chart";
 }
 
+// What a checkout caller is allowed to ask for.
+//
+// The client names a PRODUCT KEY, never a price id. A price id arriving from a
+// browser is a number the customer chose, and Stripe will happily bill whatever
+// price it is handed — including a price belonging to another product, or a $0
+// price. This allowlist is what makes that impossible: an unrecognised key is
+// refused outright, and there is no code path from req.body to a Stripe price.
+//
+// envVar holds the NAME of the variable, not its value, because process.env is
+// read at request time rather than at module load. A price id added in Railway
+// therefore takes effect without a redeploy.
+//
+// chart and chart_annual are two billing intervals of one product and so share
+// the plan string "chart" — entitlement does not care how someone paid.
+const CHECKOUT_PRODUCTS = {
+  all_access: {
+    envVar: "STRIPE_STARTER_PRICE_ID",
+    plan: "all_access",
+    successPath: "/dashboard.html?subscribed=1",
+    cancelPath: "/app.html"
+  },
+  chart: {
+    envVar: "STRIPE_CHART_MONTHLY_PRICE_ID",
+    plan: "chart",
+    successPath: "/mychart.html?subscribed=1",
+    cancelPath: "/chart.html"
+  },
+  chart_annual: {
+    envVar: "STRIPE_CHART_ANNUAL_PRICE_ID",
+    plan: "chart",
+    successPath: "/mychart.html?subscribed=1",
+    cancelPath: "/chart.html"
+  }
+};
+
 const AGENT_SYSTEM_PROMPTS = {
   seo: "You are the BizForce AI SEO Agent. Produce practical SEO work plans, audits, keyword strategies, local SEO plans, content strategies, and technical SEO recommendations.",
   sales: "You are the BizForce AI Sales Agent. Produce sales scripts, offers, follow-up sequences, objection handling, lead magnets, closing strategy, and revenue-focused actions. Be direct, measurable, and business-focused.",
@@ -12353,11 +12388,25 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
 });
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
-    const priceId = process.env.STRIPE_STARTER_PRICE_ID;
+    // Defaulting to all_access is backwards compatibility, not a preference:
+    // every caller that exists today sends no body at all, and each must keep
+    // buying the same thing it bought before this route learned to sell two
+    // products.
+    const product = req.body && req.body.product ? String(req.body.product) : "all_access";
 
+    if (!Object.prototype.hasOwnProperty.call(CHECKOUT_PRODUCTS, product)) {
+      return res.status(400).json({ error: "unknown_product" });
+    }
+
+    const entry = CHECKOUT_PRODUCTS[product];
+    const priceId = process.env[entry.envVar];
+
+    // The product exists in code but its price id has never been set. Refusing
+    // is the only honest answer — falling back to another product would sell
+    // someone a thing they did not ask for.
     if (!priceId) {
-      console.error("Stripe checkout error: STRIPE_STARTER_PRICE_ID is not set");
-      return res.status(500).json({ error: "Stripe checkout is not configured: STRIPE_STARTER_PRICE_ID is unset" });
+      console.error("Stripe checkout error: " + entry.envVar + " is not set for product " + product);
+      return res.status(500).json({ error: "product_not_configured", product });
     }
 
     const { data: existingSub } = await supabase
@@ -12372,20 +12421,26 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
     const sessionParams = {
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
+      // price_id is the webhook's second resolution source when metadata.plan
+      // is missing, and nothing has ever populated it until now.
       metadata: {
         user_id: req.user.id,
         email: req.user.email,
-        plan: "all_access"
+        plan: entry.plan,
+        price_id: priceId
       },
       subscription_data: {
         metadata: {
           user_id: req.user.id,
           email: req.user.email,
-          plan: "all_access"
+          plan: entry.plan
         }
       },
-      success_url: FRONTEND_URL + "/dashboard.html?subscribed=1",
-      cancel_url: FRONTEND_URL + "/app.html",
+      // Per product, because sending a chart buyer to the platform dashboard
+      // would be a confusing landing after purchase — it is a different product
+      // on a different funnel and shows them nothing they bought.
+      success_url: FRONTEND_URL + entry.successPath,
+      cancel_url: FRONTEND_URL + entry.cancelPath,
       allow_promotion_codes: true
     };
 
