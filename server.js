@@ -1683,6 +1683,45 @@ async function getActiveSubscription(userId) {
   return data;
 }
 
+// Migration 072 made this table one row per Stripe subscription rather than one
+// per user, so a person may hold a chart subscription and a platform
+// subscription at once. The singular getActiveSubscription remains for callers
+// that legitimately want the most recent one, but any question about
+// entitlement must ask the plural.
+async function getActiveSubscriptions(userId) {
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ["active", "trialing", "past_due"])
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return data || [];
+}
+
+// Note the asymmetry between the fetch and the test: getActiveSubscriptions
+// pulls past_due because a past-due subscriber is still a customer worth
+// showing billing state to, but past_due does NOT entitle. That matches the
+// existing behaviour in getUserPlan, where the fetch list and the active list
+// deliberately differ.
+async function hasActivePlan(userId, plan) {
+  const subscriptions = await getActiveSubscriptions(userId);
+  const wanted = String(plan || "").toLowerCase();
+
+  return subscriptions.some(function (subscription) {
+    return String(subscription.plan || "").toLowerCase() === wanted &&
+      ["active", "trialing"].includes(subscription.status);
+  });
+}
+
+// Answers "the most recent subscription", which is the wrong question for
+// entitlement now that a user may hold several at once — the newest row is not
+// necessarily the one the caller cares about. Ask hasActivePlan whether a user
+// holds a specific plan. This shape is kept because other callers depend on it.
 async function getUserPlan(userId) {
   const subscription = await getActiveSubscription(userId);
 
@@ -1760,11 +1799,8 @@ async function requireActiveSubscription(req, res, next) {
   }
 }
 
-// Gates NOTHING today. It calls next() unconditionally, on every request, for
-// every user. That is deliberate and it is the whole point of the function.
-//
-// The $29.99 chart tier does not exist yet — no price, no plan row, no checkout
-// path. Building it is the next open item, not part of this change.
+// This gates. It refuses any request from a user who does not hold an active
+// chart subscription, and it is the single place that check lives.
 //
 // requireActiveSubscription is deliberately NOT used here. That middleware gates
 // the $199 platform plan, which is a different product on a different funnel;
@@ -1773,12 +1809,24 @@ async function requireActiveSubscription(req, res, next) {
 // chart. Reusing it would silently entitle the wrong people and refuse the right
 // ones.
 //
-// This function is the single place the chart entitlement check will go. It is
-// in the middleware chain now, ahead of the check existing, so that adding the
-// gate later is a one-line change in one known location rather than a search
-// through every chart route for the places a check was supposed to be.
+// It asks hasActivePlan rather than getUserPlan because holding a chart
+// subscription is a question about whether a specific plan is among the ones a
+// user holds, not about which single plan is newest.
 async function requireChartEntitlement(req, res, next) {
-  next();
+  try {
+    const entitled = await hasActivePlan(req.user.id, "chart");
+
+    if (!entitled) {
+      return res.status(402).json({
+        error: "Chart subscription required",
+        upgrade_required: true
+      });
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 async function getMonthlyUsage(userId) {
@@ -9068,8 +9116,8 @@ app.get("/api/birth-records/:id/chart", requireAuth, async function (req, res, n
 // two places it can be read from DIFFERENTLY once either one grows a field. What
 // goes back is the record's identity and the report, nothing else.
 //
-// requireChartEntitlement gates nothing today — see its definition. It is in the
-// chain so the gate has one place to land.
+// requireChartEntitlement now enforces the chart subscription — see its
+// definition. A user without one gets 402 before this handler runs.
 app.get("/api/birth-records/:id/transits", requireAuth, requireChartEntitlement, async function (req, res, next) {
   try {
     var userId   = req.user.id;
