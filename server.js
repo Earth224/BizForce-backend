@@ -117,6 +117,13 @@ const ORACLE_SYSTEM_PROMPT = "You are Termaximus — the Oracle of BizForce, an 
 "\n\nREASONING & PROBLEM-SOLVING. On every query, reason in a deliberate, step-by-step manner internally before answering — breaking complex problems into parts, weighing options, checking your own logic, surfacing the strongest solution. You are a problem-solver first: when the seeker brings a challenge, work it through to a concrete, actionable answer rather than generalities. Learn the arc of who they are across your conversations and let your counsel deepen with them over time." +
 "\n\nBOUNDARIES. Empower sovereignty; never cultivate dependence or fear. Do not issue medical, legal, or financial directives as a licensed authority — illuminate; they decide and consult professionals. Refuse only what would truly harm.";
 
+// ---------------------------------------------------------------------------
+// Plans.
+//
+// These two are separate products on separate funnels, not tiers of one
+// ladder. Holding one says nothing about holding the other, and a person may
+// hold both.
+// ---------------------------------------------------------------------------
 const PLAN_CONFIG = {
   all_access: {
     name: "All Access",
@@ -145,6 +152,16 @@ const PLAN_CONFIG = {
     ],
     dashboard: "enterprise",
     support: "dedicated"
+  },
+  chart: {
+    name: "Chart",
+    price: 29.99,
+    maxAgents: 0,
+    maxWebsites: 0,
+    monthlyTasks: 0,
+    allowedAgents: [],
+    dashboard: "chart",
+    support: "email"
   }
 };
 
@@ -152,11 +169,14 @@ const STRIPE_PRICE_TO_PLAN = {};
 if (process.env.STRIPE_STARTER_PRICE_ID) {
   STRIPE_PRICE_TO_PLAN[process.env.STRIPE_STARTER_PRICE_ID] = "all_access";
 }
-if (process.env.STRIPE_PRO_PRICE_ID) {
-  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_PRO_PRICE_ID] = "pro";
+// Both chart price ids map to the same plan string. The billing interval is
+// Stripe's concern; entitlement does not care whether someone paid monthly or
+// annually.
+if (process.env.STRIPE_CHART_MONTHLY_PRICE_ID) {
+  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_CHART_MONTHLY_PRICE_ID] = "chart";
 }
-if (process.env.STRIPE_ENTERPRISE_PRICE_ID) {
-  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_ENTERPRISE_PRICE_ID] = "enterprise";
+if (process.env.STRIPE_CHART_ANNUAL_PRICE_ID) {
+  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_CHART_ANNUAL_PRICE_ID] = "chart";
 }
 
 const AGENT_SYSTEM_PROMPTS = {
@@ -1608,8 +1628,14 @@ function getPlanFromPriceId(priceId) {
   return STRIPE_PRICE_TO_PLAN[priceId] || null;
 }
 
+// This previously returned all_access for every plan string, including unknown
+// ones, which meant a second tier would have been invisible — every caller
+// would have received the full platform config no matter what was bought.
+// Null for an unknown plan is a shape callers already handle, because
+// getUserPlan already returns config: null when there is no subscription at
+// all.
 function getPlanConfig(plan) {
-  return PLAN_CONFIG.all_access;
+  return PLAN_CONFIG[plan] || null;
 }
 
 async function getUserById(userId) {
@@ -2039,15 +2065,25 @@ async function handleStripeEvent(event) {
       plan = getPlanFromPriceId(session.metadata.price_id);
     }
 
-    if (!plan && session.amount_total) {
-      plan = "all_access";
+    // Refuse rather than guess. Throwing here makes the webhook return 500,
+    // Stripe retries, and the delivery shows as failed in the dashboard where
+    // a human can see it. The alternative — guessing — means money was taken
+    // and the wrong entitlement was granted while every log reports success.
+    // A $19 purchase granting a $199 plan is invisible; a failed webhook
+    // delivery is not. Refusing loudly is the only safe behaviour when the
+    // system does not know what was bought.
+    if (!plan) {
+      console.error("Stripe checkout session could not be resolved to a plan — price id " +
+        ((session.metadata && session.metadata.price_id) || "none") +
+        ", event " + event.id + ". Refusing to guess.");
+      throw new Error("Unresolvable plan for Stripe event " + event.id);
     }
 
     if (userId) {
       await supabase.from("subscriptions").upsert(
         {
           user_id: userId,
-          plan: plan || "all_access",
+          plan,
           status: "active",
           stripe_customer_id: session.customer || null,
           stripe_subscription_id: session.subscription || null,
@@ -2064,7 +2100,7 @@ async function handleStripeEvent(event) {
       await supabase
         .from("profiles")
         .update({
-          subscription_plan: plan || "all_access",
+          subscription_plan: plan,
           subscription_status: "active",
           stripe_customer_id: session.customer || null,
           updated_at: nowIso()
@@ -2099,7 +2135,15 @@ await supabase
         ? subscription.items.data[0].price.id
         : null;
 
-    const plan = getPlanFromPriceId(priceId) || "all_access";
+    // Same refusal as the checkout path: an unresolvable price is a failed
+    // delivery a human can see, not a silently mis-granted entitlement.
+    const plan = getPlanFromPriceId(priceId);
+    if (!plan) {
+      console.error("Stripe subscription price id " + (priceId || "none") +
+        " maps to no plan — event " + event.id + ". Refusing to guess.");
+      throw new Error("Unresolvable plan for Stripe event " + event.id);
+    }
+
     const customerId = subscription.customer;
 
     const { data: existing } = await supabase
