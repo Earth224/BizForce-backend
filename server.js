@@ -18717,6 +18717,143 @@ app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, nex
   }
 });
 
+/* The ledger side of an inbound STOP or START.
+
+   TOTAL AND SILENT BY CONTRACT: it returns true or false and never throws. The
+   only caller is a Twilio webhook, and a webhook that fails gets retried — a
+   ledger problem must not turn one STOP into a retry storm, and must never stop
+   the 200 below from going out. Every failure path here ends in a console.error
+   and a false.
+
+   ── Why this creates a contact when it cannot find one ──
+
+   Twilio delivers a phone number and nothing else. There is no email, no name,
+   and no way to ask for one: the person sent the word STOP from a handset. A
+   number may also have reached sms_subscribers entirely through the
+   authenticated routes — POST /api/sms/subscribers or the bulk import — without
+   ever passing through a public capture, so there is no contacts row for it and
+   nothing in this system ever intended there to be.
+
+   A revocation arriving for someone the ledger has never seen must still be
+   written down, and consent_events.contact_id is NOT NULL, so it needs somewhere
+   to live. Creating the contact is how it gets one. contacts_contactable_check
+   permits a phone-only row precisely because a phone alone is a way to reach
+   someone.
+
+   A CONTACT ROW CREATED BY AN OPT-OUT IS NOT A MARKETING RECORD. It holds no
+   email, no name and no source beyond sms_inbound, and it exists for one
+   purpose: to carry the refusal. Reading it as a lead would be reading a "do not
+   contact me" as an introduction. */
+async function recordSmsConsentEvent(phone, action, req) {
+  /* A GUARD, NOT A FIX. It changes nothing about what is recorded — the number
+     below is unrecorded either way. What it changes is what the log says: without
+     it, contacts_phone_format_check rejects the insert with a 23514 that reaches
+     the generic catch below and reads as an unexplained ledger failure, which is
+     the wrong thing to go looking for. This converts a confusing constraint
+     violation into an accurate statement of what was lost.
+
+     Reachable because the caller does not require canonical input: when
+     canonicalPhone cannot read an incoming From, POST /api/sms/inbound falls back
+     to the plus-stripped raw string and attempts the opt-out anyway rather than
+     dropping it. That is the right call for the flag — a weak match beats none —
+     but the contacts table will not take the value, so it stops here. */
+  if (!/^1[0-9]{10}$/.test(String(phone == null ? "" : phone))) {
+    console.error("[sms/inbound] LEDGER WRITE IMPOSSIBLE — the " + action + " from " + phone +
+      " is outside the canonical format the contacts table accepts (^1[0-9]{10}$, enforced by " +
+      "contacts_phone_format_check), so no contact row can be created and no ledger row could " +
+      "be written. This person has " + action + " consent and there is no record of it anywhere. " +
+      "Fixing this means widening contacts_phone_format_check, sms_subscribers_phone_format_check " +
+      "and lead_captures_phone_format_check TOGETHER, in one commit, alongside canonicalPhone — " +
+      "migration 069 states all three mirrors widen as one, and widening any subset is an outage.");
+    return false;
+  }
+
+  try {
+    var existing = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("owner_id", CAPTURE_OWNER_ID)
+      .eq("phone", phone)
+      .maybeSingle();
+
+    if (existing.error) {
+      throw existing.error;
+    }
+
+    var contactId = existing.data ? existing.data.id : null;
+
+    if (!contactId) {
+      var contactInsert = await supabase
+        .from("contacts")
+        .insert({
+          owner_id: CAPTURE_OWNER_ID,
+          phone:    phone,
+          source:   "sms_inbound",
+          brand:    "bizforce"
+        })
+        .select("id")
+        .single();
+
+      if (!contactInsert.error) {
+        contactId = contactInsert.data.id;
+      } else {
+        /* 23505 means another request created this contact between the select
+           and the insert. Same handling as the other helpers: re-select and
+           carry on rather than losing the event to a race. */
+        var conflictText = String(contactInsert.error.message || "") + " " +
+          String(contactInsert.error.details || "") + " " +
+          String(contactInsert.error.constraint || "");
+
+        if (contactInsert.error.code === "23505" && conflictText.indexOf("phone") !== -1) {
+          var raced = await supabase
+            .from("contacts")
+            .select("id")
+            .eq("owner_id", CAPTURE_OWNER_ID)
+            .eq("phone", phone)
+            .maybeSingle();
+
+          if (raced.error) {
+            throw raced.error;
+          }
+          if (!raced.data) {
+            throw contactInsert.error;
+          }
+
+          contactId = raced.data.id;
+        } else {
+          throw contactInsert.error;
+        }
+      }
+    }
+
+    /* No page_url: there is no page. This arrived over the carrier network from
+       a handset, and the ip and user agent are Twilio's rather than the
+       person's — recorded anyway because they evidence which request delivered
+       the message, which is what this row is for. */
+    var eventInsert = await supabase
+      .from("consent_events")
+      .insert({
+        contact_id: contactId,
+        channel:    "sms",
+        action:     action,
+        source:     "sms_inbound",
+        ip_address: req.ip,
+        user_agent: safeText(req.get("User-Agent"), 500)
+      });
+
+    if (eventInsert.error) {
+      throw eventInsert.error;
+    }
+
+    return true;
+  } catch (error) {
+    console.error("[sms/inbound] LEDGER WRITE FAILED — the " + action + " from " + phone +
+      " was not recorded in consent_events: " + ((error && error.message) || error) +
+      ". The person sent this and consent_events has no record that they did.");
+    return false;
+  }
+}
+
 /* Twilio's inbound SMS webhook — STOP and START handling.
 
    There is no requireAuth here and there cannot be: Twilio has no BizForce
@@ -18841,6 +18978,21 @@ app.post("/api/sms/inbound", async function (req, res) {
       } else {
         console.log("[sms/inbound] Opted out " + from + " — rows updated: " + optOut.count);
       }
+
+      /* The update above changes a flag; this writes the evidence. If the two
+         ever disagree, THIS is the record that was written at the moment the
+         person asked and has never been overwritten since — consent_status is
+         updated in place by anything that can reach the row, and an append-only
+         ledger is not.
+
+         Deliberately OUTSIDE every branch above, so it runs whether the update
+         matched rows, matched none, or errored. A person who texts STOP has
+         revoked consent whether or not we hold a subscriber row for them, and
+         MATCHED NO ROWS is exactly the population this has to cover: a number
+         stored in a format the equality filter cannot find is a number whose
+         opt-out would otherwise be recorded nowhere at all. The flag missed
+         them; the ledger does not have to. */
+      await recordSmsConsentEvent(from, "revoked", req);
     } else if (START_WORDS.indexOf(body) !== -1) {
       var optIn = await supabase
         .from("sms_subscribers")
@@ -18855,6 +19007,11 @@ app.post("/api/sms/inbound", async function (req, res) {
       } else {
         console.log("[sms/inbound] Opted in " + from + " — rows updated: " + optIn.count);
       }
+
+      /* Same placement and the same reasoning as the revoked call above: outside
+         every branch, so a START is recorded whether or not a subscriber row was
+         found to flip. */
+      await recordSmsConsentEvent(from, "granted", req);
     }
   }
 
