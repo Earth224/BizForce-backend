@@ -414,6 +414,28 @@ app.use(compression());
 
 
 
+// ── SINGLE REPLICA. Read this before scaling. ────────────────────────────
+//
+// express-rate-limit stores its counters in the memory of ONE Node process.
+// There is no shared store configured below, so every max in this section is
+// per instance, not per service: the effective limit is the max multiplied by
+// the number of running replicas. Two instances behind a load balancer make
+// every bound here twice as generous, and neither instance can see it happen.
+//
+// The counters are also process state, so they reset on every redeploy. A
+// window in progress is discarded and everyone starts from zero.
+//
+// This matters most for chartEmailLimiter. Its 5/hour is not a load bound — it
+// exists because each call spends real money twice, a Sonnet generation and an
+// outbound message, billed to an account that did not make the request. Its own
+// comment below calls it "a limit on people rather than on load", and that
+// guarantee holds AT ONE REPLICA ONLY. At three replicas it is 15 an hour from
+// one address, and the sentence stops being true.
+//
+// So, plainly, so it cannot be done by accident: scaling this service past one
+// instance requires moving these counters to a shared store (Redis, or the
+// rate-limit store of your choice) FIRST. Adding a replica without that silently
+// multiplies every limit in this file, including the one guarding spend.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -5618,12 +5640,20 @@ app.post("/api/business-profile", requireAuth, async function (req, res) {
         code: result.error.code, message: result.error.message,
         details: result.error.details, hint: result.error.hint
       });
+      // THE RULE, for this handler and the five below it that used to do the
+      // same thing. A response tells the caller what failed in terms of what
+      // they asked for — here, that the save did not happen. The database's own
+      // words stay in the log: codes, constraint names, column names, hints.
+      // They describe our schema, not their request, and they are of no use to
+      // someone who cannot act on them.
+      //
+      // requireAuth is not a meaningful barrier here. Registration is free and
+      // open, so an authenticated caller is anyone willing to sign up — which is
+      // to say, anyone. Gating a disclosure behind a form nobody is turned away
+      // from is not a control.
       return res.status(500).json({
         ok: false,
-        error: "Save failed",
-        db_code: result.error.code,
-        db_message: result.error.message,
-        db_hint: result.error.hint || result.error.details || null
+        error: "Save failed"
       });
     }
 
@@ -15415,10 +15445,7 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error: "Save failed",
-        db_code: error.code,
-        db_message: error.message,
-        db_hint: error.hint || error.details || null
+        error: "Save failed"
       });
     }
     return res.status(201).json({ card: data });
@@ -15453,10 +15480,7 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error: "Save failed",
-        db_code: error.code,
-        db_message: error.message,
-        db_hint: error.hint || error.details || null
+        error: "Save failed"
       });
     }
     return res.json({ card: data });
@@ -16223,10 +16247,7 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error: "Save failed",
-        db_code: error.code,
-        db_message: error.message,
-        db_hint: error.hint || error.details || null
+        error: "Save failed"
       });
     }
     return res.json({ profile: data });
@@ -16343,10 +16364,7 @@ app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error:      "Save failed",
-        db_code:    error.code,
-        db_message: error.message,
-        db_hint:    error.hint || error.details || null
+        error:      "Save failed"
       });
     }
     return res.status(201).json({ draft: data });
@@ -16384,10 +16402,7 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
         details: error.details, hint: error.hint
       });
       return res.status(500).json({
-        error: "Save failed",
-        db_code: error.code,
-        db_message: error.message,
-        db_hint: error.hint || error.details || null
+        error: "Save failed"
       });
     }
     return res.json({ draft: data });
@@ -18485,7 +18500,16 @@ app.use(function (req, res) {
 });
 
 app.use(function (error, req, res, next) {
-  console.error("Server error [%s %s]:", req.method, req.path, {
+  // The person gets an opaque handle, the log gets the detail, and the two can
+  // be joined by whoever has access to the logs. Nothing about the schema
+  // crosses the wire: no message, no code, no hint, no constraint name. Those
+  // three fields used to be returned here alongside the mask below, which
+  // defeated it — a 500 said "Internal server error" and then spelled out the
+  // Postgres failure underneath, on public routes, to anyone who could provoke
+  // a query error.
+  const requestId = crypto.randomUUID().slice(0, 8);
+
+  console.error("Server error [%s %s] (request_id %s):", req.method, req.path, requestId, {
     message: error.message,
     code: error.code,
     details: error.details,
@@ -18495,11 +18519,11 @@ app.use(function (error, req, res, next) {
 
   const status = error.status || error.statusCode || 500;
 
+  // A non-500 carries its own status because something threw it deliberately,
+  // and its message was written for a human to read. Those keep going out.
   return res.status(status).json({
     error: status === 500 ? "Internal server error" : error.message,
-    db_message: error.message || undefined,
-    db_code: error.code || undefined,
-    db_hint: error.hint || error.details || undefined
+    request_id: requestId
   });
 });
 var dripSchedulerRunning = false;
