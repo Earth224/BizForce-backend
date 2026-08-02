@@ -26,8 +26,6 @@ const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
-const transits = require("./transits");
-const createTtlCache = require("./lib/ttlCache");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -152,31 +150,12 @@ const PLAN_CONFIG = {
     ],
     dashboard: "enterprise",
     support: "dedicated"
-  },
-  chart: {
-    name: "Chart",
-    price: 29.99,
-    maxAgents: 0,
-    maxWebsites: 0,
-    monthlyTasks: 0,
-    allowedAgents: [],
-    dashboard: "chart",
-    support: "email"
   }
 };
 
 const STRIPE_PRICE_TO_PLAN = {};
 if (process.env.STRIPE_STARTER_PRICE_ID) {
   STRIPE_PRICE_TO_PLAN[process.env.STRIPE_STARTER_PRICE_ID] = "all_access";
-}
-// Both chart price ids map to the same plan string. The billing interval is
-// Stripe's concern; entitlement does not care whether someone paid monthly or
-// annually.
-if (process.env.STRIPE_CHART_MONTHLY_PRICE_ID) {
-  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_CHART_MONTHLY_PRICE_ID] = "chart";
-}
-if (process.env.STRIPE_CHART_ANNUAL_PRICE_ID) {
-  STRIPE_PRICE_TO_PLAN[process.env.STRIPE_CHART_ANNUAL_PRICE_ID] = "chart";
 }
 
 // What a checkout caller is allowed to ask for.
@@ -190,27 +169,12 @@ if (process.env.STRIPE_CHART_ANNUAL_PRICE_ID) {
 // envVar holds the NAME of the variable, not its value, because process.env is
 // read at request time rather than at module load. A price id added in Railway
 // therefore takes effect without a redeploy.
-//
-// chart and chart_annual are two billing intervals of one product and so share
-// the plan string "chart" — entitlement does not care how someone paid.
 const CHECKOUT_PRODUCTS = {
   all_access: {
     envVar: "STRIPE_STARTER_PRICE_ID",
     plan: "all_access",
     successPath: "/dashboard.html?subscribed=1",
     cancelPath: "/app.html"
-  },
-  chart: {
-    envVar: "STRIPE_CHART_MONTHLY_PRICE_ID",
-    plan: "chart",
-    successPath: "/mychart.html?subscribed=1",
-    cancelPath: "/chart.html"
-  },
-  chart_annual: {
-    envVar: "STRIPE_CHART_ANNUAL_PRICE_ID",
-    plan: "chart",
-    successPath: "/mychart.html?subscribed=1",
-    cancelPath: "/chart.html"
   }
 };
 
@@ -501,11 +465,10 @@ const chartEmailLimiter = rateLimit({
   message: { error: "Too many chart emails from this address. Try again in an hour." }
 });
 
-// POST /api/charts/preview, and nothing else. Until now that route was covered
+// POST /api/charts/preview, and nothing else. That route is otherwise covered
 // only by the global apiLimiter — 300 requests per 15 minutes, a bound written
-// for reads, back when the route did nothing but resolve a place and turn a
-// crank. It now runs a transit report on a cache miss, which is real ephemeris
-// arithmetic on a route that needs no session.
+// for reads. This is not a read: every call resolves a place against the full
+// city dataset and computes a natal chart, on a route that needs no session.
 //
 // Twenty per 15 minutes is a limit on people rather than on load. Someone
 // casting charts for themselves, a partner, three children and both parents is
@@ -528,30 +491,6 @@ const chartPreviewLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many chart previews from this address. Try again shortly." }
 });
-
-// One transit report is roughly 60 milliseconds of ephemeris arithmetic. It is
-// also completely deterministic: the same natal longitudes on the same UTC date
-// always yield the same report, so a cached entry and a fresh computation are
-// interchangeable by construction.
-//
-// WHY THIS CACHE IS STILL HERE, stated honestly. It was written when a report
-// cost 1.3 seconds, and at that price it was mandatory — without it the route
-// was unshippable. Commit e0b2003 took the same report to about 60ms, and at
-// that price this is an optimization rather than a necessity. It is kept because
-// it is already built, costs nothing to keep, and removes repeat work for the
-// common case of one person reloading their own reading several times in a
-// sitting.
-//
-// It is NO LONGER LOAD-BEARING, and nothing downstream should assume it is.
-// Ripping it out would make the route slower and would not make it broken. Any
-// future code that only works because a report happens to be cached is relying
-// on something this comment explicitly disclaims.
-//
-// Still NEVER persisted. A report is arithmetic, not state; writing it to
-// Postgres would buy durability nobody needs and cost a migration, a schema
-// surface and a staleness question. A cold cache after a redeploy costs one
-// recomputation, which is now 60ms.
-const transitCache = createTtlCache({ maxEntries: 500, ttlMs: 24 * 60 * 60 * 1000 });
 
 app.use(apiLimiter);
 
@@ -1828,36 +1767,6 @@ async function requireActiveSubscription(req, res, next) {
     req.subscription = planState.subscription;
     req.plan = planState.plan;
     req.planConfig = planState.config;
-    next();
-  } catch (error) {
-    next(error);
-  }
-}
-
-// This gates. It refuses any request from a user who does not hold an active
-// chart subscription, and it is the single place that check lives.
-//
-// requireActiveSubscription is deliberately NOT used here. That middleware gates
-// the $199 platform plan, which is a different product on a different funnel;
-// someone who bought a chart reading has no platform subscription and must not
-// be asked for one, and someone on the platform plan has not thereby bought a
-// chart. Reusing it would silently entitle the wrong people and refuse the right
-// ones.
-//
-// It asks hasActivePlan rather than getUserPlan because holding a chart
-// subscription is a question about whether a specific plan is among the ones a
-// user holds, not about which single plan is newest.
-async function requireChartEntitlement(req, res, next) {
-  try {
-    const entitled = await hasActivePlan(req.user.id, "chart");
-
-    if (!entitled) {
-      return res.status(402).json({
-        error: "Chart subscription required",
-        upgrade_required: true
-      });
-    }
-
     next();
   } catch (error) {
     next(error);
@@ -7933,50 +7842,9 @@ app.post("/api/charts/preview", chartPreviewLimiter, async function (req, res, n
     // ── 4. Compute ─────────────────────────────────────────────────────────
     // computeNatalFromResolved is pure — no database, no network, no place
     // resolution — so there is nothing to undo and nothing to clean up. The
-    // chart itself is returned unchanged; this route adds exactly ONE field of
-    // its own, transitTeaser, and nothing else. Every natal key keeps its value
-    // and its meaning, so a client that predates the teaser reads this response
-    // exactly as it always did.
+    // chart itself is returned unchanged: every natal key keeps its value and
+    // its meaning, and this route adds no field of its own.
     var chart = computeNatalFromResolved(parsedDate, parsedTime, chosen);
-
-    // ── 5. The teaser ──────────────────────────────────────────────────────
-    // The natal chart is free and stays free. It is the lead magnet, and it is
-    // also not an honest thing to bill monthly for: a natal chart never changes,
-    // and charging rent on a static document is a subscription that gives back
-    // nothing after the first day.
-    //
-    // Transits DO change. That is why transits are the product and this is only
-    // a teaser for it.
-    //
-    // What it gives away is counts and exactly one date. A date is the thing a
-    // person cannot produce for themselves — it is the whole difference between
-    // "something is happening" and knowing when — and one real date is what
-    // proves the other twenty-one are real too. What it withholds is everything
-    // else: no active list, no second event, no orbs. Those are the product.
-    var natalLongitudes = natalLongitudesFromChart(chart);
-
-    if (!natalLongitudes) {
-      // No longitudes to run transits against. The chart is still a chart and
-      // is still worth returning; the teaser is simply absent, and null says
-      // that plainly rather than leaving the key off and making a client guess
-      // whether it forgot to look.
-      chart.transitTeaser = null;
-      return res.json(chart);
-    }
-
-    var report = getTransitReport(natalLongitudes, new Date());
-
-    chart.transitTeaser = {
-      activeCount: report.active.length,
-      eventCount:  report.events.length,
-      windowDays:  365,
-      nextEvent:   report.events.length === 0 ? null : {
-        date:       report.events[0].date,
-        transiting: report.events[0].transiting,
-        natal:      report.events[0].natal,
-        aspect:     report.events[0].aspect
-      }
-    };
 
     return res.json(chart);
   } catch (error) {
@@ -9131,105 +8999,6 @@ app.get("/api/birth-records/:id/chart", requireAuth, async function (req, res, n
     chart.placeConfidence = record.place_confidence;
 
     return res.json(chart);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ── Transits against a stored birth record ───────────────────────────────
-//
-// Everything the /chart route above says about frozen coordinates applies here
-// unchanged, and for the same reason: the natal side of a transit is the stored
-// resolution, never a fresh one. So this route mirrors that one exactly — same
-// 404 for a malformed id, same query scoped by id AND user_id, same 409 for an
-// unresolved place, same 500 for a stored date that no longer parses. Two routes
-// reading the same row must fail the same way, or a caller learns that a record
-// exists from one and that it does not from the other.
-//
-// It does NOT return the natal chart. The chart has its own endpoint and
-// duplicating it here would create two places a chart can be read from, which is
-// two places it can be read from DIFFERENTLY once either one grows a field. What
-// goes back is the record's identity and the report, nothing else.
-//
-// requireChartEntitlement now enforces the chart subscription — see its
-// definition. A user without one gets 402 before this handler runs.
-app.get("/api/birth-records/:id/transits", requireAuth, requireChartEntitlement, async function (req, res, next) {
-  try {
-    var userId   = req.user.id;
-    var recordId = String(req.params.id || "").trim();
-
-    // Same 404-not-400 reasoning as the /chart route: a non-uuid would reach the
-    // database as 22P02 and surface as a 500, and not_found is the only lookup
-    // failure either route defines.
-    if (!isValidUuid(recordId)) {
-      return res.status(404).json({ error: "not_found" });
-    }
-
-    // Scoped by BOTH id and user_id, so another account's row is indistinguishable
-    // from one that does not exist. Same named columns as /chart — contact_email
-    // is on this table and no part of a transit response needs it.
-    var result = await supabase
-      .from("birth_records")
-      .select("id, label, birth_name, birth_date, birth_time, place_query, place_label, place_confidence, latitude, longitude, timezone")
-      .eq("id", recordId)
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    if (!result.data) {
-      return res.status(404).json({ error: "not_found" });
-    }
-
-    var record = result.data;
-
-    if (record.place_confidence === "unresolved") {
-      return res.status(409).json({ error: "place_unresolved" });
-    }
-
-    // A stored date that fails the band is a corrupt row, not a bad request —
-    // POST /api/birth-records validated it through this same helper before
-    // writing. Server fault, reported as one.
-    var parsedDate = parseBirthDate(record.birth_date);
-    if (!parsedDate.valid) {
-      return res.status(500).json({ error: "stored_date_invalid", reason: parsedDate.reason });
-    }
-
-    var parsedTime = parseBirthTime(record.birth_time);
-
-    // Number() for the same reason as /chart: a coordinate arriving as a string
-    // would concatenate rather than add inside the RAMC computation and produce a
-    // plausible-looking chart with a wrong Ascendant.
-    var resolved = {
-      latitude:  Number(record.latitude),
-      longitude: Number(record.longitude),
-      timezone:  record.timezone,
-      label:     record.place_label
-    };
-
-    var chart = computeNatalFromResolved(parsedDate, parsedTime, resolved);
-
-    // The natal side of the report is read back out of the chart just computed,
-    // never recomputed, so the two can never disagree.
-    var natalLongitudes = natalLongitudesFromChart(chart);
-    if (!natalLongitudes) {
-      return res.status(500).json({ error: "chart_unavailable" });
-    }
-
-    // new Date() rather than a client-supplied instant: transits are "what is in
-    // effect now", and letting a caller name the moment would make this a
-    // different product with a different cache key space.
-    var report = getTransitReport(natalLongitudes, new Date());
-
-    return res.json({
-      recordId:   record.id,
-      label:      record.label,
-      computedAt: report.computedAt,
-      active:     report.active,
-      events:     report.events
-    });
   } catch (error) {
     next(error);
   }
@@ -10808,77 +10577,6 @@ function computeEclipticLongitudes(utcDate) {
     longitudes[name] = ecl.elon;
   });
   return longitudes;
-}
-
-// The ten natal longitudes a transit report runs against, read back OUT of a
-// chart that has already been computed rather than recomputed from a Date.
-//
-// That is the whole reason this exists. Recomputing would mean two independent
-// paths to the same numbers, and two paths can disagree — a different UTC
-// conversion, a different aberration flag, a rounding introduced on one side.
-// A transit report that disagrees with the chart it is presented beside is worse
-// than no report, because both look authoritative. Reusing chart.planets makes
-// disagreement structurally impossible.
-//
-// Returns null rather than a partial object when there is nothing to read: a
-// falsy chart, a chart that reported available:false, or a planets field that is
-// not an array. The caller decides what a null means for its response.
-function natalLongitudesFromChart(chart) {
-  if (!chart || chart.available !== true || !Array.isArray(chart.planets)) {
-    return null;
-  }
-
-  var longitudes = {};
-  chart.planets.forEach(function (planet) {
-    longitudes[planet.name] = planet.longitude;
-  });
-  return longitudes;
-}
-
-// The cache key. Ten longitudes at four decimal places, in NATAL_PLANET_NAMES
-// order, then the UTC calendar date.
-//
-// It deliberately contains NO user id, NO record id and no personal data of any
-// kind. Two consequences, both wanted:
-//
-//   Two people born at the same instant in the same place share an entry, which
-//   is correct — their transits ARE identical, and keying by user id would
-//   compute the same report twice and store it twice.
-//
-//   The key discloses nothing if it ends up in a log line, a stats dump or an
-//   error message. A row of longitudes is not a person; it does not identify
-//   whose chart it is, and it cannot be resolved back to an account.
-//
-// Four decimals is roughly 0.36 arcseconds, far finer than any difference that
-// changes a report, so two keys that differ describe genuinely different charts.
-// The date is the UTC calendar day rather than the instant: a report is a
-// day-scale product, and keying to the second would guarantee a permanent miss.
-function transitCacheKey(natalLongitudes, whenUtc) {
-  var parts = NATAL_PLANET_NAMES.map(function (name) {
-    return Number(natalLongitudes[name]).toFixed(4);
-  });
-  return parts.join(",") + "|" + whenUtc.toISOString().slice(0, 10);
-}
-
-// The only way a route should reach a transit report. Synchronous throughout:
-// computeTransitReport is pure arithmetic with no I/O, so making this async
-// would add a microtask and an await to every call site and buy nothing.
-//
-// That reasoning is STRONGER since e0b2003, not weaker. At the old 1.3 seconds a
-// synchronous call was a real stall on the event loop and the argument for
-// staying sync was a trade. At roughly 60 milliseconds it is comfortably
-// non-blocking — in the same range as the JSON serialisation and the database
-// round trip already on this path — so there is nothing left to trade away and
-// no yielding variant worth writing.
-//
-// getOrCompute runs the producer only on a miss, so even that ~60ms is paid
-// once per distinct chart per UTC day. If the producer throws, nothing is cached
-// and the error propagates unchanged to the caller's catch.
-function getTransitReport(natalLongitudes, whenUtc) {
-  var key = transitCacheKey(natalLongitudes, whenUtc);
-  return transitCache.getOrCompute(key, function () {
-    return transits.computeTransitReport(natalLongitudes, whenUtc);
-  });
 }
 
 // Resolves a free-text birth place into a ranked, filtered candidate list, or
