@@ -16926,6 +16926,284 @@ var CAPTURE_SOURCES = ["bluesky", "mastodon", "youtube", "direct", "other"];
 var CAPTURE_BRANDS = ["mrearthrose", "swordvitality", "blacksuncircle", "bizforce"];
 var WELCOME_CAMPAIGN_ID = "c735e5ea-3262-49a7-ab05-7c72971d0ff8";
 
+/* The phone half of the contacts spine.
+
+   contacts.phone, its format CHECK (contacts_phone_format_check) and its unique
+   partial index on (owner_id, lower(phone)) have all existed since migration
+   069, and nothing has ever written one. The column, the constraint and the
+   index have been sitting there unexercised since the day they were created;
+   this is the first code to use them.
+
+   The email path in POST /api/contacts/capture is the model this follows line
+   for line — same select-then-insert shape, same name-filling rule, same 23505
+   race handling, same "return the id or throw" contract. Two paths onto one
+   table that de-duplicated differently would produce two contacts for one
+   person, so the resemblance is the point and any change to one belongs in
+   both.
+
+   The caller supplies an already-canonicalized phone. This does not canonicalize
+   and must not be handed a raw one: the unique index is on lower(phone) and the
+   CHECK permits only canonical form, so a raw value would either fail the insert
+   outright or, if it somehow passed, create a duplicate the index cannot see.
+
+   ── ONE PERSON IS ONE CONTACT ROW ──
+
+   The email is taken as well as the phone, and it is tried FIRST, because a
+   submission carrying both is the only chance this system gets to link the two
+   channels. Nothing merges contacts afterwards: contacts_owner_email_uniq and
+   contacts_owner_phone_uniq are independent partial indexes, each blind to the
+   other's column, so an email-only row and a phone-only row for the same person
+   sit there as two people forever and no query would show anything wrong.
+
+   The cost of that is not tidiness. A person who exists twice cannot be
+   unsubscribed once — a revocation lands on whichever row the revoking channel
+   found, the other row keeps its granted event and its opted-in flag, and the
+   evidence then says two contradictory things about one human being. Linking at
+   write time is the only moment the link is free. */
+async function findOrCreateContactByPhone(ownerId, phone, email, name, source, brand) {
+  var hasEmail = typeof email === "string" && email.length > 0;
+
+  /* ── 1. By email first, when there is one ──
+     A hit here is the merge case: a contact already known by address, now also
+     reachable by number. */
+  if (hasEmail) {
+    var byEmail = await supabase
+      .from("contacts")
+      .select("id, name, phone")
+      .eq("owner_id", ownerId)
+      .eq("email", email)
+      .maybeSingle();
+
+    if (byEmail.error) {
+      throw byEmail.error;
+    }
+
+    if (byEmail.data && (!byEmail.data.phone || byEmail.data.phone === phone)) {
+      var emailRowUpdates = { last_seen: nowIso() };
+
+      /* Filling a null phone is the merge. An already-matching phone falls in
+         here too and simply writes nothing new — same row, same number. */
+      if (!byEmail.data.phone) {
+        emailRowUpdates.phone = phone;
+      }
+
+      if (name && !byEmail.data.name) {
+        emailRowUpdates.name = name;
+      }
+
+      var emailRowUpdate = await supabase
+        .from("contacts")
+        .update(emailRowUpdates)
+        .eq("id", byEmail.data.id);
+
+      if (!emailRowUpdate.error) {
+        return byEmail.data.id;
+      }
+
+      var mergeConflictText = String(emailRowUpdate.error.message || "") + " " +
+        String(emailRowUpdate.error.details || "") + " " +
+        String(emailRowUpdate.error.constraint || "");
+
+      if (emailRowUpdate.error.code !== "23505" || mergeConflictText.indexOf("phone") === -1) {
+        throw emailRowUpdate.error;
+      }
+
+      /* The merge could not happen: a SEPARATE row already holds this number, so
+         writing it onto the email's row violates contacts_owner_phone_uniq. The
+         sequence that produces this is ordinary — captured by phone first, then
+         by email and phone later — and it is not an error state, it is two rows
+         that describe one person.
+
+         THE PHONE ROW WINS. It is the row carrying this person's SMS consent
+         events, and those are the TCPA evidence this ledger exists to hold.
+         Attaching an email address to that row costs nothing and loses nothing;
+         attaching the number to the email row instead would mean this grant, and
+         every future one, lands somewhere the existing SMS history is not.
+
+         This does NOT merge the two rows. Nothing here deletes the email row,
+         rewrites it, or moves anything off it — it stays exactly as it was, and
+         the person still exists twice. All this chooses is which of the two rows
+         this submission's consent event attaches to, and the logs below say so
+         plainly rather than leaving a silent second row for someone to find. */
+      var phoneRow = await supabase
+        .from("contacts")
+        .select("id, name, email")
+        .eq("owner_id", ownerId)
+        .eq("phone", phone)
+        .maybeSingle();
+
+      if (phoneRow.error) {
+        throw phoneRow.error;
+      }
+      if (!phoneRow.data) {
+        // The index says the number is taken and it cannot be read back. A retry
+        // will not fix that.
+        throw emailRowUpdate.error;
+      }
+
+      var phoneRowUpdates = { last_seen: nowIso() };
+
+      if (name && !phoneRow.data.name) {
+        phoneRowUpdates.name = name;
+      }
+
+      /* An email already on the phone row is left alone, on the same rule the
+         name follows: filling a null is a gain, replacing a value is a guess. */
+      if (!phoneRow.data.email) {
+        phoneRowUpdates.email = email;
+        console.warn("[contacts] " + phone + " and " + email + " were separate rows — " +
+          "the number was captured before the address. Using the phone row (" + phoneRow.data.id +
+          "), which carries the SMS consent history, and attaching the address to it. The " +
+          "email row (" + byEmail.data.id + ") still exists and is not being changed.");
+      } else {
+        console.warn("[contacts] " + phone + " is already on a contact whose address is " +
+          phoneRow.data.email + ", and this capture carried " + email + ". Not overwriting. " +
+          "Using the phone row (" + phoneRow.data.id + ") for this consent event because it " +
+          "holds the SMS history; the row for " + email + " (" + byEmail.data.id +
+          ") still exists and is not being changed. One person, two rows, two addresses.");
+      }
+
+      var phoneRowUpdate = await supabase
+        .from("contacts")
+        .update(phoneRowUpdates)
+        .eq("id", phoneRow.data.id);
+
+      if (phoneRowUpdate.error) {
+        throw phoneRowUpdate.error;
+      }
+
+      return phoneRow.data.id;
+    }
+
+    /* A DIFFERENT number already on the email's row is not overwritten and not
+       an error. One address with two numbers is an ordinary thing — a person who
+       changed carriers, a shared household address, a work line and a mobile —
+       and replacing the stored one would destroy a number someone may still be
+       opted in on. The phone path below owns this submission instead, which
+       means a second contact row: two rows, but neither one lying. */
+    if (byEmail.data) {
+      console.warn("[contacts] " + email + " is already linked to " + byEmail.data.phone +
+        " and this capture carried " + phone + ". Not overwriting. The stored number stands " +
+        "and this number is being handled as its own contact, so this person now has two rows.");
+    }
+  }
+
+  var existing = await supabase
+    .from("contacts")
+    .select("id, name")
+    .eq("owner_id", ownerId)
+    .eq("phone", phone)
+    .maybeSingle();
+
+  if (existing.error) {
+    throw existing.error;
+  }
+
+  if (existing.data) {
+    var updates = { last_seen: nowIso() };
+
+    /* A name already on the row is never overwritten — same rule as the email
+       path. Filling a null is a gain, replacing a value is a guess. */
+    if (name && !existing.data.name) {
+      updates.name = name;
+    }
+
+    var contactUpdate = await supabase
+      .from("contacts")
+      .update(updates)
+      .eq("id", existing.data.id);
+
+    if (contactUpdate.error) {
+      throw contactUpdate.error;
+    }
+
+    return existing.data.id;
+  }
+
+  /* Both channels on the new row when both were supplied, for the same reason
+     the email lookup runs first: this is the moment the link is free. */
+  var contactRow = {
+    owner_id: ownerId,
+    phone:    phone,
+    name:     name,
+    source:   source,
+    brand:    brand
+  };
+
+  if (hasEmail) {
+    contactRow.email = email;
+  }
+
+  var contactInsert = await supabase
+    .from("contacts")
+    .insert(contactRow)
+    .select("id")
+    .single();
+
+  if (!contactInsert.error) {
+    return contactInsert.data.id;
+  }
+
+  /* 23505 means another request inserted this same person between the selects
+     above and this insert. That is not an error, it is two submissions at once.
+     Re-select and carry on, so BOTH requests write their consent event rather
+     than one of them throwing.
+
+     EITHER index can be the one that caught it, which is why both are handled:
+     the row now carries an email as well as a phone, so a concurrent insert
+     collides on contacts_owner_phone_uniq or on contacts_owner_email_uniq
+     depending on which channel the other request got in with first. Re-selecting
+     by the wrong column would find nothing and turn a race into a 500.
+
+     Constraint text is checked alongside the code, matching the email path, so
+     an unrelated unique violation is not mistaken for either of these. */
+  var conflictText = String(contactInsert.error.message || "") + " " +
+    String(contactInsert.error.details || "") + " " +
+    String(contactInsert.error.constraint || "");
+
+  if (contactInsert.error.code === "23505" && conflictText.indexOf("phone") !== -1) {
+    var raced = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("owner_id", ownerId)
+      .eq("phone", phone)
+      .maybeSingle();
+
+    if (raced.error) {
+      throw raced.error;
+    }
+    if (!raced.data) {
+      // The unique index reported this number as taken and it cannot be read
+      // back. Something is wrong that a retry will not fix.
+      throw contactInsert.error;
+    }
+
+    return raced.data.id;
+  }
+
+  if (hasEmail && contactInsert.error.code === "23505" && conflictText.indexOf("email") !== -1) {
+    var racedByEmail = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("owner_id", ownerId)
+      .eq("email", email)
+      .maybeSingle();
+
+    if (racedByEmail.error) {
+      throw racedByEmail.error;
+    }
+    if (!racedByEmail.data) {
+      // The unique index reported this address as taken and it cannot be read
+      // back. Something is wrong that a retry will not fix.
+      throw contactInsert.error;
+    }
+
+    return racedByEmail.data.id;
+  }
+
+  throw contactInsert.error;
+}
+
 app.post("/api/capture", async function (req, res) {
   try {
     var email = safeText(req.body.email, 255);
@@ -17083,6 +17361,60 @@ app.post("/api/capture", async function (req, res) {
 
           if (statusUpdate.error) {
             console.error("[capture] Failed to update lead_captures status:", statusUpdate.error.message);
+          }
+
+          /* The ledger entry for the grant that just happened.
+
+             consent_status on the row above remains the flag the drip engine and
+             the /api/sms/send gate actually read. This does not replace it and
+             changes nothing about how a send is decided today — it records
+             alongside it.
+
+             Why record at all when the flag already exists: consent_status is a
+             text column with NO CHECK constraint and a default of 'opted_in', it
+             is updated in place, and it carries no provenance whatsoever — no
+             address, no user agent, no source, and a consent_timestamp that the
+             next write overwrites. It can say opted_in without anything showing
+             how it got there. consent_events is append-only and carries the ip,
+             the user agent, the source and the moment, which is the record that
+             answers a TCPA challenge. A flag is an assertion; the ledger is
+             evidence.
+
+             Wrapped whole because it must not be able to fail the request. The
+             subscriber row and the lead_captures row above are already written
+             and are correct; a ledger failure is a gap in the evidence, not a
+             reason to reject a capture that succeeded or to leave the caller
+             thinking it did not. Which is exactly why the log below has to be
+             loud: the grant DID happen, the person is opted in and will be
+             texted, and this is the only notice anyone gets that nothing wrote
+             it down. */
+          try {
+            var smsContactId = await findOrCreateContactByPhone(
+              CAPTURE_OWNER_ID, phone, email, name, source, brand);
+
+            var smsConsentInsert = await supabase
+              .from("consent_events")
+              .insert({
+                contact_id: smsContactId,
+                channel:    "sms",
+                action:     "granted",
+                source:     source,
+                page_url:   safeText(req.body.page_url, 500),
+                ip_address: req.ip,
+                user_agent: safeText(req.get("User-Agent"), 500)
+              });
+
+            if (smsConsentInsert.error) {
+              console.error("[capture] SMS CONSENT NOT RECORDED for " + phone + " — " +
+                smsConsentInsert.error.message + ". The subscriber row was written and this " +
+                "person is opted in and will be texted, but consent_events has no evidence " +
+                "of the grant: no ip, no user agent, no timestamp. The capture itself stands.");
+            }
+          } catch (ledgerErr) {
+            console.error("[capture] SMS CONSENT NOT RECORDED for " + phone + " — " +
+              ((ledgerErr && ledgerErr.message) || ledgerErr) + ". The subscriber row was " +
+              "written and this person is opted in and will be texted, but consent_events has " +
+              "no evidence of the grant. The capture itself stands.");
           }
         } else {
           console.error("[capture] sms_subscribers upsert failed:", subscriberUpsert.error.message);
