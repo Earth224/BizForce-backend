@@ -16995,58 +16995,98 @@ app.post("/api/capture", async function (req, res) {
     var enrolled = false;
 
     if (phone && smsConsent) {
-      var subscriberUpsert = await supabase
+      /* A prior STOP is a documented revocation, and a form submission does not
+         overwrite it. The upsert below writes consent_status "opted_in"
+         unconditionally on conflict, so without this lookup a public,
+         unauthenticated endpoint could reverse an opt-out that the carrier
+         delivered — and reverse it silently.
+
+         Someone who texted STOP and later filled in this form may well have
+         meant to resubscribe. The way to record that is a START text, which is
+         the channel the carrier and the regulator both recognise, and which the
+         inbound handler already turns back into opted_in. It is not this route's
+         to infer.
+
+         What is actually at stake is the record rather than the flag. Flipping
+         it here would leave a row reading opted_in with nothing anywhere showing
+         the opt-out ever happened — the send would look authorized, and the
+         evidence that it was not would have been overwritten by the same write.
+         That is precisely the record that cannot be defended in a TCPA dispute. */
+      var priorSubscriber = await supabase
         .from("sms_subscribers")
-        .upsert({
-          user_id: CAPTURE_OWNER_ID,
-          phone_number: phone,
-          customer_name: name || null,
-          consent_status: "opted_in",
-          consent_timestamp: timestamp
-        }, { onConflict: "user_id,phone_number" })
-        .select("id")
-        .single();
+        .select("id, consent_status")
+        .eq("user_id", CAPTURE_OWNER_ID)
+        .eq("phone_number", phone)
+        .maybeSingle();
 
-      if (!subscriberUpsert.error) {
-        smsSynced = true;
+      /* Fail closed. An unreadable consent state is not an absent one, and the
+         upsert cannot ask again once it has already overwritten the answer. The
+         lead_captures row above stands either way — that record is the point of
+         this route and is not lost to a subscriber-table problem. */
+      if (priorSubscriber.error) {
+        console.error("[capture] Consent lookup FAILED for " + phone + " — " +
+          priorSubscriber.error.message + ". Skipping the sms_subscribers upsert: a prior " +
+          "opt-out could not be ruled out, so it is not being overwritten. The lead_captures " +
+          "row was still written.");
+      } else if (priorSubscriber.data && priorSubscriber.data.consent_status === "opted_out") {
+        console.warn("[capture] OPT-OUT PRESERVED for " + phone + " — a public capture " +
+          "attempted to re-opt-in a number that had previously opted out. The opt-out stands " +
+          "and no subscriber row was written. Resubscribing requires a START text. The " +
+          "lead_captures row was still written.");
+      } else {
+        var subscriberUpsert = await supabase
+          .from("sms_subscribers")
+          .upsert({
+            user_id: CAPTURE_OWNER_ID,
+            phone_number: phone,
+            customer_name: name || null,
+            consent_status: "opted_in",
+            consent_timestamp: timestamp
+          }, { onConflict: "user_id,phone_number" })
+          .select("id")
+          .single();
 
-        var subscriberId = subscriberUpsert.data && subscriberUpsert.data.id;
+        if (!subscriberUpsert.error) {
+          smsSynced = true;
 
-        if (subscriberId) {
-          try {
-            var enrollmentInsert = await supabase
-              .from("sms_campaign_enrollments")
-              .insert({
-                user_id: CAPTURE_OWNER_ID,
-                campaign_id: WELCOME_CAMPAIGN_ID,
-                subscriber_id: subscriberId
-              });
+          var subscriberId = subscriberUpsert.data && subscriberUpsert.data.id;
 
-            if (!enrollmentInsert.error) {
-              enrolled = true;
-            } else if (enrollmentInsert.error.code === "23505") {
-              console.log("[capture] Subscriber already enrolled in welcome campaign, skipping.");
-              enrolled = true;
-            } else {
-              console.error("[capture] Enrollment insert failed:", enrollmentInsert.error.message);
+          if (subscriberId) {
+            try {
+              var enrollmentInsert = await supabase
+                .from("sms_campaign_enrollments")
+                .insert({
+                  user_id: CAPTURE_OWNER_ID,
+                  campaign_id: WELCOME_CAMPAIGN_ID,
+                  subscriber_id: subscriberId
+                });
+
+              if (!enrollmentInsert.error) {
+                enrolled = true;
+              } else if (enrollmentInsert.error.code === "23505") {
+                console.log("[capture] Subscriber already enrolled in welcome campaign, skipping.");
+                enrolled = true;
+              } else {
+                console.error("[capture] Enrollment insert failed:", enrollmentInsert.error.message);
+              }
+            } catch (enrollErr) {
+              console.error("[capture] Enrollment error:", enrollErr.message || enrollErr);
             }
-          } catch (enrollErr) {
-            console.error("[capture] Enrollment error:", enrollErr.message || enrollErr);
+          } else {
+            console.error("[capture] sms_subscribers upsert returned no id, skipping enrollment.");
+          }
+
+          var statusUpdate = await supabase
+            .from("lead_captures")
+            .update({ status: enrolled ? "enrolled" : "synced" })
+            .eq("id", captureInsert.data.id);
+
+          if (statusUpdate.error) {
+            console.error("[capture] Failed to update lead_captures status:", statusUpdate.error.message);
           }
         } else {
-          console.error("[capture] sms_subscribers upsert returned no id, skipping enrollment.");
+          console.error("[capture] sms_subscribers upsert failed:", subscriberUpsert.error.message);
         }
-
-        var statusUpdate = await supabase
-          .from("lead_captures")
-          .update({ status: enrolled ? "enrolled" : "synced" })
-          .eq("id", captureInsert.data.id);
-
-        if (statusUpdate.error) {
-          console.error("[capture] Failed to update lead_captures status:", statusUpdate.error.message);
-        }
-      } else {
-        console.error("[capture] sms_subscribers upsert failed:", subscriberUpsert.error.message);
       }
     }
 
