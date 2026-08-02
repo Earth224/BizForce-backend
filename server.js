@@ -16663,6 +16663,57 @@ app.post("/api/sms/run-engine", requireAuth, async function (req, res, next) {
 
 /* ── SMS ─────────────────────────────────────────────────────────────────── */
 
+/* Consent for one phone number as the LEDGER has it, derived rather than read
+   off a flag. Returns "granted", "revoked", or null.
+
+   NULL IS NEITHER A REFUSAL NOR A PERMISSION. It means the ledger has nothing
+   to say about this number: no contact row, or a contact carrying no sms
+   events. What silence is worth is the caller's decision, not this function's.
+
+   This mirrors the derivation in sendEmail step 1, which reads the same table
+   with channel 'email' — same shape, same ordering, same "most recent row wins"
+   rule, and the same index (consent_events_contact_channel_time_idx) serves
+   both. The only thing that differs is what the two callers do with an absent
+   row, and that difference lives in the callers.
+
+   ON ANY ERROR THIS THROWS. It does not return null, and it swallows nothing:
+   null already means "the ledger is silent", and a failed read is not silence.
+   The caller must fail closed — this feeds the one route that puts a message on
+   a real phone, and an unreadable consent state is not a verified opt-in. */
+async function smsConsentFromLedger(phone) {
+  var contact = await supabase
+    .from("contacts")
+    .select("id")
+    .eq("owner_id", CAPTURE_OWNER_ID)
+    .eq("phone", phone)
+    .maybeSingle();
+
+  if (contact.error) {
+    throw contact.error;
+  }
+
+  /* No contact is not "no consent" — it is a number the ledger has never been
+     told about, which is most of sms_subscribers. */
+  if (!contact.data) {
+    return null;
+  }
+
+  var events = await supabase
+    .from("consent_events")
+    .select("action")
+    .eq("contact_id", contact.data.id)
+    .eq("channel", "sms")
+    .order("occurred_at", { ascending: false })
+    .limit(1);
+
+  if (events.error) {
+    throw events.error;
+  }
+
+  var latest = events.data && events.data[0];
+  return latest ? latest.action : null;
+}
+
 app.post("/api/sms/send", requireAuth, async function (req, res, next) {
   try {
     var accountSid  = (process.env.TWILIO_ACCOUNT_SID   || "").trim();
@@ -16737,6 +16788,49 @@ app.post("/api/sms/send", requireAuth, async function (req, res, next) {
 
     var subscriber = consentLookup.data;
 
+    /* 1. The ledger, read before any decision is made on the flag. It throws on
+          a failed read rather than returning null, so an unreadable consent
+          state lands in this catch and fails closed exactly as the failed
+          subscriber lookup above does — same status, same shape of message. A
+          consent check that could not run is not a consent check that passed. */
+    var ledgerConsent = null;
+    try {
+      ledgerConsent = await smsConsentFromLedger(toCanonical || to);
+    } catch (ledgerError) {
+      console.error("[sms/send] Consent LEDGER lookup FAILED for " + to + " — " +
+        ((ledgerError && ledgerError.message) || ledgerError) +
+        ". Refusing the send: consent could not be verified.");
+      return res.status(500).json({
+        error: "Could not verify consent for this number — the consent ledger lookup failed, so the message was not sent."
+      });
+    }
+
+    /* 2. A revocation in the ledger blocks, whatever the flag says. This is the
+          exact population the ledger was added to cover: a STOP whose
+          sms_subscribers update matched no rows still wrote a revoked event
+          here, and left consent_status reading opted_in. Before this check that
+          number got texted.
+
+          Both readings go in the log, and the disagreement is called out by
+          name. A flag saying opted_in while the ledger says revoked is not
+          noise around the block — it IS the reason this check exists, and the
+          log is the only place it is ever visible. */
+    if (ledgerConsent === "revoked") {
+      console.error("[sms/send] BLOCKED BY LEDGER — user " + req.user.id + " attempted to message " + to +
+        ", whose most recent consent_events row on the sms channel is 'revoked'. sms_subscribers says: " +
+        (subscriber ? subscriber.consent_status : "no row") + "." +
+        (subscriber && subscriber.consent_status !== "opted_out"
+          ? " THE FLAG AND THE LEDGER DISAGREE — the flag alone would have let this send through, which is" +
+            " the STOP-missed-the-subscriber-row case this check was added for."
+          : ""));
+      return res.status(403).json({
+        error: "This number has opted out and cannot be messaged."
+      });
+    }
+
+    /* 3. An opted_out flag blocks as it always has, whatever the ledger says.
+          The two sources are checked independently and either one refusing is
+          enough; neither can override the other into a send. */
     if (subscriber && subscriber.consent_status === "opted_out") {
       console.error("[sms/send] BLOCKED — user " + req.user.id + " attempted to message " + to +
         ", which has opted out. An application trying to message an opted-out number is a defect in that application.");
@@ -16745,12 +16839,34 @@ app.post("/api/sms/send", requireAuth, async function (req, res, next) {
       });
     }
 
-    /* Not a refusal: this route predates the subscriber table and has uses that
-       do not go through it, so refusing would break them. The warning is how we
-       find out how it is actually being used. */
-    if (!subscriber) {
+    /* 4. The ledger grants and nothing has refused, so this proceeds — and says
+          so, because a send standing on a recorded grant is a different thing
+          from a send standing on nothing, and the warning below is not about
+          it. */
+    if (ledgerConsent === "granted") {
+      console.log("[sms/send] Consent verified in the ledger for " + to +
+        " — most recent consent_events row on the sms channel is 'granted'.");
+    }
+
+    /* 5. The ledger said nothing at all. Fall back to exactly what this gate did
+          before it existed: block only on an opted_out flag, warn when there is
+          no subscriber row.
+
+          A null MUST NOT refuse. Most subscribers predate consent_events
+          entirely — they arrived through POST /api/sms/subscribers or the bulk
+          import, neither of which writes a ledger row — so silence here is the
+          normal case, not a suspicious one, and treating it as a refusal would
+          block nearly every legitimate send this route makes. That is the
+          opposite of sendEmail, which may treat absence as no consent because
+          every contact it mails came through a capture that wrote a granted
+          row.
+
+          Not a refusal either way: this route predates the subscriber table and
+          has uses that do not go through it, so refusing would break them. The
+          warning is how we find out how it is actually being used. */
+    if (!subscriber && ledgerConsent === null) {
       console.warn("[sms/send] NO CONSENT RECORD — user " + req.user.id + " is sending to " + to +
-        ", which has no row in sms_subscribers. Sent without a consent record on file.");
+        ", which has no row in sms_subscribers and nothing in consent_events. Sent without a consent record on file.");
     }
 
     console.log("[sms/send] User " + req.user.id + " → sending SMS to " + to);
