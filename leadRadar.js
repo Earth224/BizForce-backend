@@ -14,6 +14,26 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
 
+// The same account as CAPTURE_OWNER_ID in server.js, and the two must move
+// together. It was inlined bare at the resolveAnthropicKey call site, which
+// made that impossible to see: one literal here, one literal there, no name
+// tying them together, and changing either one leaves the other silently on
+// the old value.
+//
+// Not imported, because server.js does not export it — and requiring server.js
+// from here would be a circular import, since server.js already requires this
+// file. Two literals is the cost of that; a shared name and this comment are
+// what make the pair findable in the meantime.
+//
+// WHAT IT SELECTS: whose row in user_api_keys pays for the scoring calls.
+// Nothing else. It is not the tenant the leads belong to — bsky_leads has no
+// tenant column at all, no user_id and no owner of any kind, so there is no
+// ownership here for this value to express.
+//
+// When multi-tenancy lands both literals disappear, and this comment is the
+// note that says there were two of them.
+const SCORING_ACCOUNT_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+
 const KEYWORDS = [
   "natural energy supplement",
   "low libido",
@@ -200,7 +220,7 @@ async function scoreNewLeads() {
     var leads = data || [];
     console.log("[LeadRadar] scoring " + leads.length + " leads");
 
-    var apiKey = await resolveAnthropicKey("ea887c6e-e278-4a15-b7e9-cd78a9949b78");
+    var apiKey = await resolveAnthropicKey(SCORING_ACCOUNT_ID);
     var anthropic = new Anthropic({ apiKey: apiKey });
     // Counted apart, not together. A deferred lead is not a scored lead — it
     // has no score, it is going back on the queue, and the only thing that
