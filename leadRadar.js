@@ -179,10 +179,16 @@ async function startLeadRadar() {
 
 async function scoreNewLeads() {
   try {
+    // Ordered by score_attempts first so a lead that has failed twice does not
+    // sit at the front of the FIFO queue and consume a slot on every tick while
+    // fresh captures wait behind it. created_at breaks the tie within an
+    // attempt count, which preserves the oldest-first behaviour for the rows
+    // that have never been tried.
     var { data, error } = await supabase
       .from("bsky_leads")
       .select("*")
       .eq("status", "new")
+      .order("score_attempts", { ascending: true })
       .order("created_at", { ascending: true })
       .limit(20);
 
@@ -196,13 +202,37 @@ async function scoreNewLeads() {
 
     var apiKey = await resolveAnthropicKey("ea887c6e-e278-4a15-b7e9-cd78a9949b78");
     var anthropic = new Anthropic({ apiKey: apiKey });
-    var scoredCount = 0;
+    // Counted apart, not together. A deferred lead is not a scored lead — it
+    // has no score, it is going back on the queue, and the only thing that
+    // happened to it was a failed call. A summary that adds the two together
+    // reports a healthy-looking number while every call in the batch is
+    // failing, which is exactly the condition this counter should surface.
+    var scoredCount   = 0;
+    var deferredCount = 0;
 
     for (var i = 0; i < leads.length; i++) {
       var lead = leads[i];
       var updatePayload;
 
       try {
+        // The prompt used to interpolate post_text and nothing else, so the
+        // classifier could not tell a searched-for distress phrase from a
+        // hashtag it was never looking for. That distinction is measurable:
+        // mastodon pulls hashtag timelines and returns 617 scored rows for 7
+        // leads above 70 — a Claude call per row to find one buyer per 88.
+        // Bluesky searches free-text distress phrases and returns 105 above 70
+        // from 1,690, one per 16. The difference is what the query finds, not
+        // what the classifier does; a hashtag timeline is a list of people
+        // publishing about a topic, a phrase search is a list of people
+        // describing a problem. Telling the classifier which one it is reading
+        // is the cheapest correction available — one line of prompt, no extra
+        // call, no change to what gets captured.
+        var source  = lead.source || "bluesky";
+        var matched = lead.matched_keyword || "";
+        var discovery = source === "mastodon"
+          ? "pulled from the #" + matched + " hashtag timeline"
+          : "found by searching for the phrase " + JSON.stringify(matched);
+
         var prompt =
           "You are a buyer-intent classifier for three products:\n" +
           "- War Horse: a natural male vitality and energy supplement\n" +
@@ -214,7 +244,9 @@ async function scoreNewLeads() {
           "Score LOW (0-24) when the account appears to be teaching, coaching, promoting, or selling — even if the topic is a perfect match. Creators, coaches, and sellers are competition, not buyers.\n" +
           "Examples of low scores: sharing tips, explaining techniques to followers, promoting their own program or product, posting motivational content, using phrases like 'here is how', 'I teach', 'my clients', 'DM me'.\n\n" +
           "Score MIDDLE (25-59) for ambiguous posts where intent is unclear.\n\n" +
+          "The Source line tells you how the post was found. A post pulled from a hashtag timeline is far more likely to be a broadcaster than a seeker, because hashtagging is a publishing behaviour — weight accordingly.\n\n" +
           "Only assign a product tag to genuine seekers. For teachers/sellers set product to 'none'.\n\n" +
+          "Source: " + source + ", " + discovery + "\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
           "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\"}";
@@ -239,8 +271,35 @@ async function scoreNewLeads() {
         console.log("[LeadRadar] scored lead " + lead.id + ": score=" + result.score + " product=" + result.product + " reason=" + result.reason);
 
       } catch (scoreErr) {
-        console.error("[LeadRadar] Failed to score lead " + lead.id + ":", scoreErr.message || scoreErr);
-        updatePayload = { intent_score: 0, status: "scored" };
+        // This path used to write { intent_score: 0, status: "scored" }, which
+        // ended the lead's life: the next query filters status = 'new', so a
+        // timeout or a malformed response was never retried and was recorded
+        // identically to a post the model had genuinely read and rated zero.
+        // 27 rows across bluesky and youtube carry intent_score 0 with a null
+        // intent_reason, which is that signature. A swallowed failure is worse
+        // than a visible one because the row still looks scored — nothing in
+        // the table says the call never happened. The reason string is what
+        // tells a real zero and a dead call apart, and it was absent precisely
+        // because the failure path never wrote one.
+        var attempts = (lead.score_attempts || 0) + 1;
+
+        console.error("[LeadRadar] Failed to score lead " + lead.id + " (attempt " + attempts + " of 3):", scoreErr.message || scoreErr);
+
+        if (attempts < 3) {
+          // status is left as "new" — not written at all — so the lead comes
+          // back on a later tick. intent_score stays untouched rather than
+          // being zeroed, because no score was ever produced.
+          updatePayload = { score_attempts: attempts };
+          console.log("[LeadRadar] lead " + lead.id + " left new for retry, attempt " + attempts + " of 3");
+        } else {
+          updatePayload = {
+            score_attempts: attempts,
+            intent_score:   0,
+            intent_reason:  "scoring failed after 3 attempts",
+            status:         "scored"
+          };
+          console.log("[LeadRadar] lead " + lead.id + " gave up after " + attempts + " attempts, marked scored with a failure reason");
+        }
       }
 
       var { error: updateErr } = await supabase
@@ -250,12 +309,14 @@ async function scoreNewLeads() {
 
       if (updateErr) {
         console.error("[LeadRadar] Failed to update lead " + lead.id + ":", updateErr.message);
-      } else {
+      } else if (updatePayload.status === "scored") {
         scoredCount++;
+      } else {
+        deferredCount++;
       }
     }
 
-    console.log("[LeadRadar] scored " + scoredCount + " leads");
+    console.log("[LeadRadar] scored " + scoredCount + " leads, deferred " + deferredCount + " for retry");
 
   } catch (err) {
     console.error("[LeadRadar] scoreNewLeads error:", err.message || err);
