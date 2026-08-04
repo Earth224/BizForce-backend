@@ -7,9 +7,10 @@ const YOUTUBE_API_KEY      = process.env.YOUTUBE_API_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// Kept small and processed as a rotating slice (not all at once) to protect
-// the YouTube Data API's daily quota — search.list and commentThreads.list
-// calls are both expensive relative to the default quota.
+// Every keyword is processed on every run. The rotating slice that used to
+// live here existed only to protect the daily quota when this ran on the
+// shared 5-minute radar tick; MIN_RUN_INTERVAL_MS now protects that quota
+// directly, and rotating on top of it would just delay coverage for no gain.
 const KEYWORDS = [
   "low libido help",
   "boost energy naturally",
@@ -21,18 +22,19 @@ const KEYWORDS = [
   "quantum jumping"
 ];
 
-const KEYWORDS_PER_RUN = 4;
+// runYoutubeRadarOnce is called from leadRadar.js radarTick every 5 minutes,
+// a tick shared with Bluesky and Mastodon, neither of which has a quota
+// problem. YouTube therefore throttles itself rather than slowing the tick.
+//
+// Quota arithmetic: 8 keywords at 100 units per search.list is 800 units per
+// full pass; 8 passes a day is 6,400 units, inside the 10,000/day free quota
+// with headroom for commentThreads.list at 1 unit each and for manual testing.
+const MIN_RUN_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
-// Splits KEYWORDS into fixed-size groups and picks one group based on the
-// current UTC hour, so a caller invoking this on any schedule still covers
-// every keyword over the course of a day without ever processing more than
-// KEYWORDS_PER_RUN in a single call.
-function getRotatingKeywords() {
-  var groupCount = Math.ceil(KEYWORDS.length / KEYWORDS_PER_RUN);
-  var groupIndex = new Date().getUTCHours() % groupCount;
-  var start = groupIndex * KEYWORDS_PER_RUN;
-  return KEYWORDS.slice(start, start + KEYWORDS_PER_RUN);
-}
+// Deliberately in-process: it resets on redeploy, which costs at most one
+// extra pass. A persistent counter would mean a table and a migration for a
+// problem this size.
+let lastRunStartedAt = 0;
 
 async function fetchSearchResults(keyword) {
   var url = "https://www.googleapis.com/youtube/v3/search" +
@@ -47,15 +49,24 @@ async function fetchSearchResults(keyword) {
   return response.json();
 }
 
-// Returns null (skip quietly) when comments are disabled for the video
-// (YouTube returns 403 for that specific case), throws on any other error.
+// Returns null (skip quietly) when comments are disabled for the video, throws
+// on any other error. A 403 is not on its own enough to conclude that comments
+// are disabled — YouTube also returns 403 for quotaExceeded and for a disabled
+// or invalid key — so the body has to be read to tell them apart. Treating
+// every 403 as benign meant a quota exhaustion during the comment phase
+// produced zero output and was indistinguishable from a video with no comments.
 async function fetchCommentThreads(videoId) {
   var url = "https://www.googleapis.com/youtube/v3/commentThreads" +
     "?part=snippet&videoId=" + encodeURIComponent(videoId) +
     "&maxResults=20&order=relevance&key=" + YOUTUBE_API_KEY;
   var response = await fetch(url);
   if (response.status === 403) {
-    return null;
+    let forbiddenBody = "";
+    try { forbiddenBody = await response.text(); } catch (e) {}
+    if (forbiddenBody.indexOf("commentsDisabled") !== -1) {
+      return null;
+    }
+    throw new Error("commentThreads.list HTTP 403 :: " + forbiddenBody);
   }
   if (!response.ok) {
     throw new Error("commentThreads.list HTTP " + response.status);
@@ -64,8 +75,26 @@ async function fetchCommentThreads(videoId) {
 }
 
 async function runYoutubeRadarOnce() {
+  // Silent on the skip path: the caller ticks every 5 minutes, so a log line
+  // here would fire ~35 times per gap and drown everything else in the log.
+  if (Date.now() - lastRunStartedAt < MIN_RUN_INTERVAL_MS) return;
+
+  // Stamped at the start rather than at the end so an overlapping or slow run
+  // cannot open a second window while the first is still going.
+  lastRunStartedAt = Date.now();
+
+  // Without this the key is interpolated into every URL as the literal string
+  // "undefined" and every request fails. That is exactly what happened between
+  // 2026-07-08 and 2026-08-03: YOUTUBE_API_KEY was absent from Railway, every
+  // call sent undefined, and the only symptom was a repeating "API key not
+  // valid" in the logs.
+  if (!YOUTUBE_API_KEY) {
+    console.error("[YoutubeRadar] YOUTUBE_API_KEY is not set — every request would send the literal string 'undefined' and fail. Skipping run.");
+    return;
+  }
+
   try {
-    var keywords = getRotatingKeywords();
+    var keywords = KEYWORDS;
 
     for (var i = 0; i < keywords.length; i++) {
       var keyword = keywords[i];
