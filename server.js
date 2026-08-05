@@ -19787,10 +19787,16 @@ app.listen(PORT, function () {
 
   // Fire once ~60s after boot (so it doesn't compete with startup load),
   // then on its own independent 5-minute interval thereafter. Gated behind
-  // ENABLE_AUTO_JOBS (defaults OFF) so this background Claude spend only
+  // ENABLE_SALES_AUTOLOOP (defaults OFF) so this background Claude spend only
   // happens when explicitly opted into — manual /api/agents/sales/convert
   // calls are unaffected, since they call convertSingleLead directly.
-  if (process.env.ENABLE_AUTO_JOBS === "true") {
+  //
+  // Its own flag rather than a shared background-jobs flag because of what it
+  // costs: it drafts a conversion for every high-intent lead every five
+  // minutes and sends nothing unless SALES_SEND_LIVE is also set, so with that
+  // absent it spends money to produce text nobody reads. Off by default, and
+  // it should stay off unless sending is on.
+  if (process.env.ENABLE_SALES_AUTOLOOP === "true") {
     setTimeout(function () {
       salesAutoConvertTick().catch(function (err) {
         console.error("[SalesAutoConvert] Initial run error:", err.message || err);
@@ -19798,12 +19804,13 @@ app.listen(PORT, function () {
     }, 60000);
     setInterval(salesAutoConvertTick, 300000);
   } else {
-    console.log("[startup] salesAutoConvertTick disabled (ENABLE_AUTO_JOBS not true)");
+    console.log("[startup] salesAutoConvertTick disabled (ENABLE_SALES_AUTOLOOP not true)");
   }
 
-  // Daily Store Agent proposal pass. Double-gated: ENABLE_AUTO_JOBS turns on
-  // background jobs at all, ENABLE_STORE_PROPOSAL_JOB opts into this one
-  // specifically, so it can stay off while the sales loop runs.
+  // Daily Store Agent proposal pass. Gated on ENABLE_STORE_PROPOSAL_JOB alone.
+  // It used to also require a shared background-jobs flag, but that second gate
+  // bought nothing: this variable exists specifically to opt into this one job,
+  // so setting it is already the explicit opt-in.
   //
   // A wall-clock schedule, not an interval. setInterval(fn, 86400000) means "24
   // hours after this process booted", and on Railway every deploy replaces the
@@ -19816,7 +19823,7 @@ app.listen(PORT, function () {
   // There is no boot-time run any more. A setTimeout firing the pass five
   // minutes after every deploy is precisely the repeat-firing the job_runs claim
   // exists to prevent; testing goes through POST /api/admin/store-proposals/run.
-  if (process.env.ENABLE_AUTO_JOBS === "true" && process.env.ENABLE_STORE_PROPOSAL_JOB === "true") {
+  if (process.env.ENABLE_STORE_PROPOSAL_JOB === "true") {
     cron.schedule("0 6 * * *", function () {
       storeProposalTick().catch(function (err) {
         console.error("[StoreProposals] Scheduled run error:", err.message || err);
@@ -19826,7 +19833,7 @@ app.listen(PORT, function () {
     });
     console.log("[startup] storeProposalTick scheduled — 06:00 " + STORE_PROPOSAL_TIMEZONE + " daily, claimed through job_runs." + STORE_PROPOSAL_JOB_NAME);
   } else {
-    console.log("[startup] storeProposalTick disabled (requires ENABLE_AUTO_JOBS=true and ENABLE_STORE_PROPOSAL_JOB=true)");
+    console.log("[startup] storeProposalTick disabled (ENABLE_STORE_PROPOSAL_JOB not true)");
   }
 
   // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy

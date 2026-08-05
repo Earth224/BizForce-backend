@@ -152,6 +152,7 @@ async function runLeadRadarOnce() {
 }
 
 var radarRunning = false;
+var scoringDisabledLogged = false;
 
 async function radarTick() {
   if (radarRunning) {
@@ -174,7 +175,15 @@ async function radarTick() {
       console.error("[LeadRadar] YoutubeRadar cycle error:", youtubeErr.message || youtubeErr);
     }
 
-    await scoreNewLeads();
+    // Capture above is free — network calls only. Scoring below is the paid
+    // half: scoreNewLeads() calls the Claude API up to 20x per tick, so it is
+    // gated separately and leads keep accumulating unscored while it is off.
+    if (process.env.ENABLE_LEAD_SCORING === "true") {
+      await scoreNewLeads();
+    } else if (!scoringDisabledLogged) {
+      scoringDisabledLogged = true;
+      console.log("[LeadRadar] Scoring disabled (ENABLE_LEAD_SCORING not true) — captured leads are accumulating unscored");
+    }
   } catch (err) {
     console.error("[LeadRadar] radarTick error:", err.message || err);
   } finally {
@@ -183,14 +192,12 @@ async function radarTick() {
 }
 
 async function startLeadRadar() {
-  // Gated behind ENABLE_AUTO_JOBS (defaults OFF) — radarTick chains into
-  // scoreNewLeads(), which calls the Claude API up to 20x per tick, so
-  // neither the initial run nor the recurring interval should fire unless
-  // explicitly opted into.
-  if (process.env.ENABLE_AUTO_JOBS !== "true") {
-    console.log("[startup] radarTick disabled (ENABLE_AUTO_JOBS not true)");
-    return;
-  }
+  // Ungated. The tick used to sit behind ENABLE_AUTO_JOBS because it chained
+  // into scoreNewLeads(), which calls the Claude API up to 20x per tick — that
+  // spend is now gated separately by ENABLE_LEAD_SCORING inside radarTick, so
+  // the reason no longer applies to the tick as a whole. What is left is
+  // capture (Bluesky, Mastodon, YouTube), which costs nothing and should
+  // always run: leads not collected are gone for good.
   radarTick().catch(function (err) {
     console.error("[LeadRadar] Initial run error:", err.message || err);
   });
