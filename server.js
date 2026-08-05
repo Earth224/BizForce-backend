@@ -18610,7 +18610,19 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     }
   }
 
-  return output;
+  // A count of results is not a count of posts, and the client had no way to
+  // tell them apart: sendResult knows exactly whether a public reply went out,
+  // and that fact stopped here. It now rides back with the conversion text so
+  // the UI can report what actually went out rather than how many leads were
+  // run — which also makes it visible at a glance whether SALES_SEND_LIVE is
+  // having any effect, since every result reads send_dry while it is unset.
+  var didSend = !!(sendResult && sendResult.sent === true);
+
+  return {
+    conversion:  output,
+    sent:        didSend,
+    send_reason: didSend ? null : ((sendResult && sendResult.reason) || null)
+  };
 }
 
 // Automatic Sales Agent conversion pass — for every user with a business
@@ -18820,12 +18832,14 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
     for (var i = 0; i < targetLeads.length; i++) {
       var lead = targetLeads[i];
       var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
-      var output = await convertSingleLead(userId, lead, sharedSystemPrompt, false);
+      var converted = await convertSingleLead(userId, lead, sharedSystemPrompt, false);
 
       results.push({
         lead_post_uri: lead.post_uri,
         handle: handle,
-        conversion: output
+        conversion: converted.conversion,
+        sent: converted.sent,
+        send_reason: converted.send_reason
       });
     }
 
