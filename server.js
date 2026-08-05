@@ -18166,6 +18166,88 @@ function truncateToBlueskyLimit(text) {
   return chars.slice(0, 297).join("") + "…";
 }
 
+/* ── Outreach send cap ──────────────────────────────────────────────────────
+   Deliberately low, and env-overridable so it can be raised knowingly rather
+   than by editing code. The ceiling on how wrong a single day can go is the
+   only thing standing between a working channel and a suspended account, and
+   the send path had no ceiling of any kind: SALES_SEND_LIVE is a switch, not
+   a bound, and runSalesAutoConvert reaches this code every five minutes with
+   no human involved. Setting one environment variable was enough to start
+   unbounded automated public replies.
+
+   The account at stake is not just the outreach account. It is the SAME
+   Bluesky login leadRadar.js authenticates with to run searchPosts — one
+   BskyAgent, one session, exported and shared. Losing it to a spam
+   suspension costs the capture engine as well as the outreach, and capture
+   is what everything downstream is built on. A low cap is cheap; that is
+   not. */
+const OUTREACH_DAILY_CAP = Number(process.env.OUTREACH_DAILY_CAP || 5);
+
+// Counts this user's sends since the start of the current UTC day. head:true
+// with count:"exact" asks Postgres for the count and no rows.
+//
+// THROWS rather than returning 0 on error, because those two are not the same
+// answer and the caller must not be able to confuse them: a failed count is
+// unknown, and unknown is the one case that must never read as "under the
+// cap". canSendOutreach turns that throw into a refusal.
+async function outreachSendsToday(userId) {
+  var startOfUtcDay = new Date();
+  startOfUtcDay.setUTCHours(0, 0, 0, 0);
+
+  var { count, error } = await supabase
+    .from("outreach_sends")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("sent_at", startOfUtcDay.toISOString());
+
+  if (error) {
+    throw error;
+  }
+
+  return count || 0;
+}
+
+// The gate every send passes through. Returns { allowed: true } or
+// { allowed: false, reason }.
+//
+// FAILS CLOSED. If either query throws, this refuses the send — an
+// unverifiable count is not a verified under-cap, and the failure mode of
+// guessing wrong is a public reply that cannot be unposted. A refused send
+// costs one lead's outreach and the lead stays eligible; a wrongly permitted
+// one spends against a cap nobody can measure.
+async function canSendOutreach(userId, lead) {
+  try {
+    var existing = await supabase
+      .from("outreach_sends")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("lead_post_uri", lead.post_uri)
+      .maybeSingle();
+
+    if (existing.error) {
+      throw existing.error;
+    }
+
+    // The ledger, not sales_lead_pipeline: pipeline status is editable by
+    // hand through /api/agents/sales/lead-status, so it records intent
+    // rather than what was actually posted. This table only ever gets a row
+    // from a send that returned sent: true.
+    if (existing.data) {
+      return { allowed: false, reason: "already_contacted" };
+    }
+
+    var sentToday = await outreachSendsToday(userId);
+    if (sentToday >= OUTREACH_DAILY_CAP) {
+      return { allowed: false, reason: "daily_cap_reached" };
+    }
+
+    return { allowed: true };
+  } catch (err) {
+    console.error("[outreach] Cap check failed for user " + userId + " — refusing to send:", err.message || err);
+    return { allowed: false, reason: "check_failed" };
+  }
+}
+
 // Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
 // separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
 // pipeline bookkeeping). Defaults OFF: unset or any value other than the
@@ -18335,9 +18417,20 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   // (youtube, etc.) are draft-only and never reach a sender function.
   var sendResult = null;
   if (!dryRun) {
+    // Evaluated BEFORE the source dispatch below, so nothing reaches a sender
+    // function until the cap has allowed it. Only consulted when there is a
+    // message to send — a draft-only lead never touches the network and must
+    // not spend a query, or read as a blocked send in the logs.
+    var outreachGate = cleanMessage
+      ? await canSendOutreach(userId, lead)
+      : { allowed: false, reason: "send_dry" };
+
     if (!cleanMessage) {
       console.warn("[sales/convert] Skipping send for " + handle + " — no clean message available.");
       sendResult = { sent: false, reason: "send_dry" };
+    } else if (!outreachGate.allowed) {
+      console.log("[sales/convert] Send blocked for " + handle + " — " + outreachGate.reason + " (cap " + OUTREACH_DAILY_CAP + "/day)");
+      sendResult = { sent: false, reason: outreachGate.reason };
     } else if (lead.source === "bluesky") {
       try {
         sendResult = await sendBlueskyReply(lead, cleanMessage);
@@ -18354,6 +18447,45 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       }
     } else {
       sendResult = { sent: false, reason: "unsupported_source" };
+    }
+  }
+
+  // The ledger write, and the only thing that makes the cap above mean
+  // anything: an uncounted send is an unbounded one.
+  //
+  // Never throws. The reply is already public at this point, and failing the
+  // request would not unpost it — it would only lose the record of a post
+  // that happened, which is the one outcome worse than a noisy log line.
+  if (sendResult && sendResult.sent) {
+    try {
+      // No sent_at. The column is timestamptz not null default now(), so
+      // Postgres stamps it. This table's whole job is counting sends within a
+      // UTC day, and outreachSendsToday compares against a boundary computed
+      // in the application — if the two clocks disagree, the cap window
+      // silently shifts. The database is the one authority both the write and
+      // the count can share, so the write does not supply its own.
+      var sendRecord = await supabase
+        .from("outreach_sends")
+        .insert({
+          user_id:       userId,
+          lead_post_uri: lead.post_uri,
+          source:        lead.source || null,
+          platform_uri:  sendResult.uri || null
+        });
+
+      if (sendRecord.error) {
+        // 23505 on the unique index means a concurrent send for this
+        // (user, lead) already recorded itself. The row exists and the cap
+        // still counts it once, so this is a race resolving correctly, not
+        // a failure to record.
+        if (sendRecord.error.code === "23505") {
+          console.log("[outreach] Send for " + handle + " already recorded by a concurrent run — leaving the existing row.");
+        } else {
+          console.error("[outreach] SEND NOT RECORDED for " + handle + " (" + lead.post_uri + ") — the reply is public and does not count against the cap:", sendRecord.error.message);
+        }
+      }
+    } catch (recordErr) {
+      console.error("[outreach] SEND NOT RECORDED for " + handle + " (" + lead.post_uri + ") — the reply is public and does not count against the cap:", recordErr.message || recordErr);
     }
   }
 
