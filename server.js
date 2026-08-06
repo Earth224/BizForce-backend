@@ -572,6 +572,15 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+// Neutralises LIKE metacharacters so a value can be passed to .ilike() as a
+// literal rather than a pattern. Postgres treats % and _ as wildcards inside
+// LIKE/ILIKE, and _ is legal and common in an email local part — without this,
+// a_b@x.com also matches a stored aXb@x.com. The single character class escapes
+// backslash in the same pass, so an already-escaped input cannot slip through.
+function escapeLikePattern(value) {
+  return String(value || "").replace(/[\\%_]/g, "\\$&");
+}
+
 function normalizeUsername(value) {
   return String(value || "")
     .trim()
@@ -2101,6 +2110,7 @@ async function handleStripeEvent(event) {
           status: "active",
           stripe_customer_id: session.customer || null,
           stripe_subscription_id: session.subscription || null,
+          stripe_price_id: (session.metadata && session.metadata.price_id) || null,
           current_period_start: null,
           current_period_end: null,
           cancel_at_period_end: false,
@@ -2126,6 +2136,22 @@ if (!email) {
   console.error("Stripe checkout session missing customer email");
   return;
 }
+
+// escapeLikePattern neutralises the SQL-level LIKE metacharacters, but * is a
+// PostgREST-level convenience that may be rewritten to % before Postgres ever
+// sees the pattern, and there is no verified escape for that layer. Rather
+// than guess at one, refuse the row: this update grants subscription_active,
+// so a surviving wildcard would hand a paid entitlement to whoever happens to
+// match. Not granting is recoverable by hand from the logged event id;
+// granting the wrong row is not.
+const normalizedEmail = normalizeEmail(email);
+if (normalizedEmail.indexOf("*") !== -1) {
+  console.error("Stripe checkout session email rejected as unsafe for pattern matching " +
+    "(contains *) — event " + event.id + ". users row NOT updated; grant " +
+    "subscription_active by hand.");
+  return;
+}
+
 await supabase
   .from("users")
   .update({
@@ -2133,7 +2159,7 @@ await supabase
     subscription_status: "active",
     updated_at: new Date().toISOString()
   })
-  .eq("email", email);
+  .ilike("email", escapeLikePattern(normalizedEmail));
   }
 
   if (
