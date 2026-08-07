@@ -2103,7 +2103,12 @@ async function handleStripeEvent(event) {
     }
 
     if (userId) {
-      await supabase.from("subscriptions").upsert(
+      // This row IS the entitlement — getUserPlan resolves paid-or-not from
+      // subscriptions.status and nothing else. A discarded error here means the
+      // money was taken and access was never granted, with every log reporting
+      // success. Throwing makes the delivery fail visibly in the Stripe
+      // dashboard and get retried, same as the unresolvable-plan paths above.
+      const { error: subscriptionError } = await supabase.from("subscriptions").upsert(
         {
           user_id: userId,
           plan,
@@ -2121,7 +2126,11 @@ async function handleStripeEvent(event) {
         }
       );
 
-      await supabase
+      if (subscriptionError) {
+        throw subscriptionError;
+      }
+
+      const { error: profileError } = await supabase
         .from("profiles")
         .update({
           subscription_plan: plan,
@@ -2130,6 +2139,10 @@ async function handleStripeEvent(event) {
           updated_at: nowIso()
         })
         .eq("user_id", userId);
+
+      if (profileError) {
+        throw profileError;
+      }
     }
     const email = session.customer_details ? session.customer_details.email : null;
 if (!email) {
@@ -2140,26 +2153,39 @@ if (!email) {
 // escapeLikePattern neutralises the SQL-level LIKE metacharacters, but * is a
 // PostgREST-level convenience that may be rewritten to % before Postgres ever
 // sees the pattern, and there is no verified escape for that layer. Rather
-// than guess at one, refuse the row: this update grants subscription_active,
-// so a surviving wildcard would hand a paid entitlement to whoever happens to
-// match. Not granting is recoverable by hand from the logged event id;
-// granting the wrong row is not.
+// than guess at one, refuse the row: a surviving wildcard would stamp an active
+// billing status onto whichever stranger's row happened to match. Not writing
+// is recoverable by hand from the logged event id; writing the wrong row is not.
 const normalizedEmail = normalizeEmail(email);
 if (normalizedEmail.indexOf("*") !== -1) {
   console.error("Stripe checkout session email rejected as unsafe for pattern matching " +
-    "(contains *) — event " + event.id + ". users row NOT updated; grant " +
-    "subscription_active by hand.");
+    "(contains *) — event " + event.id + ". users row NOT updated; set " +
+    "subscription_status by hand.");
   return;
 }
 
-await supabase
+// No subscription_active here: users has no such column and never has — 071
+// defines the table with sixteen columns and production agrees. Writing it made
+// PostgREST reject the whole statement, so subscription_status never landed
+// either. Nothing reads it in any case; the subscription_active field on
+// GET /api/auth/me is derived from subscriptions.status, not from this table.
+//
+// Logged rather than thrown. This is a secondary consistency write that the
+// entitlement gate never reads, so failing it must not make Stripe retry a
+// delivery whose entitlement already landed in subscriptions above.
+const { error: userError } = await supabase
   .from("users")
   .update({
-    subscription_active: true,
     subscription_status: "active",
     updated_at: new Date().toISOString()
   })
   .ilike("email", escapeLikePattern(normalizedEmail));
+
+if (userError) {
+  console.error("Stripe checkout session could not update the users row — event " +
+    event.id + ": " + (userError.message || userError) +
+    ". Entitlement is unaffected; users.subscription_status is now stale.");
+}
   }
 
   if (
