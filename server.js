@@ -2116,8 +2116,15 @@ async function handleStripeEvent(event) {
           stripe_customer_id: session.customer || null,
           stripe_subscription_id: session.subscription || null,
           stripe_price_id: (session.metadata && session.metadata.price_id) || null,
-          current_period_start: null,
-          current_period_end: null,
+          // current_period_start / current_period_end are deliberately omitted.
+          // checkout.session.completed carries no period window, so this branch
+          // has nothing truthful to write, and Stripe delivers it independently
+          // of customer.subscription.* — a retry of this event can land after
+          // the subscription branch below has already filled both columns from
+          // the real Stripe subscription object. Writing explicit nulls here
+          // would stamp those real dates back to null on every late retry.
+          // Omitting the keys means the ON CONFLICT update never names those
+          // columns, so whatever the subscription branch wrote survives.
           cancel_at_period_end: false,
           updated_at: nowIso()
         },
@@ -2135,7 +2142,12 @@ async function handleStripeEvent(event) {
         .update({
           subscription_plan: plan,
           subscription_status: "active",
-          stripe_customer_id: session.customer || null,
+          // No stripe_customer_id here: profiles has no such column. Writing it
+          // made PostgREST reject the whole statement, so the profileError throw
+          // above fired on every checkout.session.completed and the delivery
+          // returned 500 without subscription_plan or subscription_status ever
+          // landing. The customer id lives on subscriptions.stripe_customer_id,
+          // which is what /api/billing/portal and getActiveSubscription read.
           updated_at: nowIso()
         })
         .eq("user_id", userId);
