@@ -18142,6 +18142,19 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
 // touched.
 var SALES_LEAD_STATUSES = ["new", "drafted", "contacted", "replied", "converted"];
 
+// The subset of the above meaning "this person has already been engaged" —
+// the leads the auto-loop and the segment path must never draft again. Named
+// once because both eligibility sites must agree; they drifted apart from the
+// ceiling check below when this was an inline array literal in two places.
+var SALES_ENGAGED_STATUSES = ["contacted", "replied", "converted"];
+
+// Ceiling on paid draft attempts per (user, lead). Every attempt is a billed
+// Anthropic call — see the comment above the counter write in
+// convertSingleLead. Deliberately a constant here and not a CHECK constraint
+// in migration 076: raising or lowering the ceiling is a spend decision, not
+// a schema change.
+var DRAFT_ATTEMPT_CEILING = 3;
+
 // Attaches this user's sales_lead_pipeline status/last_draft onto each lead
 // (defaulting to "new" for leads this user hasn't touched yet).
 async function annotateLeadsWithSalesPipeline(userId, leads) {
@@ -18446,6 +18459,106 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
     "\n\nUSER REQUEST:\nConvert this Lead Radar capture into the JSON conversion package described above.";
 
+  // Attempt accounting, deliberately BEFORE the model call and deliberately
+  // OUTSIDE the `if (!dryRun)` block further down that owns every other write
+  // to this table.
+  //
+  // Before, because callAnthropicText is billed the moment it is made and can
+  // throw — a timeout, a rate limit, an exhausted key. Counting the attempt
+  // after the call would mean exactly the calls that fail are the ones never
+  // counted, so the lead comes back on the next tick unchanged and bills
+  // again, forever. Counting first means a throw still leaves the attempt on
+  // the record.
+  //
+  // Outside the dry-run gate, because a dry run is billed identically to a
+  // live one. Dry runs skip the send and skip the status write — they do not
+  // skip the invoice, and it was the untouched table under SALES_AUTOLOOP_DRY_RUN
+  // that let every eligible lead be re-drafted on every 5-minute tick.
+  //
+  // Not atomic: the client has no in-place increment, so this reads then
+  // writes. A lost update under concurrency undercounts, which retries a lead
+  // once more than the ceiling of DRAFT_ATTEMPT_CEILING intends — bounded and
+  // in the cheap direction, unlike the unbounded loop it replaces.
+  var attemptTimestamp = nowIso();
+  try {
+    var attemptRead = await supabase
+      .from("sales_lead_pipeline")
+      .select("draft_attempts")
+      .eq("user_id", userId)
+      .eq("lead_post_uri", lead.post_uri)
+      .maybeSingle();
+
+    if (attemptRead.error) {
+      // Never write blind on a failed read: the insert branch below carries
+      // status "new", and applying it over a row that is already "contacted"
+      // would downgrade a real send back into the eligible pool. Skipping the
+      // count is the smaller loss.
+      console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (read failed) — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptRead.error.message);
+    } else if (attemptRead.data) {
+      var attemptUpdate = await supabase
+        .from("sales_lead_pipeline")
+        .update({
+          draft_attempts:  (attemptRead.data.draft_attempts || 0) + 1,
+          last_attempt_at: attemptTimestamp,
+          updated_at:      attemptTimestamp
+        })
+        .eq("user_id", userId)
+        .eq("lead_post_uri", lead.post_uri);
+
+      if (attemptUpdate.error) {
+        console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptUpdate.error.message);
+      }
+    } else {
+      // First attempt on this lead for this user. Plain insert rather than an
+      // upsert so a concurrent create cannot have its status overwritten with
+      // "new"; 23505 means the other writer won and is handled below.
+      var attemptInsert = await supabase
+        .from("sales_lead_pipeline")
+        .insert({
+          user_id:         userId,
+          lead_post_uri:   lead.post_uri,
+          status:          "new",
+          draft_attempts:  1,
+          last_attempt_at: attemptTimestamp,
+          updated_at:      attemptTimestamp
+        });
+
+      if (attemptInsert.error && attemptInsert.error.code === "23505") {
+        var raceRead = await supabase
+          .from("sales_lead_pipeline")
+          .select("draft_attempts")
+          .eq("user_id", userId)
+          .eq("lead_post_uri", lead.post_uri)
+          .maybeSingle();
+
+        if (!raceRead.error && raceRead.data) {
+          var raceUpdate = await supabase
+            .from("sales_lead_pipeline")
+            .update({
+              draft_attempts:  (raceRead.data.draft_attempts || 0) + 1,
+              last_attempt_at: attemptTimestamp,
+              updated_at:      attemptTimestamp
+            })
+            .eq("user_id", userId)
+            .eq("lead_post_uri", lead.post_uri);
+
+          if (raceUpdate.error) {
+            console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (concurrent create, increment failed) — every attempt a paid call:", raceUpdate.error.message);
+          }
+        } else {
+          console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " (concurrent create, re-read failed) — every attempt a paid call:", (raceRead.error && raceRead.error.message) || "row vanished");
+        }
+      } else if (attemptInsert.error) {
+        console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptInsert.error.message);
+      }
+    }
+  } catch (attemptErr) {
+    // Never fatal — a counter that cannot be written must not cost the user a
+    // lead. Never silent either: this line is the only warning that the
+    // ceiling has stopped applying to this lead.
+    console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptErr.message || attemptErr);
+  }
+
   var generation = await callAnthropicText(finalPrompt, 700);
   var output = generation.text;
 
@@ -18744,21 +18857,37 @@ async function runSalesAutoConvert() {
 
         var sharedSystemPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, businessProfile, liveStats, memoriesForBrain);
 
+        // Two exclusions, one read. A lead is ineligible when it has already
+        // been engaged (contacted/replied/converted), and ALSO when it has
+        // burned DRAFT_ATTEMPT_CEILING (3) draft attempts at any status —
+        // including "drafted" and "new", the two this query used to let
+        // through. Every one of those attempts is a paid Anthropic call, and
+        // a lead that cannot be drafted (unparseable model output, a blocked
+        // send, a source with no sender) was otherwise re-picked and re-billed
+        // on every 5-minute tick indefinitely, producing nothing.
+        //
+        // The attempts condition cannot be expressed in the same .in() as the
+        // status condition, so the whole per-user set is read once and both
+        // filters applied here rather than spending a second round trip.
         var excludedUris = [];
         try {
           var excludedResult = await supabase
             .from("sales_lead_pipeline")
-            .select("lead_post_uri")
-            .eq("user_id", userId)
-            .in("status", ["contacted", "replied", "converted"]);
+            .select("lead_post_uri, status, draft_attempts")
+            .eq("user_id", userId);
 
           if (!excludedResult.error) {
-            excludedUris = (excludedResult.data || []).map(function (row) { return row.lead_post_uri; });
+            excludedUris = (excludedResult.data || [])
+              .filter(function (row) {
+                return SALES_ENGAGED_STATUSES.indexOf(row.status) !== -1 ||
+                       (row.draft_attempts || 0) >= DRAFT_ATTEMPT_CEILING;
+              })
+              .map(function (row) { return row.lead_post_uri; });
           } else {
-            console.error("[SalesAutoConvert] Failed to load already-contacted leads for user " + userId + ":", excludedResult.error.message);
+            console.error("[SalesAutoConvert] Failed to load ineligible leads for user " + userId + ":", excludedResult.error.message);
           }
         } catch (excludeErr) {
-          console.error("[SalesAutoConvert] Failed to load already-contacted leads for user " + userId + ":", excludeErr.message || excludeErr);
+          console.error("[SalesAutoConvert] Failed to load ineligible leads for user " + userId + ":", excludeErr.message || excludeErr);
         }
 
         var leadsResult = await supabase
@@ -18820,21 +18949,33 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       }
       targetLeads = [singleResult.data];
     } else if (segment) {
+      // Same two exclusions as the auto-loop, read the same way and for the
+      // same reason: already-engaged leads, plus any lead that has burned
+      // DRAFT_ATTEMPT_CEILING (3) draft attempts at any status, because every
+      // attempt is a paid Anthropic call. A segment request is operator-driven
+      // rather than on a timer, but it drafts up to 10 leads a click and would
+      // otherwise keep paying to redraft the same undraftable ones.
+      //
+      // One read: the attempts condition cannot share the status .in().
       var excludedUris = [];
       try {
         var excludedResult = await supabase
           .from("sales_lead_pipeline")
-          .select("lead_post_uri")
-          .eq("user_id", userId)
-          .in("status", ["contacted", "replied", "converted"]);
+          .select("lead_post_uri, status, draft_attempts")
+          .eq("user_id", userId);
 
         if (!excludedResult.error) {
-          excludedUris = (excludedResult.data || []).map(function (row) { return row.lead_post_uri; });
+          excludedUris = (excludedResult.data || [])
+            .filter(function (row) {
+              return SALES_ENGAGED_STATUSES.indexOf(row.status) !== -1 ||
+                     (row.draft_attempts || 0) >= DRAFT_ATTEMPT_CEILING;
+            })
+            .map(function (row) { return row.lead_post_uri; });
         } else {
-          console.error("[sales/convert] Failed to load already-contacted leads:", excludedResult.error.message);
+          console.error("[sales/convert] Failed to load ineligible leads:", excludedResult.error.message);
         }
       } catch (excludeErr) {
-        console.error("[sales/convert] Failed to load already-contacted leads:", excludeErr.message || excludeErr);
+        console.error("[sales/convert] Failed to load ineligible leads:", excludeErr.message || excludeErr);
       }
 
       var segQuery = supabase

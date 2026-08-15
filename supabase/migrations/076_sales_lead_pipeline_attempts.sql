@@ -1,0 +1,84 @@
+-- ============================================================================
+-- 076_sales_lead_pipeline_attempts.sql
+--
+-- The same shape of bug as 073, one table over, and this one bills for it.
+-- 027 created sales_lead_pipeline with seven columns and no record of effort:
+-- id, user_id, lead_post_uri, status, last_draft, created_at, updated_at.
+-- Nothing counts attempts, nothing timestamps one, nothing says why the last
+-- one failed.
+--
+-- WHY
+--   Every draft attempt is a paid Anthropic call. convertSingleLead calls
+--   callAnthropicText before it knows whether the draft will parse, whether
+--   the daily cap will allow a send, or whether the lead's source has a
+--   sender at all - so the money is spent first and the outcome is learned
+--   after.
+--
+--   runSalesAutoConvert's eligibility query excludes only three statuses:
+--
+--     .in("status", ["contacted", "replied", "converted"])
+--
+--   'new' and 'drafted' are both absent from that list. A lead that cannot be
+--   drafted - no parseable outreach_message, the cap blocking the send, an
+--   unsupported source, a post_error - lands at 'drafted' and stays there,
+--   because the write path refuses to downgrade a row that is past 'new' and
+--   only advances to 'contacted' when a reply actually posted. So it is
+--   re-picked on the next 5-minute tick and re-drafted. Forever. Billing
+--   indefinitely and producing nothing.
+--
+--   Dry-run mode was worse, not better. The whole `if (!dryRun)` block is
+--   skipped, so nothing was recorded in this table at all - no row, no status,
+--   nothing for the exclusion list to match. Every eligible lead was re-drafted
+--   on every tick: 288 ticks a day, up to 5 leads each, roughly 1,440 paid
+--   calls per day, all of them tagged [DRY RUN] and all of them thrown away.
+--   That is the ceiling while ENABLE_SALES_AUTOLOOP is true, not a measured
+--   invoice - the actual spend depends on how long the loop has been enabled
+--   and how many leads cleared the intent_score >= 60 filter each tick.
+--
+--   These columns let the loop stop after a ceiling of 3 attempts instead of
+--   retrying without limit. draft_attempts is the count the exclusion can test
+--   against; last_attempt_at is what tells a lead abandoned at 3 attempts last
+--   month apart from one that hit 3 an hour ago, which is the difference
+--   between a stuck lead and a transient outage worth clearing by hand.
+--
+-- NOT DONE HERE
+--   No CHECK constraint on draft_attempts. The ceiling of 3 is a spend
+--   decision that belongs in the code that reads the counter, where it can be
+--   changed without a migration; encoding it as a constraint would turn
+--   raising it into schema drift and turn an off-by-one into a write error on
+--   a path that already swallows its own failures.
+--
+--   The status CHECK is untouched. No new status is introduced - a lead that
+--   exhausts its attempts is still 'drafted', and it is draft_attempts, not
+--   status, that takes it out of the eligible set.
+--
+--   This migration changes no behaviour on its own. Nothing writes these
+--   columns yet and the eligibility query does not read them; server.js must
+--   increment draft_attempts and stamp last_attempt_at around the
+--   callAnthropicText call, and filter on the ceiling, before a single call is
+--   saved. Adding the columns is the half that is safe to do first.
+--
+--   Existing rows are NOT reset. They take 0 and become eligible for a fresh
+--   ceiling of 3, which is the intended reading: nobody knows how many calls
+--   they have already cost, and backdating a count nobody measured would be a
+--   guess written into the record. The query that finds the rows this bounds:
+--
+--     select user_id, lead_post_uri, updated_at
+--     from public.sales_lead_pipeline
+--     where status = 'drafted'
+--     order by updated_at;
+--
+-- SAFETY
+--   Additive and idempotent. draft_attempts is NOT NULL with a default, so
+--   existing rows take 0 and nothing is rewritten. last_attempt_at is
+--   nullable, and null is the honest value for an attempt made before anything
+--   recorded attempts. Re-running is a no-op.
+-- ============================================================================
+
+set search_path = public;
+
+alter table sales_lead_pipeline
+  add column if not exists draft_attempts integer not null default 0;
+
+alter table sales_lead_pipeline
+  add column if not exists last_attempt_at timestamptz;
