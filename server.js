@@ -955,7 +955,8 @@ var AGENT_ORCHESTRATION_HANDOFFS = {
 
 var SALES_AGENT_BRAIN =
   "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems." +
-  "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee.";
+  "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee." +
+  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This applies to every word you write, and most of all to anything that will be posted publicly.";
 
 function truncateOrchestratorPreview(value, maxLength) {
   var text = String(value || "").trim();
@@ -18423,6 +18424,43 @@ async function sendMastodonReply(lead, replyText) {
   }
 }
 
+/* ── Outreach emoji strip ───────────────────────────────────────────────────
+   The last line of defense, and the only one that is not advice. Three prompt
+   layers now forbid emoji (BRAIN_DIRECTIVES, SALES_AGENT_BRAIN, and the
+   per-draft task instruction), but every one of them is a request to a
+   language model, and a request is not a guarantee. This is the guarantee: it
+   runs on the parsed outreach_message before anything can post it.
+
+   Matched by Unicode property, never by a character list. A hardcoded list
+   only ever bans the emoji someone already saw in production — the next
+   unlisted one posts publicly exactly as the first did. Extended_Pictographic
+   covers emoji and pictographs as a class; the modifier, modifier-base and
+   regional-indicator properties cover skin tones and flags; U+FE0F, U+200D
+   and U+20E3 cover the variation selector, the ZWJ that joins sequences, and
+   the keycap combiner, so a stripped sequence leaves no orphaned joiner.
+
+   Deliberately NOT stripped: U+2026, the ellipsis truncateToBlueskyLimit and
+   truncateToMastodonLimit append. It is punctuation, not a pictograph, and it
+   is outside every property above — but it is also appended downstream of
+   this function, so it never passes through here in the first place.
+
+   Only spaces and tabs are collapsed. Newlines are left alone so a removed
+   emoji cannot silently reflow a multi-line draft. */
+var OUTREACH_EMOJI_PATTERN =
+  /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Emoji_Modifier_Base}\p{Regional_Indicator}]|[\uFE0F\u200D\u20E3]/gu;
+
+// Returns null, never "", when stripping empties the message. A draft that was
+// nothing but emoji has no content left to post, and null is the value the
+// caller already treats as draft-only.
+function stripOutreachEmoji(text) {
+  var stripped = String(text || "")
+    .replace(OUTREACH_EMOJI_PATTERN, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return stripped || null;
+}
+
 // POST /api/agents/sales/convert — generates a ready-to-send conversion
 // package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
 // filtered segment (segment: { min_score, high_intent, buyer }, capped to
@@ -18449,7 +18487,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   var taskInstruction =
     "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
     "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
-    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. May mention MrEarthRose.com naturally at most once. " +
+    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. May mention MrEarthRose.com naturally at most once. " +
     "internal_analysis: the strategy notes, intent score reasoning, offer framing (which product/offer fits and why), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
     "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
 
@@ -18574,12 +18612,32 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       .replace(/```\s*$/i, "")
       .trim();
     var parsedDraft = JSON.parse(jsonText);
-    cleanMessage = typeof parsedDraft.outreach_message === "string" && parsedDraft.outreach_message.trim()
+    var rawMessage = typeof parsedDraft.outreach_message === "string" && parsedDraft.outreach_message.trim()
       ? parsedDraft.outreach_message.trim()
       : null;
+
+    // The emoji strip, at the boundary and nowhere else. cleanMessage is the
+    // single value that becomes a public post, so stripping it here covers
+    // every downstream consumer at once — sendBlueskyReply, sendMastodonReply,
+    // and the richDraft written to sales_lead_pipeline.last_draft — with no
+    // send-path change and no second place to keep in sync.
+    //
+    // Applied to the public reply ONLY. `analysis` is operator-only and never
+    // posted, and `output` stays verbatim so the ai_tasks and agent_memory
+    // rows keep recording what the model actually returned rather than a
+    // cleaned-up version of it. When the two differ, the log line below is the
+    // evidence that the prompt rules alone were not enough.
+    cleanMessage = rawMessage ? stripOutreachEmoji(rawMessage) : null;
+
+    if (rawMessage && cleanMessage !== rawMessage) {
+      console.warn("[Draft] Stripped emoji/pictographic characters from the outreach message for " + handle + " — three prompt-level rules forbid them and the model emitted them anyway.");
+    }
+
     analysis = typeof parsedDraft.internal_analysis === "string" ? parsedDraft.internal_analysis.trim() : null;
-    if (!cleanMessage) {
+    if (!rawMessage) {
       console.warn("[Draft] JSON parse failed, holding lead as draft-only");
+    } else if (!cleanMessage) {
+      console.warn("[Draft] Outreach message for " + handle + " was entirely emoji — nothing left to post after stripping, holding lead as draft-only");
     }
   } catch (parseErr) {
     console.warn("[Draft] JSON parse failed, holding lead as draft-only");
