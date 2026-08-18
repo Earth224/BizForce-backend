@@ -204,6 +204,17 @@ async function startLeadRadar() {
   setInterval(radarTick, 300000);
 }
 
+/* The four values the scoring prompt tells the model to choose from, and the
+   only four this file will persist. Written out literally rather than derived
+   from the prompt string, so that editing one without the other is a visible
+   mismatch between two adjacent lists instead of a silent widening of what
+   counts as a product.
+
+   Order and spelling match the prompt's closing line exactly. "none" is a
+   member: it is the value the prompt asks for on teachers and sellers, and the
+   value anything unrecognised is stored as. */
+const SCORER_ALLOWED_PRODUCTS = ["War Horse", "Tongkat Ali", "Quantum Jumping book", "none"];
+
 async function scoreNewLeads() {
   try {
     // Ordered by score_attempts first so a lead that has failed twice does not
@@ -288,14 +299,64 @@ async function scoreNewLeads() {
         var cleaned = raw.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
         var result = JSON.parse(cleaned);
 
+        // Valid JSON is not a valid score. Everything below used to be written
+        // through untouched, so whatever the model put in those two fields
+        // became the row — and both are read as though the prompt's contract
+        // had been enforced somewhere. It never was.
+        //
+        // intent_score is compared numerically in five places (>= 60 for the
+        // autoloop, >= 40 for the buyer segment, an operator-supplied
+        // min_score, and two order-bys). A string lands in an integer column
+        // and errors the write; a 150 quietly outranks every genuine lead in
+        // the table and is drafted first, forever.
+        //
+        // suggested_product is compared as an EXACT string: the buyer segment
+        // is .neq("suggested_product", "none"). Anything off-list therefore
+        // reads as a product — "War Horse supplement", "None", "N/A" and
+        // "unclear" all pass a not-equal-to-none test and qualify the lead for
+        // outreach that the classifier was signalling against.
+        var rawScore = result ? result.score : undefined;
+        var numericScore =
+          typeof rawScore === "number" ? rawScore :
+          (typeof rawScore === "string" && rawScore.trim() !== "" ? Number(rawScore) : NaN);
+
+        // Not a number at all means the model did not do the task, which is the
+        // same class of failure as unparseable output — so it takes the same
+        // route. Throwing here lands in the catch below, which leaves the row
+        // 'new' for two more attempts rather than persisting a fabricated zero.
+        // A clamp cannot rescue this: there is no number to clamp.
+        if (!Number.isFinite(numericScore)) {
+          throw new Error("scorer returned a non-numeric score: " + JSON.stringify(rawScore));
+        }
+
+        var score = Math.min(100, Math.max(0, Math.round(numericScore)));
+
+        // Exact match or nothing. Deliberately case-sensitive and untrimmed
+        // against the four values the prompt names, because a near-miss is not
+        // evidence of intent — it is evidence the model went off-contract, and
+        // guessing which product it meant is how an off-list string becomes a
+        // public reply about the wrong product.
+        var product = SCORER_ALLOWED_PRODUCTS.indexOf(result ? result.product : undefined) !== -1
+          ? result.product
+          : "none";
+
+        if (score !== numericScore) {
+          console.warn("[LeadRadar] lead " + lead.id + ": score " + JSON.stringify(rawScore) + " coerced to " + score);
+        }
+        if (product !== (result ? result.product : undefined)) {
+          console.warn("[LeadRadar] lead " + lead.id + ": product " + JSON.stringify(result ? result.product : undefined) + " is not one of the four allowed values, stored as none");
+        }
+
         updatePayload = {
-          intent_score:      result.score,
+          intent_score:      score,
           intent_reason:     result.reason,
-          suggested_product: result.product,
+          suggested_product: product,
           status:            "scored"
         };
 
-        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + result.score + " product=" + result.product + " reason=" + result.reason);
+        // Logs what was STORED, not what the model said. The two can differ now,
+        // and the warnings above are what record that they did.
+        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " reason=" + result.reason);
 
       } catch (scoreErr) {
         // This path used to write { intent_score: 0, status: "scored" }, which

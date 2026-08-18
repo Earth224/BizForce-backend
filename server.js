@@ -18326,6 +18326,19 @@ async function canSendOutreach(userId, lead) {
   }
 }
 
+/* The only sources a reply can actually be posted to, and therefore the only
+   ones worth drafting for. sendBlueskyReply and sendMastodonReply are the
+   entire set of senders; convertSingleLead's source dispatch answers anything
+   else with { sent: false, reason: "unsupported_source" } — but not before
+   paying for a generation to reach that line. bsky_leads holds youtube rows
+   today (youtubeRadar writes them) and the column has no CHECK constraint, so
+   a future radar adds a fourth value without touching this file.
+
+   Kept next to the senders deliberately: adding a sender and forgetting to
+   widen this list makes that sender unreachable, and the two are only
+   findable together if they sit together. */
+const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
+
 // Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
 // separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
 // pipeline bookkeeping). Defaults OFF: unset or any value other than the
@@ -18474,6 +18487,38 @@ function stripOutreachEmoji(text) {
 // completely untouched, so the same lead can be safely re-run later.
 async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+
+  /* ── The send gate, consulted BEFORE the paid call ───────────────────────
+     This check used to sit immediately above the send, which is the right
+     place to be correct and the wrong place to be cheap: callAnthropicText
+     had already run and already billed by the time anything asked whether
+     this lead was allowed to be contacted at all. A user at their daily cap
+     paid for a full generation per lead per tick to produce drafts the gate
+     was always going to refuse — and "already_contacted" leads did the same
+     thing forever, since a lead in the ledger never leaves it.
+
+     Asking first costs at most two cheap indexed reads and skips the
+     expensive call entirely. A refusal returns here, which is also why
+     draft_attempts is not stamped: the ceiling exists to bound paid attempts,
+     and no attempt was made. Counting one would burn a lead's retry budget
+     for a decision that had nothing to do with the model.
+
+     Only when a send is actually possible. A dry run never sends, so gating
+     it would defeat what a dry run is for — generating drafts to read — and
+     that path is left exactly as it was. */
+  if (!dryRun) {
+    var outreachGate = await canSendOutreach(userId, lead);
+
+    if (!outreachGate.allowed) {
+      console.log("[sales/convert] Skipped " + handle + " before drafting — " + outreachGate.reason + " (cap " + OUTREACH_DAILY_CAP + "/day). No model call billed, no attempt counted.");
+      return {
+        conversion:  null,
+        sent:        false,
+        send_reason: outreachGate.reason,
+        skipped:     true
+      };
+    }
+  }
 
   var leadBlock =
     "CAPTURED LEAD (from Lead Radar):\n" +
@@ -18652,20 +18697,25 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   // (youtube, etc.) are draft-only and never reach a sender function.
   var sendResult = null;
   if (!dryRun) {
-    // Evaluated BEFORE the source dispatch below, so nothing reaches a sender
-    // function until the cap has allowed it. Only consulted when there is a
-    // message to send — a draft-only lead never touches the network and must
-    // not spend a query, or read as a blocked send in the logs.
-    var outreachGate = cleanMessage
-      ? await canSendOutreach(userId, lead)
-      : { allowed: false, reason: "send_dry" };
-
+    // No gate call here any more. It ran before the model call above, and a
+    // refusal returned from the function outright — so reaching this point on
+    // a live run already means the cap allowed this lead. What is left is the
+    // message check and the source dispatch.
+    //
+    // The tradeoff that buys: the gate is now checked before a generation
+    // rather than immediately before the send, so the window between deciding
+    // and sending is one model call wider than it was. Within a single pass
+    // that changes nothing — runSalesAutoConvert awaits each lead in turn —
+    // but two overlapping passes, or a manual convert racing the autoloop,
+    // can now both pass a cap check that only had room for one. The ledger's
+    // unique index still makes a duplicate send of the SAME lead impossible;
+    // what is no longer tightly bounded is the daily total across different
+    // leads, which can overshoot OUTREACH_DAILY_CAP by the number of runs
+    // racing. Re-checking here would close that at the cost of a second pair
+    // of queries per lead.
     if (!cleanMessage) {
       console.warn("[sales/convert] Skipping send for " + handle + " — no clean message available.");
       sendResult = { sent: false, reason: "send_dry" };
-    } else if (!outreachGate.allowed) {
-      console.log("[sales/convert] Send blocked for " + handle + " — " + outreachGate.reason + " (cap " + OUTREACH_DAILY_CAP + "/day)");
-      sendResult = { sent: false, reason: outreachGate.reason };
     } else if (lead.source === "bluesky") {
       try {
         sendResult = await sendBlueskyReply(lead, cleanMessage);
@@ -18885,6 +18935,7 @@ async function runSalesAutoConvert() {
     for (var u = 0; u < userIds.length; u++) {
       var userId = userIds[u];
       var convertedCount = 0;
+      var skippedCount = 0;
 
       try {
         var profileResult = await supabase
@@ -18948,33 +18999,95 @@ async function runSalesAutoConvert() {
           console.error("[SalesAutoConvert] Failed to load ineligible leads for user " + userId + ":", excludeErr.message || excludeErr);
         }
 
-        var leadsResult = await supabase
+        /* Both filters now run in the database, before the limit rather than
+           after it.
+
+           The limit used to be applied to the unfiltered top 20 by score and
+           the exclusions subtracted from that page in application code, which
+           made the limit a cap on rows CONSIDERED rather than rows ELIGIBLE.
+           A user whose 20 highest-scoring leads were all already contacted got
+           an empty list and did no work — while their 21st lead, eligible and
+           waiting, was never read. The higher a user's engagement, the more
+           complete that starvation became: every lead they successfully
+           contacted permanently occupied one of the 20 slots the next pass
+           looked at.
+
+           The source filter belongs here for a different reason. It costs a
+           full generation to discover that a youtube lead has no sender, and
+           the answer is knowable from the row. Filtering it in the query means
+           those rows never occupy a slot and never reach convertSingleLead.
+
+           Excluded URIs are embedded in the query only while the list is small
+           enough to be safe in a URL — PostgREST takes them as a literal
+           not.in.(...) list, and a few hundred AT-URIs at ~70 characters each
+           will exceed the proxy's request-line limit and fail the whole query
+           with a 414. Past that threshold the exclusion falls back to where it
+           has always been, in application code, with a much larger page to
+           subtract from so the starvation above still cannot recur. */
+        var EXCLUSION_INLINE_MAX = 200;
+        var inlineExclusion = excludedUris.length > 0 && excludedUris.length <= EXCLUSION_INLINE_MAX;
+
+        var leadsQuery = supabase
           .from("bsky_leads")
           .select("*")
           .eq("status", "scored")
           .gte("intent_score", 60)
+          .in("source", OUTREACH_SENDABLE_SOURCES);
+
+        if (inlineExclusion) {
+          // Each value double-quoted so a delimiter inside a URI cannot end the
+          // list early. post_uri is an AT-URI for Bluesky and an instance URL
+          // for Mastodon; neither is authored here, so the quotes and the
+          // escaping are not optional.
+          var exclusionList = excludedUris
+            .map(function (uri) {
+              return "\"" + String(uri).replace(/\\/g, "\\\\").replace(/"/g, "\\\"") + "\"";
+            })
+            .join(",");
+
+          leadsQuery = leadsQuery.not("post_uri", "in", "(" + exclusionList + ")");
+        } else if (excludedUris.length > EXCLUSION_INLINE_MAX) {
+          console.log("[SalesAutoConvert] user " + userId + ": " + excludedUris.length + " excluded leads exceeds the inline limit of " + EXCLUSION_INLINE_MAX + " — filtering in application code against a wider page instead.");
+        }
+
+        // 50 is ample when the database has already removed the ineligible
+        // rows: the pass only ever works 5. The fallback page is far wider
+        // because the exclusions still have to come out of it here.
+        var leadsResult = await leadsQuery
           .order("intent_score", { ascending: false })
-          .limit(20);
+          .limit(inlineExclusion || excludedUris.length === 0 ? 50 : 500);
 
         if (leadsResult.error) {
           console.error("[SalesAutoConvert] Failed to load leads for user " + userId + ":", leadsResult.error.message);
           continue;
         }
 
+        // Retained unconditionally. It is the actual filter on the fallback
+        // path, and on the inline path it is a cheap no-op that keeps the two
+        // paths returning the same thing.
         var freshLeads = (leadsResult.data || [])
           .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
           .slice(0, 5);
 
         for (var i = 0; i < freshLeads.length; i++) {
           try {
-            await convertSingleLead(userId, freshLeads[i], sharedSystemPrompt, dryRun);
-            convertedCount++;
+            // Counted apart from converted, because a lead the gate refused
+            // before drafting had no generation run for it. Adding the two
+            // together would report a busy pass while every lead in it was
+            // being turned away at the cap — the one condition this number
+            // exists to make visible.
+            var conversionResult = await convertSingleLead(userId, freshLeads[i], sharedSystemPrompt, dryRun);
+            if (conversionResult && conversionResult.skipped) {
+              skippedCount++;
+            } else {
+              convertedCount++;
+            }
           } catch (leadErr) {
             console.error("[SalesAutoConvert] Failed to convert lead " + freshLeads[i].post_uri + " for user " + userId + ":", leadErr.message || leadErr);
           }
         }
 
-        console.log("[SalesAutoConvert] user " + userId + ": converted " + convertedCount + " lead(s) — " + (dryRun ? "DRY RUN" : "LIVE"));
+        console.log("[SalesAutoConvert] user " + userId + ": converted " + convertedCount + " lead(s), skipped " + skippedCount + " before drafting — " + (dryRun ? "DRY RUN" : "LIVE"));
       } catch (userErr) {
         console.error("[SalesAutoConvert] Error processing user " + userId + ":", userErr.message || userErr);
       }
