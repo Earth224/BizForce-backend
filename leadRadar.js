@@ -227,6 +227,7 @@ async function runLeadRadarOnce() {
 
 var radarRunning = false;
 var scoringDisabledLogged = false;
+var mastodonDisabledLogged = false;
 
 async function radarTick() {
   if (radarRunning) {
@@ -237,10 +238,42 @@ async function radarTick() {
   try {
     await runLeadRadarOnce();
 
-    try {
-      await runMastodonRadarOnce();
-    } catch (mastodonErr) {
-      console.error("[LeadRadar] MastodonRadar cycle error:", mastodonErr.message || mastodonErr);
+    /* Off unless ENABLE_MASTODON_RADAR is exactly "true", and off is the
+       default deliberately.
+
+       The endpoint is the problem, not the hashtag list. Every selector
+       /api/v1/timelines/tag/:hashtag offers is a tag, and tagging IS the
+       broadcast behaviour — you tag a post to be found, which is what sellers
+       and teachers do and what someone quietly asking their friends for help
+       never does. No narrowing of that list turns broadcasters into seekers,
+       because the only thing it can select on is the broadcast signal itself.
+       The scorer prompt already says as much and weights hashtag-sourced posts
+       down accordingly.
+
+       Measured, not assumed: 617 scored Mastodon rows produced 7 leads above
+       70, one buyer per 88, against Bluesky's one per 16. Capture itself is
+       free HTTP, so that ratio would be harmless — except these rows land in
+       the same bsky_leads queue that scoreNewLeads drains 20 at a time with a
+       paid Claude call each. The real cost is not the fetch, it is that 88
+       broadcasters crowd out Bluesky captures for a budget that only ever
+       scores 20 rows a tick.
+
+       Nothing is deleted. mastodonRadar.js, the hashtag list and
+       sendMastodonReply are untouched and still work; mastodon also remains in
+       OUTREACH_SENDABLE_SOURCES, so leads already captured stay eligible and
+       replies to them still send. Turning capture back on is one Railway
+       variable, and the way back to Mastodon worth taking is authenticated
+       /api/v2/search with the question-shaped phrases the Bluesky list now
+       uses — the MASTODON_ACCESS_TOKEN it needs already exists for sending. */
+    if (process.env.ENABLE_MASTODON_RADAR === "true") {
+      try {
+        await runMastodonRadarOnce();
+      } catch (mastodonErr) {
+        console.error("[LeadRadar] MastodonRadar cycle error:", mastodonErr.message || mastodonErr);
+      }
+    } else if (!mastodonDisabledLogged) {
+      mastodonDisabledLogged = true;
+      console.log("[LeadRadar] Mastodon radar disabled (ENABLE_MASTODON_RADAR not true) — hashtag timelines are publishing behaviour and scored at one buyer per 88 rows. Existing mastodon leads are unaffected and replies to them still send.");
     }
 
     try {
