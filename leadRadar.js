@@ -280,8 +280,111 @@ async function scoreNewLeads() {
     var leads = data || [];
     console.log("[LeadRadar] scoring " + leads.length + " leads");
 
-    var apiKey = await resolveAnthropicKey(SCORING_ACCOUNT_ID);
-    var anthropic = new Anthropic({ apiKey: apiKey });
+    /* ── Which key, and what happens when it stops working ──────────────────
+       resolveAnthropicKey reads an encrypted BYOK key out of user_api_keys and
+       already falls back to the environment key for every failure it can see:
+       no row, a query error, or a decrypt that throws. What it cannot see is
+       the failure that actually happened here — the ciphertext decrypted
+       perfectly into a real, well-formed key that Anthropic has since stopped
+       accepting. AES-GCM authenticates, so a wrong ENCRYPTION_SECRET or a
+       tampered row throws rather than yielding garbage; a key that decrypts
+       cleanly and 401s is therefore not a crypto problem at all, and no amount
+       of care inside the resolver could have caught it.
+
+       That is the gap this closes. The resolved key is used first, and a 401
+       from it switches to the environment key once, in place, for the rest of
+       the batch.
+
+       Both keys are logged by SOURCE and never by value. */
+    var envApiKey = process.env.ANTHROPIC_API_KEY;
+    var resolvedApiKey = null;
+
+    try {
+      resolvedApiKey = await resolveAnthropicKey(SCORING_ACCOUNT_ID);
+    } catch (resolveErr) {
+      // The resolver swallows its own decrypt failures, so reaching here means
+      // the Supabase read itself threw. Not fatal: the environment key below is
+      // a complete substitute.
+      console.error("[LeadRadar] resolveAnthropicKey threw, falling back to the environment key:", resolveErr.message || resolveErr);
+    }
+
+    /* Nothing left to try. Worth its own message rather than a generic failure,
+       because every other cause defers leads for retry and this one must not:
+       there is no key, so 20 leads would each burn an attempt against a
+       condition no retry can change, and three ticks later they would be marked
+       "scoring failed after 3 attempts" by a bug that never involved them. */
+    if (!resolvedApiKey && !envApiKey) {
+      console.error("[LeadRadar] NO ANTHROPIC KEY AVAILABLE — resolveAnthropicKey returned nothing and ANTHROPIC_API_KEY is unset. Skipping scoring entirely; " + leads.length + " lead(s) left untouched with their attempt counts unchanged. Set ANTHROPIC_API_KEY or repair the stored BYOK key for the scoring account.");
+      return;
+    }
+
+    /* The resolver hands back the environment key itself in most of its
+       fallback paths, so an equality check is the only way to report the source
+       honestly — otherwise a resolver fallback would be logged as BYOK. */
+    var usingEnvKey = !resolvedApiKey || resolvedApiKey === envApiKey;
+    var activeApiKey = resolvedApiKey || envApiKey;
+
+    if (!resolvedApiKey) {
+      console.warn("[LeadRadar] resolveAnthropicKey returned no key for the scoring account — using the platform environment key (ANTHROPIC_API_KEY).");
+    }
+    console.log("[LeadRadar] scoring with the " + (usingEnvKey ? "platform environment key (ANTHROPIC_API_KEY)" : "stored BYOK key for the scoring account") + ".");
+
+    var anthropic = new Anthropic({ apiKey: activeApiKey });
+
+    // Latched, so the switch is announced once per batch rather than once per
+    // lead. 20 leads against a dead key would otherwise print 20 identical
+    // warnings and bury the one line that matters.
+    var authFallbackUsed = false;
+
+    function isAuthFailure(err) {
+      if (!err) return false;
+      if (err.status === 401 || (err.response && err.response.status === 401)) return true;
+      // The SDK surfaces status on the error, but a transport-level wrapper can
+      // hide it; the message is the backstop, never the primary test.
+      var message = String(err.message || "");
+      return /\b401\b/.test(message) || /invalid x-api-key|authentication_error|API key is invalid/i.test(message);
+    }
+
+    /* One retry, only for auth, only once per batch. Anything else — a rate
+       limit, a timeout, a malformed response — is not a key problem and is left
+       to the per-lead catch below, which defers the lead and counts the attempt
+       exactly as it always has. */
+    async function createScoringMessage(params) {
+      try {
+        return await anthropic.messages.create(params);
+      } catch (err) {
+        if (!isAuthFailure(err)) throw err;
+
+        if (!authFallbackUsed && envApiKey && activeApiKey !== envApiKey) {
+          authFallbackUsed = true;
+          activeApiKey = envApiKey;
+          anthropic = new Anthropic({ apiKey: envApiKey });
+          console.warn("[LeadRadar] KEY FALLBACK: the stored BYOK key for the scoring account was rejected with 401 (it decrypted fine, so it is revoked or expired, not corrupted). Switching to the platform environment key (ANTHROPIC_API_KEY) for the rest of this batch. Repair or remove the stored key to stop paying this retry every tick.");
+
+          /* The retry needs its own tagging. Without it the second 401 escapes
+             as an ordinary error and the lead that triggered the fallback — and
+             only that lead — gets an attempt counted against a dead key, while
+             every lead after it is correctly spared. One row punished for being
+             first is precisely the kind of near-invisible damage the attempt
+             counter exists to prevent. A non-auth failure here is a real
+             per-lead failure and is left alone. */
+          try {
+            return await anthropic.messages.create(params);
+          } catch (retryErr) {
+            if (isAuthFailure(retryErr)) {
+              retryErr.__leadRadarAuthDead = true;
+            }
+            throw retryErr;
+          }
+        }
+
+        // Both keys rejected, or the only key there was. Tagged so the loop can
+        // abandon the batch instead of feeding 20 leads into a retry counter
+        // over a condition that is identical for every one of them.
+        err.__leadRadarAuthDead = true;
+        throw err;
+      }
+    }
     // Counted apart, not together. A deferred lead is not a scored lead — it
     // has no score, it is going back on the queue, and the only thing that
     // happened to it was a failed call. A summary that adds the two together
@@ -343,7 +446,7 @@ async function scoreNewLeads() {
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
           "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\"}";
 
-        var response = await anthropic.messages.create({
+        var response = await createScoringMessage({
           model:      "claude-haiku-4-5-20251001",
           max_tokens: 300,
           messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
@@ -438,6 +541,21 @@ async function scoreNewLeads() {
         console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " safe=" + outreachSafe + " reason=" + result.reason);
 
       } catch (scoreErr) {
+        /* Not this lead's fault, and not this lead's attempt to spend. Every
+           remaining lead in the batch would fail identically against the same
+           dead key, so the batch is abandoned here rather than counted through:
+           20 leads x 3 attempts would mark the whole queue "scoring failed
+           after 3 attempts" for a credentials problem none of them caused, and
+           that verdict is permanent — status becomes 'scored' and the query
+           that finds work never looks at them again.
+
+           Left untouched instead, attempt counts unchanged, to be picked up on
+           the next tick once a working key is in place. */
+        if (scoreErr && scoreErr.__leadRadarAuthDead) {
+          console.error("[LeadRadar] NO WORKING ANTHROPIC KEY — " + (authFallbackUsed ? "both the stored BYOK key and the platform environment key were rejected with 401" : "the only available key was rejected with 401") + ". Abandoning this scoring batch after " + scoredCount + " scored; the remaining " + (leads.length - i) + " lead(s) are left untouched with their attempt counts unchanged. No retry will fix this — replace the key.");
+          break;
+        }
+
         // This path used to write { intent_score: 0, status: "scored" }, which
         // ended the lead's life: the next query filters status = 'new', so a
         // timeout or a malformed response was never retried and was recorded
