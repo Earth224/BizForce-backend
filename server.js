@@ -19151,7 +19151,27 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
 
     var targetLeads = [];
 
+    /* The same freshness cutoff the auto-loop computes, for the same reason and
+       recomputed per request rather than derived once at startup. Both branches
+       below share it so a single request cannot apply two different windows. */
+    var freshnessCutoff = new Date(Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
     if (leadPostUri) {
+      /* Deliberately NOT filtered in the query, which is the one place this
+         route diverges from runSalesAutoConvert in mechanism while matching it
+         exactly in outcome.
+
+         The auto-loop is picking leads out of a pool, so a lead that fails a
+         filter should simply not be picked — silence is the correct answer to
+         "find me something to do". This branch is answering a specific request
+         about a specific lead that an operator clicked, and there the same
+         silence is a bug: a filtered query returns no row, which is
+         indistinguishable from a post_uri that does not exist, and the button
+         appears to do nothing for two completely different reasons.
+
+         So the row is read unfiltered and the identical conditions are applied
+         below, where a failure still refuses but can say which check refused
+         it. */
       var singleResult = await supabase
         .from("bsky_leads")
         .select("*")
@@ -19161,7 +19181,58 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       if (singleResult.error || !singleResult.data) {
         return res.status(404).json({ error: "Lead not found." });
       }
-      targetLeads = [singleResult.data];
+
+      var requestedLead = singleResult.data;
+      var refusals = [];
+
+      /* Freshness, evaluated to the same verdict PostgREST would reach:
+         post_created_at not null AND >= the cutoff. An unparseable timestamp
+         cannot be compared, so it joins null on the ineligible side rather
+         than being given the benefit of the doubt. */
+      var postCreatedMs = requestedLead.post_created_at ? Date.parse(requestedLead.post_created_at) : NaN;
+
+      if (requestedLead.post_created_at == null) {
+        refusals.push({
+          code:   "post_age_unknown",
+          detail: "This lead has no recorded post date. It was captured before the post timestamp was stored, so its age cannot be established and it is not eligible for outreach."
+        });
+      } else if (!Number.isFinite(postCreatedMs)) {
+        refusals.push({
+          code:   "post_age_unreadable",
+          detail: "This lead's recorded post date (" + String(requestedLead.post_created_at) + ") could not be read as a date, so its age cannot be established."
+        });
+      } else if (postCreatedMs < Date.parse(freshnessCutoff)) {
+        var ageDays = Math.floor((Date.now() - postCreatedMs) / (24 * 60 * 60 * 1000));
+        refusals.push({
+          code:   "post_too_old",
+          detail: "This post is " + ageDays + " days old and the outreach window is " + OUTREACH_MAX_POST_AGE_DAYS + " days. Replying to it now would read as a reply to a conversation that has long since ended."
+        });
+      }
+
+      // Suitability, evaluated to the same verdict as eq(outreach_safe, true):
+      // only an explicit true clears, and null is "never screened" rather than
+      // a quiet yes.
+      if (requestedLead.outreach_safe == null) {
+        refusals.push({
+          code:   "not_screened",
+          detail: "This lead has never been through the suitability screen, so nothing has judged whether a public product reply is appropriate to send this person. Leads captured before that screen existed are permanently in this state."
+        });
+      } else if (requestedLead.outreach_safe !== true) {
+        refusals.push({
+          code:   "unsafe_recipient",
+          detail: "The suitability screen judged this person an inappropriate recipient of an unsolicited public product reply — for example a post about medication, a diagnosis, care from a doctor, distress, or a minor. Intent score does not override this."
+        });
+      }
+
+      if (refusals.length) {
+        console.log("[sales/convert] Refused " + leadPostUri + " for user " + userId + " — " + refusals.map(function (r) { return r.code; }).join(", "));
+        return res.status(422).json({
+          error:   "This lead is not eligible for outreach: " + refusals.map(function (r) { return r.detail; }).join(" "),
+          reasons: refusals
+        });
+      }
+
+      targetLeads = [requestedLead];
     } else if (segment) {
       // Same two exclusions as the auto-loop, read the same way and for the
       // same reason: already-engaged leads, plus any lead that has burned
@@ -19192,10 +19263,25 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         console.error("[sales/convert] Failed to load ineligible leads:", excludeErr.message || excludeErr);
       }
 
+      /* The same two eligibility filters the auto-loop applies, in the query
+         and ahead of the limit for the same reason the exclusions are: a limit
+         applied before a filter caps rows CONSIDERED rather than rows eligible,
+         and a segment whose top 40 are all stale or unscreened would come back
+         empty while eligible leads sat unread behind them.
+
+         Written as .not(...).eq(...) / .not(...).gte(...) rather than the
+         shorter form for each, matching runSalesAutoConvert line for line —
+         the null exclusion is redundant against SQL's three-valued logic and
+         deliberately stated anyway, and the two sites are only checkable
+         against each other if they read the same. */
       var segQuery = supabase
         .from("bsky_leads")
         .select("*")
         .eq("status", "scored")
+        .not("post_created_at", "is", null)
+        .gte("post_created_at", freshnessCutoff)
+        .not("outreach_safe", "is", null)
+        .eq("outreach_safe", true)
         .order("intent_score", { ascending: false })
         .limit(40);
 
