@@ -18339,6 +18339,19 @@ async function canSendOutreach(userId, lead) {
    findable together if they sit together. */
 const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
 
+/* How old a POST may be and still be worth replying to, in days. Measured on
+   post_created_at (when the author wrote it), never on created_at (when the
+   radar captured it) — a lead captured this morning can easily be a post from
+   last spring, and a warm reply to it reads as exactly what it is.
+
+   One number in one place, because the two sites that care are far apart:
+   this bounds who gets CONTACTED, while CAPTURE_WINDOW_DAYS in leadRadar.js
+   bounds what gets FETCHED. Intentionally not the same constant — capturing
+   wider than you contact costs nothing and leaves scored history behind,
+   whereas making them one number would mean widening the archive silently
+   widened who gets messaged. */
+const OUTREACH_MAX_POST_AGE_DAYS = 7;
+
 // Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
 // separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
 // pipeline bookkeeping). Defaults OFF: unset or any value other than the
@@ -19027,12 +19040,26 @@ async function runSalesAutoConvert() {
         var EXCLUSION_INLINE_MAX = 200;
         var inlineExclusion = excludedUris.length > 0 && excludedUris.length <= EXCLUSION_INLINE_MAX;
 
+        /* Recomputed on every pass rather than derived once at startup: this
+           process stays up for weeks, and a cutoff frozen at boot would widen
+           the window by a day every day it kept running. */
+        var freshnessCutoff = new Date(Date.now() - OUTREACH_MAX_POST_AGE_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
         var leadsQuery = supabase
           .from("bsky_leads")
           .select("*")
           .eq("status", "scored")
           .gte("intent_score", 60)
-          .in("source", OUTREACH_SENDABLE_SOURCES);
+          .in("source", OUTREACH_SENDABLE_SOURCES)
+          /* Unknown age is not fresh. The gte alone would already exclude
+             nulls — a comparison against NULL is NULL, never true — but the
+             5361 rows captured before this column existed all carry null and
+             none of them may ever be contacted. A requirement that size should
+             not rest on the reader knowing three-valued logic, so it is stated
+             rather than implied; the two predicates agree and the extra one is
+             free against the same index. */
+          .not("post_created_at", "is", null)
+          .gte("post_created_at", freshnessCutoff);
 
         if (inlineExclusion) {
           // Each value double-quoted so a delimiter inside a URI cannot end the

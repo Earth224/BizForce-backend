@@ -67,7 +67,20 @@ async function runMastodonRadarOnce() {
             post_text:       stripHtml(status.content),
             matched_keyword: hashtag,
             lang:            status.language || null,
-            source:          "mastodon"
+            source:          "mastodon",
+
+            /* The status's own authored time, not the time this row was
+               captured — created_at on the row means the latter. Mastodon
+               returns this as an ISO 8601 string on every status, so the
+               fallback to null is defensive rather than expected; a null here
+               makes the lead ineligible for outreach rather than fresh.
+
+               No date parameter narrows the fetch the way Bluesky's `since`
+               does: GET /api/v1/timelines/tag/:hashtag takes only ID-based
+               pagination (max_id / since_id / min_id) alongside limit and the
+               tag filters. Nothing time-based exists to pass, so a stale status
+               is filtered by this column downstream instead. */
+            post_created_at: status.created_at || null
           };
         });
 

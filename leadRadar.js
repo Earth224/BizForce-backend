@@ -34,6 +34,14 @@ const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
 // note that says there were two of them.
 const SCORING_ACCOUNT_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
 
+/* How far back a capture reaches, in days. This bounds what is FETCHED only —
+   the outreach loop enforces its own window on post_created_at before it
+   spends anything (OUTREACH_MAX_POST_AGE_DAYS in server.js). Deliberately two
+   numbers: capturing wider than you contact is cheap and leaves scored history
+   behind, and collapsing them into one would mean widening the archive
+   silently widened who gets messaged. */
+const CAPTURE_WINDOW_DAYS = 7;
+
 const KEYWORDS = [
   "natural energy supplement",
   "low libido",
@@ -111,8 +119,24 @@ async function runLeadRadarOnce() {
     for (var i = 0; i < KEYWORDS.length; i++) {
       var keyword = KEYWORDS[i];
       try {
+        /* Ask the platform for recent posts instead of discarding stale ones
+           after the fact. searchPosts takes `since` as an inclusive datetime,
+           so a page of 25 is 25 recent candidates rather than 25 that may all
+           predate the window.
+
+           Computed per call, never hoisted to module scope: this process runs
+           for weeks, and a cutoff captured at require() time would freeze the
+           window on the day of the deploy and widen it by a day every day.
+
+           The endpoint filters on `sortAt`, which the lexicon states may not
+           match the `createdAt` stored below. The two disagree for a backdated
+           or late-federated post, so this narrows what is fetched but is not
+           the authority on freshness — the outreach query re-checks
+           post_created_at against its own window before spending anything. */
+        var sinceIso = new Date(Date.now() - CAPTURE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
         var result = await withBsky(function (a) {
-          return a.app.bsky.feed.searchPosts({ q: keyword, limit: 25, sort: "latest" });
+          return a.app.bsky.feed.searchPosts({ q: keyword, limit: 25, sort: "latest", since: sinceIso });
         });
 
         if (!result || !result.data || !result.data.posts) continue;
@@ -125,7 +149,19 @@ async function runLeadRadarOnce() {
             author_handle:   post.author.handle,
             post_text:       (post.record && post.record.text) || null,
             matched_keyword: keyword,
-            lang:            (post.record && post.record.langs && post.record.langs[0]) || null
+            lang:            (post.record && post.record.langs && post.record.langs[0]) || null,
+
+            /* When the post was AUTHORED, which is not what created_at holds —
+               that is when this row was captured, and the two drift by however
+               long the post sat before a search surfaced it. Recency decisions
+               need the former, so it is stored rather than inferred from the
+               capture time.
+
+               record.createdAt is author-supplied; indexedAt is the relay's own
+               observation and is the fallback when the record carries no
+               timestamp at all. Null when neither exists, which the outreach
+               query treats as ineligible rather than as fresh. */
+            post_created_at: (post.record && post.record.createdAt) || post.indexedAt || null
           };
         });
 

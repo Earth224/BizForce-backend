@@ -130,7 +130,23 @@ async function runYoutubeRadarOnce() {
                 post_text:       commentSnippet.textOriginal || commentSnippet.textDisplay || null,
                 matched_keyword: keyword,
                 lang:            null,
-                source:          "youtube"
+                source:          "youtube",
+
+                /* The COMMENT's publish time, which is the post being captured
+                   here — not the video's. An old comment on a new video and a
+                   new comment on an old video are opposite cases, and only the
+                   comment's own timestamp separates them. updatedAt is the
+                   fallback for an edited comment whose publishedAt is somehow
+                   absent; both are RFC 3339 strings.
+
+                   commentThreads.list has no date parameter to narrow the fetch
+                   with — its optional params are maxResults, moderationStatus,
+                   order, pageToken, searchTerms and textFormat. search.list
+                   does take publishedAfter, but that bounds which VIDEOS are
+                   discovered, not which comments come back, so it would drop
+                   fresh comments on older videos while still admitting
+                   years-old comments on new ones. Left alone deliberately. */
+                post_created_at: commentSnippet.publishedAt || commentSnippet.updatedAt || null
               });
             });
           } catch (videoErr) {
