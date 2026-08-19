@@ -21,6 +21,7 @@ const cityTimezones = require("city-timezones");
 const { Resend } = require("resend");
 const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt } = require("./config/brain");
+const { RichText } = require("@atproto/api");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
@@ -18244,6 +18245,60 @@ function truncateToBlueskyLimit(text) {
   return chars.slice(0, 297).join("") + "…";
 }
 
+/* ── Link facets for outreach replies ───────────────────────────────────────
+   Bluesky stores post text as plain text and carries formatting alongside it
+   in facets — ranges with a feature attached. A URL with no facet is
+   characters on a screen: not clickable, not tappable, retyped by hand or not
+   visited at all. Every outreach reply this system has ever sent ended in a
+   domain nobody could click.
+
+   MUST run on the FINAL string, after truncateToBlueskyLimit. Facet offsets
+   are byte offsets into the exact text that is posted, so detecting first and
+   truncating second would leave ranges pointing into a string that no longer
+   exists — at best a link over the wrong words, at worst an offset past the
+   end. Verified with multibyte text (em dashes, accented characters, the
+   ellipsis the truncator appends): the offsets are UTF-8 byte indices, not
+   UTF-16 code-unit indices, and the library converts between them itself.
+
+   Bare domains ARE detected. "MrEarthRose.com" with no scheme produces a link
+   facet whose uri is "https://MrEarthRose.com" while the visible text stays
+   exactly as written, so nothing has to rewrite the model's message to make
+   the link work. A trailing sentence period is correctly left outside the
+   range, and an email address is correctly not linkified.
+
+   LINK FEATURES ONLY, deliberately. The same detector also produces mention
+   and tag facets, and detectFacetsWithoutResolution leaves a mention's `did`
+   set to the raw handle string rather than a DID — invalid on its face, and
+   the whole post is rejected for it. Resolving instead would be worse: a draft
+   that happens to contain an @handle would silently TAG that stranger, turning
+   one unsolicited reply into a notification for an uninvolved third party. A
+   hashtag facet is the same class of unasked-for amplification. This function
+   exists to make a URL clickable and does nothing else, so every non-link
+   feature is dropped and the text keeps rendering them as ordinary characters.
+
+   Never throws. A reply that cannot be decorated is still a reply worth
+   sending, so a detector failure degrades to the plain-text post that has been
+   going out all along. */
+function detectOutreachLinkFacets(text) {
+  try {
+    var rt = new RichText({ text: String(text || "") });
+    rt.detectFacetsWithoutResolution();
+
+    return (rt.facets || [])
+      .map(function (facet) {
+        var linkFeatures = (facet.features || []).filter(function (feature) {
+          return feature && feature.$type === "app.bsky.richtext.facet#link";
+        });
+
+        return linkFeatures.length ? { index: facet.index, features: linkFeatures } : null;
+      })
+      .filter(Boolean);
+  } catch (err) {
+    console.error("[SendBluesky] Link detection failed, posting without facets (URLs will not be clickable):", err.message || err);
+    return [];
+  }
+}
+
 /* ── Outreach send cap ──────────────────────────────────────────────────────
    Deliberately low, and env-overridable so it can be raised knowingly rather
    than by editing code. The ceiling on how wrong a single day can go is the
@@ -18379,8 +18434,15 @@ async function sendBlueskyReply(lead, replyText) {
   var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
   var text = truncateToBlueskyLimit(replyText);
 
+  // AFTER the truncator, never before: facets are byte offsets into whatever
+  // string is actually posted, and truncating a decorated string invalidates
+  // every range in it. A URL the truncator cuts in half simply stops being
+  // detected — the surviving fragment has no valid TLD — so a split link
+  // degrades to plain text rather than to a facet pointing at a broken URL.
+  var facets = detectOutreachLinkFacets(text);
+
   if (!sendLive) {
-    console.log("[SEND DRY] Would reply to " + handle + ": " + text);
+    console.log("[SEND DRY] Would reply to " + handle + " (" + facets.length + " link facet(s)): " + text);
     return { sent: false, reason: "send_dry" };
   }
 
@@ -18392,11 +18454,19 @@ async function sendBlueskyReply(lead, replyText) {
     }
 
     var postRef = { uri: lead.post_uri, cid: lead.post_cid };
-    var postResult = await bskyAgent.post({
+    var postRecord = {
       text: text,
       reply: { root: postRef, parent: postRef },
       createdAt: new Date().toISOString()
-    });
+    };
+
+    // Omitted entirely rather than sent as an empty array, so a reply with no
+    // links produces the same record it always has.
+    if (facets.length) {
+      postRecord.facets = facets;
+    }
+
+    var postResult = await bskyAgent.post(postRecord);
 
     return { sent: true, uri: postResult && postResult.uri };
   } catch (err) {
