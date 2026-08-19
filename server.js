@@ -18339,6 +18339,22 @@ async function canSendOutreach(userId, lead) {
    findable together if they sit together. */
 const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
 
+/* Which offer a lead gets drafted against, keyed on the scorer's
+   suggested_product. Two products share one instruction because they share one
+   compliance regime — both are supplements sold from MrEarthRose.com, and the
+   structure-function language, the disease-claim ban and the prescription-drug
+   comparison ban all apply identically to each. The book is a different offer
+   under different rules entirely, so it gets its own instruction rather than a
+   conditional clause inside the supplement one.
+
+   Anything not named here — "none" above all, which is what the scorer assigns
+   to teachers, coaches and sellers — has no offer to write about, and there is
+   nothing to draft. The values are the scorer's exact strings; leadRadar.js
+   already refuses to store anything off-list, so an exact match here cannot be
+   defeated by a near-miss upstream. */
+const OUTREACH_SUPPLEMENT_PRODUCTS = ["War Horse", "Tongkat Ali"];
+const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
+
 /* How old a POST may be and still be worth replying to, in days. Measured on
    post_created_at (when the author wrote it), never on created_at (when the
    radar captured it) — a lead captured this morning can easily be a post from
@@ -18501,6 +18517,37 @@ function stripOutreachEmoji(text) {
 async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
 
+  /* ── Which offer, if any ─────────────────────────────────────────────────
+     First, above even the cap gate, because it is the only check here that
+     costs nothing: no query, no network, just the string the scorer already
+     wrote. A lead with no offer to write about cannot produce a draft no
+     matter what the cap says, so spending two indexed reads to discover that
+     would be work done in the wrong order.
+
+     Runs on dry runs too. A dry run skips the send, not the invoice — the
+     generation is billed identically — and a "none" lead has nothing to
+     generate in either mode.
+
+     Before the attempt counter for the same reason the cap refusal is: the
+     ceiling exists to bound paid attempts, and no attempt was made. This is
+     also permanent rather than transient, unlike a cap refusal — the scorer's
+     verdict does not change on its own — so counting it would burn a retry
+     budget against a decision that will read the same way forever. */
+  var suggestedProduct = lead.suggested_product;
+  var offerKind =
+    suggestedProduct === OUTREACH_BOOK_PRODUCT ? "book" :
+    (OUTREACH_SUPPLEMENT_PRODUCTS.indexOf(suggestedProduct) !== -1 ? "supplement" : null);
+
+  if (!offerKind) {
+    console.log("[sales/convert] Skipped " + handle + " before drafting — suggested_product " + JSON.stringify(suggestedProduct == null ? null : suggestedProduct) + " has no offer to write about. No model call billed, no attempt counted.");
+    return {
+      conversion:  null,
+      sent:        false,
+      send_reason: "unsupported_product",
+      skipped:     true
+    };
+  }
+
   /* ── The send gate, consulted BEFORE the paid call ───────────────────────
      This check used to sit immediately above the send, which is the right
      place to be correct and the wrong place to be cheap: callAnthropicText
@@ -18542,12 +18589,44 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "Intent reason: " + (lead.intent_reason || "") + "\n" +
     "Suggested product interest: " + (lead.suggested_product || "none");
 
-  var taskInstruction =
+  /* Two instructions, chosen by offer, rather than one instruction carrying a
+     conditional. The supplement text below is unchanged to the character.
+
+     They are not variations on a theme. The supplement copy is governed by
+     structure-function rules, a disease-claim ban and a prescription-drug
+     comparison ban, none of which exist for a book — carrying those clauses
+     into a book reply would not be harmlessly redundant, it would be
+     instructing the model about a compliance regime that does not apply and
+     inviting it to write around rules nobody imposed. The book has the
+     opposite problem to solve: an esoteric title whose natural register is
+     grandiose, being sent to a stranger who did not ask for it, where the
+     failure mode is a reply that reads as recruitment.
+
+     The one line both share and neither can lose is the character budget: 280,
+     under both truncateToBlueskyLimit's 300 and truncateToMastodonLimit's 500,
+     so no draft is ever cut mid-sentence by the sender. */
+  var supplementInstruction =
     "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
     "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
     "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. May mention MrEarthRose.com naturally at most once. " +
     "internal_analysis: the strategy notes, intent score reasoning, offer framing (which product/offer fits and why), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
     "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
+
+  var bookInstruction =
+    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
+    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
+    "THE OFFER FOR THIS LEAD IS A BOOK, not a supplement: \"Quantum Jumping for The Chosen Ones\", available at BlackSunCircle.com, over 1000 copies sold. This is the only offer relevant to this lead. Ignore any other products or services described in the business profile above — they are not what this person was matched to, and none of the supplement rules apply here. There are no structure-function requirements, no disease claims to avoid, and no prescription drugs to avoid comparing to, because this is a book.\n" +
+    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed; sound like a real person, not a marketer, no hashtags or hype. " +
+    "ANSWER THEM FIRST. The reply must respond to the person's actual question, or to what they actually said, with something genuinely useful, BEFORE the book is mentioned at all. Lead with the useful thing. The book is a natural next step at the end, never the opening line, and never the reason the reply exists. " +
+    "Mention the book at most once, and only if it genuinely fits what they asked. If you can write a useful, honest reply without mentioning it, do that — a reply that helps and never names the book is a better outcome than one that forces it in. Never mention it twice. " +
+    "If you do link, link to BlackSunCircle.com and nothing else. Never link a checkout, cart, payment or order URL of any kind, and never a direct-purchase link. " +
+    "Do NOT tell this person they are chosen, special, awakened, ready, or that they have been searching for something. Do not use grandiose, initiatory, prophetic or recruiting language toward a stranger. The book's own voice is uncompromising; the reply's job is not to match that voice, it is only to be worth reading and to earn a click from someone who was not asking for one. " +
+    "Never promise outcomes or results, never say a method will work for them, or that it will change, fix or transform anything. You may say what the book is about and who it is for. " +
+    "Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. " +
+    "internal_analysis: the strategy notes, intent score reasoning, offer framing (why the book fits this person and what they actually asked for), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
+    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
+
+  var taskInstruction = offerKind === "book" ? bookInstruction : supplementInstruction;
 
   var finalPrompt =
     sharedSystemPrompt +
