@@ -19059,7 +19059,23 @@ async function runSalesAutoConvert() {
              rather than implied; the two predicates agree and the extra one is
              free against the same index. */
           .not("post_created_at", "is", null)
-          .gte("post_created_at", freshnessCutoff);
+          .gte("post_created_at", freshnessCutoff)
+          /* The suitability screen, and the only filter here that is about the
+             person rather than the lead. Intent says they want something;
+             this says a public product reply from a stranger is a decent thing
+             to send them, which stays false for someone in a crisis, under a
+             doctor's care, or writing about medication no matter how well the
+             post matches a keyword.
+
+             Null is not a quiet maybe — it means no model ever screened this
+             row, which covers every lead captured before the column existed
+             and every lead that reached "scored" by exhausting its retries.
+             Same shape as the freshness pair above: the eq alone already drops
+             nulls, and the explicit predicate is here so that guarantee is
+             visible to whoever edits this query next rather than resting on
+             three-valued logic they have to remember. */
+          .not("outreach_safe", "is", null)
+          .eq("outreach_safe", true);
 
         if (inlineExclusion) {
           // Each value double-quoted so a delimiter inside a URI cannot end the

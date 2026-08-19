@@ -251,6 +251,12 @@ async function startLeadRadar() {
    value anything unrecognised is stored as. */
 const SCORER_ALLOWED_PRODUCTS = ["War Horse", "Tongkat Ali", "Quantum Jumping book", "none"];
 
+/* The only two answers the suitability screen may give. Just the exact string
+   "SAFE" clears a lead for outreach; this list exists so an off-contract answer
+   can be told apart from a deliberate "UNSAFE" and logged as the contract
+   violation it is, instead of passing silently as a refusal. */
+const SCORER_SAFETY_VALUES = ["SAFE", "UNSAFE"];
+
 async function scoreNewLeads() {
   try {
     // Ordered by score_attempts first so a lead that has failed twice does not
@@ -320,10 +326,22 @@ async function scoreNewLeads() {
           "Score MIDDLE (25-59) for ambiguous posts where intent is unclear.\n\n" +
           "The Source line tells you how the post was found. A post pulled from a hashtag timeline is far more likely to be a broadcaster than a seeker, because hashtagging is a publishing behaviour — weight accordingly.\n\n" +
           "Only assign a product tag to genuine seekers. For teachers/sellers set product to 'none'.\n\n" +
+
+          "SECOND, SEPARATE JUDGEMENT — SUITABILITY.\n" +
+          "Decide whether this person is a SAFE recipient of an unsolicited PUBLIC reply from a stranger that mentions a supplement or a book.\n\n" +
+          "This is NOT the same question as intent, and it is not a stricter version of it. Someone can want help badly and still be a person nobody should approach this way. Judge it on its own evidence, and never let a high score pull this answer toward SAFE.\n\n" +
+          "Answer UNSAFE whenever ANY of the following is true, no matter how high the score:\n" +
+          "- The post mentions prescription medication, psychiatric medication, hormone therapy, birth control, or any named medical condition or diagnosis.\n" +
+          "- The post expresses distress, crisis, hopelessness, or self-harm, or asks for help in an emotional rather than a practical sense.\n" +
+          "- The person is describing a medical situation they are under a doctor's care for.\n" +
+          "- The post is about a minor, or the author appears to be a minor.\n" +
+          "- A stranger replying with a product link would reasonably read as intrusive rather than helpful.\n\n" +
+          "Answer SAFE ONLY when the person is openly asking for suggestions, recommendations, or ideas in a way that invites replies from strangers. If you are unsure, answer UNSAFE.\n\n" +
+
           "Source: " + source + ", " + discovery + "\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
-          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\"}";
+          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\"}";
 
         var response = await anthropic.messages.create({
           model:      "claude-haiku-4-5-20251001",
@@ -376,23 +394,48 @@ async function scoreNewLeads() {
           ? result.product
           : "none";
 
+        /* Suitability, validated the same way product is and for a sharper
+           version of the same reason: only the exact string "SAFE" clears a
+           lead, and every other value on earth — "safe", "Safe", true, "yes",
+           null, a missing key, a model that ignored the field entirely — lands
+           on UNSAFE. Written as a positive test against one literal rather than
+           a negative test against a list of refusals, because a negative test
+           fails open: the day the model answers something nobody enumerated,
+           an .indexOf(...) === -1 check would read it as clearance.
+
+           The default direction is the whole point of the field. A lead wrongly
+           held back costs one unsent reply; a lead wrongly cleared is a public
+           product pitch at someone in a crisis or under a doctor's care. Those
+           are not comparable, so the ambiguous case resolves to the cheap
+           mistake every time. */
+        var rawSafety    = result ? result.safety : undefined;
+        var outreachSafe = rawSafety === "SAFE";
+
         if (score !== numericScore) {
           console.warn("[LeadRadar] lead " + lead.id + ": score " + JSON.stringify(rawScore) + " coerced to " + score);
         }
         if (product !== (result ? result.product : undefined)) {
           console.warn("[LeadRadar] lead " + lead.id + ": product " + JSON.stringify(result ? result.product : undefined) + " is not one of the four allowed values, stored as none");
         }
+        // Separate from the value itself: an off-contract answer and a genuine
+        // "UNSAFE" both store false, and only this line tells them apart. If
+        // the model starts returning a boolean or a lowercase word, every lead
+        // silently stops being eligible — this is the warning that says why.
+        if (SCORER_SAFETY_VALUES.indexOf(rawSafety) === -1) {
+          console.warn("[LeadRadar] lead " + lead.id + ": safety " + JSON.stringify(rawSafety) + " is not SAFE or UNSAFE, stored as UNSAFE");
+        }
 
         updatePayload = {
           intent_score:      score,
           intent_reason:     result.reason,
           suggested_product: product,
+          outreach_safe:     outreachSafe,
           status:            "scored"
         };
 
         // Logs what was STORED, not what the model said. The two can differ now,
         // and the warnings above are what record that they did.
-        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " reason=" + result.reason);
+        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " safe=" + outreachSafe + " reason=" + result.reason);
 
       } catch (scoreErr) {
         // This path used to write { intent_score: 0, status: "scored" }, which
@@ -416,6 +459,12 @@ async function scoreNewLeads() {
           updatePayload = { score_attempts: attempts };
           console.log("[LeadRadar] lead " + lead.id + " left new for retry, attempt " + attempts + " of 3");
         } else {
+          // outreach_safe is deliberately NOT written here. This lead reached
+          // "scored" without any model ever having read it, so there is no
+          // suitability judgement to record — and leaving the column null is
+          // what keeps it out of the outreach query, which treats null as
+          // ineligible. Writing false would say "screened and refused", which
+          // is a different and untrue statement.
           updatePayload = {
             score_attempts: attempts,
             intent_score:   0,
