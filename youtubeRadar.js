@@ -11,15 +11,36 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // live here existed only to protect the daily quota when this ran on the
 // shared 5-minute radar tick; MIN_RUN_INTERVAL_MS now protects that quota
 // directly, and rotating on top of it would just delay coverage for no gain.
+/* Question-shaped, like the Bluesky list — but aimed one step further away,
+   and that difference matters when editing this.
+
+   These strings do not search comments. search.list searches VIDEOS, and the
+   comments harvested from the videos it returns are what become leads. So the
+   target is not "a comment phrased as a question", it is "a video whose
+   comment section fills up with people asking questions".
+
+   Question-titled videos are the ones that do that. A video called "Does
+   Tongkat Ali Actually Work?" collects comments like "tried it for 3 months,
+   nothing, what else is there" — someone who bought, was disappointed, and is
+   still looking. A video called "Tongkat Ali Reviews" collects the channel's
+   own affiliate audience, which is where the old topic-word list was fishing.
+   Same correction as the Bluesky list, one layer removed: the seeker is in the
+   comments under the question, not under the topic.
+
+   Still exactly 8. The quota arithmetic below is written against that number,
+   and adding a ninth silently changes the daily unit cost. */
 const KEYWORDS = [
-  "low libido help",
-  "boost energy naturally",
-  "natural male vitality",
-  "tongkat ali reviews",
-  "always tired no energy",
-  "how to manifest",
-  "neville goddard method",
-  "quantum jumping"
+  // Supplements: libido, energy, fatigue.
+  "does tongkat ali actually work",
+  "how to increase libido naturally",
+  "why am i always tired",
+  "what supplements actually work",
+  "how to boost energy naturally",
+
+  // The book: manifestation, law of assumption, quantum jumping.
+  "why isn't my manifestation working",
+  "does manifestation actually work",
+  "does quantum jumping actually work"
 ];
 
 // runYoutubeRadarOnce is called from leadRadar.js radarTick every 5 minutes,

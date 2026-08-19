@@ -42,32 +42,70 @@ const SCORING_ACCOUNT_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
    silently widened who gets messaged. */
 const CAPTURE_WINDOW_DAYS = 7;
 
+/* Search phrases, not topics. This distinction is the whole list.
+
+   The old list searched the SUBJECT — "low libido", "law of attraction",
+   "male vitality", "neville goddard". Everyone who talks about a subject
+   matches a subject word, and in these two niches the people talking are
+   overwhelmingly the ones selling: coaches, affiliate accounts, supplement
+   brands, manifestation teachers posting daily. The last scoring batch came
+   back uniformly score=12, product=none, safe=false, with reasons reading
+   "publishing behavior indicates a teacher/activist, not a seeker" and
+   "broadcasting their own product." The scorer was right every time. It was
+   being handed a list of broadcasters and correctly refusing all of them.
+
+   The two leads that ever converted were not on-topic posts. They were
+   QUESTIONS put to the room:
+
+     "Ok chat real question: if you're having a problem with low libido, what's
+      done stuff you can do to help get your sex drive back up?"
+     "For the health conscious or nutritionist. Is there anything I can eat
+      specifically that will naturally boost my energy and mood?"
+
+   Neither contains a product name. What they share is grammar — first person,
+   asking, admitting a problem, inviting strangers to answer. A seller almost
+   never writes "what helped your", "why isn't my", "does it actually work",
+   because those sentences concede that something did not work. That concession
+   is the buying signal, and it is what these phrases search for.
+
+   Kept short on purpose. Bluesky ANDs the words of an unquoted query rather
+   than matching the phrase, so every extra word is another term the post must
+   contain — a seven-word question would match almost nothing. Three to five
+   words keeps the seeker-shaped words ("anyone", "tried", "helped", "why",
+   "actually") as the binding constraint while leaving the sentence around them
+   free to vary.
+
+   25 phrases, the same count as before, so the per-tick search cost is
+   unchanged. */
 const KEYWORDS = [
-  "natural energy supplement",
-  "low libido",
-  "male vitality",
-  "herbal aphrodisiac",
-  "quantum jumping",
-  "law of assumption",
-  "manifestation method",
-  "natural remedy for energy",
-  "always tired no energy",
-  "help with low libido",
-  "boost my energy naturally",
-  "cant focus tired all day",
+  // Supplements: libido, energy, fatigue.
   "anyone tried tongkat ali",
-  "how to manifest",
-  "does manifestation work",
-  "quantum jumping method",
-  "neville goddard",
-  "law of attraction",
-  "how to quantum jump",
-  "neville goddard method",
-  "sats manifestation",
-  "manifestation not working",
-  "how to manifest faster",
-  "living in the end",
-  "revision method neville"
+  "does tongkat ali actually work",
+  "get my sex drive back",
+  "what helped your low libido",
+  "why is my libido low",
+  "struggling with low libido",
+  "what worked for low libido",
+  "recommendations for low energy",
+  "anyone else always tired",
+  "what supplements actually work",
+  "anyone recommend an energy supplement",
+  "anything to eat for energy",
+  "supplement recommendations for fatigue",
+  "anyone had luck with ashwagandha",
+
+  // The book: manifestation, law of assumption, quantum jumping.
+  "why isn't my manifestation working",
+  "manifestation isn't working for me",
+  "does manifestation actually work",
+  "how do i actually manifest",
+  "am i manifesting wrong",
+  "what helped you manifest",
+  "anyone had luck manifesting",
+  "struggling with law of assumption",
+  "is law of assumption real",
+  "anyone tried quantum jumping",
+  "does quantum jumping actually work"
 ];
 
 const agent = new BskyAgent({ service: "https://bsky.social" });
