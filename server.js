@@ -2325,6 +2325,111 @@ if (userError) {
   }
 }
 
+/* ── The contact row behind every transactional email ────────────────────────
+   sendEmail refuses any send without a contactId — not as a consent check, but
+   as an attribution one: "an unattributed send cannot be counted against a
+   person, cannot be unsubscribed from, and leaves a ledger row pointing at
+   nobody." A registered user is a person we will eventually need to mail, and
+   until now nothing created a contacts row for one. Registration wrote to
+   users and profiles and stopped, so the first transactional email anyone tried
+   to send — this password reset — had no row to attribute itself to.
+
+   owner_id is the USER'S OWN id, not CAPTURE_OWNER_ID. The capture constant
+   attributes a landing-page lead to the operator who owns the funnel; this row
+   is the account holder themselves, and the person a reset email is about is
+   the person it belongs to. contacts_owner_email_uniq is on (owner_id, email),
+   so the same address can legitimately hold both rows: one as somebody's
+   captured lead, one as their own account. They are different facts.
+
+   No consent event is written here, deliberately. Creating an account is not
+   granting marketing permission, and a granted row written at signup would let
+   anything reading that ledger mail every user who never opted in. The reset
+   mail passes skipConsentCheck precisely because it needs no such row.
+
+   Returns a contact id, or null when one could not be established. NEVER
+   throws: both callers treat a missing contact as a degraded outcome rather
+   than a failure — registration must not fail over it, and the reset route must
+   not tell a caller anything it would not tell them anyway. */
+async function findOrCreateUserContact(userId, email) {
+  try {
+    if (!userId || !email) {
+      return null;
+    }
+
+    var existing = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("owner_id", userId)
+      .eq("email", email)
+      .maybeSingle();
+
+    if (existing.error) {
+      console.error("[contacts] Lookup failed for user " + userId + ": " + existing.error.message);
+      return null;
+    }
+
+    if (existing.data) {
+      // last_seen only. Nothing else on the row is this function's to update,
+      // and a signup or a reset request is exactly what "seen" means.
+      var touch = await supabase
+        .from("contacts")
+        .update({ last_seen: nowIso() })
+        .eq("id", existing.data.id);
+
+      if (touch.error) {
+        // Not fatal: the row exists and its id is what the caller needs. A
+        // stale last_seen is a reporting inaccuracy, not a broken send.
+        console.error("[contacts] last_seen update failed for contact " + existing.data.id + ": " + touch.error.message);
+      }
+
+      return existing.data.id;
+    }
+
+    var created = await supabase
+      .from("contacts")
+      .insert({
+        owner_id: userId,
+        email:    email,
+        source:   "registration",
+        brand:    "bizforce"
+      })
+      .select("id")
+      .single();
+
+    if (!created.error) {
+      return created.data.id;
+    }
+
+    /* 23505 means a concurrent request inserted the same address between the
+       select and this insert — two tabs, a double-clicked signup, or a reset
+       requested twice. Re-select and carry on, the same resolution POST
+       /api/capture uses. Constraint text is checked alongside the code so an
+       unrelated unique violation is not mistaken for this one. */
+    var conflictText = String(created.error.message || "") + " " +
+      String(created.error.details || "") + " " +
+      String(created.error.constraint || "");
+
+    if (created.error.code === "23505" && conflictText.indexOf("email") !== -1) {
+      var raced = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("owner_id", userId)
+        .eq("email", email)
+        .maybeSingle();
+
+      if (!raced.error && raced.data) {
+        return raced.data.id;
+      }
+    }
+
+    console.error("[contacts] Insert failed for user " + userId + ": " + created.error.message);
+    return null;
+  } catch (contactErr) {
+    console.error("[contacts] Unexpected failure for user " + userId + ": " + (contactErr.message || contactErr));
+    return null;
+  }
+}
+
 app.post("/api/auth/register", authLimiter, async function (req, res, next) {
   try {
     const email = normalizeEmail(req.body.email);
@@ -2481,6 +2586,22 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       console.error("Welcome bonus wallet grant failed:", walletErr.message);
     }
 
+    /* Non-fatal by design, on the same terms as the wallet grant above. A user
+       who exists without a contact row is recoverable — the reset route creates
+       one on demand, and so can anything else that needs to mail them. A signup
+       that 500s after users, profiles, notifications and the wallet have all
+       been written is not: the account exists, the caller was told it failed,
+       and retrying hits "Email already registered".
+
+       Logged loudly because the failure is otherwise invisible until someone
+       asks why an email never arrived, weeks later. */
+    const registrationContactId = await findOrCreateUserContact(user.id, email);
+
+    if (!registrationContactId) {
+      console.error("[register] No contacts row for new user " + user.id +
+        " — registration succeeded and is NOT being failed for this, but transactional email to this address will have nothing to attribute itself to until one exists.");
+    }
+
     const token = createToken(user);
 
     return res.status(201).json({
@@ -2575,28 +2696,235 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── Password reset, part one: request ───────────────────────────────────────
+   Every branch below returns the SAME body. That is the one rule this route has
+   to keep: it is unauthenticated and takes an email address, so any difference
+   between "that account exists" and "it does not" is an account enumeration
+   oracle, and a login form that refuses to leak addresses is pointless beside a
+   reset form that hands them over. Unknown address, failed write, failed send
+   and complete success are indistinguishable to the caller. Everything that
+   went wrong goes to the log instead, where it is worth something.
+
+   Previously this generated a token, wrote it with `await supabase...` and no
+   error capture, and answered success unconditionally — so it also answered
+   success when the columns it wrote did not exist, which they did not until
+   migration 079. Nothing sent an email; the route's own message said the link
+   had been "prepared", which was accurate and the whole story. */
 app.post("/api/auth/password-reset", authLimiter, async function (req, res, next) {
+  // One object, returned from every exit. Assembling it once removes the
+  // possibility of two branches drifting into two different answers.
+  const genericResponse = {
+    success: true,
+    message: "If an account exists for that email, a password reset link has been sent."
+  };
+
   try {
     const email = normalizeEmail(req.body.email);
 
     if (!email) {
+      // The only distinguishable response, and it reveals nothing: a caller who
+      // sent no address learns only that they sent no address.
       return res.status(400).json({ error: "Email is required" });
     }
 
-    const resetToken = crypto.randomBytes(32).toString("hex");
+    /* Look the user up FIRST, and send nothing when there is none. Mailing an
+       address with no account would be worse than an enumeration leak: it tells
+       whoever received it that somebody is trying to get into an account they
+       do not have, and it is unsolicited mail to a person who never signed up.
+       The generic answer covers the difference at the API boundary. */
+    const { data: user, error: lookupError } = await supabase
+      .from("users")
+      .select("id, email")
+      .eq("email", email)
+      .maybeSingle();
 
-    await supabase
+    if (lookupError) {
+      console.error("[password-reset] User lookup failed for a reset request: " + lookupError.message + ". No token issued, no mail sent.");
+      return res.json(genericResponse);
+    }
+
+    if (!user) {
+      console.log("[password-reset] Reset requested for an address with no account. Nothing sent.");
+      return res.json(genericResponse);
+    }
+
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const resetExpiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+
+    /* The error is captured now. A discarded write here is the worst failure
+       this route has: the caller is told a link is on its way, the token was
+       never stored, and the link — if one were sent — could never work. */
+    const tokenWrite = await supabase
       .from("users")
       .update({
         password_reset_token: resetToken,
-        password_reset_expires_at: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
+        password_reset_expires_at: resetExpiresAt,
         updated_at: nowIso()
       })
-      .eq("email", email);
+      .eq("id", user.id);
 
+    if (tokenWrite.error) {
+      console.error("[password-reset] FAILED TO STORE RESET TOKEN for user " + user.id + ": " + tokenWrite.error.message + ". No mail sent — a link whose token was never stored can only fail in the user's hands.");
+      return res.json(genericResponse);
+    }
+
+    // Attribution for the send. Created on demand, so an account registered
+    // before findOrCreateUserContact existed can still be mailed.
+    const contactId = await findOrCreateUserContact(user.id, email);
+
+    if (!contactId) {
+      console.error("[password-reset] No contacts row for user " + user.id + " and one could not be created — sendEmail requires a contact to attribute to, so the reset mail cannot be sent. The token IS stored and valid for one hour if the link is delivered another way.");
+      return res.json(genericResponse);
+    }
+
+    /* Built through the FRONTEND_URL constant with trailing slashes stripped,
+       the same construction as the List-Unsubscribe link: one definition of
+       where the frontend is, and no double slash when the variable is set with
+       a trailing one. The token rides as a query parameter because
+       reset-password.html reads it from the query string. */
+    const resetUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+      "/reset-password?token=" + encodeURIComponent(resetToken);
+
+    const resetHtml =
+      '<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;color:#1a1a2e">' +
+      '<h1 style="font-size:20px;margin:0 0 16px">Reset your BizForce AI password</h1>' +
+      '<p style="font-size:15px;line-height:1.6;margin:0 0 20px">Someone asked to reset the password for this account. If that was you, use the link below. It expires in one hour.</p>' +
+      '<p style="margin:0 0 24px"><a href="' + resetUrl + '" style="display:inline-block;background:#00e5ff;color:#000;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Choose a new password</a></p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0 0 8px">If the button does not work, paste this into your browser:</p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;word-break:break-all;margin:0 0 24px">' + resetUrl + '</p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0">If you did not ask for this, you can ignore this email. Your password will not change until someone uses the link above.</p>' +
+      '</div>';
+
+    const resetText =
+      "Reset your BizForce AI password\n\n" +
+      "Someone asked to reset the password for this account. If that was you, open the link below. It expires in one hour.\n\n" +
+      resetUrl + "\n\n" +
+      "If you did not ask for this, you can ignore this email. Your password will not change until someone uses the link above.";
+
+    /* skipConsentCheck, and this is the case the flag was written for: "someone
+       who unsubscribed from marketing still gets their password reset." It is
+       sent because of something the person just did, not because they are on a
+       list. sendEmail never throws, so there is no try/catch here — the result
+       is read instead. */
+    const sendResult = await sendEmail({
+      contactId:        contactId,
+      to:               email,
+      subject:          "Reset your BizForce AI password",
+      html:             resetHtml,
+      text:             resetText,
+      template:         "password_reset",
+      skipConsentCheck: true
+    });
+
+    if (sendResult && sendResult.sent) {
+      console.log("[password-reset] Reset link sent for user " + user.id + ".");
+    } else {
+      console.error("[password-reset] Reset mail NOT sent for user " + user.id + " — reason: " + ((sendResult && sendResult.reason) || "unknown") + ". The token is stored and valid for one hour; the caller was told a link was sent.");
+    }
+
+    return res.json(genericResponse);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ── Password reset, part two: confirm ───────────────────────────────────────
+   The half that did not exist. A token was issued and nothing on the server
+   could ever consume it, so every reset link that could have been sent led
+   nowhere.
+
+   Unlike the request route, this one is allowed to be specific: the caller is
+   holding a token, which is evidence they already received the mail, so
+   "expired" and "already used" tell them something they need without telling
+   an attacker anything they could not learn by trying. The one thing it stays
+   vague about is WHICH failure — a bad token, a missing expiry and a lapsed
+   expiry share a message, because separating them would let someone with a
+   stolen token learn whether it was ever valid. */
+app.post("/api/auth/password-reset/confirm", authLimiter, async function (req, res, next) {
+  try {
+    const token = String(req.body.token || "").trim();
+    const password = String(req.body.password || "");
+
+    if (!token) {
+      return res.status(400).json({ error: "Reset token is required" });
+    }
+
+    // The same minimum registration enforces, in the same words. A reset that
+    // accepted a weaker password than signup would be a way around the rule
+    // rather than a separate rule.
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    const { data: user, error: lookupError } = await supabase
+      .from("users")
+      .select("id, password_reset_expires_at")
+      .eq("password_reset_token", token)
+      .maybeSingle();
+
+    if (lookupError) {
+      throw lookupError;
+    }
+
+    /* Three refusals, one message. A null expiry is refused as firmly as a
+       lapsed one: it would otherwise be a token that never stops working, which
+       is what a future writer setting the token without the expiry would
+       accidentally create. Unusable is the right reading of a half-written
+       reset. */
+    const expiresAtMs = user && user.password_reset_expires_at
+      ? Date.parse(user.password_reset_expires_at)
+      : NaN;
+
+    if (!user || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      console.log("[password-reset/confirm] Refused a reset token (missing, unreadable expiry, or expired).");
+      return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    /* One update, and the token is cleared in it. Two statements would leave a
+       window where the password is already changed and the token still works —
+       a second use could set it again, and a leaked link would stay live until
+       the follow-up write landed.
+
+       The .eq on the token is a compare-and-set: a concurrent confirm that got
+       there first has already nulled the column, so this update matches zero
+       rows rather than applying twice. .select() is what makes that visible —
+       an update matching nothing is not an error in PostgREST, it is an empty
+       result, and without asking for the row back a no-op would read as a
+       success. */
+    const { data: updated, error: updateError } = await supabase
+      .from("users")
+      .update({
+        password_hash:             passwordHash,
+        password_reset_token:      null,
+        password_reset_expires_at: null,
+        updated_at:                nowIso()
+      })
+      .eq("id", user.id)
+      .eq("password_reset_token", token)
+      .select("id")
+      .maybeSingle();
+
+    if (updateError) {
+      console.error("[password-reset/confirm] Password write FAILED for user " + user.id + ": " + updateError.message + ". The password was not changed.");
+      throw updateError;
+    }
+
+    if (!updated) {
+      console.log("[password-reset/confirm] Token for user " + user.id + " was consumed by a concurrent request; this one changed nothing.");
+      return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new one." });
+    }
+
+    console.log("[password-reset/confirm] Password reset completed for user " + user.id + ".");
+
+    /* No session is issued. Signing the caller in here would mean a password
+       reset link is also a login link, so anyone who intercepts one gets a
+       session without ever knowing the new password. They log in with it
+       instead, through the route that already verifies a password. */
     return res.json({
       success: true,
-      message: "If the email exists, a password reset link has been prepared."
+      message: "Your password has been reset. You can now sign in with your new password."
     });
   } catch (error) {
     next(error);
