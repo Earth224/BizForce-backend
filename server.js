@@ -19224,7 +19224,19 @@ async function runSalesAutoConvert() {
              visible to whoever edits this query next rather than resting on
              three-valued logic they have to remember. */
           .not("outreach_safe", "is", null)
-          .eq("outreach_safe", true);
+          .eq("outreach_safe", true)
+          /* The invitation screen. Separate from suitability because the two
+             refuse different people: suitability asks whether a reply would
+             harm someone, this asks whether they asked at all. A post narrating
+             a low-energy day and a post asking the room what helps are the same
+             lead to an intent scorer and opposites here, and only this column
+             tells them apart.
+
+             Null ineligible on the same terms as the columns above, and by the
+             same explicit pair — the eq already drops nulls, and the predicate
+             is stated so nobody has to remember that. */
+          .not("reply_invited", "is", null)
+          .eq("reply_invited", true);
 
         if (inlineExclusion) {
           // Each value double-quoted so a delimiter inside a URI cannot end the
@@ -19373,6 +19385,23 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         });
       }
 
+      // Invitation, on the same terms as eq(reply_invited, true). Deliberately
+      // its own refusal rather than folded into the one above: "we should not
+      // reply to this person" and "this person did not ask" are different
+      // findings, and an operator who sees them merged will read every uninvited
+      // lead as an unsafe one.
+      if (requestedLead.reply_invited == null) {
+        refusals.push({
+          code:   "invitation_unscreened",
+          detail: "This lead has never been through the invitation screen, so nothing has judged whether the post actually asked for replies. Leads scored before that screen existed are permanently in this state."
+        });
+      } else if (requestedLead.reply_invited !== true) {
+        refusals.push({
+          code:   "reply_not_invited",
+          detail: "This post did not ask for replies — it is narration, commentary, or a statement rather than a question to the room. Having the problem the product addresses is not the same as asking for help with it, and a stranger answering an unasked post reads as someone monitoring the author's timeline. Intent score does not override this."
+        });
+      }
+
       if (refusals.length) {
         console.log("[sales/convert] Refused " + leadPostUri + " for user " + userId + " — " + refusals.map(function (r) { return r.code; }).join(", "));
         return res.status(422).json({
@@ -19412,11 +19441,12 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         console.error("[sales/convert] Failed to load ineligible leads:", excludeErr.message || excludeErr);
       }
 
-      /* The same two eligibility filters the auto-loop applies, in the query
-         and ahead of the limit for the same reason the exclusions are: a limit
-         applied before a filter caps rows CONSIDERED rather than rows eligible,
-         and a segment whose top 40 are all stale or unscreened would come back
-         empty while eligible leads sat unread behind them.
+      /* The same eligibility filters the auto-loop applies — freshness,
+         suitability and invitation — in the query and ahead of the limit for
+         the same reason the exclusions are: a limit applied before a filter
+         caps rows CONSIDERED rather than rows eligible, and a segment whose top
+         40 are all stale, unscreened or uninvited would come back empty while
+         eligible leads sat unread behind them.
 
          Written as .not(...).eq(...) / .not(...).gte(...) rather than the
          shorter form for each, matching runSalesAutoConvert line for line —
@@ -19431,6 +19461,8 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         .gte("post_created_at", freshnessCutoff)
         .not("outreach_safe", "is", null)
         .eq("outreach_safe", true)
+        .not("reply_invited", "is", null)
+        .eq("reply_invited", true)
         .order("intent_score", { ascending: false })
         .limit(40);
 

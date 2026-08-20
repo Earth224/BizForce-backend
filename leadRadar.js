@@ -328,6 +328,12 @@ const SCORER_ALLOWED_PRODUCTS = ["War Horse", "Tongkat Ali", "Quantum Jumping bo
    violation it is, instead of passing silently as a refusal. */
 const SCORER_SAFETY_VALUES = ["SAFE", "UNSAFE"];
 
+/* The two answers the invitation screen may give, on the same terms as the
+   suitability list above: only the exact string "INVITED" clears a lead, and
+   this list exists so an off-contract answer can be told apart from a
+   deliberate "NOT_INVITED" and logged as the contract violation it is. */
+const SCORER_INVITATION_VALUES = ["INVITED", "NOT_INVITED"];
+
 async function scoreNewLeads() {
   try {
     // Ordered by score_attempts first so a lead that has failed twice does not
@@ -512,10 +518,19 @@ async function scoreNewLeads() {
           "- A stranger replying with a product link would reasonably read as intrusive rather than helpful.\n\n" +
           "Answer SAFE ONLY when the person is openly asking for suggestions, recommendations, or ideas in a way that invites replies from strangers. If you are unsure, answer UNSAFE.\n\n" +
 
+          "THIRD, SEPARATE JUDGEMENT — INVITATION.\n" +
+          "Decide whether the post INVITES a reply from a stranger.\n\n" +
+          "This is the narrowest of the three questions and the easiest to answer too generously. It is not about whether the person has the problem, and not about whether a reply would be welcome or useful. It is only about whether they ASKED. Having a need is not the same as asking for help with it.\n\n" +
+          "Answer INVITED only when the post asks a question of the room, requests recommendations or suggestions, or otherwise opens the floor to answers from people the author does not know.\n" +
+          "Examples of INVITED: \"any recommendations for low energy?\", \"has anyone tried this?\", \"what worked for you?\", \"asking for advice\", \"can someone explain this to me\".\n\n" +
+          "Answer NOT_INVITED when the post is narration, commentary, a joke, a statement of what the person is doing or has done, or anything else where no answer was solicited. This holds EVEN IF the person clearly has the problem the product addresses, and EVEN IF the intent score is high.\n" +
+          "Example of NOT_INVITED: \"If I can't get to the store tomorrow, I'll be ordering delivery. Gonna try and see if just plain ol bone broth helps at all. Also getting some protein bars for when I don't have energy for cooking.\" That person has low energy and is buying things for it, and asked nobody anything. A stranger answering it would read as someone monitoring their timeline.\n\n" +
+          "A rhetorical question is not an invitation. A question aimed at one named person is not an invitation to the room. If you are unsure, answer NOT_INVITED.\n\n" +
+
           "Source: " + source + ", " + discovery + "\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
-          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\"}";
+          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
 
         var response = await createScoringMessage({
           model:      "claude-haiku-4-5-20251001",
@@ -585,6 +600,22 @@ async function scoreNewLeads() {
         var rawSafety    = result ? result.safety : undefined;
         var outreachSafe = rawSafety === "SAFE";
 
+        /* Invitation, validated identically and for the same structural reason:
+           a positive test against one literal, never a negative test against a
+           list of refusals, because a negative test fails open the moment the
+           model answers something nobody enumerated.
+
+           A third screen rather than a stricter second one, because the two
+           refuse different people. Suitability asks whether replying would harm
+           someone. This asks whether they asked at all — and the lead that
+           forced it did no harm to anyone: score 72, safety SAFE, a post about
+           ordering bone broth and protein bars because cooking is too much
+           effort. Every word of it says low energy, and not one word of it asks
+           a question. Answering it is not unsafe, it is uninvited, and nothing
+           in the first two questions could tell the difference. */
+        var rawInvitation = result ? result.invitation : undefined;
+        var replyInvited  = rawInvitation === "INVITED";
+
         if (score !== numericScore) {
           console.warn("[LeadRadar] lead " + lead.id + ": score " + JSON.stringify(rawScore) + " coerced to " + score);
         }
@@ -598,18 +629,22 @@ async function scoreNewLeads() {
         if (SCORER_SAFETY_VALUES.indexOf(rawSafety) === -1) {
           console.warn("[LeadRadar] lead " + lead.id + ": safety " + JSON.stringify(rawSafety) + " is not SAFE or UNSAFE, stored as UNSAFE");
         }
+        if (SCORER_INVITATION_VALUES.indexOf(rawInvitation) === -1) {
+          console.warn("[LeadRadar] lead " + lead.id + ": invitation " + JSON.stringify(rawInvitation) + " is not INVITED or NOT_INVITED, stored as NOT_INVITED");
+        }
 
         updatePayload = {
           intent_score:      score,
           intent_reason:     result.reason,
           suggested_product: product,
           outreach_safe:     outreachSafe,
+          reply_invited:     replyInvited,
           status:            "scored"
         };
 
         // Logs what was STORED, not what the model said. The two can differ now,
         // and the warnings above are what record that they did.
-        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " safe=" + outreachSafe + " reason=" + result.reason);
+        console.log("[LeadRadar] scored lead " + lead.id + ": score=" + score + " product=" + product + " safe=" + outreachSafe + " invited=" + replyInvited + " reason=" + result.reason);
 
       } catch (scoreErr) {
         /* Not this lead's fault, and not this lead's attempt to spend. Every
@@ -648,9 +683,10 @@ async function scoreNewLeads() {
           updatePayload = { score_attempts: attempts };
           console.log("[LeadRadar] lead " + lead.id + " left new for retry, attempt " + attempts + " of 3");
         } else {
-          // outreach_safe is deliberately NOT written here. This lead reached
-          // "scored" without any model ever having read it, so there is no
-          // suitability judgement to record — and leaving the column null is
+          // outreach_safe and reply_invited are deliberately NOT written here.
+          // This lead reached "scored" without any model ever having read it,
+          // so there is no suitability or invitation judgement to record — and
+          // leaving both columns null is
           // what keeps it out of the outreach query, which treats null as
           // ineligible. Writing false would say "screened and refused", which
           // is a different and untrue statement.
