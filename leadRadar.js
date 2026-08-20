@@ -493,11 +493,33 @@ async function scoreNewLeads() {
           ? "pulled from the #" + matched + " hashtag timeline"
           : "found by searching for the phrase " + JSON.stringify(matched);
 
+        /* The lang column has been written on every capture since the start
+           and has never once reached the classifier. That gap has a cost that
+           can be named: a Hindi/Urdu post describing weak legs, weak muscles
+           and weak nerves, and asking for a home remedy for walking like a
+           baby, was scored SAFE. Every clause of the suitability refusal list
+           covers it — a named medical complaint, a mobility complaint, a
+           person asking a stranger about their own body — and not one of them
+           fired, because the list is written in English and was being matched
+           against text that was not.
+
+           Passing the code is only half the correction. The other half is the
+           LANGUAGE block in the prompt, which tells the model to translate
+           before it judges rather than ruling on the fragments it happens to
+           recognise. A model reading a language partially finds no refusal
+           trigger and reports that absence as clearance — which is exactly
+           the shape of the SAFE above. */
+        var lang    = lead.lang || "unknown";
+
         var prompt =
           "You are a buyer-intent classifier for three products:\n" +
           "- War Horse: a natural male vitality and energy supplement\n" +
           "- Tongkat Ali: a natural herbal supplement for male energy and libido\n" +
           "- Quantum Jumping book: an esoteric self-help / manifestation book\n\n" +
+          "BEFORE ANY OF THE THREE JUDGEMENTS BELOW — LANGUAGE.\n" +
+          "The Language line gives the language code the post was captured with. If it is anything other than English, translate the post into English internally BEFORE you answer any of the three questions below, and apply all three judgements to the translated meaning rather than to the words you happen to recognise in the original.\n" +
+          "A post you have only partly read is not a post that has been cleared. A non-English post is NEVER given the benefit of the doubt on safety: if translating still leaves you unsure what is being described, that is UNSAFE, not SAFE. Every refusal rule below applies to the MEANING of the post, never to its English wording.\n\n" +
+
           "Your job is to separate SEEKERS from TEACHERS/SELLERS.\n\n" +
           "Score HIGH (60-100) ONLY when the post shows a real individual expressing personal desire, struggle, confusion, or genuine openness to a method or product — someone who might actually buy.\n" +
           "Examples of high scores: asking for recommendations, venting about low energy or low libido, sharing personal frustration, saying they want to try something, admitting confusion about a method.\n\n" +
@@ -524,16 +546,20 @@ async function scoreNewLeads() {
           "Answer INVITED only when the post asks a question of the room, requests recommendations or suggestions, or otherwise opens the floor to answers from people the author does not know.\n" +
           "Examples of INVITED: \"any recommendations for low energy?\", \"has anyone tried this?\", \"what worked for you?\", \"asking for advice\", \"can someone explain this to me\".\n\n" +
           "Answer NOT_INVITED when the post is narration, commentary, a joke, a statement of what the person is doing or has done, or anything else where no answer was solicited. This holds EVEN IF the person clearly has the problem the product addresses, and EVEN IF the intent score is high.\n" +
-          "Example of NOT_INVITED: \"If I can't get to the store tomorrow, I'll be ordering delivery. Gonna try and see if just plain ol bone broth helps at all. Also getting some protein bars for when I don't have energy for cooking.\" That person has low energy and is buying things for it, and asked nobody anything. A stranger answering it would read as someone monitoring their timeline.\n\n" +
+          "BINDING RULE, not a guideline: a post describing what the author is BUYING, TRYING, or PLANNING is NOT_INVITED, even when it names the problem in detail, even when it names the exact thing the product addresses, and even when a suggestion would obviously have helped. Shopping out loud is not a question. Deciding out loud is not a question.\n" +
+          "The post below is the REFERENCE CASE for that rule, not an illustration of it. It is NOT_INVITED, and any post built the same way is NOT_INVITED for the same reason:\n" +
+          "\"If I can't get to the store tomorrow, I'll be ordering delivery. Gonna try and see if just plain ol bone broth helps at all. Also getting some protein bars for when I don't have energy for cooking.\"\n" +
+          "That person has low energy and is buying things for it, and asked nobody anything. A stranger answering it would read as someone monitoring their timeline. If your reasoning is carrying you toward INVITED on that post, or on one shaped like it, the reasoning is wrong and the answer is NOT_INVITED.\n\n" +
           "A rhetorical question is not an invitation. A question aimed at one named person is not an invitation to the room. If you are unsure, answer NOT_INVITED.\n\n" +
 
+          "Language: " + lang + "\n" +
           "Source: " + source + ", " + discovery + "\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
           "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
 
         var response = await createScoringMessage({
-          model:      "claude-haiku-4-5-20251001",
+          model:      "claude-sonnet-4-6",
           max_tokens: 300,
           messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
         });
