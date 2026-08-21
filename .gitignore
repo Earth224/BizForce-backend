@@ -1,3 +1,26 @@
+# Dependencies.
 node_modules/
+
+# Secrets.
 .env
 .env.*
+
+# Local tooling.
+.claude/
+
+# OS and editor cruft.
+.DS_Store
+Thumbs.db
+
+# Scratch, probe and test files kept at the repo root. Rooted with a leading
+# slash so nothing nested is caught by accident.
+/test-*
+/probe-*
+/scratch-*
+/tmp-*
+/*.tmp
+/chinese-calendar-table.js
+
+# NOTE: deliberately no *.sql rule. supabase/migrations/ is tracked SQL that
+# belongs in this repo. The frontend ignores *.sql because its root is a public
+# web root; that reasoning does not carry over here.
