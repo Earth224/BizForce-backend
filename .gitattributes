@@ -1,0 +1,22 @@
+# Normalize text to LF in the repository. No eol= here on purpose: checkouts
+# stay whatever core.autocrlf gives the working copy, so nobody's editor moves.
+* text=auto
+
+# Text, declared explicitly so detection never has to guess.
+*.html text
+*.js   text
+*.css  text
+*.json text
+*.md   text
+*.svg  text
+*.txt  text
+
+# Binary. Git must never convert these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
