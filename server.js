@@ -27,6 +27,7 @@ const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
+const { runNightlyBackup } = require("./lib/backup");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -20047,6 +20048,34 @@ app.listen(PORT, function () {
     console.log("[startup] storeProposalTick scheduled — 06:00 " + STORE_PROPOSAL_TIMEZONE + " daily, claimed through job_runs." + STORE_PROPOSAL_JOB_NAME);
   } else {
     console.log("[startup] storeProposalTick disabled (ENABLE_STORE_PROPOSAL_JOB not true)");
+  }
+
+  // Nightly backup. A wall-clock schedule for the same reason the pass above is
+  // one: on Railway every deploy replaces the process, so an interval measures
+  // time from the last deploy rather than from the clock, and a job that is meant
+  // to run every night would follow deploys instead — twice on a busy day, never
+  // on a quiet one.
+  //
+  // 08:00 rather than alongside the 06:00 proposal pass, so the two do not
+  // compete and a slow backup cannot delay proposals.
+  //
+  // No job_runs claim. That mechanism exists to stop a job firing twice and doing
+  // its work twice; two backups on one day is a duplicate email, not damage, and
+  // a claim that failed to release would silently stop the backups — which is the
+  // failure this whole job is being built to prevent.
+  if (process.env.ENABLE_NIGHTLY_BACKUP === "true") {
+    var BACKUP_TIMEZONE = process.env.BACKUP_TIMEZONE || "America/Los_Angeles";
+    var BACKUP_CRON = process.env.BACKUP_CRON || "0 8 * * *";
+    cron.schedule(BACKUP_CRON, function () {
+      runNightlyBackup({ supabase }).catch(function (err) {
+        console.error("[NightlyBackup][FAILED] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: BACKUP_TIMEZONE
+    });
+    console.log("[startup] runNightlyBackup scheduled — cron \"" + BACKUP_CRON + "\" " + BACKUP_TIMEZONE + ".");
+  } else {
+    console.log("[startup] runNightlyBackup disabled (ENABLE_NIGHTLY_BACKUP not true)");
   }
 
   // RedditRadar disabled — Railway datacenter IP blocked by Reddit; revive later via residential proxy
