@@ -2173,14 +2173,19 @@ if (userError) {
 
     const customerId = subscription.customer;
 
-    const { data: existing } = await supabase
+    const { data: existing, error: subscriptionLookupError } = await supabase
       .from("subscriptions")
       .select("user_id")
       .eq("stripe_customer_id", customerId)
       .maybeSingle();
 
+    if (subscriptionLookupError) {
+      console.error("SUBSCRIPTION_EVENT lookup failed: " +
+        (subscriptionLookupError.message || subscriptionLookupError));
+    }
+
     if (existing && existing.user_id) {
-      await supabase.from("subscriptions").upsert(
+      const { error: subscriptionUpsertError } = await supabase.from("subscriptions").upsert(
         {
           user_id: existing.user_id,
           plan,
@@ -2202,7 +2207,18 @@ if (userError) {
         }
       );
 
-      await supabase
+      // Logged, never thrown. A throw here makes Stripe retry the delivery and
+      // eventually disable the endpoint, which would take down billing for a
+      // live paying subscriber. A visible log is the safe failure mode.
+      if (subscriptionUpsertError) {
+        console.error("SUBSCRIPTION_EVENT subscriptions upsert failed: " +
+          (subscriptionUpsertError.message || subscriptionUpsertError) +
+          " details=" + (subscriptionUpsertError.details || "none") +
+          " hint=" + (subscriptionUpsertError.hint || "none") +
+          " code=" + (subscriptionUpsertError.code || "none"));
+      }
+
+      const { error: subscriptionProfileError } = await supabase
         .from("profiles")
         .update({
           subscription_plan: plan,
@@ -2210,6 +2226,11 @@ if (userError) {
           updated_at: nowIso()
         })
         .eq("user_id", existing.user_id);
+
+      if (subscriptionProfileError) {
+        console.error("SUBSCRIPTION_EVENT profiles update failed: " +
+          (subscriptionProfileError.message || subscriptionProfileError));
+      }
     }
   }
 
