@@ -15054,10 +15054,13 @@ function bfPublicKeyBelongsToUser(key, userId) {
   return segments[1] === owner;
 }
 
-// Removes the bf-public objects a card update displaced. Never throws and never rejects:
-// the row is already saved by the time this runs, so a cleanup failure must not fail the
+// Removes the bf-public objects a card write displaced. Pass updatedRow as null when the
+// row itself is gone, which displaces all four slots. Never throws and never rejects: the
+// row is already written by the time this runs, so a cleanup failure must not fail the
 // request.
-async function removeDisplacedCardMedia(priorRow, updatedRow, userId) {
+async function removeDisplacedCardMedia(priorRow, updatedRow, userId, logTag) {
+  const tag = logTag || "digital-cards PUT";
+
   // Any URL still present in one of the four slots is live — a user may move a single
   // asset from one slot to another, which must not delete it.
   const stillReferenced = new Set();
@@ -15076,13 +15079,13 @@ async function removeDisplacedCardMedia(priorRow, updatedRow, userId) {
 
     const key = bfPublicUrlToKey(previous);
     if (!key) {
-      console.error("[digital-cards PUT] Displaced %s is not a bf-public URL, leaving it in place: %s",
-        column, previous);
+      console.error("[%s] Displaced %s is not a bf-public URL, leaving it in place: %s",
+        tag, column, previous);
       continue;
     }
     if (!bfPublicKeyBelongsToUser(key, userId)) {
-      console.error("[digital-cards PUT] Refusing to delete %s — key is not owned by user %s: %s",
-        column, userId, key);
+      console.error("[%s] Refusing to delete %s — key is not owned by user %s: %s",
+        tag, column, userId, key);
       continue;
     }
     if (seen.has(key)) continue;
@@ -15095,12 +15098,12 @@ async function removeDisplacedCardMedia(priorRow, updatedRow, userId) {
   try {
     const removal = await supabase.storage.from("bf-public").remove(keys);
     if (removal.error) {
-      console.error("[digital-cards PUT] Failed to remove displaced media (non-fatal):",
-        removal.error.message || removal.error);
+      console.error("[%s] Failed to remove displaced media (non-fatal): %s",
+        tag, removal.error.message || removal.error);
     }
   } catch (cleanupErr) {
-    console.error("[digital-cards PUT] Failed to remove displaced media (non-fatal):",
-      cleanupErr.message || cleanupErr);
+    console.error("[%s] Failed to remove displaced media (non-fatal): %s",
+      tag, cleanupErr.message || cleanupErr);
   }
 }
 
@@ -15217,12 +15220,35 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
 
 app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
   try {
+    // Read the media URLs first — once the row is gone there is nothing left to tell us
+    // which bf-public objects belonged to it.
+    let priorMedia = null;
+    const { data: priorRow, error: priorError } = await supabase
+      .from("digital_cards")
+      .select("video_url, bg_image_url, still_image_url, audio_url")
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (priorError) {
+      console.error("[digital-cards DELETE] Could not read media before delete, cleanup skipped:",
+        priorError.message || priorError);
+    } else {
+      priorMedia = priorRow;
+    }
+
     const { error } = await supabase
       .from("digital_cards")
       .delete()
       .eq("id", req.params.id)
       .eq("user_id", req.user.id);
     if (error) throw error;
+
+    // The row is gone; from here nothing may fail the request. A null updatedRow means
+    // every slot is displaced.
+    if (priorMedia) {
+      await removeDisplacedCardMedia(priorMedia, null, req.user.id, "digital-cards DELETE");
+    }
+
     return res.json({ success: true });
   } catch (error) { next(error); }
 });
