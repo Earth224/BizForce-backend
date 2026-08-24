@@ -2052,6 +2052,20 @@ async function handleStripeEvent(event) {
     }
 
     if (userId) {
+      // Stripe does not guarantee that checkout.session.completed arrives before
+      // customer.subscription.created, so the period window is fetched here and
+      // written with the row below rather than left to the subscription branch.
+      let checkoutSubscription = null;
+      if (session.subscription) {
+        try {
+          checkoutSubscription = await stripe.subscriptions.retrieve(session.subscription);
+        } catch (retrieveError) {
+          console.error("CHECKOUT retrieve subscription failed: " +
+            (retrieveError && retrieveError.message ? retrieveError.message : retrieveError));
+          checkoutSubscription = null;
+        }
+      }
+
       // This row IS the entitlement — getUserPlan resolves paid-or-not from
       // subscriptions.status and nothing else. A discarded error here means the
       // money was taken and access was never granted, with every log reporting
@@ -2065,15 +2079,19 @@ async function handleStripeEvent(event) {
           stripe_customer_id: session.customer || null,
           stripe_subscription_id: session.subscription || null,
           stripe_price_id: (session.metadata && session.metadata.price_id) || null,
-          // current_period_start / current_period_end are deliberately omitted.
-          // checkout.session.completed carries no period window, so this branch
-          // has nothing truthful to write, and Stripe delivers it independently
-          // of customer.subscription.* — a retry of this event can land after
-          // the subscription branch below has already filled both columns from
-          // the real Stripe subscription object. Writing explicit nulls here
-          // would stamp those real dates back to null on every late retry.
-          // Omitting the keys means the ON CONFLICT update never names those
-          // columns, so whatever the subscription branch wrote survives.
+          // current_period_start / current_period_end are written here because
+          // event arrival order is not guaranteed: customer.subscription.created
+          // can land before this row exists, and its handler skips its write in
+          // that case, leaving the renewal date null. The period window comes
+          // from the subscription object retrieved above, or null when that
+          // retrieve failed; the subscription branch still corrects it later
+          // for renewals.
+          current_period_start: checkoutSubscription && checkoutSubscription.current_period_start
+            ? new Date(checkoutSubscription.current_period_start * 1000).toISOString()
+            : null,
+          current_period_end: checkoutSubscription && checkoutSubscription.current_period_end
+            ? new Date(checkoutSubscription.current_period_end * 1000).toISOString()
+            : null,
           cancel_at_period_end: false,
           updated_at: nowIso()
         },
