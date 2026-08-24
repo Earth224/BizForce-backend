@@ -14993,6 +14993,117 @@ app.get("/api/editor/image", requireAuth, async function (req, res, next) {
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
 
+// The digital_cards columns that hold a bf-public object URL.
+const CARD_MEDIA_COLUMNS = ["video_url", "bg_image_url", "still_image_url", "audio_url"];
+
+// getPublicUrl builds encodeURI(`${SUPABASE_URL}/storage/v1/object/public/bf-public/${key}`),
+// so the inverse is: find that marker in the path, take the remainder, decodeURI it.
+const BF_PUBLIC_PATH_MARKER = "/storage/v1/object/public/bf-public/";
+
+// Host of the Supabase project, so a foreign URL that merely mimics the storage path
+// cannot be mistaken for one of our objects. Null if SUPABASE_URL is unparseable, in
+// which case the path marker alone has to carry the check.
+const BF_PUBLIC_HOST = (function () {
+  try {
+    return new URL(process.env.SUPABASE_URL).host;
+  } catch (err) {
+    return null;
+  }
+})();
+
+// Converts a stored public URL back to its bf-public storage key.
+// Returns null for anything that is not recognisably a bf-public object URL — callers
+// must skip those rather than guess a key and delete the wrong object.
+function bfPublicUrlToKey(value) {
+  if (typeof value !== "string" || !value) return null;
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch (err) {
+    return null; // a bare path, a blob: ref, or not a URL at all
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (BF_PUBLIC_HOST && parsed.host !== BF_PUBLIC_HOST) return null; // not our project
+
+  const markerAt = parsed.pathname.indexOf(BF_PUBLIC_PATH_MARKER);
+  if (markerAt === -1) return null; // another bucket, a render/image URL, or a foreign host
+
+  const encodedKey = parsed.pathname.slice(markerAt + BF_PUBLIC_PATH_MARKER.length);
+  if (!encodedKey) return null;
+
+  try {
+    return decodeURI(encodedKey) || null;
+  } catch (err) {
+    return null; // malformed percent-encoding
+  }
+}
+
+// Keys are built as `${folder}/${user_id}/${Date.now()}_${safeName}`, so the owner is
+// segment 1. Deleting a key that does not carry the caller's own id would destroy another
+// user's file, so anything that does not match exactly is refused.
+function bfPublicKeyBelongsToUser(key, userId) {
+  if (typeof key !== "string" || !key) return false;
+
+  const owner = String(userId || "");
+  if (!owner) return false;
+
+  const segments = key.split("/");
+  if (segments.length < 3) return false;
+
+  return segments[1] === owner;
+}
+
+// Removes the bf-public objects a card update displaced. Never throws and never rejects:
+// the row is already saved by the time this runs, so a cleanup failure must not fail the
+// request.
+async function removeDisplacedCardMedia(priorRow, updatedRow, userId) {
+  // Any URL still present in one of the four slots is live — a user may move a single
+  // asset from one slot to another, which must not delete it.
+  const stillReferenced = new Set();
+  for (const column of CARD_MEDIA_COLUMNS) {
+    const current = updatedRow ? updatedRow[column] : null;
+    if (typeof current === "string" && current) stillReferenced.add(current);
+  }
+
+  const keys = [];
+  const seen = new Set();
+
+  for (const column of CARD_MEDIA_COLUMNS) {
+    const previous = priorRow ? priorRow[column] : null;
+    if (typeof previous !== "string" || !previous) continue;
+    if (stillReferenced.has(previous)) continue;
+
+    const key = bfPublicUrlToKey(previous);
+    if (!key) {
+      console.error("[digital-cards PUT] Displaced %s is not a bf-public URL, leaving it in place: %s",
+        column, previous);
+      continue;
+    }
+    if (!bfPublicKeyBelongsToUser(key, userId)) {
+      console.error("[digital-cards PUT] Refusing to delete %s — key is not owned by user %s: %s",
+        column, userId, key);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+
+  if (!keys.length) return;
+
+  try {
+    const removal = await supabase.storage.from("bf-public").remove(keys);
+    if (removal.error) {
+      console.error("[digital-cards PUT] Failed to remove displaced media (non-fatal):",
+        removal.error.message || removal.error);
+    }
+  } catch (cleanupErr) {
+    console.error("[digital-cards PUT] Failed to remove displaced media (non-fatal):",
+      cleanupErr.message || cleanupErr);
+  }
+}
+
 app.get("/api/digital-cards", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
@@ -15057,6 +15168,28 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.audio_url       !== undefined) updates.audio_url       = safeText(req.body.audio_url, 500)       || null;
     if (req.body.holographic_style !== undefined) updates.holographic_style = Boolean(req.body.holographic_style);
     if (req.body.media_layout !== undefined) updates.media_layout = req.body.media_layout || {};
+
+    // Capture the media URLs this update is about to overwrite, so the displaced objects
+    // can be removed afterwards instead of being orphaned in bf-public forever.
+    const touchesMedia = CARD_MEDIA_COLUMNS.some(function (column) {
+      return req.body[column] !== undefined;
+    });
+    let priorMedia = null;
+    if (touchesMedia) {
+      const { data: priorRow, error: priorError } = await supabase
+        .from("digital_cards")
+        .select("video_url, bg_image_url, still_image_url, audio_url")
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (priorError) {
+        console.error("[digital-cards PUT] Could not read prior media, cleanup skipped:",
+          priorError.message || priorError);
+      } else {
+        priorMedia = priorRow;
+      }
+    }
+
     const { data, error } = await supabase
       .from("digital_cards")
       .update(updates)
@@ -15072,6 +15205,12 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
         error: "Save failed"
       });
     }
+
+    // The row is saved; from here nothing may fail the request.
+    if (priorMedia) {
+      await removeDisplacedCardMedia(priorMedia, data, req.user.id);
+    }
+
     return res.json({ card: data });
   } catch (error) { next(error); }
 });
