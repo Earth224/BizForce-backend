@@ -18073,6 +18073,36 @@ function detectOutreachLinkFacets(text) {
    not. */
 const OUTREACH_DAILY_CAP = Number(process.env.OUTREACH_DAILY_CAP || 5);
 
+/* The intent score a lead must reach before outreach will consider it. Tuning
+   this is the difference between drafting for 105 leads and drafting for 1,690,
+   which is a spend decision an operator should be able to make from a Railway
+   variable rather than a deploy.
+
+   Deliberately NOT the `process.env.X || default` shape used by the cap above.
+   That pattern cannot express zero: "0" is falsy, so it would be replaced by
+   the default and a deliberate "score everything" would silently become the
+   opposite of what was typed. Parsed first, then tested with Number.isFinite,
+   so absent, empty and unparseable all fall back while a real 0 survives.
+
+   Clamped to 0..100 because that is the range the scorer writes — leadRadar
+   rounds and clamps to it before storing. A value outside it is a typo, and
+   the two directions fail differently: 600 admits nothing and stops outreach
+   dead, -5 admits every unscored row. Neither should be reachable by a
+   mistyped variable. */
+const OUTREACH_MIN_INTENT = (function () {
+  // Emptiness is tested before parsing, not after. Number("") and Number("   ")
+  // are both 0, not NaN, so a variable that is present but blank would survive
+  // the isFinite check below and read as a deliberate zero — the exact
+  // confusion the parse-then-check shape exists to prevent.
+  var raw = process.env.OUTREACH_MIN_INTENT;
+  if (raw == null || String(raw).trim() === "") return 60;
+
+  var parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 60;
+
+  return Math.min(100, Math.max(0, parsed));
+})();
+
 // Counts this user's sends since the start of the current UTC day. head:true
 // with count:"exact" asks Postgres for the count and no rows.
 //
@@ -18955,7 +18985,7 @@ async function runSalesAutoConvert() {
           .from("bsky_leads")
           .select("*")
           .eq("status", "scored")
-          .gte("intent_score", 60)
+          .gte("intent_score", OUTREACH_MIN_INTENT)
           .in("source", OUTREACH_SENDABLE_SOURCES)
           /* Unknown age is not fresh. The gte alone would already exclude
              nulls — a comparison against NULL is NULL, never true — but the
@@ -19225,7 +19255,7 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
 
       var segMinScore = Number(segment.min_score);
       if (Number.isFinite(segMinScore)) segQuery = segQuery.gte("intent_score", segMinScore);
-      if (segment.high_intent) segQuery = segQuery.gte("intent_score", 60);
+      if (segment.high_intent) segQuery = segQuery.gte("intent_score", OUTREACH_MIN_INTENT);
       if (segment.buyer) segQuery = segQuery.neq("suggested_product", "none").gte("intent_score", 40);
 
       var segResult = await segQuery;
@@ -20224,6 +20254,7 @@ async function storeProposalTick() {
 
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
+  console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
   });
