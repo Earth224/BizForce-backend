@@ -1592,6 +1592,36 @@ function getPlanConfig(plan) {
   return PLAN_CONFIG[plan] || null;
 }
 
+// Stripe API version 2026-04-22.dahlia, which this webhook endpoint is pinned
+// to, moved current_period_start / current_period_end off the Subscription
+// object and onto the subscription item. Reading the top-level property there
+// yields undefined and silently writes a null renewal date. Item first,
+// subscription second so older API versions still resolve.
+function subscriptionPeriodIso(subscription) {
+  const item =
+    subscription &&
+    subscription.items &&
+    Array.isArray(subscription.items.data) &&
+    subscription.items.data.length > 0
+      ? subscription.items.data[0]
+      : null;
+
+  function pick(field) {
+    let seconds = item ? item[field] : undefined;
+    if (typeof seconds !== "number") {
+      seconds = subscription ? subscription[field] : undefined;
+    }
+    return typeof seconds === "number" && Number.isFinite(seconds)
+      ? new Date(seconds * 1000).toISOString()
+      : null;
+  }
+
+  return {
+    periodStart: pick("current_period_start"),
+    periodEnd: pick("current_period_end")
+  };
+}
+
 async function getUserById(userId) {
   const { data, error } = await supabase
     .from("users")
@@ -2066,6 +2096,8 @@ async function handleStripeEvent(event) {
         }
       }
 
+      const checkoutPeriod = subscriptionPeriodIso(checkoutSubscription);
+
       // This row IS the entitlement — getUserPlan resolves paid-or-not from
       // subscriptions.status and nothing else. A discarded error here means the
       // money was taken and access was never granted, with every log reporting
@@ -2086,12 +2118,8 @@ async function handleStripeEvent(event) {
           // from the subscription object retrieved above, or null when that
           // retrieve failed; the subscription branch still corrects it later
           // for renewals.
-          current_period_start: checkoutSubscription && checkoutSubscription.current_period_start
-            ? new Date(checkoutSubscription.current_period_start * 1000).toISOString()
-            : null,
-          current_period_end: checkoutSubscription && checkoutSubscription.current_period_end
-            ? new Date(checkoutSubscription.current_period_end * 1000).toISOString()
-            : null,
+          current_period_start: checkoutPeriod.periodStart,
+          current_period_end: checkoutPeriod.periodEnd,
           cancel_at_period_end: false,
           updated_at: nowIso()
         },
@@ -2203,6 +2231,7 @@ if (userError) {
     }
 
     if (existing && existing.user_id) {
+      const subscriptionPeriod = subscriptionPeriodIso(subscription);
       const { error: subscriptionUpsertError } = await supabase.from("subscriptions").upsert(
         {
           user_id: existing.user_id,
@@ -2211,12 +2240,8 @@ if (userError) {
           stripe_customer_id: customerId,
           stripe_subscription_id: subscription.id,
           stripe_price_id: priceId,
-          current_period_start: subscription.current_period_start
-            ? new Date(subscription.current_period_start * 1000).toISOString()
-            : null,
-          current_period_end: subscription.current_period_end
-            ? new Date(subscription.current_period_end * 1000).toISOString()
-            : null,
+          current_period_start: subscriptionPeriod.periodStart,
+          current_period_end: subscriptionPeriod.periodEnd,
           cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
           updated_at: nowIso()
         },
