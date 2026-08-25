@@ -42,6 +42,25 @@ const SCORING_ACCOUNT_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
    silently widened who gets messaged. */
 const CAPTURE_WINDOW_DAYS = 7;
 
+/* Which sources are worth paying to score. MUST STAY IN STEP WITH
+   OUTREACH_SENDABLE_SOURCES in server.js — that list is the set of sources a
+   reply can actually be posted to, and this one is the set we spend a model
+   call on. Scoring a source with no sender spends a Sonnet call on a lead that
+   can never be replied to: server.js dispatches on lead.source and answers
+   anything outside its list with { sent: false, reason: "unsupported_source" },
+   so the score is bought and then thrown away.
+
+   Two literals rather than an import, for the same reason SCORING_ACCOUNT_ID
+   above is duplicated: server.js already requires this file, so requiring it
+   back would be a circular import. The shared name and this note are what make
+   the pair findable.
+
+   This bounds SCORING ONLY. Capture is deliberately wider — youtubeRadar keeps
+   running and keeps writing rows, because an unreplyable lead is still market
+   signal worth having in the table. Those rows stay at status 'new' and simply
+   never get picked up by the scorer. */
+const SCORABLE_SOURCES = ["bluesky", "mastodon"];
+
 /* Search phrases, not topics. This distinction is the whole list.
 
    The old list searched the SUBJECT — "low libido", "law of attraction",
@@ -345,6 +364,7 @@ async function scoreNewLeads() {
       .from("bsky_leads")
       .select("*")
       .eq("status", "new")
+      .in("source", SCORABLE_SOURCES)
       .order("score_attempts", { ascending: true })
       .order("created_at", { ascending: true })
       .limit(20);
@@ -355,7 +375,7 @@ async function scoreNewLeads() {
     }
 
     var leads = data || [];
-    console.log("[LeadRadar] scoring " + leads.length + " leads");
+    console.log("[LeadRadar] scoring " + leads.length + " leads [sendable-sources-only]");
 
     /* ── Which key, and what happens when it stops working ──────────────────
        resolveAnthropicKey reads an encrypted BYOK key out of user_api_keys and
