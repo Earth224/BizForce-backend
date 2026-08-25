@@ -358,6 +358,25 @@ const COMPLIANCE_PROFILES = {
 
 const COMPLIANCE_PROFILE_NAMES = Object.keys(COMPLIANCE_PROFILES);
 
+/* Which properties carry a regulated category by default. The rail used to be
+   purely opt-in, which meant the one caller most likely to forget it — anyone
+   writing a supplement article in a hurry — got an unscanned article with no
+   disclaimer, and nothing anywhere said so. A vitality domain is not a caller
+   preference; it is a fact about what is being sold, and the rules follow the
+   product whether or not the request remembered to name them.
+
+   Keys are the CANONICAL host, exactly as canonicalSiteHost produces it: bare,
+   lowercase, no scheme, no path, no leading www. That is what makes a bare
+   domain and its www form match identically here — "https://www.SwordVitality.com/x"
+   and "http://swordvitality.com" both reduce to "swordvitality.com" before the
+   lookup, so neither needs its own entry.
+
+   Adding a property is one line: its canonical host, and the profile name. */
+const COMPLIANCE_PROFILE_BY_HOST = {
+  "swordvitality.com": "supplement_vitality",
+  "mrearthrose.com":   "supplement_vitality"
+};
+
 // Collapses every run of whitespace to a single space so a sentence the model
 // wrapped across lines still compares equal. Only whitespace is forgiven — a
 // changed, dropped or reordered word still fails, which is the point.
@@ -5272,12 +5291,58 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
     // rejected rather than ignored: silently writing uncontrolled content for a
     // caller who asked for a compliance profile is the whole failure this
     // feature exists to prevent.
-    const complianceProfileName = safeText(req.body.compliance_profile, 60);
+    let complianceProfileName = safeText(req.body.compliance_profile, 60);
     if (complianceProfileName && !Object.prototype.hasOwnProperty.call(COMPLIANCE_PROFILES, complianceProfileName)) {
       return res.status(422).json({
         error: "Unknown compliance_profile '" + complianceProfileName + "'. Valid profiles are: " + COMPLIANCE_PROFILE_NAMES.join(", ") + "."
       });
     }
+
+    /* What the DOMAIN says the category is, independent of what the request
+       asked for. Only meaningful in external mode: without a money_url there is
+       no property to attribute the post to, and the internal path's money pages
+       are marketplace listings that this map says nothing about.
+
+       hasOwnProperty rather than a bare lookup, matching the guard on
+       COMPLIANCE_PROFILES above and for the same reason: externalSite is a
+       hostname parsed out of caller input, and a bare index would answer
+       inherited Object keys with something that is not a profile name. */
+    const domainProfileName =
+      externalMode && externalSite &&
+      Object.prototype.hasOwnProperty.call(COMPLIANCE_PROFILE_BY_HOST, externalSite)
+        ? COMPLIANCE_PROFILE_BY_HOST[externalSite]
+        : null;
+
+    if (complianceProfileName) {
+      /* An explicit choice is never overridden. The caller may know something
+         this map does not — a domain that sells more than one category, or a
+         post that is genuinely about something else — and silently substituting
+         a different rulebook would validate the article against rules nobody
+         asked for and reject it with a profile name absent from the request.
+         Disagreement is worth SAYING, though: it is either a mis-typed profile
+         or a map that has fallen behind what a property sells, and both are
+         invisible without this line. */
+      if (domainProfileName && domainProfileName !== complianceProfileName) {
+        console.warn(
+          "[agents/seo/generate-post] COMPLIANCE_PROFILE_MISMATCH" +
+          " host=" + externalSite +
+          " requested=" + complianceProfileName +
+          " domain_default=" + domainProfileName +
+          " — keeping the requested profile."
+        );
+      }
+    } else if (domainProfileName) {
+      // The rail engaging without being asked is the whole point of the map,
+      // and it is also the case a reader of the logs would otherwise have no
+      // way to distinguish from a caller who named the profile themselves.
+      complianceProfileName = domainProfileName;
+      console.log(
+        "[agents/seo/generate-post] COMPLIANCE_PROFILE_AUTO" +
+        " host=" + externalSite +
+        " profile=" + complianceProfileName
+      );
+    }
+
     const complianceProfile = complianceProfileName ? COMPLIANCE_PROFILES[complianceProfileName] : null;
 
     // The money pages — every post has to route traffic to one of these.
