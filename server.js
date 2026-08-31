@@ -14740,6 +14740,28 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
       return res.status(500).json({ error: "Failed to save generated book: " + updateError.message });
     }
 
+    // The row now points at the freshly uploaded objects, so whatever it
+    // pointed at before is unreachable — remove it (non-fatal, same shape as
+    // the delete-book cleanup). The old EPUB is only superseded when a new
+    // one actually uploaded; otherwise the row still points at it.
+    var supersededPaths = [];
+    if (book.storage_path && book.storage_path !== storagePath) {
+      supersededPaths.push(book.storage_path);
+    }
+    if (epubStoragePath && book.storage_path_epub && book.storage_path_epub !== epubStoragePath) {
+      supersededPaths.push(book.storage_path_epub);
+    }
+    if (supersededPaths.length) {
+      try {
+        var removal = await supabase.storage.from("bf-books").remove(supersededPaths);
+        if (removal && removal.error) {
+          console.error("[bizbook] Failed to remove superseded book files (non-fatal):", removal.error.message || removal.error);
+        }
+      } catch (cleanupErr) {
+        console.error("[bizbook] Failed to remove superseded book files (non-fatal):", cleanupErr.message || cleanupErr);
+      }
+    }
+
     return res.status(200).json({ ok: true, storage_path: storagePath, has_epub: !!epubStoragePath });
   } catch (error) { next(error); }
 });
