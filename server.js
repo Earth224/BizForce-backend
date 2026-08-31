@@ -1988,6 +1988,69 @@ async function enforceTaskLimit(userId, agentType) {
   };
 }
 
+/* ── revenue_events, the money ledger ────────────────────────────────────────
+   One row per paid Stripe event. NEVER throws. The only caller is
+   handleStripeEvent, and a throw there returns 500 to Stripe, which retries a
+   delivery whose entitlement work has already landed — re-granting a plan to fix
+   a reporting row is the wrong trade. Every failure here is logged and swallowed.
+
+   Idempotency is revenue_events_stripe_event_id_key, the partial unique index
+   from migration 080. Stripe redelivers on any non-2xx and on manual replay, and
+   a second row would silently inflate revenue. The select below is only the fast
+   path; the index is the actual guarantee, which is why 23505 is read as
+   "already recorded" rather than an error — two concurrent redeliveries both pass
+   the select and exactly one of them lands here. Same idiom as the
+   source_proposal_id path above, and for the same reason: PostgREST cannot aim
+   on_conflict at a PARTIAL unique index, so upsert/ignoreDuplicates would raise
+   42P10 on every call instead of deduplicating.
+
+   amount is dollars, never cents — the Stripe integer is divided by 100 here, as
+   the column comment migration 080 puts on revenue_events.amount requires.
+   business_id and staff_member stay null: this table predates Stripe billing and
+   those two columns describe staff-entered revenue, which is a different fact. */
+async function recordRevenueEvent(event, fields) {
+  try {
+    const { data: existing, error: lookupError } = await supabase
+      .from("revenue_events")
+      .select("id")
+      .eq("stripe_event_id", event.id)
+      .maybeSingle();
+
+    if (lookupError) {
+      throw lookupError;
+    }
+
+    if (existing) {
+      console.log("REVENUE_EVENT already recorded for Stripe event " + event.id + " — skipping duplicate delivery.");
+      return;
+    }
+
+    const { error: insertError } = await supabase.from("revenue_events").insert({
+      stripe_event_id: event.id,
+      user_id: fields.userId || null,
+      currency: fields.currency || null,
+      event_type: event.type,
+      amount: fields.amountCents / 100,
+      business_id: null,
+      staff_member: null,
+      created_at: nowIso()
+    });
+
+    if (insertError) {
+      const conflictText = String(insertError.message || "") + " " + String(insertError.details || "") + " " + String(insertError.constraint || "");
+      if (insertError.code === "23505" && conflictText.indexOf("stripe_event_id") !== -1) {
+        console.log("REVENUE_EVENT already recorded for Stripe event " + event.id + " — concurrent delivery lost the race.");
+        return;
+      }
+      throw insertError;
+    }
+  } catch (error) {
+    console.error("REVENUE_EVENT write failed for Stripe event " + event.id + ": " +
+      (error && error.message ? error.message : error) +
+      ". Billing and entitlement are unaffected; revenue_events is missing this row.");
+  }
+}
+
 async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
@@ -2076,6 +2139,7 @@ async function handleStripeEvent(event) {
       } catch (error) {
         console.error("Failed to record marketplace USD order:", error);
       }
+      // Deliberately no revenue_events row: marketplace USD runs on Stripe test mode, so recording it would pollute real MRR.
       return;
     }
 
@@ -2170,6 +2234,24 @@ async function handleStripeEvent(event) {
         throw profileError;
       }
     }
+
+    // Recorded here rather than at the end of the branch. The two email checks
+    // below return early, and neither has anything to do with whether money
+    // moved — a paid session with an unusable customer email still took payment
+    // and still belongs in the ledger. Everything above this line that can fail
+    // has already thrown, so reaching it means the entitlement work landed.
+    //
+    // userId is the same value the branch resolved for the subscription row,
+    // session.metadata.user_id. When Stripe sends no metadata the row is still
+    // written with user_id null, because unattributed revenue is still revenue.
+    if (session.payment_status === "paid" && session.amount_total) {
+      await recordRevenueEvent(event, {
+        userId: userId,
+        amountCents: session.amount_total,
+        currency: session.currency
+      });
+    }
+
     const email = session.customer_details ? session.customer_details.email : null;
 if (!email) {
   console.error("Stripe checkout session missing customer email");
@@ -2322,6 +2404,54 @@ if (userError) {
           updated_at: nowIso()
         })
         .eq("user_id", existing.user_id);
+    }
+  }
+
+  // Recording only. This branch writes revenue_events and nothing else: no
+  // subscriptions row, no profiles row, no status change anywhere. Renewal
+  // status is already maintained by customer.subscription.updated, and a second
+  // writer for it here would be a race, not a safety net.
+  if (event.type === "invoice.payment_succeeded") {
+    const invoice = event.data.object;
+
+    // Stripe fires BOTH checkout.session.completed and invoice.payment_succeeded
+    // for the first payment of a new subscription. The checkout branch above has
+    // already recorded that money under its own event id, and the unique index
+    // cannot catch the overlap because these are two genuinely different Stripe
+    // events with two different ids. Without this guard the first month of every
+    // customer is counted twice. subscription_create is that first invoice;
+    // subscription_cycle and the other reasons are the later billing periods
+    // this branch exists to record.
+    if (invoice.billing_reason === "subscription_create") {
+      console.log("REVENUE_EVENT skipping first invoice of a new subscription — event " +
+        event.id + " is already covered by checkout.session.completed.");
+      return;
+    }
+
+    if (invoice.amount_paid) {
+      const customerId = invoice.customer;
+
+      // The same lookup the subscription branches use — subscriptions is the
+      // only table mapping a Stripe customer back to a platform user.
+      const { data: existing, error: invoiceLookupError } = await supabase
+        .from("subscriptions")
+        .select("user_id")
+        .eq("stripe_customer_id", customerId)
+        .maybeSingle();
+
+      // Logged, not thrown, and the row is written either way: a renewal whose
+      // user cannot be resolved is still money taken, and dropping it would
+      // understate revenue in order to hide a lookup problem.
+      if (invoiceLookupError) {
+        console.error("INVOICE_PAID subscriptions lookup failed: " +
+          (invoiceLookupError.message || invoiceLookupError));
+      }
+
+      await recordRevenueEvent(event, {
+        userId: existing ? existing.user_id : null,
+        amountCents: invoice.amount_paid,
+        currency: invoice.currency
+      });
     }
   }
 
