@@ -4686,11 +4686,13 @@ const PROPOSAL_EXECUTORS = {
 
     // An external post exists to send traffic to exactly one page. The
     // sanitizer passes absolute http(s) hrefs through untouched so this should
-    // hold, but it is the last point at which its absence is catchable.
-    if (moneyUrl && body.indexOf(moneyUrl) === -1) {
+    // hold, but it is the last point at which its absence is catchable. body is
+    // the sanitized copy, so this asks whether the LINK survived, not merely
+    // whether the URL is somewhere in the text.
+    if (moneyUrl && !bodyLinksToMoneyUrl(body, moneyUrl)) {
       throw new Error(
         "publish_blog_post: the money link " + moneyUrl +
-        " is not present in the sanitized post body. Nothing was published, because an external post without its money link has no purpose"
+        " is not the href of any link in the sanitized post body. Nothing was published, because an external post without its money link has no purpose"
       );
     }
 
@@ -5779,12 +5781,29 @@ app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res,
       return res.status(422).json({ error: "The SEO Agent returned a post body of only " + body.length + " characters; at least 800 are required." });
     }
 
-    // In external mode the money link IS the post. Nothing downstream checks
-    // for one — the sanitizer passes any absolute URL through untouched and
-    // never asks whether the required one is present — so this is the only
-    // place it can be caught.
-    if (externalMode && body.indexOf(moneyUrl) === -1) {
-      return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " anywhere in the post. No post was created." });
+    // In external mode the money link IS the post, so it is checked here as
+    // well as at publish time — a proposal that could never publish is not
+    // worth filing.
+    //
+    // Checked against a SANITIZED copy, not the raw body above. The proposal
+    // stores the raw string, but publish_blog_post sanitizes before it writes,
+    // and sanitizeBlogHtml answers an href it refuses with a bare <a> that keeps
+    // the link text — so the raw body can still contain the URL while the
+    // published post has no link at all. Sanitizing with the same handle,
+    // listing slugs and mode the executor will use is what makes this check see
+    // the markup that will actually be stored. The copy is used for the check
+    // only; what the proposal carries is unchanged.
+    if (externalMode) {
+      const publishedBody = sanitizeBlogHtml(
+        body,
+        authorHandle,
+        existingListings.map(function (l) { return l && l.slug; }),
+        externalMode
+      );
+
+      if (!bodyLinksToMoneyUrl(publishedBody, moneyUrl)) {
+        return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " as a link anywhere in the post. No post was created." });
+      }
     }
 
     // The control, as opposed to the instruction. Title, meta description and
@@ -12676,6 +12695,41 @@ function sanitizeBlogHtml(html, authorHandle, listingSlugs, isExternalPost) {
   });
 
   return out;
+}
+
+/* Presence was never the question. body.indexOf(moneyUrl) passes on the money
+   URL sitting in plain text, inside somebody else's anchor, or in an <a> whose
+   href sanitizeBlogHtml has just refused — the branch above answers that with a
+   bare "<a>" and keeps the visible text, so a flattened link reads as a present
+   one. An external post exists to send traffic to one page, and a post whose
+   money link is text sends none.
+
+   Reads the sanitizer's own output shape first: every anchor it emits is
+   <a href="..."> with double quotes and & escaped to &amp;, which is why that
+   escape is undone before comparing — a money URL carrying a query string is
+   not stored as the string the caller is holding. Single quotes are accepted
+   too, because this also runs at generation time against markup the model
+   wrote, before any rebuild has normalized it.
+
+   Compared case-insensitively and with a trailing slash trimmed: scheme and
+   host are case-insensitive by spec, and https://x.com/p and https://x.com/p/
+   are the same page. Neither difference is a missing link, and treating one as
+   missing would fail a post whose money link is in fact there. */
+function bodyLinksToMoneyUrl(html, moneyUrl) {
+  const wanted = String(moneyUrl == null ? "" : moneyUrl).trim().toLowerCase().replace(/\/+$/, "");
+  if (!wanted) return false;
+
+  const hrefRe = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  const subject = String(html == null ? "" : html);
+  let m;
+
+  while ((m = hrefRe.exec(subject))) {
+    const raw = m[1] !== undefined ? m[1] : m[2];
+    const href = String(raw).replace(/&amp;/gi, "&").trim().toLowerCase().replace(/\/+$/, "");
+    if (href === wanted) return true;
+  }
+
+  return false;
 }
 
 function sanitizeMedia(rawMedia) {
