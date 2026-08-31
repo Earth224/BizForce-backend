@@ -153,6 +153,12 @@ async function runYoutubeRadarOnce() {
                 lang:            null,
                 source:          "youtube",
 
+                /* youtube is not in SCORABLE_SOURCES in leadRadar.js, so these
+                   rows are captured as signal and never enter the scorer queue,
+                   which selects status = new. Left at the column default of new
+                   they would sit in that queue forever without ever being drained. */
+                status:          "signal",
+
                 /* The COMMENT's publish time, which is the post being captured
                    here — not the video's. An old comment on a new video and a
                    new comment on an old video are opposite cases, and only the

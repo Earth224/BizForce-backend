@@ -68,7 +68,12 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.status(200).json({
     ok: true,
-    status: "healthy"
+    status: "healthy",
+    // Railway injects this on every deploy. Explicitly null when absent —
+    // local runs and any non-Railway host have no such variable, and a missing
+    // key would read as "the field is gone" rather than "the build is unknown".
+    // Nothing else belongs here: this route is public and unauthenticated.
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null
   });
 });
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://bizforceai.net";
