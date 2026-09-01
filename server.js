@@ -11124,6 +11124,76 @@ function parseReminderMinutesBefore(value) {
   return Math.floor(n);
 }
 
+// Validates a calendar event's fields and returns them ready to insert.
+//
+// Extracted from POST /api/calendar/events so a non-HTTP caller can reach the
+// same rules. It takes a plain object, never req; it returns a value, never a
+// response; and it deliberately does NOT take or produce user_id, because the
+// caller that knows who the event belongs to is the only one entitled to say
+// so. Nothing here touches the database.
+//
+// On success:  { valid: true, fields: { ...columns } }
+// On failure:  { valid: false, field: "<name>", error: "<message>" }
+//
+// The order of the three checks below is load-bearing, not incidental. An input
+// that is wrong in more than one way reports jdn first, then title, then
+// event_type, which is the order the route has always reported them in; a
+// caller that fixes the field it is told about and retries walks the same path
+// it always did.
+//
+// Note the deliberate asymmetry between the two list-checked fields, which is
+// preserved exactly as the route has it:
+//
+//   event_type    is REJECTED when it is not in CALENDAR_EVENT_TYPES. It is
+//                 backed by a CHECK constraint (047_calendar_events_recurrence
+//                 .sql:8), so an unknown value would be refused by Postgres
+//                 anyway — better to say which values are legal than to let a
+//                 constraint violation surface as a 500.
+//
+//   recur_calendar is COERCED to "gregorian" when it is absent or unrecognised,
+//                 never rejected. It has no CHECK constraint behind it, and the
+//                 field is meaningless unless recurring is true, so an odd
+//                 value falls back to the default calendar rather than failing
+//                 a write the user did not think they were making.
+//
+// Changing either of those to match the other would be a behaviour change, not
+// a tidy-up.
+function validateCalendarEventInput(input) {
+  var source = input || {};
+
+  var jdn = Number(source.jdn);
+  var title = safeText(source.title, 200);
+  var eventType = safeText(source.event_type, 30) || "other";
+  var recurCalendar = safeText(source.recur_calendar, 30);
+  if (!recurCalendar || CALENDAR_RECUR_CALENDARS.indexOf(recurCalendar) === -1) {
+    recurCalendar = "gregorian";
+  }
+
+  if (!Number.isFinite(jdn)) {
+    return { valid: false, field: "jdn", error: "jdn is required and must be a number" };
+  }
+  if (!title) {
+    return { valid: false, field: "title", error: "title is required" };
+  }
+  if (CALENDAR_EVENT_TYPES.indexOf(eventType) === -1) {
+    return { valid: false, field: "event_type", error: "event_type must be one of: " + CALENDAR_EVENT_TYPES.join(", ") };
+  }
+
+  return {
+    valid: true,
+    fields: {
+      jdn: jdn,
+      title: title,
+      event_type: eventType,
+      notes: safeText(source.notes, 5000),
+      recurring: !!source.recurring,
+      recur_calendar: recurCalendar,
+      remind_at: parseRemindAt(source.remind_at),
+      reminder_minutes_before: parseReminderMinutesBefore(source.reminder_minutes_before)
+    }
+  };
+}
+
 app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
   try {
     var startJdn = req.query.startJdn !== undefined ? Number(req.query.startJdn) : null;
@@ -11196,37 +11266,22 @@ app.get("/api/calendar/events", requireAuth, async function (req, res, next) {
 
 app.post("/api/calendar/events", requireAuth, async function (req, res, next) {
   try {
-    var jdn = Number(req.body.jdn);
-    var title = safeText(req.body.title, 200);
-    var eventType = safeText(req.body.event_type, 30) || "other";
-    var recurCalendar = safeText(req.body.recur_calendar, 30);
-    if (!recurCalendar || CALENDAR_RECUR_CALENDARS.indexOf(recurCalendar) === -1) {
-      recurCalendar = "gregorian";
+    var validated = validateCalendarEventInput(req.body);
+
+    // One 400 for whichever field the validator names, carrying its message
+    // verbatim. The three checks it runs are the three this route used to run
+    // inline, in the same order, so the same request still gets the same
+    // status and the same wording.
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error });
     }
 
-    if (!Number.isFinite(jdn)) {
-      return res.status(400).json({ error: "jdn is required and must be a number" });
-    }
-    if (!title) {
-      return res.status(400).json({ error: "title is required" });
-    }
-    if (CALENDAR_EVENT_TYPES.indexOf(eventType) === -1) {
-      return res.status(400).json({ error: "event_type must be one of: " + CALENDAR_EVENT_TYPES.join(", ") });
-    }
-
+    // user_id is applied here and nowhere else. The validator has no idea who
+    // is asking, which is what makes it safe to call from a context that has
+    // no req to read an identity out of.
     var { data, error } = await supabase
       .from("calendar_events")
-      .insert({
-        user_id: req.user.id,
-        jdn: jdn,
-        title: title,
-        event_type: eventType,
-        notes: safeText(req.body.notes, 5000),
-        recurring: !!req.body.recurring,
-        recur_calendar: recurCalendar,
-        remind_at: parseRemindAt(req.body.remind_at),
-        reminder_minutes_before: parseReminderMinutesBefore(req.body.reminder_minutes_before)
-      })
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields))
       .select("*")
       .single();
 
