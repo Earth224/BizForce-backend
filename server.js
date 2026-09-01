@@ -6633,11 +6633,17 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, han
    object retired the parsing and with it every way the check could fail to
    verify while the code was in fact fine.
 
-   general is expected to be brains-only: it is the fallback the miss branch
-   assigns and the default agentBrains lookup at the end of the handler, and
-   it deliberately has no AGENT_SYSTEM_PROMPTS key, so it is not reported.
+   One key is exempt from the comparison, named in BRAINS_ONLY_AGENTS below
+   rather than skipped inline, because an exemption nothing names is an
+   exemption nobody can audit. The OK line prints the compared and exempt
+   counts so the numbers it reports always add up to the objects it read.
 
    Log only. This never throws and never prevents the server from starting. */
+// Brains with no AGENT_SYSTEM_PROMPTS entry by design. general is the fallback
+// agent_type itself — the miss branch assigns it and the handler defaults to it —
+// so it is never validated against the prompt list and needs no prompt.
+var BRAINS_ONLY_AGENTS = ["general"];
+
 function checkAgentBrainCoverage() {
   try {
     var brainKeys = Object.keys(agentBrains);
@@ -6647,8 +6653,16 @@ function checkAgentBrainCoverage() {
       return brainKeys.indexOf(key) === -1;
     });
 
-    var missingPrompt = brainKeys.filter(function (key) {
-      return key !== "general" && promptKeys.indexOf(key) === -1;
+    var exemptKeys = brainKeys.filter(function (key) {
+      return BRAINS_ONLY_AGENTS.indexOf(key) !== -1;
+    });
+
+    var comparedKeys = brainKeys.filter(function (key) {
+      return BRAINS_ONLY_AGENTS.indexOf(key) === -1;
+    });
+
+    var missingPrompt = comparedKeys.filter(function (key) {
+      return promptKeys.indexOf(key) === -1;
     });
 
     if (missingBrain.length) {
@@ -6666,7 +6680,11 @@ function checkAgentBrainCoverage() {
     }
 
     if (!missingBrain.length && !missingPrompt.length) {
-      console.log("[agents] brain coverage OK — " + promptKeys.length + " agent types, each with a prompt and a brain");
+      console.log(
+        "[agents] brain coverage OK — " + comparedKeys.length + " agent types compared, each with a prompt and a brain; " +
+        exemptKeys.length + " exempt (brains-only, no prompt by design): " + (exemptKeys.join(", ") || "none") + "; " +
+        promptKeys.length + " prompts, " + brainKeys.length + " brains"
+      );
     }
   } catch (coverageErr) {
     console.warn("[agents] brain coverage NOT VERIFIED — check failed:", coverageErr.message || coverageErr);
