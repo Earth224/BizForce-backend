@@ -12067,6 +12067,228 @@ app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
   }
 });
 
+// ── GET /api/activity/overview ───────────────────────────────────────────────
+//
+// Task activity for the calling user on the axis a dashboard actually draws:
+// the last 24 hours by hour, 30 days by day, 12 weeks by week, plus flat totals
+// by agent_type and by status. Read-only, scoped to req.user.id like every
+// other route here, and backed by no new table.
+//
+// THE SELECT IS THREE COLUMNS AND MUST STAY THAT WAY. ai_tasks is the largest
+// table on the platform and prompt and result are its wide ones — one holds the
+// user's request, the other a whole model response. A select("*") here would
+// drag megabytes of generated text across the wire to count rows that never
+// needed more than their timestamp, agent and status.
+//
+// The bucketing is done in JS, matching getLiveStats, which tallies agent_type
+// the same way rather than reaching for a database aggregate. The three RPCs
+// this repo defines — bfc_transfer, bfc_buy_listing and bfc_donate — are wallet
+// mutations, not aggregates, so there is nothing to reuse; a date_trunc rollup
+// would mean a new function and a migration, and this needs neither.
+//
+// created_at is the only time axis. ai_tasks does carry a completed_at column
+// (071_transcribe_foundation_tables.sql:92), but nothing in this codebase has
+// ever written it, so it is NULL on every row: bucketing on it would draw an
+// empty chart indistinguishable from a genuinely quiet quarter. status carries
+// the completion signal instead.
+//
+// Everything is UTC. Stepping by a fixed number of milliseconds is only exact
+// in a zone without DST; in a local zone the boundaries would slip twice a year
+// and show up as one duplicated hour in March and one missing hour in October.
+var ACTIVITY_WINDOW_DAYS = 90;
+var ACTIVITY_PAGE_SIZE = 1000;
+
+// A ceiling on what one request will aggregate. If it is reached, the route
+// errors rather than answering: the alternative is a chart built from the first
+// N rows and presented as the whole window, which is the one failure a
+// dashboard has no way to notice. ai_tasks held 2,599 rows platform-wide when
+// 071 was written, so this is far out of reach and exists to fail loudly.
+var ACTIVITY_MAX_ROWS = 50000;
+
+var ACTIVITY_HOUR_MS = 60 * 60 * 1000;
+var ACTIVITY_DAY_MS = 24 * ACTIVITY_HOUR_MS;
+var ACTIVITY_WEEK_MS = 7 * ACTIVITY_DAY_MS;
+
+// "2026-09-01T14:00" — the UTC hour the timestamp falls in.
+function activityHourKey(date) {
+  return date.toISOString().slice(0, 13) + ":00";
+}
+
+// "2026-09-01" — the UTC day the timestamp falls in.
+function activityDayKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+// The Monday opening the timestamp's UTC week, as a day key. Monday rather than
+// Sunday so a week label means the ISO week a reader already has in mind.
+function activityWeekKey(date) {
+  var start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  var mondayOffset = (start.getUTCDay() + 6) % 7;
+  start.setUTCDate(start.getUTCDate() - mondayOffset);
+  return activityDayKey(start);
+}
+
+// A zero-filled run of buckets in chronological order, ending at the bucket
+// endMs falls in. Built before a single row is read, so an interval with no
+// activity arrives as a zero the client can plot rather than as an absent key
+// it has to detect and fill in itself.
+function activityBuckets(count, stepMs, endMs, keyFn) {
+  var series = [];
+
+  for (var i = count - 1; i >= 0; i--) {
+    series.push({ bucket: keyFn(new Date(endMs - (i * stepMs))), count: 0 });
+  }
+
+  return series;
+}
+
+// Index a series by bucket key so tallying a row is a lookup instead of a scan.
+function activityIndex(series) {
+  var index = {};
+
+  series.forEach(function (entry) {
+    index[entry.bucket] = entry;
+  });
+
+  return index;
+}
+
+app.get("/api/activity/overview", requireAuth, async function (req, res, next) {
+  try {
+    var now = new Date();
+    var windowStart = new Date(now.getTime() - (ACTIVITY_WINDOW_DAYS * ACTIVITY_DAY_MS));
+
+    // Each series ends at the bucket the current moment falls in, so the last
+    // entry is the hour, day and week still in progress rather than the last
+    // one to have closed. A dashboard that dropped the partial bucket would
+    // show nothing for work done in the last few minutes.
+    var hourEndMs = Math.floor(now.getTime() / ACTIVITY_HOUR_MS) * ACTIVITY_HOUR_MS;
+    var dayEndMs = Math.floor(now.getTime() / ACTIVITY_DAY_MS) * ACTIVITY_DAY_MS;
+
+    var byHour = activityBuckets(24, ACTIVITY_HOUR_MS, hourEndMs, activityHourKey);
+    var byDay = activityBuckets(30, ACTIVITY_DAY_MS, dayEndMs, activityDayKey);
+    var byWeek = activityBuckets(12, ACTIVITY_WEEK_MS, dayEndMs, activityWeekKey);
+
+    var hourIndex = activityIndex(byHour);
+    var dayIndex = activityIndex(byDay);
+    var weekIndex = activityIndex(byWeek);
+
+    var byAgentType = {};
+    var byStatus = {};
+    var totalTasks = 0;
+
+    // Paged rather than read in one shot. PostgREST caps a response at its own
+    // max-rows however wide a range asks for, so a single select would return a
+    // silently short answer for any user busy enough to pass it. Ordered by
+    // created_at because an unordered range walk can repeat and drop rows
+    // between pages. Both filtered columns are indexed (071:348, 071:351);
+    // there is no composite over the pair, which is a migration, not a route.
+    var complete = false;
+
+    for (var offset = 0; offset < ACTIVITY_MAX_ROWS; offset += ACTIVITY_PAGE_SIZE) {
+      var pageResult = await supabase
+        .from("ai_tasks")
+        .select("created_at, agent_type, status")
+        .eq("user_id", req.user.id)
+        .gte("created_at", windowStart.toISOString())
+        .order("created_at", { ascending: true })
+        .range(offset, offset + ACTIVITY_PAGE_SIZE - 1);
+
+      // Not swallowed, and not softened into an empty overview. All-zero
+      // buckets are a legible reading of this endpoint — a user who ran nothing
+      // this quarter — so returning them on a failed read would publish an
+      // outage as an accurate quiet period. The database's own words stay in
+      // the log; the caller is told what they asked for did not happen.
+      if (pageResult.error) {
+        console.error("[activity/overview] Supabase error:", {
+          code: pageResult.error.code,
+          message: pageResult.error.message,
+          details: pageResult.error.details,
+          hint: pageResult.error.hint,
+          offset: offset
+        });
+
+        return res.status(500).json({ error: "Activity overview unavailable" });
+      }
+
+      var page = pageResult.data || [];
+
+      page.forEach(function (row) {
+        var created = new Date(row.created_at);
+
+        // created_at is NOT NULL with a default, so this is defensive only. A
+        // row that somehow carries an unparseable timestamp is left out of the
+        // counts rather than incrementing an Invalid Date bucket.
+        if (isNaN(created.getTime())) {
+          return;
+        }
+
+        totalTasks += 1;
+
+        var agentType = row.agent_type || "general";
+        byAgentType[agentType] = (byAgentType[agentType] || 0) + 1;
+
+        var status = row.status || "unknown";
+        byStatus[status] = (byStatus[status] || 0) + 1;
+
+        // A row outside a given series simply is not in that index — the fetch
+        // window is wider than every series — so it counts toward the totals
+        // and is skipped for that grouping.
+        var hourEntry = hourIndex[activityHourKey(created)];
+        if (hourEntry) {
+          hourEntry.count += 1;
+        }
+
+        var dayEntry = dayIndex[activityDayKey(created)];
+        if (dayEntry) {
+          dayEntry.count += 1;
+        }
+
+        var weekEntry = weekIndex[activityWeekKey(created)];
+        if (weekEntry) {
+          weekEntry.count += 1;
+        }
+      });
+
+      if (page.length < ACTIVITY_PAGE_SIZE) {
+        complete = true;
+        break;
+      }
+    }
+
+    // The cap was reached with rows still unread. Everything tallied above is a
+    // partial count shaped exactly like a whole one, so none of it is returned.
+    if (!complete) {
+      console.error("[activity/overview] user " + req.user.id + " has more than " +
+        ACTIVITY_MAX_ROWS + " ai_tasks rows in the last " + ACTIVITY_WINDOW_DAYS +
+        " days. Refusing to return a partial aggregate as if it were the window.");
+
+      return res.status(500).json({ error: "Too much activity to aggregate" });
+    }
+
+    // total_tasks_90d, by_agent_type and by_status span the full window_days
+    // fetch; the three series span their own shorter ranges. The window is in
+    // the field name because summing by_day does not reproduce it and is not
+    // meant to — a bare total_tasks sitting beside a 30-day series gives a
+    // client every reason to expect the two to agree.
+    return res.json({
+      overview: {
+        timezone: "UTC",
+        generated_at: nowIso(),
+        window_days: ACTIVITY_WINDOW_DAYS,
+        total_tasks_90d: totalTasks,
+        by_hour: byHour,
+        by_day: byDay,
+        by_week: byWeek,
+        by_agent_type: byAgentType,
+        by_status: byStatus
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/notifications", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
