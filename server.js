@@ -65,6 +65,44 @@ app.get("/", (req, res) => {
   res.status(200).send("BizForce AI Backend Live");
 });
 
+// Whether this runtime genuinely applies IANA time zones — tested, not asserted.
+//
+// A Node built against small-icu still exposes Intl and still ACCEPTS a timeZone
+// option; it simply ignores it and formats everything in UTC. Reading a flag, or
+// trusting resolvedOptions().timeZone to echo the zone back, therefore reports
+// success on exactly the runtime that would silently misdate every timestamp.
+// The only honest check is to format one fixed instant twice and see whether the
+// two answers actually differ.
+//
+// 03:30 UTC is chosen deliberately: it falls on the previous calendar day in Los
+// Angeles year-round, under both PST (-8) and PDT (-7), so the verdict never
+// depends on when this is called or on which side of a DST change it lands.
+//
+// Only the two dates and the verdict are reported. No versions, no build flags,
+// no environment. This route is public.
+function icuHealth() {
+  try {
+    var instant = new Date("2026-09-01T03:30:00Z");
+    var losAngeles = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(instant);
+    var utc = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(instant);
+
+    return {
+      los_angeles: losAngeles,
+      utc: utc,
+      timezone_applied: losAngeles !== utc
+    };
+  } catch (err) {
+    // A degraded runtime is the thing this probe exists to report, so the probe
+    // itself must never be what takes /health down. Anything thrown becomes a
+    // false verdict and a short reason — the reason comes from Intl, which knows
+    // nothing about this deployment beyond locales and zone names.
+    return {
+      timezone_applied: false,
+      reason: String((err && err.message) || "unknown").slice(0, 80)
+    };
+  }
+}
+
 app.get("/health", (req, res) => {
   res.status(200).json({
     ok: true,
@@ -73,7 +111,8 @@ app.get("/health", (req, res) => {
     // local runs and any non-Railway host have no such variable, and a missing
     // key would read as "the field is gone" rather than "the build is unknown".
     // Nothing else belongs here: this route is public and unauthenticated.
-    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    icu: icuHealth()
   });
 });
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://bizforceai.net";
