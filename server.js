@@ -762,6 +762,32 @@ var ROUTABLE_ASSIGNMENT_AGENT_TYPES = [
   "reputation"
 ];
 
+// The statuses POST /api/assignments/:id/start is willing to claim.
+//
+// failed is claimable on purpose. A run that died part way through is exactly
+// the thing worth starting again, and nothing else in this codebase clears that
+// status — without this the row would be stranded for good.
+//
+// completed and in_progress are deliberately absent: one is finished, and one is
+// another request's run still in flight. Claiming either would mean two runs on
+// one assignment.
+var ASSIGNMENT_CLAIMABLE_STATUSES = ["pending", "failed"];
+
+// The already-completed answer, in one place because it is now returned from two
+// of them: the read before the claim, and a claim that missed because another
+// request finished the assignment in between. Same shape, same wording, same 200
+// on both paths — a caller cannot tell which one answered it, and should not have
+// to.
+function respondAssignmentAlreadyCompleted(res, assignment) {
+  return res.json({
+    ok: true,
+    already_completed: true,
+    message: "Assignment already completed.",
+    assignment: assignment,
+    result: "Assignment was already completed. No further action was taken."
+  });
+}
+
 function summarizeAssignmentTasks(assignment) {
   var tasks = assignment && assignment.tasks;
 
@@ -7088,13 +7114,7 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
     var assignment = fetchResult.data;
 
     if (assignment.status === "completed") {
-      return res.json({
-        ok: true,
-        already_completed: true,
-        message: "Assignment already completed.",
-        assignment: assignment,
-        result: "Assignment was already completed. No further action was taken."
-      });
+      return respondAssignmentAlreadyCompleted(res, assignment);
     }
 
     var agentType = String(assignment.agent_type || "").toLowerCase().trim();
@@ -7106,7 +7126,12 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
       });
     }
 
-    var inProgressUpdate = await supabase
+    // Claim the assignment first: claimable -> in_progress in a single
+    // conditional update, so two concurrent starts cannot both run it. The
+    // status filter is what makes this a claim rather than an announcement —
+    // without it the update always succeeds and the check above is only as good
+    // as the gap between reading the row and writing it.
+    var claimUpdate = await supabase
       .from("agent_assignments")
       .update({
         status: "in_progress",
@@ -7114,28 +7139,95 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
       })
       .eq("id", assignmentId)
       .eq("user_id", userId)
+      .in("status", ASSIGNMENT_CLAIMABLE_STATUSES)
       .select("*")
-      .single();
+      .maybeSingle();
 
-    if (inProgressUpdate.error) {
-      throw inProgressUpdate.error;
+    if (claimUpdate.error) {
+      throw claimUpdate.error;
     }
 
-    var executionResult = buildAssignmentExecutionResult(inProgressUpdate.data);
+    if (!claimUpdate.data) {
+      // Nothing was claimed, so the row moved between the read above and this
+      // write. Re-read to say which way it moved: a finished assignment and one
+      // already running are different answers to the caller, and reporting one
+      // for the other would tell a client to retry work that is done, or to give
+      // up on work that is merely in flight.
+      var currentResult = await supabase
+        .from("agent_assignments")
+        .select("*")
+        .eq("id", assignmentId)
+        .eq("user_id", userId)
+        .maybeSingle();
 
-    var completedUpdate = await supabase
-      .from("agent_assignments")
-      .update({
-        status: "completed",
-        updated_at: nowIso()
-      })
-      .eq("id", assignmentId)
-      .eq("user_id", userId)
-      .select("*")
-      .single();
+      if (currentResult.error) {
+        throw currentResult.error;
+      }
 
-    if (completedUpdate.error) {
-      throw completedUpdate.error;
+      if (!currentResult.data) {
+        return res.status(404).json({
+          ok: false,
+          error: "Assignment not found"
+        });
+      }
+
+      if (currentResult.data.status === "completed") {
+        return respondAssignmentAlreadyCompleted(res, currentResult.data);
+      }
+
+      return res.status(409).json({
+        ok: false,
+        error: "Assignment is already running"
+      });
+    }
+
+    // From here the row is in_progress and this request owns it. Everything up to
+    // the completed write is wrapped so a throw cannot leave it that way: an
+    // assignment stuck in_progress is unclaimable by the filter above and there is
+    // no sweeper to free it, so the failure would be permanent.
+    try {
+      var executionResult = buildAssignmentExecutionResult(claimUpdate.data);
+
+      var completedUpdate = await supabase
+        .from("agent_assignments")
+        .update({
+          status: "completed",
+          updated_at: nowIso()
+        })
+        .eq("id", assignmentId)
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+
+      if (completedUpdate.error) {
+        throw completedUpdate.error;
+      }
+    } catch (workError) {
+      // Bookkeeping about a failure that has already happened, and best-effort on
+      // purpose. If this write fails too, the original error is still the one that
+      // explains what went wrong and is still the one that propagates — replacing
+      // it with a write failure would bury the actual cause and leave whoever
+      // reads the log chasing the wrong thing.
+      try {
+        var failedUpdate = await supabase
+          .from("agent_assignments")
+          .update({
+            status: "failed",
+            updated_at: nowIso()
+          })
+          .eq("id", assignmentId)
+          .eq("user_id", userId);
+
+        if (failedUpdate.error) {
+          console.error("ASSIGNMENT START could not mark assignment " + assignmentId + " failed:", failedUpdate.error.message || failedUpdate.error);
+        }
+      } catch (bookkeepingError) {
+        console.error("ASSIGNMENT START could not mark assignment " + assignmentId + " failed:", (bookkeepingError && bookkeepingError.message) ? bookkeepingError.message : bookkeepingError);
+      }
+
+      // Rethrown unchanged, so the outer catch logs and next(error)s exactly the
+      // error it would have received before any of this existed.
+      throw workError;
     }
 
     console.log("ASSIGNMENT START COMPLETED", {
