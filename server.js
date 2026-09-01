@@ -6357,7 +6357,32 @@ async function handleAiTaskRequest(req, res, next) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-   var allowedAgents = ["general", "executive", "seo", "sales", "content", "social", "ads", "reputation", "analytics", "email", "community", "influencer", "operations", "store", "publicist", "broker", "crm", "security", "finance", "legal", "research", "rd", "etsy"];
+   // Derived from AGENT_SYSTEM_PROMPTS rather than listed again here. This was
+   // a third hardcoded copy of the agent list and it had drifted: it accepted
+   // crm, security, finance and legal, none of which have a prompt in either
+   // AGENT_SYSTEM_PROMPTS or the agentBrains map below, so a task submitted
+   // under those types was recorded as that agent and then answered by the
+   // general brain. Deriving the list makes acceptance and having a prompt the
+   // same condition, so the two can no longer disagree.
+   //
+   // Note that "general" is deliberately NOT added back: it is the fallback
+   // value itself, so a request naming it misses this check and is then set to
+   // "general" anyway — the same value, by the same path every other
+   // unrecognised type takes. The miss branch below is unchanged.
+   var allowedAgents = Object.keys(AGENT_SYSTEM_PROMPTS);
+
+   // config/brain.js:41 describes the R&D agent as "Also addressable as
+   // "research", so callers sending research were always meant to reach rd.
+   // Nothing implemented that, and the old hardcoded list papered over it by
+   // accepting research as its own type. With the list derived, research is no
+   // longer a key, so the alias has to be real — resolved here, before the
+   // check below, so an aliased type is validated as the agent it resolves to.
+   // One alias only: this is a compatibility shim for a documented spelling,
+   // not a second naming scheme.
+   var AGENT_TYPE_ALIASES = { research: "rd" };
+   if (Object.prototype.hasOwnProperty.call(AGENT_TYPE_ALIASES, agentType)) {
+     agentType = AGENT_TYPE_ALIASES[agentType];
+   }
     var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign"];
     if (!allowedAgents.includes(agentType)) {
       agentType = "general";
@@ -6570,6 +6595,92 @@ return res.status(202).json({
   }
 }
 app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, handleAiTaskRequest);
+
+/* Startup coverage check for the two prompt lists.
+
+   allowedAgents is now derived from AGENT_SYSTEM_PROMPTS, so an accepted
+   agent_type is guaranteed to have a key there. That is NOT the same as
+   having a brain: the text actually sent to the model comes from agentBrains,
+   a separate object inside handleAiTaskRequest that nothing keeps in step. An
+   agent present in AGENT_SYSTEM_PROMPTS but missing from agentBrains is
+   accepted as a specialist and then answered by the general brain — the exact
+   failure the derived list was meant to end, one layer further in. This
+   reports that mismatch at boot instead of leaving it to be noticed in output.
+
+   agentBrains is function-local and is deliberately left that way, so its
+   keys are read from the function source rather than from the object. That
+   ties this check to the literal being formatted as it is today, which is why
+   a failure to locate it logs "could not verify" rather than passing in
+   silence — a check that quietly stops checking is worse than no check.
+
+   general is expected to be brains-only: it is the fallback the miss branch
+   assigns and the default agentBrains lookup at the end of the handler, and
+   it deliberately has no AGENT_SYSTEM_PROMPTS key, so it is not reported.
+
+   Log only. This never throws and never prevents the server from starting. */
+function checkAgentBrainCoverage() {
+  try {
+    var source = String(handleAiTaskRequest);
+    var start = source.indexOf("var agentBrains = {");
+    if (start === -1) {
+      console.warn("[agents] brain coverage NOT VERIFIED — could not locate the agentBrains literal in handleAiTaskRequest");
+      return;
+    }
+
+    var body = source.slice(start);
+    var closeIndex = body.search(/\n\s{4}\};/);
+    if (closeIndex === -1) {
+      console.warn("[agents] brain coverage NOT VERIFIED — could not find the end of the agentBrains literal");
+      return;
+    }
+
+    body = body.slice(0, closeIndex);
+
+    var brainKeys = [];
+    var keyPattern = /\n\s{6}(\w+):/g;
+    var match;
+    while ((match = keyPattern.exec(body)) !== null) {
+      brainKeys.push(match[1]);
+    }
+
+    if (!brainKeys.length) {
+      console.warn("[agents] brain coverage NOT VERIFIED — parsed the agentBrains literal but found no keys");
+      return;
+    }
+
+    var promptKeys = Object.keys(AGENT_SYSTEM_PROMPTS);
+
+    var missingBrain = promptKeys.filter(function (key) {
+      return brainKeys.indexOf(key) === -1;
+    });
+
+    var missingPrompt = brainKeys.filter(function (key) {
+      return key !== "general" && promptKeys.indexOf(key) === -1;
+    });
+
+    if (missingBrain.length) {
+      console.warn(
+        "[agents] BRAIN COVERAGE GAP — in AGENT_SYSTEM_PROMPTS but missing from agentBrains, so these are accepted as specialists and answered by the general brain: " +
+        missingBrain.join(", ")
+      );
+    }
+
+    if (missingPrompt.length) {
+      console.warn(
+        "[agents] BRAIN COVERAGE GAP — in agentBrains but missing from AGENT_SYSTEM_PROMPTS, so these are unreachable: the derived allowedAgents rejects them before the brain is ever looked up: " +
+        missingPrompt.join(", ")
+      );
+    }
+
+    if (!missingBrain.length && !missingPrompt.length) {
+      console.log("[agents] brain coverage OK — " + promptKeys.length + " agent types, each with a prompt and a brain");
+    }
+  } catch (coverageErr) {
+    console.warn("[agents] brain coverage NOT VERIFIED — check failed:", coverageErr.message || coverageErr);
+  }
+}
+
+checkAgentBrainCoverage();
 
 app.post("/api/ai-reports", requireAuth, async function (req, res, next) {
   try {
