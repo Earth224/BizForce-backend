@@ -205,6 +205,42 @@ const AGENT_SYSTEM_PROMPTS = {
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations."
 };
 
+var SALES_AGENT_BRAIN =
+  "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems." +
+  "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee." +
+  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This applies to every word you write, and most of all to anything that will be posted publicly.";
+
+// The text actually sent to the model, one entry per agent type. It lives
+// here, beside AGENT_SYSTEM_PROMPTS, because the two must agree: an accepted
+// agent_type is validated against AGENT_SYSTEM_PROMPTS but answered from this
+// object, so an agent in one and not the other is silently answered by the
+// general brain. checkAgentBrainCoverage below compares the two objects at
+// boot, which it can only do while both are module-scope values.
+//
+// general is deliberately brains-only: it is the fallback the miss branch
+// assigns and the default lookup in handleAiTaskRequest, and it has no
+// AGENT_SYSTEM_PROMPTS key on purpose.
+var agentBrains = {
+  general: "You are BizForce AI, a senior business execution assistant. Produce clear, practical business outputs.",
+  executive: "You are the BizForce AI Executive Coordinator Agent. Act like a chief operating officer for the user's business. Break the user's request into coordinated assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations agents. Produce an executive plan with priorities, owners, timelines, KPIs, risks, and next actions.",
+  seo: "You are the BizForce AI SEO Agent. Produce technical SEO audits, keyword strategies, local SEO plans, content clusters, and ranking action plans.",
+  sales: SALES_AGENT_BRAIN,
+  content: "You are the BizForce AI Content Agent, a senior SEO copywriter. Given a keyword or topic, you produce ONE complete, publish-ready SEO article in markdown for the user's blog, built to rank in Google and convert readers into buyers. Match the brand voice in the business profile: confident, direct, premium, no fluff or hype words. ALWAYS output in this exact markdown structure: (1) an SEO title tag line under 60 characters including the keyword; (2) a meta description line under 155 characters including the keyword; (3) a suggested URL slug line; (4) an H1 headline then the body in short scannable paragraphs with H2 subheadings; (5) weave the primary keyword into the H1, first paragraph, and subheadings naturally without stuffing. Include 1-2 calls-to-action linking to the user's product, using the product name and URL from the business profile or task instructions. End with a 'Frequently Asked Questions' H2 containing 4-5 Q&A pairs, each answer 2-4 sentences, to target featured snippets and AI search. Output only the finished article with no preamble or explanation. HARD COMPLIANCE RULES, never violate: for any supplement, vitality, health, or wellness topic, never claim the product cures, treats, prevents, or diagnoses any disease, and never compare it to a named prescription drug; use only supportive language like supports, may help, or traditionally used for. Never invent statistics, study results, citations, or customer quotes; if you lack a real source, speak generally. Always include an FDA not-medical-advice disclaimer line for any health, supplement, medical, financial, or legal topic. OUTPUT CLEANLINESS, strictly enforced: use plain text and standard markdown only. Absolutely no emojis, no decorative or novelty symbols, no unicode ornaments, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, normal punctuation, and markdown headings, lists, links, and bold. Straight quotes and apostrophes only.",
+  ads: "You are the BizForce AI Ads Agent. Build compliant ad campaigns, audience targeting, creative angles, copy, and test plans.",
+  reputation: "You are the BizForce AI Reputation Agent. Build review generation systems, response templates, trust signals, and brand protection plans.",
+  analytics: "You are the BizForce AI Analytics Agent. Analyze KPIs, traffic, conversion rates, revenue signals, and dashboard priorities.",
+  email: "You are the BizForce AI Email Agent. Build email sequences, subject lines, retention flows, winback flows, and nurture campaigns.",
+  community: "You are the BizForce AI Community Agent. Build community growth plans, engagement systems, member retention, and partnership plays.",
+  influencer: "You are the BizForce AI Influencer Agent. Build outreach scripts, partnership offers, creator lists, and collaboration campaigns.",
+  operations: "You are the BizForce AI Operations Agent. Build SOPs, workflows, automation systems, fulfillment checklists, and operating procedures.",
+  store: "You are the BizForce AI Store Agent. Optimize e-commerce stores with product strategy, inventory management, conversion rate optimization, omnichannel tactics, and launch plans for physical and digital products.",
+  publicist: "You are the BizForce AI Publicist Agent. Write press releases, craft media pitches, build PR campaigns, shape brand narratives, and identify media outreach opportunities to earn coverage and grow visibility.",
+  broker: "You are the BizForce AI Broker Agent. Identify deal flow, structure partnership opportunities, build negotiation briefs, outline due diligence checklists, and draft term sheet frameworks for business deals.",
+  rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
+  etsy: "You are the BizForce AI Etsy Agent. Optimize Etsy shop listings with SEO-rich titles and tags, conduct shop audits, research high-volume keywords, build pricing strategies, and analyze competitor shops to maximize marketplace visibility and revenue.",
+  social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth."
+};
+
 // ---------------------------------------------------------------------------
 // Compliance profiles.
 //
@@ -924,11 +960,6 @@ var AGENT_ORCHESTRATION_HANDOFFS = {
   analytics: "executive",
   executive: "sales"
 };
-
-var SALES_AGENT_BRAIN =
-  "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems." +
-  "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee." +
-  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This applies to every word you write, and most of all to anything that will be posted publicly.";
 
 function truncateOrchestratorPreview(value, maxLength) {
   var text = String(value || "").trim();
@@ -2731,13 +2762,17 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       throw profileError;
     }
 
-    await supabase.from("notifications").insert({
+    var welcomeNotification = await supabase.from("notifications").insert({
       user_id: user.id,
       type: "welcome",
       title: "Welcome to BizForce AI",
       message: "Complete your profile and choose a plan to activate your AI business agents.",
       read: false
     });
+
+    if (welcomeNotification.error) {
+      console.warn("[notifications] insert failed for POST /api/auth/register — the route still succeeded, the user simply was not notified:", welcomeNotification.error.message || welcomeNotification.error);
+    }
 
     try {
       await supabase.from("user_wallets").insert({
@@ -3616,13 +3651,17 @@ app.post("/api/follow/:userId", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    await supabase.from("notifications").insert({
+    var followNotification = await supabase.from("notifications").insert({
       user_id: followingId,
       type: "follow",
       title: "New follower",
       message: "Someone followed your business profile.",
       read: false
     });
+
+    if (followNotification.error) {
+      console.warn("[notifications] insert failed for POST /api/follow/:userId — the route still succeeded, the user simply was not notified:", followNotification.error.message || followNotification.error);
+    }
 
     return res.status(201).json({ follow: data });
   } catch (error) {
@@ -3874,13 +3913,17 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    await supabase.from("notifications").insert({
+    var messageNotification = await supabase.from("notifications").insert({
       user_id: receiverId,
       type: "message",
       title: "New message",
       message: "You received a new business message.",
       read: false
     });
+
+    if (messageNotification.error) {
+      console.warn("[notifications] insert failed for POST /api/messages — the route still succeeded, the user simply was not notified:", messageNotification.error.message || messageNotification.error);
+    }
 
     return res.status(201).json({ message: data });
   } catch (error) {
@@ -6360,7 +6403,7 @@ async function handleAiTaskRequest(req, res, next) {
    // Derived from AGENT_SYSTEM_PROMPTS rather than listed again here. This was
    // a third hardcoded copy of the agent list and it had drifted: it accepted
    // crm, security, finance and legal, none of which have a prompt in either
-   // AGENT_SYSTEM_PROMPTS or the agentBrains map below, so a task submitted
+   // AGENT_SYSTEM_PROMPTS or the agentBrains map, so a task submitted
    // under those types was recorded as that agent and then answered by the
    // general brain. Deriving the list makes acceptance and having a prompt the
    // same condition, so the two can no longer disagree.
@@ -6451,28 +6494,6 @@ if (memoryResult.error) {
     });
 
     var combinedMemoriesForBrain = agentMemoriesForBrain.concat(memoriesForBrain);
-
-    var agentBrains = {
-      general: "You are BizForce AI, a senior business execution assistant. Produce clear, practical business outputs.",
-      executive: "You are the BizForce AI Executive Coordinator Agent. Act like a chief operating officer for the user's business. Break the user's request into coordinated assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations agents. Produce an executive plan with priorities, owners, timelines, KPIs, risks, and next actions.",
-      seo: "You are the BizForce AI SEO Agent. Produce technical SEO audits, keyword strategies, local SEO plans, content clusters, and ranking action plans.",
-      sales: SALES_AGENT_BRAIN,
-      content: "You are the BizForce AI Content Agent, a senior SEO copywriter. Given a keyword or topic, you produce ONE complete, publish-ready SEO article in markdown for the user's blog, built to rank in Google and convert readers into buyers. Match the brand voice in the business profile: confident, direct, premium, no fluff or hype words. ALWAYS output in this exact markdown structure: (1) an SEO title tag line under 60 characters including the keyword; (2) a meta description line under 155 characters including the keyword; (3) a suggested URL slug line; (4) an H1 headline then the body in short scannable paragraphs with H2 subheadings; (5) weave the primary keyword into the H1, first paragraph, and subheadings naturally without stuffing. Include 1-2 calls-to-action linking to the user's product, using the product name and URL from the business profile or task instructions. End with a 'Frequently Asked Questions' H2 containing 4-5 Q&A pairs, each answer 2-4 sentences, to target featured snippets and AI search. Output only the finished article with no preamble or explanation. HARD COMPLIANCE RULES, never violate: for any supplement, vitality, health, or wellness topic, never claim the product cures, treats, prevents, or diagnoses any disease, and never compare it to a named prescription drug; use only supportive language like supports, may help, or traditionally used for. Never invent statistics, study results, citations, or customer quotes; if you lack a real source, speak generally. Always include an FDA not-medical-advice disclaimer line for any health, supplement, medical, financial, or legal topic. OUTPUT CLEANLINESS, strictly enforced: use plain text and standard markdown only. Absolutely no emojis, no decorative or novelty symbols, no unicode ornaments, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, normal punctuation, and markdown headings, lists, links, and bold. Straight quotes and apostrophes only.",
-      ads: "You are the BizForce AI Ads Agent. Build compliant ad campaigns, audience targeting, creative angles, copy, and test plans.",
-      reputation: "You are the BizForce AI Reputation Agent. Build review generation systems, response templates, trust signals, and brand protection plans.",
-      analytics: "You are the BizForce AI Analytics Agent. Analyze KPIs, traffic, conversion rates, revenue signals, and dashboard priorities.",
-      email: "You are the BizForce AI Email Agent. Build email sequences, subject lines, retention flows, winback flows, and nurture campaigns.",
-      community: "You are the BizForce AI Community Agent. Build community growth plans, engagement systems, member retention, and partnership plays.",
-      influencer: "You are the BizForce AI Influencer Agent. Build outreach scripts, partnership offers, creator lists, and collaboration campaigns.",
-      operations: "You are the BizForce AI Operations Agent. Build SOPs, workflows, automation systems, fulfillment checklists, and operating procedures.",
-      store: "You are the BizForce AI Store Agent. Optimize e-commerce stores with product strategy, inventory management, conversion rate optimization, omnichannel tactics, and launch plans for physical and digital products.",
-      publicist: "You are the BizForce AI Publicist Agent. Write press releases, craft media pitches, build PR campaigns, shape brand narratives, and identify media outreach opportunities to earn coverage and grow visibility.",
-      broker: "You are the BizForce AI Broker Agent. Identify deal flow, structure partnership opportunities, build negotiation briefs, outline due diligence checklists, and draft term sheet frameworks for business deals.",
-      rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
-      research: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
-      etsy: "You are the BizForce AI Etsy Agent. Optimize Etsy shop listings with SEO-rich titles and tags, conduct shop audits, research high-volume keywords, build pricing strategies, and analyze competitor shops to maximize marketplace visibility and revenue.",
-      social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth."
-    };
 
     var taskInstructions = {
       general: "Handle the user request directly and produce a specific, actionable business output. Give concrete steps, examples, and measurable actions — not generic advice.",
@@ -6598,20 +6619,19 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, han
 
 /* Startup coverage check for the two prompt lists.
 
-   allowedAgents is now derived from AGENT_SYSTEM_PROMPTS, so an accepted
+   allowedAgents is derived from AGENT_SYSTEM_PROMPTS, so an accepted
    agent_type is guaranteed to have a key there. That is NOT the same as
-   having a brain: the text actually sent to the model comes from agentBrains,
-   a separate object inside handleAiTaskRequest that nothing keeps in step. An
-   agent present in AGENT_SYSTEM_PROMPTS but missing from agentBrains is
+   having a brain: the text actually sent to the model comes from agentBrains.
+   An agent present in AGENT_SYSTEM_PROMPTS but missing from agentBrains is
    accepted as a specialist and then answered by the general brain — the exact
    failure the derived list was meant to end, one layer further in. This
    reports that mismatch at boot instead of leaving it to be noticed in output.
 
-   agentBrains is function-local and is deliberately left that way, so its
-   keys are read from the function source rather than from the object. That
-   ties this check to the literal being formatted as it is today, which is why
-   a failure to locate it logs "could not verify" rather than passing in
-   silence — a check that quietly stops checking is worse than no check.
+   Both objects are module-scope, so this reads their keys directly. It used to
+   parse the agentBrains literal out of handleAiTaskRequest.toString(), which
+   tied the check to how that literal happened to be formatted; hoisting the
+   object retired the parsing and with it every way the check could fail to
+   verify while the code was in fact fine.
 
    general is expected to be brains-only: it is the fallback the miss branch
    assigns and the default agentBrains lookup at the end of the handler, and
@@ -6620,34 +6640,7 @@ app.post("/api/ai/tasks", requireAuth, requireActiveSubscription, aiLimiter, han
    Log only. This never throws and never prevents the server from starting. */
 function checkAgentBrainCoverage() {
   try {
-    var source = String(handleAiTaskRequest);
-    var start = source.indexOf("var agentBrains = {");
-    if (start === -1) {
-      console.warn("[agents] brain coverage NOT VERIFIED — could not locate the agentBrains literal in handleAiTaskRequest");
-      return;
-    }
-
-    var body = source.slice(start);
-    var closeIndex = body.search(/\n\s{4}\};/);
-    if (closeIndex === -1) {
-      console.warn("[agents] brain coverage NOT VERIFIED — could not find the end of the agentBrains literal");
-      return;
-    }
-
-    body = body.slice(0, closeIndex);
-
-    var brainKeys = [];
-    var keyPattern = /\n\s{6}(\w+):/g;
-    var match;
-    while ((match = keyPattern.exec(body)) !== null) {
-      brainKeys.push(match[1]);
-    }
-
-    if (!brainKeys.length) {
-      console.warn("[agents] brain coverage NOT VERIFIED — parsed the agentBrains literal but found no keys");
-      return;
-    }
-
+    var brainKeys = Object.keys(agentBrains);
     var promptKeys = Object.keys(AGENT_SYSTEM_PROMPTS);
 
     var missingBrain = promptKeys.filter(function (key) {
@@ -12309,13 +12302,17 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
       })
       .eq("user_id", userId);
 
-    await supabase.from("notifications").insert({
+    var verificationNotification = await supabase.from("notifications").insert({
       user_id: userId,
       type: "verification",
       title: "Business verified",
       message: "Your BizForce AI business profile has been verified.",
       read: false
     });
+
+    if (verificationNotification.error) {
+      console.warn("[notifications] insert failed for POST /api/admin/verify/:userId — the route still succeeded, the user simply was not notified:", verificationNotification.error.message || verificationNotification.error);
+    }
 
     return res.json({ user: data });
   } catch (error) {
