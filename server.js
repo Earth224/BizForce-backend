@@ -42,6 +42,21 @@ const cron = require("node-cron");
 
 const app = express();
 
+/* ONE hop, and the number is the whole meaning. Express takes the last entry of
+   X-Forwarded-For as req.ip, which on Railway is the real client rather than the
+   edge — and req.ip is what express-rate-limit keys every bucket on, what
+   /api/contacts/capture and POST /api/capture store as consent_ip, and what the
+   webhook rejection logs name.
+
+   Putting another layer in front of Railway — a CDN, a WAF, a second proxy —
+   without raising this makes req.ip the second-to-last X-Forwarded-For entry,
+   which the client can write. Every rate-limit key becomes attacker-chosen and
+   every recorded consent IP becomes a claim rather than an observation. The
+   count must match the number of proxies actually in front of this process.
+
+   This setting was previously made twice, here and again further down, both to
+   1. Two assignments of one value is a trap rather than redundancy: changing
+   the one you find leaves the other silently winning. There is now one. */
 app.set("trust proxy", 1);
 
 const allowedOrigins = [
@@ -555,8 +570,6 @@ function findComplianceViolations(profile, text, limit) {
 
   return violations;
 }
-
-app.set("trust proxy", 1);
 
 app.use(
   helmet({
@@ -5840,7 +5853,13 @@ function parseSeoPostResponse(rawText) {
   };
 }
 
-app.post("/api/agents/seo/generate-post", requireAuth, async function (req, res, next) {
+// aiLimiter, on the same terms as the other six routes that reach Anthropic.
+// This one had only the global apiLimiter (300 per 15 minutes) and is the most
+// expensive call in the file by an order of magnitude: callAnthropicText below
+// asks for claude-sonnet-5 with a 32000-token ceiling, where every other AI
+// route runs Haiku 4.5 at 150 to 3000. The limiter it was missing is the one
+// sized for exactly that.
+app.post("/api/agents/seo/generate-post", requireAuth, aiLimiter, async function (req, res, next) {
   try {
     const topic = safeText(req.body.topic, 200);
 
