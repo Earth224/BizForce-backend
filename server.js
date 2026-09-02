@@ -244,6 +244,53 @@ const AGENT_SYSTEM_PROMPTS = {
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations."
 };
 
+// The name each agent type is shown under, copied from the seventeen
+// <h2 class="agent-name"> headings in agents-hub.html and paired to a type by
+// the data-agent attribute on each card's status dot. One entry per
+// AGENT_SYSTEM_PROMPTS key.
+//
+// Written out rather than derived, because the two names that matter cannot be
+// derived: type.toUpperCase() + " Agent" gives "SEO Agent" correctly and then
+// gives "SALES Agent" and "RD Agent", which is what the seeded directory has
+// been showing while the hub shows "Sales Agent" and "R&D Agent". Capitalising
+// the first letter instead would fix sales and break seo and rd. There is no
+// rule here, only a list, so it is a list.
+//
+// executive is "Executive Agent" because that is the hub's heading. Its system
+// prompt calls it the Executive Coordinator Agent; the hub is what the user
+// reads, so the hub wins.
+const AGENT_DISPLAY_NAMES = {
+  seo:        "SEO Agent",
+  sales:      "Sales Agent",
+  content:    "Content Agent",
+  ads:        "Ads Agent",
+  reputation: "Reputation Agent",
+  analytics:  "Analytics Agent",
+  email:      "Email Agent",
+  community:  "Community Agent",
+  influencer: "Influencer Agent",
+  operations: "Operations Agent",
+  executive:  "Executive Agent",
+  social:     "Social Agent",
+  etsy:       "Etsy Agent",
+  store:      "Store Agent",
+  broker:     "Broker Agent",
+  publicist:  "Publicist Agent",
+  rd:         "R&D Agent"
+};
+
+/* The display name for an agent type. A type with no entry above falls back to
+   the old uppercase construction, so a type added to AGENT_SYSTEM_PROMPTS and
+   not to the map still gets a name — an ugly one, which is the point: it is
+   visibly the unmapped spelling rather than a blank or a crash, and it is the
+   exact string that type would have been given before this map existed. */
+function agentDisplayName(type) {
+  var key = String(type || "");
+  return Object.prototype.hasOwnProperty.call(AGENT_DISPLAY_NAMES, key)
+    ? AGENT_DISPLAY_NAMES[key]
+    : key.toUpperCase() + " Agent";
+}
+
 var SALES_AGENT_BRAIN =
   "You are the BizForce AI Sales Agent. Build offers, sales scripts, funnels, objection handling, upsells, and conversion systems." +
   "\n\nCOMPLIANCE RULES, never violate: For any supplement, vitality, health, or wellness product, never claim it cures, treats, prevents, restores, fixes, or diagnoses anything. Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). Use only supportive structure-function language such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee." +
@@ -4238,7 +4285,7 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
           return {
             user_id: req.user.id,
             type,
-            display_name: type.toUpperCase() + " Agent",
+            display_name: agentDisplayName(type),
             description: "",
             active: true,
             settings: {},
@@ -4345,7 +4392,7 @@ app.post("/api/agents", requireAuth, requireActiveSubscription, async function (
       .insert({
         user_id: req.user.id,
         type,
-        display_name: displayName || type.toUpperCase() + " Agent",
+        display_name: displayName || agentDisplayName(type),
         description: safeText(req.body.description, 500),
         active: true,
         settings: req.body.settings || {},
@@ -17114,6 +17161,20 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
 
 async function runDripEngine(userId) {
   try {
+    /* DRY_RUN is a rehearsal, not a send with the Twilio call commented out, so
+       it must leave the campaign exactly as it found it. It used to write the
+       send log AND advance current_step/next_send_at (and mark finished
+       enrollments completed), which meant a dry run consumed the campaign: the
+       second run reported "not yet due" or "all steps complete" and there was
+       nothing left to rehearse.
+
+       So under DRY_RUN nothing in sms_campaign_enrollments is written. What
+       still happens is the record of intent — the sms_send_log row with status
+       "dry_run" — and the log lines saying what would have gone out and what
+       the advance would have been. A dry run is therefore repeatable: run it
+       twice and you get the same summary both times.
+
+       With DRY_RUN false every write below happens exactly as before. */
     var DRY_RUN = true;
 
     var { data: enrollments, error } = await supabase
@@ -17151,6 +17212,13 @@ async function runDripEngine(userId) {
       msgs = msgs || [];
 
       if (enrollment.current_step >= msgs.length) {
+        if (DRY_RUN) {
+          console.log("[dripEngine] Enrollment " + enrollment.id +
+            " — all steps complete, would mark completed [DRY RUN — enrollment not written]");
+          summary.completed++;
+          continue;
+        }
+
         console.log("[dripEngine] Enrollment " + enrollment.id + " — all steps complete, marking completed");
 
         var { error: completeErr } = await supabase
@@ -17196,7 +17264,10 @@ async function runDripEngine(userId) {
         " — subscriber " + enrollment.subscriber_id +
         " due for step " + enrollment.current_step +
         " (step_order " + currentMsg.step_order + ")" +
-        (DRY_RUN ? " [DRY RUN]" : ""));
+        (DRY_RUN
+          ? " [DRY RUN] would send: " +
+            JSON.stringify(String(currentMsg.message_body || "").slice(0, 160))
+          : ""));
 
       var nowIso = new Date().toISOString();
 
@@ -17227,6 +17298,15 @@ async function runDripEngine(userId) {
         var delayHours = (msgs[newStep].delay_hours != null ? msgs[newStep].delay_hours : 0);
         var nextDate = new Date(Date.now() + delayHours * 60 * 60 * 1000);
         nextSendAt = nextDate.toISOString();
+      }
+
+      if (DRY_RUN) {
+        console.log("[dripEngine] Enrollment " + enrollment.id +
+          " — [DRY RUN] would advance to step " + newStep +
+          " with next_send_at " + (nextSendAt || "null") +
+          " — enrollment left untouched, so this run repeats identically");
+        summary.sent++;
+        continue;
       }
 
       var { error: advanceErr } = await supabase
@@ -20615,8 +20695,28 @@ async function dripTick() {
   }
 }
 
-setInterval(dripTick, 300000);
-dripTick();
+// Drip scheduler. Gated on ENABLE_DRIP_SCHEDULER, in the same style as the other
+// background-job gates in this file (ENABLE_SALES_AUTOLOOP,
+// ENABLE_STORE_PROPOSAL_JOB, ENABLE_NIGHTLY_BACKUP) and as ENABLE_AUTO_JOBS was
+// before them: the same lowercase `=== "true"` comparison, so absent, blank,
+// "TRUE" and "1" all mean off. Default OFF.
+//
+// Both halves were previously unconditional at module scope — a 5-minute
+// interval plus an immediate call — so every process that loaded this file
+// started walking every active enrollment, including local runs and every
+// Railway deploy. Its own flag rather than a shared one for the same reason the
+// other jobs have theirs: this one walks every user's enrollments and writes
+// send-log rows, so turning it on is a decision about this job specifically.
+//
+// Manual runs through POST /api/sms/run-engine are unaffected — they call
+// runDripEngine directly and never look at this flag.
+if (process.env.ENABLE_DRIP_SCHEDULER === "true") {
+  setInterval(dripTick, 300000);
+  dripTick();
+  console.log("[startup] dripTick scheduled — every 5 minutes (ENABLE_DRIP_SCHEDULER=true)");
+} else {
+  console.log("[startup] dripTick disabled (ENABLE_DRIP_SCHEDULER not true)");
+}
 
 /* Phrases how far out a due reminder's event is, using the offset the user
    originally chose (reminder_minutes_before) rather than recomputing from
