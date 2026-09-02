@@ -18991,6 +18991,53 @@ const OUTREACH_CREDENTIAL_OWNER_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
    not. */
 const OUTREACH_DAILY_CAP = Number(process.env.OUTREACH_DAILY_CAP || 5);
 
+/* ── Account-wide daily ceiling ─────────────────────────────────────────
+   THE WHOLE SHARED SOCIAL ACCOUNT, NOT ONE USER. Second gate, and the only
+   number in this file that describes the thing actually at risk.
+
+   Every other guard on this path is per-user. outreachSendsToday filters
+   .eq("user_id", userId); the uniqueness index is (user_id, lead_post_uri);
+   the slices bound one pass for one user. But there is one Bluesky login and
+   one Mastodon token in this process, so with N operators that one account
+   can post N x OUTREACH_DAILY_CAP in a day and NOTHING COUNTS IT — no query
+   in this codebase reads outreach_sends without a user_id filter, and the
+   schema has no column naming which social account a row was posted from,
+   because there has only ever been one. Two users can also both reply to the
+   same lead: the unique index permits it, the pair differs by user_id, and
+   one stranger receives two replies from one account with every guard
+   satisfied.
+
+   Migration 074 named this gap when the per-user cap was added — the audit
+   found no cap "not daily, not hourly, not per account". The daily cap
+   closed the first two. This closes the third.
+
+   Default 25, five operators' worth of the default per-user cap. Chosen to
+   sit above any single user’s cap rather than to bind today: with one
+   operator this changes nothing, which is the point. It is a ceiling on how
+   wrong the account can go, not a target.
+
+   Parsed the careful way OUTREACH_MIN_INTENT is, not the `env || default`
+   shape of the cap above, and for a reason that matters more here than
+   there: Number("abc") is NaN, and `count >= NaN` is false, so an
+   unparseable value in the simple shape would not fall back to the default,
+   it would disable this ceiling entirely and silently. A guard that fails
+   open on a typo is worse than no guard, because it reads as present. Zero
+   survives parsing on purpose: OUTREACH_ACCOUNT_DAILY_CEILING=0 is a
+   deliberate full stop on all outreach and must not be mistaken for
+   absence. */
+const OUTREACH_ACCOUNT_DAILY_CEILING = (function () {
+  var raw = process.env.OUTREACH_ACCOUNT_DAILY_CEILING;
+  if (raw == null || String(raw).trim() === "") return 25;
+
+  var parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 25;
+
+  // Negative is a typo, and it would stop outreach dead rather than loosen
+  // it. Clamped to 0 so the strictest reading of a mistyped value is a full
+  // stop, never a widening.
+  return Math.max(0, parsed);
+})();
+
 /* The intent score a lead must reach before outreach will consider it. Tuning
    this is the difference between drafting for 105 leads and drafting for 1,690,
    which is a spend decision an operator should be able to make from a Railway
@@ -19045,6 +19092,35 @@ async function outreachSendsToday(userId) {
   return count || 0;
 }
 
+// Counts EVERY send since the start of the current UTC day, across all users.
+// The same query as outreachSendsToday with the .eq("user_id", ...) removed,
+// deliberately the only difference, so the two numbers are always measured the
+// same way over the same window and one can be read against the other.
+//
+// The UTC boundary is computed identically rather than shared through a
+// helper, matching how outreachSendsToday computes its own. Both compare
+// against sent_at, which Postgres stamps by default, so the application
+// supplies only the boundary and never the timestamp.
+//
+// THROWS on error, exactly as outreachSendsToday does and for exactly the same
+// reason: a failed count is unknown, and unknown must never read as
+// under-ceiling. canSendOutreach turns the throw into a refusal.
+async function outreachSendsAccountToday() {
+  var startOfUtcDay = new Date();
+  startOfUtcDay.setUTCHours(0, 0, 0, 0);
+
+  var { count, error } = await supabase
+    .from("outreach_sends")
+    .select("id", { count: "exact", head: true })
+    .gte("sent_at", startOfUtcDay.toISOString());
+
+  if (error) {
+    throw error;
+  }
+
+  return count || 0;
+}
+
 // The gate every send passes through. Returns { allowed: true } or
 // { allowed: false, reason }.
 //
@@ -19077,6 +19153,29 @@ async function canSendOutreach(userId, lead) {
     var sentToday = await outreachSendsToday(userId);
     if (sentToday >= OUTREACH_DAILY_CAP) {
       return { allowed: false, reason: "daily_cap_reached" };
+    }
+
+    /* The account ceiling, checked last. The order is deliberate: the
+       per-user checks above are the ones an operator can reason about and
+       act on, and reaching this line means they were all satisfied. A stop
+       here is not about this user at all — it says the shared account has
+       had enough for the day, on everyone’s behalf.
+
+       Its own reason string for that reason. "daily_cap_reached" tells an
+       operator to wait for their own window to reset; this one means the
+       account is done regardless of whose window it is, and collapsing the
+       two would hide the only condition that involves other users. Nothing
+       outside this function branches on the value — it is logged and
+       returned — so a new string is additive. */
+    var accountSentToday = await outreachSendsAccountToday();
+    if (accountSentToday >= OUTREACH_ACCOUNT_DAILY_CEILING) {
+      console.warn("[outreach] ACCOUNT CEILING REACHED — " + accountSentToday +
+        " send(s) recorded across all users since UTC midnight, ceiling is " +
+        OUTREACH_ACCOUNT_DAILY_CEILING + " (OUTREACH_ACCOUNT_DAILY_CEILING)." +
+        " Refusing this send for user " + userId + ", who is still under their" +
+        " own per-user cap of " + OUTREACH_DAILY_CAP + "/day. This is the one" +
+        " limit measured over the shared social account rather than one user.");
+      return { allowed: false, reason: "account_ceiling_reached" };
     }
 
     return { allowed: true };
@@ -19128,6 +19227,84 @@ const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
    widened who gets messaged. */
 const OUTREACH_MAX_POST_AGE_DAYS = 7;
 
+/* Is this thrown thing Bluesky telling us to stop?
+
+   @atproto/api rejects with an XRPCError carrying a numeric `status` and a
+   string `error`; 429 is ResponseType.RateLimitExceeded and the error string
+   is "RateLimitExceeded". Both are checked, plus a couple of shapes the SDK
+   does not itself produce — a bare `statusCode`, a wrapped `response.status`
+   — because this value has been through a catch by the time it reaches here
+   and the one outcome worth avoiding is a rate limit read as a generic
+   failure and retried into a harder one.
+
+   Name-only matching is deliberately NOT done on the message text. A message
+   containing "rate limit" is not evidence, and the point of this check is to
+   change behaviour, so a false positive would stop a pass that had no reason
+   to stop. Status codes are the evidence. */
+function isBlueskyRateLimit(err) {
+  if (!err) return false;
+
+  var status = err.status;
+  if (status == null) status = err.statusCode;
+  if (status == null && err.response) status = err.response.status;
+
+  if (Number(status) === 429) return true;
+
+  return String(err.error || "") === "RateLimitExceeded";
+}
+
+/* When the limit lifts, if the response says so. Bluesky sends
+   `ratelimit-reset` as a UNIX epoch SECOND, not a duration, which is the
+   trap here: reading it as "seconds from now" would report a wait of about
+   fifty-six years. It is converted to a remaining duration; the standard
+   `retry-after`, when present, is already a duration and is taken as one.
+
+   Returns null when the response carries neither, which is a normal answer
+   and not an error — nothing in this file depends on having a number, and a
+   guess would be worse than the absence. Headers arrive as an XRPC HeadersMap
+   with lowercase keys; both cases are read anyway, since this object has been
+   through a catch and is not guaranteed to be the SDK’s own. */
+function blueskyRetryAfterSeconds(err) {
+  var headers = (err && (err.headers || (err.response && err.response.headers))) || null;
+  if (!headers || typeof headers !== "object") return null;
+
+  function header(name) {
+    if (typeof headers.get === "function") {
+      try { return headers.get(name); } catch (getErr) { /* not a Headers */ }
+    }
+    return headers[name] != null ? headers[name] : headers[name.toUpperCase()];
+  }
+
+  /* Presence is tested before parsing, never after. Headers.get() returns
+     null for a header that is not there and Number(null) is 0, not NaN — so
+     an isFinite check alone would read a MISSING retry-after as a retry-after
+     of zero seconds and report "retry immediately" for a response that said
+     nothing at all. Same discipline as the OUTREACH_MIN_INTENT parser, and
+     the same trap. */
+  function headerNumber(name) {
+    var raw = header(name);
+    if (raw == null || String(raw).trim() === "") return null;
+
+    var parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  var retryAfter = headerNumber("retry-after");
+  if (retryAfter != null && retryAfter >= 0) {
+    return Math.round(retryAfter);
+  }
+
+  // Epoch seconds, so the remaining wait is reset minus now. A reset already
+  // in the past reports 0 rather than a negative number: the limit has
+  // lifted, and "0" says that where "-4" would just look broken.
+  var reset = headerNumber("ratelimit-reset");
+  if (reset != null && reset > 0) {
+    return Math.max(0, Math.round(reset - Date.now() / 1000));
+  }
+
+  return null;
+}
+
 // Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
 // separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
 // pipeline bookkeeping). Defaults OFF: unset or any value other than the
@@ -19175,6 +19352,35 @@ async function sendBlueskyReply(lead, replyText) {
 
     return { sent: true, uri: postResult && postResult.uri };
   } catch (err) {
+    /* A rate limit is not a failed post, it is the account being told to
+       stop, and the two must not return the same thing. Reported before the
+       generic branch and with its own reason so the caller can act on it;
+       "post_error" means one lead went wrong and the next may be fine, which
+       is the opposite of what this means.
+
+       NO RETRY, no sleep, no backoff, by design. Retrying into a rate limit
+       is how a limit becomes a suspension, and this account is also the one
+       leadRadar.js runs capture with — losing it costs more than the send.
+       The wait is returned for the caller to log and act on, not to await. */
+    if (isBlueskyRateLimit(err)) {
+      var retryAfter = blueskyRetryAfterSeconds(err);
+
+      console.error("[SendBluesky] RATE LIMITED by Bluesky posting to " + handle +
+        (retryAfter == null
+          ? " — the response carried no retry-after or ratelimit-reset, so how long is unknown."
+          : " — retry after roughly " + retryAfter + "s.") +
+        " Not retrying and not backing off: this is the same account leadRadar" +
+        " captures with, and retrying into a limit is how it gets suspended." +
+        " Nothing was posted and nothing was recorded. (" + (err.message || err) + ")");
+
+      return {
+        sent: false,
+        reason: "rate_limited",
+        retry_after_seconds: retryAfter,
+        error: err.message || String(err)
+      };
+    }
+
     console.error("[SendBluesky] Failed to post reply to " + handle + ":", err.message || err);
     return { sent: false, reason: "post_error", error: err.message || String(err) };
   }
@@ -19186,6 +19392,73 @@ function truncateToMastodonLimit(text) {
   var chars = Array.from(str);
   if (chars.length <= 500) return str;
   return chars.slice(0, 497).join("") + "…";
+}
+
+/* The Mastodon equivalent of blueskyRetryAfterSeconds, and separate from it
+   for one reason that matters: THE RESET HEADER IS A DIFFERENT FORMAT.
+   Bluesky sends `ratelimit-reset` as a UNIX epoch second; Mastodon sends
+   `X-RateLimit-Reset` as an ISO 8601 datetime string. Number() on the ISO
+   form is NaN, so pointing the Bluesky reader at a Mastodon response would
+   not misreport the wait — it would silently return null and lose it. The
+   arithmetic below is identical (reset minus now, clamped at 0, never
+   negative); only the parse differs, which is exactly why it is written out
+   rather than shared.
+
+   Takes the Response, not an error, because Mastodon rate limits arrive as a
+   non-ok response rather than a throw — fetch only rejects on transport
+   failure. Headers is a web Headers object here, so .get() is the accessor
+   and casing is handled for us.
+
+   Both spellings of the reset header are read. X-RateLimit-Reset is the one
+   Mastodon documents; a bare `ratelimit-reset` is what a proxy in front of
+   an instance may add, and it is epoch seconds when it appears, so it is
+   parsed as such. Null when the response carries nothing usable, which is a
+   normal answer — a guessed wait would be worse than an absent one. */
+function mastodonRetryAfterSeconds(response) {
+  var headers = response && response.headers;
+  if (!headers || typeof headers.get !== "function") return null;
+
+  /* Present-then-parse, for the reason blueskyRetryAfterSeconds spells out:
+     Headers.get() answers null for an absent header and Number(null) is 0,
+     so parsing first would turn "no retry-after header" into "retry after 0
+     seconds" — a confident wrong answer where null is the honest one. */
+  function headerNumber(name) {
+    var raw = headers.get(name);
+    if (raw == null || String(raw).trim() === "") return null;
+
+    var parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  // A duration already, in seconds. Standard, and preferred when present.
+  var retryAfter = headerNumber("retry-after");
+  if (retryAfter != null && retryAfter >= 0) {
+    return Math.round(retryAfter);
+  }
+
+  // ISO 8601, e.g. "2026-09-02T14:00:00.000000Z". Date.parse gives
+  // milliseconds; the wait is that minus now.
+  var resetIso = headers.get("x-ratelimit-reset");
+  if (resetIso) {
+    var resetMs = Date.parse(resetIso);
+    if (Number.isFinite(resetMs)) {
+      return Math.max(0, Math.round((resetMs - Date.now()) / 1000));
+    }
+
+    // Not ISO after all. Some proxies put epoch seconds in this header
+    // instead, so it is tried that way before being given up on.
+    var resetEpoch = headerNumber("x-ratelimit-reset");
+    if (resetEpoch != null && resetEpoch > 0) {
+      return Math.max(0, Math.round(resetEpoch - Date.now() / 1000));
+    }
+  }
+
+  var proxyReset = headerNumber("ratelimit-reset");
+  if (proxyReset != null && proxyReset > 0) {
+    return Math.max(0, Math.round(proxyReset - Date.now() / 1000));
+  }
+
+  return null;
 }
 
 // Mastodon reply-send. Gated behind the SAME SALES_SEND_LIVE flag as
@@ -19228,6 +19501,40 @@ async function sendMastodonReply(lead, replyText) {
     });
 
     var responseData = await response.json().catch(function () { return null; });
+
+    /* A rate limit is not a failed post, it is the account being told to
+       stop, and the two must not return the same thing — the same
+       distinction sendBlueskyReply draws, for the same reason. Checked
+       ahead of the generic !response.ok branch below, which would otherwise
+       flatten a 429 into "post_error" and let the pass continue into it.
+
+       STATUS CODE ONLY. The body is not consulted and the message text is
+       not pattern-matched: a body containing "rate limit" is not evidence,
+       and this check changes behaviour, so a false positive would stop a
+       pass that had no reason to stop.
+
+       NO RETRY, no sleep, no backoff, by design. Retrying into a rate limit
+       is how a limit becomes a suspension, and there is one Mastodon token
+       in this process shared by everyone. The wait is returned for the
+       caller to log and act on, not to await. */
+    if (response.status === 429) {
+      var mastodonRetryAfter = mastodonRetryAfterSeconds(response);
+
+      console.error("[SendMastodon] RATE LIMITED by " + base + " posting to " + handle +
+        (mastodonRetryAfter == null
+          ? " — the response carried no retry-after or x-ratelimit-reset, so how long is unknown."
+          : " — retry after roughly " + mastodonRetryAfter + "s.") +
+        " Not retrying and not backing off: there is one Mastodon token in this" +
+        " process and retrying into a limit is how it gets suspended." +
+        " Nothing was posted and nothing was recorded.");
+
+      return {
+        sent: false,
+        reason: "rate_limited",
+        retry_after_seconds: mastodonRetryAfter,
+        error: "HTTP 429"
+      };
+    }
 
     if (!response.ok) {
       console.error("[SendMastodon] Failed to post reply to " + handle + ": HTTP " + response.status, responseData);
@@ -19773,7 +20080,14 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   return {
     conversion:  output,
     sent:        didSend,
-    send_reason: didSend ? null : ((sendResult && sendResult.reason) || null)
+    send_reason: didSend ? null : ((sendResult && sendResult.reason) || null),
+
+    // Only ever set alongside send_reason "rate_limited", and null whenever
+    // the response carried no wait. Rides back so the auto-loop can say how
+    // long the pass is stopped for without re-reading the error.
+    retry_after_seconds: (sendResult && sendResult.retry_after_seconds != null)
+      ? sendResult.retry_after_seconds
+      : null
   };
 }
 
@@ -20010,6 +20324,45 @@ async function runSalesAutoConvert() {
               skippedCount++;
             } else {
               convertedCount++;
+            }
+
+            /* The network told this account to stop, so stop — the remaining
+               leads in this pass would post to the same account through the
+               same session and meet the same limit. Continuing would spend a
+               model call per lead to be refused by the network each time.
+
+               Source-agnostic on purpose. Both senders return this reason:
+               sendBlueskyReply on a 429 or RateLimitExceeded from the XRPC
+               client, sendMastodonReply on a 429 from the statuses endpoint.
+               A pass can hold leads from both, and a limit on either one is
+               equally a reason to stop spending generations — so the break
+               keys on the reason and names the source in the log rather than
+               branching on it.
+
+               break, not throw and not return: this user’s pass is over, the
+               loop below still logs their counts, and the next user is still
+               attempted. That is deliberate even though every user shares the
+               one rate-limited account — the guard above already restricts
+               this loop to a single user, so there is no second user to
+               protect today, and a limit that has lifted by the time the next
+               user is reached should not be assumed to still hold.
+
+               Nothing is marked. The lead was not contacted, so it stays
+               exactly as eligible as it was: no outreach_sends row (the
+               ledger write is gated on sent: true and this returned false),
+               no pipeline bump to contacted, and ai_tasks recorded whatever
+               it already records for a send that did not happen. */
+            if (conversionResult && conversionResult.send_reason === "rate_limited") {
+              console.warn("[SalesAutoConvert] PASS STOPPED BY RATE LIMIT for user " + userId +
+                " — " + (freshLeads[i].source || "the network") +
+                " refused the post at lead " + (i + 1) + " of " + freshLeads.length +
+                (conversionResult.retry_after_seconds == null
+                  ? " and gave no retry-after, so how long is unknown."
+                  : " and asked for roughly " + conversionResult.retry_after_seconds + "s.") +
+                " Abandoning the remaining " + (freshLeads.length - i - 1) + " lead(s) rather" +
+                " than spending a generation each to be refused again. Nothing was posted," +
+                " nothing was recorded, and every remaining lead stays eligible.");
+              break;
             }
           } catch (leadErr) {
             console.error("[SalesAutoConvert] Failed to convert lead " + freshLeads[i].post_uri + " for user " + userId + ":", leadErr.message || leadErr);
