@@ -18946,6 +18946,34 @@ function detectOutreachLinkFacets(text) {
   }
 }
 
+/* ── Who the outreach credentials actually belong to ────────────────────────
+   THIS IS A CREDENTIAL OWNER, NOT A LEAD OWNER. It does not say who a lead
+   belongs to and it is not a tenant key — bsky_leads has no owner column at
+   all. It says one thing: whose social accounts the send path posts from.
+
+   There is exactly one Bluesky login and exactly one Mastodon token in this
+   process. sendBlueskyReply posts through the module-level BskyAgent exported
+   by leadRadar.js, authenticated once from BLUESKY_IDENTIFIER and
+   BLUESKY_APP_PASSWORD; sendMastodonReply posts with the single
+   MASTODON_ACCESS_TOKEN. Neither takes a user. Nothing anywhere stores a
+   per-user credential for either network.
+
+   runSalesAutoConvert, however, iterates every user holding a business
+   profile, and writes outreach_sends.user_id from that loop variable. So for
+   any user who is not the account holder, the two halves disagree: the reply
+   is drafted from THEIR business profile and posted from THIS account, while
+   the ledger records it as theirs. The recipient sees this account; the books
+   say someone else. The daily cap is counted per user, so with N users the one
+   real account posts up to N x OUTREACH_DAILY_CAP and no counter shows it.
+
+   Same UUID as CAPTURE_OWNER_ID above and SCORING_ACCOUNT_ID in leadRadar.js,
+   named separately because it means a third thing: that pair is who a capture
+   is attributed to and whose API key pays for scoring. One value, three
+   unrelated reasons, and they will not stop being the same value at the same
+   moment. When per-user credentials exist this constant and the guard that
+   uses it both go; the other two are unaffected. */
+const OUTREACH_CREDENTIAL_OWNER_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+
 /* ── Outreach send cap ──────────────────────────────────────────────────────
    Deliberately low, and env-overridable so it can be raised knowingly rather
    than by editing code. The ceiling on how wrong a single day can go is the
@@ -19773,6 +19801,26 @@ async function runSalesAutoConvert() {
 
     for (var u = 0; u < userIds.length; u++) {
       var userId = userIds[u];
+
+      /* The send path has one global credential pair, so this pass may only
+         act for the account those credentials belong to. Skipping here rather
+         than at the send means no model call is spent drafting a reply that
+         must not be posted, and no ledger row is written attributing this
+         account's post to someone else.
+
+         continue, not throw and not return: a second user is an ordinary state
+         of the system, not an error, and the remaining users — including the
+         credential owner, who may sort after them — still get their pass. */
+      if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+        console.warn("[SalesAutoConvert] SKIPPING user " + userId +
+          " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+          " until per-user credentials exist. There is one Bluesky login and one" +
+          " Mastodon token in this process, so sending for this user would post" +
+          " from the owner's accounts while outreach_sends recorded the send as" +
+          " theirs. No draft was generated and nothing was sent.");
+        continue;
+      }
+
       var convertedCount = 0;
       var skippedCount = 0;
 
@@ -19983,6 +20031,43 @@ async function runSalesAutoConvert() {
 app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var userId = req.user.id;
+
+    /* The same restriction runSalesAutoConvert applies in its per-user loop,
+       enforced here because this route reaches convertSingleLead directly and
+       never passes through that loop. Without it the guard covers the
+       background job and leaves the button beside it open — the same send, the
+       same one global Bluesky login and Mastodon token, through a different
+       door.
+
+       A refusal rather than a skip, because this call has someone waiting on
+       it. The loop is choosing work nobody asked for by name and can drop a
+       user silently; a request an operator made about a lead they picked has
+       to be answered, and an empty 200 here would read as "converted" for a
+       send that never happened.
+
+       403 rather than 404 or 400: the route exists, the request is
+       well-formed, the caller is authenticated and subscribed, and the answer
+       is still no. Nothing about the request can be changed to make it
+       succeed, which is what separates this from a validation failure.
+
+       Placed before every query, every model call and every send — the first
+       thing after reading the caller's id, so a refused request costs a string
+       comparison and nothing else. */
+    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[sales/convert] REFUSING user " + userId +
+        " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        " until per-user credentials exist. There is one Bluesky login and one" +
+        " Mastodon token in this process, so sending for this user would post" +
+        " from the owner's accounts while outreach_sends recorded the send as" +
+        " theirs. No lead was read, no draft was generated and nothing was sent.");
+
+      return res.status(403).json({
+        error: "Outreach is limited to the credential owner until per-user credentials exist. " +
+               "This deployment has a single shared Bluesky and Mastodon account, so a reply " +
+               "sent for your account would be posted from someone else's."
+      });
+    }
+
     var leadPostUri = safeText(req.body.lead_post_uri, 500);
     var segment = (req.body.segment && typeof req.body.segment === "object" && !Array.isArray(req.body.segment))
       ? req.body.segment : null;
