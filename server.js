@@ -3192,16 +3192,59 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       console.warn("[notifications] insert failed for POST /api/auth/register — the route still succeeded, the user simply was not notified:", welcomeNotification.error.message || welcomeNotification.error);
     }
 
+    /* The welcome bonus. Two writes, neither of which may fail a signup, and
+       both of whose failures were previously invisible.
+
+       supabase-js RESOLVES WITH AN ERROR, IT DOES NOT THROW. Both inserts were
+       awaited and their results discarded, so the try/catch around them caught
+       nothing a database could produce — a constraint violation, an RLS
+       refusal, a renamed column all set .error and were dropped on the floor.
+       The catch only ever fired on a network fault. Six of the accounts on this
+       system have no wallet row and nothing anywhere says why; this is the code
+       that was supposed to say. */
     try {
-      await supabase.from("user_wallets").insert({
+      var walletInsert = await supabase.from("user_wallets").insert({
         user_id: user.id, balance: 1000, currency: "BFC", updated_at: nowIso()
       });
 
-      await supabase.from("wallet_transactions").insert({
-        user_id: user.id, type: "reward", amount: 1000, description: "Welcome bonus", created_at: nowIso()
-      });
+      if (walletInsert.error) {
+        /* Non-fatal, deliberately. A missing welcome bonus is a grant that can
+           be made again later; a signup that 500s after users, profiles and
+           notifications are already written is not recoverable — the account
+           exists, the caller was told it failed, and retrying answers "Email
+           already registered". The bonus is never worth that trade. */
+        console.error("[register] WELCOME BONUS NOT GRANTED — the user_wallets insert failed for user " +
+          user.id + ": " + walletInsert.error.message +
+          ". Registration still succeeded and the account is usable; this person simply has no " +
+          "wallet and no 1000 BFC. The reward transaction below was NOT attempted.");
+      } else {
+        /* Only after the wallet exists. A reward transaction with no wallet
+           behind it is a record of money that does not exist: GET /api/wallet
+           would report a balance of 0 while listing a 1000 BFC credit, and any
+           later sum over wallet_transactions would disagree with every balance
+           column. Skipping the second write leaves nothing rather than
+           something false. */
+        var txInsert = await supabase.from("wallet_transactions").insert({
+          user_id: user.id, type: "reward", amount: 1000, description: "Welcome bonus", created_at: nowIso()
+        });
+
+        if (txInsert.error) {
+          console.error("[register] WELCOME BONUS PARTIALLY RECORDED — the user_wallets row was " +
+            "written for user " + user.id + " with a balance of 1000 BFC, but the matching " +
+            "wallet_transactions row failed: " + txInsert.error.message +
+            ". The balance exists with no transaction explaining where it came from.");
+        }
+      }
     } catch (walletErr) {
-      console.error("Welcome bonus wallet grant failed:", walletErr.message);
+      /* Reaching here now means something threw rather than resolving — a
+         network fault inside the client, or a programming error above. Read
+         defensively: a thrown non-Error (a string, a rejected promise carrying
+         a plain object) has no .message, and reading one turns a handled
+         failure into an unhandled TypeError inside this handler, which would
+         500 the signup this block exists to protect. */
+      console.error("[register] WELCOME BONUS THREW for user " + user.id + " — " +
+        ((walletErr && walletErr.message) || String(walletErr)) +
+        ". Registration still succeeded.");
     }
 
     /* Non-fatal by design, on the same terms as the wallet grant above. A user
@@ -13251,40 +13294,117 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
 
 /* ── Wallet ── */
 
+/* Credits a wallet and records the matching transaction.
+
+   REPORTS FAILURE BY THROWING, and that is dictated by the caller rather than
+   chosen freely. The one call site awaits this inside a try/catch and ignores
+   the resolved value entirely, so a returned false or a result object would be
+   dropped on the floor and the failure would stay exactly as invisible as it is
+   now. A throw is the only signal that site already observes — its catch was
+   written for this and, until this change, could never fire, because every
+   failure below resolved rather than threw. Signature and success return are
+   unchanged.
+
+   Every one of the four writes had its result discarded. supabase-js resolves
+   with an error instead of throwing, so a constraint violation, an RLS refusal
+   or a renamed column all set .error and were ignored, and this function
+   returned as though the money had moved. */
 async function creditWallet(userId, amount, description) {
-  const { data: existing } = await supabase
+  const existingResult = await supabase
     .from("user_wallets")
     .select("balance")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!existing) {
-    await supabase.from("user_wallets").insert({
-      user_id: userId, balance: amount, currency: "BFC", updated_at: nowIso()
-    });
-  } else {
-    await supabase.from("user_wallets").update({
-      balance: existing.balance + amount, updated_at: nowIso()
-    }).eq("user_id", userId);
+  /* A failed read is not an absent wallet. Continuing here would treat "we
+     could not tell" as "there is none" and insert a second wallet row for
+     someone who already has one — the balance would be replaced by `amount`
+     rather than added to it, silently destroying whatever they held. */
+  if (existingResult.error) {
+    console.error("[creditWallet] CREDIT ABANDONED — could not read the wallet for user " +
+      userId + ": " + existingResult.error.message +
+      ". Nothing was written; whether a wallet exists is unknown, and guessing would risk " +
+      "overwriting an existing balance.");
+    throw existingResult.error;
   }
 
-  await supabase.from("wallet_transactions").insert({
+  const existing = existingResult.data;
+
+  if (!existing) {
+    const created = await supabase.from("user_wallets").insert({
+      user_id: userId, balance: amount, currency: "BFC", updated_at: nowIso()
+    });
+
+    if (created.error) {
+      console.error("[creditWallet] CREDIT FAILED — the user_wallets insert failed for user " +
+        userId + " (" + amount + " BFC, " + description + "): " + created.error.message +
+        ". No transaction row was written.");
+      throw created.error;
+    }
+  } else {
+    const updated = await supabase.from("user_wallets").update({
+      balance: existing.balance + amount, updated_at: nowIso()
+    }).eq("user_id", userId);
+
+    if (updated.error) {
+      console.error("[creditWallet] CREDIT FAILED — the user_wallets update failed for user " +
+        userId + " (" + amount + " BFC, " + description + "): " + updated.error.message +
+        ". The balance is unchanged and no transaction row was written.");
+      throw updated.error;
+    }
+  }
+
+  /* Only once the balance write succeeded, the same ordering the welcome bonus
+     uses: a reward transaction with no balance behind it is a record of money
+     that does not exist. Both throws above skip this. */
+  const recorded = await supabase.from("wallet_transactions").insert({
     user_id: userId, type: "reward", amount, description, created_at: nowIso()
   });
+
+  if (recorded.error) {
+    console.error("[creditWallet] CREDIT PARTIALLY RECORDED — the balance was credited for user " +
+      userId + " (" + amount + " BFC) but the wallet_transactions row failed: " +
+      recorded.error.message + ". The money is in the balance with nothing explaining where it " +
+      "came from; the caller is being told the credit failed even though the balance moved.");
+    throw recorded.error;
+  }
 }
 
 app.get("/api/wallet", requireAuth, async function (req, res, next) {
   try {
-    const { data: wallet } = await supabase
+    const walletResult = await supabase
       .from("user_wallets")
       .select("balance")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
+    // Logged, not thrown. The transactions below are readable without it, and
+    // the response already answers 0 for an absent wallet — but "absent" and
+    // "unreadable" reaching the same answer is worth saying out loud, because
+    // it also decides whether the lazy create below is attempted.
+    if (walletResult.error) {
+      console.error("[GET /api/wallet] wallet read failed for user " + req.user.id + ": " +
+        walletResult.error.message + ". Reporting a balance of 0, which is what an absent " +
+        "wallet also reports — the two are indistinguishable in the response.");
+    }
+
+    const wallet = walletResult.data;
+
     if (!wallet) {
-      await supabase.from("user_wallets").insert({
+      const lazyCreate = await supabase.from("user_wallets").insert({
         user_id: req.user.id, balance: 0, currency: "BFC", updated_at: nowIso()
       });
+
+      /* A read endpoint must not 500 because a convenience write failed. The
+         wallet this would have created holds a balance of zero, which is
+         exactly what the response reports when it does not exist — so the
+         caller sees the same thing either way and the only thing lost is the
+         row being there next time. */
+      if (lazyCreate.error) {
+        console.error("[GET /api/wallet] LAZY WALLET CREATE FAILED for user " + req.user.id +
+          ": " + lazyCreate.error.message + ". The read still succeeded and returned a balance " +
+          "of 0; this user still has no wallet row and the next read will try again.");
+      }
     }
 
     const { data: txns, error } = await supabase
