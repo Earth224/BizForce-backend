@@ -19,6 +19,15 @@ const { createClient } = require("@supabase/supabase-js");
 const Astronomy = require("astronomy-engine");
 const cityTimezones = require("city-timezones");
 const { Resend } = require("resend");
+
+// Resend signs its webhooks with Svix, so the verifier comes from Svix rather
+// than being written here. Signature verification is not a place to hand-roll
+// an HMAC: the payload Svix signs is a specific concatenation of id, timestamp
+// and body, the comparison has to be timing-safe, the timestamp has to be
+// checked for replay, and a secret may carry multiple versioned keys. Getting
+// any one of those subtly wrong produces a verifier that accepts forgeries
+// while looking correct.
+const { Webhook: SvixWebhook } = require("svix");
 const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt } = require("./config/brain");
 const { RichText } = require("@atproto/api");
@@ -646,6 +655,290 @@ app.post(
     } catch (error) {
       console.error("Stripe webhook handler failed:", error);
       return res.status(500).json({ error: "Webhook handler failed" });
+    }
+  }
+);
+
+/* ── Resend delivery webhook ─────────────────────────────────────────────
+   Bounces and spam complaints, arriving from the provider rather than from
+   the person. This is the route migration 070 was written in advance of:
+   email_sends.status has carried 'bounced' and 'complained' since that
+   migration with nothing able to write them, and the table comment records
+   that a complaint must also write a revoked row into consent_events,
+   because pressing "this is spam" is a consent revocation arriving through a
+   side channel. Recording it only as a send status would leave the ledger in
+   069 still saying the person consents.
+
+   MOUNTED HERE, DELIBERATELY, AND THE PLACEMENT IS THE MECHANISM. Svix signs
+   the exact bytes of the body, so express.raw is scoped to this one path the
+   way line 628 scopes it to the Stripe route, and both are registered BEFORE
+   app.use(express.json(...)) below. Express runs middleware in registration
+   order: because this route is declared first and terminates the request, the
+   global JSON parser never sees it and req.body stays a Buffer. Move this
+   below express.json and the body arrives parsed, express.raw finds an
+   already-consumed stream, and every signature check fails — the failure is
+   total and looks like a bad secret, which is the wrong thing to go looking
+   for. The Twilio webhook is NOT this pattern and must not be copied here:
+   validateRequest hashes the URL and sorted form parameters, so it works on
+   a parsed body. Svix does not.
+
+   FAILS CLOSED THREE WAYS, each logged distinctly so a misconfigured deploy
+   and a forged request are not one indistinguishable line: no secret, no
+   headers, failed verification. Nothing past this point runs on an
+   unverified payload.
+
+   200 AFTER VERIFICATION, ALWAYS. Svix retries a non-2xx with backoff for
+   days, and every failure below is one a retry cannot fix: an unknown event
+   type will still be unknown, an unmatched provider_id will still be
+   unmatched, and a database error needs a person rather than the same
+   delivery again. The logs carry the failure; the retry queue does not need
+   to. A 403 before verification is the one refusal worth retrying, and it is
+   the one this route returns. */
+app.post(
+  "/api/webhooks/resend",
+  express.raw({ type: "application/json" }),
+  async function (req, res) {
+    var secret = (process.env.RESEND_WEBHOOK_SECRET || "").trim();
+
+    /* An unset secret refuses everything rather than skipping the check. The
+       alternative — verify only when configured — means a deploy that forgot
+       the variable accepts anything anyone posts, and accepts it silently.
+       Same posture as the Twilio route with TWILIO_AUTH_TOKEN. */
+    if (!secret) {
+      console.error("[webhooks/resend] REJECTED (misconfiguration) — RESEND_WEBHOOK_SECRET " +
+        "is not set, so no request can be verified and every bounce and complaint is being " +
+        "refused. This is a deploy problem, not an attack. Bounces are being dropped and " +
+        "spam complaints are NOT being recorded as consent revocations while this is unset.");
+      return res.status(403).type("text/plain").send("Forbidden");
+    }
+
+    /* Svix sends all three on every delivery. Checked before verify so a
+       missing header reports itself as missing rather than as a verification
+       failure — the two have different causes and different fixes. */
+    var svixId        = req.get("svix-id") || "";
+    var svixTimestamp = req.get("svix-timestamp") || "";
+    var svixSignature = req.get("svix-signature") || "";
+
+    if (!svixId || !svixTimestamp || !svixSignature) {
+      // Which headers DID arrive, computed before the message is built rather
+      // than inline. Inline, "Present: " + list.join(", ") || "none" parses as
+      // ("Present: " + list.join(", ")) || "none" — the left side is a non-empty
+      // string always, so the fallback is unreachable and a request carrying no
+      // headers at all logs a bare "Present: " instead of "Present: none".
+      var presentHeaders = [
+        svixId && "svix-id",
+        svixTimestamp && "svix-timestamp",
+        svixSignature && "svix-signature"
+      ].filter(Boolean).join(", ") || "none";
+
+      console.error("[webhooks/resend] REJECTED (unsigned) — missing Svix headers. " +
+        "Present: " + presentHeaders + ". Svix sends all three on every delivery, so a " +
+        "request missing any of them did not come from Svix. ip=" + req.ip);
+      return res.status(403).type("text/plain").send("Forbidden");
+    }
+
+    /* The raw bytes, exactly as delivered. req.body is a Buffer here because
+       of the express.raw above; toString is the only transformation, and it
+       must not be re-serialized from a parsed object — key order and
+       whitespace are part of what was signed. */
+    var rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : String(req.body || "");
+
+    try {
+      new SvixWebhook(secret).verify(rawBody, {
+        "svix-id":        svixId,
+        "svix-timestamp": svixTimestamp,
+        "svix-signature": svixSignature
+      });
+    } catch (verifyError) {
+      /* Covers a forged or tampered body, a wrong secret, and a timestamp
+         outside the replay window — Svix does not distinguish them in its
+         error and neither should the response. The id is logged because it
+         is the only value safe to log from an unverified request: the body
+         is untrusted and carries an email address. */
+      console.error("[webhooks/resend] REJECTED (bad signature) — svix-id=" + svixId +
+        " ip=" + req.ip + " — " + (verifyError.message || verifyError) +
+        ". A wrong RESEND_WEBHOOK_SECRET fails every request; a forged or replayed " +
+        "request fails only its own.");
+      return res.status(403).type("text/plain").send("Forbidden");
+    }
+
+    // ── Verified past this point. Everything below answers 200. ───────────
+    try {
+      var event;
+      try {
+        event = JSON.parse(rawBody);
+      } catch (parseError) {
+        /* Parsed here rather than through the verifier's jsonParse option,
+           which is off by default in svix 2.x and returns undefined — a
+           default worth not depending on. A verified body that will not parse
+           is close to impossible and is logged as the anomaly it is. */
+        console.error("[webhooks/resend] VERIFIED BUT UNPARSEABLE — svix-id=" + svixId +
+          " passed signature verification and is not valid JSON: " +
+          (parseError.message || parseError) + ". Nothing was recorded.");
+        return res.status(200).json({ received: true });
+      }
+
+      var eventType = String((event && event.type) || "");
+
+      /* Exactly two types are acted on. Everything else — email.sent,
+         email.delivered, email.opened, email.clicked, and whatever Resend adds
+         next — is acknowledged and dropped. Erroring on an unknown type would
+         turn a new provider event into a retry storm against a route that was
+         never going to do anything with it. */
+      if (eventType !== "email.bounced" && eventType !== "email.complained") {
+        console.log("[webhooks/resend] Ignoring event type '" + eventType +
+          "' (svix-id=" + svixId + ") — only email.bounced and email.complained are handled.");
+        return res.status(200).json({ received: true });
+      }
+
+      var data = (event && event.data) || {};
+
+      /* The join key, verbatim. email_sends.provider_id holds whatever Resend
+         returned from the send call, stored with no normalisation, so the
+         match here is equally literal — no trim, no case fold. Anything else
+         would make the two ends disagree about what the same id is. */
+      var providerId = data.email_id;
+
+      if (!providerId) {
+        console.error("[webhooks/resend] NOT JOINABLE — a " + eventType + " arrived carrying " +
+          "no data.email_id (svix-id=" + svixId + "), so there is nothing to match against " +
+          "email_sends.provider_id. The event is acknowledged and lost." +
+          (eventType === "email.complained"
+            ? " A SPAM COMPLAINT HAS NOT BEEN RECORDED AS A CONSENT REVOCATION."
+            : ""));
+        return res.status(200).json({ received: true });
+      }
+
+      /* limit(1) rather than maybeSingle(): provider_id carries no unique
+         constraint, only a partial index, so two rows holding one id is
+         possible in principle and maybeSingle would throw on it. Taking the
+         first row degrades to acting on one send instead of failing the whole
+         delivery. */
+      var matched = await supabase
+        .from("email_sends")
+        .select("id, contact_id, to_email, status")
+        .eq("provider_id", providerId)
+        .limit(1);
+
+      if (matched.error) {
+        console.error("[webhooks/resend] LOOKUP FAILED for provider_id " + providerId +
+          " (" + eventType + ") — " + matched.error.message +
+          ". The event is acknowledged and nothing was recorded.");
+        return res.status(200).json({ received: true });
+      }
+
+      var sendRow = matched.data && matched.data[0];
+
+      if (!sendRow) {
+        /* A real state, not a bug: a send whose ledger row never received its
+           provider id (the update after the provider call can fail, and
+           sendEmail logs exactly that), or mail sent before this table
+           existed, or from another system on the same domain. */
+        console.error("[webhooks/resend] COULD NOT JOIN EVENT — no email_sends row has " +
+          "provider_id " + providerId + " for this " + eventType + " (svix-id=" + svixId +
+          "). Either the send predates the ledger, or its provider id was never written back. " +
+          "Nothing was recorded." +
+          (eventType === "email.complained"
+            ? " A SPAM COMPLAINT HAS NOT BEEN RECORDED AS A CONSENT REVOCATION."
+            : ""));
+        return res.status(200).json({ received: true });
+      }
+
+      var newStatus = eventType === "email.bounced" ? "bounced" : "complained";
+
+      /* Whatever the provider said, if it said anything. Resend puts a bounce
+         under data.bounce and a complaint under data.complaint, and the exact
+         sub-fields vary by the upstream mailbox provider — so several shapes
+         are read and the first present one wins, rather than assuming one.
+         Null when the payload carries no reason, which is normal for a
+         complaint: mailbox providers rarely say why. */
+      var reason = null;
+      var detail = data.bounce || data.complaint || null;
+
+      if (detail && typeof detail === "object") {
+        reason = detail.message || detail.subType || detail.type ||
+                 detail.complaintFeedbackType || null;
+      }
+      if (!reason && typeof data.reason === "string") {
+        reason = data.reason;
+      }
+
+      var statusUpdate = { status: newStatus };
+      if (reason) {
+        statusUpdate.error_message = safeText(String(reason), 500);
+      }
+
+      /* No updated_at: the email_sends_set_updated_at trigger from migration
+         070 stamps it, and the column comment says this is exactly what it is
+         for — "when did we last learn something about this send", including a
+         bounce days later. */
+      var applied = await supabase
+        .from("email_sends")
+        .update(statusUpdate)
+        .eq("id", sendRow.id);
+
+      if (applied.error) {
+        console.error("[webhooks/resend] STATUS NOT WRITTEN — email_sends row " + sendRow.id +
+          " could not be set to '" + newStatus + "': " + applied.error.message +
+          ". The row still reads '" + sendRow.status + "' and deliverability accounting " +
+          "is wrong by one.");
+      } else {
+        console.log("[webhooks/resend] " + eventType + " — email_sends " + sendRow.id +
+          " set to '" + newStatus + "'" + (reason ? " (" + reason + ")" : "") + ".");
+      }
+
+      /* ── The consent half, for complaints only ─────────────────────────
+         A BOUNCE IS NOT A REVOCATION. It is a delivery failure — a full
+         mailbox, a dead domain, a typo — and the person may never have seen
+         the message, let alone objected to it. Writing a revoked row for one
+         would record an objection nobody made. A complaint is the opposite:
+         someone pressed "this is spam", which is a person asking to stop.
+
+         The contact comes from the matched row and from nowhere else. It is
+         NOT resolved by looking up the address: email_sends.contact_id is ON
+         DELETE SET NULL, so a null here can mean the contact was erased, and
+         re-creating them from an address in a webhook would resurrect exactly
+         the person who asked to be forgotten. A complaint that cannot be
+         attributed is logged as unrecorded rather than attributed by guess. */
+      if (eventType === "email.complained") {
+        if (!sendRow.contact_id) {
+          console.error("[webhooks/resend] COMPLAINT NOT RECORDED AS A REVOCATION — " +
+            "email_sends row " + sendRow.id + " has a null contact_id, so there is no " +
+            "contact to write a consent_events row against. The send is marked complained " +
+            "and the ledger in 069 still reads as consenting. Someone pressed 'this is " +
+            "spam' and nothing revoked their consent.");
+        } else {
+          var revocation = await supabase
+            .from("consent_events")
+            .insert({
+              contact_id: sendRow.contact_id,
+              channel:    "email",
+              action:     "revoked",
+              source:     "resend_complaint",
+              note:       "Spam complaint reported by the provider for email_sends " +
+                          sendRow.id + (reason ? " (" + reason + ")" : "")
+            });
+
+          if (revocation.error) {
+            console.error("[webhooks/resend] REVOCATION WRITE FAILED for contact " +
+              sendRow.contact_id + " — " + revocation.error.message +
+              ". This person marked our mail as spam and consent_events does not know it. " +
+              "sendEmail reads the most recent row and will keep sending to them.");
+          } else {
+            console.log("[webhooks/resend] Complaint recorded as an email revocation for " +
+              "contact " + sendRow.contact_id + " (email_sends " + sendRow.id + ").");
+          }
+        }
+      }
+
+      return res.status(200).json({ received: true });
+    } catch (handlerError) {
+      /* The last resort, and still a 200. The signature was valid, so this was
+         a real Resend delivery and redelivering it will hit the same failure. */
+      console.error("[webhooks/resend] HANDLER FAILED after successful verification " +
+        "(svix-id=" + svixId + ") — " + ((handlerError && handlerError.message) || handlerError) +
+        ". The event was acknowledged and nothing was recorded.");
+      return res.status(200).json({ received: true });
     }
   }
 );
