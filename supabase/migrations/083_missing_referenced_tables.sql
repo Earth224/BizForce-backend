@@ -57,6 +57,33 @@ create table if not exists public.reddit_leads (
   created_at timestamptz not null default now()
 );
 
+-- ── Row level security: enabled, with no policies ──
+--
+-- ZERO POLICIES IS DELIBERATE, NOT AN OMISSION. Nothing is missing below this
+-- line; the absence is the design, and it is recorded here so nobody later
+-- reads it as work that was forgotten.
+--
+-- server.js connects with SUPABASE_SERVICE_KEY, and the service role bypasses
+-- RLS entirely, so every backend route against these five tables behaves
+-- exactly as it would with RLS off. Enabling it costs the application nothing.
+--
+-- What it does affect: with RLS on and zero policies, the anon key can read
+-- nothing here. That is the same posture 070 records for email_sends and 069
+-- for contacts and consent_events. Access control for all five stays where it
+-- already is — in the route handlers, scoped by req.user.id and requireAdmin.
+--
+-- Verified live rather than assumed, on 2026-09-03: users and contacts, both
+-- configured exactly this way, returned ZERO rows to the anon key while the
+-- service key read 11 and 4 real rows out of them.
+--
+-- THE HAZARD, stated because the evidence above is easy to misread: a denied
+-- table answers the anon key with HTTP 200 and an EMPTY BODY, not 42501
+-- permission denied. That distinction is the entire warning. A 42501 would
+-- mean the anon role lacks the table grant; 200-and-empty means it HOLDS the
+-- grant and RLS alone is what stops it. So a single narrow policy added to any
+-- of these five is the only thing standing between the anon key and that
+-- table's contents — there is no second barrier underneath it. Whoever writes
+-- one is not loosening a restriction, they are removing the only one there is.
 alter table public.websites enable row level security;
 alter table public.favorites enable row level security;
 alter table public.admin_flags enable row level security;
