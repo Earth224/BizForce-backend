@@ -2175,10 +2175,86 @@ async function hasActivePlan(userId, plan) {
   });
 }
 
+/* Days past current_period_end before a subscription stops entitling.
+
+   A grace window exists because the boundary is not the moment access should
+   end. Stripe renews AT period end and customer.subscription.updated lands
+   minutes or hours later; revoking exactly at the boundary would lock out a
+   paying customer in the middle of a normal, successful renewal — and this is
+   the first code in the file capable of revoking anything, so the failure mode
+   worth engineering against is the false positive, not the free week.
+
+   Parsed the careful way OUTREACH_MIN_INTENT is, NOT the `process.env.X ||
+   default` shape used by OUTREACH_DAILY_CAP. That pattern cannot express zero:
+   "0" is falsy, so a deliberate "revoke exactly at period end" would be
+   silently replaced by the default and become the opposite of what was typed.
+   Emptiness is tested before parsing, because Number("") and Number("   ") are
+   both 0 rather than NaN and a blank variable would otherwise read as a
+   deliberate zero.
+
+   Clamped to 0..90. Below 0 is meaningless; a grace of a year is not a grace
+   window, it is this check turned off by a typo, and turning it off should
+   require typing 0 on purpose. */
+const SUBSCRIPTION_GRACE_DAYS = (function () {
+  var raw = process.env.SUBSCRIPTION_GRACE_DAYS;
+  if (raw == null || String(raw).trim() === "") return 3;
+
+  var parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return 3;
+
+  return Math.min(90, Math.max(0, parsed));
+})();
+
+/* Whether a subscription's period end PROVES it has expired.
+
+   The asymmetry here is the whole point, and it is deliberate in one
+   direction: absence of evidence is not evidence of expiry. A null, absent,
+   blank or unparseable current_period_end does NOT revoke. Two of the three
+   live rows carry no period at all — they predate commit 10153fc, which fixed
+   subscriptionPeriodIso to read the window off the subscription ITEM after
+   Stripe API 2026-04-22.dahlia moved it there — and a strict `period_end >=
+   now` test would revoke both of them for a bug in the writer rather than
+   anything the customer did.
+
+   Only a parseable timestamp strictly past the end of the grace window
+   revokes. Everything else returns proven:false and the status test decides
+   alone, which is exactly the behaviour that existed before this function. */
+function subscriptionExpiryState(subscription) {
+  const raw = subscription ? subscription.current_period_end : null;
+
+  if (raw == null || String(raw).trim() === "") {
+    return { proven: false, periodEnd: null, reason: "no period recorded", msPastGrace: 0 };
+  }
+
+  const periodEndMs = new Date(raw).getTime();
+
+  if (!Number.isFinite(periodEndMs)) {
+    return { proven: false, periodEnd: String(raw), reason: "period unparseable", msPastGrace: 0 };
+  }
+
+  const deadlineMs = periodEndMs + (SUBSCRIPTION_GRACE_DAYS * 86400000);
+  const msPastGrace = Date.now() - deadlineMs;
+
+  return {
+    proven: msPastGrace > 0,
+    periodEnd: new Date(periodEndMs).toISOString(),
+    reason: msPastGrace > 0 ? "past period end plus grace" : "within period or grace",
+    msPastGrace
+  };
+}
+
 // Answers "the most recent subscription", which is the wrong question for
 // entitlement now that a user may hold several at once — the newest row is not
 // necessarily the one the caller cares about. Ask hasActivePlan whether a user
 // holds a specific plan. This shape is kept because other callers depend on it.
+//
+// `active` is now BOTH tests: the status must entitle AND the period must not
+// prove expiry. Before this, status was the only input, so a row reading
+// "active" with a period end six months old entitled forever — and a
+// customer.subscription.deleted that never arrived granted permanent free
+// access with nothing anywhere to reconcile it. There is still no sweep; this
+// is a check at the point of use, which is the only place that can see the row
+// and the clock at the same time.
 async function getUserPlan(userId) {
   const subscription = await getActiveSubscription(userId);
 
@@ -2187,17 +2263,50 @@ async function getUserPlan(userId) {
       plan: null,
       config: null,
       subscription: null,
-      active: false
+      active: false,
+      expired: false,
+      inactive_reason: "no_subscription"
     };
   }
 
   const plan = String(subscription.plan || "").toLowerCase();
+  const statusEntitles = ["active", "trialing"].includes(subscription.status);
+  const expiry = subscriptionExpiryState(subscription);
+  const active = statusEntitles && !expiry.proven;
 
+  /* Logged on every refusal, not once per process. This is the first code that
+     can take access away from someone who is paying, and a wrong revocation
+     has to be reconstructable from the logs alone — which row, which status,
+     which period end, how far past, and what to go and check. Volume is the
+     right trade against a silent lockout. */
+  if (statusEntitles && expiry.proven) {
+    console.warn("[entitlement] SUBSCRIPTION REFUSED AS EXPIRED — user " + userId +
+      ", status \"" + subscription.status + "\" (which would otherwise entitle), " +
+      "current_period_end " + expiry.periodEnd + ", grace " + SUBSCRIPTION_GRACE_DAYS +
+      " day(s), now " + (Math.floor(expiry.msPastGrace / 86400000)) + " day(s) past the end of " +
+      "that window. ACCESS DENIED. If this is wrong the row was never renewed by a webhook " +
+      "rather than the customer having lapsed — check customer.subscription.updated delivery " +
+      "for stripe_subscription_id " + (subscription.stripe_subscription_id || "none") +
+      " before widening SUBSCRIPTION_GRACE_DAYS.");
+  }
+
+  /* expired and inactive_reason are ADDITIVE. Every key existing callers read
+     — plan, config, subscription, active — keeps its meaning and its type, so
+     requireActiveSubscription, enforceAgentLimit, enforceWebsiteLimit,
+     enforceTaskLimit and POST /api/agents are unaffected.
+
+     They exist so a caller can tell the two refusals apart, which `active:
+     false` alone cannot: "expired" is a customer who paid and whose row went
+     stale, "no_subscription" is someone who never bought. Those want different
+     answers from a UI and different reactions from an operator, and until now
+     they were indistinguishable. */
   return {
     plan,
     config: getPlanConfig(plan),
     subscription,
-    active: ["active", "trialing"].includes(subscription.status)
+    active,
+    expired: expiry.proven,
+    inactive_reason: active ? null : (statusEntitles ? "expired" : "status")
   };
 }
 
@@ -22479,6 +22588,9 @@ async function storeProposalTick() {
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
+  console.log("[startup] SUBSCRIPTION_GRACE_DAYS=" + SUBSCRIPTION_GRACE_DAYS +
+    " (days past current_period_end before a subscription stops entitling; " +
+    "a null or unparseable period never revokes)");
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
   });
