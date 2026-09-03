@@ -13594,13 +13594,32 @@ app.post("/api/admin/ban/:userId", requireAuth, requireAdmin, async function (re
       throw error;
     }
 
-    await supabase.from("moderation_logs").insert({
+    /* The ban has already landed. This row is the record of WHO did it and
+       why, and its failure must not undo the ban or change what this route
+       returns — but it must not be invisible either, which is what it was: the
+       insert was awaited and its result thrown away, so a lost audit row
+       looked exactly like a successful one from both the response and the
+       logs.
+
+       Logged, never thrown. A throw here would 500 a request whose actual work
+       succeeded, and the caller would reasonably retry a ban that is already
+       in place. */
+    const banLog = await supabase.from("moderation_logs").insert({
       admin_id: req.user.id,
       target_user_id: userId,
       action: "ban",
       reason,
       created_at: nowIso()
     });
+
+    if (banLog.error) {
+      console.error("[admin] AUDIT ROW LOST for POST /api/admin/ban/:userId — admin " + req.user.id +
+        " banned user " + userId + " and the moderation_logs insert failed: [" +
+        (banLog.error.code || "?") + "] " + banLog.error.message +
+        ". THE BAN STANDS and the caller was told it succeeded; only the record of it is missing, " +
+        "so there is now no stored evidence of who performed this ban or why. Reason given: " +
+        JSON.stringify(reason || null) + ".");
+    }
 
     return res.json({ user: data });
   } catch (error) {
@@ -13627,13 +13646,28 @@ app.post("/api/admin/unban/:userId", requireAuth, requireAdmin, async function (
       throw error;
     }
 
-    await supabase.from("moderation_logs").insert({
+    /* Same contract as the ban route above: the unban has already landed, so a
+       failed audit row is logged and never thrown. The reason is captured into
+       a variable rather than inlined so the log below can name the value that
+       was actually attempted. */
+    const unbanReason = safeText(req.body.reason, 1000);
+
+    const unbanLog = await supabase.from("moderation_logs").insert({
       admin_id: req.user.id,
       target_user_id: userId,
       action: "unban",
-      reason: safeText(req.body.reason, 1000),
+      reason: unbanReason,
       created_at: nowIso()
     });
+
+    if (unbanLog.error) {
+      console.error("[admin] AUDIT ROW LOST for POST /api/admin/unban/:userId — admin " + req.user.id +
+        " unbanned user " + userId + " and the moderation_logs insert failed: [" +
+        (unbanLog.error.code || "?") + "] " + unbanLog.error.message +
+        ". THE UNBAN STANDS and the caller was told it succeeded; only the record of it is missing, " +
+        "so there is now no stored evidence of who lifted this ban or why. Reason given: " +
+        JSON.stringify(unbanReason || null) + ".");
+    }
 
     return res.json({ user: data });
   } catch (error) {
