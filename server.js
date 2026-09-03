@@ -2256,61 +2256,107 @@ async function requireActiveSubscription(req, res, next) {
   }
 }
 
-async function getMonthlyUsage(userId) {
-  const monthKey = currentMonthKey();
+/* ── usage_logs: the code and the table describe two different designs ───────
+   THE TWO FUNCTIONS BELOW WERE WRITTEN AGAINST A TABLE THAT DOES NOT EXIST.
 
-  const { data, error } = await supabase
-    .from("usage_logs")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("month_key", monthKey)
-    .maybeSingle();
+   They read and wrote month_key, ai_tasks_used, websites_used, agents_used and
+   updated_at — the shape of a per-user, per-month COUNTER ROW. The live
+   usage_logs is a PROMPT/RESPONSE LOG: id, user_id, agent, prompt, response,
+   created_at, and nothing else. Not one of those five columns is on it, and no
+   migration in supabase/migrations has ever added them. Same table name, two
+   incompatible designs.
 
-  if (error) {
-    throw error;
+   That was not dormant code. The select threw 42703 ("column
+   usage_logs.month_key does not exist") on every single call, and
+   getMonthlyUsage sits inside the Promise.all in GET /api/dashboard — so that
+   route returned 500 to every subscribed caller, for as long as both have
+   existed.
+
+   What replaces it is the honest version: a zeroed shape carrying the keys
+   callers already read, plus a log saying the number is not a measurement.
+
+   DELIBERATELY NOT a count derived from ai_tasks or anywhere else. A plausible
+   number is worse here than a zero: a zero sitting next to this log reads as
+   "not implemented", while a plausible number reads as "measured", and nobody
+   would ever go looking for the difference. Wrong in a way that cannot be seen
+   is the one failure mode worth engineering against.
+
+   Nothing is harmed by the zeros TODAY. monthlyTasks is -1 on the only plan in
+   PLAN_CONFIG so enforceTaskLimit's threshold never applies; enforceTaskLimit
+   has no callers at all; and GET /api/dashboard passes this object straight
+   through as `usage` without reading a field of it.
+
+   REAL QUOTAS REQUIRE A MIGRATION, which is why none is attempted from here.
+   Either add month_key / ai_tasks_used / websites_used / agents_used /
+   updated_at to usage_logs — which changes what that table means, since it is
+   currently one row per AI call rather than one per user per month — or create
+   a separate counter table and point these two functions at it. Neither is
+   reachable from application code. ── */
+
+// Logged once per process, not once per call: the dashboard is polled, and a
+// line per request would bury this fact rather than report it. Flip the guard
+// if you want it on every call.
+var usageCountingWarned = false;
+
+function warnUsageCountingUnimplemented(where) {
+  if (usageCountingWarned) {
+    return;
   }
+  usageCountingWarned = true;
 
-  if (data) {
-    return data;
-  }
-
-  const { data: created, error: createError } = await supabase
-    .from("usage_logs")
-    .insert({
-      user_id: userId,
-      month_key: monthKey,
-      ai_tasks_used: 0,
-      websites_used: 0,
-      agents_used: 0
-    })
-    .select("*")
-    .single();
-
-  if (createError) {
-    throw createError;
-  }
-
-  return created;
+  console.warn("[usage] " + where + ": per-user usage counting is NOT IMPLEMENTED against the " +
+    "current usage_logs schema. That table is a prompt/response log (id, user_id, agent, prompt, " +
+    "response, created_at) and carries none of the counter columns this code was written for " +
+    "(month_key, ai_tasks_used, websites_used, agents_used, updated_at). Usage is being reported " +
+    "as ZERO — that is a placeholder, not a measurement. Real counting needs a migration; see the " +
+    "comment above getMonthlyUsage.");
 }
 
+/* The shape the counter row would have had, zeroed. Same key names, so
+   enforceTaskLimit and anything reading `usage` off the dashboard keep working
+   unchanged — they simply read zeros.
+
+   No id, deliberately: there is no row, and handing back a fake one would
+   invite a caller to write against it. counting_implemented is the
+   machine-readable half of the warning above, so a consumer can tell a
+   placeholder zero from a real one without reading server logs. */
+function zeroedUsage(userId) {
+  return {
+    user_id: userId,
+    month_key: currentMonthKey(),
+    ai_tasks_used: 0,
+    websites_used: 0,
+    agents_used: 0,
+    counting_implemented: false
+  };
+}
+
+async function getMonthlyUsage(userId) {
+  warnUsageCountingUnimplemented("getMonthlyUsage");
+
+  return zeroedUsage(userId);
+}
+
+/* A no-op that says so. This used to update ai_tasks_used and updated_at on a
+   row selected by month_key — three columns that do not exist — so any call
+   would have thrown 42703 before writing anything. It has no callers today.
+
+   It is kept, rather than deleted, for the day somebody adds one: the point is
+   that they get a log line instead of a silent failed write or an unexplained
+   500 from somewhere three frames down.
+
+   Logged on EVERY call, unlike getMonthlyUsage above. A caller that believes
+   it is counting something needs to be told each time that its increment went
+   nowhere, and there is no polling loop here for that to flood. It returns the
+   same zeroed shape rather than null so a future caller reading the result
+   gets the counting_implemented flag rather than a TypeError — the log is the
+   signal, and a second, different failure mode would not help anyone. */
 async function incrementTaskUsage(userId) {
-  const usage = await getMonthlyUsage(userId);
+  console.warn("[usage] incrementTaskUsage(" + userId + ") DID NOTHING. Per-user task counting is " +
+    "not implemented against the current usage_logs schema, and this call was not recorded " +
+    "anywhere. Adding a caller does not make it count — see the comment above getMonthlyUsage.");
 
-  const { data, error } = await supabase
-    .from("usage_logs")
-    .update({
-      ai_tasks_used: Number(usage.ai_tasks_used || 0) + 1,
-      updated_at: nowIso()
-    })
-    .eq("id", usage.id)
-    .select("*")
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return zeroedUsage(userId);
 }
 
 async function enforceAgentLimit(userId, agentType) {
@@ -2375,6 +2421,34 @@ async function enforceWebsiteLimit(userId) {
 
   const config = planState.config;
 
+  /* ── HAZARD: THE TABLE THIS COUNTS DOES NOT EXIST ──────────────────────────
+     `websites` is not in the database. PostgREST answers a query against it
+     with PGRST205 ("Could not find the table 'public.websites' in the schema
+     cache"), and no migration in supabase/migrations creates it.
+
+     The only reason that is invisible today is that maxWebsites is -1 on the
+     one plan in PLAN_CONFIG, so the block below is skipped on every call and
+     this function degrades to a plain entitlement check.
+
+     SETTING maxWebsites TO A FINITE NUMBER TURNS THIS ON. Whoever does that —
+     adding a tier, capping the existing one — reaches a count against a table
+     that is not there, and POST /api/websites is the route that pays for it.
+     That is the same class of failure the usage_logs mismatch caused on
+     GET /api/dashboard: code written against a schema that was never applied,
+     dormant until something made it run. Creating the table is a migration and
+     is not done from here.
+
+     So the count FAILS OPEN. A missing quota table must not stop a paying
+     customer from creating something they are entitled to create — the same
+     trade the welcome-bonus grant makes at registration, where a failed
+     user_wallets insert is logged and the signup still succeeds. An
+     unenforceable limit is a reporting problem; a 500 on the create path is
+     the customer's problem, and the customer did nothing wrong.
+
+     Note what this does NOT do: it does not fail open on the entitlement check
+     above, only on the count. A caller with no active subscription is still
+     refused. The thing being waived is a ceiling that cannot currently be
+     measured, not the right to be here at all. ── */
   if (config.maxWebsites !== -1) {
     const { count, error } = await supabase
       .from("websites")
@@ -2383,7 +2457,19 @@ async function enforceWebsiteLimit(userId) {
       .eq("active", true);
 
     if (error) {
-      throw error;
+      console.error("[quota] WEBSITE LIMIT NOT ENFORCED for user " + userId + " — the count against " +
+        "`websites` failed: [" + (error.code || "?") + "] " + error.message + ". That table does not " +
+        "exist in this database and no migration creates it, so this limit cannot be enforced at all. " +
+        "The request is being ALLOWED rather than refused: a quota that cannot be measured must not " +
+        "block a subscriber from creating something. maxWebsites is currently " + config.maxWebsites +
+        " — if that was just changed from -1, this is why, and the table has to be created first.");
+
+      return {
+        allowed: true,
+        plan: planState.plan,
+        config,
+        limit_enforced: false
+      };
     }
 
     if (count >= config.maxWebsites) {
@@ -6176,7 +6262,16 @@ function parseSeoPostResponse(rawText) {
 // asks for claude-sonnet-5 with a 32000-token ceiling, where every other AI
 // route runs Haiku 4.5 at 150 to 3000. The limiter it was missing is the one
 // sized for exactly that.
-app.post("/api/agents/seo/generate-post", requireAuth, aiLimiter, async function (req, res, next) {
+/* requireActiveSubscription is not decoration here. This is the most expensive
+   call in the file — Sonnet 5 at a 32000-token ceiling — and it was the only
+   route on that spend tier reachable without a subscription: any authenticated
+   account, paying or not, could run it twenty times a minute on aiLimiter
+   alone. Every other subscription-gated AI route uses this exact middleware
+   order (requireAuth, requireActiveSubscription, aiLimiter) — /api/ai/tasks,
+   /api/seo/audit, /api/agents/seo/optimize, /api/agents/sales/convert — so the
+   gate runs before the limiter and an unentitled caller is refused without
+   consuming a slot in their own rate-limit bucket. */
+app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     const topic = safeText(req.body.topic, 200);
 
