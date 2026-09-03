@@ -5303,6 +5303,105 @@ const PROPOSAL_EXECUTORS = {
       created: true,
       already_published: false
     };
+  },
+
+  // Creates one calendar_events row from an approved proposal. The jdn it
+  // writes was computed by POST /api/proposals/calendar-event from the
+  // caller's own local date parts; nothing here recomputes it and nothing here
+  // reads a clock. validateCalendarEventInput is defined further down the
+  // file; this body only runs at call time.
+  create_calendar_event: async function (proposal) {
+    const payload = proposal.payload || {};
+
+    /* Re-validated at execution time against the STORED payload, never against
+       anything in the approval request. A proposal can sit pending
+       indefinitely, so the rules it has to satisfy are the ones in force when
+       it actually writes, not when it was proposed. This is the same function
+       it already passed on the way in — a failure here means the stored
+       payload was altered or the rules moved underneath it, and either way it
+       must not write. */
+    const validated = validateCalendarEventInput(payload);
+    if (!validated.valid) {
+      throw new Error(
+        "create_calendar_event: the stored payload is not valid (" + validated.field + "): " + validated.error
+      );
+    }
+
+    const fields = validated.fields;
+
+    /* Replay guard, same reported shape as publish_blog_post, different
+       enforcement — and the difference is worth stating rather than glossing.
+
+       publish_blog_post lets the database catch a repeat: it inserts, catches
+       23505 on the per-author slug index, reads the existing row back and
+       reports created:false. calendar_events HAS NO UNIQUE INDEX to conflict
+       on — 043 gives it only the non-unique (user_id, jdn) lookup index — so
+       the same detection has to run as a read first.
+
+       THAT MAKES THIS CHECK ADVISORY, NOT ATOMIC. Two executions interleaving
+       between this select and the insert below would both write. What makes
+       that unreachable today is not this guard: it is the claim in
+       POST /api/proposals/:id/approve, which moves pending -> executing in one
+       conditional update, so a second concurrent approval never reaches an
+       executor at all. This covers the other path — a row put back to pending
+       by hand, or a retry after a failed execution — where nothing else would.
+
+       Matching on the four fields that identify the event rather than on the
+       proposal id, because calendar_events has no column pointing back at a
+       proposal. A replay re-runs from the same stored payload, so all four are
+       identical by construction; using all four is what keeps the guard from
+       mistaking a genuinely different event for a repeat. */
+    const priorEvent = await supabase
+      .from("calendar_events")
+      .select("id, jdn, title, event_type")
+      .eq("user_id", proposal.user_id)
+      .eq("jdn", fields.jdn)
+      .eq("title", fields.title)
+      .eq("event_type", fields.event_type)
+      .limit(1);
+
+    if (priorEvent.error) {
+      throw priorEvent.error;
+    }
+
+    /* limit(1) and an array rather than maybeSingle(): with no unique index
+       this user may already hold two identical events created by hand, and
+       maybeSingle() turns that into a thrown PGRST116 — failing a proposal
+       over a duplicate that is not this proposal's doing. */
+    if (priorEvent.data && priorEvent.data.length > 0) {
+      const already = priorEvent.data[0];
+
+      return {
+        event_id:        already.id,
+        jdn:             already.jdn,
+        title:           already.title,
+        event_type:      already.event_type,
+        created:         false,
+        already_created: true
+      };
+    }
+
+    /* user_id comes off the proposal row and nowhere else. The approver is not
+       necessarily the person the event belongs to, and the executor is handed
+       the stored row precisely so the approval request cannot redirect it. */
+    const { data, error } = await supabase
+      .from("calendar_events")
+      .insert(Object.assign({ user_id: proposal.user_id }, fields))
+      .select("id, jdn, title, event_type")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return {
+      event_id:        data.id,
+      jdn:             data.jdn,
+      title:           data.title,
+      event_type:      data.event_type,
+      created:         true,
+      already_created: false
+    };
   }
 };
 
@@ -5364,6 +5463,167 @@ app.get("/api/proposals", requireAuth, async function (req, res, next) {
     }
 
     return res.json({ proposals: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* Reads one local date part off a request body. Accepts a JSON integer, or a
+   string of digits from a form-encoded client, and nothing else.
+
+   Deliberately NOT Number(): Number("") and Number([]) are both 0 and
+   Number(true) is 1, so a bare coercion turns three different kinds of
+   "missing" into a real-looking date part and files an event on 0 January.
+   Returning null keeps "absent" and "unreadable" distinguishable from a real
+   value, which every caller below turns into a 400 rather than a default. */
+function readDatePart(value) {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) {
+    return parseInt(value.trim(), 10);
+  }
+
+  return null;
+}
+
+/* ── Proposal: create a calendar event ──────────────────────────────────────
+   THE SERVER NEVER COMPUTES A CALENDAR DATE FROM A TIMESTAMP, here or
+   anywhere on this path. Every jdn already in calendar_events was computed by
+   the browser from local date parts; this process has no ICU guarantee and no
+   knowledge of the caller's timezone. So the caller supplies its own local
+   year, month and day as integers, and the server does integer arithmetic on
+   them and nothing else. There is no `new Date()` below, on purpose.
+
+   A missing or unreadable local date is a 400. It is NOT filled in from the
+   server clock: a server sitting a day ahead of the caller would silently file
+   the event on the wrong day, and a silently wrong reminder is worse than a
+   refused one. Guessing is the bug this shape exists to prevent. */
+app.post("/api/proposals/calendar-event", requireAuth, async function (req, res, next) {
+  try {
+    var localYear  = readDatePart(req.body.local_year);
+    var localMonth = readDatePart(req.body.local_month);
+    var localDay   = readDatePart(req.body.local_day);
+
+    if (localYear === null || localMonth === null || localDay === null) {
+      return res.status(400).json({
+        error: "local_year, local_month and local_day are required and must each be an integer. " +
+               "They are the caller's own local date — the server does not supply them and will not guess them.",
+        field: localYear === null ? "local_year" : (localMonth === null ? "local_month" : "local_day")
+      });
+    }
+
+    if (localYear < 1 || localYear > 9999) {
+      return res.status(400).json({ error: "local_year must be between 1 and 9999", field: "local_year" });
+    }
+
+    if (localMonth < 1 || localMonth > 12) {
+      return res.status(400).json({ error: "local_month must be between 1 and 12", field: "local_month" });
+    }
+
+    /* The month's REAL length, not a flat 1-31, and February follows the leap
+       rule. This check exists because of what the conversion below does with a
+       date that does not exist: Fliegel-Van Flandern NORMALIZES an impossible
+       pair rather than rejecting it. (2026, 2, 31) converts to the JDN for 3
+       March; (2026, 4, 31) to 1 May. Nothing throws and nothing looks wrong
+       afterwards — the row carries an ordinary jdn pointing at a day the user
+       never chose, and the local parts stored beside it are the only evidence
+       anything moved.
+
+       That is precisely the silent-wrong-date failure this whole design
+       refuses. A local date the server cannot trust is refused, never
+       adjusted: the same reason a missing local date is a 400 instead of a
+       reading of the server clock. An impossible date is a broken client, and
+       the honest answer to a broken client is to say so. */
+    var monthLength = daysInGregorianMonth(localYear, localMonth);
+
+    if (localDay < 1 || localDay > monthLength) {
+      return res.status(400).json({
+        error: "local_day " + localDay + " is not a real date — " + localYear + "-" + localMonth +
+               " has " + monthLength + " days. That date does not exist.",
+        field: "local_day"
+      });
+    }
+
+    /* Absent means zero — the event falls on the caller's today. That default
+       is safe in a way a defaulted DATE would not be: it reads no clock and
+       invents no date, it just declines to move the one the caller gave. A
+       supplied-but-unreadable offset is still a 400. */
+    var daysFromNow = 0;
+
+    if (req.body.days_from_now !== undefined && req.body.days_from_now !== null) {
+      daysFromNow = readDatePart(req.body.days_from_now);
+
+      if (daysFromNow === null) {
+        return res.status(400).json({ error: "days_from_now must be an integer", field: "days_from_now" });
+      }
+
+      if (daysFromNow < -3650 || daysFromNow > 3650) {
+        return res.status(400).json({
+          error: "days_from_now must be within 3650 days either way",
+          field: "days_from_now"
+        });
+      }
+    }
+
+    /* Integer arithmetic, start to finish. A JDN is a count of days, so
+       stepping forward by whole days IS the date arithmetic — there is no
+       timestamp in it, no timezone, and nothing that can drift by an hour and
+       land on the previous day. */
+    var targetJdn = gregorianToJDN(localYear, localMonth, localDay) + daysFromNow;
+
+    /* The inputs ride along in the payload beside the result. If a stored jdn
+       is ever disputed, everything that produced it is on the row and the
+       arithmetic can be replayed by hand years later. The executor reads only
+       jdn — these four are evidence, not instructions. */
+    var proposalPayload = {
+      jdn:           targetJdn,
+      title:         safeText(req.body.title, 200),
+      notes:         safeText(req.body.note, 5000),
+      event_type:    safeText(req.body.event_type, 30) || "other",
+      local_year:    localYear,
+      local_month:   localMonth,
+      local_day:     localDay,
+      days_from_now: daysFromNow
+    };
+
+    /* Validated BEFORE anything is stored, through the same function POST
+       /api/calendar/events uses, so a proposal that could never execute is
+       never created in the first place — an approver should not be able to
+       approve something guaranteed to fail. The structured failure is returned
+       as it comes: the field name travels with the message here, which the
+       calendar route drops on the floor. */
+    var validated = validateCalendarEventInput(proposalPayload);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    const { data: inserted, error: insertError } = await supabase
+      .from("agent_proposals")
+      .insert({
+        user_id:       req.user.id,
+        agent_type:    "executive",
+        action_type:   "create_calendar_event",
+        title:         safeText("Add calendar event: " + validated.fields.title, 200),
+        target:        "calendar_events",
+        payload:       proposalPayload,
+        cost_amount:   0,
+        cost_currency: "USD",
+        reversible:    true,
+        reasoning:     safeText(req.body.reasoning, 2000),
+        status:        "pending",
+        created_at:    nowIso()
+      })
+      .select("*")
+      .single();
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    return res.status(201).json({ proposal: inserted });
   } catch (error) {
     next(error);
   }
@@ -11643,6 +11903,65 @@ var CALENDAR_RECUR_CALENDARS = [
   "ethiopic", "indianNational", "buddhist", "japanese", "egyptian",
   "chinese", "mayan"
 ];
+
+// Gregorian (year, month, day) -> Julian Day Number, Fliegel-Van Flandern.
+//
+// A LINE-FOR-LINE PORT of gregorianToJDN in the frontend repo, calendar.html
+// lines 1429-1442 (BizForce-fronyend). Same name, same variables, same order
+// of operations, same integer divisions. It is duplicated rather than shared
+// because the two repos ship separately, and it is duplicated EXACTLY so the
+// two can never disagree: every jdn already sitting in calendar_events was
+// produced by that function in a browser, and a server that rounded one step
+// differently would file new events on a different day from old ones.
+//
+// Integer arithmetic on integer inputs. It reads no clock, knows no timezone
+// and never sees a timestamp -- which is the whole point. Callers pass the
+// date parts their own local calendar is showing; converting a Date here
+// would reintroduce exactly the server-timezone guess this design refuses.
+//
+// If it is ever changed, it changes in calendar.html first and is copied back.
+function gregorianToJDN(year, month, day) {
+  var a = Math.floor((14 - month) / 12);
+  var y = year + 4800 - a;
+  var m = month + 12 * a - 3;
+  return (
+    day +
+    Math.floor((153 * m + 2) / 5) +
+    365 * y +
+    Math.floor(y / 4) -
+    Math.floor(y / 100) +
+    Math.floor(y / 400) -
+    32045
+  );
+}
+
+// How many days a Gregorian month really has. Integer arithmetic only -- no
+// Date and no Intl, for exactly the reason gregorianToJDN above takes date
+// parts rather than a timestamp.
+//
+// The leap rule in full: divisible by 4, except centuries, except centuries
+// divisible by 400. So 2024 and 2000 have a 29 February; 2026 and 2100 do not.
+//
+// Callers are expected to have already range-checked month as 1-12. An
+// out-of-range month returns 0, which fails every day comparison rather than
+// silently admitting one.
+function daysInGregorianMonth(year, month) {
+  if (month < 1 || month > 12) {
+    return 0;
+  }
+
+  if (month === 2) {
+    var isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return isLeap ? 29 : 28;
+  }
+
+  // Thirty days hath September, April, June and November.
+  if (month === 4 || month === 6 || month === 9 || month === 11) {
+    return 30;
+  }
+
+  return 31;
+}
 
 // Validates a remind_at sent by the client: must be a non-empty string
 // that Date can actually parse, otherwise treated as "no reminder" rather
