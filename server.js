@@ -199,25 +199,37 @@ const PLAN_CONFIG = {
     maxAgents: -1,
     maxWebsites: -1,
     monthlyTasks: -1,
-    allowedAgents: [
-      "seo",
-      "sales",
-      "content",
-      "ads",
-      "reputation",
-      "analytics",
-      "email",
-      "community",
-      "influencer",
-      "operations",
-      "executive",
-      "social",
-      "etsy",
-      "store",
-      "broker",
-      "publicist",
-      "rd"
-    ],
+    /* Derived, not declared. This was a second copy of the agent roster —
+       seventeen strings that had to be kept byte-identical to the keys of
+       AGENT_SYSTEM_PROMPTS by hand, with nothing checking that they were.
+       handleAiTaskRequest already derives its own copy the same way
+       (Object.keys(AGENT_SYSTEM_PROMPTS)), so this brings the second consumer
+       into line with the first rather than inventing a pattern.
+
+       Object.keys preserves declaration order for string keys, so the order is
+       unchanged and SEED INSERTION ORDER IS UNCHANGED with it — the /api/agents
+       seed maps this array straight into an insert, and those rows are read
+       back ordered by created_at.
+
+       Three consumers, all order-insensitive except that one: two membership
+       tests (enforceAgentLimit, enforceTaskLimit) and the seed map.
+
+       A GETTER RATHER THAN A VALUE, and that is load-bearing. PLAN_CONFIG is
+       declared at the top of this file, ABOVE AGENT_SYSTEM_PROMPTS. Writing
+       `allowedAgents: Object.keys(AGENT_SYSTEM_PROMPTS)` here would evaluate
+       during module initialisation, while that const is still in its temporal
+       dead zone, and throw ReferenceError at boot — the server would not start.
+       A getter defers the read to first access, which is inside a request
+       handler, long after both objects exist. It is also immune to the problem
+       rather than merely sequenced around it: neither block can be moved later
+       in a way that reintroduces the crash.
+
+       Each access returns a fresh array. Every consumer reads it (.includes,
+       .map) and none mutates it, so that costs nothing and prevents a caller
+       from editing the roster through a plan config. */
+    get allowedAgents() {
+      return Object.keys(AGENT_SYSTEM_PROMPTS);
+    },
     dashboard: "enterprise",
     support: "dedicated"
   }
