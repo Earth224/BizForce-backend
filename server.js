@@ -277,7 +277,10 @@ const AGENT_SYSTEM_PROMPTS = {
   store: "You are the BizForce AI Store Agent. Manage multi-store commerce strategy, optimize inventory, analyze omnichannel sales performance, improve conversion rates, and drive retail and e-commerce growth.",
   broker: "You are the BizForce AI Broker Agent. Identify deal flow opportunities, structure partnership agreements, manage negotiations, build pipeline, due diligence checklists, and execute brokerage strategy.",
   publicist: "You are the BizForce AI Publicist Agent. Write press releases, manage media outreach, build PR campaigns, secure media coverage, craft brand narratives, and grow brand visibility and reputation.",
-  rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations."
+  rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations.",
+  crm: "You are the BizForce AI CRM Agent. Segment the existing customer base, design follow-up cadences, build retention and win-back campaigns, define lifecycle stages, and flag accounts at risk of churn.",
+  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Build marketing for one industry vertical rather than in general: positioning, language, channels, and objections particular to that single trade.",
+  prospecting: "You are the BizForce AI Prospecting Agent. Define the ideal customer profile, build targeted prospect lists, set qualification criteria, score fit and intent, and sequence outreach to prospects who are not yet leads."
 };
 
 // The name each agent type is shown under, copied from the seventeen
@@ -312,7 +315,13 @@ const AGENT_DISPLAY_NAMES = {
   store:      "Store Agent",
   broker:     "Broker Agent",
   publicist:  "Publicist Agent",
-  rd:         "R&D Agent"
+  rd:         "R&D Agent",
+  // vertical_marketing is longer than the column the other keys align to.
+  // Widening the whole map for one key would rewrite seventeen lines that are
+  // not changing, so it takes a single space instead.
+  crm:        "CRM Agent",
+  vertical_marketing: "Vertical Marketing Agent",
+  prospecting: "Prospecting Agent"
 };
 
 // The page each agent type opens, copied from LINK_MAP in ai-agents.html and
@@ -349,7 +358,15 @@ const AGENT_PAGE_URLS = {
   publicist:  "publicist-agent.html",
   rd:         "rd-agent.html",
   executive:  "executive-agent.html",
-  ads:        "ads-agent.html"
+  ads:        "ads-agent.html",
+  /* All three take the root <type>-agent.html convention, the one twelve of the
+     seventeen already use. Note vertical_marketing: the TYPE KEY keeps its
+     underscore and the FILE NAME takes a hyphen. That is not a typo — it is the
+     same split the rest of this map already lives with, where a key never
+     predicts its path, and it is exactly why this is a list rather than a rule. */
+  crm:        "crm-agent.html",
+  vertical_marketing: "vertical-marketing-agent.html",
+  prospecting: "prospecting-agent.html"
 };
 
 /* The page URL for an agent type, or NULL when the type has no entry.
@@ -429,7 +446,10 @@ var agentBrains = {
   broker: "You are the BizForce AI Broker Agent. Identify deal flow, structure partnership opportunities, build negotiation briefs, outline due diligence checklists, and draft term sheet frameworks for business deals.",
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
   etsy: "You are the BizForce AI Etsy Agent. Optimize Etsy shop listings with SEO-rich titles and tags, conduct shop audits, research high-volume keywords, build pricing strategies, and analyze competitor shops to maximize marketplace visibility and revenue.",
-  social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth."
+  social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth.",
+  crm: "You are the BizForce AI CRM Agent. Segment the existing customer base, build follow-up cadences, design retention and win-back campaigns, define lifecycle stages, and surface churn risk.",
+  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Produce marketing for one industry vertical: positioning and language specific to that trade, the channels its buyers use, and the objections it raises.",
+  prospecting: "You are the BizForce AI Prospecting Agent. Define the ideal customer profile, build prospect lists, set qualification criteria, score fit and intent, and sequence outreach to prospects who are not yet leads."
 };
 
 // ---------------------------------------------------------------------------
