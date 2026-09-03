@@ -315,6 +315,75 @@ const AGENT_DISPLAY_NAMES = {
   rd:         "R&D Agent"
 };
 
+// The page each agent type opens, copied from LINK_MAP in ai-agents.html and
+// matching the seventeen Open Profile hrefs in agents-hub.html exactly. One
+// entry per AGENT_SYSTEM_PROMPTS key.
+//
+// A list for the same reason AGENT_DISPLAY_NAMES is one, and the irregularity
+// here runs deeper: these paths follow TWO independent conventions at once.
+// Five agents live under agents/ as a bare <type>.html; the other twelve sit at
+// the web root as <type>-agent.html. Nothing predicts which an agent uses — it
+// is not by age, not by whether the agent is a specialist, not by anything in
+// the data. A rule that produced "agents/seo.html" would produce
+// "agents/email.html", which is a 404, and a rule that produced
+// "email-agent.html" would produce "seo-agent.html", which is also a 404. There
+// is no rule here, only a list, so it is a list.
+//
+// Read at request time by GET /api/agents and never written to the ai_agents
+// table, so a path corrected here is corrected everywhere at once and no stored
+// row can hold a stale URL.
+const AGENT_PAGE_URLS = {
+  seo:        "agents/seo.html",
+  sales:      "agents/sales.html",
+  content:    "agents/content.html",
+  analytics:  "agents/analytics.html",
+  social:     "agents/social.html",
+  email:      "email-agent.html",
+  reputation: "reputation-agent.html",
+  community:  "community-agent.html",
+  influencer: "influencer-agent.html",
+  operations: "operations-agent.html",
+  etsy:       "etsy-agent.html",
+  store:      "store-agent.html",
+  broker:     "broker-agent.html",
+  publicist:  "publicist-agent.html",
+  rd:         "rd-agent.html",
+  executive:  "executive-agent.html",
+  ads:        "ads-agent.html"
+};
+
+/* The page URL for an agent type, or NULL when the type has no entry.
+
+   Deliberately not the fallback shape agentDisplayName uses. An unmapped
+   display name degrades to an ugly string that is still a name; an unmapped URL
+   has no harmless degradation — every construction rule is wrong for twelve of
+   seventeen types, so a guess is a link to a page that does not exist. A null
+   lets the caller decide, and ai-agents.html already has that branch: its
+   LINK_MAP lookup falls back to agents-hub.html when a type is unknown.
+
+   The miss is logged once per type per process. Once, because this is called
+   for every agent on every dashboard load and a per-request line would bury it;
+   per type, because two unmapped types are two separate facts. */
+var loggedMissingPageUrl = {};
+
+function agentPageUrl(type) {
+  var key = String(type || "");
+
+  if (Object.prototype.hasOwnProperty.call(AGENT_PAGE_URLS, key)) {
+    return AGENT_PAGE_URLS[key];
+  }
+
+  if (!loggedMissingPageUrl[key]) {
+    loggedMissingPageUrl[key] = true;
+    console.warn("[agents] NO PAGE URL for agent type " + JSON.stringify(key) +
+      " — returning null rather than guessing a path, because the two path conventions " +
+      "(agents/<type>.html and <type>-agent.html) each produce a 404 for the other's types. " +
+      "Add it to AGENT_PAGE_URLS; the startup coverage check names it too.");
+  }
+
+  return null;
+}
+
 /* The display name for an agent type. A type with no entry above falls back to
    the old uppercase construction, so a type added to AGENT_SYSTEM_PROMPTS and
    not to the map still gets a name — an ugly one, which is the point: it is
@@ -4940,8 +5009,29 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
       }
     }
 
+    /* page_url is DERIVED AT READ TIME and never stored. ai_agents is not
+       altered and nothing writes a URL into it, so a path corrected in
+       AGENT_PAGE_URLS is corrected for every row instantly and no persisted row
+       can hold a stale link — which is the failure a column would eventually
+       have, since these rows are seeded once and never rewritten.
+
+       A new key on each row rather than a replacement: the row is spread first,
+       so every existing field keeps its name, type and value. The two callers
+       both read named properties and neither enumerates keys, so an added key
+       is invisible to them.
+
+       Null for an unmapped type, never a guessed path — agentPageUrl logs the
+       miss once per type. ai-agents.html already handles a falsy URL by falling
+       back to the hub, which is the same thing its LINK_MAP does today for an
+       unknown type. */
+    const agentsWithPages = agents.map(function (agent) {
+      return Object.assign({}, agent, {
+        page_url: agentPageUrl(agent && agent.type)
+      });
+    });
+
     return res.json({
-      agents,
+      agents: agentsWithPages,
       available_agent_types: Object.keys(AGENT_SYSTEM_PROMPTS),
       plan: planState.plan,
       plan_config: planState.config
@@ -7683,6 +7773,63 @@ function checkAgentBrainCoverage() {
 }
 
 checkAgentBrainCoverage();
+
+/* The same check for AGENT_PAGE_URLS, in the same shape and for the same
+   reason: a map that must stay one-to-one with AGENT_SYSTEM_PROMPTS and has
+   nothing but discipline keeping it there. AGENT_DISPLAY_NAMES drifting shows
+   up as an ugly name; this one drifting shows up as a null page_url, which
+   ai-agents.html renders as a card pointing at the hub — indistinguishable from
+   a working link until someone clicks it.
+
+   No exemption list, unlike the brain check. BRAINS_ONLY_AGENTS exists because
+   `general` is a real brain with no prompt by design; there is no equivalent
+   here. Every agent with a prompt is reachable in the directory and needs a
+   page, and a page URL for a type with no prompt describes an agent nobody can
+   select.
+
+   Logs only. A missing page URL is a broken link on one card, and refusing to
+   boot over it would take down billing, SMS and the Oracle to protect a href. */
+function checkAgentPageUrlCoverage() {
+  try {
+    var urlKeys = Object.keys(AGENT_PAGE_URLS);
+    var promptKeys = Object.keys(AGENT_SYSTEM_PROMPTS);
+
+    var missingUrl = promptKeys.filter(function (key) {
+      return urlKeys.indexOf(key) === -1;
+    });
+
+    var missingPrompt = urlKeys.filter(function (key) {
+      return promptKeys.indexOf(key) === -1;
+    });
+
+    if (missingUrl.length) {
+      console.warn(
+        "[agents] PAGE URL COVERAGE GAP — in AGENT_SYSTEM_PROMPTS but missing from AGENT_PAGE_URLS, " +
+        "so GET /api/agents returns page_url null for these and the directory card links nowhere useful: " +
+        missingUrl.join(", ")
+      );
+    }
+
+    if (missingPrompt.length) {
+      console.warn(
+        "[agents] PAGE URL COVERAGE GAP — in AGENT_PAGE_URLS but missing from AGENT_SYSTEM_PROMPTS, " +
+        "so these name a page for an agent type that cannot be selected anywhere: " +
+        missingPrompt.join(", ")
+      );
+    }
+
+    if (!missingUrl.length && !missingPrompt.length) {
+      console.log(
+        "[agents] page URL coverage OK — " + urlKeys.length + " agent types, each with a prompt and a page; " +
+        promptKeys.length + " prompts, " + urlKeys.length + " page URLs"
+      );
+    }
+  } catch (coverageErr) {
+    console.warn("[agents] page URL coverage NOT VERIFIED — check failed:", coverageErr.message || coverageErr);
+  }
+}
+
+checkAgentPageUrlCoverage();
 
 app.post("/api/ai-reports", requireAuth, async function (req, res, next) {
   try {
