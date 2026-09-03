@@ -3647,7 +3647,6 @@ app.put("/api/profile/me", requireAuth, async function (req, res, next) {
       "industry",
       "location",
       "contact_email",
-      "contact_phone",
       "social_links",
       "products_services",
       "photos",
@@ -3665,6 +3664,21 @@ app.put("/api/profile/me", requireAuth, async function (req, res, next) {
       if (Object.prototype.hasOwnProperty.call(req.body, key)) {
         updates[key] = req.body[key];
       }
+    }
+
+    /* Lifted out of `allowed` for the same reason website and username sit here:
+       it needs normalizing rather than copying. It was the only contact field on
+       this route reaching the column as a raw req.body value — no trim, no length
+       cap — while every other phone this file writes passes through safeText
+       first. 40 matches digital_cards.phone, the other user-entered phone stored
+       verbatim for display.
+
+       safeText and nothing more. NOT canonicalPhone: profiles.contact_phone is
+       display text on a profile page, not a messaging target, and it carries no
+       format constraint. Bringing it under the canonical rule is a separate
+       decision from stopping it being unbounded. */
+    if (Object.prototype.hasOwnProperty.call(req.body, "contact_phone")) {
+      updates.contact_phone = safeText(req.body.contact_phone, 40);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body, "website")) {
@@ -21252,14 +21266,30 @@ async function recordSmsConsentEvent(phone, action, req) {
      to the plus-stripped raw string and attempts the opt-out anyway rather than
      dropping it. That is the right call for the flag — a weak match beats none —
      but the contacts table will not take the value, so it stops here. */
-  if (!/^1[0-9]{10}$/.test(String(phone == null ? "" : phone))) {
+  /* The test is canonicalPhone itself rather than a fourth copy of its pattern.
+     canonicalPhone leaves an already-canonical value unchanged and rewrites
+     everything else, so "does it come back identical" admits exactly the set the
+     inlined ^1[0-9]{10}$ admitted. The String(...) normalization is kept so a
+     null, an undefined or a numeric argument behaves exactly as it did before.
+
+     Deliberately NOT `if (!canonicalPhone(phone))`. That asks whether the value
+     can be PARSED, which is a strictly wider set than the constraint accepts:
+     canonicalPhone reads "9173252291" and returns a canonical form for it, but
+     the insert below writes `phone` AS GIVEN, so a caller passing that shape
+     would clear the guard and then hit the very 23514 this guard exists to turn
+     into a legible message. Parseable is not the same question as canonical. */
+  var phoneText = String(phone == null ? "" : phone);
+
+  if (canonicalPhone(phoneText) !== phoneText) {
     console.error("[sms/inbound] LEDGER WRITE IMPOSSIBLE — the " + action + " from " + phone +
-      " is outside the canonical format the contacts table accepts (^1[0-9]{10}$, enforced by " +
-      "contacts_phone_format_check), so no contact row can be created and no ledger row could " +
-      "be written. This person has " + action + " consent and there is no record of it anywhere. " +
-      "Fixing this means widening contacts_phone_format_check, sms_subscribers_phone_format_check " +
-      "and lead_captures_phone_format_check TOGETHER, in one commit, alongside canonicalPhone — " +
-      "migration 069 states all three mirrors widen as one, and widening any subset is an outage.");
+      " is not the shape canonicalPhone produces (eleven digits, leading 1, no plus or " +
+      "punctuation), so no contact row can be created and no ledger row could be written. " +
+      "This person has " + action + " consent and there is no record of it anywhere. " +
+      "canonicalPhone in this file IS the rule; contacts_phone_format_check, " +
+      "sms_subscribers_phone_format_check and lead_captures_phone_format_check are its " +
+      "database-side mirrors and permit exactly what it produces. Fixing this means widening " +
+      "canonicalPhone and all three mirrors TOGETHER, in one commit — migration 069 states the " +
+      "mirrors widen as one, and widening any subset is an outage.");
     return false;
   }
 
