@@ -1341,19 +1341,31 @@ function normalizeMemoryMetadata(value) {
   return value;
 }
 
-var COLLABORATION_AGENT_TYPES = [
-  "executive",
-  "seo",
-  "content",
-  "sales",
-  "analytics",
-  "operations",
-  "reputation",
-  "social",
-  "email",
-  "community",
-  "influencer"
-];
+/* The agent types that may appear as source_agent or target_agent. Derived
+   from the roster, because the hand-written version was never a considered
+   subset — the history says so plainly:
+
+   - Typed on 2026-06-15 in e7a4fa7, in the same commit as migration 003 and its
+     matching CHECK constraint, and NEVER EDITED afterwards.
+   - Wrong in both directions on the day it was written. It listed `social`,
+     which was not an agent type until ten days later, and omitted `ads`, which
+     already was one. A deliberate subset does not name a type that does not
+     exist while dropping one that does; this was typed from memory.
+   - Then it drifted. 513fcb8 on 2026-06-25 added social, etsy, store, broker,
+     publicist and rd to AGENT_SYSTEM_PROMPTS in one commit. This list was not
+     updated with it, which is how eleven-of-seventeen happened. `social` was
+     covered only by the earlier mistake.
+
+   A PLAIN VALUE, not a getter, and the difference from
+   PLAN_CONFIG.allowedAgents is only about position. That one sits ABOVE
+   AGENT_SYSTEM_PROMPTS and had to defer its read or hit the temporal dead zone
+   at boot. This sits BELOW it — line 263 against 1344 — so the const is fully
+   initialised by the time this line runs and Object.keys can be called
+   directly. Deferring here would be ceremony imitating a fix for a problem
+   this position does not have.
+
+   Nothing mutates this array; every consumer reads it with indexOf. */
+var COLLABORATION_AGENT_TYPES = Object.keys(AGENT_SYSTEM_PROMPTS);
 
 var COLLABORATION_TYPES = [
   "handoff",
@@ -1491,6 +1503,28 @@ async function orchestrateAgentWorkflow(options) {
 
   var targetAgent = AGENT_ORCHESTRATION_HANDOFFS[agentType];
 
+  /* BOTH ALLOWLIST BRANCHES BELOW ARE STRUCTURALLY UNREACHABLE TODAY, and they
+     are kept rather than deleted because what makes them unreachable is not a
+     check anywhere — it is a coincidence of contents that a one-line edit
+     elsewhere can end.
+
+     The reason: every key and every value of AGENT_ORCHESTRATION_HANDOFFS is
+     already in COLLABORATION_AGENT_TYPES. Sources are seo, content, sales,
+     operations, reputation, analytics and executive; targets are content,
+     analytics, operations, executive and sales. Nothing validates that — the
+     two lists simply happen to nest. And an agent with no handoff rule at all
+     never gets this far: it exits at the no_handoff_rule branch above, which is
+     what actually happens to ads, etsy, store, broker, publicist and rd, so
+     they are skipped for having no rule rather than for failing an allowlist
+     they were never tested against.
+
+     They go live the moment a handoff rule names an agent the allowlist does
+     not. Deriving COLLABORATION_AGENT_TYPES from AGENT_SYSTEM_PROMPTS is
+     precisely what now prevents that: any agent reachable enough to appear in
+     a handoff rule has a system prompt, so it is in the derived list by
+     construction. Delete these branches and that guarantee becomes load-bearing
+     and silent; leave them and a future divergence is a logged skip rather than
+     a constraint violation on insert. */
   if (!targetAgent) {
     console.log("AGENT ORCHESTRATOR SKIPPED", {
       user_id: userId,
