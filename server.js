@@ -5158,6 +5158,447 @@ app.delete("/api/deals/:id", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── CRM System ──────────────────────────────────────────────────────────────
+   crm_customers and crm_activities are the CRM's OWN records: a user's book of
+   business, edited by that user. They are not public.contacts, which is the
+   consent ledger, and the two must not be confused — see the send-target note
+   on email and phone in validateCrmCustomerInput below. contacts,
+   consent_events, sendEmail and the SMS path are untouched by any of this. ── */
+
+/* Where a customer sits in their lifecycle with this business. A CUSTOMER
+   vocabulary, not a deal pipeline: DEAL_STAGES tracks one opportunity from new
+   to won or lost, while this tracks a relationship that outlives any single
+   deal. A person can be "active" through three deals and "dormant" between
+   them, which is why these are not the same list and must not be merged.
+
+   In the application, not a CHECK, for the reason migration 084 records: a
+   vocabulary in Postgres is a second copy that needs a migration every time it
+   changes, and that is the migration that gets forgotten. */
+var CRM_STATUSES = ["lead", "prospect", "active", "dormant", "churned"];
+
+/* What a logged interaction was. Same reasoning as CRM_STATUSES. */
+var CRM_ACTIVITY_TYPES = ["call", "email", "meeting", "note", "task"];
+
+/* An ISO timestamp for a timestamptz column, or null when absent, or false when
+   the input is not a real instant.
+
+   Three return values rather than two, which is the lesson parseDealCloseDate
+   taught: absent and invalid are DIFFERENT ANSWERS. Collapsing them stores a bad
+   value as an empty one, so a caller who fat-fingers a date gets silence instead
+   of a 400 and the row reads as "never contacted".
+
+   The date half is validated through daysInGregorianMonth before Date sees it,
+   because Date.parse("2026-02-31") does not fail — it silently returns 3 March.
+   A timestamp that quietly moved is worse than one that was refused. */
+function parseCrmTimestamp(value) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+
+  var text = String(value).trim();
+  var parts = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
+
+  if (!parts) {
+    return false;
+  }
+
+  var year = Number(parts[1]);
+  var month = Number(parts[2]);
+  var day = Number(parts[3]);
+
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  if (day < 1 || day > daysInGregorianMonth(year, month)) {
+    return false;
+  }
+
+  var ms = Date.parse(text);
+
+  if (!Number.isFinite(ms)) {
+    return false;
+  }
+
+  return new Date(ms).toISOString();
+}
+
+/* Builds a failure from the field name so the name is written once.
+   validateDealInput hardcodes "amount must be a number" beside field:"amount",
+   which is the same string twice and two places to miss on a rename. */
+function crmFieldError(field, reason) {
+  return { valid: false, field: field, error: field + " " + reason };
+}
+
+/* Validates a CRM customer and returns the fields ready to insert or update.
+
+   Same contract as validateDealInput: a plain object in, never req; a value
+   out, never a response; no database access; and it neither takes nor produces
+   user_id, because the caller that knows whose customer this is is the only one
+   entitled to say so.
+
+   On success:  { valid: true, fields: { ...columns } }
+   On failure:  { valid: false, field: "<name>", error: "<message>" }
+
+   options.partial validates and returns ONLY the keys the input actually
+   carries, tested with hasOwnProperty rather than truthiness so that {"notes":
+   ""} is a real update and not an absence. Whole-record mode supplies defaults
+   and demands name; partial mode demands name only if the caller is setting it.
+   The rules themselves are identical either way, which is the entire point —
+   two verbs that sanitise differently is the bug this shape exists to prevent.
+
+   ── THE WRITABLE COLUMN SET IS DEFINED HERE, AND THAT IS A GUARANTEE ──
+
+   `fields` can only ever contain the eight columns below. Callers spread it
+   into an insert or an update, so no request body can reach id, user_id,
+   contact_id, created_at or updated_at no matter what it contains. There is no
+   separate allowlist to keep in step; adding a key here is what makes a column
+   writable, and that is deliberate. contact_id in particular is NOT writable
+   from a request: linking a CRM customer to a consent-ledger contact is a
+   consent decision, not a form field.
+
+   ── EMAIL AND PHONE ARE NOT SEND TARGETS ──
+
+   Both are stored EXACTLY as the user typed them, capped for length and
+   otherwise untouched. No normalizeEmail, no canonicalPhone, no format check,
+   matching the columns, which carry no constraints on purpose.
+
+   That is not laxness, it is the point: this is a user's own record of a
+   customer, and canonicalPhone returns NULL for anything that is not a US
+   number, so running it here would silently erase every international number,
+   extension and partial the column exists to allow. normalizeEmail would
+   lowercase a display value for no gain, since there is no unique index on
+   lower(email) here as there is on contacts.
+
+   THE CONSEQUENCE, STATED SO NOBODY HAS TO REDISCOVER IT: nothing may send to
+   these values. sendEmail takes a contactId and reads consent_events; it cannot
+   be handed a raw address, and there is no argument for one. The SMS path
+   resolves consent through contacts by canonical phone, which these values are
+   not guaranteed to be. Reaching a CRM customer through a real channel means
+   creating a contacts row and recording consent FIRST — deliberately, as a
+   consent decision — never by passing one of these strings to a sender. */
+function validateCrmCustomerInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("name")) {
+    var name = safeText(source.name, 150);
+
+    if (!name) {
+      return crmFieldError("name", "is required");
+    }
+
+    fields.name = name;
+  }
+
+  if (wanted("company")) {
+    fields.company = safeText(source.company, 150);
+  }
+
+  // Stored verbatim. See the send-target note above before changing either.
+  if (wanted("email")) {
+    fields.email = safeText(source.email, 320);
+  }
+
+  if (wanted("phone")) {
+    fields.phone = safeText(source.phone, 40);
+  }
+
+  if (wanted("status")) {
+    var status = safeText(source.status, 40);
+
+    /* Lowercased on the way in, the same canonicalisation DEAL_STAGES gets and
+       for the same reason: one spelling in the table beats every future filter
+       and group-by having to be forgiving. */
+    status = status ? status.toLowerCase() : "lead";
+
+    if (CRM_STATUSES.indexOf(status) === -1) {
+      return crmFieldError("status", "must be one of: " + CRM_STATUSES.join(", "));
+    }
+
+    fields.status = status;
+  }
+
+  if (wanted("source")) {
+    fields.source = safeText(source.source, 80);
+  }
+
+  if (wanted("notes")) {
+    fields.notes = safeText(source.notes, 5000);
+  }
+
+  if (wanted("last_contacted_at")) {
+    var lastContacted = parseCrmTimestamp(source.last_contacted_at);
+
+    if (lastContacted === false) {
+      return crmFieldError("last_contacted_at", "must be a valid ISO timestamp");
+    }
+
+    fields.last_contacted_at = lastContacted;
+  }
+
+  return { valid: true, fields: fields };
+}
+
+/* Same contract, for an activity. activity_type and occurred_at are the only
+   fields with rules; note is free text.
+
+   customer_id is absent from the writable set ON PURPOSE. The routes take it
+   from the verified parent in the URL, never from a body, so a caller cannot
+   file an activity against someone else's customer by naming its id. */
+function validateCrmActivityInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("activity_type")) {
+    var activityType = safeText(source.activity_type, 40);
+
+    activityType = activityType ? activityType.toLowerCase() : "note";
+
+    if (CRM_ACTIVITY_TYPES.indexOf(activityType) === -1) {
+      return crmFieldError("activity_type", "must be one of: " + CRM_ACTIVITY_TYPES.join(", "));
+    }
+
+    fields.activity_type = activityType;
+  }
+
+  if (wanted("note")) {
+    fields.note = safeText(source.note, 5000);
+  }
+
+  if (wanted("occurred_at")) {
+    var occurredAt = parseCrmTimestamp(source.occurred_at);
+
+    if (occurredAt === false) {
+      return crmFieldError("occurred_at", "must be a valid ISO timestamp");
+    }
+
+    fields.occurred_at = occurredAt;
+  }
+
+  return { valid: true, fields: fields };
+}
+
+/* The owned-parent lookup every activity route runs first.
+
+   Follows the bizdoc_documents/bizdoc_signatures precedent — verify the parent,
+   then use the VERIFIED id — while avoiding the flaw in its DELETE, which reads
+   the row unscoped and compares ownership in JavaScript afterwards. The owner
+   filter is inside this query, so a row belonging to someone else simply does
+   not come back and there is nothing to compare.
+
+   Returns the row, or null. A null is a 404 at every caller regardless of
+   whether the id is unknown or merely someone else's — the two are deliberately
+   indistinguishable from outside. */
+async function findOwnedCrmCustomer(customerId, userId) {
+  const { data, error } = await supabase
+    .from("crm_customers")
+    .select("*")
+    .eq("id", customerId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data || null;
+}
+
+app.get("/api/crm/customers", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("crm_customers")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ customers: data || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/crm/customers", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateCrmCustomerInput(req.body);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    /* user_id and the timestamps are applied here and nowhere else, which is
+       what lets the validator stay ignorant of who is asking. */
+    const { data, error } = await supabase
+      .from("crm_customers")
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields, {
+        created_at: nowIso(),
+        updated_at: nowIso()
+      }))
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ customer: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/crm/customers/:id", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateCrmCustomerInput(req.body, { partial: true });
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    /* The ownership filter is INSIDE the write predicate, the shape the deals
+       routes use: no read-then-authorise step, so there is no window between the
+       check and the write and no path that can forget the second query.
+
+       maybeSingle rather than single, which is the rough edge deals inherited
+       and this does not repeat. single() treats "no rows" as an error, so a PUT
+       for an unknown or someone else's id 500'd — an internal error for what is
+       an ordinary client mistake. maybeSingle returns data null instead, and
+       null is a 404 here. */
+    const { data, error } = await supabase
+      .from("crm_customers")
+      .update(Object.assign({}, validated.fields, { updated_at: nowIso() }))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Customer not found" });
+    }
+
+    return res.json({ customer: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/crm/customers/:id", requireAuth, async function (req, res, next) {
+  try {
+    /* .select() after .delete() returns the rows actually removed, which is the
+       only way to tell a real deletion from a no-op. Without it this route
+       returned { success: true } whether or not anything was deleted, so a
+       caller deleting someone else's customer — or a typo'd id — was told it
+       worked. */
+    const { data, error } = await supabase
+      .from("crm_customers")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Customer not found" });
+    }
+
+    return res.json({ success: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/crm/customers/:id/activities", requireAuth, async function (req, res, next) {
+  try {
+    /* Parent first, always. crm_activities carries no user_id — deliberately —
+       so an activity has no independent claim about who owns it and is
+       reachable only through a customer this caller owns. Guessing an activity
+       id gets nobody anywhere, because no route takes one. */
+    const customer = await findOwnedCrmCustomer(req.params.id, req.user.id);
+
+    if (!customer) {
+      return res.status(404).json({ error: "Customer not found" });
+    }
+
+    /* No owner filter needed on the child query, and none is possible: the
+       column does not exist. The parent lookup above is the authorisation, and
+       req.params.id is safe to use here only because it has just been proven to
+       belong to the caller. */
+    const { data, error } = await supabase
+      .from("crm_activities")
+      .select("*")
+      .eq("customer_id", customer.id)
+      .order("occurred_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ customer_id: customer.id, activities: data || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/crm/customers/:id/activities", requireAuth, async function (req, res, next) {
+  try {
+    const customer = await findOwnedCrmCustomer(req.params.id, req.user.id);
+
+    if (!customer) {
+      return res.status(404).json({ error: "Customer not found" });
+    }
+
+    const validated = validateCrmActivityInput(req.body);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    /* customer_id comes from the VERIFIED parent, never from req.body — the
+       validator has no customer_id in its writable set, so a body naming one is
+       ignored rather than trusted. occurred_at defaults to now when the caller
+       did not supply one; the validator has already refused an unparseable one. */
+    const { data, error } = await supabase
+      .from("crm_activities")
+      .insert(Object.assign({}, validated.fields, {
+        customer_id: customer.id,
+        occurred_at: validated.fields.occurred_at || nowIso(),
+        created_at: nowIso()
+      }))
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ activity: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/agents", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
