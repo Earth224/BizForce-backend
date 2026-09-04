@@ -4843,6 +4843,214 @@ app.get("/api/business-chat", requireAuth, async function (req, res, next) {
   }
 });
 
+/* The pipeline stages a deal may sit in.
+
+   IN THE APPLICATION, NOT A CHECK CONSTRAINT, and that is the same decision
+   migration 084 records for the agent_collaborations type checks: a vocabulary
+   in Postgres is a second copy of a list this file already owns, and a second
+   copy is the one that drifts. 003's eleven-of-seventeen agent types are what
+   that looks like a year on. This list changes with a deploy; a CHECK would
+   change with a migration, and the migration is what gets forgotten.
+
+   "won" and "lost" are load-bearing rather than decorative. GET /api/dashboard
+   filters `String(deal.stage).toLowerCase() === "won"` to compute
+   metrics.won_revenue, so a stage vocabulary without "won" would leave that
+   figure permanently zero — which is exactly the state the column was in before
+   migration 085 gave it somewhere to live. */
+var DEAL_STAGES = ["new", "qualified", "proposal", "negotiation", "won", "lost"];
+
+/* The largest value numeric(12,2) can hold: precision 12 with scale 2 leaves
+   ten integer digits, so anything at 10^10 or above raises Postgres 22003 and
+   surfaces as a 500. Rejected here as a 400 that names the field instead. */
+var DEAL_AMOUNT_MAX = 9999999999.99;
+
+/* An expected_close_date for a `date` column, or null when absent, or false
+   when the input is not a real calendar date.
+
+   Three return values rather than two because absent and invalid are different
+   answers: absent stores null, invalid is a 400. Before this, the raw string
+   went straight to Postgres, so "tomorrow" became a 22007 and a 500.
+
+   Reuses daysInGregorianMonth — the same leap-year table the calendar proposal
+   route validates against — so 2026-02-31 is refused rather than silently
+   normalised to 3 March, which is what `new Date("2026-02-31")` would do. */
+function parseDealCloseDate(value) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+
+  var text = String(value).trim();
+  var parts = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!parts) {
+    return false;
+  }
+
+  var year = Number(parts[1]);
+  var month = Number(parts[2]);
+  var day = Number(parts[3]);
+
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  if (day < 1 || day > daysInGregorianMonth(year, month)) {
+    return false;
+  }
+
+  return text;
+}
+
+/* Validates a deal's fields and returns them ready to insert or update.
+   Same shape as validateCalendarEventInput: it takes a plain object, never req;
+   it returns a value, never a response; it does not touch the database; and it
+   deliberately does NOT take or produce user_id, because the caller that knows
+   whose deal it is is the only one entitled to say so.
+
+   On success:  { valid: true, fields: { ...columns } }
+   On failure:  { valid: false, field: "<name>", error: "<message>" }
+
+   ── Partial updates ──
+
+   options.partial is what lets PUT share this with POST. The validator is
+   written for a whole record, so without it a PUT that omits amount would be
+   handed the default and would BLANK a value the caller never mentioned.
+
+   With partial:true, a field is validated and returned only when the request
+   body actually carries the key — tested with hasOwnProperty, not truthiness,
+   so `{"amount": 0}` and `{"contact_email": ""}` are real updates rather than
+   absences. Everything omitted is left out of `fields` entirely and therefore
+   out of the UPDATE, so the stored value stands.
+
+   The rules themselves do not change between the two modes. A field that IS
+   present is held to exactly the same standard either way, which is the whole
+   point: before this, POST sanitised and PUT copied req.body verbatim, so the
+   same input produced two different rows depending on the verb.
+
+   Only `title` differs, and only in whether it is demanded: POST requires it,
+   PUT requires it only if the caller is trying to set it. A PUT sending
+   title:"" is still refused, because blanking a NOT NULL title to an empty
+   string is not an edit anyone means to make. */
+function validateDealInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("title")) {
+    var title = safeText(source.title, 200);
+
+    if (!title) {
+      // Wording unchanged from what POST has always returned.
+      return { valid: false, field: "title", error: "Deal title is required" };
+    }
+
+    fields.title = title;
+  }
+
+  if (wanted("description")) {
+    fields.description = safeText(source.description, 5000);
+  }
+
+  if (wanted("amount")) {
+    var rawAmount = source.amount;
+    var amount = (rawAmount === undefined || rawAmount === null || String(rawAmount).trim() === "")
+      ? 0
+      : Number(rawAmount);
+
+    /* NaN is refused rather than stored. It used to become null on the way
+       through JSON.stringify, so "abc" was silently accepted as "no amount" —
+       a wrong answer that looked like a deliberate one. */
+    if (!Number.isFinite(amount)) {
+      return { valid: false, field: "amount", error: "amount must be a number" };
+    }
+    if (amount < 0) {
+      return { valid: false, field: "amount", error: "amount cannot be negative" };
+    }
+    if (amount > DEAL_AMOUNT_MAX) {
+      return {
+        valid: false,
+        field: "amount",
+        error: "amount cannot exceed " + DEAL_AMOUNT_MAX + " — the column is numeric(12,2)"
+      };
+    }
+
+    fields.amount = amount;
+  }
+
+  if (wanted("stage")) {
+    var stage = safeText(source.stage, 80);
+
+    /* Compared case-insensitively and STORED LOWERCASE. The dashboard's
+       won_revenue filter lowercases what it reads, but storing "Won" and "won"
+       as two different strings would still split the pipeline for every other
+       consumer — a stage filter, a group-by, a future report. Canonicalising on
+       the way in means there is one spelling in the table, not one comparison
+       that happens to be forgiving. */
+    stage = stage ? stage.toLowerCase() : "new";
+
+    if (DEAL_STAGES.indexOf(stage) === -1) {
+      return { valid: false, field: "stage", error: "stage must be one of: " + DEAL_STAGES.join(", ") };
+    }
+
+    fields.stage = stage;
+  }
+
+  if (wanted("contact_name")) {
+    fields.contact_name = safeText(source.contact_name, 150);
+  }
+
+  if (wanted("contact_email")) {
+    var email = normalizeEmail(source.contact_email);
+
+    /* Character for character the check POST /api/capture applies at 9736.
+       Empty is allowed — a deal need not have an email — but a non-empty value
+       that is not an address is a 400 rather than a stored string nobody can
+       mail. Loose on purpose, for the reason migration 069 records about
+       contacts_email_format_check: strict RFC validation rejects addresses that
+       are real. */
+    if (email && !/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+      return { valid: false, field: "contact_email", error: "contact_email must be a valid email address" };
+    }
+
+    fields.contact_email = email;
+  }
+
+  if (wanted("expected_close_date")) {
+    var closeDate = parseDealCloseDate(source.expected_close_date);
+
+    if (closeDate === false) {
+      return {
+        valid: false,
+        field: "expected_close_date",
+        error: "expected_close_date must be a real calendar date in YYYY-MM-DD form"
+      };
+    }
+
+    fields.expected_close_date = closeDate;
+  }
+
+  if (wanted("probability")) {
+    var rawProbability = source.probability;
+    var probability = (rawProbability === undefined || rawProbability === null || String(rawProbability).trim() === "")
+      ? 0
+      : Number(rawProbability);
+
+    if (!Number.isFinite(probability) || Math.floor(probability) !== probability) {
+      return { valid: false, field: "probability", error: "probability must be a whole number" };
+    }
+    if (probability < 0 || probability > 100) {
+      return { valid: false, field: "probability", error: "probability must be between 0 and 100" };
+    }
+
+    fields.probability = probability;
+  }
+
+  return { valid: true, fields: fields };
+}
+
 app.get("/api/deals", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
@@ -4863,27 +5071,23 @@ app.get("/api/deals", requireAuth, async function (req, res, next) {
 
 app.post("/api/deals", requireAuth, async function (req, res, next) {
   try {
-    const title = safeText(req.body.title, 200);
+    /* Whole-record mode: every field gets its default, and title is required.
+       The 400 status and the "Deal title is required" wording are unchanged. */
+    const validated = validateDealInput(req.body);
 
-    if (!title) {
-      return res.status(400).json({ error: "Deal title is required" });
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
     }
 
+    /* user_id and the timestamps are applied here and nowhere else. The
+       validator has no idea who is asking, which is what makes it safe to call
+       from PUT and from anything else that is not an HTTP handler. */
     const { data, error } = await supabase
       .from("deals")
-      .insert({
-        user_id: req.user.id,
-        title,
-        description: safeText(req.body.description, 5000),
-        amount: Number(req.body.amount || 0),
-        stage: safeText(req.body.stage, 80) || "new",
-        contact_name: safeText(req.body.contact_name, 150),
-        contact_email: normalizeEmail(req.body.contact_email),
-        expected_close_date: req.body.expected_close_date || null,
-        probability: Number(req.body.probability || 0),
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields, {
         created_at: nowIso(),
         updated_at: nowIso()
-      })
+      }))
       .select("*")
       .single();
 
@@ -4899,26 +5103,24 @@ app.post("/api/deals", requireAuth, async function (req, res, next) {
 
 app.put("/api/deals/:id", requireAuth, async function (req, res, next) {
   try {
-    const allowed = [
-      "title",
-      "description",
-      "amount",
-      "stage",
-      "contact_name",
-      "contact_email",
-      "expected_close_date",
-      "probability"
-    ];
+    /* The same validator POST runs, in partial mode. This replaces an allowlist
+       loop that copied req.body straight through — no safeText, no Number, no
+       normalizeEmail — so the two verbs stored different things for identical
+       input: PUT would take a 5000-character stage, an unbounded title, an
+       uppercased email, and the string "5000" into a numeric column.
 
-    const updates = {};
+       partial:true means only keys actually present in the body are validated
+       and written, so a PUT that omits amount leaves amount alone rather than
+       resetting it to the whole-record default. The allowlist is now implicit:
+       `fields` can only ever contain the eight columns the validator knows how
+       to produce, so id and user_id remain unreachable from a request body. */
+    const validated = validateDealInput(req.body, { partial: true });
 
-    for (const key of allowed) {
-      if (Object.prototype.hasOwnProperty.call(req.body, key)) {
-        updates[key] = req.body[key];
-      }
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
     }
 
-    updates.updated_at = nowIso();
+    const updates = Object.assign({}, validated.fields, { updated_at: nowIso() });
 
     const { data, error } = await supabase
       .from("deals")
