@@ -319,7 +319,7 @@ const AGENT_DISPLAY_NAMES = {
   // vertical_marketing is longer than the column the other keys align to.
   // Widening the whole map for one key would rewrite seventeen lines that are
   // not changing, so it takes a single space instead.
-  crm:        "CRM Agent",
+  crm:        "CRM System",
   vertical_marketing: "Vertical Marketing Agent",
   prospecting: "Prospecting Agent"
 };
@@ -364,7 +364,7 @@ const AGENT_PAGE_URLS = {
      underscore and the FILE NAME takes a hyphen. That is not a typo — it is the
      same split the rest of this map already lives with, where a key never
      predicts its path, and it is exactly why this is a list rather than a rule. */
-  crm:        "crm-agent.html",
+  crm:        "crm.html",
   vertical_marketing: "vertical-marketing-agent.html",
   prospecting: "prospecting-agent.html"
 };

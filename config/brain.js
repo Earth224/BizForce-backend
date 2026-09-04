@@ -40,7 +40,7 @@ const PLATFORM_KNOWLEDGE = {
     { key: "rd",         name: "R&D Agent",        description: "Market research, competitive intelligence, trend analysis, and executive-ready briefings. (Also addressable as \"research\".)" },
     { key: "etsy",       name: "Etsy Agent",       description: "Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis." },
     { key: "social",     name: "Social Agent",     description: "Social media campaigns, content calendars, engagement strategy, and platform-specific playbooks." },
-    { key: "crm",        name: "CRM Agent",        description: "Existing-customer relationships: segmentation, follow-up cadence, retention and win-back campaigns, and lifecycle stage management." },
+    { key: "crm",        name: "CRM System",       description: "Existing-customer relationships: segmentation, follow-up cadence, retention and win-back campaigns, and lifecycle stage management." },
     { key: "vertical_marketing", name: "Vertical Marketing Agent", description: "Marketing built for one industry vertical rather than in general: positioning, language, channels, and objections particular to a single trade." },
     { key: "prospecting", name: "Prospecting Agent", description: "Finding and qualifying new prospects before they are leads: ICP definition, list building, qualification criteria, and outreach sequencing." }
   ],
