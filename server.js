@@ -325,22 +325,36 @@ const AGENT_DISPLAY_NAMES = {
 };
 
 // The page each agent type opens, copied from LINK_MAP in ai-agents.html and
-// matching the seventeen Open Profile hrefs in agents-hub.html exactly. One
-// entry per AGENT_SYSTEM_PROMPTS key.
+// matching the Open Profile hrefs in agents-hub.html exactly. One entry per
+// AGENT_SYSTEM_PROMPTS key.
 //
 // A list for the same reason AGENT_DISPLAY_NAMES is one, and the irregularity
-// here runs deeper: these paths follow TWO independent conventions at once.
-// Five agents live under agents/ as a bare <type>.html; the other twelve sit at
-// the web root as <type>-agent.html. Nothing predicts which an agent uses — it
-// is not by age, not by whether the agent is a specialist, not by anything in
-// the data. A rule that produced "agents/seo.html" would produce
-// "agents/email.html", which is a 404, and a rule that produced
-// "email-agent.html" would produce "seo-agent.html", which is also a 404. There
-// is no rule here, only a list, so it is a list.
+// here runs deeper: these twenty paths follow THREE conventions at once.
+// Five agents live under agents/ as a bare <type>.html — seo, sales, content,
+// analytics, social. Thirteen sit at the web root as <type>-agent.html. The
+// remaining two, crm.html and prospecting.html, follow neither: both are
+// records systems with their own CRUD pages rather than agents that write a
+// report, so neither carries the -agent suffix the other thirteen do.
+//
+// Nothing predicts which convention a key uses — it is not by age, not by
+// whether the agent is a specialist, not by anything in the data. A rule that
+// produced "agents/seo.html" would produce "agents/email.html", which is a 404;
+// a rule that produced "email-agent.html" would produce "seo-agent.html", which
+// is also a 404, and "crm-agent.html", which is a third. There is no rule here,
+// only a list, so it is a list.
 //
 // Read at request time by GET /api/agents and never written to the ai_agents
 // table, so a path corrected here is corrected everywhere at once and no stored
 // row can hold a stale URL.
+//
+// What checkAgentPageUrlCoverage below CANNOT check: it proves every agent type
+// has a URL and every URL has an agent type, not that any of these paths names
+// a file that exists. Three entries — crm, vertical_marketing and prospecting —
+// pointed at pages the frontend did not have while that check passed cleanly at
+// twenty, because a path naming nothing is exactly as one-to-one as a path
+// naming something; only resolving these values against the frontend directory
+// found them. The two repositories ship separately, so nothing running from
+// here can close that gap, and it stays a manual check after any edit below.
 const AGENT_PAGE_URLS = {
   seo:        "agents/seo.html",
   sales:      "agents/sales.html",
@@ -359,11 +373,14 @@ const AGENT_PAGE_URLS = {
   rd:         "rd-agent.html",
   executive:  "executive-agent.html",
   ads:        "ads-agent.html",
-  /* All three take the root <type>-agent.html convention, the one twelve of the
-     seventeen already use. Note vertical_marketing: the TYPE KEY keeps its
-     underscore and the FILE NAME takes a hyphen. That is not a typo — it is the
-     same split the rest of this map already lives with, where a key never
-     predicts its path, and it is exactly why this is a list rather than a rule. */
+  /* These three split two ways, which is the argument above in miniature. Only
+     vertical_marketing takes the root <type>-agent.html convention; crm and
+     prospecting are records systems and take a bare page name instead.
+
+     Note vertical_marketing even so: the TYPE KEY keeps its underscore and the
+     FILE NAME takes a hyphen. That is not a typo — it is the same split the
+     rest of this map already lives with, where a key never predicts its path,
+     and it is exactly why this is a list rather than a rule. */
   crm:        "crm.html",
   vertical_marketing: "vertical-marketing-agent.html",
   prospecting: "prospecting.html"
