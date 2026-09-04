@@ -8149,15 +8149,28 @@ async function getLiveStats(userId) {
    in taskInstructions whose value is not accepted can never run at all. The
    startup check names both directions rather than leaving it to be found.
 
-   vertical_positioning, channel_research and objection_handling are new.
-   objection_handling is not a new capability - agents/sales.html has offered it
-   as a dropdown option all along, and every submission was silently coerced to
-   general. */
-var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign", "vertical_positioning", "channel_research", "objection_handling"];
+   Nineteen values were added across two changes to close the gap against the
+   frontend: every value the 18 agent-page configs, the two hardcoded fetch
+   sites in agents/content.html and dashboard.html's own select offer is now
+   accepted. Almost none of them are new capabilities - agents/sales.html has
+   offered Objection Handling, and agents/analytics.html four of its six
+   options, as dropdown options all along, and every submission was coerced.
+
+   executive_plan's instruction was keyed "executive" - the agent type, not the
+   task type - so it was unreachable from the day after it was written, and the
+   value it belongs to was counted as having no instruction. Renaming the key
+   closed both halves of that at once. email_campaign_plan was deleted: its live
+   twin email_campaign was written in the same commit with the working text, and
+   nothing has ever offered the longer name.
+
+   Twenty-seven accepted values still have no instruction of their own. They run
+   general's instruction with their own name in the prompt; the startup check
+   names every one, and writing those instructions is the work that remains. */
+var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign", "vertical_positioning", "channel_research", "objection_handling", "audience_growth", "platform_playbook", "social_campaign", "blog_post", "repurpose_plan", "social_media_drafts", "video_script", "content_calendar", "funnel_analysis", "growth_analysis", "kpi_review", "revenue_forecast", "lead_gen", "offer_build", "outreach_script", "local_seo"];
 
 var taskInstructions = {
   general: "Handle the user request directly and produce a specific, actionable business output. Give concrete steps, examples, and measurable actions — not generic advice.",
-  executive: "Produce an Executive Command Plan. Act as the coordinator over all BizForce agents. Break the business objective into agent assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations. For each agent include mission, priority level, exact tasks, deadline, KPI, expected outcome, dependencies, and owner approval needs. End with a 7-day, 30-day, 60-day, and 90-day execution roadmap.",
+  executive_plan: "Produce an Executive Command Plan. Act as the coordinator over all BizForce agents. Break the business objective into agent assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations. For each agent include mission, priority level, exact tasks, deadline, KPI, expected outcome, dependencies, and owner approval needs. End with a 7-day, 30-day, 60-day, and 90-day execution roadmap.",
   seo_audit: "Produce a structured SEO audit with technical SEO, keyword strategy, local SEO, content strategy, backlinks, metadata, schema, sitemap, page speed, and conversion recommendations.",
   sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, email sequence, objections, conversion points, upsell path, and tracking KPIs.",
   content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, platform strategy, repurposing plan, and brand voice guidance.",
@@ -8214,7 +8227,6 @@ var taskInstructions = {
   competitor_analysis: "Analyze Etsy competitors: top 5 competing shops, their listing strategies, pricing, review counts, bestseller patterns, and gaps the user can exploit to differentiate.",
   reputation_plan: "Build a reputation management plan: monitoring setup, review response templates, proactive reputation tactics, and a 90-day brand trust improvement roadmap.",
   analytics_report: "Produce an analytics report framework: key metrics dashboard, traffic analysis, conversion funnel, revenue attribution, and monthly reporting cadence with action triggers.",
-  email_campaign_plan: "Create an email marketing strategy: list segmentation, campaign calendar, automation workflows, deliverability best practices, and growth tactics.",
   community_growth: "Build a community growth strategy: acquisition channels, onboarding flow, engagement programming, and member retention systems.",
   operations_workflow: "Design an operations workflow: process documentation, team roles, handoff procedures, quality controls, and efficiency metrics.",
   store_plan: "Create a comprehensive store strategy: product selection, pricing, marketing mix, customer acquisition, and scaling roadmap.",
@@ -8224,11 +8236,15 @@ var taskInstructions = {
   research_report: "Conduct business research and analysis: market intelligence, competitive landscape, trend identification, and strategic recommendations."
 };
 
-/* An unrecognised task_type is COERCED to "general", not refused. That stays:
-   seventeen dropdown values across five frontend pages are absent from the list
-   above, and a 400 would break all five today. What was wrong is that it
-   happened in silence, so those pages have been running the general instruction
-   and telling nobody.
+/* An unrecognised task_type is COERCED to "general", not refused. The decision
+   stands but the reason has changed: every value a frontend page offers is now
+   in the list above, so the coercion is no longer covering a gap. It is there
+   for a stale cached client, a typo, or a page deployed ahead of its task type,
+   none of which should become a 500.
+
+   What was wrong was the silence, and that is what the warning below fixes. A
+   coercion that is logged is a fact someone can find; one that is not is a
+   wrong answer handed over as a right one.
 
    Logged once per distinct value per process - the shape agentPageUrl uses for
    a missing page URL. This runs on every task submission, so a line per request
