@@ -321,7 +321,7 @@ const AGENT_DISPLAY_NAMES = {
   // not changing, so it takes a single space instead.
   crm:        "CRM System",
   vertical_marketing: "Vertical Marketing Agent",
-  prospecting: "Prospecting Agent"
+  prospecting: "Prospecting System"
 };
 
 // The page each agent type opens, copied from LINK_MAP in ai-agents.html and
@@ -366,7 +366,7 @@ const AGENT_PAGE_URLS = {
      predicts its path, and it is exactly why this is a list rather than a rule. */
   crm:        "crm.html",
   vertical_marketing: "vertical-marketing-agent.html",
-  prospecting: "prospecting-agent.html"
+  prospecting: "prospecting.html"
 };
 
 /* The page URL for an agent type, or NULL when the type has no entry.
