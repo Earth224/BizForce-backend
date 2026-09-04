@@ -5599,6 +5599,848 @@ app.post("/api/crm/customers/:id/activities", requireAuth, async function (req, 
   }
 });
 
+/* ── Prospecting: prospects and ICP profiles ─────────────────────────────────
+
+   Schema in 087, conversion function in 088. This follows the CRM pattern —
+   a pure validator, ownership inside the write predicate, maybeSingle so a
+   no-op is a 404 rather than a 500 — with six deliberate departures from it,
+   each marked DEPARTURE below.
+
+   No requireActiveSubscription, matching the CRM and deals routes: these are
+   records the user owns, and locking someone out of their own data when a card
+   expires is a different decision from locking them out of the agents. ── */
+
+var PROSPECT_STATUSES = ["new", "researching", "qualified", "contacted", "converted", "disqualified"];
+
+/* disqualified LAST, not between qualified and contacted. The array order is
+   not decorative — GET /api/agents/sales/pipeline seeds its response buckets by
+   iterating SALES_LEAD_STATUSES, so a list rendered in array order should read
+   as the funnel it describes. new -> researching -> qualified -> contacted ->
+   converted is that funnel; disqualified is the exit from it and belongs at the
+   end rather than in the middle of the progression. */
+
+var CRITERION_OPERATORS = [
+  "equals", "not_equals", "contains", "not_contains",
+  "gt", "gte", "lt", "lte", "in", "exists"
+];
+
+var ICP_CRITERIA_MAX = 50;
+var CRITERION_WEIGHT_MAX = 1000;
+
+/* The reachable score bound, derived rather than picked: fifty criteria at a
+   maximum absolute weight of a thousand. Bounding fit_score and pass_threshold
+   by what the rubric can actually produce beats an arbitrary 0-100, which would
+   reject a legitimately weighted rubric, and beats leaving it unbounded, which
+   lets a client write a number int4 cannot hold and turn a 400 into a 22003. */
+var PROSPECT_SCORE_MAX = ICP_CRITERIA_MAX * CRITERION_WEIGHT_MAX;
+
+var PROSPECT_LIST_LIMIT_DEFAULT = 50;
+var PROSPECT_LIST_LIMIT_MAX = 200;
+
+function prospectFieldError(field, reason) {
+  return { valid: false, field: field, error: field + " " + reason };
+}
+
+/* DEPARTURE 1 — safeText returns "" for an absent or blank value, so a row
+   created without a company holds null while the same row edited to "" holds
+   the empty string, and every later filter has to test both. crm_customers and
+   deals both carry that. Optional text here is null or a value, never "". */
+function optionalText(value, maxLength) {
+  var text = safeText(value, maxLength);
+
+  return text ? text : null;
+}
+
+/* DEPARTURE 2 — parseCrmTimestamp returns null for absent, false for invalid
+   and a string for valid, distinguished only by `=== false`. One `if (!value)`
+   written anywhere collapses "absent" into "invalid". This reports the two
+   separately and cannot be read wrongly by a falsy check. */
+function parseProspectTimestamp(value) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return { ok: true, value: null };
+  }
+
+  var text = String(value).trim();
+  var parts = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
+
+  if (!parts) {
+    return { ok: false };
+  }
+
+  var year = Number(parts[1]);
+  var month = Number(parts[2]);
+  var day = Number(parts[3]);
+
+  if (month < 1 || month > 12) {
+    return { ok: false };
+  }
+  if (day < 1 || day > daysInGregorianMonth(year, month)) {
+    return { ok: false };
+  }
+
+  var ms = Date.parse(text);
+
+  if (!Number.isFinite(ms)) {
+    return { ok: false };
+  }
+
+  return { ok: true, value: new Date(ms).toISOString() };
+}
+
+function parseBoundedInteger(value, max) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.floor(value) !== value) {
+    return { ok: false, reason: "must be a whole number" };
+  }
+  if (value < -max || value > max) {
+    return { ok: false, reason: "must be between -" + max + " and " + max };
+  }
+
+  return { ok: true, value: value };
+}
+
+/* DEPARTURE 4 — every list route here is bounded. GET /api/crm/customers has
+   no limit at all, which is invisible while that table holds nothing and will
+   not be: prospects arrive in bulk from a shared upstream feed. A caller may
+   ask for less than the cap and never more. */
+function parseListRange(query) {
+  var source = query || {};
+  var limit = PROSPECT_LIST_LIMIT_DEFAULT;
+  var offset = 0;
+
+  if (source.limit !== undefined && String(source.limit).trim() !== "") {
+    var requested = Number(source.limit);
+
+    if (!Number.isFinite(requested) || Math.floor(requested) !== requested || requested < 1) {
+      return { ok: false, field: "limit", reason: "must be a whole number of at least 1" };
+    }
+
+    limit = Math.min(requested, PROSPECT_LIST_LIMIT_MAX);
+  }
+
+  if (source.offset !== undefined && String(source.offset).trim() !== "") {
+    var skip = Number(source.offset);
+
+    if (!Number.isFinite(skip) || Math.floor(skip) !== skip || skip < 0) {
+      return { ok: false, field: "offset", reason: "must be a whole number of at least 0" };
+    }
+
+    offset = skip;
+  }
+
+  return { ok: true, limit: limit, offset: offset };
+}
+
+/* An element failure has to name the element AND the key, which the
+   { valid, field, error } contract was not built to carry.
+
+   normalizeAssignmentInput's caller solves this in prose — "Invalid assignment
+   at index 3. assignment_number and agent_type are required." — which tells a
+   human where to look and tells the frontend nothing: crm.html's
+   showFieldError() reads the 400's `field` to highlight an input, and prose
+   gives it nothing to match.
+
+   So the contract is EXTENDED rather than replaced. `field` stays a single
+   string and becomes a path, "criteria[2].weight", which showFieldError can
+   still key on and a person can still read; `index` is added alongside for a
+   caller that wants to scroll to the row without parsing the path. Nothing that
+   consumes the existing shape has to change. */
+function criterionError(index, path, reason) {
+  return { valid: false, field: path, index: index, error: path + " " + reason };
+}
+
+function normalizeCriterionValue(value, path) {
+  if (typeof value === "boolean") {
+    return { ok: true, value: value };
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? { ok: true, value: value } : { ok: false, reason: "must be a finite number" };
+  }
+  if (typeof value === "string") {
+    return { ok: true, value: safeText(value, 500) };
+  }
+  if (Array.isArray(value)) {
+    if (value.length > ICP_CRITERIA_MAX) {
+      return { ok: false, reason: "must hold at most " + ICP_CRITERIA_MAX + " entries" };
+    }
+
+    var out = [];
+
+    for (var i = 0; i < value.length; i++) {
+      var entry = value[i];
+
+      if (typeof entry === "boolean" || typeof entry === "string") {
+        out.push(typeof entry === "string" ? safeText(entry, 500) : entry);
+      } else if (typeof entry === "number" && Number.isFinite(entry)) {
+        out.push(entry);
+      } else {
+        return { ok: false, reason: "must hold only strings, numbers or booleans" };
+      }
+    }
+
+    return { ok: true, value: out };
+  }
+
+  return { ok: false, reason: "must be a string, number, boolean, or an array of those" };
+}
+
+/* criteria is an array of OBJECTS and must never reach normalizeJsonbArray,
+   which maps String(item).trim() over its input and would store the literal
+   text "[object Object]" for every criterion. That helper is correct for
+   agent_assignments.tasks, which really is an array of strings, and wrong here.
+
+   This is the first validator in this file to check the shape of objects living
+   INSIDE a jsonb value. Every other jsonb write is a raw passthrough
+   (ai_agents.settings, agent_proposals.payload, analytics_events.event_data), a
+   container gate that checks only that the top level is an object
+   (normalizeMemoryMetadata), a size cap with no shape check
+   (coverWrapValidateDesignField), or string coercion.
+
+   `fieldName` is the column being validated, and every path built below is
+   rooted in it. The same array shape lives under two names -- icp_profiles.criteria
+   and prospects.criteria_results -- so a hardcoded "criteria" prefix would name
+   the ICP's column while the user is editing a prospect, and showFieldError
+   would key on an input the prospect form does not have. Each caller passes its
+   own column name; nothing else about the shape check differs. */
+function validateIcpCriteria(value, fieldName) {
+  if (!Array.isArray(value)) {
+    return prospectFieldError(fieldName, "must be an array");
+  }
+  if (value.length > ICP_CRITERIA_MAX) {
+    return prospectFieldError(fieldName, "must hold at most " + ICP_CRITERIA_MAX + " criteria");
+  }
+
+  var normalized = [];
+  var seenLabels = {};
+
+  for (var i = 0; i < value.length; i++) {
+    var raw = value[i];
+    var path = fieldName + "[" + i + "]";
+
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return criterionError(i, path, "must be an object");
+    }
+
+    var label = safeText(raw.label, 200);
+
+    if (!label) {
+      return criterionError(i, path + ".label", "is required");
+    }
+
+    /* Deduped the way normalizeAssignmentInput dedupes its assignments, and for
+       the same reason: two criteria with one label produce a score nobody can
+       explain, because the results array cannot say which one contributed. */
+    var labelKey = label.toLowerCase();
+
+    if (Object.prototype.hasOwnProperty.call(seenLabels, labelKey)) {
+      return criterionError(i, path + ".label", "duplicates " + fieldName + "[" + seenLabels[labelKey] + "].label");
+    }
+
+    seenLabels[labelKey] = i;
+
+    var weight = parseBoundedInteger(raw.weight, CRITERION_WEIGHT_MAX);
+
+    if (!weight.ok) {
+      return criterionError(i, path + ".weight", weight.reason);
+    }
+
+    var criterion = { label: label, weight: weight.value };
+
+    var hasOperator = Object.prototype.hasOwnProperty.call(raw, "operator") &&
+      raw.operator !== null && String(raw.operator).trim() !== "";
+    var hasValue = Object.prototype.hasOwnProperty.call(raw, "value") && raw.value !== null;
+
+    if (hasOperator) {
+      var operator = String(raw.operator).toLowerCase().trim();
+
+      if (CRITERION_OPERATORS.indexOf(operator) === -1) {
+        return criterionError(i, path + ".operator", "must be one of: " + CRITERION_OPERATORS.join(", "));
+      }
+
+      criterion.operator = operator;
+    }
+
+    if (hasValue) {
+      /* The same cross-field shape as disqualified_reason below, one level
+         down: a value with no operator is a comparison with no comparison in
+         it, and storing it would put a field in the rubric that nothing can
+         act on. */
+      if (!hasOperator) {
+        return criterionError(i, path + ".operator", "is required when value is present");
+      }
+
+      var normalizedValue = normalizeCriterionValue(raw.value, path);
+
+      if (!normalizedValue.ok) {
+        return criterionError(i, path + ".value", normalizedValue.reason);
+      }
+
+      criterion.value = normalizedValue.value;
+    }
+
+    normalized.push(criterion);
+  }
+
+  return { valid: true, value: normalized };
+}
+
+/* Same contract as validateCrmCustomerInput: a plain object in, never req; a
+   value out, never a response; no database access; and neither takes nor
+   produces user_id.
+
+   NOT in the writable set, deliberately: converted_customer_id, converted_at
+   and the converted status are written by convert_prospect_to_customer and by
+   nothing else. A body naming any of them is ignored rather than trusted, which
+   is what stops a client from claiming a conversion that never happened. */
+function validateProspectInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  function present(key) {
+    return Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("name")) {
+    var name = safeText(source.name, 150);
+
+    if (!name) {
+      return prospectFieldError("name", "is required");
+    }
+
+    fields.name = name;
+  }
+
+  if (wanted("company"))             fields.company             = optionalText(source.company, 150);
+  if (wanted("title"))               fields.title               = optionalText(source.title, 150);
+  if (wanted("website"))             fields.website             = optionalText(source.website, 500);
+  if (wanted("social_handle"))       fields.social_handle       = optionalText(source.social_handle, 150);
+  if (wanted("source"))              fields.source              = optionalText(source.source, 80);
+  if (wanted("notes"))               fields.notes               = optionalText(source.notes, 5000);
+  if (wanted("qualification_notes")) fields.qualification_notes = optionalText(source.qualification_notes, 5000);
+
+  /* Stored verbatim, no normaliser. See the column comments in 087: both are
+     display and reference only and neither is ever a send target, so
+     canonicalPhone — which nulls an international number, an extension or a
+     partial one — must not run here. */
+  if (wanted("email")) fields.email = optionalText(source.email, 320);
+  if (wanted("phone")) fields.phone = optionalText(source.phone, 40);
+
+  if (wanted("lead_post_uri")) {
+    fields.lead_post_uri = optionalText(source.lead_post_uri, 500);
+  }
+
+  if (wanted("icp_profile_id")) {
+    var icpId = source.icp_profile_id;
+
+    if (icpId === null || icpId === undefined || String(icpId).trim() === "") {
+      fields.icp_profile_id = null;
+    } else if (!isValidUuid(icpId)) {
+      return prospectFieldError("icp_profile_id", "must be a uuid");
+    } else {
+      fields.icp_profile_id = String(icpId).trim();
+    }
+  }
+
+  if (wanted("fit_score")) {
+    if (source.fit_score === null || source.fit_score === undefined || String(source.fit_score).trim() === "") {
+      fields.fit_score = null;
+    } else {
+      var score = parseBoundedInteger(source.fit_score, PROSPECT_SCORE_MAX);
+
+      if (!score.ok) {
+        return prospectFieldError("fit_score", score.reason);
+      }
+
+      fields.fit_score = score.value;
+    }
+  }
+
+  /* present(), not wanted(): the column defaults to '[]' in 087, so a create
+     that omits it must be left out of the insert for Postgres to supply the
+     default. wanted() is true for every key on a create, which would turn an
+     omitted array into "criteria_results must be an array". The same applies to
+     status above and to three fields in validateIcpProfileInput. */
+  if (present("criteria_results")) {
+    if (!Array.isArray(source.criteria_results)) {
+      return prospectFieldError("criteria_results", "must be an array");
+    }
+
+    var results = validateIcpCriteria(source.criteria_results, "criteria_results");
+
+    if (!results.valid) {
+      return results;
+    }
+
+    fields.criteria_results = results.value;
+  }
+
+  var timestampFields = ["last_researched_at", "last_contacted_at"];
+
+  for (var t = 0; t < timestampFields.length; t++) {
+    var key = timestampFields[t];
+
+    if (wanted(key)) {
+      var parsed = parseProspectTimestamp(source[key]);
+
+      if (!parsed.ok) {
+        return prospectFieldError(key, "must be a valid ISO timestamp");
+      }
+
+      fields[key] = parsed.value;
+    }
+  }
+
+  /* DEPARTURE 3 — status is validated only when the request carries it, in
+     BOTH modes, and an unrecognised or empty one is refused.
+
+     validateCrmCustomerInput does `status = status ? status.toLowerCase() :
+     "lead"`, so a PUT carrying status "" silently resets the row to the first
+     state in the lifecycle. On a customer that is merely wrong. On a prospect
+     it would silently UN-DISQUALIFY someone: a terminal state, reached by a
+     deliberate decision with a reason attached, undone by an empty string.
+
+     Absent on create is not an error — the column defaults to 'new' — so the
+     field is simply left out of the insert and Postgres supplies it. */
+  if (present("status")) {
+    var status = safeText(source.status, 40);
+
+    status = status ? status.toLowerCase() : "";
+
+    if (PROSPECT_STATUSES.indexOf(status) === -1) {
+      return prospectFieldError("status", "must be one of: " + PROSPECT_STATUSES.join(", "));
+    }
+
+    fields.status = status;
+  }
+
+  /* DEPARTURE 5 — the one cross-field rule, in a validator built for
+     independent fields.
+
+     The invariant is that disqualified_reason is meaningless unless status is
+     "disqualified", and required when it is. Expressing it here at all takes a
+     second pass over the already-validated fields, because it is a statement
+     about the RESULT rather than about any single input, and it can only be
+     enforced against what the request itself contains — the validator has no
+     database access and cannot see the stored status.
+
+     So it is enforced on the request as a whole, in three branches, and the
+     third is the one that closes the hole:
+
+       status disqualified      -> a non-empty reason is required alongside it
+       status anything else     -> the reason is forced to null in the same
+                                   write, because leaving a stale reason on a
+                                   requalified prospect is the invariant broken
+       reason without a status  -> refused
+
+     The third branch costs a client one extra key: editing the reason on an
+     already-disqualified prospect means resending status "disqualified" in the
+     same request. That is cheap, self-documenting, and the alternative is
+     reading the row first — which reintroduces the read-then-authorise window
+     the write predicate exists to avoid, and would still be racing anything
+     that changed the status in between. */
+  if (present("disqualified_reason") || present("status")) {
+    var reason = optionalText(source.disqualified_reason, 2000);
+    var resultingStatus = Object.prototype.hasOwnProperty.call(fields, "status") ? fields.status : null;
+
+    if (resultingStatus === "disqualified") {
+      if (!reason) {
+        return prospectFieldError("disqualified_reason", "is required when status is disqualified");
+      }
+
+      fields.disqualified_reason = reason;
+    } else if (resultingStatus !== null) {
+      fields.disqualified_reason = null;
+    } else {
+      return prospectFieldError(
+        "status",
+        "must be sent as disqualified in the same request as disqualified_reason, which has no meaning without it"
+      );
+    }
+  }
+
+  return { valid: true, fields: fields };
+}
+
+function validateIcpProfileInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  function present(key) {
+    return Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("name")) {
+    var name = safeText(source.name, 150);
+
+    if (!name) {
+      return prospectFieldError("name", "is required");
+    }
+
+    fields.name = name;
+  }
+
+  if (wanted("description")) {
+    fields.description = optionalText(source.description, 2000);
+  }
+
+  /* All three below use present(), not wanted(), because all three have a
+     database default in 087 — '[]', 0 and true. wanted() is true for every key
+     on a create, so omitting any of them would be refused as malformed instead
+     of taking the default the column already declares. */
+  if (present("criteria")) {
+    var criteria = validateIcpCriteria(source.criteria, "criteria");
+
+    if (!criteria.valid) {
+      return criteria;
+    }
+
+    fields.criteria = criteria.value;
+  }
+
+  if (present("pass_threshold")) {
+    var threshold = parseBoundedInteger(source.pass_threshold, PROSPECT_SCORE_MAX);
+
+    if (!threshold.ok) {
+      return prospectFieldError("pass_threshold", threshold.reason);
+    }
+
+    fields.pass_threshold = threshold.value;
+  }
+
+  if (present("is_active")) {
+    if (typeof source.is_active !== "boolean") {
+      return prospectFieldError("is_active", "must be true or false");
+    }
+
+    fields.is_active = source.is_active;
+  }
+
+  return { valid: true, fields: fields };
+}
+
+/* DEPARTURE 6 — there is no findOwnedProspect helper.
+
+   findOwnedCrmCustomer exists because the activities routes need a VERIFIED
+   PARENT: crm_activities rows carry a customer_id that must come from a row
+   proven to belong to the caller, so the read is doing work the write predicate
+   cannot do for it. Nothing here has a child table. Every write below scopes
+   itself with .eq("id").eq("user_id") inside its own predicate, and the convert
+   route delegates ownership to the function, which repeats the same filter in
+   both its select and its update. A helper would add a read that nothing needs
+   and a window between the check and the write. */
+
+app.get("/api/prospects", requireAuth, async function (req, res, next) {
+  try {
+    var range = parseListRange(req.query);
+
+    if (!range.ok) {
+      return res.status(400).json({ error: range.field + " " + range.reason, field: range.field });
+    }
+
+    /* One row past the limit, discarded before responding. It answers has_more
+       without a second count query, and without count: "exact", which makes the
+       database walk the whole table to answer a question about one page. */
+    const { data, error } = await supabase
+      .from("prospects")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .range(range.offset, range.offset + range.limit);
+
+    if (error) {
+      throw error;
+    }
+
+    var rows = data || [];
+    var hasMore = rows.length > range.limit;
+
+    return res.json({
+      prospects: hasMore ? rows.slice(0, range.limit) : rows,
+      limit: range.limit,
+      offset: range.offset,
+      has_more: hasMore
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/prospects", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateProspectInput(req.body);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field, index: validated.index });
+    }
+
+    const { data, error } = await supabase
+      .from("prospects")
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields, {
+        created_at: nowIso(),
+        updated_at: nowIso()
+      }))
+      .select("*")
+      .single();
+
+    if (error) {
+      /* The partial unique index in 087 is (user_id, lead_post_uri) where
+         lead_post_uri is not null: importing the same captured lead twice is a
+         409, not a 500. Hand-entered prospects carry a null uri and cannot
+         collide with each other. */
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "A prospect for this lead already exists",
+          field: "lead_post_uri"
+        });
+      }
+
+      throw error;
+    }
+
+    return res.status(201).json({ prospect: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/prospects/:id", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateProspectInput(req.body, { partial: true });
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field, index: validated.index });
+    }
+
+    const { data, error } = await supabase
+      .from("prospects")
+      .update(Object.assign({}, validated.fields, { updated_at: nowIso() }))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "A prospect for this lead already exists",
+          field: "lead_post_uri"
+        });
+      }
+
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Prospect not found" });
+    }
+
+    return res.json({ prospect: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/prospects/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("prospects")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Prospect not found" });
+    }
+
+    return res.json({ success: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* Conversion. The only route here that does not write the table itself.
+
+   p_user_id IS req.user.id AND NOTHING ELSE. The function is SECURITY DEFINER,
+   so RLS does not apply to it and its `and user_id = p_user_id` predicate is
+   the only thing scoping the call to one person. A p_user_id taken from a
+   request body would convert anyone's prospect on demand. */
+app.post("/api/prospects/:id/convert", requireAuth, async function (req, res, next) {
+  try {
+    /* Checked before the call, because the function takes uuid: a non-uuid id
+       reaches Postgres as a cast failure (22P02), surfaces as a thrown error
+       and becomes a 500 for what is an ordinary bad request. */
+    if (!isValidUuid(req.params.id)) {
+      return res.status(404).json({ error: "Prospect not found" });
+    }
+
+    const { data, error } = await supabase.rpc("convert_prospect_to_customer", {
+      p_prospect_id: req.params.id,
+      p_user_id: req.user.id
+    });
+
+    if (error) {
+      /* 088 raises both of these as bare machine-readable names rather than
+         sentences, precisely so this mapping can be exact. Compared with ===
+         against the trimmed message, not with includes() — a substring test
+         would also match some future error that merely mentioned the token, and
+         would map an unrelated failure to a 404. Anything else is rethrown and
+         becomes a 500, which is the correct answer for a database that broke. */
+      var raised = String(error.message || "").trim();
+
+      if (raised === "prospect_not_found") {
+        return res.status(404).json({ error: "Prospect not found" });
+      }
+
+      if (raised === "already_converted") {
+        return res.status(409).json({
+          error: "This prospect has already been converted",
+          field: "status"
+        });
+      }
+
+      throw error;
+    }
+
+    return res.status(201).json({ customer_id: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/icp-profiles", requireAuth, async function (req, res, next) {
+  try {
+    var range = parseListRange(req.query);
+
+    if (!range.ok) {
+      return res.status(400).json({ error: range.field + " " + range.reason, field: range.field });
+    }
+
+    const { data, error } = await supabase
+      .from("icp_profiles")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .range(range.offset, range.offset + range.limit);
+
+    if (error) {
+      throw error;
+    }
+
+    var rows = data || [];
+    var hasMore = rows.length > range.limit;
+
+    return res.json({
+      icp_profiles: hasMore ? rows.slice(0, range.limit) : rows,
+      limit: range.limit,
+      offset: range.offset,
+      has_more: hasMore
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/icp-profiles", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateIcpProfileInput(req.body);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field, index: validated.index });
+    }
+
+    const { data, error } = await supabase
+      .from("icp_profiles")
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields, {
+        created_at: nowIso(),
+        updated_at: nowIso()
+      }))
+      .select("*")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ icp_profile: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/icp-profiles/:id", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateIcpProfileInput(req.body, { partial: true });
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field, index: validated.index });
+    }
+
+    const { data, error } = await supabase
+      .from("icp_profiles")
+      .update(Object.assign({}, validated.fields, { updated_at: nowIso() }))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "ICP profile not found" });
+    }
+
+    return res.json({ icp_profile: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* prospects.icp_profile_id is ON DELETE SET NULL (087), so deleting a profile
+   detaches every prospect scored against it rather than deleting them. Their
+   fit_score and criteria_results are left in place deliberately: they record
+   what was decided at the time, and blanking them would erase the reasoning
+   behind a qualification that really happened. */
+app.delete("/api/icp-profiles/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("icp_profiles")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "ICP profile not found" });
+    }
+
+    return res.json({ success: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/agents", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
