@@ -278,9 +278,7 @@ const AGENT_SYSTEM_PROMPTS = {
   broker: "You are the BizForce AI Broker Agent. Identify deal flow opportunities, structure partnership agreements, manage negotiations, build pipeline, due diligence checklists, and execute brokerage strategy.",
   publicist: "You are the BizForce AI Publicist Agent. Write press releases, manage media outreach, build PR campaigns, secure media coverage, craft brand narratives, and grow brand visibility and reputation.",
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence, trend analysis, innovation research, product-market fit analysis, and deliver executive briefings and strategic recommendations.",
-  crm: "You are the BizForce AI CRM Agent. Segment the existing customer base, design follow-up cadences, build retention and win-back campaigns, define lifecycle stages, and flag accounts at risk of churn.",
-  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Build marketing for one industry vertical rather than in general: positioning, language, channels, and objections particular to that single trade.",
-  prospecting: "You are the BizForce AI Prospecting Agent. Define the ideal customer profile, build targeted prospect lists, set qualification criteria, score fit and intent, and sequence outreach to prospects who are not yet leads."
+  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Build marketing for one industry vertical rather than in general: positioning, language, channels, and objections particular to that single trade."
 };
 
 // The name each agent type is shown under, copied from the seventeen
@@ -319,9 +317,7 @@ const AGENT_DISPLAY_NAMES = {
   // vertical_marketing is longer than the column the other keys align to.
   // Widening the whole map for one key would rewrite seventeen lines that are
   // not changing, so it takes a single space instead.
-  crm:        "CRM System",
-  vertical_marketing: "Vertical Marketing Agent",
-  prospecting: "Prospecting System"
+  vertical_marketing: "Vertical Marketing Agent"
 };
 
 // The page each agent type opens, copied from LINK_MAP in ai-agents.html and
@@ -329,19 +325,23 @@ const AGENT_DISPLAY_NAMES = {
 // AGENT_SYSTEM_PROMPTS key.
 //
 // A list for the same reason AGENT_DISPLAY_NAMES is one, and the irregularity
-// here runs deeper: these twenty paths follow THREE conventions at once.
-// Five agents live under agents/ as a bare <type>.html — seo, sales, content,
-// analytics, social. Thirteen sit at the web root as <type>-agent.html. The
-// remaining two, crm.html and prospecting.html, follow neither: both are
-// records systems with their own CRUD pages rather than agents that write a
-// report, so neither carries the -agent suffix the other thirteen do.
+// here runs deeper: these eighteen paths follow TWO conventions at once. Five
+// agents live under agents/ as a bare <type>.html — seo, sales, content,
+// analytics, social. The other thirteen sit at the web root as
+// <type>-agent.html.
+//
+// There were twenty, under three conventions. crm.html and prospecting.html
+// carried neither shape, because both are records systems with their own CRUD
+// pages rather than agents that write a report; they were registered as agent
+// types only to borrow this map as a routing table, which is what made them a
+// third convention. Both now have dashboard tiles and are deregistered, so
+// this map describes agents alone again.
 //
 // Nothing predicts which convention a key uses — it is not by age, not by
 // whether the agent is a specialist, not by anything in the data. A rule that
 // produced "agents/seo.html" would produce "agents/email.html", which is a 404;
 // a rule that produced "email-agent.html" would produce "seo-agent.html", which
-// is also a 404, and "crm-agent.html", which is a third. There is no rule here,
-// only a list, so it is a list.
+// is also a 404. There is no rule here, only a list, so it is a list.
 //
 // Read at request time by GET /api/agents and never written to the ai_agents
 // table, so a path corrected here is corrected everywhere at once and no stored
@@ -349,12 +349,12 @@ const AGENT_DISPLAY_NAMES = {
 //
 // What checkAgentPageUrlCoverage below CANNOT check: it proves every agent type
 // has a URL and every URL has an agent type, not that any of these paths names
-// a file that exists. Three entries — crm, vertical_marketing and prospecting —
-// pointed at pages the frontend did not have while that check passed cleanly at
-// twenty, because a path naming nothing is exactly as one-to-one as a path
-// naming something; only resolving these values against the frontend directory
-// found them. The two repositories ship separately, so nothing running from
-// here can close that gap, and it stays a manual check after any edit below.
+// a file that exists. Three entries once pointed at pages the frontend did not
+// have while that check passed cleanly at twenty, because a path naming nothing
+// is exactly as one-to-one as a path naming something; only resolving these
+// values against the frontend directory found them. The two repositories ship
+// separately, so nothing running from here can close that gap, and it stays a
+// manual check after any edit below.
 const AGENT_PAGE_URLS = {
   seo:        "agents/seo.html",
   sales:      "agents/sales.html",
@@ -373,17 +373,11 @@ const AGENT_PAGE_URLS = {
   rd:         "rd-agent.html",
   executive:  "executive-agent.html",
   ads:        "ads-agent.html",
-  /* These three split two ways, which is the argument above in miniature. Only
-     vertical_marketing takes the root <type>-agent.html convention; crm and
-     prospecting are records systems and take a bare page name instead.
-
-     Note vertical_marketing even so: the TYPE KEY keeps its underscore and the
-     FILE NAME takes a hyphen. That is not a typo — it is the same split the
-     rest of this map already lives with, where a key never predicts its path,
-     and it is exactly why this is a list rather than a rule. */
-  crm:        "crm.html",
-  vertical_marketing: "vertical-marketing-agent.html",
-  prospecting: "prospecting.html"
+  /* Note vertical_marketing: the TYPE KEY keeps its underscore and the FILE
+     NAME takes a hyphen. That is not a typo — it is the same split the rest of
+     this map already lives with, where a key never predicts its path, and it is
+     exactly why this is a list rather than a rule. */
+  vertical_marketing: "vertical-marketing-agent.html"
 };
 
 /* The page URL for an agent type, or NULL when the type has no entry.
@@ -464,9 +458,7 @@ var agentBrains = {
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
   etsy: "You are the BizForce AI Etsy Agent. Optimize Etsy shop listings with SEO-rich titles and tags, conduct shop audits, research high-volume keywords, build pricing strategies, and analyze competitor shops to maximize marketplace visibility and revenue.",
   social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth.",
-  crm: "You are the BizForce AI CRM Agent. Segment the existing customer base, build follow-up cadences, design retention and win-back campaigns, define lifecycle stages, and surface churn risk.",
-  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Produce marketing for one industry vertical: positioning and language specific to that trade, the channels its buyers use, and the objections it raises.",
-  prospecting: "You are the BizForce AI Prospecting Agent. Define the ideal customer profile, build prospect lists, set qualification criteria, score fit and intent, and sequence outreach to prospects who are not yet leads."
+  vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Produce marketing for one industry vertical: positioning and language specific to that trade, the channels its buyers use, and the objections it raises."
 };
 
 // ---------------------------------------------------------------------------
@@ -7122,7 +7114,12 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
        Null for an unmapped type, never a guessed path — agentPageUrl logs the
        miss once per type. ai-agents.html already handles a falsy URL by falling
        back to the hub, which is the same thing its LINK_MAP does today for an
-       unknown type. */
+       unknown type.
+
+       available_agent_types below is the CURRENT ROSTER, not a description of
+       the rows above it. The two can legitimately differ in length: rows are
+       seeded once and never reconciled, so a user seeded before a type was
+       deregistered keeps a row for it while the roster no longer lists it. */
     const agentsWithPages = agents.map(function (agent) {
       return Object.assign({}, agent, {
         page_url: agentPageUrl(agent && agent.type)
