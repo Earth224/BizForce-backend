@@ -4790,9 +4790,11 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
       "Description: "    + (businessProfile.description     || "Not provided") + "\n" +
       "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
       "Target Audience: " + (businessProfile.target_audience  || "Not provided") + "\n" +
-      "Goals: "          + (businessProfile.business_goals   || "Not provided") + "\n" +
-      "Location: "       + (businessProfile.location         || "Not provided") + "\n" +
-      "Positioning: "    + (businessProfile.positioning      || "Not provided") + "\n\n" +
+      /* Live column names, not the ones 014 declares — see the comment on
+         formatBusinessProfile in config/brain.js. business_goals does not
+         exist on the real table; primary_goal does. */
+      "Goals: "          + (businessProfile.primary_goal     || businessProfile.goals || "Not provided") + "\n" +
+      "Location: "       + (businessProfile.location         || "Not provided") + "\n\n" +
       "Keep responses clear and practical. Use bullet points when listing steps or options. Be direct.";
 
     var messages = history.map(function (row) {
@@ -15156,7 +15158,9 @@ app.post("/api/insights/page", requireAuth, aiLimiter, async function (req, res,
       "Industry: "          + (businessProfile.industry          || "Not provided") + "\n" +
       "Products/Services: " + (businessProfile.products_services || "Not provided") + "\n" +
       "Target Audience: "   + (businessProfile.target_audience   || "Not provided") + "\n" +
-      "Goals: "             + (businessProfile.business_goals    || "Not provided") + "\n" +
+      /* Live column name; business_goals is not on the real table. Same fix as
+         formatBusinessProfile in config/brain.js. */
+      "Goals: "             + (businessProfile.primary_goal      || businessProfile.goals || "Not provided") + "\n" +
       "Location: "          + (businessProfile.location          || "Not provided");
 
     var prompt =
@@ -23010,8 +23014,11 @@ function stripOutreachEmoji(text) {
 // package (outreach message, offer, CTA) for one lead (lead_post_uri) or a
 // filtered segment (segment: { min_score, high_intent, buyer }, capped to
 // 10 leads per call). Inherits platform knowledge + the Sales Agent role +
-// this user's business_profile (competitors, website) via
-// buildAgentSystemPrompt, same as every other agent route.
+// this user's business_profile (top_competitors, top_keywords, website) via
+// buildAgentSystemPrompt, same as every other agent route. The competitor list
+// genuinely arrives now: this comment used to say "competitors", which was the
+// name 014 declares and not the column the live table has, so that half of the
+// context reached the model as "Not provided" while the claim stood here.
 // Runs the Sales Agent's conversion pass for exactly one lead: builds the
 // per-lead prompt, calls the model, and logs the result. When dryRun is
 // true, the ai_tasks/agent_memory rows are still written (clearly tagged

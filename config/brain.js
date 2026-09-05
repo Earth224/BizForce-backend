@@ -107,6 +107,22 @@ function formatPlatformKnowledge() {
   return lines.join("\n");
 }
 
+/* READ AGAINST THE LIVE COLUMN NAMES, which are not the ones 014 declares.
+   business_profiles was built outside the migration system and 014 describes a
+   table that does not exist: it declares business_goals and competitors, and
+   the real table has primary_goal, goals and top_competitors instead. Reading
+   the declared names returned undefined, so this block told every agent and the
+   Oracle "Goals: Not provided" and "Competitors: Not provided" while the row
+   held "Revenue Growth" and a full competitor list.
+
+   primary_goal is preferred over goals because it is the one the dashboard
+   form reads and writes; goals is a second copy of the same string that no UI
+   maintains, kept here only as a fallback for a row where primary_goal is null.
+
+   Keywords is new rather than restored — top_keywords has never been in this
+   block. The SEO instruction at server.js:15362 asks for "keyword gaps versus
+   the competitors listed in its business profile", and the profile supplied
+   neither half of that comparison. */
 function formatBusinessProfile(businessProfile) {
   var p = businessProfile || {};
   return "BUSINESS PROFILE:\n" +
@@ -117,9 +133,10 @@ function formatBusinessProfile(businessProfile) {
     "Products/Services: " + (p.products_services || "Not provided") + "\n" +
     "Target Audience: "   + (p.target_audience   || "Not provided") + "\n" +
     "Brand Voice: "       + (p.brand_voice       || "Not provided") + "\n" +
-    "Goals: "             + (p.business_goals    || "Not provided") + "\n" +
+    "Goals: "             + (p.primary_goal      || p.goals || "Not provided") + "\n" +
     "Location: "          + (p.location          || "Not provided") + "\n" +
-    "Competitors: "       + (p.competitors       || "Not provided");
+    "Keywords: "          + (p.top_keywords      || "Not provided") + "\n" +
+    "Competitors: "       + (p.top_competitors   || "Not provided");
 }
 
 function formatLiveStats(liveStats) {
