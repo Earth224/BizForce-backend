@@ -9451,29 +9451,130 @@ app.get("/api/business-profile", requireAuth, async (req, res) => {
     }
 });
 
+/* EVERY KEY BELOW NAMES A COLUMN THAT EXISTS ON THE LIVE TABLE.
+
+   It did not before. This literal carried brand_values, business_goals,
+   banned_topics, competitors and posting_frequency — the names
+   014_business_profiles.sql declares, against a table that was built outside
+   the migration system and has none of them. PostgREST rejects an unknown
+   column with PGRST204 and does not partially apply, so the payload being a
+   literal rather than a conditional made every save fail: this route could not
+   write anything at all.
+
+   Eight live columns the dashboard form has always posted were being dropped
+   on the way in, because the route had no key for them: niche, primary_goal,
+   top_competitors, top_keywords, monthly_revenue, monthly_budget and
+   business_description. They are here now.
+
+   goals, revenue_goal and automation_level are here too. They were left out
+   while the payload was a literal, because a key present with nothing to fill
+   it resolves to null and would have erased them on every save. Now that a key
+   only appears when the body carries it, they are safe — and leaving them out
+   would mean a client wanting to set them has no route that will. goals is
+   aliased to primary_goal like the other duplicate pairs; nothing writes it
+   today and formatBusinessProfile already falls back to it.
+
+   THE ALIASES, and why each is kept rather than dropped:
+
+     industry   <- industry || niche          two live columns holding the same
+     niche      <- niche || industry          string; either client filling one
+                                              fills both, so they cannot drift
+
+     description          <- description || business_description   same, and
+     business_description <- business_description || description   formatBusiness-
+                                              Profile reads `description` while
+                                              the dashboard posts only the other
+
+     primary_goal    <- primary_goal || business_goals     agents/content.html
+     top_competitors <- top_competitors || competitors     posts the 014 names;
+                                              accepting them maps that client
+                                              onto the real columns instead of
+                                              failing it */
 app.post("/api/business-profile", requireAuth, async function (req, res) {
   try {
-    var payload = {
-      user_id:           req.user.id,
-      business_name:     safeText(req.body.business_name, 120)                                          || null,
-      business_type:     safeText(req.body.business_type, 120)                                          || null,
-      industry:          safeText(req.body.industry || req.body.niche, 120)                             || null,
-      website:           safeText(req.body.website, 500)                                                || null,
-      location:          safeText(req.body.location, 200)                                               || null,
-      target_audience:   safeText(req.body.target_audience, 500)                                        || null,
-      offer:             safeText(req.body.offer, 500)                                                  || null,
-      products_services: safeText(req.body.products_services, 1000)                                     || null,
-      brand_voice:       safeText(req.body.brand_voice, 500)                                            || null,
-      brand_values:      safeText(req.body.brand_values, 1000)                                          || null,
-      business_goals:    safeText(req.body.business_goals || req.body.goals || req.body.primary_goal, 1000) || null,
-      banned_topics:     safeText(req.body.banned_topics, 1000)                                         || null,
-      competitors:       safeText(req.body.competitors || req.body.top_competitors, 500)                || null,
-      description:       safeText(req.body.description || req.body.business_description, 2000)          || null,
-      social_platforms:  (req.body.social_platforms && typeof req.body.social_platforms === "object" && !Array.isArray(req.body.social_platforms))
-        ? req.body.social_platforms : {},
-      posting_frequency: safeText(req.body.posting_frequency, 100)                                      || null,
-      created_at: nowIso(), updated_at: nowIso()
-    };
+    /* THE THREE THAT ARE NOT CLIENT FIELDS, so they are set directly and are
+       always present. Everything after this is conditional. */
+    var payload = { user_id: req.user.id };
+
+    /* A column enters the payload only when the body actually carries one of
+       its spellings. That is the whole point: an upsert writes every key it is
+       given, so a key present with nothing behind it resolves to null and
+       ERASES the column. Absent now means unchanged.
+
+       PRESENCE and VALUE are two separate questions, and they are answered by
+       two separate loops on purpose:
+
+         presence — does ANY spelling appear in the body at all, even as ""?
+                    That is the client saying "I am writing this field", and an
+                    empty string is a legitimate instruction to clear it.
+         value    — the FIRST spelling carrying something non-blank, which is
+                    what `a || b` did before and is why the alias order here is
+                    the alias order documented above. */
+    function setField(column, maxLength) {
+      var names = Array.prototype.slice.call(arguments, 2);
+      var i, name, raw, chosen;
+      var present = false;
+
+      for (i = 0; i < names.length; i++) {
+        if (req.body[names[i]] !== undefined) { present = true; break; }
+      }
+      if (!present) { return; }
+
+      for (i = 0; i < names.length; i++) {
+        name = names[i];
+        raw = req.body[name];
+        if (raw !== undefined && raw !== null && String(raw).trim() !== "") { chosen = raw; break; }
+      }
+
+      payload[column] = safeText(chosen, maxLength) || null;
+    }
+
+    setField("business_name",        120,  "business_name");
+    setField("business_type",        120,  "business_type");
+    setField("industry",             120,  "industry", "niche");
+    setField("niche",                120,  "niche", "industry");
+    setField("website",              500,  "website");
+    setField("location",             200,  "location");
+    setField("target_audience",      500,  "target_audience");
+    setField("offer",                500,  "offer");
+    setField("products_services",    1000, "products_services");
+    setField("brand_voice",          500,  "brand_voice");
+    setField("primary_goal",         1000, "primary_goal", "goals", "business_goals");
+    setField("goals",                1000, "goals", "primary_goal", "business_goals");
+    setField("top_competitors",      500,  "top_competitors", "competitors");
+    setField("top_keywords",         500,  "top_keywords");
+    setField("monthly_revenue",      100,  "monthly_revenue");
+    setField("monthly_budget",       100,  "monthly_budget");
+    setField("revenue_goal",         100,  "revenue_goal");
+    setField("automation_level",     100,  "automation_level");
+    setField("description",          2000, "description", "business_description");
+    setField("business_description", 2000, "business_description", "description");
+    /* text on the live table, NOT the jsonb 014 declares. The object guard this
+       replaced substituted a JavaScript {} for any non-object, so the string
+       every client actually sends became "{}" — which would have written {} over
+       a real value the moment the phantom columns stopped failing the request
+       first. safeText, like every other text column. */
+    setField("social_platforms",     500,  "social_platforms");
+
+    /* created_at IS DELIBERATELY NOT SET HERE, and its absence is the fix.
+
+       onConflict compiles to INSERT ... ON CONFLICT (user_id) DO UPDATE SET
+       <every key in the payload>. created_at used to be one of those keys, so
+       every save rewrote the creation timestamp to now and the row claimed to
+       have been created the last time it was edited. The original was gone
+       after the first update and there was nothing to recover it from.
+
+       A guard would not have helped: this route cannot tell an insert from an
+       update — that is the whole point of an upsert, and the answer arrives
+       from the database after the decision has already been made. Omitting the
+       key is what makes the distinction unnecessary. The column carries
+       DEFAULT now() on the live table, so an insert fills it and an update
+       leaves it out of the SET list entirely, which is the behaviour this
+       should always have had.
+
+       updated_at stays unconditional. It is meant to move on every write, and
+       it is the only column here that is. */
+    payload.updated_at = nowIso();
 
     var result = await supabase
       .from("business_profiles")
@@ -20322,20 +20423,30 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
     if (req.body.business_name     !== undefined) updates.business_name     = safeText(req.body.business_name, 120)      || null;
     if (req.body.business_type     !== undefined) updates.business_type     = safeText(req.body.business_type, 120)      || null;
     if (req.body.industry          !== undefined) updates.industry          = safeText(req.body.industry, 120)           || null;
+    if (req.body.niche             !== undefined) updates.niche             = safeText(req.body.niche, 120)              || null;
     if (req.body.website           !== undefined) updates.website           = safeText(req.body.website, 500)            || null;
     if (req.body.location          !== undefined) updates.location          = safeText(req.body.location, 200)           || null;
     if (req.body.target_audience   !== undefined) updates.target_audience   = safeText(req.body.target_audience, 500)    || null;
     if (req.body.offer             !== undefined) updates.offer             = safeText(req.body.offer, 500)              || null;
     if (req.body.products_services !== undefined) updates.products_services = safeText(req.body.products_services, 1000) || null;
     if (req.body.brand_voice       !== undefined) updates.brand_voice       = safeText(req.body.brand_voice, 500)        || null;
-    if (req.body.brand_values      !== undefined) updates.brand_values      = safeText(req.body.brand_values, 1000)      || null;
-    if (req.body.business_goals    !== undefined) updates.business_goals    = safeText(req.body.business_goals, 1000)    || null;
-    if (req.body.banned_topics     !== undefined) updates.banned_topics     = safeText(req.body.banned_topics, 1000)     || null;
-    if (req.body.competitors       !== undefined) updates.competitors       = safeText(req.body.competitors, 500)        || null;
-    if (req.body.description       !== undefined) updates.description       = safeText(req.body.description, 2000)       || null;
-    if (req.body.social_platforms  !== undefined && typeof req.body.social_platforms === "object" && !Array.isArray(req.body.social_platforms))
-      updates.social_platforms = req.body.social_platforms;
-    if (req.body.posting_frequency !== undefined) updates.posting_frequency = safeText(req.body.posting_frequency, 100)  || null;
+    if (req.body.top_keywords      !== undefined) updates.top_keywords      = safeText(req.body.top_keywords, 500)       || null;
+    if (req.body.monthly_revenue   !== undefined) updates.monthly_revenue   = safeText(req.body.monthly_revenue, 100)    || null;
+    if (req.body.monthly_budget    !== undefined) updates.monthly_budget    = safeText(req.body.monthly_budget, 100)     || null;
+    /* The same aliases the POST payload documents, in the same precedence, so
+       the two routes accept an identical field set. Each `!== undefined` test
+       names both spellings, or a client sending only the alias would be told
+       nothing was updated. */
+    if (req.body.primary_goal !== undefined || req.body.business_goals !== undefined)
+      updates.primary_goal = safeText(req.body.primary_goal || req.body.business_goals, 1000) || null;
+    if (req.body.top_competitors !== undefined || req.body.competitors !== undefined)
+      updates.top_competitors = safeText(req.body.top_competitors || req.body.competitors, 500) || null;
+    if (req.body.description !== undefined || req.body.business_description !== undefined) {
+      updates.description          = safeText(req.body.description || req.body.business_description, 2000) || null;
+      updates.business_description = safeText(req.body.business_description || req.body.description, 2000) || null;
+    }
+    /* text live, not jsonb — see the POST payload comment. */
+    if (req.body.social_platforms  !== undefined) updates.social_platforms  = safeText(req.body.social_platforms, 500)   || null;
     const { data, error } = await supabase
       .from("business_profiles")
       .update(updates)
