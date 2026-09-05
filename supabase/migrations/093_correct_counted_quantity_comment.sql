@@ -1,0 +1,90 @@
+-- ============================================================================
+-- 093_correct_counted_quantity_comment.sql
+--
+-- The comment on inventory_movements.counted_quantity asserted an invariant
+-- that does not hold. This replaces it.
+--
+-- WHAT IT CLAIMED, AND WHY IT WAS WRONG
+--   The previous comment ended "...so the log stays homogeneous and
+--   sum(in) - sum(out) still reconstructs the balance." The first half is true.
+--   The second is false as soon as a single adjust row exists.
+--
+--   direction 'adjust' carries no sign, and quantity holds abs(delta). A
+--   correction of three down and a correction of three up are therefore stored
+--   identically in (direction, quantity) and differ only in counted_quantity.
+--   A sum over the in and out rows cannot see either of them, so it diverges
+--   from quantity_on_hand by exactly the adjust deltas it skipped.
+--
+--   Worked, because an invariant is easier to disprove than to argue about:
+--
+--     in 10             on_hand 10    row: in,     qty 10
+--     out 3             on_hand  7    row: out,    qty 3
+--     adjust counted 5  on_hand  5    row: adjust, qty 2, counted 5
+--     in 4              on_hand  9    row: in,     qty 4
+--
+--     sum(in) - sum(out) = 14 - 3 = 11
+--     actual quantity_on_hand      =  9
+--     difference                   =  2, the adjust delta, exactly
+--
+--   THE CORRECT RECONSTRUCTION, in one line so the next reader has it without
+--   deriving it: re-anchor on the most recent adjust's counted_quantity, sum
+--   the in and out rows after it, and where no adjust exists sum(in) - sum(out)
+--   is the whole answer.
+--
+-- WHY THIS IS NOT A TYPO
+--   A comment that overstates a column's range is a nuisance. A comment
+--   asserting that a log is SUMMABLE is a different kind of thing: it is an
+--   instruction to write a query, and the query it invites returns a number
+--   that is wrong and does not announce itself. No exception is raised, no
+--   constraint is violated, nothing is logged. A stock valuation, a reorder
+--   decision or a reconciliation report built on it is simply incorrect by the
+--   size of the adjustments — which is to say, incorrect in proportion to how
+--   much counting the operator actually did, so the discrepancy grows precisely
+--   where the data was being cared for most.
+--
+--   That is the exact failure mode the design notes throughout this schema
+--   exist to prevent, and it is the failure mode 089 describes in a different
+--   register: a comment in server.js asserted that all three wallet RPCs were
+--   defined in the repo when only one was, and 089 records that this was "worth
+--   recording because it is exactly the kind of statement that stops anyone
+--   looking." A reader checking whether the log summed would have read the old
+--   comment and stopped. Wrong documentation is worse than none, because none
+--   prompts a check.
+--
+-- WHY THE FIX IS HERE AND NOT IN 091
+--   091 transcribed this comment faithfully and correctly, and 091 is not
+--   changed by this file.
+--
+--   091 is a transcription of live objects that had never been recorded in this
+--   repo. A transcription that edits its source is no longer a transcription —
+--   it is an assertion about what the database ought to contain, dressed as a
+--   record of what it does contain, and the two are only distinguishable by
+--   whoever wrote it. The value of 034, 071, 089 and 091 rests entirely on
+--   their being literal. Silently improving one line would put every other line
+--   in them in question.
+--
+--   The error was in the live database, so the live database is where it is
+--   corrected — forward, in a numbered migration, the way every other change to
+--   live state in this directory is made.
+--
+--   CONSEQUENCE, stated so it is not later read as a mistake: 091 now records a
+--   comment the database no longer carries. That is correct. 091 says what was
+--   there when it was written; 093 is the change. Reading them in order gives
+--   the true history, which is what a migration directory is for. Reading 091
+--   alone and expecting it to match production is the error, and it is the same
+--   for any table whose columns were altered after being transcribed.
+--
+-- THE STATEMENT ITSELF
+--   Exactly the comment on column already run against the live database, not a
+--   reconstruction — read back verbatim from the live schema rather than
+--   retyped. One straight apostrophe, in "adjust's", is doubled below as
+--   required inside a single-quoted SQL literal; that is an escape, not a
+--   difference in the stored text. The two em dashes are U+2014 and pass
+--   through unchanged.
+--
+--   Idempotent: comment on column replaces whatever is there, so re-running
+--   this file is a no-op. Depends on 091 for the table and column.
+-- ============================================================================
+
+comment on column public.inventory_movements.counted_quantity is
+  'The figure a physical count actually observed, set only when direction is adjust and null otherwise. quantity carries the ABSOLUTE delta the count implied, which means the sign is not stored — a correction of 3 down and 3 up are identical in (direction, quantity) and differ only here. So the balance does NOT reconstruct as sum(in) - sum(out) once any adjust exists: it re-anchors on the most recent adjust''s counted_quantity and sums the in and out rows after it. Where no adjust exists, sum(in) - sum(out) is the whole answer. A count that agrees with the system writes quantity 0 with counted_quantity set — which is why quantity is >= 0 rather than > 0, against the wallet_transactions precedent: a count confirming nothing changed is a real event and the proof the count happened, and inventory_movements_adjust_shape still forbids a zero in or out.';
