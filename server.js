@@ -5654,7 +5654,7 @@ var PROSPECT_SCORE_MAX = ICP_CRITERIA_MAX * CRITERION_WEIGHT_MAX;
 var PROSPECT_LIST_LIMIT_DEFAULT = 50;
 var PROSPECT_LIST_LIMIT_MAX = 200;
 
-function prospectFieldError(field, reason) {
+function validationError(field, reason) {
   return { valid: false, field: field, error: field + " " + reason };
 }
 
@@ -5672,7 +5672,7 @@ function optionalText(value, maxLength) {
    and a string for valid, distinguished only by `=== false`. One `if (!value)`
    written anywhere collapses "absent" into "invalid". This reports the two
    separately and cannot be read wrongly by a falsy check. */
-function parseProspectTimestamp(value) {
+function parseIsoTimestamp(value) {
   if (value === undefined || value === null || String(value).trim() === "") {
     return { ok: true, value: null };
   }
@@ -5820,10 +5820,10 @@ function normalizeCriterionValue(value, path) {
    own column name; nothing else about the shape check differs. */
 function validateIcpCriteria(value, fieldName) {
   if (!Array.isArray(value)) {
-    return prospectFieldError(fieldName, "must be an array");
+    return validationError(fieldName, "must be an array");
   }
   if (value.length > ICP_CRITERIA_MAX) {
-    return prospectFieldError(fieldName, "must hold at most " + ICP_CRITERIA_MAX + " criteria");
+    return validationError(fieldName, "must hold at most " + ICP_CRITERIA_MAX + " criteria");
   }
 
   var normalized = [];
@@ -5925,7 +5925,7 @@ function validateProspectInput(input, options) {
     var name = safeText(source.name, 150);
 
     if (!name) {
-      return prospectFieldError("name", "is required");
+      return validationError("name", "is required");
     }
 
     fields.name = name;
@@ -5956,7 +5956,7 @@ function validateProspectInput(input, options) {
     if (icpId === null || icpId === undefined || String(icpId).trim() === "") {
       fields.icp_profile_id = null;
     } else if (!isValidUuid(icpId)) {
-      return prospectFieldError("icp_profile_id", "must be a uuid");
+      return validationError("icp_profile_id", "must be a uuid");
     } else {
       fields.icp_profile_id = String(icpId).trim();
     }
@@ -5969,7 +5969,7 @@ function validateProspectInput(input, options) {
       var score = parseBoundedInteger(source.fit_score, PROSPECT_SCORE_MAX);
 
       if (!score.ok) {
-        return prospectFieldError("fit_score", score.reason);
+        return validationError("fit_score", score.reason);
       }
 
       fields.fit_score = score.value;
@@ -5983,7 +5983,7 @@ function validateProspectInput(input, options) {
      status above and to three fields in validateIcpProfileInput. */
   if (present("criteria_results")) {
     if (!Array.isArray(source.criteria_results)) {
-      return prospectFieldError("criteria_results", "must be an array");
+      return validationError("criteria_results", "must be an array");
     }
 
     var results = validateIcpCriteria(source.criteria_results, "criteria_results");
@@ -6001,10 +6001,10 @@ function validateProspectInput(input, options) {
     var key = timestampFields[t];
 
     if (wanted(key)) {
-      var parsed = parseProspectTimestamp(source[key]);
+      var parsed = parseIsoTimestamp(source[key]);
 
       if (!parsed.ok) {
-        return prospectFieldError(key, "must be a valid ISO timestamp");
+        return validationError(key, "must be a valid ISO timestamp");
       }
 
       fields[key] = parsed.value;
@@ -6028,7 +6028,7 @@ function validateProspectInput(input, options) {
     status = status ? status.toLowerCase() : "";
 
     if (PROSPECT_STATUSES.indexOf(status) === -1) {
-      return prospectFieldError("status", "must be one of: " + PROSPECT_STATUSES.join(", "));
+      return validationError("status", "must be one of: " + PROSPECT_STATUSES.join(", "));
     }
 
     fields.status = status;
@@ -6065,14 +6065,14 @@ function validateProspectInput(input, options) {
 
     if (resultingStatus === "disqualified") {
       if (!reason) {
-        return prospectFieldError("disqualified_reason", "is required when status is disqualified");
+        return validationError("disqualified_reason", "is required when status is disqualified");
       }
 
       fields.disqualified_reason = reason;
     } else if (resultingStatus !== null) {
       fields.disqualified_reason = null;
     } else {
-      return prospectFieldError(
+      return validationError(
         "status",
         "must be sent as disqualified in the same request as disqualified_reason, which has no meaning without it"
       );
@@ -6099,7 +6099,7 @@ function validateIcpProfileInput(input, options) {
     var name = safeText(source.name, 150);
 
     if (!name) {
-      return prospectFieldError("name", "is required");
+      return validationError("name", "is required");
     }
 
     fields.name = name;
@@ -6127,7 +6127,7 @@ function validateIcpProfileInput(input, options) {
     var threshold = parseBoundedInteger(source.pass_threshold, PROSPECT_SCORE_MAX);
 
     if (!threshold.ok) {
-      return prospectFieldError("pass_threshold", threshold.reason);
+      return validationError("pass_threshold", threshold.reason);
     }
 
     fields.pass_threshold = threshold.value;
@@ -6135,7 +6135,7 @@ function validateIcpProfileInput(input, options) {
 
   if (present("is_active")) {
     if (typeof source.is_active !== "boolean") {
-      return prospectFieldError("is_active", "must be true or false");
+      return validationError("is_active", "must be true or false");
     }
 
     fields.is_active = source.is_active;
