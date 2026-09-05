@@ -9739,7 +9739,10 @@ var taskInstructions = {
   nurture_campaign: "Build a lead nurture campaign: segment definitions, content themes per stage, email templates, send timing, and conversion triggers that move leads to purchase.",
   subject_lines: "Generate 20 subject line variations for the given campaign goal — including curiosity, urgency, personalization, benefit-led, and question-based styles. Note which to A/B test first.",
   influencer_outreach: "Write an influencer outreach campaign: target creator profile (niche, size, engagement rate), 3 outreach email templates, partnership offer structure, and a 30-day campaign timeline.",
-  campaign_plan: "Build an influencer campaign plan: campaign goal, creator selection criteria, content brief, usage rights, performance KPIs, payment structure, and post-campaign reporting format.",
+  /* Shared by the Influencer agent and Vertical Marketing. The creator-specific
+     work it used to assume still lives in influencer_outreach and creator_list,
+     which are the Influencer agent's own tasks and are not shared. */
+  campaign_plan: "Build a campaign plan: campaign goal, audience and partner selection criteria, creative brief, usage rights, performance KPIs, budget and payment structure, and post-campaign reporting format.",
   partnership_offer: "Draft a creator partnership offer: value proposition, deliverables, compensation (flat fee + performance bonus structure), exclusivity terms, and content approval process.",
   creator_list: "Generate a creator list strategy: ideal creator archetypes, platform focus, discovery methods, outreach prioritization, and a scoring rubric to evaluate fit.",
   roi_forecast: "Build an influencer ROI forecast: estimated reach, engagement rate assumptions, conversion rate, projected revenue, cost per acquisition, and break-even analysis.",
@@ -9754,25 +9757,49 @@ var taskInstructions = {
   brand_narrative: "Craft a brand narrative: origin story, mission statement, brand values, hero customer story, key messages by audience, and an elevator pitch in 3 lengths (30s, 60s, 3min).",
   media_pitch: "Write 3 media pitch variations for different journalist personas: a news hook pitch, a trend story pitch, and a human interest pitch — each under 200 words with a subject line.",
   market_research: "Conduct a market research brief: market size estimate, key segments, growth trends, customer pain points, unmet needs, and 3 market entry or expansion opportunities.",
-  competitive_intel: "Build a competitive intelligence report: top 5 competitors, their positioning, pricing, strengths, weaknesses, recent moves, and strategic gaps the business can exploit.",
+  /* Neutral already — shared by the R&D and Vertical Marketing agents and
+     written for neither. The second sentence is the one that matters: this
+     asks for five competitors' PRICING and their RECENT MOVES, and the system
+     holds neither. top_competitors supplies the names and nothing else, so
+     every figure after that is training recall with no date on it. */
+  competitive_intel: "Build a competitive intelligence report: top 5 competitors, their positioning, pricing, strengths, weaknesses, recent moves, and strategic gaps the business can exploit. Any figure not supplied in the business profile — a price, a market share, a funding round — is recalled from training rather than observed, so attribute it that way and never state it as current.",
   trend_analysis: "Produce a trend analysis: 5 relevant industry or market trends, evidence for each, business impact (opportunity/threat), recommended response, and 12-month outlook.",
   innovation_brief: "Write an innovation brief: problem to solve, customer insight driving it, 3 product or service concepts, feasibility assessment, potential business model, and next validation step.",
   executive_briefing: "Create an executive briefing: situation summary, key data points, decision options with pros/cons, recommended action, risk factors, and resource requirements — fit for a leadership presentation.",
-  reputation_audit: "Conduct a reputation audit: review platform scores, sentiment patterns, top positive/negative themes, competitor comparison, and a priority repair plan for weak areas.",
+  /* Same shape as sentiment_report: scores about the outside world, no feed
+     behind them. */
+  reputation_audit: "Conduct a reputation audit: review platform scores, sentiment patterns, top positive/negative themes, competitor comparison, and a priority repair plan for weak areas. This platform reads no review site and no competitor's ratings, so give the scores as what the user must go and check rather than as findings already made, and attribute anything recalled from training as recalled.",
   review_strategy: "Build a review generation strategy: ask timing, request channels, messaging templates (email/SMS/in-person), incentive-safe approaches, and a monthly review tracking system.",
   brand_trust: "Create a brand trust plan: trust signals to add (certifications, testimonials, press, guarantees), messaging changes, website credibility elements, and a 60-day trust-building calendar.",
   crisis_response: "Write a crisis response playbook: situation assessment criteria, internal escalation steps, holding statement template, spokesperson guidelines, platform-specific response templates, and post-crisis review process.",
-  sentiment_report: "Produce a sentiment report: overall brand sentiment score, positive/negative/neutral breakdown, key themes driving each, competitor sentiment comparison, and recommended messaging shifts.",
+  /* The most dangerous instruction in this map. It asks for a numeric brand
+     sentiment score, and a user who reads "72% positive" has no way to see it
+     came from nowhere. */
+  sentiment_report: "Produce a sentiment report: overall brand sentiment score, positive/negative/neutral breakdown, key themes driving each, competitor sentiment comparison, and recommended messaging shifts. This platform holds no review data, no social listening and no sentiment feed, so give the scoring framework and how to populate it rather than a score, and never state a number as this brand's measured sentiment.",
   store_audit: "Conduct a store audit: homepage effectiveness, product page quality, checkout friction points, mobile experience, trust signals, load speed, and a prioritized fix list.",
   inventory_plan: "Build an inventory plan: demand forecasting method, reorder point calculation, safety stock formula, supplier diversity strategy, and seasonal adjustment guidelines.",
   omnichannel_strategy: "Create an omnichannel retail strategy: channel mix (online/offline/marketplace), inventory sync approach, customer experience consistency plan, and channel-specific marketing tactics.",
   conversion_audit: "Audit conversion rate: identify 5 drop-off points in the funnel, root cause analysis, A/B test recommendations for each, priority order, and expected lift estimates.",
   product_launch: "Build a product launch plan: launch timeline, pre-launch buzz tactics, launch day actions, email/social/ad coordination, influencer seeding, and post-launch review criteria.",
   etsy_listing: "Optimize an Etsy listing: SEO-rich title (140 chars), 13 keyword tags, description structure (hook + features + story + CTA), pricing guidance, photo requirements, and shipping strategy.",
-  shop_audit: "Conduct an Etsy shop audit: shop score assessment, listing quality review, keyword coverage gaps, pricing competitiveness, photo quality, shop sections, and a 30-day improvement plan.",
-  keyword_research: "Produce an Etsy keyword research report: 20 high-volume low-competition keywords, long-tail phrase variations, seasonal keyword opportunities, and placement guidance (title vs tags).",
-  pricing_strategy: "Build an Etsy pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan.",
-  competitor_analysis: "Analyze Etsy competitors: top 5 competing shops, their listing strategies, pricing, review counts, bestseller patterns, and gaps the user can exploit to differentiate.",
+  /* Etsy-named and UNSHARED, so it keeps its channel. What it cannot keep is
+     the pretence of having looked at the shop. */
+  shop_audit: "Conduct an Etsy shop audit: shop score assessment, listing quality review, keyword coverage gaps, pricing competitiveness, photo quality, shop sections, and a 30-day improvement plan. This platform cannot see the shop or the marketplace around it, so shop score, pricing competitiveness and photo quality are a checklist for the user to run rather than an assessment you have already made.",
+  /* Also shared by the Etsy and SEO agents. The Etsy-specific mechanics it
+     used to carry — title-versus-tags placement — survive in etsy_listing,
+     which still names the 140-character title and the 13 tags, so nothing is
+     lost to the Etsy agent by making this one channel-neutral. */
+  keyword_research: "Produce a keyword research report: 20 high-intent keywords with low competition, long-tail phrase variations, seasonal opportunities, and guidance on where each one belongs — titles, tags, headings or body copy, whichever the user's channel uses.",
+  /* The only one of the four where half the figures are real: inventory_items
+     carries unit_cost and unit_price, and profile_products carries price. The
+     competitor half is what has no source. */
+  pricing_strategy: "Build an Etsy pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan. This platform holds the user's own costs and prices but sees no competitor's, so present any competitive price range as recalled from training and undated rather than as the current market.",
+  /* Offered by BOTH the Etsy agent and the SEO agent, and taskInstructions is
+     keyed on task type alone, so one wording has to serve both. It said
+     "Etsy competitors ... competing shops ... listing strategies ... review
+     counts", which asked an SEO user about a marketplace they may not sell on.
+     Neutral now: the same work, described without naming a channel. */
+  competitor_analysis: "Analyze the competitors named in the business profile: how each positions itself, how it presents and prices what it sells, the social proof it displays, what appears to sell best for it, and the gaps the user can exploit to differentiate. Any figure not supplied in the business profile — a price, a review count, a ranking — is recalled from training rather than observed, so attribute it that way and never state it as current.",
   reputation_plan: "Build a reputation management plan: monitoring setup, review response templates, proactive reputation tactics, and a 90-day brand trust improvement roadmap.",
   analytics_report: "Produce an analytics report framework: key metrics dashboard, traffic analysis, conversion funnel, revenue attribution, and monthly reporting cadence with action triggers.",
   community_growth: "Build a community growth strategy: acquisition channels, onboarding flow, engagement programming, and member retention systems.",
