@@ -6458,6 +6458,577 @@ app.delete("/api/icp-profiles/:id", requireAuth, async function (req, res, next)
   }
 });
 
+/* ══ INVENTORY ═════════════════════════════════════════════════════════════
+
+   Follows the prospecting block above, which is the newest form of this
+   pattern and the one carrying all six corrections: optionalText coercing ""
+   to null so a column holds one kind of absence; parsers returning
+   { ok, value } rather than a tri-state distinguished only by `=== false`; an
+   unparseable status answered with a 400 instead of a silent reset to the
+   first lifecycle value; list routes bounded with limit/offset/has_more; the
+   one cross-field rule expressed as a second pass over already-validated
+   fields; and an owned-parent lookup only where a child table genuinely needs
+   parent scoping.
+
+   Two things are reused rather than rewritten, and both are named for the
+   feature that first needed them rather than for what they do:
+   validationError builds the { valid, field, error } shape every validator
+   in this file returns, and parseIsoTimestamp is a generic ISO parser.
+   Copying either to get a better name would leave two definitions of one
+   contract to drift apart — the criterionError work already extended that
+   contract once with `index`, and it extended one copy. Renaming them is a
+   separate change that touches the prospecting routes.
+
+   parseListRange is reused for the same reason; PROSPECT_LIST_LIMIT_DEFAULT
+   and _MAX bound these routes too. */
+
+var INVENTORY_STATUSES = ["active", "archived"];
+
+/* int4's ceiling, which is the type of quantity_on_hand and of both reorder
+   columns. Not a business rule — a reorder point of two billion is absurd —
+   and it is not trying to be one. The bound exists so a number too large for
+   the column is refused with a 400 naming the field, instead of reaching
+   Postgres and raising 22003 numeric_field_overflow, which arrives as a 500
+   for what is an ordinary bad request. */
+var INVENTORY_COUNT_MAX = 2147483647;
+
+/* The largest value numeric(12,2) can hold: twelve significant digits with two
+   after the point, so ten digits of currency and two of cents. DERIVED FROM
+   THE COLUMN rather than picked, the same way PROSPECT_SCORE_MAX is derived
+   from ICP_CRITERIA_MAX * CRITERION_WEIGHT_MAX rather than set to a round
+   0-100. A picked bound is wrong in both directions at once: too low and it
+   refuses a price the column would have stored, too high and it lets through a
+   value that becomes a 22003 at write time. */
+var INVENTORY_MONEY_MAX = 9999999999.99;
+
+function parseInventoryCount(value, field) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Math.floor(value) !== value) {
+    return validationError(field, "must be a whole number");
+  }
+  if (value < 0) {
+    return validationError(field, "must not be negative");
+  }
+  if (value > INVENTORY_COUNT_MAX) {
+    return validationError(field, "must be at most " + INVENTORY_COUNT_MAX);
+  }
+
+  return { valid: true, value: value };
+}
+
+/* Rounded to two places HERE, not left to the column.
+
+   numeric(12,2) would round a third decimal on write anyway, but silently and
+   after validation has already returned — so the row would hold a number this
+   validator never saw and never reported back. Rounding at the gate means the
+   value stored is the value the request was judged on. toFixed rather than
+   arithmetic on the raw float because it rounds the decimal representation the
+   user typed rather than its binary approximation. */
+function parseInventoryMoney(value, field) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return validationError(field, "must be a number");
+  }
+  if (value < 0) {
+    return validationError(field, "must not be negative");
+  }
+  if (value > INVENTORY_MONEY_MAX) {
+    return validationError(field, "must be at most " + INVENTORY_MONEY_MAX);
+  }
+
+  return { valid: true, value: Number(value.toFixed(2)) };
+}
+
+/* Same contract as validateProspectInput: a plain object in, never req; a value
+   out, never a response; no database access; and it neither takes nor produces
+   user_id.
+
+   NOT IN THE WRITABLE SET, deliberately: quantity_on_hand, last_counted_at,
+   and every movement field. quantity_on_hand has exactly one writer —
+   record_inventory_movement, which locks the item row and inserts the movement
+   in the same transaction — and last_counted_at moves only when that function
+   records an adjust. A body naming any of them is IGNORED rather than refused,
+   which is the same posture validateProspectInput takes toward
+   converted_customer_id: an unknown key is a client sending noise, while a
+   silently honoured one would let a caller assert a stock level no movement
+   ever produced. There is no code path below that writes either column. */
+function validateInventoryItemInput(input, options) {
+  var source = input || {};
+  var partial = !!(options && options.partial);
+  var fields = {};
+
+  function wanted(key) {
+    return !partial || Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  function present(key) {
+    return Object.prototype.hasOwnProperty.call(source, key);
+  }
+
+  if (wanted("name")) {
+    var name = safeText(source.name, 150);
+
+    if (!name) {
+      return validationError("name", "is required");
+    }
+
+    fields.name = name;
+  }
+
+  if (wanted("sku"))         fields.sku         = optionalText(source.sku, 80);
+  if (wanted("description")) fields.description = optionalText(source.description, 5000);
+  if (wanted("category"))    fields.category    = optionalText(source.category, 80);
+  if (wanted("location"))    fields.location    = optionalText(source.location, 150);
+  if (wanted("supplier"))    fields.supplier    = optionalText(source.supplier, 150);
+  if (wanted("notes"))       fields.notes       = optionalText(source.notes, 5000);
+
+  /* unit falls back in JavaScript while status below uses present() and lets
+     the column default stand. The asymmetry is deliberate: unit is a free-text
+     label where "" and "unit" mean the same thing to a reader, but status is a
+     lifecycle value where a blank must never quietly select one. */
+  if (wanted("unit")) {
+    fields.unit = safeText(source.unit, 40) || "unit";
+  }
+
+  var countFields = ["reorder_point", "reorder_quantity"];
+
+  for (var c = 0; c < countFields.length; c++) {
+    var countKey = countFields[c];
+
+    if (wanted(countKey)) {
+      if (source[countKey] === null || source[countKey] === undefined || String(source[countKey]).trim() === "") {
+        fields[countKey] = null;
+      } else {
+        var count = parseInventoryCount(source[countKey], countKey);
+
+        if (!count.valid) {
+          return count;
+        }
+
+        fields[countKey] = count.value;
+      }
+    }
+  }
+
+  var moneyFields = ["unit_cost", "unit_price"];
+
+  for (var m = 0; m < moneyFields.length; m++) {
+    var moneyKey = moneyFields[m];
+
+    if (wanted(moneyKey)) {
+      if (source[moneyKey] === null || source[moneyKey] === undefined || String(source[moneyKey]).trim() === "") {
+        fields[moneyKey] = null;
+      } else {
+        var money = parseInventoryMoney(source[moneyKey], moneyKey);
+
+        if (!money.valid) {
+          return money;
+        }
+
+        fields[moneyKey] = money.value;
+      }
+    }
+  }
+
+  if (wanted("product_id")) {
+    var productId = source.product_id;
+
+    if (productId === null || productId === undefined || String(productId).trim() === "") {
+      fields.product_id = null;
+    } else if (!isValidUuid(productId)) {
+      return validationError("product_id", "must be a uuid");
+    } else {
+      fields.product_id = String(productId).trim();
+    }
+  }
+
+  /* present(), not wanted(), because the column defaults to 'active' in 091 —
+     and an empty or unknown value is a 400 rather than a reset. The prospecting
+     block records why: validateCrmCustomerInput does
+     `status = status ? status.toLowerCase() : "lead"`, so a PUT carrying ""
+     silently returns the row to the first state in its lifecycle. Here that
+     would quietly un-archive an item somebody deliberately archived. */
+  if (present("status")) {
+    var status = safeText(source.status, 40);
+
+    status = status ? status.toLowerCase() : "";
+
+    if (INVENTORY_STATUSES.indexOf(status) === -1) {
+      return validationError("status", "must be one of: " + INVENTORY_STATUSES.join(", "));
+    }
+
+    fields.status = status;
+  }
+
+  return { valid: true, fields: fields };
+}
+
+/* The owned-parent lookup both movement routes run first.
+
+   Same shape and same reason as findOwnedCrmCustomer: inventory_movements
+   carries no user_id, so a movement makes no independent claim about who owns
+   it and is reachable only through an item this caller owns. The owner filter
+   is inside this query, so a row belonging to someone else does not come back
+   and there is nothing to compare in JavaScript afterwards.
+
+   Returns the row or null. A null is a 404 at every caller whether the id is
+   unknown or merely someone else's — deliberately indistinguishable from
+   outside. */
+async function findOwnedInventoryItem(itemId, userId) {
+  const { data, error } = await supabase
+    .from("inventory_items")
+    .select("*")
+    .eq("id", itemId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data || null;
+}
+
+app.get("/api/inventory/items", requireAuth, async function (req, res, next) {
+  try {
+    var range = parseListRange(req.query);
+
+    if (!range.ok) {
+      return res.status(400).json({ error: range.field + " " + range.reason, field: range.field });
+    }
+
+    /* One row past the limit, discarded before responding — the same trick the
+       prospects list uses. It answers has_more without a second count query and
+       without count: "exact", which makes the database walk the whole table to
+       describe one page. */
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .range(range.offset, range.offset + range.limit);
+
+    if (error) {
+      throw error;
+    }
+
+    var rows = data || [];
+    var hasMore = rows.length > range.limit;
+
+    return res.json({
+      items: hasMore ? rows.slice(0, range.limit) : rows,
+      limit: range.limit,
+      offset: range.offset,
+      has_more: hasMore
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/inventory/items", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateInventoryItemInput(req.body);
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .insert(Object.assign({ user_id: req.user.id }, validated.fields, {
+        created_at: nowIso(),
+        updated_at: nowIso()
+      }))
+      .select("*")
+      .single();
+
+    if (error) {
+      /* inventory_items_user_sku_uniq in 091 is unique on (user_id,
+         lower(sku)) where the sku is non-null and non-empty, so a repeated SKU
+         is a 409 rather than a 500. */
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "You already have an item with this SKU",
+          field: "sku"
+        });
+      }
+
+      /* 23503 in an INSERT handler means the row NAMED A PARENT THAT DOES NOT
+         EXIST, which here can only be product_id — the sole outbound FK a
+         client can set. That is the opposite meaning it carries in the DELETE
+         handler below, where the same code means a child blocked the delete.
+         Each handler knows which because only one of the two is reachable from
+         it. */
+      if (error.code === "23503") {
+        return res.status(400).json({
+          error: "product_id does not match a product you own",
+          field: "product_id"
+        });
+      }
+
+      throw error;
+    }
+
+    return res.status(201).json({ item: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/inventory/items/:id", requireAuth, async function (req, res, next) {
+  try {
+    const validated = validateInventoryItemInput(req.body, { partial: true });
+
+    if (!validated.valid) {
+      return res.status(400).json({ error: validated.error, field: validated.field });
+    }
+
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .update(Object.assign({}, validated.fields, { updated_at: nowIso() }))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "You already have an item with this SKU",
+          field: "sku"
+        });
+      }
+
+      if (error.code === "23503") {
+        return res.status(400).json({
+          error: "product_id does not match a product you own",
+          field: "product_id"
+        });
+      }
+
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    return res.json({ item: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/inventory/items/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      /* ABOVE the throw, deliberately, and this is the whole point of the
+         branch: inventory_movements.item_id is ON DELETE RESTRICT in 091, so
+         deleting an item that has any movement raises 23503
+         foreign_key_violation. Left to fall through, an ordinary and entirely
+         expected refusal becomes a 500.
+
+         409, not the 404 this route returns just below. The two are different
+         facts: a 404 means no such row was found to delete, while this row
+         EXISTS, belongs to the caller, and the server declined. Answering 404
+         would tell someone their item is gone while it is still on their
+         screen.
+
+         The message names status because that is what RESTRICT exists to push
+         toward — an item that has traded is a historical record, and 091 keeps
+         it deletable only until it has one. Retirement is the supported path
+         and there is no route that deletes movements.
+
+         The ownership predicate above closes the obvious probe for free: another
+         caller's item matches no row, so no FK check ever fires and the answer
+         is the plain 404 below. A 409 is only ever visible to the owner, and
+         23503 cannot be used to discover whether someone else's item has
+         movements. */
+      if (error.code === "23503") {
+        return res.status(409).json({
+          error: "This item has recorded movements and cannot be deleted. Set its status to archived instead.",
+          field: "status"
+        });
+      }
+
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    return res.json({ success: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/inventory/items/:id/movements", requireAuth, async function (req, res, next) {
+  try {
+    var range = parseListRange(req.query);
+
+    if (!range.ok) {
+      return res.status(400).json({ error: range.field + " " + range.reason, field: range.field });
+    }
+
+    /* Parent first, always. Same shape as the crm_activities list route, for
+       the same structural reason: inventory_movements carries no user_id, so a
+       movement has no independent claim about who owns it. */
+    const item = await findOwnedInventoryItem(req.params.id, req.user.id);
+
+    if (!item) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    /* NO OWNER FILTER ON THE CHILD QUERY, AND NONE IS POSSIBLE — the column
+       does not exist on this table. The parent lookup above IS the
+       authorisation, and item.id is safe here only because it has just been
+       proven to belong to the caller. Note it is item.id that is used and not
+       req.params.id: the same value, but only one of them has been through the
+       check. */
+    const { data, error } = await supabase
+      .from("inventory_movements")
+      .select("*")
+      .eq("item_id", item.id)
+      .order("occurred_at", { ascending: false })
+      .range(range.offset, range.offset + range.limit);
+
+    if (error) {
+      throw error;
+    }
+
+    var rows = data || [];
+    var hasMore = rows.length > range.limit;
+
+    return res.json({
+      item_id: item.id,
+      movements: hasMore ? rows.slice(0, range.limit) : rows,
+      limit: range.limit,
+      offset: range.offset,
+      has_more: hasMore
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The only route that changes quantity_on_hand, and it does not write the
+   column — record_inventory_movement does, under a row lock, in the same
+   transaction as the movement insert. */
+app.post("/api/inventory/items/:id/movements", requireAuth, async function (req, res, next) {
+  try {
+    /* Checked before the call because p_item_id is uuid: a non-uuid reaches
+       Postgres as a 22P02 cast failure, surfaces as a thrown error and becomes
+       a 500 for an ordinary bad request. Same gate, same reason, as the convert
+       route above. */
+    if (!isValidUuid(req.params.id)) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
+    /* TYPE gates only. The function owns every rule about shape and
+       positivity — whether a counted figure belongs on this direction, whether
+       a quantity is positive — and raises a token for each. What it cannot do
+       is survive a string where an integer is declared: that fails as a cast
+       before the body runs, with no token to map. So these three check the type
+       and nothing else, and the five semantic answers stay with the function. */
+    var numericParams = ["quantity", "counted_quantity", "unit_cost"];
+
+    for (var n = 0; n < numericParams.length; n++) {
+      var key = numericParams[n];
+      var raw = req.body[key];
+
+      if (raw !== undefined && raw !== null && (typeof raw !== "number" || !Number.isFinite(raw))) {
+        return res.status(400).json({ error: key + " must be a number", field: key });
+      }
+    }
+
+    var occurredAt = parseIsoTimestamp(req.body.occurred_at);
+
+    if (!occurredAt.ok) {
+      return res.status(400).json({ error: "occurred_at must be a valid ISO timestamp", field: "occurred_at" });
+    }
+
+    const { data, error } = await supabase.rpc("record_inventory_movement", {
+      p_item_id: req.params.id,
+      /* req.user.id AND NOTHING ELSE. The function is SECURITY DEFINER, so RLS
+         does not apply and this parameter IS the authorisation — and it is the
+         only one available, because inventory_movements has no user_id to check
+         against afterwards. A p_user_id taken from the body would let any
+         caller write movements against anyone's items and desynchronise every
+         quantity_on_hand in the system, through the one function the schema
+         designates as that column's sole writer. */
+      p_user_id: req.user.id,
+      p_direction: req.body.direction,
+      p_quantity: req.body.quantity === undefined ? null : req.body.quantity,
+      p_counted_quantity: req.body.counted_quantity === undefined ? null : req.body.counted_quantity,
+      p_reason: optionalText(req.body.reason, 500),
+      p_reference: optionalText(req.body.reference, 200),
+      p_unit_cost: req.body.unit_cost === undefined ? null : req.body.unit_cost,
+      p_occurred_at: occurredAt.value
+    });
+
+    if (error) {
+      /* 092 raises all five as bare machine-readable tokens rather than
+         sentences, precisely so this mapping can be exact. Compared with ===
+         against the trimmed message, not includes() — a substring test would
+         also match a future error that merely mentioned a token, and would map
+         an unrelated failure to a 400. Anything unmatched is rethrown and
+         becomes a 500, which is the right answer for a database that broke. */
+      var raised = String(error.message || "").trim();
+
+      if (raised === "item_not_found") {
+        return res.status(404).json({ error: "Item not found" });
+      }
+
+      if (raised === "invalid_direction") {
+        return res.status(400).json({
+          error: "direction must be one of: in, out, adjust",
+          field: "direction"
+        });
+      }
+
+      if (raised === "counted_quantity_required") {
+        return res.status(400).json({
+          error: "counted_quantity is required and must not be negative when direction is adjust",
+          field: "counted_quantity"
+        });
+      }
+
+      if (raised === "counted_quantity_not_allowed") {
+        return res.status(400).json({
+          error: "counted_quantity may only be sent when direction is adjust",
+          field: "counted_quantity"
+        });
+      }
+
+      if (raised === "quantity_must_be_positive") {
+        return res.status(400).json({
+          error: "quantity must be a positive whole number when direction is in or out",
+          field: "quantity"
+        });
+      }
+
+      throw error;
+    }
+
+    /* The function returns the new running total. Returned rather than
+       re-read: any second query would see a value another transaction could
+       already have moved, whereas this one is the value produced under the
+       lock. */
+    return res.status(201).json({ item_id: req.params.id, quantity_on_hand: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/agents", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
