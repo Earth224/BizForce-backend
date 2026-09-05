@@ -4960,8 +4960,7 @@ function validateDealInput(input, options) {
     var title = safeText(source.title, 200);
 
     if (!title) {
-      // Wording unchanged from what POST has always returned.
-      return { valid: false, field: "title", error: "Deal title is required" };
+      return validationError("title", "is required");
     }
 
     fields.title = title;
@@ -4981,17 +4980,16 @@ function validateDealInput(input, options) {
        through JSON.stringify, so "abc" was silently accepted as "no amount" —
        a wrong answer that looked like a deliberate one. */
     if (!Number.isFinite(amount)) {
-      return { valid: false, field: "amount", error: "amount must be a number" };
+      return validationError("amount", "must be a number");
     }
     if (amount < 0) {
-      return { valid: false, field: "amount", error: "amount cannot be negative" };
+      return validationError("amount", "cannot be negative");
     }
     if (amount > DEAL_AMOUNT_MAX) {
-      return {
-        valid: false,
-        field: "amount",
-        error: "amount cannot exceed " + DEAL_AMOUNT_MAX + " — the column is numeric(12,2)"
-      };
+      return validationError(
+        "amount",
+        "cannot exceed " + DEAL_AMOUNT_MAX + " — the column is numeric(12,2)"
+      );
     }
 
     fields.amount = amount;
@@ -5009,7 +5007,7 @@ function validateDealInput(input, options) {
     stage = stage ? stage.toLowerCase() : "new";
 
     if (DEAL_STAGES.indexOf(stage) === -1) {
-      return { valid: false, field: "stage", error: "stage must be one of: " + DEAL_STAGES.join(", ") };
+      return validationError("stage", "must be one of: " + DEAL_STAGES.join(", "));
     }
 
     fields.stage = stage;
@@ -5029,7 +5027,7 @@ function validateDealInput(input, options) {
        contacts_email_format_check: strict RFC validation rejects addresses that
        are real. */
     if (email && !/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
-      return { valid: false, field: "contact_email", error: "contact_email must be a valid email address" };
+      return validationError("contact_email", "must be a valid email address");
     }
 
     fields.contact_email = email;
@@ -5039,11 +5037,10 @@ function validateDealInput(input, options) {
     var closeDate = parseDealCloseDate(source.expected_close_date);
 
     if (closeDate === false) {
-      return {
-        valid: false,
-        field: "expected_close_date",
-        error: "expected_close_date must be a real calendar date in YYYY-MM-DD form"
-      };
+      return validationError(
+        "expected_close_date",
+        "must be a real calendar date in YYYY-MM-DD form"
+      );
     }
 
     fields.expected_close_date = closeDate;
@@ -5056,10 +5053,10 @@ function validateDealInput(input, options) {
       : Number(rawProbability);
 
     if (!Number.isFinite(probability) || Math.floor(probability) !== probability) {
-      return { valid: false, field: "probability", error: "probability must be a whole number" };
+      return validationError("probability", "must be a whole number");
     }
     if (probability < 0 || probability > 100) {
-      return { valid: false, field: "probability", error: "probability must be between 0 and 100" };
+      return validationError("probability", "must be between 0 and 100");
     }
 
     fields.probability = probability;
@@ -5239,13 +5236,6 @@ function parseCrmTimestamp(value) {
   return new Date(ms).toISOString();
 }
 
-/* Builds a failure from the field name so the name is written once.
-   validateDealInput hardcodes "amount must be a number" beside field:"amount",
-   which is the same string twice and two places to miss on a rename. */
-function crmFieldError(field, reason) {
-  return { valid: false, field: field, error: field + " " + reason };
-}
-
 /* Validates a CRM customer and returns the fields ready to insert or update.
 
    Same contract as validateDealInput: a plain object in, never req; a value
@@ -5306,7 +5296,7 @@ function validateCrmCustomerInput(input, options) {
     var name = safeText(source.name, 150);
 
     if (!name) {
-      return crmFieldError("name", "is required");
+      return validationError("name", "is required");
     }
 
     fields.name = name;
@@ -5334,7 +5324,7 @@ function validateCrmCustomerInput(input, options) {
     status = status ? status.toLowerCase() : "lead";
 
     if (CRM_STATUSES.indexOf(status) === -1) {
-      return crmFieldError("status", "must be one of: " + CRM_STATUSES.join(", "));
+      return validationError("status", "must be one of: " + CRM_STATUSES.join(", "));
     }
 
     fields.status = status;
@@ -5352,7 +5342,7 @@ function validateCrmCustomerInput(input, options) {
     var lastContacted = parseCrmTimestamp(source.last_contacted_at);
 
     if (lastContacted === false) {
-      return crmFieldError("last_contacted_at", "must be a valid ISO timestamp");
+      return validationError("last_contacted_at", "must be a valid ISO timestamp");
     }
 
     fields.last_contacted_at = lastContacted;
@@ -5382,7 +5372,7 @@ function validateCrmActivityInput(input, options) {
     activityType = activityType ? activityType.toLowerCase() : "note";
 
     if (CRM_ACTIVITY_TYPES.indexOf(activityType) === -1) {
-      return crmFieldError("activity_type", "must be one of: " + CRM_ACTIVITY_TYPES.join(", "));
+      return validationError("activity_type", "must be one of: " + CRM_ACTIVITY_TYPES.join(", "));
     }
 
     fields.activity_type = activityType;
@@ -5396,7 +5386,7 @@ function validateCrmActivityInput(input, options) {
     var occurredAt = parseCrmTimestamp(source.occurred_at);
 
     if (occurredAt === false) {
-      return crmFieldError("occurred_at", "must be a valid ISO timestamp");
+      return validationError("occurred_at", "must be a valid ISO timestamp");
     }
 
     fields.occurred_at = occurredAt;
@@ -5654,6 +5644,21 @@ var PROSPECT_SCORE_MAX = ICP_CRITERIA_MAX * CRITERION_WEIGHT_MAX;
 var PROSPECT_LIST_LIMIT_DEFAULT = 50;
 var PROSPECT_LIST_LIMIT_MAX = 200;
 
+/* Builds a failure from the field name so the name is written once, and is
+   the single definition of the { valid, field, error } contract that every
+   validator in this file returns.
+
+   The history is worth carrying, because it is the argument for keeping one
+   copy: validateDealInput hardcodes "amount must be a number" beside
+   field: "amount", the same string written twice and two places to miss on a
+   rename. This shape exists to fix that, and it only fixes it while there is
+   one definition to call. There were three — the CRM routes carried a
+   byte-identical crmFieldError and the prospecting routes this one, under a
+   name that said prospect — and criterionError extended the contract with
+   `index` on one copy alone, which is what drift looks like before anyone
+   notices. The CRM copy is folded in here; criterionError still extends this
+   contract deliberately, for callers that want to scroll to a row without
+   parsing the path. */
 function validationError(field, reason) {
   return { valid: false, field: field, error: field + " " + reason };
 }
@@ -6470,14 +6475,15 @@ app.delete("/api/icp-profiles/:id", requireAuth, async function (req, res, next)
    fields; and an owned-parent lookup only where a child table genuinely needs
    parent scoping.
 
-   Two things are reused rather than rewritten, and both are named for the
-   feature that first needed them rather than for what they do:
+   Two things are reused rather than rewritten, and both are named for what
+   they do rather than for the feature that first needed them:
    validationError builds the { valid, field, error } shape every validator
-   in this file returns, and parseIsoTimestamp is a generic ISO parser.
-   Copying either to get a better name would leave two definitions of one
-   contract to drift apart — the criterionError work already extended that
-   contract once with `index`, and it extended one copy. Renaming them is a
-   separate change that touches the prospecting routes.
+   in this file returns, and parseIsoTimestamp is a generic ISO parser. The
+   inventory routes are the third caller of validationError, after the CRM
+   and prospecting routes, and that is the whole point of the name — one
+   definition of the contract serving all three, which cannot drift the way
+   three copies under three names did. criterionError extends this contract
+   with `index`; there is now a single definition for it to extend.
 
    parseListRange is reused for the same reason; PROSPECT_LIST_LIMIT_DEFAULT
    and _MAX bound these routes too. */
@@ -14614,7 +14620,11 @@ function parseReminderMinutesBefore(value) {
 // so. Nothing here touches the database.
 //
 // On success:  { valid: true, fields: { ...columns } }
-// On failure:  { valid: false, field: "<name>", error: "<message>" }
+// On failure:  whatever validationError returns. That helper is the single
+//              definition of the failure contract in this file, and the three
+//              checks below call it rather than building the shape by hand —
+//              which is what they used to do, in the third of what were four
+//              hand-written copies of it.
 //
 // The order of the three checks below is load-bearing, not incidental. An input
 // that is wrong in more than one way reports jdn first, then title, then
@@ -14651,13 +14661,13 @@ function validateCalendarEventInput(input) {
   }
 
   if (!Number.isFinite(jdn)) {
-    return { valid: false, field: "jdn", error: "jdn is required and must be a number" };
+    return validationError("jdn", "is required and must be a number");
   }
   if (!title) {
-    return { valid: false, field: "title", error: "title is required" };
+    return validationError("title", "is required");
   }
   if (CALENDAR_EVENT_TYPES.indexOf(eventType) === -1) {
-    return { valid: false, field: "event_type", error: "event_type must be one of: " + CALENDAR_EVENT_TYPES.join(", ") };
+    return validationError("event_type", "must be one of: " + CALENDAR_EVENT_TYPES.join(", "));
   }
 
   return {
