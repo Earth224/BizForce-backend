@@ -9456,10 +9456,16 @@ app.get("/api/business-profile", requireAuth, async (req, res) => {
    It did not before. This literal carried brand_values, business_goals,
    banned_topics, competitors and posting_frequency — the names
    014_business_profiles.sql declares, against a table that was built outside
-   the migration system and has none of them. PostgREST rejects an unknown
+   the migration system and had none of them. PostgREST rejects an unknown
    column with PGRST204 and does not partially apply, so the payload being a
    literal rather than a conditional made every save fail: this route could not
    write anything at all.
+
+   THREE OF THOSE FIVE ARE COLUMNS NOW. 095 created brand_values,
+   banned_topics and posting_frequency — 014 had declared them and nothing ever
+   made them, so the fix was to add them rather than to keep dropping their
+   values. business_goals and competitors are still not columns and still map
+   onto primary_goal and top_competitors by the aliases below.
 
    Eight live columns the dashboard form has always posted were being dropped
    on the way in, because the route had no key for them: niche, primary_goal,
@@ -9549,6 +9555,12 @@ app.post("/api/business-profile", requireAuth, async function (req, res) {
     setField("automation_level",     100,  "automation_level");
     setField("description",          2000, "description", "business_description");
     setField("business_description", 2000, "business_description", "description");
+    /* Added live in 095. All three were declared by 014, never created, and
+       discarded on every save until then — see that file for why banned_topics
+       is the one that mattered. */
+    setField("brand_values",         1000, "brand_values");
+    setField("banned_topics",        1000, "banned_topics");
+    setField("posting_frequency",    100,  "posting_frequency");
     /* text on the live table, NOT the jsonb 014 declares. The object guard this
        replaced substituted a JavaScript {} for any non-object, so the string
        every client actually sends became "{}" — which would have written {} over
@@ -20433,12 +20445,26 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
     if (req.body.top_keywords      !== undefined) updates.top_keywords      = safeText(req.body.top_keywords, 500)       || null;
     if (req.body.monthly_revenue   !== undefined) updates.monthly_revenue   = safeText(req.body.monthly_revenue, 100)    || null;
     if (req.body.monthly_budget    !== undefined) updates.monthly_budget    = safeText(req.body.monthly_budget, 100)     || null;
+    /* Added live in 095, and here so the two routes keep an identical field
+       set — which is the property that made the last mismatch invisible. */
+    if (req.body.brand_values      !== undefined) updates.brand_values      = safeText(req.body.brand_values, 1000)      || null;
+    if (req.body.banned_topics     !== undefined) updates.banned_topics     = safeText(req.body.banned_topics, 1000)     || null;
+    if (req.body.posting_frequency !== undefined) updates.posting_frequency = safeText(req.body.posting_frequency, 100)  || null;
+    /* PARITY REPAIR. POST has accepted these two since the payload became
+       conditional; PATCH never did, so the two routes were not the identical
+       field set that change claimed. The check that passed used a body which
+       happened not to carry either name, which is exactly how a set comparison
+       lies. Neither column has a reader yet — see 094. */
+    if (req.body.revenue_goal      !== undefined) updates.revenue_goal      = safeText(req.body.revenue_goal, 100)       || null;
+    if (req.body.automation_level  !== undefined) updates.automation_level  = safeText(req.body.automation_level, 100)   || null;
     /* The same aliases the POST payload documents, in the same precedence, so
        the two routes accept an identical field set. Each `!== undefined` test
        names both spellings, or a client sending only the alias would be told
        nothing was updated. */
-    if (req.body.primary_goal !== undefined || req.body.business_goals !== undefined)
-      updates.primary_goal = safeText(req.body.primary_goal || req.body.business_goals, 1000) || null;
+    if (req.body.primary_goal !== undefined || req.body.goals !== undefined || req.body.business_goals !== undefined) {
+      updates.primary_goal = safeText(req.body.primary_goal || req.body.goals || req.body.business_goals, 1000) || null;
+      updates.goals        = safeText(req.body.goals || req.body.primary_goal || req.body.business_goals, 1000) || null;
+    }
     if (req.body.top_competitors !== undefined || req.body.competitors !== undefined)
       updates.top_competitors = safeText(req.body.top_competitors || req.body.competitors, 500) || null;
     if (req.body.description !== undefined || req.body.business_description !== undefined) {
