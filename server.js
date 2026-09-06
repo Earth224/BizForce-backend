@@ -16553,14 +16553,52 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
       .eq("user_id", req.user.id)
       .maybeSingle();
 
-    // Logged, not thrown. The transactions below are readable without it, and
-    // the response already answers 0 for an absent wallet — but "absent" and
-    // "unreadable" reaching the same answer is worth saying out loud, because
-    // it also decides whether the lazy create below is attempted.
+    /* ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS AND NO LONGER SHARE ONE.
+
+       Under maybeSingle() the two are already distinct in the result and need no
+       code check to tell apart: zero rows sets data to null and leaves error
+       null — postgrest-js enforces the cardinality client-side and hands back
+       null for an empty list — while any error at all means the read did not
+       answer. So `error` is the whole test, and absent is `!error && !data`,
+       handled below exactly as it was.
+
+       For anyone reaching for a PGRST116 check here: under maybeSingle() that
+       code does NOT mean "no row". It means MORE THAN ONE row — the duplicate
+       wallet case, raised with status 406 — and reading it as absence would
+       send a user who already has two wallet rows into the lazy create below
+       and write them a third. It belongs in this branch, because two balances
+       is not a balance.
+
+       This used to log and continue, reporting a balance of 0 for a read that
+       failed. The comment that stood here said the two were indistinguishable
+       in the response and left them that way; the response is what a person
+       reads their money off, and a wallet that could not be read is not a
+       wallet that is empty. Returning early also stops the lazy create below
+       from firing for a user whose row could not be read and may well exist. */
     if (walletResult.error) {
       console.error("[GET /api/wallet] wallet read failed for user " + req.user.id + ": " +
-        walletResult.error.message + ". Reporting a balance of 0, which is what an absent " +
-        "wallet also reports — the two are indistinguishable in the response.");
+        walletResult.error.message +
+        (walletResult.error.code ? " (" + walletResult.error.code + ")" : "") +
+        (walletResult.error.code === "PGRST116"
+          ? ". PGRST116 under maybeSingle() means MORE THAN ONE user_wallets row for this " +
+            "user — a duplicate to reconcile by hand, not a missing wallet."
+          : "") +
+        ". Answering 503; no balance is being reported and the lazy create is skipped.");
+
+      /* 503, not 500, and not a 200 carrying a flag.
+
+         The status is set deliberately so it survives the error handler at the
+         bottom of this file: that handler masks a 500 down to "Internal server
+         error" and passes any other status's message through verbatim, which is
+         what lets the page say why instead of showing a number. Nothing about
+         the schema travels with it — code, hint and details stay in the log
+         line above, where that handler's own rule says they belong. */
+      const balanceUnreadable = new Error(
+        "Your balance could not be read just now. This is a problem on our side, " +
+        "not a balance of zero — nothing has been spent or lost."
+      );
+      balanceUnreadable.status = 503;
+      throw balanceUnreadable;
     }
 
     const wallet = walletResult.data;
@@ -16589,7 +16627,33 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
       .order("created_at", { ascending: false })
       .limit(50);
 
-    if (error) throw error;
+    /* This one already failed loudly rather than answering an empty history, and
+       it stays that way. What changes is only that it says so in words the page
+       can show, instead of reaching the handler as a bare Postgres error and
+       being masked to "Internal server error".
+
+       IT IS NOT A 200 WITH THE HISTORY MARKED UNREADABLE, and the reason is a
+       second consumer rather than symmetry with the balance above. receipts.html
+       reads this route for `transactions` alone and merges them with marketplace
+       orders and campaign donations into one ledger. It does not know about a
+       marker field and would not learn about one from a backend change, so a 200
+       carrying a short history would silently under-report money across three
+       sources — which is the precise defect that page was just fixed for. A
+       response whose meaning depends on a field an existing caller does not read
+       is the same swallow in a new place. */
+    if (error) {
+      console.error("[GET /api/wallet] wallet_transactions read failed for user " + req.user.id +
+        ": " + error.message + (error.code ? " (" + error.code + ")" : "") +
+        ". Answering 503; the balance read succeeded but a partial history is not being served.");
+
+      const historyUnreadable = new Error(
+        "Your transaction history could not be read just now. This is a problem on our side — " +
+        "no payment, order or transfer has been lost."
+      );
+      historyUnreadable.status = 503;
+      throw historyUnreadable;
+    }
+
     return res.json({ balance: wallet ? wallet.balance : 0, transactions: txns || [] });
   } catch (error) { next(error); }
 });
