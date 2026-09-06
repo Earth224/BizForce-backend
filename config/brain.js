@@ -139,15 +139,44 @@ function formatBusinessProfile(businessProfile) {
     "Competitors: "       + (p.top_competitors   || "Not provided");
 }
 
+/* getLiveStats lists here, by key, any statistic whose query failed and whose
+   value is therefore a fallback rather than a measurement. Metadata about the
+   block, not a statistic in it, so it is never rendered as one. */
+var UNREADABLE_KEY = "_unreadable";
+
+/* The whole point of the marker: "0" is a fact about the business, "unavailable"
+   is a fact about this request. Phrased as something the prompt lacks rather
+   than as a failure, so the model treats it as a gap to work around or ask
+   about — not as a malfunction it should stop and explain to the user. The
+   "not zero" is the load-bearing half: without it a model reading "unavailable"
+   still tends to reason as though there were none. */
+function unreadableLine(key) {
+  return "- " + key + ": unavailable (unknown for this request — not zero)";
+}
+
 function formatLiveStats(liveStats) {
   if (!liveStats || typeof liveStats !== "object" || Object.keys(liveStats).length === 0) {
     return "LIVE PLATFORM STATS:\nNo live stats available for this request.";
   }
-  var lines = Object.keys(liveStats).map(function (key) {
-    var value = liveStats[key];
-    if (value && typeof value === "object") value = JSON.stringify(value);
-    return "- " + key + ": " + value;
-  });
+
+  var unreadable = Array.isArray(liveStats[UNREADABLE_KEY]) ? liveStats[UNREADABLE_KEY] : [];
+
+  var lines = Object.keys(liveStats)
+    .filter(function (key) { return key !== UNREADABLE_KEY; })
+    .map(function (key) {
+      if (unreadable.indexOf(key) !== -1) {
+        return unreadableLine(key);
+      }
+      var value = liveStats[key];
+      if (value && typeof value === "object") value = JSON.stringify(value);
+      return "- " + key + ": " + value;
+    });
+
+  /* An object carrying the marker and nothing else is not a stats block. */
+  if (lines.length === 0) {
+    return "LIVE PLATFORM STATS:\nNo live stats available for this request.";
+  }
+
   return "LIVE PLATFORM STATS (this user's real, current usage — use it, don't ignore it):\n" + lines.join("\n");
 }
 

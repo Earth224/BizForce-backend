@@ -9671,8 +9671,58 @@ async function getLiveStats(userId) {
   if (blogItemsResult.error)      throw blogItemsResult.error;
   if (smsItemsResult.error)       throw smsItemsResult.error;
 
+  /* THE FOUR SOFT COUNTS AND byAgent KEEP THEIR VALUES. THE FAILURE IS RECORDED
+     BESIDE THEM INSTEAD OF BEING DISCARDED.
+
+     A failed count still reports 0, exactly as before, and every existing key
+     keeps its name, its type and its value. What is new is one sibling key
+     listing which of them are a fallback rather than a measurement, so a reader
+     that wants the distinction can have it and a reader that does not is
+     untouched.
+
+     WHY A SIBLING LIST AND NOT null, WHICH WOULD BE THE OBVIOUS SHAPE.
+     analytics-dashboard.html reads three of these four — subscribers, optedIn
+     and campaigns — as `s.<key> != null ? s.<key> : "—"`. Returning null would
+     silently flip those three tiles from 0 to an em dash. That is arguably the
+     better dashboard, but it is a change to a surface this commit was asked to
+     leave alone, and it would arrive without anyone choosing it.
+
+     WHY NOT A { value, ok } WRAPPER. All seven callers and the dashboard read
+     these as plain numbers. A wrapper breaks every one of them at once, which
+     is the opposite of the guarantee this needs to make.
+
+     The key is underscore-prefixed because it is metadata about the block
+     rather than a statistic in it, and formatLiveStats skips it by name when
+     rendering. Anything else iterating this object will see one extra key whose
+     name says it is not a stat. */
+  var unreadable = [];
+
+  function softCount(result, name) {
+    if (result.error) {
+      /* These four used to discard the error object entirely — no log, no
+         marker, nothing. Even the wallet swallow this pattern was found beside
+         managed a console.error. */
+      console.error("[getLiveStats] " + name + " count failed for user " + userId + ": " +
+        (result.error.message || result.error) +
+        (result.error.code ? " (" + result.error.code + ")" : "") +
+        ". Reporting 0 to existing readers and marking it unreadable for the prompt.");
+      unreadable.push(name);
+      return 0;
+    }
+    return result.count || 0;
+  }
+
   var byAgent = {};
-  if (!agentRowsResult.error && Array.isArray(agentRowsResult.data)) {
+  if (agentRowsResult.error) {
+    /* byAgent degrades to {} rather than to 0, which is why it was not one of
+       the "four" — but it is the same defect wearing a different default: an
+       empty tally is indistinguishable from a user who has run nothing. Marked
+       for the same reason, and it is the fifth item, not a sixth query. */
+    console.error("[getLiveStats] byAgent tally failed for user " + userId + ": " +
+      (agentRowsResult.error.message || agentRowsResult.error) +
+      ". Reporting {} to existing readers and marking it unreadable for the prompt.");
+    unreadable.push("byAgent");
+  } else if (Array.isArray(agentRowsResult.data)) {
     agentRowsResult.data.forEach(function (row) {
       var t = row.agent_type || "general";
       byAgent[t] = (byAgent[t] || 0) + 1;
@@ -9685,11 +9735,12 @@ async function getLiveStats(userId) {
     contentItems: contentItemsResult.count || 0,
     blogItems: blogItemsResult.count || 0,
     smsItems: smsItemsResult.count || 0,
-    subscribers: subscribersResult.error ? 0 : (subscribersResult.count || 0),
-    optedIn: optedInResult.error ? 0 : (optedInResult.count || 0),
-    campaigns: campaignsResult.error ? 0 : (campaignsResult.count || 0),
-    socialDrafts: socialDraftsResult.error ? 0 : (socialDraftsResult.count || 0),
-    byAgent: byAgent
+    subscribers: softCount(subscribersResult, "subscribers"),
+    optedIn: softCount(optedInResult, "optedIn"),
+    campaigns: softCount(campaignsResult, "campaigns"),
+    socialDrafts: softCount(socialDraftsResult, "socialDrafts"),
+    byAgent: byAgent,
+    _unreadable: unreadable
   };
 }
 
