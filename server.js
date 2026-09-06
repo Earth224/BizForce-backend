@@ -9735,8 +9735,15 @@ var taskInstructions = {
   sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, email sequence, objections, conversion points, upsell path, and tracking KPIs.",
   content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, platform strategy, repurposing plan, and brand voice guidance.",
   ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget guidance, testing plan, and compliance-safe language.",
-  deal_pipeline: "Build a deal pipeline analysis: identify 5 specific deal or partnership opportunities relevant to the business, each with target company profile, deal structure, estimated value, and first outreach step.",
-  partnership_strategy: "Create a partnership strategy: identify ideal partner types, value exchange structure, co-marketing opportunities, revenue share models, and an outreach sequence with a sample first message.",
+  /* Asks for five NAMED companies with values attached, on a platform that
+     holds no directory of other businesses and cannot contact a stranger. Both
+     halves of that are covered below: the names are training recall, and the
+     outreach step has to name a place the user goes rather than a button. */
+  deal_pipeline: "Build a deal pipeline analysis: identify 5 specific deal or partnership opportunities relevant to the business, each with target company profile, deal structure, estimated value, and first outreach step. This platform holds no directory of other businesses, cannot search for one and has no path to contact a stranger, so every company named here is recalled from training rather than discovered, every estimated value is a guess with no source behind it, and each first outreach step must say where the user goes to take it.",
+  /* The partner TYPES and the exchange structure are ordinary business
+     reasoning and answerable. The outreach sequence is not: there is no
+     delivery path for it. */
+  partnership_strategy: "Create a partnership strategy: identify ideal partner types, value exchange structure, co-marketing opportunities, revenue share models, and an outreach sequence with a sample first message. This platform cannot find a partner or deliver a pitch to one — its only outbound channels are email and SMS to contacts the user has already entered themselves — so say where the user goes to identify and approach each partner type rather than implying the tool will reach them, and treat any partner named by name as recalled from training rather than found.",
   negotiation_brief: "Write a negotiation brief covering the user's objectives, BATNA, key leverage points, concession ranges, red lines, and a proposed opening position with reasoning.",
   due_diligence: "Build a due diligence checklist tailored to the deal context covering: financials, legal, operations, team, technology, market position, and risk factors — with specific questions for each area.",
   term_sheet: "Draft a term sheet framework covering deal structure, valuation basis, equity or revenue split, key milestones, exit provisions, exclusivity period, and standard protective clauses.",
@@ -19822,7 +19829,47 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: "Card not found" });
-    return res.json({ card: data });
+
+    /* THE CARD GOES FIRST. The visitor has what they came for before the
+       counter is touched, so the increment cannot delay the response and
+       cannot fail it — the same shape as the digital-good delivery in the
+       Stripe webhook and the Oracle turn count: soft work, after the thing
+       that matters. */
+    res.json({ card: data });
+
+    /* DELIBERATELY NOT AWAITED, and deliberately an RPC.
+
+       Not awaited, because nothing downstream needs the result and awaiting
+       would put a second round trip between the visitor and their card for a
+       number only the owner ever reads.
+
+       An RPC because supabase-js cannot express `views = views + 1`: through
+       PostgREST an update takes a literal, so the JavaScript version is a
+       read then a write, and two visitors opening the same card at once both
+       read 7 and both write 8. One view is lost with no error, and it is lost
+       precisely when a card is being shared hardest. 096 does the read and
+       the write in one UPDATE under a row lock, so concurrent opens serialise
+       and both land. See 096 for why it is not SECURITY DEFINER, and for why
+       there is no is_active guard: digital_cards has no such column.
+
+       The catch swallows on purpose. The response is already sent — there is
+       no status left to change and no caller left to tell, so the only honest
+       thing left is a log line. A card that renders with an uncounted view is
+       a working card; a card that 500s to protect a counter is not. */
+    supabase
+      .rpc("increment_card_view", { p_share_token: req.params.token })
+      .then(function (result) {
+        if (result && result.error) {
+          console.error("[cards/share] view count not incremented: " +
+            (result.error.message || result.error));
+        }
+      })
+      .catch(function (rpcError) {
+        console.error("[cards/share] view count not incremented: " +
+          ((rpcError && rpcError.message) || rpcError));
+      });
+
+    return;
   } catch (error) { next(error); }
 });
 
