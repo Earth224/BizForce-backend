@@ -16052,6 +16052,29 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
     const sessionParams = {
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
+      // OPERATIONAL REDUNDANCY, NOT A WEBHOOK DEPENDENCY.
+      //
+      // This path resolves the user from session.metadata.user_id — that is the
+      // only field the checkout.session.completed handler reads, and nothing in
+      // this file reads client_reference_id at all. Setting it grants no
+      // entitlement metadata was not already granting, and its absence has never
+      // been the reason a subscription failed to activate.
+      //
+      // It is set for the human, not the handler. Stripe surfaces
+      // client_reference_id on the payment row in the dashboard, in CSV exports
+      // and in the event payload, where metadata sits collapsed behind a
+      // disclosure. Someone reconciling a payment by hand — matching a charge to
+      // an account, chasing a dispute, answering "who is this £199 from" — reads
+      // that field and would otherwise have to open the session to find the same
+      // id. One line buys that.
+      //
+      // THE WEBHOOK DELIBERATELY DOES NOT FALL BACK TO IT, and should not be
+      // changed to. A fallback would alter billing behaviour to guard a failure
+      // nobody has observed, on a path that has never processed a real payment.
+      // Add it if and when metadata is actually seen to go missing — at which
+      // point this field will already be populated on every session written
+      // since, which is the other half of why it is worth setting now.
+      client_reference_id: req.user.id,
       // price_id is the webhook's second resolution source when metadata.plan
       // is missing, and nothing has ever populated it until now.
       metadata: {
@@ -17045,6 +17068,19 @@ app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async functi
       }],
       success_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=success",
       cancel_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=cancelled",
+      /* Without this, Stripe shows no promo-code box and REJECTS any code
+         against this session — the subscription checkout at /api/stripe/checkout
+         has carried it since it was written and this one never did, which is the
+         whole of the difference between them.
+
+         WHAT IT ENABLES: a coupon or promotion code created in the Stripe
+         dashboard can be entered by the buyer and applied to this line item.
+         WHAT IT DOES NOT: nothing here creates, validates, lists or records a
+         code, and no column on marketplace_listings holds one. The discount
+         exists only in Stripe, and the webhook does not read
+         total_details.amount_discount, so the platform cannot report what any
+         buyer actually paid after a code. */
+      allow_promotion_codes: true,
       metadata: {
         listing_id: String(listing.id),
         buyer_id: String(req.user.id),
