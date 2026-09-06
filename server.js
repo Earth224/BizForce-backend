@@ -256,7 +256,19 @@ const CHECKOUT_PRODUCTS = {
     envVar: "STRIPE_STARTER_PRICE_ID",
     plan: "all_access",
     successPath: "/dashboard.html?subscribed=1",
-    cancelPath: "/app.html"
+    // A CANCELLED CHECKOUT IS NOT A SIGN-OUT. This was "/app.html", which is
+    // the sign-in and landing page, so a signed-in user who changed their mind
+    // was bounced out of the authenticated surface for it — back to a page
+    // offering to log them in while they already were. Returning them to the
+    // dashboard puts them where they started, and the parameter lets that page
+    // say what happened rather than leaving the trip unexplained.
+    //
+    // Safe for a signed-out canceller too, though that cannot happen today:
+    // /api/stripe/checkout is requireAuth, so no session exists without a valid
+    // token. If one ever did, dashboard.html checks bf_token at the top and
+    // replaces to /app.html — the same destination as before, reached one hop
+    // later. The change cannot strand anybody.
+    cancelPath: "/dashboard.html?checkout=cancel"
   }
 };
 
