@@ -37,7 +37,7 @@ const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { runNightlyBackup } = require("./lib/backup");
-const { generateSelfReview } = require("./lib/selfReview");
+const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -25686,6 +25686,350 @@ async function storeProposalTick() {
   }
 }
 
+// ── Daily self-review pass ───────────────────────────────────────────────────
+//
+// Generates the weekly and monthly self-reviews that have become available, for
+// every user who opted into autonomous analytics work. Claimed through job_runs
+// on exactly the same terms as the store proposal pass above, because that is
+// the only durable claim in this file and the only thing that holds if Railway
+// ever runs more than one replica: an in-process guard sees one process's own
+// memory and nothing else.
+var SELF_REVIEW_JOB_NAME = "daily_self_reviews";
+
+// Same zone as the store pass, and for the same reason: the schedule's timezone
+// and the claim day's timezone must be the same string or the claim boundary
+// and the fire time drift apart. Note this is the CLAIM's calendar, which is a
+// separate thing from the reviews' own UTC period boundaries — those are
+// computed inside lib/selfReview.js and are deliberately not local.
+var SELF_REVIEW_TIMEZONE = "America/Los_Angeles";
+
+// Both period types, every day. See the schedule comment for why daily.
+var SELF_REVIEW_PERIOD_TYPES = ["weekly", "monthly"];
+
+/* Consent, not billing, and reusing the existing "analytics" opt-in rather than
+   inventing a key. A self-review is an analytics artefact — it measures the
+   account and writes about it — so a user who enabled autonomous analytics has
+   opted into this.
+
+   NOT a new "self_review" agent_type. Migration 064's own column comment binds
+   agent_type to the keys in AGENT_SYSTEM_PROMPTS and explains that the database
+   deliberately does not constrain it, which makes writing an unregistered value
+   here a silent contract break rather than a caught error. If self-reviews ever
+   want their own opt-in, the key gets registered in AGENT_SYSTEM_PROMPTS first
+   and this constant follows it. */
+var SELF_REVIEW_AUTONOMY_AGENT_TYPE = "analytics";
+
+var SELF_REVIEW_DEFAULT_MAX_PER_TICK = 10;
+
+// Local calendar day in the job's own timezone, formatted as the date literal
+// job_runs.last_run_on compares against. Deliberately NOT
+// new Date().toISOString().slice(0,10) — that is the UTC day, and at 7am
+// Pacific the UTC day is already tomorrow's for part of the year, so the claim
+// would roll over mid-evening local time and a second pass could run the same
+// local day.
+function selfReviewClaimDay() {
+  return DateTime.now().setZone(SELF_REVIEW_TIMEZONE).toFormat("yyyy-MM-dd");
+}
+
+/* The per-tick ceiling on GENERATIONS, from SELF_REVIEW_MAX_PER_TICK,
+   defaulting to 10.
+
+   Parsed the same defensive way SALES_AUTOLOOP_DAILY_DRAFT_CAP is, and for the
+   same reason: Number("") is 0 in JavaScript, not NaN. A blank or
+   whitespace-only variable would otherwise parse as a deliberate ceiling of
+   zero and silently disable the job while looking configured. Missing, blank,
+   non-numeric, zero and negative all fall back to the default; only a finite
+   positive number is honoured. */
+function selfReviewMaxPerTick() {
+  var raw = process.env.SELF_REVIEW_MAX_PER_TICK;
+  var parsed = Number(raw);
+
+  if (raw != null && String(raw).trim() !== "" && Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return SELF_REVIEW_DEFAULT_MAX_PER_TICK;
+}
+
+// Claim today for this job, atomically, returning true only if this process won
+// it. Two atomic statements rather than 064's single upsert, for the reason
+// spelled out above claimStoreProposalDay: PostgREST cannot attach a WHERE to
+// the DO UPDATE arm, and neither of these two can produce two winners.
+async function claimSelfReviewDay() {
+  var today = selfReviewClaimDay();
+
+  var insertResult = await supabase
+    .from("job_runs")
+    .insert({
+      job_name:    SELF_REVIEW_JOB_NAME,
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .select("job_name");
+
+  if (!insertResult.error) {
+    return true;
+  }
+
+  // 23505 = unique_violation, which means the row already exists. Anything else
+  // is a real failure, and a failure to read the claim must never be treated as
+  // holding it.
+  if (insertResult.error.code !== "23505") {
+    console.error("[SelfReview] Claim insert failed:", insertResult.error.message);
+    return false;
+  }
+
+  var updateResult = await supabase
+    .from("job_runs")
+    .update({
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .eq("job_name", SELF_REVIEW_JOB_NAME)
+    // "is distinct from today", spelled for PostgREST: a null last_run_on has
+    // never claimed and must win. A plain neq would drop the null row, because
+    // null <> date is null rather than true.
+    .or("last_run_on.is.null,last_run_on.neq." + today)
+    .select("job_name");
+
+  if (updateResult.error) {
+    console.error("[SelfReview] Claim update failed:", updateResult.error.message);
+    return false;
+  }
+
+  return (updateResult.data || []).length > 0;
+}
+
+// Close out the row this process claimed, on both the success and the failure
+// path, so a run never leaves started_at set with finished_at null — 064 notes
+// that state is indistinguishable from a run still in progress, and this table
+// has no heartbeat to tell them apart.
+async function finishSelfReviewRun(errorMessage) {
+  var patch = { finished_at: nowIso() };
+
+  if (errorMessage) {
+    patch.last_error = String(errorMessage).slice(0, 2000);
+  }
+
+  var result = await supabase
+    .from("job_runs")
+    .update(patch)
+    .eq("job_name", SELF_REVIEW_JOB_NAME);
+
+  if (result.error) {
+    console.error("[SelfReview] Failed to record run completion:", result.error.message);
+  }
+}
+
+// The pass body, split from the claim the same way runStoreProposalPass is.
+async function runSelfReviewPass() {
+  var generated  = 0;
+  var skipped    = 0;
+  var failed     = 0;
+  var firstFailure = null;
+  var ceilingReached = false;
+
+  var maxPerTick = selfReviewMaxPerTick();
+
+  function noteFailure(userId, periodType, detail) {
+    failed += 1;
+    if (!firstFailure) {
+      firstFailure = "user " + userId + " (" + periodType + "): " + detail;
+    }
+    console.error("[SelfReview] user " + userId + " " + periodType + " failed: " + detail);
+  }
+
+  /* Consent, not billing — an inner filter on enabled = true, so a user with no
+     agent_autonomy row is excluded rather than defaulted in. 064's header is
+     explicit that a left join coalescing to true would silently restore the old
+     behaviour of enrolling everyone with an active subscription, which is
+     billing status and not consent. */
+  var autonomyResult = await supabase
+    .from("agent_autonomy")
+    .select("user_id")
+    .eq("agent_type", SELF_REVIEW_AUTONOMY_AGENT_TYPE)
+    .eq("enabled", true);
+
+  /* Thrown, not returned. This is the pass's own query failing, so nothing can
+     proceed and there is no partial result to report. Returning an empty
+     summary would have the tick write finished_at with no last_error on a day
+     that is already claimed and cannot retry, leaving a row indistinguishable
+     from a genuinely empty pass. */
+  if (autonomyResult.error) {
+    throw new Error("Failed to load analytics autonomy opt-ins: " + autonomyResult.error.message);
+  }
+
+  var seenUserIds = {};
+  var userIds = (autonomyResult.data || [])
+    .map(function (row) { return row.user_id; })
+    .filter(function (id) {
+      if (!id || seenUserIds[id]) return false;
+      seenUserIds[id] = true;
+      return true;
+    });
+
+  console.log("[SelfReview] Pass starting — " + userIds.length +
+    " user(s) opted into analytics autonomy, ceiling " + maxPerTick + " generation(s) this tick.");
+
+  for (var i = 0; i < userIds.length; i++) {
+    var userId = userIds[i];
+
+    for (var p = 0; p < SELF_REVIEW_PERIOD_TYPES.length; p++) {
+      var periodType = SELF_REVIEW_PERIOD_TYPES[p];
+
+      if (generated >= maxPerTick) {
+        ceilingReached = true;
+        break;
+      }
+
+      try {
+        /* The ceiling counts GENERATIONS, not calls, so the already-complete
+           case has to be identified before the call rather than after it —
+           generateSelfReview returns the same shape whether it generated or
+           skipped, and a ceiling that counted skips would stop a tick that had
+           spent nothing.
+
+           This is deliberately the same check the helper makes internally, run
+           once more here. It is one indexed read against the unique index, and
+           paying it buys a ceiling that means what it says. The helper still
+           makes its own check: this one is not load-bearing for correctness,
+           only for counting, and removing it would silently turn the ceiling
+           into a cap on calls. */
+        var bounds = computePeriodBounds(periodType, new Date());
+
+        var existing = await supabase
+          .from("self_reviews")
+          .select("narrative")
+          .eq("user_id", userId)
+          .eq("period_type", periodType)
+          .eq("period_start", bounds.start.toISOString())
+          .maybeSingle();
+
+        if (existing.error) {
+          noteFailure(userId, periodType, existing.error.message || String(existing.error));
+          continue;
+        }
+
+        if (existing.data && existing.data.narrative) {
+          skipped += 1;
+          continue;
+        }
+
+        var review = await generateSelfReview({
+          supabase:          supabase,
+          callAnthropicText: callAnthropicText,
+          userId:            userId,
+          periodType:        periodType,
+          now:               new Date()
+        });
+
+        if (!review) {
+          noteFailure(userId, periodType, "generateSelfReview returned null; nothing was written");
+          continue;
+        }
+
+        if (review.narrative) {
+          generated += 1;
+        } else {
+          /* A row with metrics and no narrative. The model call failed inside
+             the helper, which logged the reason and kept the numbers. Counted
+             as a failure here so the pass does not close clean, but NOT as a
+             generation, because nothing was produced. */
+          noteFailure(userId, periodType, "metrics were written but the narrative was not generated");
+        }
+      } catch (userErr) {
+        /* ONE USER MUST NOT STOP THE OTHERS. Each user's reviews are
+           independent, the day's claim is already taken, and there is no retry
+           until tomorrow — so letting one transient error abort the loop would
+           deny every remaining user their reviews for a full day. Failures are
+           still counted and surfaced through last_error rather than swallowed. */
+        noteFailure(userId, periodType, (userErr && userErr.message) || String(userErr));
+      }
+    }
+
+    if (generated >= maxPerTick) {
+      ceilingReached = true;
+      break;
+    }
+  }
+
+  if (ceilingReached) {
+    console.log("[SelfReview] Ceiling reached — " + generated + " generation(s) this tick, ceiling " +
+      maxPerTick + " (SELF_REVIEW_MAX_PER_TICK). Stopping; the remainder are picked up on the next run.");
+  }
+
+  console.log("[SelfReview] Pass finished — " + generated + " generated, " + skipped +
+    " already complete, " + failed + " failed, across " + userIds.length + " user(s).");
+
+  return {
+    users: userIds.length,
+    generated: generated,
+    skipped: skipped,
+    failed: failed,
+    firstFailure: firstFailure,
+    ceilingReached: ceilingReached
+  };
+}
+
+var selfReviewPassRunning = false;
+
+async function selfReviewTick() {
+  // Cheap first check. It only sees this process's own memory, so it cannot
+  // stop a redeployed container repeating a pass — that is what the job_runs
+  // claim is for — but it costs nothing and stops a pass overlapping itself.
+  if (selfReviewPassRunning) {
+    console.log("[SelfReview] Tick skipped — previous run still in progress");
+    return;
+  }
+  selfReviewPassRunning = true;
+  console.log("[SelfReview] Tick starting...");
+
+  try {
+    // Claimed once per pass, before any user is enumerated — the claim is for
+    // the day, not for a user.
+    var claimed = await claimSelfReviewDay();
+
+    if (!claimed) {
+      console.log("[SelfReview] Tick skipped — " + SELF_REVIEW_JOB_NAME + " already claimed for " +
+        selfReviewClaimDay() + " (another process or an earlier run today)");
+      return;
+    }
+
+    // Past this point the row has started_at set and finished_at null, so every
+    // exit from here has to close it out — including a throw.
+    try {
+      var summary = await runSelfReviewPass();
+
+      // A pass that completed but failed some users is not a clean run. Those
+      // failures are deliberately not thrown inside the pass, so one user's
+      // error does not deny everyone else their reviews on a day that cannot
+      // retry — but they still have to land in last_error, or a partial failure
+      // closes looking identical to a successful pass.
+      if (summary && summary.failed > 0) {
+        await finishSelfReviewRun(
+          summary.failed + " failure(s) across " + summary.users + " user(s); first: " + summary.firstFailure
+        );
+      } else {
+        await finishSelfReviewRun(null);
+      }
+    } catch (passErr) {
+      var message = passErr && (passErr.message || String(passErr));
+      console.error("[SelfReview] Pass error:", message);
+      await finishSelfReviewRun(message);
+    }
+  } catch (err) {
+    // Nothing throws out of a tick. A scheduled job that rejects has no caller
+    // to catch it.
+    console.error("[SelfReview] Tick error:", err.message || err);
+  } finally {
+    selfReviewPassRunning = false;
+    console.log("[SelfReview] Tick finished.");
+  }
+}
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
@@ -25745,6 +26089,52 @@ app.listen(PORT, function () {
     console.log("[startup] storeProposalTick scheduled — 06:00 " + STORE_PROPOSAL_TIMEZONE + " daily, claimed through job_runs." + STORE_PROPOSAL_JOB_NAME);
   } else {
     console.log("[startup] storeProposalTick disabled (ENABLE_STORE_PROPOSAL_JOB not true)");
+  }
+
+  /* Daily self-review pass. OFF BY DEFAULT.
+   *
+   * The gate is exact, lowercase string equality against "true". A capital-T
+   * "True" does not enable this job, and it fails silently — the server boots
+   * clean, the startup line says disabled, and nothing looks broken until
+   * someone asks why no reviews exist. That exact mistake has cost this project
+   * before, which is why the disabled branch below logs the variable name: the
+   * log is the only place the misconfiguration is visible.
+   *
+   * DAILY, and daily is enough. A weekly review becomes available the day its
+   * week closes and a monthly one the day its month closes, so a once-a-day
+   * check catches both within hours of becoming available. Running more often
+   * would not make a review available any sooner — the period bounds are closed
+   * and do not move — it would only re-ask a question whose answer changes at
+   * most once a day.
+   *
+   * Most days, most of these calls do nothing: a period that already has a
+   * narrative costs one indexed read and no model call. That is the intended
+   * shape, not waste. The work concentrates on Mondays and on the first of the
+   * month, which is exactly when it should.
+   *
+   * A wall-clock cron rather than setInterval, for the same reason the two jobs
+   * around it are: on Railway every deploy replaces the process, so an interval
+   * measures from the last deploy rather than from the clock — deploy twice in a
+   * day and it runs twice, deploy often enough and it never fires at all.
+   *
+   * 07:00 rather than alongside the 06:00 proposal pass, so the two do not
+   * compete and a slow review pass cannot delay proposals.
+   *
+   * No boot-time run. A setTimeout firing minutes after every deploy is
+   * precisely the repeat-firing the job_runs claim exists to prevent. */
+  if (process.env.ENABLE_SELF_REVIEW === "true") {
+    cron.schedule("0 7 * * *", function () {
+      selfReviewTick().catch(function (err) {
+        console.error("[SelfReview] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: SELF_REVIEW_TIMEZONE
+    });
+    console.log("[startup] selfReviewTick scheduled — 07:00 " + SELF_REVIEW_TIMEZONE +
+      " daily, claimed through job_runs." + SELF_REVIEW_JOB_NAME +
+      ", ceiling " + selfReviewMaxPerTick() + " generation(s) per tick");
+  } else {
+    console.log("[startup] selfReviewTick disabled (ENABLE_SELF_REVIEW not exactly \"true\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is
