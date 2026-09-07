@@ -23087,9 +23087,35 @@ function blueskyRetryAfterSeconds(err) {
 // exact string "true" means dry-run — this logs what would have been sent
 // and never calls the Bluesky API. Reuses the single authenticated
 // BskyAgent exported by leadRadar.js; never creates a second login/session.
+/* Exactly one leading at-sign, whatever the radar happened to store.
+
+   The three radars store three different shapes, and no call site can assume
+   any of them:
+
+     Bluesky   stores a bare handle, "someone.bsky.social" (leadRadar.js:206,
+               from post.author.handle).
+     Mastodon  stores "user@instance", also with no leading at-sign
+               (mastodonRadar.js:66, from status.account.acct).
+     YouTube   stores authorDisplayName verbatim (youtubeRadar.js:150), and
+               modern YouTube display names ARE the channel handle, already
+               carrying the at-sign: "@AparecidaTomaz-u9c".
+
+   So prefixing unconditionally, which is what all four sites used to do,
+   produced "@@AparecidaTomaz-u9c" for every YouTube-sourced lead — in log
+   lines, in the prompt's CAPTURED LEAD block, and in the API response. Testing
+   for a prefix at each site would be the same decision made in four places and
+   forgotten in the fifth; normalising is the only thing that works for all
+   three shapes and keeps working when a fourth radar arrives.
+
+   Only LEADING at-signs are stripped. Mastodon's internal one separates user
+   from instance and is part of the handle, not a prefix. */
+function formatLeadHandle(rawHandle) {
+  return "@" + String(rawHandle).replace(/^@+/, "");
+}
+
 async function sendBlueskyReply(lead, replyText) {
   var sendLive = process.env.SALES_SEND_LIVE === "true";
-  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
   var text = truncateToBlueskyLimit(replyText);
 
   // AFTER the truncator, never before: facets are byte offsets into whatever
@@ -23244,7 +23270,7 @@ function mastodonRetryAfterSeconds(response) {
 // field existed won't have one.
 async function sendMastodonReply(lead, replyText) {
   var sendLive = process.env.SALES_SEND_LIVE === "true";
-  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
   var text = truncateToMastodonLimit(replyText);
 
   if (!sendLive) {
@@ -23376,7 +23402,7 @@ function stripOutreachEmoji(text) {
 // "[DRY RUN]" / status "dry_run") but sales_lead_pipeline is left
 // completely untouched, so the same lead can be safely re-run later.
 async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
-  var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+  var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
 
   /* ── Which offer, if any ─────────────────────────────────────────────────
      First, above even the cap gate, because it is the only check here that
@@ -24436,7 +24462,7 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
 
     for (var i = 0; i < targetLeads.length; i++) {
       var lead = targetLeads[i];
-      var handle = lead.author_handle ? "@" + lead.author_handle : (lead.author_did || "unknown");
+      var handle = lead.author_handle ? formatLeadHandle(lead.author_handle) : (lead.author_did || "unknown");
       var converted = await convertSingleLead(userId, lead, sharedSystemPrompt, false);
 
       results.push({
