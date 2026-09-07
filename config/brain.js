@@ -168,6 +168,18 @@ function formatLiveStats(liveStats) {
         return unreadableLine(key);
       }
       var value = liveStats[key];
+
+      /* Enforced here rather than trusted upstream. A null or undefined value
+         means exactly what the marker means — unknown for this request, not
+         zero — so the formatter guarantees it instead of depending on every
+         producer pushing the key onto _unreadable on the same branch that
+         returns the null (softCountNullable in server.js does; nothing makes
+         the next one). Without this, a null from anywhere else renders the
+         literal word "null" into an agent prompt. */
+      if (value === null || value === undefined) {
+        return unreadableLine(key);
+      }
+
       if (value && typeof value === "object") value = JSON.stringify(value);
       return "- " + key + ": " + value;
     });
