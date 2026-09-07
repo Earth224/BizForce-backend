@@ -23758,31 +23758,56 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     console.error("[sales/convert] ai_tasks insert failed:", taskInsert.error.message);
   }
 
-  try {
-    var memTimestamp = nowIso();
-    var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
+  /* NO DURABLE MEMORY FOR A REHEARSAL. Joins the send above and the
+     sales_lead_pipeline write below in the set of things a dry run does not do.
+     The ai_tasks row written just above is deliberately NOT in that set — it is
+     the record that the dry run happened, and it stays.
 
-    var memInsert = await supabase
-      .from("agent_memory")
-      .insert({
-        user_id: userId,
-        agent: "sales",
-        agent_type: "sales",
-        memory_key: (dryRun ? "sales_convert_dryrun_" : "sales_convert_") + (taskInsert.data ? taskInsert.data.id : Date.now()),
-        memory_value: memContent,
-        memory_type: "insight",
-        title: (dryRun ? "[DRY RUN] " : "") + "Converted lead: " + handle,
-        content: memContent,
-        metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri, dry_run: dryRun }),
-        created_at: memTimestamp,
-        updated_at: memTimestamp
-      });
+     A dry run is a rehearsal. agent_memory is the agent's account of what it
+     actually did for this business, and a draft nobody sent is not that.
 
-    if (memInsert.error) {
-      console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
+     THE COMPOUNDING PART, which is why this is not merely tidy. Each pass reads
+     the five most recent sales memories into the shared system prompt
+     (line 23937, ordered by created_at desc, limit 5). A dry run writing memory
+     therefore fed its own drafts back into the next prompt, and with a pass
+     drafting up to five leads every five minutes those five slots were filled
+     by rehearsal output almost immediately. Two costs, both real: every
+     subsequent prompt carried up to five extra blocks of up to 2000 characters
+     of text describing sends that never happened, and the agent's business
+     memory — the thing meant to hold what worked with real people — was
+     displaced by drafts nobody received.
+
+     Note that the flag which cleanly identifies these rows, metadata.dry_run,
+     is not in the columns that read selects, so it could not have filtered them
+     out. Not writing them is the fix that does not depend on every future
+     reader remembering to exclude them. */
+  if (!dryRun) {
+    try {
+      var memTimestamp = nowIso();
+      var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
+
+      var memInsert = await supabase
+        .from("agent_memory")
+        .insert({
+          user_id: userId,
+          agent: "sales",
+          agent_type: "sales",
+          memory_key: (dryRun ? "sales_convert_dryrun_" : "sales_convert_") + (taskInsert.data ? taskInsert.data.id : Date.now()),
+          memory_value: memContent,
+          memory_type: "insight",
+          title: (dryRun ? "[DRY RUN] " : "") + "Converted lead: " + handle,
+          content: memContent,
+          metadata: normalizeMemoryMetadata({ source: "sales_convert", lead_post_uri: lead.post_uri, dry_run: dryRun }),
+          created_at: memTimestamp,
+          updated_at: memTimestamp
+        });
+
+      if (memInsert.error) {
+        console.error("[sales/convert] agent_memory write failed:", memInsert.error.message);
+      }
+    } catch (memErr) {
+      console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
     }
-  } catch (memErr) {
-    console.error("[sales/convert] agent_memory write error:", memErr.message || memErr);
   }
 
   if (!dryRun) {
