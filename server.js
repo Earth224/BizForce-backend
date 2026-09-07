@@ -9208,9 +9208,27 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
         .map(function (block) { return block.text; })
         .join("");
 
+      /* `model` is reported back because a caller that stores which model
+         produced a piece of text previously had no way to ask. The model is a
+         defaulted parameter here, so such a caller mirrored this function's
+         default constant in its own file — which is correct exactly until the
+         default changes, and then silently wrong: every row written would
+         attribute the text to a model that did not produce it, with nothing
+         failing to reveal it.
+
+         Prefer what the API echoed back over the requested name, since those
+         can differ — an alias resolves to a concrete version, and the response
+         says which one actually served the call. Falls back to the requested
+         model when the response omits it.
+
+         Purely additive. Every caller reads named properties off this object
+         (.text everywhere, .stopReason at two sites) and none spreads it,
+         serialises it, or iterates its keys, so an extra field reaches nobody
+         who did not ask for it. */
       return {
         text: text || "",
-        stopReason: response.stop_reason || ""
+        stopReason: response.stop_reason || "",
+        model: response.model || model
       };
 
     } catch (err) {
