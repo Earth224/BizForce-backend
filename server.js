@@ -24402,6 +24402,26 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         .from("bsky_leads")
         .select("*")
         .eq("status", "scored")
+        /* Sendable sources only, matching runSalesAutoConvert's own
+           `.in("source", OUTREACH_SENDABLE_SOURCES)`. This path had every other
+           filter that one has and not this one.
+
+           It matters more here than there, because this path always runs LIVE —
+           it calls convertSingleLead with dryRun hardcoded false. A lead from a
+           source with no sender would therefore be drafted at full cost, one
+           billed generation each, and then fail at the send with
+           "unsupported_source": the money is spent before anything checks
+           whether the reply could be delivered, and the answer was knowable from
+           the row all along.
+
+           OUTREACH_SENDABLE_SOURCES is ["bluesky", "mastodon"] — the two with
+           sender functions. YouTube leads are captured as signal only
+           (youtubeRadar.js writes status "signal", and youtube is not in
+           leadRadar.js's SCORABLE_SOURCES, so they are never scored), which
+           makes them unreachable through the status filter above today. The
+           source filter is what keeps that true if either of those facts
+           changes. */
+        .in("source", OUTREACH_SENDABLE_SOURCES)
         .not("post_created_at", "is", null)
         .gte("post_created_at", freshnessCutoff)
         .not("outreach_safe", "is", null)
