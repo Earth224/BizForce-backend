@@ -15893,19 +15893,27 @@ app.get("/api/self-reviews", requireAuth, async function (req, res, next) {
   }
 });
 
-/* Generating a review is idempotent per period, and cheap to call again.
+/* RATE LIMITED, because the helper's cheap-to-repeat property does not cover
+   the case that matters.
 
-   generateSelfReview checks for an existing row first and returns immediately
-   when that row already has a narrative — before gathering any metrics and
-   before calling the model. So a person leaning on this button spends money
-   exactly once per period: the first successful run writes the narrative, and
-   every call after it is one indexed read and no generation at all.
+   generateSelfReview does skip a period whose narrative is already written —
+   it returns that row before gathering metrics and before calling the model.
+   But a period whose model call FAILED is left with its metrics and a null
+   narrative, and that row is deliberately re-runnable: a null narrative is the
+   unfinished state, and finishing it on a later run is the whole reason the
+   check tests the narrative rather than the row.
 
-   That is a property of the helper rather than of this route, which is why
-   there is no rate limiter bolted on here. If the helper ever stops skipping
-   completed periods, this route becomes a way to spend money in a loop, and
-   the guard would have to move here. */
-app.post("/api/self-reviews/run", requireAuth, async function (req, res, next) {
+   So the expensive case is exactly the one a person is most likely to retry.
+   During a model outage every press bills a fresh generation, and
+   callAnthropicText retries up to three times internally, so one press can be
+   three billed calls. Pressing it repeatedly against a failing model is not
+   protected by anything in the helper — it is the helper working as intended.
+
+   Hence aiLimiter here rather than trusting the skip. The idempotency is a
+   property of the helper's current behaviour, not a guarantee this endpoint
+   makes, and an endpoint that can spend money should not be relying on a
+   promise made somewhere else that it cannot enforce. */
+app.post("/api/self-reviews/run", requireAuth, aiLimiter, async function (req, res, next) {
   try {
     /* Exact strings only. Not a truthy check, not a case-insensitive match, and
        not a default when absent: the column carries a CHECK constraint over
