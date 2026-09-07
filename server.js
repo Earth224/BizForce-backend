@@ -25080,6 +25080,111 @@ async function salesAutoConvertTick() {
     console.log("[SalesAutoConvert] Tick skipped — previous run still in progress");
     return;
   }
+
+  /* ── DAILY DRAFTING CAP ───────────────────────────────────────────────────
+     A ceiling on DRAFTS, not on sends, and it applies in dry-run mode exactly
+     as it applies live.
+
+     WHY THIS EXISTS. OUTREACH_DAILY_CAP was the only ceiling this path had, and
+     it is consulted inside the `if (!dryRun)` branch of convertSingleLead. So
+     it limited how many replies could be POSTED and never limited how many
+     model calls could be BILLED — and in dry-run mode, the mode this loop
+     defaults to, it was not consulted at all. The result was a pass drafting up
+     to five leads every five minutes, around the clock, with nothing counting
+     the spend: roughly 1,440 drafts a day, which is what happened across two
+     episodes in July and August.
+
+     A dry run is billed identically to a live one. It skips the send, not the
+     invoice. So the gate that bounds spend has to be a gate on drafting, and it
+     has to apply in both modes — which is why this sits here rather than beside
+     the send. */
+
+  /* The cap, from SALES_AUTOLOOP_DAILY_DRAFT_CAP, defaulting to 50.
+
+     Parsed defensively because Number("") is 0 in JavaScript, not NaN. A blank
+     or whitespace-only variable would otherwise parse as a deliberate cap of
+     zero and silently disable the loop entirely, which is a different decision
+     from not having configured it. Missing, blank, non-numeric, zero and
+     negative all fall back to the default; only a finite positive number is
+     honoured as a deliberate setting. */
+  var SALES_AUTOLOOP_DEFAULT_DRAFT_CAP = 50;
+  var rawDraftCap = process.env.SALES_AUTOLOOP_DAILY_DRAFT_CAP;
+  var parsedDraftCap = Number(rawDraftCap);
+  var dailyDraftCap =
+    (rawDraftCap != null && String(rawDraftCap).trim() !== "" &&
+     Number.isFinite(parsedDraftCap) && parsedDraftCap > 0)
+      ? parsedDraftCap
+      : SALES_AUTOLOOP_DEFAULT_DRAFT_CAP;
+
+  /* The four statuses convertSingleLead writes to ai_tasks, all of them after
+     the model call has been made and billed: "dry_run" for a rehearsal, "sent"
+     for a posted reply, "send_failed" for one that errored on the way out, and
+     "drafted" for a live run that produced text but sent nothing. Every one of
+     them cost a generation, which is why every one of them counts here.
+
+     Its two early returns — an unsupported product and a cap refusal — return
+     before any ai_tasks row is written, and neither spends. They are absent
+     from this list because they are absent from the table. */
+  var SALES_DRAFTING_STATUSES = ["dry_run", "sent", "send_failed", "drafted"];
+
+  /* The count deliberately includes conversions a person started by hand
+     through POST /api/agents/sales/convert. Both paths call convertSingleLead
+     and both bill the same generation, so a budget that ignored one of them
+     would not be a budget.
+
+     What it does NOT do is block that path. The cap gates this background tick
+     and nothing else: a user asking for a conversion still gets one after the
+     loop has stopped for the day. The asymmetry is deliberate — an unattended
+     timer spending in a loop is the thing worth stopping, and a person waiting
+     on a request they just made is not. */
+  var capNow = new Date();
+  var utcDayStart = new Date(Date.UTC(
+    capNow.getUTCFullYear(),
+    capNow.getUTCMonth(),
+    capNow.getUTCDate()
+  ));
+  var utcDayLabel = utcDayStart.toISOString().slice(0, 10);
+
+  var draftedTodayResult;
+  try {
+    // head: true asks PostgREST for the count and no rows at all.
+    draftedTodayResult = await supabase
+      .from("ai_tasks")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", OUTREACH_CREDENTIAL_OWNER_ID)
+      .eq("agent_type", "sales")
+      .in("status", SALES_DRAFTING_STATUSES)
+      .gte("created_at", utcDayStart.toISOString());
+  } catch (capErr) {
+    draftedTodayResult = { error: capErr };
+  }
+
+  /* FAIL CLOSED. An unreadable count is not a low count. If this read fails the
+     tick stops, exactly as if the cap had been reached, because the alternative
+     is a spend gate that opens precisely when it has lost the ability to see
+     what it is guarding — and the failure mode there is unbounded billing
+     during a database problem, which is the worst possible moment for it. A
+     gate that cannot read itself is not a gate. Skipping one pass costs five
+     drafts; opening on error costs whatever the outage lasts. */
+  if (draftedTodayResult && draftedTodayResult.error) {
+    console.error("[SalesAutoConvert] Tick ABORTED — could not read today's draft count for user " +
+      OUTREACH_CREDENTIAL_OWNER_ID + " (UTC day " + utcDayLabel + "): " +
+      (draftedTodayResult.error.message || draftedTodayResult.error) +
+      (draftedTodayResult.error.code ? " (" + draftedTodayResult.error.code + ")" : "") +
+      ". Failing closed and drafting nothing this pass rather than spending against a cap that cannot be checked.");
+    return;
+  }
+
+  var draftedToday = draftedTodayResult.count || 0;
+
+  if (draftedToday >= dailyDraftCap) {
+    console.log("[SalesAutoConvert] Tick skipped — " + draftedToday + " draft(s) already made for user " +
+      OUTREACH_CREDENTIAL_OWNER_ID + " on UTC day " + utcDayLabel + ", at or above the daily cap of " +
+      dailyDraftCap + " (SALES_AUTOLOOP_DAILY_DRAFT_CAP). No leads selected and no model calls made. " +
+      "This cap applies to dry runs as well as live runs, because both are billed.");
+    return;
+  }
+
   salesAutoConvertRunning = true;
   console.log("[SalesAutoConvert] Tick starting...");
   try {
