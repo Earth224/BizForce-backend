@@ -37,6 +37,7 @@ const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { runNightlyBackup } = require("./lib/backup");
+const { generateSelfReview } = require("./lib/selfReview");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -15853,6 +15854,94 @@ app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
   try {
     var stats = await getLiveStats(req.user.id);
     return res.json({ stats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Self-reviews ─────────────────────────────────────────────────────────────
+//
+// Stored weekly and monthly review cycles. Both routes scope to req.user.id and
+// to nothing else: no user id is read from a query string or a body on either
+// of them, so there is no parameter a caller could supply to read or write
+// somebody else's reviews.
+
+app.get("/api/self-reviews", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("self_reviews")
+      .select("period_type, period_start, period_end, metrics, unreadable, narrative, model, created_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    /* Thrown, never softened into an empty list.
+       `{ reviews: [] }` is not a neutral fallback — it is a claim about this
+       user's data, and it is the specific claim "you have no reviews", which a
+       read that failed has no standing to make. The page renders that as an
+       empty state indistinguishable from a genuinely new account, and the
+       person is told something false about their own history by a route that
+       simply could not reach the database. An error status says the one true
+       thing available here: we do not know. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ reviews: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* Generating a review is idempotent per period, and cheap to call again.
+
+   generateSelfReview checks for an existing row first and returns immediately
+   when that row already has a narrative — before gathering any metrics and
+   before calling the model. So a person leaning on this button spends money
+   exactly once per period: the first successful run writes the narrative, and
+   every call after it is one indexed read and no generation at all.
+
+   That is a property of the helper rather than of this route, which is why
+   there is no rate limiter bolted on here. If the helper ever stops skipping
+   completed periods, this route becomes a way to spend money in a loop, and
+   the guard would have to move here. */
+app.post("/api/self-reviews/run", requireAuth, async function (req, res, next) {
+  try {
+    /* Exact strings only. Not a truthy check, not a case-insensitive match, and
+       not a default when absent: the column carries a CHECK constraint over
+       these same two values (migration 097), so anything else is a 400 here
+       rather than a 500 from Postgres further down. */
+    var periodType = req.body ? req.body.period_type : null;
+
+    if (periodType !== "weekly" && periodType !== "monthly") {
+      return res.status(400).json({
+        error: 'period_type must be exactly "weekly" or "monthly".'
+      });
+    }
+
+    // req.user.id, never a user id from the body. callAnthropicText is passed
+    // by reference because lib/selfReview.js cannot require it — it is not in
+    // this file's module.exports, and requiring server.js from lib/ would be a
+    // cycle — but it is in scope right here.
+    var review = await generateSelfReview({
+      supabase:          supabase,
+      callAnthropicText: callAnthropicText,
+      userId:            req.user.id,
+      periodType:        periodType,
+      now:               new Date()
+    });
+
+    /* null means the helper stopped before writing a row: it could not check
+       for an existing review, or could not store the metrics. Nothing was
+       created, so there is nothing to return, and answering 200 with an empty
+       body would report success for work that did not happen. */
+    if (!review) {
+      return res.status(500).json({
+        error: "The review could not be generated. Nothing was written; see the server log for the reason."
+      });
+    }
+
+    return res.json({ review: review });
   } catch (error) {
     next(error);
   }
