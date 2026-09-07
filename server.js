@@ -9671,37 +9671,53 @@ async function getLiveStats(userId) {
   if (blogItemsResult.error)      throw blogItemsResult.error;
   if (smsItemsResult.error)       throw smsItemsResult.error;
 
-  /* THE FOUR SOFT COUNTS AND byAgent KEEP THEIR VALUES. THE FAILURE IS RECORDED
-     BESIDE THEM INSTEAD OF BEING DISCARDED.
+  /* AN UNREADABLE COUNT REPORTS null, AND IS LISTED IN _unreadable BESIDE IT.
 
-     A failed count still reports 0, exactly as before, and every existing key
-     keeps its name, its type and its value. What is new is one sibling key
-     listing which of them are a fallback rather than a measurement, so a reader
-     that wants the distinction can have it and a reader that does not is
-     untouched.
+     null is the value, _unreadable is the reason. Both are needed because they
+     answer different questions: null tells a numeric reader "no figure", the
+     list tells the prompt formatter which key to describe in words. Neither
+     alone is enough — a bare null renders in a prompt as the literal "null",
+     and a bare list leaves a 0 sitting in the JSON for anyone who does not read
+     the list.
 
-     WHY A SIBLING LIST AND NOT null, WHICH WOULD BE THE OBVIOUS SHAPE.
-     analytics-dashboard.html reads three of these four — subscribers, optedIn
-     and campaigns — as `s.<key> != null ? s.<key> : "—"`. Returning null would
-     silently flip those three tiles from 0 to an em dash. That is arguably the
-     better dashboard, but it is a change to a surface this commit was asked to
-     leave alone, and it would arrive without anyone choosing it.
+     3fe7bf7 held these at 0 on purpose, because at the time the dashboard was
+     off limits and 0 was what it already displayed. The guard it needed was
+     always there: analytics-dashboard.html:403-405 reads each of the three as
+     `s.<key> != null ? s.<key> : "—"`, written for a null the backend never
+     sent. This sends it, and those tiles show an em dash instead of a zero.
 
-     WHY NOT A { value, ok } WRAPPER. All seven callers and the dashboard read
-     these as plain numbers. A wrapper breaks every one of them at once, which
-     is the opposite of the guarantee this needs to make.
+     WHY NOT A { value, ok } WRAPPER. Every reader treats these as plain
+     numbers; a wrapper breaks all of them at once. null is falsy and
+     `!= null`-detectable, so it degrades safely everywhere it lands.
 
-     The key is underscore-prefixed because it is metadata about the block
-     rather than a statistic in it, and formatLiveStats skips it by name when
-     rendering. Anything else iterating this object will see one extra key whose
-     name says it is not a stat. */
+     socialDrafts is deliberately still 0 on failure. Nothing renders it — it is
+     prompt-only, and the prompt reads _unreadable rather than the value — so
+     there is no reader for a null to inform, and changing it would be a change
+     nobody can observe. It stays listed in _unreadable exactly as before.
+
+     The _unreadable key itself is unchanged: same name, same contents, same
+     underscore prefix marking it as metadata rather than a statistic. */
   var unreadable = [];
 
+  /* nullOnError: for counts something actually renders. Returns null so a
+     numeric reader can tell "we could not measure this" from "this is zero". */
+  function softCountNullable(result, name) {
+    if (result.error) {
+      console.error("[getLiveStats] " + name + " count failed for user " + userId + ": " +
+        (result.error.message || result.error) +
+        (result.error.code ? " (" + result.error.code + ")" : "") +
+        ". Reporting null and marking it unreadable.");
+      unreadable.push(name);
+      return null;
+    }
+    return result.count || 0;
+  }
+
+  /* Zero on error, for counts with no numeric reader. Kept separate rather than
+     folded into the above so the difference is a deliberate choice at the call
+     site and not an argument someone flips by accident. */
   function softCount(result, name) {
     if (result.error) {
-      /* These four used to discard the error object entirely — no log, no
-         marker, nothing. Even the wallet swallow this pattern was found beside
-         managed a console.error. */
       console.error("[getLiveStats] " + name + " count failed for user " + userId + ": " +
         (result.error.message || result.error) +
         (result.error.code ? " (" + result.error.code + ")" : "") +
@@ -9735,9 +9751,9 @@ async function getLiveStats(userId) {
     contentItems: contentItemsResult.count || 0,
     blogItems: blogItemsResult.count || 0,
     smsItems: smsItemsResult.count || 0,
-    subscribers: softCount(subscribersResult, "subscribers"),
-    optedIn: softCount(optedInResult, "optedIn"),
-    campaigns: softCount(campaignsResult, "campaigns"),
+    subscribers: softCountNullable(subscribersResult, "subscribers"),
+    optedIn: softCountNullable(optedInResult, "optedIn"),
+    campaigns: softCountNullable(campaignsResult, "campaigns"),
     socialDrafts: softCount(socialDraftsResult, "socialDrafts"),
     byAgent: byAgent,
     _unreadable: unreadable
