@@ -1685,11 +1685,22 @@ async function orchestrateAgentWorkflow(options) {
         });
 
         var salesSharedPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, salesBusinessProfile, salesLiveStats, salesMemoriesForBrain);
+        var salesHandoffLanguageTag = await resolvePreferredLanguage(userId);
+
         var salesHandoffPrompt =
           salesSharedPrompt +
           "\n\nHANDOFF CONTEXT:\nThe " + agentType.toUpperCase() + " Agent just completed this assignment and handed it to you:\n" +
           truncateOrchestratorPreview(resultText, 3000) +
-          "\n\nTASK INSTRUCTIONS:\nTranslate this handoff into concrete sales action: offers, scripts, funnel steps, or objection handling relevant to what was just completed.\n\nUSER REQUEST:\nAct on this handoff as the Sales Agent.";
+          "\n\nTASK INSTRUCTIONS:\nTranslate this handoff into concrete sales action: offers, scripts, funnel steps, or objection handling relevant to what was just completed.\n\nUSER REQUEST:\nAct on this handoff as the Sales Agent." +
+
+          /* surfaceSeesUserText is FALSE. Despite the "USER REQUEST" heading, that
+             line is a fixed string this file writes — the seeker never typed it.
+             Everything else is salesSharedPrompt (profile and memories) and
+             resultText, which is ANOTHER AGENT'S OUTPUT, not the seeker's words.
+             The chain began with something they wrote, but it is not in this
+             prompt, and mirroring cannot be asked of a prompt that carries
+             nothing to mirror. */
+          buildLanguageInstruction(salesHandoffLanguageTag, false);
 
         var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700);
         var salesOutput = salesGeneration.text;
@@ -5047,6 +5058,8 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
       .single();
     var businessProfile = profileResult.data || {};
 
+    var businessChatLanguageTag = await resolvePreferredLanguage(req.user.id);
+
     var systemPrompt =
       "You are the BizForce AI Business Guide — a knowledgeable, concise advisor embedded directly inside the user's business platform. " +
       "Your role is to answer questions, give strategic advice, and help solve problems specifically for THIS business. " +
@@ -5063,7 +5076,14 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
          exist on the real table; primary_goal does. */
       "Goals: "          + (businessProfile.primary_goal     || businessProfile.goals || "Not provided") + "\n" +
       "Location: "       + (businessProfile.location         || "Not provided") + "\n\n" +
-      "Keep responses clear and practical. Use bullet points when listing steps or options. Be direct.";
+      "Keep responses clear and practical. Use bullet points when listing steps or options. Be direct." +
+
+      /* surfaceSeesUserText is TRUE. The messages array below is built from
+         chat_messages — the user's own side of this conversation — and the
+         message they just sent was inserted into that table moments ago, so the
+         history genuinely carries their words. Read as prose, never parsed, so
+         no structural guard is needed. */
+      buildLanguageInstruction(businessChatLanguageTag, true);
 
     var messages = history.map(function (row) {
       return { role: row.role, content: row.content };
@@ -9145,6 +9165,8 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
               ? "(no posts published yet — this is the first)"
               : "(none available as link targets — do not link to any blog post)"));
 
+    const seoPostLanguageTag = await resolvePreferredLanguage(req.user.id);
+
     const promptText = AGENT_SYSTEM_PROMPTS.seo +
       moneySection +
       "\n\nThis seller's already-published posts (available as internal links):\n" + postLines +
@@ -9222,7 +9244,25 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       "---BODY---\n" +
       "the full post as HTML, following the tag rules above. Write the HTML exactly as it should appear — " +
       "real double quotes around every href, real line breaks between elements, nothing escaped. " +
-      "This section is last: everything after this marker is the article, so write it straight through to the end.";
+      "This section is last: everything after this marker is the article, so write it straight through to the end." +
+
+      /* surfaceSeesUserText is TRUE. `topic` and `site_context` come off req.body
+         — the operator typed them in this request — so there is real prose to
+         judge from. A topic written in Spanish should produce a Spanish article.
+
+         PARSED, so it needs a structural guard. parseSeoPostResponse locates the
+         seven markers with an anchored regex per marker and THROWS on the first
+         one it cannot find, so a translated marker is a hard failure, not a
+         degraded one — the route logs "Unparseable agent response" and the post
+         is lost after a 32000-token Sonnet call. Louder than the reflection's
+         silent freeze, but expensive, so the markers are pinned explicitly. */
+      buildLanguageInstruction(seoPostLanguageTag, true) +
+      "\n\nTHE SECTION MARKERS ARE NEVER TRANSLATED. Whatever language you write in, the seven marker lines must " +
+      "appear exactly as given above — ---TITLE---, ---SLUG---, ---META_DESCRIPTION---, ---KEYWORD---, " +
+      "---INTERNAL_LINKS---, ---REASONING--- and ---BODY--- — in English, in ASCII, each alone on its own line, " +
+      "with the same three dashes on each side. Only the CONTENT between the markers is written in the chosen " +
+      "language. These lines are read by a program, not by a person: a translated marker is not a stylistic choice, " +
+      "it makes the whole response unparseable and the article is discarded. The slug stays URL-safe ASCII.";
 
     // Sonnet rather than the Haiku default — a long-form structured article is
     // the most demanding writing task in this file, and it has to hold the
@@ -9581,7 +9621,37 @@ function mergeExecutiveAssignmentOutput(existingOutput, repairOutput) {
   return merged + "\n\n" + repair;
 }
 
-async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialStopReason) {
+/* Appended after the language instruction on the two executive paths, and only
+   when a language instruction was actually produced.
+
+   The executive output is STRUCTURALLY PARSED, twice: getMissingExecutiveAssignmentHeadings
+   tests it with /AGENT\s+ASSIGNMENT\s+<n>\s*:\s*<AGENT>\s+AGENT/i, and
+   mergeExecutiveAssignmentOutput splices repaired blocks in by the same shape.
+   Translate "AGENT ASSIGNMENT" and every heading reads as missing — so the repair
+   pass fires, spends another 4096-token call, and its output does not match
+   either, leaving the task flagged incomplete with a report that is in fact
+   complete and correctly written. Expensive and invisible at once.
+
+   Field labels are pinned too: the repair prompt names Mission, Owner, Priority,
+   Timeline, Tasks, KPIs, Risks and Next Action as "the exact heading format", and
+   a merged repair block has to sit alongside blocks from the first pass. */
+var EXECUTIVE_ASSIGNMENT_LANGUAGE_GUARD =
+  "\n\nTHE ASSIGNMENT HEADINGS AND FIELD LABELS ARE NEVER TRANSLATED. Whatever language you write in, every " +
+  "assignment heading keeps the exact English form \"AGENT ASSIGNMENT <number>: <AGENT NAME> AGENT\", and the field " +
+  "labels stay exactly Mission, Owner, Priority, Timeline, Tasks, KPIs, Risks and Next Action — in English, spelled " +
+  "and cased as given. Only the CONTENT after each label is written in the chosen language. These headings are " +
+  "matched by a program, not read by a person: a translated heading counts as a missing assignment.";
+
+/* The instruction plus its structural guard, or nothing at all. The guard is
+   only worth appending when there is a language instruction to guard — with no
+   preference and no user text the helper returns "", and bolting a paragraph
+   about untranslated headings onto an English-only prompt would be noise. */
+function executiveLanguageBlock(languageTag, surfaceSeesUserText) {
+  var instruction = buildLanguageInstruction(languageTag, surfaceSeesUserText);
+  return instruction ? instruction + EXECUTIVE_ASSIGNMENT_LANGUAGE_GUARD : "";
+}
+
+async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialStopReason, languageTag) {
   var output = String(initialOutput || "").trim();
   var missing = getMissingExecutiveAssignmentHeadings(userPrompt, output);
   var stopReason = initialStopReason || "";
@@ -9602,7 +9672,17 @@ async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialSto
       return "- " + item.heading;
     }).join("\n") +
     "\n\nExisting report context:\n" +
-    output.slice(-6000);
+    output.slice(-6000) +
+
+    /* surfaceSeesUserText is FALSE. This prompt is a list of missing headings
+       plus the tail of the model's OWN previous output — not a word the seeker
+       wrote. userPrompt is a parameter here, but it is used only to derive the
+       required headings, never placed in the prompt.
+
+       languageTag is passed down from processAiTask rather than re-resolved, so
+       the repair pass cannot disagree with the pass it is repairing, and one
+       task does not cost two preference reads. */
+    executiveLanguageBlock(languageTag, false);
 
   var repairResult = await callAnthropicText(repairPrompt, 4096);
   output = mergeExecutiveAssignmentOutput(output, repairResult.text);
@@ -9618,7 +9698,27 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
     try {
         var isExecutive = agentType === "executive";
         var maxTokens = (isExecutive || agentType === "content") ? 8192 : 1200;
-        var generation = await callAnthropicText(finalPrompt, maxTokens);
+
+        /* THE WIDEST SITE IN THE FILE — every specialist agent reaches the model
+           through here, so this one append covers all of them.
+
+           surfaceSeesUserText is TRUE: handleAiTaskRequest ends finalPrompt with
+           "USER REQUEST:\n" + userPrompt, which is the text the operator typed
+           into the task box. Unlike the sales handoff's fixed "USER REQUEST"
+           line, this one really is theirs.
+
+           The structural guard is added ONLY for executive tasks. Their output is
+           the only kind parsed — by heading regex, below — and telling a content
+           or SEO agent to preserve "AGENT ASSIGNMENT" headings it was never asked
+           to produce would be noise at best and an instruction to invent them at
+           worst. Resolved once here and handed to the repair pass so the two
+           cannot disagree. */
+        var taskLanguageTag = await resolvePreferredLanguage(userId);
+        var taskLanguageBlock = isExecutive
+          ? executiveLanguageBlock(taskLanguageTag, true)
+          : buildLanguageInstruction(taskLanguageTag, true);
+
+        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens);
         var output = generation.text;
         var executiveComplete = true;
 
@@ -9626,7 +9726,8 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           var executiveResult = await finalizeExecutiveTaskOutput(
             userPrompt || finalPrompt,
             output,
-            generation.stopReason
+            generation.stopReason,
+            taskLanguageTag
           );
 
           output = executiveResult.output;
@@ -15994,12 +16095,27 @@ app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiL
       "Be specific to the actual extracted content above, not generic advice — quote the actual title, headings, and alt text you are replacing.";
 
     var sharedSystemPrompt = buildAgentSystemPrompt(seoAgentBrain, businessProfile, liveStats, memoriesForBrain);
+    var seoOptimizeLanguageTag = await resolvePreferredLanguage(userId);
+
     var finalPrompt =
       sharedSystemPrompt +
       "\n\n" + pageDataBlock +
       "\n\nTASK INSTRUCTIONS:\n" + taskInstruction +
       "\n\nUSER REQUEST:\nRun a full Google SEO optimization pass on " + targetUrl +
-      (brandDescription ? " for this business: " + brandDescription : "");
+      (brandDescription ? " for this business: " + brandDescription : "") +
+
+      /* surfaceSeesUserText is FALSE, and this one is the closest call of the
+         eight. The prompt's bulk is pageDataBlock — text scraped off the target
+         website — plus a URL and a fixed instruction. brandDescription is the
+         only field the operator might have typed, and it is OPTIONAL: the
+         ternary above drops it entirely when absent, which is the common case.
+
+         Marked false because a flag that is only sometimes true is not a
+         truthful flag, and scraped page content is not "something the user
+         wrote" in the sense that matters — it is the site's copy, which may not
+         even be theirs. A set preference still governs this surface, which is
+         the path that counts. */
+      buildLanguageInstruction(seoOptimizeLanguageTag, false);
 
     var pendingInsert = await supabase
       .from("ai_tasks")
