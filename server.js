@@ -15955,6 +15955,120 @@ app.post("/api/self-reviews/run", requireAuth, aiLimiter, async function (req, r
   }
 });
 
+// ── Agent autonomy opt-ins ───────────────────────────────────────────────────
+//
+// A user reading and setting their own per-agent consent to autonomous work.
+// Both routes scope to req.user.id and to nothing else: no user id is read from
+// a query string or a body, so there is no parameter a caller could supply to
+// read or change somebody else's opt-ins.
+//
+// Migration 064 is explicit that the absence of a row means disabled and that
+// no job may default a missing row to enabled, so this table is the whole
+// consent record and these are the only routes that write it.
+
+app.get("/api/agent-autonomy", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("agent_autonomy")
+      .select("agent_type, enabled")
+      .eq("user_id", req.user.id)
+      .order("agent_type", { ascending: true });
+
+    /* Thrown, never softened into an empty list, for the same reason
+       GET /api/self-reviews throws. `{ autonomy: [] }` is not a neutral
+       fallback here either — it is the claim "you have enabled nothing", which
+       a read that failed cannot make. It is a worse claim on this route than on
+       that one: a settings page rendering it would show every toggle off, and a
+       user who had enabled an agent would be told, on screen, that they had
+       not. If they then toggled something to "fix" it, the write would be made
+       against a picture that was never true. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ autonomy: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/agent-autonomy", requireAuth, async function (req, res, next) {
+  try {
+    var agentType = req.body ? req.body.agent_type : null;
+    var enabled   = req.body ? req.body.enabled : undefined;
+
+    /* agent_type is validated against the live AGENT_SYSTEM_PROMPTS object, not
+       a list copied beside it. Migration 064 says the database deliberately
+       carries no CHECK on this column and that the validation belongs in the
+       route that writes it, checked against AGENT_SYSTEM_PROMPTS directly —
+       because a second copy of the roster drifts. It already has: 064's comment
+       names 17 keys and there are now 18.
+
+       What an unvalidated value costs is worse than a bad row. Nothing would
+       reject it, so the setting would be stored, returned by the GET above, and
+       rendered as an enabled toggle — while matching no job's filter, because
+       every job filters on a specific agent_type. The user would have a setting
+       that looks saved, reads back correctly, and does nothing at all, with no
+       error anywhere to explain it.
+
+       hasOwnProperty rather than `in` or a truthy property read: "constructor",
+       "toString" and "valueOf" are all `in` any object literal, and would
+       otherwise validate as agent types. */
+    if (typeof agentType !== "string" ||
+        !Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType)) {
+      return res.status(400).json({
+        error: "agent_type must be one of the registered agents.",
+        valid_agent_types: Object.keys(AGENT_SYSTEM_PROMPTS)
+      });
+    }
+
+    /* A REAL BOOLEAN, not a truthy value. The column is `boolean not null` and
+       this is a consent record, so the difference between false and "false"
+       matters more than usual: the string "false" is truthy in JavaScript, and
+       a coercing check would read a client sending it as consent GRANTED —
+       enabling autonomous work for a user whose request said to turn it off.
+       Missing, null, 0, "" and "true" are all rejected rather than interpreted. */
+    if (enabled !== true && enabled !== false) {
+      return res.status(400).json({
+        error: "enabled must be a boolean, true or false."
+      });
+    }
+
+    /* An upsert on (user_id, agent_type), which is safe here because migration
+       064 adds `agent_autonomy_user_agent_key unique (user_id, agent_type)` — a
+       FULL unique constraint, so PostgREST can target it with on_conflict. The
+       constraint's own comment says this is exactly what it exists for: to make
+       the toggle route an upsert rather than a select-then-insert-or-update,
+       and to stop two rows disagreeing about whether one agent is enabled for
+       one user.
+
+       updated_at is deliberately NOT set here. Migration 067 attaches
+       agent_autonomy_set_updated_at, a BEFORE UPDATE trigger calling
+       set_updated_at(), and 067's replacement column comment states that
+       callers do not need to set it and that the trigger overwrites whatever an
+       UPDATE supplies. Setting it would be redundant code that reads as though
+       the trigger were not trusted. The insert arm needs nothing either: the
+       column defaults to now(). */
+    const { data, error } = await supabase
+      .from("agent_autonomy")
+      .upsert({
+        user_id:    req.user.id,
+        agent_type: agentType,
+        enabled:    enabled
+      }, { onConflict: "user_id,agent_type" })
+      .select("agent_type, enabled")
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ autonomy: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── GET /api/activity/overview ───────────────────────────────────────────────
 //
 // Task activity for the calling user on the axis a dashboard actually draws:
