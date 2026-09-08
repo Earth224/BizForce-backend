@@ -16096,6 +16096,276 @@ app.put("/api/agent-autonomy", requireAuth, async function (req, res, next) {
   }
 });
 
+// ── Birth records ────────────────────────────────────────────────────────────
+//
+// Chart subjects other than the account holder — the second person in a
+// synastry pair. All three routes scope to req.user.id and read no user id from
+// a body or a query, so there is no parameter a caller could supply to reach,
+// create against, or delete from another account.
+//
+// Migration 066 designed this table for exactly this and left it unused: a
+// nullable user_id for guest and marketplace subjects, and a partial unique
+// index on (user_id, label) so an account cannot accumulate two records under
+// one name.
+
+// A ceiling, not a guess at how many partners anyone has. Without one this
+// table grows with every request an account cares to make, and the first thing
+// anyone notices is the bill for the storage rather than the shape of the
+// abuse. 25 is far past ordinary use and low enough to bound the damage.
+var BIRTH_RECORDS_MAX_PER_USER = 25;
+
+// Exactly the columns a caller needs. Deliberately not select("*"): contact_email
+// exists on this table for guest and marketplace rows and has no business in a
+// list of a logged-in user's own subjects.
+var BIRTH_RECORD_FIELDS =
+  "id, label, birth_name, birth_date, birth_time, place_query, place_label, " +
+  "latitude, longitude, timezone, place_confidence, created_at";
+
+app.get("/api/birth-records", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("birth_records")
+      .select(BIRTH_RECORD_FIELDS)
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(BIRTH_RECORDS_MAX_PER_USER);
+
+    /* Thrown, never softened into an empty list, for the reason
+       GET /api/self-reviews throws. `{ records: [] }` is the claim "you have
+       saved nobody", which a read that failed has no standing to make — and
+       here it invites a specific harm: a user who sees an empty list re-enters
+       a record they already have, and the unique index on (user_id, label)
+       turns that into a confusing rejection rather than the duplicate they
+       were trying to create. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ records: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/birth-records", requireAuth, async function (req, res, next) {
+  try {
+    var label      = safeText(req.body ? req.body.label : null, 80) || "";
+    var birthName  = safeText(req.body ? req.body.birth_name : null, 120);
+    var birthDate  = safeText(req.body ? req.body.birth_date : null, 20) || "";
+    var birthTime  = safeText(req.body ? req.body.birth_time : null, 20) || null;
+    var placeQuery = safeText(req.body ? req.body.place_query : null, 200) || "";
+    // Set on a second POST to accept one of the candidates a previous ambiguous
+    // response offered. Its value is a candidate's `id`, which resolvePlace
+    // builds as "<lat>,<lng>".
+    var placeId    = safeText(req.body ? req.body.place_id : null, 64) || "";
+
+    // Both are NOT NULL columns, so a blank one is a 400 here rather than a 500
+    // out of Postgres, and the message names which field was missing.
+    if (!birthDate) {
+      return res.status(400).json({ error: "birth_date is required." });
+    }
+    if (!placeQuery) {
+      return res.status(400).json({ error: "place_query is required." });
+    }
+
+    /* Validated here rather than left to the CHECK constraint, which would
+       surface a real 23514 as an opaque 500. parseBirthDate is the same
+       validator the natal chart uses, so a date accepted here is a date that
+       can actually produce a chart later. */
+    var parsedDate = parseBirthDate(birthDate);
+    if (!parsedDate.valid) {
+      return res.status(400).json({
+        error: "birth_date could not be read (" + parsedDate.reason + "). Expected a calendar date.",
+        field: "birth_date"
+      });
+    }
+    if (parsedDate.year < 1700 || parsedDate.year > 2200) {
+      return res.status(400).json({
+        error: "birth_date must fall between 1700 and 2200.",
+        field: "birth_date"
+      });
+    }
+
+    /* The cap, checked before any work. head: true asks for the count and no
+       rows. A failed count is NOT treated as room to spare — the ceiling exists
+       to bound growth, and a ceiling that opens when it cannot read itself does
+       not bound anything. */
+    var countResult = await supabase
+      .from("birth_records")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", req.user.id);
+
+    if (countResult.error) {
+      throw countResult.error;
+    }
+
+    if ((countResult.count || 0) >= BIRTH_RECORDS_MAX_PER_USER) {
+      return res.status(400).json({
+        error: "You have reached the limit of " + BIRTH_RECORDS_MAX_PER_USER +
+          " saved birth records. Delete one before adding another."
+      });
+    }
+
+    /* ── THE PLACE, RESOLVED ONCE AND STORED ────────────────────────────────
+       Migration 066 states the reason directly: the resolved coordinates and
+       timezone are stored PERMANENTLY rather than looked up at chart time, so
+       "a chart computed today produces the same Ascendant years from now even
+       if the geocoding dataset is updated, corrected or replaced. A chart that
+       silently moves because a city centroid shifted is indistinguishable from
+       a bug."
+
+       So this is the only moment the place is looked up. Everything after it
+       reads the stored numbers. */
+    var placeResult = resolvePlace(placeQuery);
+
+    var chosen = null;
+
+    if (placeId) {
+      /* A second POST naming one of the candidates from a previous ambiguous
+         answer. Matched against this resolve's own candidate list rather than
+         trusted from the body, so a caller cannot post arbitrary coordinates
+         under the guise of a choice — the id has to be one this server just
+         offered for this query. */
+      for (var c = 0; c < placeResult.candidates.length; c++) {
+        if (placeResult.candidates[c].id === placeId) {
+          chosen = placeResult.candidates[c];
+          break;
+        }
+      }
+      if (!chosen) {
+        return res.status(400).json({
+          error: "place_id does not match any candidate for this place_query. Resolve the place again and choose from the candidates returned.",
+          candidates: placeResult.candidates
+        });
+      }
+    }
+
+    var row = {
+      user_id:     req.user.id,
+      label:       label || "partner",
+      birth_name:  birthName,
+      birth_date:  birthDate,
+      birth_time:  birthTime,
+      place_query: placeQuery
+    };
+
+    if (chosen) {
+      // The user picked. 'chosen' rather than 'exact' because the distinction
+      // is worth keeping: one is the dataset's single answer, the other is a
+      // person's answer among several.
+      row.place_label      = chosen.label;
+      row.latitude         = chosen.latitude;
+      row.longitude        = chosen.longitude;
+      row.timezone         = chosen.timezone;
+      row.place_confidence = "chosen";
+
+    } else if (placeResult.confidence === "exact") {
+      var only = placeResult.candidates[0];
+      row.place_label      = only.label;
+      row.latitude         = only.latitude;
+      row.longitude        = only.longitude;
+      row.timezone         = only.timezone;
+      row.place_confidence = "exact";
+
+    } else if (placeResult.confidence === "ambiguous") {
+      /* NOTHING IS STORED, AND NO CANDIDATE IS PICKED.
+
+         066 records what taking matches[0] cost: dataset order is not
+         relevance, so "London" silently became London, Ontario and produced
+         "an Ascendant that was confidently, unrecoverably wrong." Wrong in the
+         worst way available — the chart renders, every number looks measured,
+         and nothing anywhere says it describes the wrong city.
+
+         A record that cannot yet produce a chart is better than one that
+         produces the wrong chart, because the first announces itself and the
+         second never does. The candidates go back and the person chooses.
+
+         The database agrees, incidentally: place_confidence is constrained to
+         ('exact','chosen','unresolved'), so there is no value that could even
+         represent a stored ambiguity. */
+      return res.status(409).json({
+        error:  "That birth place matches more than one location. Choose which one, then post again with place_id.",
+        code:   "place_ambiguous",
+        query:  placeResult.query,
+        candidates: placeResult.candidates
+      });
+
+    } else {
+      /* Unresolved. The row is still worth keeping: the birth date and name are
+         the parts a person cannot look up again later, and the place is the
+         part they can correct. Stored with null coordinates, which is what the
+         resolution CHECK requires of an 'unresolved' row and what keeps it
+         honestly unable to produce a chart until it is fixed. */
+      row.place_label      = null;
+      row.latitude         = null;
+      row.longitude        = null;
+      row.timezone         = null;
+      row.place_confidence = "unresolved";
+    }
+
+    const { data, error } = await supabase
+      .from("birth_records")
+      .insert(row)
+      .select(BIRTH_RECORD_FIELDS)
+      .single();
+
+    if (error) {
+      // 23505 = unique_violation on (user_id, label). A duplicate label is the
+      // caller's mistake and nameable, not a server fault.
+      if (error.code === "23505") {
+        return res.status(400).json({
+          error: "You already have a birth record labelled \"" + (label || "partner") + "\". Use a different label or delete the existing one."
+        });
+      }
+      throw error;
+    }
+
+    // 201 with the row, and the place verdict said plainly — an unresolved
+    // place is a successful create whose chart will not compute yet, and the
+    // caller should not have to infer that from a null latitude.
+    return res.status(201).json({
+      record: data,
+      place_confidence: data.place_confidence,
+      place_unresolved: data.place_confidence === "unresolved",
+      message: data.place_confidence === "unresolved"
+        ? "Saved, but the birth place could not be resolved, so no chart can be computed for this record until the place is corrected."
+        : "Saved."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/birth-records/:id", requireAuth, async function (req, res, next) {
+  try {
+    /* Matched on BOTH id and user_id. The id alone would be enough to find the
+       row and is exactly what must not be enough to delete it: a uuid from
+       another account would otherwise delete that account's record. The
+       user_id predicate is what makes a wrong id a miss rather than a breach. */
+    const { data, error } = await supabase
+      .from("birth_records")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id");
+
+    if (error) {
+      throw error;
+    }
+
+    // Zero rows means no record with that id belongs to this caller. Reported
+    // as not-found rather than as a success, so a caller is never told
+    // something was deleted when nothing was.
+    if (!data || !data.length) {
+      return res.status(404).json({ error: "No birth record with that id belongs to your account." });
+    }
+
+    return res.json({ deleted: data[0].id });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── GET /api/activity/overview ───────────────────────────────────────────────
 //
 // Task activity for the calling user on the axis a dashboard actually draws:
