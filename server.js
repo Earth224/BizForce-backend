@@ -4159,11 +4159,50 @@ app.delete("/api/user/api-key", requireAuth, async function (req, res, next) {
 
 var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
 
+/* BCP-47 tag -> the English name of the language.
+
+   ONE OBJECT DOING TWO JOBS, ON PURPOSE. The keys are the validation set for
+   preferred_language, and the values are the exact wording that gets written
+   into a prompt when a language is set. Keeping both in one place is what makes
+   it impossible for the route to accept a tag that the model then cannot be
+   told about: there is no way to add a key here without also naming it, so a
+   language cannot be storable and simultaneously unnameable.
+
+   The alternative — a list of valid tags in one place and a tag-to-name lookup
+   in another — fails quietly rather than loudly. The route would accept "sv",
+   the value would save, the GET would return it, the settings page would show
+   it selected, and the prompt builder would find no name for it and fall back
+   to English. The user would have a setting that reads back correctly and does
+   nothing, which is the same failure mode migration 064 and the agent-autonomy
+   route below are written to prevent.
+
+   English names rather than endonyms because the value is being interpolated
+   into an otherwise-English instruction to the model, which reads "Spanish"
+   more reliably than "Español" in that position. */
+var LANGUAGE_NAMES = {
+  en: "English",
+  es: "Spanish",
+  pt: "Portuguese",
+  fr: "French",
+  de: "German",
+  it: "Italian",
+  nl: "Dutch",
+  pl: "Polish",
+  tr: "Turkish",
+  ru: "Russian",
+  ar: "Arabic",
+  hi: "Hindi",
+  id: "Indonesian",
+  zh: "Chinese (Simplified)",
+  ja: "Japanese",
+  ko: "Korean"
+};
+
 app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
   try {
     const { data: row, error } = await supabase
       .from("user_preferences")
-      .select("termaximus_active, mist_position, notifications_enabled")
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -4171,18 +4210,38 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       throw error;
     }
 
+    /* available_languages is served rather than duplicated in the settings page.
+       The dropdown needs a tag-to-label list; if the frontend carried its own
+       copy, the two would drift the moment a language is added on one side and
+       not the other — and the drift would be silent, because a stale frontend
+       list still renders and still saves, it just offers the wrong set.
+
+       This codebase has the receipt for that already: migration 064's comment
+       names seventeen agent types and there are eighteen, which is why the
+       agent-autonomy route below validates against the live object instead of a
+       list copied beside it. Same reasoning, applied one step further out — the
+       frontend gets the object too, so there is exactly one roster.
+
+       preferred_language is null here and null is a real value, not a missing
+       one: it means mirror whatever language the seeker writes in. Returned
+       explicitly in both branches so the client never has to infer it from a
+       key being absent. */
     if (!row) {
       return res.json({
         termaximus_active: true,
         mist_position: "top-right",
-        notifications_enabled: true
+        notifications_enabled: true,
+        preferred_language: null,
+        available_languages: LANGUAGE_NAMES
       });
     }
 
     return res.json({
       termaximus_active: row.termaximus_active,
       mist_position: row.mist_position,
-      notifications_enabled: row.notifications_enabled
+      notifications_enabled: row.notifications_enabled,
+      preferred_language: row.preferred_language,
+      available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
     next(error);
@@ -4206,6 +4265,49 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
 
     if (req.body.notifications_enabled !== undefined) {
       updates.notifications_enabled = !!req.body.notifications_enabled;
+    }
+
+    /* THREE CASES, AND THEY MUST STAY THREE.
+
+         key absent            -> leave the stored value alone
+         key present and null  -> store null: mirror the seeker's language
+         key present, a string -> validate against LANGUAGE_NAMES, then store
+
+       `!== undefined` is the whole reason the middle case exists. It is what
+       separates "the client did not send this field" from "the client sent it
+       as null", and those mean opposite things here: the first is a partial
+       update that must not touch the column, the second is the user actively
+       turning the setting off. A truthiness check — `if (req.body.x)` — would
+       collapse both into "do nothing" and make the preference impossible to
+       unset once set. There would be no error, no failed request, and no way
+       back to the default except editing the row by hand.
+
+       null is stored deliberately, not coerced to a string or to "en". The
+       column is nullable precisely so this state can be expressed, and
+       migration 099 records why: with no value the Oracle keeps mirroring
+       whatever language the seeker writes in, which is a different behaviour
+       from being pinned to English.
+
+       hasOwnProperty rather than a plain lookup or `in`, for the same reason
+       the agent-autonomy route gives: "constructor", "toString" and "valueOf"
+       all resolve through the prototype chain of any object literal, so
+       `LANGUAGE_NAMES[tag]` and `tag in LANGUAGE_NAMES` would both accept them
+       and store a tag no prompt can ever name. The typeof guard keeps non-null
+       non-strings (numbers, arrays, objects) out of the same path. */
+    if (req.body.preferred_language !== undefined) {
+      if (req.body.preferred_language === null) {
+        updates.preferred_language = null;
+      } else if (
+        typeof req.body.preferred_language !== "string" ||
+        !Object.prototype.hasOwnProperty.call(LANGUAGE_NAMES, req.body.preferred_language)
+      ) {
+        return res.status(400).json({
+          error: "preferred_language must be null or one of the supported language tags.",
+          valid_language_tags: Object.keys(LANGUAGE_NAMES)
+        });
+      } else {
+        updates.preferred_language = req.body.preferred_language;
+      }
     }
 
     const { error } = await supabase
