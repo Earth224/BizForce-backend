@@ -224,16 +224,50 @@ async function runLeadRadarOnce() {
 
         if (!rows.length) continue;
 
-        var { error } = await supabase
-          .from("bsky_leads")
-          .upsert(rows, { onConflict: "post_uri", ignoreDuplicates: true });
+        /* The select is what makes the log below true.
 
+           ignoreDuplicates is ON CONFLICT DO NOTHING against
+           bsky_leads_post_uri_key, so a returning select yields ONLY the rows
+           that were genuinely inserted — a post already captured on an earlier
+           tick contributes nothing to it. Without it this call reports no count
+           at all, and the line beneath it had nothing to report but `rows`, the
+           array built before the write and never adjusted by it.
+
+           WHY THAT MATTERED. The old line printed `rows.length + " new leads"`,
+           which is posts the SEARCH MATCHED, not leads CAPTURED. Those two
+           numbers coincide only on the first tick that ever sees a post. The
+           keyword searches re-run over the same recent window every five
+           minutes and re-return the same posts, so matching-without-inserting
+           is the normal steady state rather than an edge case — the old line
+           overstated captures on most ticks, not rarely, and reported a number
+           for work that did not happen.
+
+           That is the same class of fabricated figure this codebase has been
+           removing elsewhere: a count that reads as a measurement and is
+           actually a fallback. This one had already cost something concrete —
+           it sent a diagnosis after a phantom pipeline failure, because "8 new
+           leads" beside "scoring 0 leads" looked like a broken scorer when
+           nothing had been inserted for the scorer to find. */
+        var { data: insertedRows, error } = await supabase
+          .from("bsky_leads")
+          .upsert(rows, { onConflict: "post_uri", ignoreDuplicates: true })
+          .select("post_uri");
+
+        // Unchanged: an error is logged and the keyword is skipped. The select
+        // adds a way for this call to fail on the read side as well as the
+        // write, and both arrive in the same `error` and are handled the same.
         if (error) {
           console.error("[LeadRadar] Supabase upsert error for keyword '" + keyword + "':", error.message);
           continue;
         }
 
-        console.log("[LeadRadar] " + keyword + " -> " + rows.length + " new leads");
+        // Null rather than 0 when the select returned nothing at all, which is
+        // a different fact from "nothing was inserted" and should not be
+        // printed as one.
+        var insertedCount = Array.isArray(insertedRows) ? insertedRows.length : null;
+
+        console.log("[LeadRadar] " + keyword + " -> " + rows.length + " matched, " +
+          (insertedCount === null ? "unknown" : insertedCount) + " new");
 
       } catch (kwErr) {
         console.error("[LeadRadar] Error processing keyword '" + keyword + "':", kwErr.message || kwErr);
