@@ -4209,6 +4209,81 @@ var LANGUAGE_NAMES = {
   ko: "Korean"
 };
 
+/* The same instruction, written in each language itself.
+
+   A SECOND MAP RATHER THAN WIDENING LANGUAGE_NAMES. Turning its values into
+   objects would have been the tidier-looking change and would have broken the
+   product: GET /api/user/preferences returns LANGUAGE_NAMES verbatim as
+   available_languages, and the settings page does `opt.textContent = map[tag]`
+   to label the dropdown. Objects there render "[object Object]" in the select.
+   The map stays a tag -> string map so that contract is untouched.
+
+   FULL NATIVE SENTENCES, NOT BARE ENDONYMS. The point of this text is that the
+   immediate context is in the target language — an English sentence with one
+   foreign noun dropped into it ("Write in Español") is still an English
+   sentence and carries none of that signal. Each entry is a complete, short
+   imperative a native speaker would recognise as an instruction.
+
+   Keys must track LANGUAGE_NAMES. That is the drift the LANGUAGE_NAMES comment
+   above warns about, now with two maps instead of one, so the lookup below
+   falls back to the English-only form when an entry is missing rather than
+   emitting "undefined" into a prompt. A missing endonym degrades to the
+   behaviour we already had; it cannot produce a broken directive.
+
+   These are my translations. They are short and standard, but they are the one
+   part of this change a native speaker should review before it is trusted. */
+var LANGUAGE_DIRECTIVES = {
+  en: "Reply entirely in English.",
+  es: "Responde íntegramente en español.",
+  pt: "Responda inteiramente em português.",
+  fr: "Répondez entièrement en français.",
+  de: "Antworte vollständig auf Deutsch.",
+  it: "Rispondi interamente in italiano.",
+  nl: "Antwoord volledig in het Nederlands.",
+  pl: "Odpowiadaj w całości po polsku.",
+  tr: "Tamamen Türkçe yanıt ver.",
+  ru: "Отвечай полностью на русском языке.",
+  ar: "أجب بالكامل باللغة العربية.",
+  hi: "पूरी तरह से हिन्दी में उत्तर दें।",
+  id: "Jawab sepenuhnya dalam bahasa Indonesia.",
+  zh: "请完全用简体中文回答。",
+  ja: "回答はすべて日本語で書いてください。",
+  ko: "전부 한국어로 답변하세요."
+};
+
+/* The SHORT form, for appending to the final user message rather than to a
+   system prompt. Two sentences at most, on purpose: this text sits at the end
+   of something the seeker wrote, and a thousand-character block there would
+   swamp the message it is attached to and read as the dominant content of the
+   turn. The long form in buildLanguageInstruction still does the arguing; this
+   only has to be the last thing seen.
+
+   Marked as a system directive so the model does not attribute it to the
+   seeker — without the marker it reads as the seeker asking, in the third
+   person, for a language, which is a strange thing for them to have written
+   and invites a reply commenting on it. */
+function buildTrailingLanguageDirective(languageTag, surfaceSeesUserText) {
+  var languageName = languageTag &&
+    Object.prototype.hasOwnProperty.call(LANGUAGE_NAMES, languageTag)
+      ? LANGUAGE_NAMES[languageTag]
+      : null;
+
+  if (languageName) {
+    var native = Object.prototype.hasOwnProperty.call(LANGUAGE_DIRECTIVES, languageTag)
+      ? LANGUAGE_DIRECTIVES[languageTag]
+      : "";
+
+    return "\n\n[System directive — not written by the seeker] Write your entire reply in " + languageName + "." +
+      (native ? " " + native : "");
+  }
+
+  if (surfaceSeesUserText) {
+    return "\n\n[System directive — not written by the seeker] Write your entire reply in the same language as this message.";
+  }
+
+  return "";
+}
+
 /* Reads the stored preferred_language for a user, or null.
 
    NULL IS THE SAFE DIRECTION, AND IT IS RETURNED FOR ALL THREE WAYS OF NOT
@@ -11970,6 +12045,51 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     });
     messages.push({ role: "user", content: currentUserContent });
 
+    /* Resolved HERE rather than beside the system prompt below, because the
+       trailing directive is built in this block and the system prompt is built
+       further down. Declared before both uses: `var` would have hoisted it
+       either way, so reading it before this line returned undefined rather than
+       throwing — the directive would have quietly fallen back to the mirror form
+       instead of naming the stored language, which is precisely the kind of
+       failure this whole change exists to fix. */
+    var oracleLanguageTag = await resolvePreferredLanguage(req.user.id);
+
+    /* THE DIRECTIVE GOES ON THE FINAL USER MESSAGE, AND ONLY ON THE COPY IN THIS
+       ARRAY.
+
+       Recency beats a system-prompt tail by a wide margin. Everything in the
+       system prompt — both copies — is still separated from the moment of
+       generation by the entire conversation history; this is the last text the
+       model reads before it writes, which is the one position no amount of
+       preceding English can bury.
+
+       NOT WRITTEN TO oracle_messages. The insert in step 7 below uses `message`,
+       the raw string the seeker typed, and is deliberately untouched: the stored
+       turn has to stay exactly what they wrote. Otherwise the directive would be
+       replayed as part of their words in every future request, accumulate one
+       copy per turn, and be shown back to them in the transcript as something
+       they said. This mutation is scoped to the array being sent to the API and
+       dies with the request.
+
+       Both content shapes are handled. currentUserContent is a plain string on
+       the text-only path and an array of blocks when images are attached — a
+       string concatenation against the array form would produce
+       "[object Object]..." and send the images as garbage, so the array case
+       gets its own trailing text block instead. */
+    var oracleTrailingDirective = buildTrailingLanguageDirective(oracleLanguageTag, true);
+
+    if (oracleTrailingDirective) {
+      var oracleFinalMessage = messages[messages.length - 1];
+
+      if (typeof oracleFinalMessage.content === "string") {
+        oracleFinalMessage.content = oracleFinalMessage.content + oracleTrailingDirective;
+      } else if (Array.isArray(oracleFinalMessage.content)) {
+        oracleFinalMessage.content = oracleFinalMessage.content.concat([
+          { type: "text", text: oracleTrailingDirective }
+        ]);
+      }
+    }
+
     // 3. Build system prompt — shared platform brain (knowledge + directives
     //    + business profile, now sourced from buildAgentSystemPrompt) plus
     //    the Oracle's own seeker-profile and numerology context, unchanged.
@@ -12175,15 +12295,32 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
        when the main model failed, which is both the worst moment for it and the
        hardest to notice, because the fallback path is rare and its output still
        looks like a working reply. */
-    var oracleLanguageTag = await resolvePreferredLanguage(req.user.id);
+    var oracleLanguageInstruction = buildLanguageInstruction(oracleLanguageTag, true);
 
+    /* TWICE, DELIBERATELY — at the front and at the end.
+
+       The first attempt appended it once, at the end, and it lost: a stored "es"
+       preference produced an English reply on afc4315. Appended last it sat
+       behind the persona, the platform brain, the business profile, the live
+       stats, the accumulated memories, and the seeker, numerology, natal and
+       enterprise blocks — several thousand characters of English, most of it
+       describing how fluently this voice commands English. Position, not
+       wording, is what failed.
+
+       So it now occupies both positions a long prompt is actually read from: the
+       opening, which frames everything that follows, and the tail, which is
+       nearest the generation. The middle is where instructions go to be ignored,
+       and that is exactly where the only copy used to be. The duplication is not
+       redundancy to be tidied away later — removing either copy puts it back in
+       the middle. */
     var systemPrompt =
+      oracleLanguageInstruction +
       buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain) +
       contextBlock +
       numerologyContext +
       natalContext +
       enterpriseContext +
-      buildLanguageInstruction(oracleLanguageTag, true);
+      oracleLanguageInstruction;
 
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
