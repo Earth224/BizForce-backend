@@ -11585,13 +11585,31 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
 
     // 2. Load last 20 oracle_messages oldest-first, then append the current message
     //    (saving it to the DB happens later and must never block the reply)
+    //
+    //    DESCENDING, THEN REVERSED IN JS. The order and the limit are doing two
+    //    different jobs and they must not be the same direction: the limit has to
+    //    cut from the NEWEST end (which is what "last 20" means), while the array
+    //    handed to Anthropic has to be chronological. Ascending + limit(20) does
+    //    the opposite — it takes the twenty OLDEST rows, so past twenty messages
+    //    the window pinned to the beginning of the user's history and never moved
+    //    again. Every later reading was answered against their first ten
+    //    exchanges.
+    //
+    //    WHY THIS WAS INVISIBLE. The current turn is appended in JS on the line
+    //    below rather than read back from the table, so the model always received
+    //    what the seeker had just said. Only the history behind it was stale, and
+    //    a stale window does not fail — it produces confident, fluent, in-voice
+    //    output that is indistinguishable from a working one. Nothing errors,
+    //    nothing looks empty, and the reply still answers the question asked.
+    //    Under twenty messages the two orderings agree, which is why it read as
+    //    correct for the whole life of every new account.
     var historyResult = await supabase
       .from("oracle_messages")
       .select("role, content")
       .eq("user_id", req.user.id)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(20);
-    var messages = (historyResult.data || []).map(function (row) {
+    var messages = (historyResult.data || []).slice().reverse().map(function (row) {
       return { role: row.role, content: row.content };
     });
     messages.push({ role: "user", content: currentUserContent });
@@ -11927,13 +11945,37 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
               priorSoulRecord = soulRecordResult.data.content || "";
             }
 
+            // DESCENDING, THEN REVERSED IN JS — the same defect as the history
+            // load in step 2, and the same reasoning. Ascending + limit(12) took
+            // the twelve OLDEST messages while the prompt below labels the block
+            // RECENT CONVERSATION, so on any account past twelve messages the
+            // reflection was rewriting the soul-record from a conversation that
+            // had long since ended. The reverse keeps the block reading as a
+            // transcript, oldest line first.
+            //
+            // WHY THIS WAS INVISIBLE, AND WHY IT IS WORSE HERE. Nothing about a
+            // stale window announces itself: the model still returns well-formed
+            // JSON with a fluent, plausible soul-record, because a coherent
+            // narrative about the wrong twelve messages looks exactly like a
+            // coherent narrative about the right ones. But unlike the history
+            // load — which is rebuilt from scratch on every request and so only
+            // ever affects the reply in front of it — this result is WRITTEN to
+            // agent_memory under memory_key "oracle_soul_record" (below), read
+            // back by the main route, and rendered by formatMemories() at the top
+            // of the ACCUMULATED MEMORY block of every later system prompt,
+            // prefixed "build on this, don't just repeat it back". A stale window
+            // here does not pass through; it is persisted, re-read, and built
+            // upon, so each subsequent reflection compounds the drift instead of
+            // correcting it.
             var recentMessagesResult = await supabase
               .from("oracle_messages")
               .select("role, content")
               .eq("user_id", req.user.id)
-              .order("created_at", { ascending: true })
+              .order("created_at", { ascending: false })
               .limit(12);
-            var recentMessagesForReflection = recentMessagesResult.error ? [] : (recentMessagesResult.data || []);
+            var recentMessagesForReflection = recentMessagesResult.error
+              ? []
+              : (recentMessagesResult.data || []).slice().reverse();
 
             var recentConversationBlock = recentMessagesForReflection.map(function (row) {
               return (row.role === "user" ? "Seeker" : "Termaximus") + ": " + row.content;
