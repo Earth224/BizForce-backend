@@ -37,6 +37,7 @@ const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
+const { computeSynastryAspects } = require("./lib/synastry");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -16361,6 +16362,158 @@ app.delete("/api/birth-records/:id", requireAuth, async function (req, res, next
     }
 
     return res.json({ deleted: data[0].id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ── GET /api/synastry/:recordId ──────────────────────────────────────────────
+   The caller's own chart against one of their saved birth records.
+
+   Scoped to req.user.id on both halves: the record must belong to the caller,
+   and the first chart is always the caller's own oracle_sync row. No user id is
+   read from the path, a body or a query — :recordId identifies a record, and a
+   record that is not theirs is a 404 rather than a comparison. */
+app.get("/api/synastry/:recordId", requireAuth, async function (req, res, next) {
+  try {
+    var recordResult = await supabase
+      .from("birth_records")
+      .select(BIRTH_RECORD_FIELDS)
+      .eq("id", req.params.recordId)
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+
+    if (recordResult.error) {
+      throw recordResult.error;
+    }
+
+    // Same words the delete route uses, deliberately: one id that does not
+    // belong to this account should read the same way everywhere.
+    if (!recordResult.data) {
+      return res.status(404).json({ error: "No birth record with that id belongs to your account." });
+    }
+
+    var record = recordResult.data;
+
+    /* A KNOWN, DESIGNED STATE — not an error and not an attempt.
+       An unresolved record was saved on purpose: migration 066's resolution
+       CHECK requires its coordinates to be null, and the POST route stores it
+       that way so the birth date and name survive while the place is corrected
+       later. There is nothing to compute and nothing has gone wrong, so this
+       answers 200 with the reason rather than a 4xx or 5xx that would read as
+       a fault. */
+    if (record.place_confidence === "unresolved" ||
+        record.latitude == null || record.longitude == null || !record.timezone) {
+      return res.json({
+        available: false,
+        reason:    "record_place_unresolved",
+        message:   "No chart can be computed for \"" + (record.label || "this record") +
+                   "\" until its birth place is corrected — the place could not be resolved when it was saved, so no coordinates are stored for it.",
+        record: {
+          id: record.id, label: record.label, birth_name: record.birth_name,
+          place_query: record.place_query, place_confidence: record.place_confidence
+        }
+      });
+    }
+
+    // ── The caller's own chart, exactly as GET /api/oracle/natal builds it ──
+    var syncResult = await supabase
+      .from("oracle_sync")
+      .select("*")
+      .eq("user_id", req.user.id)
+      .single();
+
+    if (syncResult.error || !syncResult.data || !syncResult.data.birth_date) {
+      return res.json({
+        available: false,
+        reason:    "no_birth_data",
+        message:   "You have not synced your own birth data yet, so there is no chart of yours to compare against."
+      });
+    }
+
+    var ownChart = computeNatalChart(
+      syncResult.data.birth_date,
+      syncResult.data.birth_time,
+      syncResult.data.birth_place
+    );
+
+    if (!ownChart || !ownChart.available) {
+      return res.json({
+        available: false,
+        reason:    "own_chart_" + ((ownChart && ownChart.reason) || "unavailable"),
+        message:   "Your own chart could not be computed, so there is nothing to compare against.",
+        own_chart: ownChart || null
+      });
+    }
+
+    /* ── The record's chart, FROM THE STORED COORDINATES ────────────────────
+       computeNatalFromResolved, never computeNatalChart, and this is the point
+       of the whole route.
+
+       computeNatalChart resolves the place from place_query on every call.
+       Doing that here would re-geocode a row whose coordinates were frozen at
+       creation precisely so they could not move — and migration 066 says why
+       they are frozen: "a chart computed today produces the same Ascendant
+       years from now even if the geocoding dataset is updated, corrected or
+       replaced. A chart that silently moves because a city centroid shifted is
+       indistinguishable from a bug."
+
+       So calling computeNatalChart here would have re-introduced exactly the
+       drift 066 stores coordinates to prevent — and worse than the original,
+       because a stored row whose place_query is ambiguous would be refused
+       outright by a resolver that has nothing left to disambiguate: the choice
+       was already made and recorded.
+
+       The `resolved` argument is structural rather than a resolvePlace type —
+       latitude, longitude, timezone and label — which a stored row supplies
+       directly. computeNatalFromResolved does not validate its arguments, so
+       the parsedDate check below is this caller's job, as its header requires. */
+    var recordDate = parseBirthDate(record.birth_date);
+
+    if (!recordDate.valid) {
+      return res.json({
+        available: false,
+        reason:    "record_date_invalid",
+        message:   "The stored birth date for \"" + (record.label || "this record") + "\" could not be read, so no chart can be computed for it.",
+        record:    { id: record.id, label: record.label, birth_name: record.birth_name }
+      });
+    }
+
+    var recordTime  = parseBirthTime(record.birth_time);
+    var recordChart = computeNatalFromResolved(recordDate, recordTime, {
+      latitude:  Number(record.latitude),
+      longitude: Number(record.longitude),
+      timezone:  record.timezone,
+      label:     record.place_label || record.place_query
+    });
+
+    var synastry = computeSynastryAspects(ownChart, recordChart);
+
+    /* Full charts returned, matching GET /api/oracle/natal, which answers
+       res.json(chart) with the whole object. A synastry page needs the
+       positions to draw anything, and inventing a narrower shape here would
+       leave two chart shapes in one API for no reason. */
+    return res.json({
+      available: true,
+      subjects: {
+        self: {
+          label:      "You",
+          birth_name: syncResult.data.birth_name || null,
+          time_known: ownChart.timeKnown === true
+        },
+        record: {
+          id:         record.id,
+          label:      record.label,
+          birth_name: record.birth_name,
+          time_known: recordChart.timeKnown === true,
+          place_label:      record.place_label,
+          place_confidence: record.place_confidence
+        }
+      },
+      synastry:     synastry,
+      own_chart:    ownChart,
+      record_chart: recordChart
+    });
   } catch (error) {
     next(error);
   }
