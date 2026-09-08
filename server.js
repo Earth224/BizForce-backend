@@ -4198,6 +4198,159 @@ var LANGUAGE_NAMES = {
   ko: "Korean"
 };
 
+/* Reads the stored preferred_language for a user, or null.
+
+   NULL IS THE SAFE DIRECTION, AND IT IS RETURNED FOR ALL THREE WAYS OF NOT
+   KNOWING: no row, a null column, and a failed query. That is deliberate rather
+   than lazy error handling. null does not mean "no language" here — it means
+   "mirror whatever language the seeker writes in", which is a defensible answer
+   when we could not find out what they chose, because it defers to evidence we
+   do have instead of inventing a preference.
+
+   Falling back to a language instead would be the actual error. Defaulting to
+   "en" on a failed read is asserting a preference the user never expressed, and
+   it would do it invisibly and only sometimes — a Spanish-speaking seeker would
+   get Spanish on every request where the read succeeded and English on the ones
+   where it did not, which reads as the Oracle randomly switching languages
+   rather than as a database problem. A soft failure that degrades to mirroring
+   is indistinguishable from the normal no-preference case, which is exactly what
+   makes it safe.
+
+   Never throws. Callers are prompt builders on paths where a reply matters more
+   than a preference; none of them should fail a reading because a preference
+   lookup did. */
+async function resolvePreferredLanguage(userId) {
+  if (!userId) {
+    return null;
+  }
+
+  try {
+    var result = await supabase
+      .from("user_preferences")
+      .select("preferred_language")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (result.error) {
+      console.error("[language] preferred_language read failed for user " + userId +
+        " — " + result.error.message + ". Falling back to mirroring the seeker's language.");
+      return null;
+    }
+
+    return (result.data && result.data.preferred_language) || null;
+  } catch (readErr) {
+    console.error("[language] preferred_language read threw for user " + userId +
+      " — " + (readErr.message || readErr) + ". Falling back to mirroring the seeker's language.");
+    return null;
+  }
+}
+
+/* Turns a preference into the instruction appended to a prompt. Pure — no I/O,
+   no user lookup — so the caller decides once what to pass and every surface
+   gets the same wording.
+
+   languageTag        a key of LANGUAGE_NAMES, or null for no preference
+   surfaceSeesUserText  true when the prompt this is appended to actually
+                        carries something the seeker wrote
+
+   THREE OUTCOMES, AND THE THIRD IS WHY THE SETTING EXISTS.
+
+   1. A tag is set -> instruct the language explicitly, by its English name. The
+      tag never reaches the model: "es" is an identifier, "Spanish" is a word.
+
+   2. No tag, and the surface can see the seeker's words -> instruct mirroring.
+      This is the case that looks redundant and is not. The model already tends
+      to answer in the language it is addressed in, so today the behaviour mostly
+      happens — but it happens by accident, and ORACLE_SYSTEM_PROMPT spends about
+      seven thousand characters describing registers of ENGLISH ("Oxford-level
+      command of English", "hip, street, up-to-the-moment slang"), which pulls the
+      other way. Saying it out loud converts an accident into a designed
+      behaviour that survives that persona.
+
+   3. No tag, and the surface cannot see the seeker's words -> EMPTY STRING, and
+      the output stays English.
+
+      This is the honest outcome, not a gap to be filled later. The daily
+      invocation (GET /api/oracle/invocation) is built from a birth name, a
+      personal-day integer and wallet/listing/sales counts. The page insight
+      (POST /api/insights/page) is built from business-profile fields and a
+      filename slug. Neither ever receives a sentence the seeker wrote, so there
+      is no language to detect and nothing an instruction could truthfully ask
+      for — "mirror the seeker" addressed to a prompt containing no seeker text
+      is an instruction the model cannot follow, and inventing a guess from a
+      name or a location would be worse than saying nothing.
+
+      So those two surfaces answer in English for as long as no preference is
+      set, and no wording here can change that. Setting preferred_language is
+      the ONLY thing that makes them speak anything else — which is the entire
+      argument for the column, and the reason the settings note tells the user
+      so rather than leaving them to wonder why they would ever touch it. */
+function buildLanguageInstruction(languageTag, surfaceSeesUserText) {
+  var languageName = languageTag &&
+    Object.prototype.hasOwnProperty.call(LANGUAGE_NAMES, languageTag)
+      ? LANGUAGE_NAMES[languageTag]
+      : null;
+
+  /* Case 1. Phrased to outrank the persona rather than sit politely beside it,
+     because it is appended AFTER thousands of characters about English range and
+     has to win. The separation it draws — those passages govern HOW you write,
+     this one governs WHICH language — is what stops the model treating them as a
+     conflict and splitting the difference into English with foreign phrases. */
+  if (languageName) {
+    return "\n\nLANGUAGE — THIS GOVERNS THE ENTIRE RESPONSE. Write everything you say in " + languageName + ". " +
+      "Any instruction above that describes your command of English, your registers, your vernacular, or your range " +
+      "describes HOW you write, never WHICH language you write in; every one of those qualities applies just as fully " +
+      "in " + languageName + ", and none of them is a reason to answer in English. " +
+      "This covers the whole reply and not merely its prose: headings, labels, lists, and the terms you would " +
+      "ordinarily leave in English — concepts, techniques, esoteric and technical vocabulary, and the names of things — " +
+      "are all written in " + languageName + ", rendered as a fluent speaker of " + languageName + " would render them. " +
+      "Proper names are the exception and stay exactly as they are: the seeker's own name, and the platform's names such " +
+      "as BizForce, BizDoc and BFC. " +
+      "Do not add an English translation, gloss, or restatement alongside what you write, and do not remark on the " +
+      "language you are using. If the seeker writes to you in a different language, still answer in " + languageName + ".";
+  }
+
+  /* Case 2. Judged from the CONVERSATION, not from the latest message alone.
+
+     Anchoring to the most recent message is the obvious reading and the wrong
+     one. Real messages twenty turns into a conversation are "ok", "sí", "y
+     eso?", "go on" — short, and several of them ambiguous between languages. A
+     rule that falls back to English whenever the latest message is too short to
+     classify would drop a Spanish conversation into English on the first terse
+     reply, then back to Spanish on the next substantial one. Flapping mid-thread
+     is worse than either language chosen consistently, and it is the failure the
+     seeker would actually notice.
+
+     So the latest message leads and the history breaks the tie. English is kept
+     as the fallback only for the case where there is genuinely nothing to judge
+     from — a first message that is one ambiguous word, with no exchanges behind
+     it.
+
+     Still explicitly cut off from the profile: birth name, birth place and
+     current location all sit in the same prompt, and a model told to infer a
+     language will reach for them. A seeker in Lisbon writing English gets
+     English. */
+  if (surfaceSeesUserText) {
+    return "\n\nLANGUAGE — THIS GOVERNS THE ENTIRE RESPONSE. Write everything you say in the language the seeker is " +
+      "conversing in. Judge it from their most recent message first; when that message is too short or too ambiguous to " +
+      "tell on its own — a brief acknowledgement, a single word, a fragment — judge it from the earlier messages in this " +
+      "conversation instead, and keep answering in the language the exchange has been conducted in. A short reply is a " +
+      "continuation of the conversation, never a reason to switch languages. Only when there is genuinely nothing to " +
+      "judge from — a first message that is a single ambiguous word, with no exchange behind it — answer in English. " +
+      "Determine this from the words the seeker actually wrote, never from their name, their birth place, their current " +
+      "location, or any other profile field — someone may write to you in one language from anywhere in the world. " +
+      "Any instruction above that describes your command of English, your registers, your vernacular, or your range " +
+      "describes HOW you write, never WHICH language you write in; every one of those qualities applies just as fully " +
+      "in the language you are answering in. " +
+      "If the conversation is in English, answer in English. Match it for the whole reply, including headings, labels " +
+      "and the terms you would ordinarily leave in English. Do not add a translation alongside your reply, and do not " +
+      "remark on the language you are using.";
+  }
+
+  // Case 3 — nothing to mirror, so nothing honest to say. See the block above.
+  return "";
+}
+
 app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
   try {
     const { data: row, error } = await supabase
