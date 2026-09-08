@@ -5118,13 +5118,45 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
       .single();
     if (userInsert.error) throw userInsert.error;
 
+    /* DESCENDING, THEN REVERSED IN JS. The order and the limit are doing two
+       different jobs and they must not be the same direction: the limit has to
+       cut from the NEWEST end, which is what "the last 20 messages" means, while
+       the array handed to Anthropic has to be chronological. Ascending +
+       limit(20) did the opposite — it took the twenty OLDEST rows, so past
+       twenty messages this window pinned to the beginning of the conversation
+       and never moved again.
+
+       THE THIRD AND LAST INSTANCE of the defect fixed in the Oracle's history
+       and reflection windows by e0a202a. It is the same three lines and the same
+       reasoning; the audit that followed e0a202a swept every Supabase query in
+       this repo that pairs an order on a timestamp with a limit, and this was
+       the one that was left. The other ascending windows are page walks that
+       read to exhaustion (activity/overview, readRevenueRows) or a genuine
+       oldest-first work queue (leadRadar scoreNewLeads), and are correct as they
+       stand.
+
+       WHY IT WAS INVISIBLE HERE IN PARTICULAR, and worse than on the Oracle.
+       The insert at the top of this handler runs BEFORE this read, so the
+       message the user just sent was already in the table — and still did not
+       reach the model, because it sorted to the far end of a window cut from the
+       wrong side. The Oracle at least appended the current turn in JS and so
+       always saw it; this route did not, and past twenty messages answered every
+       question without the question in front of it. That does not fail loudly. A
+       stale window still produces a fluent, confident, on-topic-looking reply,
+       and under twenty messages the two orderings agree, which is why it read as
+       correct for the whole life of every new account. */
     var historyResult = await supabase
       .from("chat_messages")
       .select("role, content, created_at")
       .eq("user_id", req.user.id)
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(20);
-    var history = historyResult.data || [];
+
+    /* Reversed at the point of assignment rather than at the .map() below, so
+       `history` is oldest-first for every reader of it, not just the one that
+       happens to exist today. .slice() first because .reverse() mutates, and
+       historyResult.data is not this function's to reorder in place. */
+    var history = (historyResult.data || []).slice().reverse();
 
     var profileResult = await supabase
       .from("business_profiles")
@@ -5137,11 +5169,23 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
 
     /* Computed ONCE, used at BOTH ends of the system prompt below.
 
-       surfaceSeesUserText is TRUE. The messages array below is built from
-       chat_messages — the user's own side of this conversation — and the
-       message they just sent was inserted into that table moments ago, so the
-       history genuinely carries their words. Read as prose, never parsed, so
-       no structural guard is needed. */
+       surfaceSeesUserText is TRUE, and as of the descending fix above it is
+       true for the reason it always claimed to be. The messages array below is
+       built from chat_messages — the user's own side of this conversation — and
+       the window now genuinely carries their RECENT words, including the message
+       they just sent, which the insert at the top of this handler committed
+       moments before the read.
+
+       BEFORE THAT FIX THIS JUSTIFICATION WAS FALSE PAST TWENTY MESSAGES, and it
+       is worth saying so rather than quietly letting the sentence come true. The
+       window was cut from the oldest end, so on any established conversation the
+       model was handed the user's FIRST twenty turns and not the one it was
+       being asked to answer — the mirror instruction, which reads the
+       conversation to judge what language to reply in when the latest message is
+       too short to tell, was reading the wrong conversation. The claim and the
+       code agree now; they did not before.
+
+       Read as prose, never parsed, so no structural guard is needed. */
     var businessChatLanguageInstruction = buildLanguageInstruction(businessChatLanguageTag, true);
 
     /* FRONT AND TAIL, as on POST /api/oracle. This prompt is shorter than the
@@ -5199,16 +5243,36 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
        written out anyway so a future shape change is a silent no-op rather than
        an "[object Object]".
 
-       THE LAST ELEMENT IS NOT RELIABLY A USER TURN, so the scan runs backwards
-       for the last one whose role is "user". The history query above is ordered
-       ascending with .limit(20), which takes the twenty OLDEST rows rather than
-       the most recent twenty; past that point the window stops advancing and its
-       final row can be an assistant reply. That is a pre-existing quirk of this
-       route and is deliberately not changed here — but appending a user-turn
-       directive to an assistant message would attribute it to the model's own
-       earlier words, so the role is checked rather than assumed. If no user turn
-       is present at all, nothing is appended and the two system-prompt copies
-       still stand. */
+       THE BACKWARDS SCAN IS A GUARD, NOT A WORKAROUND. It was written while the
+       history window above still read from the oldest end, where the last row
+       genuinely could be an assistant reply; that is fixed, and with a
+       descending read reversed into chronological order the last element is now
+       reliably the user's newest turn — the one the insert at the top of this
+       handler just committed. So the scan is no longer load-bearing, and it is
+       kept anyway.
+
+       WHAT IT IS FOR NOW: it holds the directive on a user turn whatever the
+       history query does. Taking messages[length - 1] unconditionally would be
+       correct today and silently wrong the moment someone reorders that query,
+       widens it to include a system or tool row, or appends anything after the
+       user's turn — and wrong in the way this route specialises in, with a
+       fluent reply and nothing to show that the directive landed on the model's
+       own earlier words instead of the seeker's. Appending a turn marked
+       "[System directive — not written by the seeker]" to an ASSISTANT message
+       is precisely that: it attributes an instruction about the reply to the
+       last thing the model itself said.
+
+       This is the reasoning behind formatLiveStats' null check (config/brain.js)
+       — enforced in the formatter rather than trusted from every producer that
+       might push the key onto _unreadable — and behind agentDisplayName's
+       fallback to the raw uppercased key (server.js), which keeps an agent type
+       added to one map and not the other readable instead of blank. Two lines
+       that do not depend on a neighbouring invariant are worth their two lines,
+       because the invariant is one edit away from someone who has not read this
+       comment.
+
+       If no user turn is present at all, nothing is appended and the two
+       system-prompt copies still stand. */
     var businessChatTrailingDirective = buildTrailingLanguageDirective(businessChatLanguageTag, true);
 
     if (businessChatTrailingDirective) {
