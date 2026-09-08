@@ -15887,7 +15887,35 @@ app.get("/api/self-reviews", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json({ reviews: data });
+    /* scheduler_enabled: whether the DAILY PASS is switched on at the server,
+       which is a different switch from the user's own opt-in.
+
+       Two switches have to be on before a review is generated automatically:
+       this one, ENABLE_SELF_REVIEW on the server, and the user's
+       agent_autonomy row for the analytics agent. Either one off means nothing
+       runs, and a page that could only see the second would show autonomy
+       enabled while no job was scheduled to act on it — a setting that saves,
+       reads back correctly, and does nothing. That is precisely the failure the
+       agent-autonomy route's own validation comment warns about, arriving by a
+       different route: there the cause was an unregistered agent_type, here it
+       is a job that is not running. Neither produces an error, and both look
+       identical to a working configuration from the settings page.
+
+       Exposed to every authenticated caller because it is server configuration
+       rather than user data. It is the same value for everyone, derived from a
+       process environment variable, and reveals nothing about any account —
+       not whether reviews exist, not who has opted in, not how many users
+       there are.
+
+       Compared the same exact lowercase way the scheduler itself compares it,
+       so this cannot report enabled while the cron gate reads disabled. A
+       capital-T "True" is false in both places, which is the point: this field
+       exists to make that silent misconfiguration visible on a page rather
+       than only in a startup log nobody reads. */
+    return res.json({
+      reviews: data,
+      scheduler_enabled: process.env.ENABLE_SELF_REVIEW === "true"
+    });
   } catch (error) {
     next(error);
   }
