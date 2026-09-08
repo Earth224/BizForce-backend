@@ -33,7 +33,6 @@ const { buildAgentSystemPrompt } = require("./config/brain");
 const { RichText } = require("@atproto/api");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
-const { runYoutubeRadarOnce } = require("./youtubeRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { runNightlyBackup } = require("./lib/backup");
