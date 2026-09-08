@@ -281,6 +281,10 @@ async function runLeadRadarOnce() {
 var radarRunning = false;
 var scoringDisabledLogged = false;
 var mastodonDisabledLogged = false;
+// Logged once either way rather than only when disabled, because the point of
+// the line is that the state is visible — and "on" is the state worth being
+// able to confirm from a log when the rows it writes are read by nothing.
+var youtubeRadarStateLogged = false;
 
 async function radarTick() {
   if (radarRunning) {
@@ -329,10 +333,44 @@ async function radarTick() {
       console.log("[LeadRadar] Mastodon radar disabled (ENABLE_MASTODON_RADAR not true) — hashtag timelines are publishing behaviour and scored at one buyer per 88 rows. Existing mastodon leads are unaffected and replies to them still send.");
     }
 
-    try {
-      await runYoutubeRadarOnce();
-    } catch (youtubeErr) {
-      console.error("[LeadRadar] YoutubeRadar cycle error:", youtubeErr.message || youtubeErr);
+    /* Off unless ENABLE_YOUTUBE_RADAR is exactly "true", matching the Mastodon
+       gate above and the scoring gate below.
+
+       IT WAS THE ONLY UNGATED CALL IN THIS TICK. Every other thing radarTick
+       does can be switched off from the environment; this one ran on every
+       tick, forever, with no way to stop it short of a deploy.
+
+       What it produces has no reader. youtubeRadar writes rows with status
+       "signal" and source "youtube": the scorer selects status "new" and
+       source in SCORABLE_SOURCES, so it never sees them, and both outreach
+       paths filter to OUTREACH_SENDABLE_SOURCES — bluesky and mastodon — so
+       neither can send to them. There is no YouTube sender for them to feed.
+       The rows therefore accumulate permanently and are read by nothing.
+
+       Capture is free in money terms, which is why this was easy to leave
+       running and why it stayed invisible: no invoice ever pointed at it. Free
+       is not the same as harmless. It is unattended work against a third-party
+       API, on a quota, writing rows to a table the scorer's queue shares, with
+       no off switch — and the argument for keeping it on is that a YouTube
+       sender might exist one day, which is not an argument for it running
+       today.
+
+       ROWS ALREADY CAPTURED ARE LEFT ALONE. Nothing is deleted and nothing is
+       rewritten; youtubeRadar.js itself is untouched and still works. Turning
+       capture back on is one Railway variable. */
+    if (process.env.ENABLE_YOUTUBE_RADAR === "true") {
+      if (!youtubeRadarStateLogged) {
+        youtubeRadarStateLogged = true;
+        console.log("[LeadRadar] YouTube radar ENABLED (ENABLE_YOUTUBE_RADAR=true) — capturing rows with status \"signal\", which nothing currently scores or sends to.");
+      }
+      try {
+        await runYoutubeRadarOnce();
+      } catch (youtubeErr) {
+        console.error("[LeadRadar] YoutubeRadar cycle error:", youtubeErr.message || youtubeErr);
+      }
+    } else if (!youtubeRadarStateLogged) {
+      youtubeRadarStateLogged = true;
+      console.log("[LeadRadar] YouTube radar disabled (ENABLE_YOUTUBE_RADAR not true) — its rows are status \"signal\", which the scorer does not select and no outreach path can send to. Existing youtube rows are unaffected.");
     }
 
     // Capture above is free — network calls only. Scoring below is the paid
