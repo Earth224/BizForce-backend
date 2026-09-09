@@ -3933,6 +3933,198 @@ app.post("/api/auth/logout", requireAuth, async function (req, res) {
   return res.json({ success: true });
 });
 
+/* ── POST /api/auth/refresh ──────────────────────────────────────────────────
+
+   NOT BEHIND requireAuth, deliberately, and this is not an oversight to be
+   tidied later. The caller's access token has almost certainly expired — that
+   is the entire reason they are here — so demanding a valid one would make this
+   route reachable only by clients that do not need it. The refresh token is the
+   credential; it authenticates the request by itself. authLimiter still applies,
+   because an unauthenticated route taking a secret is exactly what wants rate
+   limiting.
+
+   FOUR OUTCOMES. Three of them are 401 and they are deliberately
+   indistinguishable to the caller: an unknown hash, a replayed token and an
+   expired one all answer the same way. A client has nothing to do differently
+   in any of them — sign in again — and telling them apart would let someone
+   holding a stolen token learn whether it was ever real. The distinction is
+   recorded in revoked_reason and in the log, where it is worth something. */
+app.post("/api/auth/refresh", authLimiter, async function (req, res, next) {
+  try {
+    const presented = safeText(req.body.refresh_token, 200);
+
+    if (!presented) {
+      return res.status(400).json({ error: "refresh_token is required" });
+    }
+
+    /* Hashed with the same function createSession used to store it, which is
+       what makes the lookup possible without the server ever holding the
+       plaintext. The unique index on refresh_token_hash is both this lookup's
+       path and the guarantee that one token names one session. */
+    const lookup = await supabase
+      .from("auth_sessions")
+      .select("id, user_id, revoked_at, expires_at, users(id, email, role, banned_at, created_at)")
+      .eq("refresh_token_hash", hashRefreshToken(presented))
+      .maybeSingle();
+
+    if (lookup.error) {
+      throw lookup.error;
+    }
+
+    const session = lookup.data;
+
+    /* ── 1. No session with that hash ───────────────────────────────────────
+       Says nothing about whether the token was ever valid. A token that never
+       existed, one from a deleted account, and one whose row was cleaned up
+       are the same answer, because the difference is only useful to someone
+       probing with tokens they should not have. */
+    if (!session) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    /* ── 3. Already revoked — REUSE DETECTED ────────────────────────────────
+
+       Checked BEFORE expiry, because a replay is the more serious finding and
+       a stolen token that has also aged out is still a stolen token.
+
+       THIS IS NOT A MISTAKE, IT IS EVIDENCE. A legitimate client discards a
+       refresh token the instant it exchanges it — rotation below hands back a
+       new one and the old is never sent again. So a revoked token arriving
+       means the string survived somewhere it should not have, and that two
+       parties now hold what was meant to be held by one. There is no way to
+       tell from here which of them is the owner: the thief may be presenting
+       a token they captured, or the owner may be presenting one the thief has
+       already spent.
+
+       Because it cannot be told, the only safe response is to trust neither.
+       Every session for that user is revoked — not just the one presented —
+       and the real user signs in with their password, which the thief does not
+       have. That is deliberately drastic. The alternative is leaving a thief
+       holding a working session because the replay was ambiguous, and the
+       whole point of storing sessions is to be able to end exactly that. */
+    if (session.revoked_at) {
+      console.error("[auth] REFRESH TOKEN REUSE DETECTED for user " + session.user_id +
+        " (session " + session.id + ", revoked at " + session.revoked_at + "). " +
+        "A revoked refresh token was presented, which means it was held by more than " +
+        "one party. Revoking every session for this user; they must sign in again.");
+
+      const purge = await supabase
+        .from("auth_sessions")
+        .update({ revoked_at: nowIso(), revoked_reason: "reuse_detected" })
+        .eq("user_id", session.user_id)
+        .is("revoked_at", null);
+
+      if (purge.error) {
+        /* Logged, not returned. The caller is told 401 either way, and the one
+           thing that must not happen is answering as though the purge worked
+           when it did not — that failure needs to be visible to a human. */
+        console.error("[auth] FAILED to revoke sessions after reuse detection for user " +
+          session.user_id + ": " + (purge.error.message || purge.error) +
+          " — sessions for this user may still be live.");
+      }
+
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    /* ── 4. Expired ─────────────────────────────────────────────────────────
+       Revoked on the way out with a reason, so the row stops being ambiguous:
+       an expired-but-unrevoked row and a live one differ only by a timestamp
+       comparison every reader would have to remember to make. Writing the
+       reason settles it in the data. It also means a later replay of this same
+       token lands in case 3 above rather than here, which is the correct
+       reading — presenting it twice is still a replay. */
+    if (Date.parse(session.expires_at) <= Date.now()) {
+      const expire = await supabase
+        .from("auth_sessions")
+        .update({ revoked_at: nowIso(), revoked_reason: "expired" })
+        .eq("id", session.id)
+        .is("revoked_at", null);
+
+      if (expire.error) {
+        console.error("[auth] Could not mark session " + session.id + " expired: " +
+          (expire.error.message || expire.error));
+      }
+
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    const user = session.users || null;
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid refresh token" });
+    }
+
+    if (user.banned_at) {
+      return res.status(403).json({ error: "Account banned" });
+    }
+
+    /* ── 2. Valid — ROTATE ──────────────────────────────────────────────────
+
+       A NEW ROW, NOT AN UPDATE OF THIS ONE, and that is what makes reuse
+       detectable at all. The old row survives, revoked, as the record that this
+       token has already been spent — so if the same string arrives again it
+       finds a revoked row and lands in case 3. Overwriting the row in place
+       with a new hash would be tidier and would erase exactly the evidence the
+       theft check reads: a replayed token would simply not match anything and
+       answer case 1, indistinguishable from a typo, and the compromise would
+       pass unnoticed.
+
+       Created BEFORE the old one is revoked. If the insert fails, the caller
+       still holds a working session and can retry; revoking first would strand
+       them with nothing on a transient error.
+
+       user_agent and ip come from THIS request rather than being copied from
+       the old row, so the chain records where the session is being used now
+       rather than where it started. A session that begins on a laptop and
+       continues on a phone should say so.
+
+       A SLIDING WINDOW WITH NO ABSOLUTE CAP, DELIBERATELY. The new row gets a
+       full 60 days from now, so someone who keeps using the app keeps their
+       session and never meets the weekly sign-out this work exists to remove.
+       The consequence is real and is accepted here: an actively-used session
+       can live indefinitely, because every refresh restarts the clock and
+       nothing measures the chain as a whole. Capping total age would need a
+       column carrying the ORIGINAL issue date forward across rotations — the
+       current issued_at is per-row and resets with each one, so it cannot
+       answer "when did this chain begin". That is a migration and a decision
+       about how long a session may live at most, not something to infer here. */
+    const rotated = await createSession(user, req);
+
+    const revokeOld = await supabase
+      .from("auth_sessions")
+      .update({ revoked_at: nowIso(), revoked_reason: "rotated" })
+      .eq("id", session.id)
+      .is("revoked_at", null);
+
+    if (revokeOld.error) {
+      /* The new session exists and the old one is still live, so the user has
+         two working sessions rather than none. That is the safe direction —
+         nobody is locked out — but it does mean the spent token still works
+         and reuse detection will not fire for it, so this must be visible. */
+      console.error("[auth] Rotated session for user " + user.id + " but FAILED to revoke " +
+        "the previous session " + session.id + ": " + (revokeOld.error.message || revokeOld.error) +
+        " — the old refresh token remains usable and reuse detection will not fire for it.");
+    }
+
+    const profile = await getProfileByUserId(user.id);
+    const subscription = await getActiveSubscription(user.id);
+    const token = createToken(user, rotated.sessionId);
+
+    /* The same shape POST /api/auth/login returns, so a client can handle the
+       two identically and a refresh is indistinguishable from a fresh sign-in
+       to everything downstream of it. */
+    return res.json({
+      token,
+      refresh_token: rotated.refreshToken,
+      user: publicUser(user),
+      profile,
+      subscription
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/auth/me", requireAuth, async function (req, res, next) {
   try {
     const profile = await getProfileByUserId(req.user.id);
