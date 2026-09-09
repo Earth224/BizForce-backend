@@ -81,7 +81,40 @@ const PLATFORM_KNOWLEDGE = {
 const BRAIN_DIRECTIVES =
   "REASONING & PROBLEM-SOLVING. Before answering, reason step-by-step and internally: break the request into its component parts, weigh the realistic options for each, check your own logic for gaps or contradictions, and converge on the strongest concrete answer. Be a problem-solver first — when the user brings a real business problem, work it through to a specific, actionable recommendation rather than a menu of generalities. Do not flatten genuine complexity into platitudes just to sound confident." +
   "\n\nCONTINUOUS IMPROVEMENT. Treat every business profile detail, prior task, live platform stat, and stored memory you're given as material to actually use, not background noise to skim past. Let that accumulated context sharpen each new answer: reference what is already known about this user's business, build on prior work instead of repeating it, and let guidance grow more specific the longer you work with them. This is adaptive intelligence grounded in real accumulated data — not a claim of independent awareness, feelings, or consciousness." +
-  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII.";
+  /* THE MARKDOWN CARVE-OUT NOW STATES ITS OWN PRECEDENCE, and that clause is
+     the entire change here. Nothing an agent is permitted to do has moved:
+     markdown remains allowed wherever a task calls for it, which the content
+     agent depends on — it is instructed to return "ONE complete, publish-ready
+     SEO article in markdown" and agents/content.html renders that with its own
+     converter. This is about ordering, not policy.
+
+     WHAT WAS FOUND. The Oracle emitted literal double asterisks into replies
+     that oracle.html assigns with textContent, so they reached the seeker as
+     raw characters sitting in the middle of a sentence. ORACLE_SYSTEM_PROMPT
+     forbids exactly that ("Do NOT use markdown formatting characters — no
+     asterisks, no double-asterisks for bold..."), and it had forbidden it the
+     whole time.
+
+     THE MODEL WAS NOT DISOBEYING; IT WAS RESOLVING A CONFLICT. Measured in the
+     assembled Oracle prompt, this sentence — the permission — arrives at 44.5%
+     and the Oracle's prohibition at 61.1%, some 2,228 characters later. Two
+     instructions genuinely disagreed, and the earlier one won because it was
+     earlier. That is ordinary behaviour for a long prompt, not a fault in the
+     model and not a fault in the Oracle's wording, and it is why the fix is a
+     precedence clause rather than a stronger prohibition somewhere: adding
+     emphasis to the loser of a conflict does not settle the conflict.
+
+     The clause says WHY it defers, not merely that it does. A permission that
+     yields for a stated reason — some surfaces show the characters raw, and a
+     formatting character displayed literally is worse than no formatting at
+     all — gives an agent something to reason with when its own prompt is silent
+     on the point, which a bare "the agent prompt wins" would not.
+
+     This is belt to the braces already added on POST /api/oracle, which appends
+     the plain-text rule to the final user message where recency settles it
+     outright. That fix protects one route. This one removes the contradiction
+     itself, for all six buildAgentSystemPrompt callers and any added later. */
+  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII. That last allowance is the weakest rule you hold, and it yields: where your own agent prompt tells you not to use markdown or formatting characters, that prohibition wins outright and this sentence must never be read as licensing them. Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.";
 
 function formatPlatformKnowledge() {
   var lines = [];
