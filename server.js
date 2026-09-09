@@ -20,6 +20,15 @@ const Astronomy = require("astronomy-engine");
 const cityTimezones = require("city-timezones");
 const { Resend } = require("resend");
 
+/* Plain require, not a dynamic import: @simplewebauthn/server ships a dual
+   build and its exports map resolves "require" to ./script/index.js, so the
+   latest major loads directly in this CommonJS file. Verified against 14.0.1
+   before it was added. */
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse
+} = require("@simplewebauthn/server");
+
 // Resend signs its webhooks with Svix, so the verifier comes from Svix rather
 // than being written here. Signature verification is not a place to hand-roll
 // an HMAC: the payload Svix signs is a specific concatenation of id, timestamp
@@ -141,6 +150,53 @@ app.get("/health", (req, res) => {
   });
 });
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://bizforceai.net";
+
+/* ══ WebAuthn ═══════════════════════════════════════════════════════════════
+   WebAuthn binds a credential to the origin of the PAGE, not of this API. The
+   browser is on bizforceai.net; this server answers from a Railway domain that
+   the ceremony never sees.
+
+   PINNED, NOT DERIVED FROM FRONTEND_URL. That variable is an unvalidated env
+   var with a silent fallback, and of its five use sites only two normalise a
+   trailing slash. Every one of those flaws is survivable in an email link,
+   which is all it currently builds. None is survivable here: a wrong RP ID
+   does not degrade, it makes every credential ever issued under it
+   permanently unusable, and no amount of later correction brings them back.
+   The cost of pinning is remembering to change it if the domain changes; the
+   cost of deriving it is silently destroying everyone's passkeys.
+
+   ONE ORIGIN, AND WHY THAT IS SAFE TODAY. www.bizforceai.net answers 301 to
+   the apex and preserves the path (verified: /app.html on www redirects to
+   /app.html on the apex). The browser follows that before any HTML runs, so
+   no page is ever SERVED from www and a ceremony can never originate there.
+
+   That redirect is a Netlify dashboard setting. It is NOT in this repo and
+   could be turned off without a commit, which means this file cannot detect
+   the change — the first symptom would be users on www failing to sign in.
+   If it ever goes away, expectedOrigin must become an array covering both
+   origins. RP_ID needs no change: "bizforceai.net" is a registrable suffix of
+   www.bizforceai.net, so credentials stay valid for both either way. */
+const WEBAUTHN_RP_NAME = "BizForce AI";
+const WEBAUTHN_RP_ID = "bizforceai.net";
+const WEBAUTHN_EXPECTED_ORIGIN = "https://bizforceai.net";
+
+/* EdDSA, ES256, RS256. The library's default list also carries -48
+   (ML-DSA-44, post-quantum), which Node's Web Crypto supports only
+   experimentally — so an authenticator that took us up on it would leave this
+   server holding a credential it can only verify through an experimental code
+   path. Not offering the algorithm is the way to not be offered the
+   credential. These three cover every authenticator that actually exists.
+
+   This does NOT silence the two ExperimentalWarnings in the boot log —
+   measured, not assumed: a bare require() of the library prints them with no
+   options generated at all, because it probes Web Crypto's capabilities at
+   import. They fire once at startup and are unrelated to this list. Add -48
+   back when Node supports it without the experimental flag. */
+const WEBAUTHN_ALGORITHM_IDS = [-8, -7, -257];
+
+// Five minutes. Long enough to find a security key in a drawer, short enough
+// that a challenge captured from a log is worthless by the time it is read.
+const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 
 
@@ -4413,6 +4469,228 @@ app.post("/api/auth/verify-email", async function (req, res, next) {
       .eq("id", user.id);
 
     return res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ══ PASSKEY REGISTRATION ═══════════════════════════════════════════════════
+   Two halves of one ceremony. start issues a challenge; finish spends it and
+   stores the credential. Both are behind requireAuth: registering a passkey
+   adds a way to sign in as this account, so the caller must already BE the
+   account. The login ceremony, where the caller is not yet known, is separate
+   and is not built yet. */
+
+app.post("/api/webauthn/register/start", requireAuth, authLimiter, async function (req, res, next) {
+  try {
+    /* Every credential this user already holds, handed to the authenticator as
+       excludeCredentials. It is what makes a second enrolment of the SAME key
+       fail politely in the browser — the authenticator recognises itself and
+       declines — instead of travelling all the way to the unique index in
+       finish and coming back as an error. The index is still the guarantee;
+       this is the courtesy. */
+    var existing = await supabase
+      .from("webauthn_credentials")
+      .select("credential_id, transports")
+      .eq("user_id", req.user.id);
+
+    if (existing.error) {
+      throw existing.error;
+    }
+
+    var options = await generateRegistrationOptions({
+      rpName: WEBAUTHN_RP_NAME,
+      rpID: WEBAUTHN_RP_ID,
+
+      /* THE USER HANDLE, and it is deliberately the account uuid rather than a
+         random value. A discoverable credential stores this handle inside the
+         authenticator and hands it back at login BEFORE the user is identified
+         — it is how the authenticator names the account. Storing the uuid as
+         utf8 bytes means the login ceremony can decode the handle straight
+         back to a users.id with no extra lookup table.
+
+         It is not a secret: it is stored on the authenticator and returned in
+         every assertion. A uuid is fine. An email address would not be — that
+         would put the user's address inside a device that may not be theirs
+         forever. */
+      userID: Buffer.from(req.user.id, "utf8"),
+      userName: req.user.email,
+      userDisplayName: req.user.email,
+
+      attestationType: "none",
+      supportedAlgorithmIDs: WEBAUTHN_ALGORITHM_IDS,
+
+      excludeCredentials: (existing.data || []).map(function (c) {
+        return { id: c.credential_id, transports: c.transports || undefined };
+      }),
+
+      authenticatorSelection: {
+        /* REQUIRED, not preferred, and this is the whole feature. A
+           discoverable credential can be found by the authenticator with
+           nothing but the RP ID, which is what allows signing in without
+           typing an email first. "preferred" would let an authenticator
+           silently issue a non-discoverable credential, and the user would
+           only discover it later, at the login screen, when their passkey
+           does not appear. Better to fail at enrolment than to enrol
+           something that cannot do the job. */
+        residentKey: "required",
+        userVerification: "preferred"
+      }
+    });
+
+    var stored = await supabase
+      .from("webauthn_challenges")
+      .insert({
+        user_id: req.user.id,
+        challenge: options.challenge,
+        purpose: "register",
+        expires_at: new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS).toISOString()
+      })
+      .select("id")
+      .single();
+
+    if (stored.error) {
+      throw stored.error;
+    }
+
+    return res.json({ options: options });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/webauthn/register/finish", requireAuth, authLimiter, async function (req, res, next) {
+  try {
+    var attestation = req.body && req.body.response;
+    var nickname = safeText(req.body && req.body.nickname, 60);
+
+    if (!attestation || typeof attestation !== "object") {
+      return res.status(400).json({ error: "response is required" });
+    }
+
+    /* ── CONSUMED BEFORE IT IS VERIFIED, IN ONE STATEMENT ──────────────────
+       This is an UPDATE ... WHERE ... RETURNING, which the database applies as
+       a single atomic operation. Every condition that makes a challenge usable
+       is in the WHERE clause: unspent, unexpired, purpose 'register', and
+       belonging to THIS user.
+
+       Select-then-update would be the obvious way to write this and it would be
+       wrong. Between the read and the write there is a window in which a second
+       request reads the same unspent row, and both then proceed to verify
+       against a challenge each believes it owns. Two concurrent finishes would
+       both succeed. Here the second request's UPDATE matches zero rows, because
+       the first request's write already moved consumed_at away from null, and
+       it is refused. The database does the arbitration; nothing in this process
+       has to.
+
+       THE CHALLENGE COMES FROM THIS QUERY, NOT FROM THE REQUEST. It would be
+       easy to read it out of the response's clientDataJSON and look that up
+       instead — and it would quietly disarm the check underneath. The library
+       verifies that the challenge inside clientDataJSON equals the
+       expectedChallenge it is given; feeding it a value taken from that same
+       clientDataJSON makes the comparison compare a thing to itself. The
+       server must remember what it issued. So the account is the key, and the
+       challenge is an answer, never an input.
+
+       Every outstanding challenge for this user is consumed, not just one. A
+       user with two enrolment tabs open has two live challenges and only one
+       of them can be the ceremony being finished; leaving the other unspent
+       means leaving a valid challenge lying around after a successful
+       registration. The newest is the one this response can plausibly be for,
+       and the rest die with it. The cost is that a second open tab must start
+       again, which is correct — it was never going to be the same ceremony.
+
+       No rows back means every possibility is exhausted: already spent, or
+       expired, or none was ever issued. Three different facts that all mean the
+       same thing to the caller and are deliberately not distinguished, because
+       saying which one it was tells an attacker whether a challenge existed. */
+    var claimed = await supabase
+      .from("webauthn_challenges")
+      .update({ consumed_at: nowIso() })
+      .eq("purpose", "register")
+      .eq("user_id", req.user.id)
+      .is("consumed_at", null)
+      .gt("expires_at", nowIso())
+      .select("id, challenge, created_at");
+
+    if (claimed.error) {
+      throw claimed.error;
+    }
+
+    var outstanding = (claimed.data || []).slice().sort(function (a, b) {
+      return Date.parse(b.created_at) - Date.parse(a.created_at);
+    });
+
+    if (!outstanding.length) {
+      return res.status(400).json({ error: "That registration attempt is no longer valid. Start again." });
+    }
+
+    var verification;
+
+    try {
+      verification = await verifyRegistrationResponse({
+        response: attestation,
+        expectedChallenge: outstanding[0].challenge,
+        expectedOrigin: WEBAUTHN_EXPECTED_ORIGIN,
+        expectedRPID: WEBAUTHN_RP_ID,
+        requireUserVerification: false
+      });
+    } catch (verifyError) {
+      /* THE CHALLENGE STAYS CONSUMED. It was spent the moment it was claimed
+         above, and a failed verification does not give it back. That is the
+         point of consuming first: if a failure released the challenge, an
+         attacker could feed deliberately invalid responses at one challenge
+         until something got through, which is exactly the replay the
+         single-use rule exists to prevent. A failed ceremony costs the user
+         one more tap on "add a passkey". It must never cost less than that. */
+      return res.status(400).json({ error: "That passkey could not be verified. Start again." });
+    }
+
+    if (!verification || !verification.verified || !verification.registrationInfo) {
+      return res.status(400).json({ error: "That passkey could not be verified. Start again." });
+    }
+
+    var info = verification.registrationInfo;
+    var credential = info.credential;
+
+    var insert = await supabase
+      .from("webauthn_credentials")
+      .insert({
+        user_id: req.user.id,
+        credential_id: credential.id,
+        // Uint8Array from the library; base64url so it round-trips through a
+        // text column unchanged and goes straight back into verification.
+        public_key: Buffer.from(credential.publicKey).toString("base64url"),
+        sign_count: credential.counter,
+        transports: credential.transports || null,
+        aaguid: info.aaguid || null,
+        backed_up: typeof info.credentialBackedUp === "boolean" ? info.credentialBackedUp : null,
+        nickname: nickname || "Passkey"
+      })
+      .select("id, credential_id, nickname, transports, backed_up, created_at")
+      .single();
+
+    if (insert.error) {
+      /* 23505 on credential_id means this authenticator is already registered.
+         The unique index spans ALL users, so it may belong to this account or
+         to another one — and the response must not say which. "It is already on
+         your account" versus "it is already on someone else's" would turn this
+         route into an oracle: anyone holding a security key could learn whether
+         it had been enrolled elsewhere on this service. One message covers
+         both. Constraint text is checked alongside the code so an unrelated
+         unique violation is not swallowed as this one. */
+      var conflictText = String(insert.error.message || "") + " " +
+        String(insert.error.details || "") + " " +
+        String(insert.error.constraint || "");
+
+      if (insert.error.code === "23505" && conflictText.indexOf("credential_id") !== -1) {
+        return res.status(409).json({ error: "That authenticator is already registered." });
+      }
+
+      throw insert.error;
+    }
+
+    return res.status(201).json({ credential: insert.data });
   } catch (error) {
     next(error);
   }
