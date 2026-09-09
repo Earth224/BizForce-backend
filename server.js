@@ -26,7 +26,9 @@ const { Resend } = require("resend");
    before it was added. */
 const {
   generateRegistrationOptions,
-  verifyRegistrationResponse
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse
 } = require("@simplewebauthn/server");
 
 // Resend signs its webhooks with Svix, so the verifier comes from Svix rather
@@ -4691,6 +4693,267 @@ app.post("/api/webauthn/register/finish", requireAuth, authLimiter, async functi
     }
 
     return res.status(201).json({ credential: insert.data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ══ PASSKEY LOGIN ══════════════════════════════════════════════════════════
+   Neither route is behind requireAuth, and that is the entire point: the
+   caller has no token yet, and the credential is what will name the account.
+
+   HOW THE CHALLENGE IS FOUND WITHOUT AN ACCOUNT TO KEY IT ON. Registration
+   looks its challenge up by user id, because registration is authenticated.
+   Here there is no user id until the credential has been identified, and the
+   credential cannot be trusted until the challenge has been checked — so that
+   key is unavailable at exactly the moment it is needed.
+
+   The obvious escape is to read the challenge out of the response's own
+   clientDataJSON and look THAT up. It is also wrong, for the same reason it
+   was wrong in registration: the library's job is to check that the challenge
+   inside clientDataJSON matches the one the server issued, and taking the
+   expected value from that same clientDataJSON makes it compare a value to
+   itself. The check still runs, still passes, and no longer means anything.
+
+   So start returns a ceremony id — the challenge row's own uuid — and finish
+   sends it back. The server looks the row up by id and uses ITS stored
+   challenge as expectedChallenge. The client names a row; it never supplies
+   the value that row holds. The comparison stays honest because the two sides
+   of it come from different places.
+
+   THE CEREMONY ID IS NOT A SECRET AND DOES NOT NEED TO BE. Guessing one buys
+   nothing: it names a row, it does not authorise anything. Whoever holds it
+   still has to produce an assertion signed by a private key they do not have,
+   over a 32-byte random challenge they cannot read from the id, and the row is
+   consumed on first use so a correct guess is worth at most one attempt at a
+   challenge that is now spent. It is an identifier, not a credential, and it
+   is treated as one. */
+
+app.post("/api/webauthn/login/start", authLimiter, async function (req, res, next) {
+  try {
+    /* NO allowCredentials, deliberately. Passing a list would require knowing
+       whose credentials to list, which would mean asking for an email first —
+       and signing in without typing an email is the whole feature. The
+       credentials are discoverable (residentKey was "required" at enrolment),
+       so the authenticator finds the right one from the RP ID alone and offers
+       the account itself.
+
+       Omitting it also means this route reveals nothing. An allowCredentials
+       list built from an email would answer "does this address have a passkey
+       here" to anyone who asked. */
+    var options = await generateAuthenticationOptions({
+      rpID: WEBAUTHN_RP_ID,
+      userVerification: "preferred"
+    });
+
+    /* user_id is null, and migration 101's CHECK permits that for 'login' and
+       only for 'login'. Nothing here knows who is signing in yet — that is not
+       a gap to be filled in later, it is the state this route exists to be in. */
+    var stored = await supabase
+      .from("webauthn_challenges")
+      .insert({
+        user_id: null,
+        challenge: options.challenge,
+        purpose: "login",
+        expires_at: new Date(Date.now() + WEBAUTHN_CHALLENGE_TTL_MS).toISOString()
+      })
+      .select("id")
+      .single();
+
+    if (stored.error) {
+      throw stored.error;
+    }
+
+    return res.json({ ceremony_id: stored.data.id, options: options });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/webauthn/login/finish", authLimiter, async function (req, res, next) {
+  try {
+    var ceremonyId = safeText(req.body && req.body.ceremony_id, 100);
+    var assertion = req.body && req.body.response;
+
+    /* ONE REFUSAL FOR EVERY WAY THIS CAN FAIL, and it is the same sentence
+       throughout: a malformed id, an id naming no row, a spent or expired
+       ceremony, an unrecognised credential, a signature that does not verify.
+       Those are five different facts and the caller learns none of them.
+
+       Distinguishing them would answer questions worth asking. "That credential
+       is not registered" tells someone holding a stolen security key whether
+       this service knows it. "That ceremony expired" confirms the id was real.
+       Neither is worth the diagnostic convenience, and the server logs still
+       carry the detail for anyone entitled to it. */
+    var refusal = { error: "That sign-in could not be completed. Start again." };
+
+    if (!ceremonyId || !assertion || typeof assertion !== "object" || !assertion.id) {
+      return res.status(400).json(refusal);
+    }
+
+    /* Checked before it reaches the database, not for tidiness: the id column
+       is uuid, and PostgREST answers a malformed uuid with a 500-shaped error
+       rather than an empty result. Without this, garbage in the field would be
+       a server error instead of a refusal. */
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ceremonyId)) {
+      return res.status(400).json(refusal);
+    }
+
+    /* Consumed atomically by id, exactly as registration consumes by account:
+       one UPDATE ... WHERE ... RETURNING carrying every condition that makes
+       the row usable. Two concurrent finishes cannot both win, because the
+       second matches zero rows once the first has moved consumed_at. */
+    var claimed = await supabase
+      .from("webauthn_challenges")
+      .update({ consumed_at: nowIso() })
+      .eq("id", ceremonyId)
+      .eq("purpose", "login")
+      .is("consumed_at", null)
+      .gt("expires_at", nowIso())
+      .select("id, challenge")
+      .maybeSingle();
+
+    if (claimed.error) {
+      throw claimed.error;
+    }
+    if (!claimed.data) {
+      return res.status(400).json(refusal);
+    }
+
+    /* THE CREDENTIAL NAMES THE ACCOUNT. There is no email in this request and
+       there never was one: the authenticator returned a credential id, that id
+       is unique across every account, and the row it matches carries the
+       user_id. This lookup is the entire identification step. */
+    var credentialRow = await supabase
+      .from("webauthn_credentials")
+      .select("id, user_id, credential_id, public_key, sign_count, transports")
+      .eq("credential_id", String(assertion.id))
+      .maybeSingle();
+
+    if (credentialRow.error) {
+      throw credentialRow.error;
+    }
+    if (!credentialRow.data) {
+      return res.status(400).json(refusal);
+    }
+
+    var stored = credentialRow.data;
+    var storedCounter = Number(stored.sign_count) || 0;
+    var verification;
+
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: assertion,
+        expectedChallenge: claimed.data.challenge,
+        expectedOrigin: WEBAUTHN_EXPECTED_ORIGIN,
+        expectedRPID: WEBAUTHN_RP_ID,
+        requireUserVerification: false,
+        credential: {
+          id: stored.credential_id,
+          // Stored base64url at registration; back to bytes to verify against.
+          publicKey: Buffer.from(stored.public_key, "base64url"),
+          counter: storedCounter,
+          transports: stored.transports || undefined
+        }
+      });
+    } catch (verifyError) {
+      // The challenge stays consumed. A failed assertion must not hand back a
+      // challenge that could be tried again — same rule as registration.
+      return res.status(400).json(refusal);
+    }
+
+    if (!verification || !verification.verified) {
+      return res.status(400).json(refusal);
+    }
+
+    var newCounter = Number(verification.authenticationInfo.newCounter) || 0;
+
+    /* ── THE CLONE CHECK ───────────────────────────────────────────────────
+       The signature counter lives inside the authenticator and increments on
+       every assertion it produces. Its only purpose is this: if the same
+       credential is presented by two devices, the copy's counter cannot keep
+       pace with the original's, and a value that fails to advance past what
+       was last seen is the visible trace of a private key existing in two
+       places. That is the one thing a signature check cannot catch — a clone's
+       signatures are perfectly valid, because it holds a perfectly valid key.
+
+       The database's `sign_count >= 0` is a floor and nothing more. Monotonicity
+       is a comparison against the PREVIOUS value, which no column constraint
+       can express, so the real rule is here and only here.
+
+       AND THE EXCEPTION, which is not a loophole. A large share of
+       authenticators — Apple's platform passkeys among them, which is what is
+       actually enrolled on this account today — implement no counter at all and
+       report zero forever, as the spec permits. For those, stored and returned
+       are both 0 on every legitimate sign-in, and "must be greater" would
+       reject every one of them: the feature would be unusable by exactly the
+       devices most people have.
+
+       So zero-and-zero is accepted and means "this authenticator does not keep
+       a counter", while any other non-advance is refused. The cost is real and
+       worth naming: a cloned Apple passkey cannot be detected this way, because
+       there is no counter to disagree. Detection for those relies on the key
+       being non-exportable in the first place. This check defends the
+       authenticators that DO count, and does not pretend to defend the ones
+       that do not. */
+    var counterIsUnimplemented = storedCounter === 0 && newCounter === 0;
+
+    if (!counterIsUnimplemented && newCounter <= storedCounter) {
+      console.error("[webauthn] CLONE SIGNAL — credential " + stored.credential_id +
+        " (user " + stored.user_id + ") returned counter " + newCounter +
+        " against a stored " + storedCounter + ". The counter did not advance, " +
+        "which means this credential may exist on more than one device. Sign-in refused.");
+      return res.status(401).json({ error: "That passkey could not be used. Please sign in with your password." });
+    }
+
+    var userRow = await supabase
+      .from("users")
+      .select("id, email, role, banned_at, created_at")
+      .eq("id", stored.user_id)
+      .maybeSingle();
+
+    if (userRow.error) {
+      throw userRow.error;
+    }
+    if (!userRow.data) {
+      return res.status(400).json(refusal);
+    }
+
+    var user = userRow.data;
+
+    if (user.banned_at) {
+      return res.status(403).json({ error: "Account banned" });
+    }
+
+    await supabase
+      .from("webauthn_credentials")
+      .update({ sign_count: newCounter, last_used_at: nowIso() })
+      .eq("id", stored.id);
+
+    await supabase
+      .from("users")
+      .update({ last_login_at: nowIso(), last_login_ip: req.ip })
+      .eq("id", user.id);
+
+    var profile = await getProfileByUserId(user.id);
+    var subscription = await getActiveSubscription(user.id);
+
+    /* THE SAME SHAPE POST /api/auth/login RETURNS, built by the same helpers in
+       the same order — session first, because the token carries its id. A
+       passkey sign-in and a password sign-in must be indistinguishable to the
+       frontend: app.html writes bf_token, bf_refresh and bf_user from this
+       response and scripts/bf-session.js renews from it. Any field missing here
+       is a session that behaves differently depending on how it began. */
+    var loginSession = await createSession(user, req);
+    var token = createToken(user, loginSession.sessionId);
+
+    return res.json({
+      token: token,
+      refresh_token: loginSession.refreshToken,
+      user: publicUser(user),
+      profile: profile,
+      subscription: subscription
+    });
   } catch (error) {
     next(error);
   }
