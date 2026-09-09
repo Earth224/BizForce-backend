@@ -4284,6 +4284,42 @@ function buildTrailingLanguageDirective(languageTag, surfaceSeesUserText) {
   return "";
 }
 
+/* The plain-text rule, worded for the SAME trailing position the language
+   directive occupies and appended into the SAME bracketed block, so the model
+   receives one directive carrying two rules rather than two competing ones.
+
+   WHY IT IS HERE AT ALL, when ORACLE_SYSTEM_PROMPT already forbids exactly
+   this. The rule is in the prompt and is being ignored, for the same reason
+   the language instruction was ignored on afc4315: position. Measured against
+   the assembled prompt, the prohibition ("Do NOT use markdown formatting
+   characters") sits at 61% — the middle, where instructions go to be ignored —
+   and it is not the first word on the subject the model reads. BRAIN_DIRECTIVES
+   reaches it earlier, at 44%, saying the character rule "does not forbid
+   ordinary markdown where the task calls for it, since markdown is itself
+   ASCII". A permission at 44% and a prohibition at 61% is not one rule being
+   disobeyed; it is two rules disagreeing, with the permissive one better
+   placed. Nothing here edits either — this only puts the rule that matches the
+   surface in the one position that has already been proven to win on this
+   route.
+
+   IT EXPLAINS THE CONSEQUENCE RATHER THAN ONLY FORBIDDING THE CHARACTERS, and
+   that is the substantive difference from the buried rule. "Do NOT use
+   markdown" is a rule to be weighed against a persona that spends a thousand
+   characters rewarding emphasis and register; "the reader will see the
+   asterisks" is a reason, and a model that knows the character is shown raw
+   has something to comply WITH rather than merely something to obey. It is
+   also simply true: oracle.html assigns the reply with textContent
+   (bubble.textContent = text), and no markdown renderer exists anywhere in the
+   frontend.
+
+   TWO SENTENCES, DELIBERATELY. This is appended to something the seeker wrote,
+   and the language half is already sitting there; a longer block would swamp
+   the message it is attached to, which is the same reason
+   buildTrailingLanguageDirective carries the short form rather than the long
+   argument in buildLanguageInstruction. */
+var ORACLE_PLAIN_TEXT_DIRECTIVE =
+  " Your reply is displayed as plain text and is never rendered as markdown, so any asterisk, hash, backtick or bullet character you write will be shown to the seeker exactly as typed, sitting raw in the middle of your sentence. Write your reply with none of those characters in it.";
+
 /* Reads the stored preferred_language for a user, or null.
 
    NULL IS THE SAFE DIRECTION, AND IT IS RETURNED FOR ALL THREE WAYS OF NOT
@@ -12198,7 +12234,32 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
        string concatenation against the array form would produce
        "[object Object]..." and send the images as garbage, so the array case
        gets its own trailing text block instead. */
+    /* ONE DIRECTIVE, BOTH RULES, ONE MARKER. The formatting sentences are
+       concatenated onto the language directive rather than appended as a second
+       block, so the final user turn carries a single bracketed
+       "[System directive — not written by the seeker]" paragraph covering both.
+       Two separately marked blocks would read as two interruptions of the
+       seeker's message and would dilute the position that makes this work.
+
+       The guard is not decoration. buildTrailingLanguageDirective returns the
+       empty string when there is no stored language AND the surface cannot see
+       the seeker's text — not reachable from this route, which passes true, but
+       reachable by anyone who changes that argument later. Appending to "" would
+       emit the formatting rule with no marker at all, which is precisely the
+       failure the marker exists to prevent: an unattributed instruction reads as
+       something the seeker wrote about themselves in the third person.
+
+       ONLY THIS ROUTE. The other eleven threaded sites are untouched and must
+       stay that way — the content agent is explicitly instructed to emit
+       markdown and agents/content.html renders it (its own converter handles
+       "## " and "**"), so this rule would corrupt that surface rather than fix
+       it. buildTrailingLanguageDirective itself is deliberately NOT modified for
+       the same reason: /api/oracle/chat and /api/business-chat share it. */
     var oracleTrailingDirective = buildTrailingLanguageDirective(oracleLanguageTag, true);
+
+    oracleTrailingDirective = oracleTrailingDirective
+      ? oracleTrailingDirective + ORACLE_PLAIN_TEXT_DIRECTIVE
+      : "\n\n[System directive — not written by the seeker]" + ORACLE_PLAIN_TEXT_DIRECTIVE;
 
     if (oracleTrailingDirective) {
       var oracleFinalMessage = messages[messages.length - 1];
