@@ -1830,12 +1830,81 @@ async function orchestrateAgentWorkflow(options) {
   return orchestrationResult;
 }
 
-function createToken(user) {
+/* ── SESSIONS ────────────────────────────────────────────────────────────────
+
+   Until now the JWT was the whole session. It could not be revoked, because
+   nothing recorded that it had been issued, and it could not be renewed,
+   because nothing could vouch for it once it expired. auth_sessions (migration
+   100) is the record; this is the code that writes and reads it. */
+
+var SESSION_TTL_DAYS = 60;
+
+/* SHA-256, NOT BCRYPT, AND THAT IS THE RIGHT CALL HERE RATHER THAN A SHORTCUT.
+   bcrypt exists to make guessing expensive against LOW-entropy secrets — a
+   password a human chose, which a wordlist can walk. This is 32 bytes from
+   crypto.randomBytes: 256 bits of uniform entropy with no distribution to
+   exploit, so there is nothing for a work factor to slow down. Brute force is
+   already impossible and bcrypt would only add cost to every refresh — a cost
+   paid on the hot path, forever, buying nothing. */
+function hashRefreshToken(token) {
+  return crypto.createHash("sha256").update(String(token)).digest("hex");
+}
+
+/* Creates the session row and hands the caller the plaintext refresh token —
+   ONCE. This return value is the only moment that string exists outside the
+   client that will hold it.
+
+   ONLY THE HASH IS STORED, and the reason is what a database dump is worth. A
+   backup, a support query, a misconfigured read replica or an attacker with
+   SELECT on this table gets a column of digests that cannot be presented to
+   anything — the server verifies by hashing what it is given and comparing, so
+   it never needs to read a token back. There is no legitimate operation that
+   requires recovering one, which is exactly why the capability should not
+   exist: a stored refresh token is a stored password to every account it
+   belongs to, and the only way to guarantee it cannot leak is not to have it.
+
+   Throwing is deliberate. A caller that cannot create a session must fail
+   loudly rather than fall back to issuing a token with no session behind it:
+   that token would be unrevokable and unrefreshable, which is the state this
+   whole change exists to leave, and it would happen silently. */
+async function createSession(user, req) {
+  var refreshToken = crypto.randomBytes(32).toString("hex");
+  var expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
+
+  var insert = await supabase
+    .from("auth_sessions")
+    .insert({
+      user_id: user.id,
+      refresh_token_hash: hashRefreshToken(refreshToken),
+      expires_at: expiresAt.toISOString(),
+      /* Truncated because a User-Agent is attacker-controlled and unbounded;
+         500 is far past any real one. req.ip is how POST /api/auth/login
+         already records last_login_ip, so the two agree about what an address
+         is — including whatever trust proxy setting is in force. */
+      user_agent: safeText(req && req.headers ? req.headers["user-agent"] : null, 500),
+      ip: req ? req.ip : null
+    })
+    .select("id")
+    .single();
+
+  if (insert.error) {
+    throw insert.error;
+  }
+
+  return { sessionId: insert.data.id, refreshToken: refreshToken };
+}
+
+/* `sid` binds an access token to a session row, which is what makes revocation
+   take effect: requireAuth reads it, finds the row and refuses a revoked or
+   expired one. A token without it can only be checked against its own
+   signature, which is the position we are leaving. */
+function createToken(user, sessionId) {
   return jwt.sign(
     {
       id: user.id,
       email: user.email,
-      role: user.role || "user"
+      role: user.role || "user",
+      sid: sessionId || null
     },
     process.env.JWT_SECRET,
     {
@@ -2478,6 +2547,67 @@ async function getUserPlan(userId) {
   };
 }
 
+/* ── THE PRE-SESSION GRACE — TEMPORARY, AND HERE IS WHEN TO DELETE IT. ───────
+
+   Every access token already in the wild when this deploys was signed by the
+   old createToken and carries NO sid. Rejecting those would sign out every
+   logged-in user the moment this ships — which is precisely the bug this whole
+   workstream exists to fix, reintroduced by the fix. So a token with no sid is
+   accepted and checked exactly as it was before.
+
+   REMOVABLE AFTER 2026-09-15. Access tokens are signed with expiresIn "7d",
+   this deploys on 2026-09-08, so the last sid-less token expires seven days
+   later and jwt.verify rejects it on its own from then on. After that date
+   this branch can only ever be reached by a forged token, and it should be
+   deleted — leaving it in place indefinitely means anyone who can mint an
+   unsigned-session token bypasses revocation entirely.
+
+   Logged so the grace is visible rather than silent, and so its disappearance
+   from the logs is the evidence that it is safe to remove. Once per user per
+   process, not once per request: a busy account would otherwise write a line
+   on every call and bury the signal in the noise it creates. The Set is capped
+   because it would otherwise grow without bound in a long-lived process; past
+   the cap the grace is still granted, it simply stops re-logging. */
+var LEGACY_TOKEN_GRACE_LOGGED = new Set();
+var LEGACY_TOKEN_GRACE_LOG_CAP = 1000;
+
+function noteLegacyToken(userId) {
+  if (LEGACY_TOKEN_GRACE_LOGGED.has(userId)) return;
+  if (LEGACY_TOKEN_GRACE_LOGGED.size < LEGACY_TOKEN_GRACE_LOG_CAP) {
+    LEGACY_TOKEN_GRACE_LOGGED.add(userId);
+  }
+  console.log("[auth] Pre-session token accepted under grace for user " + userId +
+    " — signed before sessions existed, so it carries no sid and cannot be revoked. " +
+    "Expected to stop appearing after 2026-09-15, when the last 7-day token issued " +
+    "before this change has expired; the grace branch in requireAuth can be removed then.");
+}
+
+/* Written back on use so an idle session can be told from a live one, but NOT
+   on every request — that would be a write per read, and this runs on every
+   authenticated call in the product. An hour is far finer than any question
+   anyone asks of this column and costs at most one write per session per hour.
+
+   Deliberately not awaited: the caller is already authenticated and the answer
+   does not depend on this landing, so making the user wait for it would add a
+   round-trip to every request for a value nothing reads synchronously. The
+   rejection handler is not optional — an un-awaited promise that rejects with
+   no handler takes the process down on modern Node. */
+var SESSION_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
+
+function touchSession(session) {
+  if (!session || !session.id) return;
+
+  var last = session.last_used_at ? Date.parse(session.last_used_at) : 0;
+  if (last && (Date.now() - last) < SESSION_TOUCH_INTERVAL_MS) return;
+
+  Promise.resolve(
+    supabase.from("auth_sessions").update({ last_used_at: nowIso() }).eq("id", session.id)
+  ).then(null, function (touchError) {
+    console.error("[auth] last_used_at update failed for session " + session.id + ": " +
+      ((touchError && touchError.message) || touchError));
+  });
+}
+
 async function requireAuth(req, res, next) {
   try {
     const header = req.headers.authorization || "";
@@ -2488,7 +2618,61 @@ async function requireAuth(req, res, next) {
 
     const token = header.replace("Bearer ", "").trim();
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await getUserById(decoded.id);
+
+    let user = null;
+    let session = null;
+
+    if (decoded.sid) {
+      /* ONE ROUND TRIP, NOT TWO. The user is read THROUGH the session rather
+         than beside it: auth_sessions.user_id references users(id), so
+         PostgREST can embed the owner in the same request and this replaces
+         the getUserById call that was already happening rather than adding to
+         it. An authenticated request costs exactly what it cost yesterday. */
+      const sessionResult = await supabase
+        .from("auth_sessions")
+        .select("id, revoked_at, expires_at, last_used_at, users(id, email, role, banned_at, created_at)")
+        .eq("id", decoded.sid)
+        .maybeSingle();
+
+      if (sessionResult.error) {
+        /* FAILS OPEN, DELIBERATELY, AND ONLY HERE. A null result is an answer —
+           no such session — and is rejected below. An ERROR is not an answer:
+           the database was unreachable, or PostgREST has not picked up the
+           table. Rejecting on that would turn a transient fault into "every
+           user is signed out", the exact outage this workstream exists to
+           prevent, and it would do it to people holding perfectly valid
+           sessions. Falling through to the user-only check restores precisely
+           yesterday's behaviour — which shipped and was accepted — for as long
+           as the fault lasts. The cost is that a revoked session is honoured
+           during an outage; that is the trade, and it is logged so it cannot
+           happen quietly. */
+        console.error("[auth] Session lookup FAILED for sid " + decoded.sid + " (user " +
+          decoded.id + "): " + (sessionResult.error.message || sessionResult.error) +
+          " — falling back to token-only auth for this request. Revocation is NOT " +
+          "being enforced while this persists.");
+      } else {
+        session = sessionResult.data;
+
+        if (!session) {
+          return res.status(401).json({ error: "Session not found" });
+        }
+        if (session.revoked_at) {
+          return res.status(401).json({ error: "Session revoked" });
+        }
+        if (Date.parse(session.expires_at) <= Date.now()) {
+          return res.status(401).json({ error: "Session expired" });
+        }
+
+        user = session.users || null;
+      }
+    } else {
+      noteLegacyToken(decoded.id);
+    }
+
+    /* Reached on the grace path, and on the failed-lookup path above. */
+    if (!user) {
+      user = await getUserById(decoded.id);
+    }
 
     if (!user) {
       return res.status(401).json({ error: "Invalid token" });
@@ -2498,7 +2682,10 @@ async function requireAuth(req, res, next) {
       return res.status(403).json({ error: "Account banned" });
     }
 
+    touchSession(session);
+
     req.user = user;
+    req.sessionId = session ? session.id : null;
     next();
   } catch (error) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -3626,10 +3813,12 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         " — registration succeeded and is NOT being failed for this, but transactional email to this address will have nothing to attribute itself to until one exists.");
     }
 
-    const token = createToken(user);
+    const registrationSession = await createSession(user, req);
+    const token = createToken(user, registrationSession.sessionId);
 
     return res.status(201).json({
       token,
+      refresh_token: registrationSession.refreshToken,
       user: publicUser(user),
       profile,
       email_verification_required: true
@@ -3682,10 +3871,16 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
 
     const profile = await getProfileByUserId(user.id);
     const subscription = await getActiveSubscription(user.id);
-    const token = createToken(user);
+
+    /* The session is created BEFORE the token because the token carries its
+       id. refresh_token is the only time that string leaves the server; it is
+       not stored here in any recoverable form and cannot be re-issued. */
+    const loginSession = await createSession(user, req);
+    const token = createToken(user, loginSession.sessionId);
 
     return res.json({
       token,
+      refresh_token: loginSession.refreshToken,
       user: publicUser(user),
       profile,
       subscription
@@ -3695,7 +3890,46 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
   }
 });
 
+/* Was `return res.json({ success: true })` — a literal no-op that deleted the
+   client's copy of a token the server went on accepting until it expired on its
+   own. Signing out did nothing a thief could notice.
+
+   revoked_reason is not decoration: migration 100 has a paired CHECK requiring
+   revoked_at and revoked_reason to be set together, so a revoked row can always
+   say why it was revoked. That matters most for the case this pass does not yet
+   build — a refresh token replayed after revocation, which is read as theft and
+   revokes everything the user has. A revocation that cannot be told apart from
+   a deliberate sign-out is unauditable, so "logout" is written here explicitly.
+
+   SUCCEEDS EVEN WHEN THERE IS NOTHING TO REVOKE. Logging out twice, or from a
+   pre-session token that has no sid, is not an error — the caller asked to end
+   a session and by the time they are told "done" there is none. Reporting a
+   failure would leave a client believing it is still signed in when it holds
+   nothing, which is worse than the no-op this replaces.
+
+   The update is scoped by user_id as well as id, so a caller cannot revoke a
+   session that is not theirs even if they mint a token naming one. */
 app.post("/api/auth/logout", requireAuth, async function (req, res) {
+  if (!req.sessionId) {
+    return res.json({ success: true });
+  }
+
+  const revoke = await supabase
+    .from("auth_sessions")
+    .update({ revoked_at: nowIso(), revoked_reason: "logout" })
+    .eq("id", req.sessionId)
+    .eq("user_id", req.user.id)
+    .is("revoked_at", null);
+
+  if (revoke.error) {
+    /* Not softened into success. The client is about to discard its tokens on
+       the strength of this answer, and a session left live while the holder
+       believes it is closed is the failure logout exists to prevent. */
+    console.error("[auth] Logout failed to revoke session " + req.sessionId +
+      " for user " + req.user.id + ": " + (revoke.error.message || revoke.error));
+    return res.status(500).json({ error: "Could not end the session. Please try again." });
+  }
+
   return res.json({ success: true });
 });
 
