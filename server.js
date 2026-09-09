@@ -200,6 +200,12 @@ const WEBAUTHN_ALGORITHM_IDS = [-8, -7, -257];
 // that a challenge captured from a log is worthless by the time it is read.
 const WEBAUTHN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
+/* Used wherever a uuid arrives from a client. The id columns are uuid, and
+   PostgREST answers a malformed uuid with a 500-shaped error rather than an
+   empty result — so a client sending garbage would get a server error instead
+   of a refusal unless the shape is checked before the query. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 
 
 const supabase = createClient(
@@ -4791,11 +4797,8 @@ app.post("/api/webauthn/login/finish", authLimiter, async function (req, res, ne
       return res.status(400).json(refusal);
     }
 
-    /* Checked before it reaches the database, not for tidiness: the id column
-       is uuid, and PostgREST answers a malformed uuid with a 500-shaped error
-       rather than an empty result. Without this, garbage in the field would be
-       a server error instead of a refusal. */
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ceremonyId)) {
+    // Shape-checked before it reaches the database — see UUID_RE.
+    if (!UUID_RE.test(ceremonyId)) {
       return res.status(400).json(refusal);
     }
 
@@ -4954,6 +4957,124 @@ app.post("/api/webauthn/login/finish", authLimiter, async function (req, res, ne
       profile: profile,
       subscription: subscription
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ══ PASSKEY MANAGEMENT ═════════════════════════════════════════════════════
+   Listing and removal. Without these the settings page can only show what it
+   just added in the current session and cannot remove anything, which makes it
+   describe the account inaccurately the moment it is reloaded. */
+
+app.get("/api/webauthn/credentials", requireAuth, async function (req, res, next) {
+  try {
+    /* THE COLUMN LIST IS THE PROTECTION, so it is written out rather than
+       select("*") minus a few fields. public_key and credential_id are absent
+       deliberately and must stay absent.
+
+       credential_id is the handle an authenticator is addressed by. Nothing on
+       the settings page needs it — rows are removed by their own row id — and
+       there is no reason to put an authenticator's address into a response, a
+       browser's memory, or whatever logs sit between here and there. The public
+       key is likewise only ever used by verification on this server.
+
+       A select("*") here would leak both the day someone adds it, silently and
+       without any diff that looks like it touched security. */
+    var result = await supabase
+      .from("webauthn_credentials")
+      .select("id, nickname, transports, backed_up, created_at, last_used_at")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false });
+
+    /* THROWN, NOT SWALLOWED INTO AN EMPTY LIST. A failed query and an account
+       with no passkeys are completely different facts that would render as the
+       same screen — "no passkeys yet" — and the wrong one of those is actively
+       dangerous. Someone with three registered devices, told they have none,
+       reasonably concludes the account lost them and goes and enrols
+       everything again. An error reaches the error handler and the page can say
+       it could not load the list, which is true and leads nowhere bad. */
+    if (result.error) {
+      throw result.error;
+    }
+
+    return res.json({ credentials: result.data || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* REMOVING A PASSKEY REMOVES A WAY OF SIGNING IN, so the question of whether
+   this can lock someone out was settled before the route was written rather
+   than assumed either way. It cannot, and here is exactly why:
+
+     - public.users.password_hash is `text not null` (migration 071), and no
+       later migration relaxes it.
+     - There is exactly ONE insert into public.users in this entire codebase —
+       POST /api/auth/register — and it always writes bcrypt.hash(password, 12).
+     - That route rejects a missing password with 400 and a password under 8
+       characters with 400, so the hash is always of a real password and never
+       a placeholder.
+     - The only other writer of password_hash is POST
+       /api/auth/password-reset/confirm, which also writes a real bcrypt hash.
+     - There is no OAuth, magic-link, SSO or invite path: the auth surface is
+       register, login, logout, refresh, me, password-reset,
+       password-reset/confirm, verify-email, and now the passkey ceremonies.
+     - No migration inserts into public.users, and there is no trigger on
+       auth.users creating rows here.
+
+   So every account has a usable password, deleting the last passkey always
+   leaves a way in, and NO LAST-CREDENTIAL GUARD IS NEEDED. The deletion is
+   simple, and adding a guard would only refuse something safe.
+
+   THE INVARIANT IS THE WHOLE REASON THIS IS SAFE, so it is written down here,
+   at the route that depends on it. If a signup path is ever added that creates
+   an account without a password — "sign in with Google", an invited team
+   member, a passkey-only registration — THIS ROUTE BECOMES A LOCKOUT AND MUST
+   GROW THE GUARD: refuse to delete the last credential for an account whose
+   password_hash cannot authenticate. The reset flow is not a safety net for
+   those users; it emails an address they may no longer control. */
+app.delete("/api/webauthn/credentials/:id", requireAuth, async function (req, res, next) {
+  try {
+    var id = safeText(req.params.id, 100);
+
+    /* ONE ANSWER FOR "NOT YOURS" AND FOR "DOES NOT EXIST". A malformed id, an
+       id naming no row, and an id naming someone else's credential all return
+       this. Distinguishing them would make the route a probe: 404 versus 403
+       across a range of guessed uuids would report which ones are real
+       credentials belonging to other accounts. */
+    var missing = { error: "No such passkey." };
+
+    if (!id || !UUID_RE.test(id)) {
+      return res.status(404).json(missing);
+    }
+
+    /* BOTH COLUMNS IN THE WHERE CLAUSE. The user_id is not a check performed
+       after the fact — it is part of what the delete matches, so a row
+       belonging to another account is not found rather than found and then
+       refused. There is no ordering here in which the wrong row is briefly
+       selected.
+
+       .select() matters: in PostgREST a delete matching nothing is not an
+       error, it is an empty result. Without asking for the row back, deleting
+       someone else's credential and deleting nothing at all would both look
+       like success. */
+    var removed = await supabase
+      .from("webauthn_credentials")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", req.user.id)
+      .select("id, nickname")
+      .maybeSingle();
+
+    if (removed.error) {
+      throw removed.error;
+    }
+    if (!removed.data) {
+      return res.status(404).json(missing);
+    }
+
+    return res.json({ success: true, removed: { id: removed.data.id, nickname: removed.data.nickname } });
   } catch (error) {
     next(error);
   }
