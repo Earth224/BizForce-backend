@@ -28846,6 +28846,555 @@ async function selfReviewTick() {
   }
 }
 
+// ── Hourly scheduled agent runs ──────────────────────────────────────────────
+//
+// Reads public.agent_schedules and launches the runs that are due. The table,
+// the API and the UI all existed before this; nothing read the table on a timer,
+// so a saved schedule was a stored intention while the interface told the user
+// their agent would run.
+//
+// Claimed through job_runs on the same terms as the two passes above, for the
+// same reason: an in-process guard sees one process's own memory and nothing
+// else. Replica count is 1 today and nothing enforces that, and a second process
+// running this tick would double every scheduled run — and every one of those is
+// a model call.
+//
+// ONE JOB_RUNS ROW PER HOUR SLOT, which is the one real difference from the
+// daily passes. job_runs.last_run_on is a DATE, so a single job_name could only
+// ever claim once a day — correct for a daily pass and useless for an hourly
+// one. The job_name therefore carries the UTC hour it claims
+// (hourly_agent_schedules_h13), so "this hour, today" is exactly one row and the
+// existing claim idiom works unchanged. 24 rows, each claimed at most once a day.
+var AGENT_SCHEDULE_JOB_PREFIX = "hourly_agent_schedules_h";
+
+/* 25 runs per tick by default. Chosen as a spend ceiling rather than a
+   throughput target: every run is a model call, eighteen agents on daily
+   cadences is real money, and this project has already lost $45-$70 to
+   salesAutoConvertTick running in a mode that still called the model. */
+var AGENT_SCHEDULE_DEFAULT_MAX_PER_TICK = 25;
+
+// The UTC calendar day, and UTC is deliberate here where it was deliberately
+// WRONG for the self-review claim. That job fires at 07:00 Pacific, so its claim
+// day has to be Pacific or the boundary and the fire time drift apart. This job
+// fires on the UTC hour and matches rows against hour_utc, so its day is the UTC
+// day; using a local calendar here would put the claim's rollover in the middle
+// of the hours it is claiming.
+function agentScheduleUtcDay(now) {
+  return now.toISOString().slice(0, 10);
+}
+
+function agentScheduleJobName(now) {
+  var hour = now.getUTCHours();
+  return AGENT_SCHEDULE_JOB_PREFIX + (hour < 10 ? "0" : "") + hour;
+}
+
+/* The last day of the UTC month `now` falls in. Day 0 of the following month is
+   the last day of this one, which avoids a leap-year rule written by hand. */
+function agentScheduleDaysInUtcMonth(now) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/* THE CLAMP. A day past the end of the current month means that month's LAST
+   day, which migration 102's header states as a requirement of whatever reads
+   the table — the database cannot enforce it, because day_of_month accepts 1-31
+   and knows nothing about which month it is being compared against.
+
+   Without it a schedule set for the 31st runs in seven months and silently skips
+   five: February always, plus April, June, September and November. Nothing would
+   error and nothing would log, because a run that does not happen produces no
+   event — the user would simply have a monthly schedule that fires eight times a
+   year, and no way to find out why. Someone who picks the 31st means month-end. */
+function agentScheduleEffectiveMonthDay(dayOfMonth, now) {
+  var day = Number(dayOfMonth);
+  if (!Number.isFinite(day) || day < 1) return 0;   // never matches a real date
+  return Math.min(day, agentScheduleDaysInUtcMonth(now));
+}
+
+/* Whether one schedule is due at `now`. Pure, and deliberately so: the clamp and
+   the weekday encoding are the two things in this job most worth testing without
+   a database in the way.
+
+   day_of_week is 0 = Sunday, matching Date#getUTCDay and the encoding the column
+   comment and the UI both use. The other common convention starts the week on
+   Monday and is off by one the whole way along. */
+function agentScheduleIsDue(row, now) {
+  if (!row) return false;
+
+  // A schedule switched off is not due. The column defaults to true, so this is
+  // about rows somebody has deliberately disabled.
+  if (row.enabled !== true) return false;
+
+  if (Number(row.hour_utc) !== now.getUTCHours()) return false;
+
+  // Already run today. The guard against a double run within one day, separate
+  // from the job_runs claim, which guards against two processes in one hour.
+  if (row.last_run_on && row.last_run_on === agentScheduleUtcDay(now)) return false;
+
+  if (row.cadence === "daily") return true;
+  if (row.cadence === "weekly") return Number(row.day_of_week) === now.getUTCDay();
+  if (row.cadence === "monthly") {
+    return agentScheduleEffectiveMonthDay(row.day_of_month, now) === now.getUTCDate();
+  }
+
+  // An unrecognised cadence never fires. The column has a CHECK, so this is
+  // unreachable through the API; running such a row on a guess would be the
+  // worse answer if it ever became reachable.
+  return false;
+}
+
+/* The per-tick ceiling, from AGENT_SCHEDULE_MAX_PER_TICK.
+
+   THREE OUTCOMES, NOT TWO, and the third is the point. Absent or blank means the
+   default — nobody configured it, so the sane default is the intent. A positive
+   whole number is honoured. Anything else returns null, which ABORTS THE TICK.
+
+   That last branch is where this deliberately differs from
+   selfReviewMaxPerTick, which falls back to its default on an unparseable value.
+   A value that is present but unreadable means somebody tried to set a spend
+   limit and it cannot be determined what they meant, and the one thing that must
+   not happen then is spending money against a guess. A gate that opens when it
+   cannot read itself is not a gate. Note that Number("") is 0 rather than NaN,
+   so the blank case is separated out first — otherwise a whitespace-only
+   variable would read as a deliberate ceiling of zero. */
+function agentScheduleMaxPerTick() {
+  var raw = process.env.AGENT_SCHEDULE_MAX_PER_TICK;
+
+  if (raw == null || String(raw).trim() === "") {
+    return AGENT_SCHEDULE_DEFAULT_MAX_PER_TICK;
+  }
+
+  var parsed = Number(String(raw).trim());
+  if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  return null;
+}
+
+// Claim this hour, atomically. The same two-statement shape as
+// claimSelfReviewDay, for the same reason recorded there: PostgREST cannot
+// attach a WHERE to the DO UPDATE arm of an upsert, and neither statement here
+// can produce two winners.
+async function claimAgentScheduleHour(now) {
+  var jobName = agentScheduleJobName(now);
+  var today   = agentScheduleUtcDay(now);
+
+  var insertResult = await supabase
+    .from("job_runs")
+    .insert({
+      job_name:    jobName,
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .select("job_name");
+
+  if (!insertResult.error) {
+    return true;
+  }
+
+  // 23505 = unique_violation, so the row exists and this is the second or later
+  // process through. Any other error is a real failure, and failing to read the
+  // claim must never be treated as holding it.
+  if (insertResult.error.code !== "23505") {
+    console.error("[AgentSchedules] Claim insert failed:", insertResult.error.message);
+    return false;
+  }
+
+  var updateResult = await supabase
+    .from("job_runs")
+    .update({
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .eq("job_name", jobName)
+    // "is distinct from today" spelled for PostgREST: a null last_run_on has
+    // never claimed and must win, and a plain neq drops the null row because
+    // null <> date is null rather than true.
+    .or("last_run_on.is.null,last_run_on.neq." + today)
+    .select("job_name");
+
+  if (updateResult.error) {
+    console.error("[AgentSchedules] Claim update failed:", updateResult.error.message);
+    return false;
+  }
+
+  return (updateResult.data || []).length > 0;
+}
+
+async function finishAgentScheduleRun(now, errorMessage) {
+  var patch = { finished_at: nowIso() };
+
+  if (errorMessage) {
+    patch.last_error = String(errorMessage).slice(0, 2000);
+  }
+
+  var result = await supabase
+    .from("job_runs")
+    .update(patch)
+    .eq("job_name", agentScheduleJobName(now));
+
+  if (result.error) {
+    console.error("[AgentSchedules] Failed to record run completion:", result.error.message);
+  }
+}
+
+/* Launches one scheduled run THROUGH THE MANUAL PATH. handleAiTaskRequest is
+   called with a synthesised req and res rather than a second task builder being
+   written here, which is the same thing POST /api/seo/audit already does: it
+   sets agent_type, task_type and prompt on req.body and hands off.
+
+   The reason is that a scheduled run and a hand-pressed one must not be able to
+   diverge. That handler owns the agent-type resolution, the high-risk approval
+   pattern, the memory and business-profile lookups, the prompt assembly and the
+   ai_tasks row. A copy of any of that here would be a second implementation of
+   the thing the user is actually buying, kept in step by hope.
+
+   What counts as success is the 202 the handler returns when the task is QUEUED,
+   which is also the moment the spend is committed — processAiTask runs the model
+   on a setImmediate after that. A model failure afterwards is the task's own
+   status and is visible on the agent page; it is not this schedule failing, and
+   treating it as one would re-run and re-bill it. */
+function runScheduledAgentTask(schedule) {
+  return new Promise(function (resolve) {
+    var settled = false;
+    function done(outcome) {
+      if (!settled) { settled = true; resolve(outcome); }
+    }
+
+    var req = {
+      user: { id: schedule.user_id },
+      body: {
+        agent_type: schedule.agent_type,
+        task_type:  schedule.task_type,
+        prompt:     schedule.prompt
+      }
+    };
+
+    var res = {
+      statusCode: 200,
+      status: function (code) { this.statusCode = code; return this; },
+      json: function (payload) {
+        done({
+          ok: this.statusCode >= 200 && this.statusCode < 300,
+          status: this.statusCode,
+          payload: payload
+        });
+        return this;
+      }
+    };
+
+    // handleAiTaskRequest reports its own failures through next(), so next is
+    // where most real errors arrive rather than as a rejection.
+    function next(err) {
+      done({ ok: false, status: 500, error: err });
+    }
+
+    Promise.resolve()
+      .then(function () { return handleAiTaskRequest(req, res, next); })
+      .catch(function (err) { done({ ok: false, status: 500, error: err }); });
+  });
+}
+
+// The pass body, split from the claim the way runSelfReviewPass is.
+async function runAgentSchedulePass(now, maxPerTick) {
+  var hour  = now.getUTCHours();
+  var today = agentScheduleUtcDay(now);
+
+  var launched = 0;
+  var attempts = 0;
+  var failed   = 0;
+  var skippedNoAutonomy = 0;
+  var skippedInvalid    = 0;
+  var firstFailure = null;
+  var ceilingReached = false;
+
+  function noteFailure(schedule, detail) {
+    failed += 1;
+    if (!firstFailure) {
+      firstFailure = schedule.agent_type + " for user " + schedule.user_id + ": " + detail;
+    }
+    console.error("[AgentSchedules] " + schedule.agent_type + " for user " +
+      schedule.user_id + " failed: " + detail);
+  }
+
+  /* Narrowed in the query to what could possibly be due this hour; the cadence
+     and the month-end clamp are then applied in agentScheduleIsDue, because the
+     clamp compares against the length of the current month and there is no way
+     to express that as a PostgREST filter. */
+  var candidateResult = await supabase
+    .from("agent_schedules")
+    .select("id, user_id, agent_type, task_type, prompt, cadence, hour_utc, " +
+            "day_of_week, day_of_month, enabled, last_run_on")
+    .eq("enabled", true)
+    .eq("hour_utc", hour)
+    .or("last_run_on.is.null,last_run_on.neq." + today);
+
+  /* Thrown, not returned empty. This is the pass's own read failing, so nothing
+     can proceed and there is no partial result to report — and an empty summary
+     would close the claimed row with finished_at and no last_error, leaving it
+     indistinguishable from an hour that genuinely had nothing due. */
+  if (candidateResult.error) {
+    throw new Error("Failed to load due schedules: " + candidateResult.error.message);
+  }
+
+  var due = (candidateResult.data || []).filter(function (row) {
+    return agentScheduleIsDue(row, now);
+  });
+
+  if (!due.length) {
+    console.log("[AgentSchedules] Nothing due at " + today + " " +
+      (hour < 10 ? "0" : "") + hour + ":00 UTC.");
+    return {
+      due: 0, launched: 0, failed: 0, skippedNoAutonomy: 0, skippedInvalid: 0,
+      firstFailure: null, ceilingReached: false
+    };
+  }
+
+  /* ── THE AUTONOMY GATE ──────────────────────────────────────────────────
+     A SCHEDULE IS THE WHEN. agent_autonomy IS THE MAY. BOTH ARE REQUIRED.
+
+     A schedule whose agent has autonomy off DOES NOT RUN, and a schedule is
+     never sufficient on its own. Anyone reading this later should not be able to
+     conclude otherwise: the row in agent_schedules says when the user would like
+     this to happen, and the row in agent_autonomy is the user's consent to this
+     agent acting without being launched by hand. Creating a schedule is not that
+     consent, and the UI says as much beside the control.
+
+     Checked per schedule and per user, because both tables are keyed on
+     (user_id, agent_type) and consent for one agent is not consent for another.
+
+     An inner filter on enabled = true, so a user with NO autonomy row is
+     excluded rather than defaulted in. Migration 064's header is explicit that a
+     left join coalescing a missing row to true would silently restore the old
+     behaviour of enrolling everyone with an active subscription — billing status
+     standing in for consent, which is the mistake that table exists to undo. */
+  var dueUserIds    = [];
+  var dueAgentTypes = [];
+  var seenUser = {}, seenAgent = {};
+  due.forEach(function (row) {
+    if (row.user_id && !seenUser[row.user_id]) { seenUser[row.user_id] = true; dueUserIds.push(row.user_id); }
+    if (row.agent_type && !seenAgent[row.agent_type]) { seenAgent[row.agent_type] = true; dueAgentTypes.push(row.agent_type); }
+  });
+
+  var autonomyResult = await supabase
+    .from("agent_autonomy")
+    .select("user_id, agent_type")
+    .eq("enabled", true)
+    .in("user_id", dueUserIds)
+    .in("agent_type", dueAgentTypes);
+
+  /* FAIL CLOSED. If consent cannot be read, nothing runs. Treating an unreadable
+     gate as an open one would run agents unattended for users who may never have
+     opted in, which is the one outcome this whole feature is built to prevent. */
+  if (autonomyResult.error) {
+    throw new Error("Failed to load autonomy consent; no scheduled runs were started: " +
+      autonomyResult.error.message);
+  }
+
+  var consented = {};
+  (autonomyResult.data || []).forEach(function (row) {
+    consented[row.user_id + "|" + row.agent_type] = true;
+  });
+
+  console.log("[AgentSchedules] Pass starting — " + due.length + " schedule(s) due at " +
+    today + " " + (hour < 10 ? "0" : "") + hour + ":00 UTC, ceiling " + maxPerTick + ".");
+
+  var i;
+  for (i = 0; i < due.length; i++) {
+    var schedule = due[i];
+
+    if (!consented[schedule.user_id + "|" + schedule.agent_type]) {
+      skippedNoAutonomy += 1;
+      console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " +
+        schedule.user_id + " — autonomy is not enabled for that agent. The schedule " +
+        "says when; autonomy says whether, and it is off.");
+      continue;
+    }
+
+    /* An agent_type or task_type the server does not recognise is SKIPPED, not
+       run. handleAiTaskRequest would accept either — it coerces an unknown agent
+       to "general" and an unknown task type to "general", warning once per
+       process — and on a schedule that substitution repeats on every run
+       forever. The API that writes this table refuses both, so these rows should
+       not exist; if one does, not running it is the answer that does not quietly
+       bill someone for the wrong instruction. */
+    if (!Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, schedule.agent_type)) {
+      skippedInvalid += 1;
+      console.error("[AgentSchedules] Skipped schedule " + schedule.id + " — agent_type " +
+        JSON.stringify(schedule.agent_type) + " is not a registered agent, and running it " +
+        "would silently run the general agent instead, every time.");
+      continue;
+    }
+
+    if (!allowedTaskTypes.includes(schedule.task_type)) {
+      skippedInvalid += 1;
+      console.error("[AgentSchedules] Skipped schedule " + schedule.id + " — task_type " +
+        JSON.stringify(schedule.task_type) + " is not recognised, and running it would " +
+        "silently run the general instruction on every future tick.");
+      continue;
+    }
+
+    /* THE CEILING COUNTS ATTEMPTS, NOT SUCCESSES, and that is the decision that
+       makes it a spend limit rather than a throughput limit. An attempt is what
+       can cost money; counting only the ones that succeeded would let a tick make
+       an unbounded number of failing calls and still report itself inside its
+       ceiling.
+
+       It is also the answer to a schedule that fails every time. Because due-ness
+       requires hour_utc to equal the current hour, a failed run is not retried
+       later the same day — the next tick is the next hour and the row no longer
+       matches — so a permanently broken schedule costs at most one attempt per
+       day, not one per hour, and cannot consume the ceiling on every tick. */
+    if (attempts >= maxPerTick) {
+      ceilingReached = true;
+      break;
+    }
+    attempts += 1;
+
+    try {
+      var outcome = await runScheduledAgentTask(schedule);
+
+      if (!outcome.ok) {
+        var why = outcome.error
+          ? (outcome.error.message || String(outcome.error))
+          : ((outcome.payload && outcome.payload.error) || ("HTTP " + outcome.status));
+        noteFailure(schedule, "task was not queued: " + why);
+        continue;
+      }
+
+      /* last_run_on set only after the task is queued, and only on success, so a
+         failure leaves it alone and the schedule is due again at its hour
+         tomorrow. updated_at is deliberately NOT touched: that column records
+         when the schedule DEFINITION changed, and a run does not change it. */
+      var markResult = await supabase
+        .from("agent_schedules")
+        .update({ last_run_on: today })
+        .eq("id", schedule.id);
+
+      if (markResult.error) {
+        /* The task IS queued and the money IS spent; only the bookkeeping
+           failed. Counted as a failure so the hour does not close clean, and
+           logged loudly, because the visible consequence is a second run at this
+           hour tomorrow looking like a duplicate for no apparent reason. */
+        noteFailure(schedule, "task was queued but last_run_on could not be set: " +
+          markResult.error.message);
+        launched += 1;
+        continue;
+      }
+
+      launched += 1;
+      console.log("[AgentSchedules] Launched " + schedule.task_type + " for " +
+        schedule.agent_type + ", user " + schedule.user_id + ".");
+    } catch (scheduleErr) {
+      /* ONE SCHEDULE MUST NOT STOP THE OTHERS. Each is a different user's run,
+         the hour's claim is already taken, and there is no retry until this hour
+         comes round again — so letting one transient error abort the loop would
+         deny every remaining user their run for a day. */
+      noteFailure(schedule, (scheduleErr && scheduleErr.message) || String(scheduleErr));
+    }
+  }
+
+  if (ceilingReached) {
+    console.log("[AgentSchedules] Ceiling reached — " + attempts + " attempt(s) this tick, " +
+      "ceiling " + maxPerTick + " (AGENT_SCHEDULE_MAX_PER_TICK). Stopping; the remainder " +
+      "are due again at their next matching hour.");
+  }
+
+  console.log("[AgentSchedules] Pass finished — " + launched + " launched, " + failed +
+    " failed, " + skippedNoAutonomy + " skipped for autonomy being off, " +
+    skippedInvalid + " skipped as unrunnable, out of " + due.length + " due.");
+
+  return {
+    due: due.length,
+    launched: launched,
+    failed: failed,
+    skippedNoAutonomy: skippedNoAutonomy,
+    skippedInvalid: skippedInvalid,
+    firstFailure: firstFailure,
+    ceilingReached: ceilingReached
+  };
+}
+
+var agentSchedulePassRunning = false;
+
+async function agentScheduleTick() {
+  /* THE CEILING IS READ FIRST, before the reentrancy flag is set, and the tick
+     returns here rather than inside the guarded section if it cannot be trusted.
+
+     Order matters for two separate reasons. A spend limit that cannot be read
+     must stop the tick before anything is claimed or launched. And returning
+     before the flag is set means this exit cannot leave the flag stuck true — a
+     flag set and then abandoned would disable the job permanently, with no error
+     after the first tick and nothing in the logs but silence. */
+  var maxPerTick = agentScheduleMaxPerTick();
+
+  if (maxPerTick === null) {
+    console.error("[AgentSchedules] Tick aborted — AGENT_SCHEDULE_MAX_PER_TICK is set to " +
+      JSON.stringify(process.env.AGENT_SCHEDULE_MAX_PER_TICK) + ", which is not a positive " +
+      "whole number. Failing closed rather than spending against a default nobody asked for. " +
+      "Unset it to use the default of " + AGENT_SCHEDULE_DEFAULT_MAX_PER_TICK + ".");
+    return;
+  }
+
+  // Cheap first check. It sees only this process's own memory, so it cannot stop
+  // a redeployed container repeating an hour — that is what the job_runs claim is
+  // for — but it costs nothing and stops a pass overlapping itself.
+  if (agentSchedulePassRunning) {
+    console.log("[AgentSchedules] Tick skipped — previous run still in progress");
+    return;
+  }
+
+  agentSchedulePassRunning = true;
+  console.log("[AgentSchedules] Tick starting...");
+
+  try {
+    // One `now` for the whole tick. Read once so the claim, the due test and the
+    // last_run_on write cannot straddle an hour or a midnight boundary and
+    // disagree about which hour this was.
+    var now = new Date();
+
+    var claimed = await claimAgentScheduleHour(now);
+
+    if (!claimed) {
+      console.log("[AgentSchedules] Tick skipped — " + agentScheduleJobName(now) +
+        " already claimed for " + agentScheduleUtcDay(now) +
+        " (another process, or an earlier run this hour)");
+      return;
+    }
+
+    // Past here the row has started_at set and finished_at null, so every exit
+    // has to close it out, including a throw.
+    try {
+      var summary = await runAgentSchedulePass(now, maxPerTick);
+
+      /* A pass that ran but failed some schedules is not a clean hour. Those
+         failures are deliberately not thrown inside the pass so one user's error
+         does not deny everyone else their run, but they still have to land in
+         last_error or a partial failure closes looking like a clean one. */
+      if (summary && summary.failed > 0) {
+        await finishAgentScheduleRun(now,
+          summary.failed + " failure(s) of " + summary.due + " due; first: " + summary.firstFailure);
+      } else {
+        await finishAgentScheduleRun(now, null);
+      }
+    } catch (passErr) {
+      var message = passErr && (passErr.message || String(passErr));
+      console.error("[AgentSchedules] Pass error:", message);
+      await finishAgentScheduleRun(now, message);
+    }
+  } catch (err) {
+    // Nothing throws out of a tick. A scheduled job that rejects has no caller.
+    console.error("[AgentSchedules] Tick error:", err.message || err);
+  } finally {
+    agentSchedulePassRunning = false;
+    console.log("[AgentSchedules] Tick finished.");
+  }
+}
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
@@ -28951,6 +29500,47 @@ app.listen(PORT, function () {
       ", ceiling " + selfReviewMaxPerTick() + " generation(s) per tick");
   } else {
     console.log("[startup] selfReviewTick disabled (ENABLE_SELF_REVIEW not exactly \"true\")");
+  }
+
+  /* Hourly scheduled agent runs. OFF BY DEFAULT.
+   *
+   * The gate is exact, lowercase string equality against "true", like the two
+   * jobs above. A capital-T "True" does not enable this and fails silently — the
+   * server boots clean, the startup line says disabled, and nothing looks broken
+   * until someone asks why their schedule never ran. That exact mistake has cost
+   * this project before, which is why the disabled branch names the variable: the
+   * log is the only place the misconfiguration is visible.
+   *
+   * HOURLY, because hour_utc is the finest granularity a schedule has. Checking
+   * more often could not make a schedule due any sooner; checking less often
+   * would miss hours entirely.
+   *
+   * ON THE UTC HOUR, and the timezone is stated rather than left to the host. The
+   * rows store hour_utc and the due test compares against getUTCHours, so a cron
+   * firing in a local zone would run the 14:00 UTC schedules at 14:00 local and
+   * be wrong by the offset — silently, and differently twice a year.
+   *
+   * A wall-clock cron rather than setInterval, for the same reason as the jobs
+   * above: on Railway every deploy replaces the process, so an interval measures
+   * from the last deploy rather than from the clock.
+   *
+   * No boot-time run. A setTimeout firing after every deploy is precisely the
+   * repeat-firing the job_runs claim exists to prevent, and here each repeat is a
+   * model call per due schedule. */
+  if (process.env.ENABLE_AGENT_SCHEDULES === "true") {
+    cron.schedule("0 * * * *", function () {
+      agentScheduleTick().catch(function (err) {
+        console.error("[AgentSchedules] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] agentScheduleTick scheduled — hourly on the UTC hour, claimed " +
+      "through job_runs." + AGENT_SCHEDULE_JOB_PREFIX + "<hh>, ceiling " +
+      agentScheduleMaxPerTick() + " run(s) per tick. Autonomy is still required per " +
+      "schedule: agent_autonomy.enabled must be true for that user and agent.");
+  } else {
+    console.log("[startup] agentScheduleTick disabled (ENABLE_AGENT_SCHEDULES not exactly \"true\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is
