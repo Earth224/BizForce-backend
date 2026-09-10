@@ -19154,6 +19154,1347 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
     }
   });
 
+// ── Ads Agent tools ──────────────────────────────────────────────────────────
+
+/* Platform asset limits, and the distinction between the two KINDS of limit is
+   load bearing rather than pedantry.
+
+   A HARD limit is enforced by the platform: a Google responsive search ad
+   headline of 31 characters is rejected at upload, so the copy simply does not
+   run. A TRUNCATION point is not enforced at all — Meta accepts primary text of
+   any length and then cuts it in the feed behind a "See more", so the copy runs
+   and the second half is unread. Both matter and they fail differently, so the
+   response says which each one is instead of reporting one number called "the
+   limit" and letting a writer assume the wrong failure.
+
+   Anything marked truncation is also approximate: where Meta cuts depends on the
+   placement, the device and whether a link preview is attached. */
+var AD_PLATFORMS = {
+  google_rsa: {
+    label: "Google Responsive Search Ad",
+    assets: {
+      HEADLINE:    { max: 30, kind: "hard",
+                     note: "Enforced by Google; a longer headline is rejected at upload." },
+      DESCRIPTION: { max: 90, kind: "hard",
+                     note: "Enforced by Google; a longer description is rejected at upload." }
+    },
+    asset_counts: "Google accepts up to 15 headlines and 4 descriptions per responsive search ad."
+  },
+  meta: {
+    label: "Meta (Facebook / Instagram) feed ad",
+    assets: {
+      PRIMARY_TEXT: { max: 125, kind: "truncation",
+                      note: "Approximate. Meta accepts longer text and then cuts it in the feed " +
+                            "behind \"See more\", so anything past this is written but usually unread. " +
+                            "Where it cuts varies by placement and device." },
+      HEADLINE:     { max: 40, kind: "truncation",
+                      note: "Approximate. Longer headlines are accepted and then shortened in most " +
+                            "placements." },
+      DESCRIPTION:  { max: 30, kind: "truncation",
+                      note: "Approximate, and shown in some placements only." }
+    },
+    asset_counts: "One primary text, one headline and one link description per ad in most placements."
+  }
+};
+
+/* Measured here, never asked of the model. A headline is 31 characters or it is
+   not, and Google rejects it on the number rather than on the intent. A model
+   that counts to 29 when the answer is 31 produces copy that fails at upload,
+   and it fails silently from the writer's point of view because the draft looked
+   compliant. */
+function measureAdAsset(assetType, text, spec) {
+  var value = String(text || "").trim();
+  return {
+    type: assetType,
+    text: value,
+    length: value.length,
+    limit: spec.max,
+    limit_kind: spec.kind,
+    within_limit: value.length > 0 && value.length <= spec.max,
+    chars_over: value.length > spec.max ? value.length - spec.max : 0,
+    consequence: value.length > spec.max
+      ? (spec.kind === "hard"
+          ? "Rejected at upload. This asset cannot run as written."
+          : "Accepted but cut short in the feed. Everything past character " + spec.max +
+            " is written and usually unread.")
+      : null
+  };
+}
+
+/* ── Advertising policy phrasing ─────────────────────────────────────────────
+   The rules that get supplement, health and sexual-wellness advertising
+   rejected, expressed as patterns so the copy can actually be scanned rather
+   than asked about.
+
+   WHAT THIS IS: a check on WORDING. Every pattern here is a real phrasing signal
+   that reviewers and automated classifiers act on, and finding one is a concrete
+   fact about the text.
+
+   WHAT THIS IS NOT: an approval, or a prediction of one. Platforms review on
+   signals this cannot see — the landing page, the image and video, the
+   advertiser's history, the targeting, the vertical the account is classified
+   in, and human review that disagrees with itself. Copy with zero matches here is
+   rejected every day, and copy with a match runs every day. The agent's own
+   description uses the word "compliant"; that word must not become a promise the
+   platform never made, which is why `clean_scan_is_not_approval` is in the
+   response body rather than in a sentence somebody may not read.
+
+   False positives are expected and are the right trade. "Treat yourself" matches
+   the cure-or-treat rule. The rule fires, the response shows the matched text and
+   its position, and a person decides — which is better than a scan that stays
+   quiet to look clever and lets a real claim through. */
+var AD_POLICY_RULES = [
+  {
+    id: "cure_or_treat_claims",
+    label: "Claims to cure, treat, heal or prevent",
+    why: "Stating or implying that a product treats, cures, prevents or reverses a condition is " +
+         "the single most common reason health and supplement ads are rejected. Only an approved " +
+         "drug may make that claim, and the claim is read from the wording, not the intent.",
+    patterns: [
+      /\bcure[sd]?\b/i, /\bcuring\b/i,
+      /\btreat(s|ed|ing|ment)?\b/i,
+      /\bheal(s|ed|ing)?\b/i,
+      /\breverse[sd]?\b/i, /\breversing\b/i,
+      /\bprevent(s|ed|ing|ion)?\b/i,
+      /\beliminate[sd]?\b/i,
+      /\bdiagnos(e|es|ed|ing|is)\b/i,
+      /\bremedy\b/i, /\bremedies\b/i
+    ]
+  },
+  {
+    id: "before_and_after",
+    label: "Before-and-after results, stated or implied",
+    why: "Before-and-after framing and specific outcome figures imply a typical result the " +
+         "advertiser cannot promise. Weight-loss and body-transformation imagery and wording are " +
+         "restricted on every major platform.",
+    patterns: [
+      /\bbefore\s*(and|&|\/)\s*after\b/i,
+      /\btransformation\b/i,
+      /\blose\s+\d+\s*(lb|lbs|pound|pounds|kg|kilo|kilos|stone|inch|inches|size|sizes)\b/i,
+      /\bdrop(ped)?\s+\d+\s*(lb|lbs|pound|pounds|kg|size|sizes|dress size)\b/i,
+      /\b\d+\s*(lb|lbs|pounds|kg)\s+(down|lighter|lost|gone)\b/i,
+      /\bresults?\s+in\s+\d+\s*(day|days|week|weeks|night|nights)\b/i,
+      /\bin\s+(just\s+)?\d+\s*(day|days|week|weeks)\b/i,
+      /\bmy\s+results\b/i
+    ]
+  },
+  {
+    id: "personal_attributes",
+    label: "Addressing a personal attribute as \"you\"",
+    why: "Asserting or implying knowledge of the viewer's own health, body, finances or identity " +
+         "is prohibited as a personal-attribute violation. The test the platforms apply is whether " +
+         "the viewer would feel the ad knows something about them — \"do you struggle with X\" " +
+         "fails it where \"people who struggle with X\" does not.",
+    patterns: [
+      /\bdo you (suffer|struggle|have|feel|experience)\b/i,
+      /\bare you (over ?weight|obese|depressed|anxious|balding|struggling|diabetic|infertile|lonely|broke|in debt)\b/i,
+      /\byour\s+(weight|belly|body fat|diabetes|anxiety|depression|acne|hair loss|balding|erectile|infertility|debt|credit score|condition|illness|disease|diagnosis|symptoms)\b/i,
+      /\bpeople like you\b/i,
+      /\bbecause you(?:'re| are)\s+(over ?weight|depressed|anxious|diabetic|struggling)\b/i,
+      /\bstop being\b/i
+    ]
+  },
+  {
+    id: "guaranteed_results",
+    label: "Guaranteed or unqualified results",
+    why: "A guarantee of outcome, or an unqualified claim of proof, is an unsupported claim unless " +
+         "the advertiser holds the evidence and the approval to state it. \"Clinically proven\" and " +
+         "\"doctor approved\" are both treated as claims requiring substantiation.",
+    patterns: [
+      /\bguarantee[sd]?\b/i, /\bguaranteed results\b/i,
+      /\b100\s*%\s*(effective|guaranteed|safe|natural|results|success)\b/i,
+      /\brisk[\s-]?free\b/i,
+      /\bmoney[\s-]?back guarantee\b/i,
+      /\b(clinically|scientifically|medically)\s+proven\b/i,
+      /\bdoctor[\s-]?(approved|recommended|trusted)\b/i,
+      /\bfda[\s-]?(approved|cleared)\b/i,
+      /\bno side effects\b/i,
+      /\bworks for (everyone|anyone|every ?body)\b/i,
+      /\bpermanent(ly)? (cure|fix|results|solution)\b/i,
+      /\bmiracle\b/i
+    ]
+  },
+  {
+    id: "prescription_drug_comparison",
+    label: "Prescription drug named as a comparison",
+    why: "Naming a prescription medication to position a non-prescription product against it — " +
+         "\"nature's Ozempic\", \"a natural alternative to Viagra\" — is restricted on every major " +
+         "platform, and the drug name alone is often enough to trigger review. Flagged on presence " +
+         "because the comparison is usually implied rather than stated.",
+    patterns: [
+      /\bozempic\b/i, /\bwegovy\b/i, /\bmounjaro\b/i, /\bzepbound\b/i, /\bsemaglutide\b/i,
+      /\bviagra\b/i, /\bcialis\b/i, /\bsildenafil\b/i, /\btadalafil\b/i,
+      /\badderall\b/i, /\bxanax\b/i, /\bvalium\b/i, /\bprozac\b/i, /\bzoloft\b/i,
+      /\bbotox\b/i, /\baccutane\b/i, /\bropinirole\b/i,
+      /\bnature'?s\s+\w+\b/i,
+      /\b(natural|herbal|otc)\s+alternative to\b/i,
+      /\bwithout (a )?prescription\b/i,
+      /\bbig pharma\b/i
+    ]
+  },
+  {
+    id: "sexual_wellness_claims",
+    label: "Sexual performance or enhancement claims",
+    why: "Sexual-wellness advertising is a restricted category in its own right. Performance and " +
+         "enhancement claims are rejected outright in most placements, and even permitted products " +
+         "face targeting restrictions and a narrower set of allowed wording.",
+    patterns: [
+      /\b(sexual|sex)\s+(performance|enhancement|stamina|drive|health)\b/i,
+      /\blast(ing)? longer in bed\b/i,
+      /\berectile\b/i, /\bimpotence\b/i,
+      /\blibido\b/i,
+      /\b(male|penis|breast)\s+enhancement\b/i,
+      /\bbigger\b.{0,20}\bharder\b/i,
+      /\bboost your (sex|libido|testosterone)\b/i
+    ]
+  }
+];
+
+/* Scans copy against the rules and returns exactly what matched and where.
+
+   "Where" is a character offset plus a surrounding snippet, because "your copy
+   mentions a guarantee" is not actionable and "characters 41-50, 'guaranteed',
+   in the context ...' is. Overlapping matches within one rule are kept
+   separately; the same phrase matched by two different rules appears under both,
+   which is correct — it is two different policy problems. */
+function scanAdPolicy(copy) {
+  var text = String(copy || "");
+  var findings = [];
+
+  AD_POLICY_RULES.forEach(function (rule) {
+    var matches = [];
+
+    rule.patterns.forEach(function (pattern) {
+      // Rebuilt with the global flag so every occurrence is found, not just the
+      // first. The source patterns are left non-global so they stay reusable and
+      // stateless.
+      var global = new RegExp(pattern.source, pattern.flags.indexOf("g") === -1
+        ? pattern.flags + "g" : pattern.flags);
+      var m;
+      while ((m = global.exec(text)) !== null) {
+        if (m[0].length === 0) { global.lastIndex += 1; continue; }
+        var start = m.index;
+        var contextStart = Math.max(0, start - 30);
+        var contextEnd = Math.min(text.length, start + m[0].length + 30);
+        matches.push({
+          matched_text: m[0],
+          position: start,
+          context: (contextStart > 0 ? "…" : "") +
+                   text.slice(contextStart, contextEnd).replace(/\s+/g, " ").trim() +
+                   (contextEnd < text.length ? "…" : "")
+        });
+      }
+    });
+
+    // Same offset matched by two patterns in one rule is one finding.
+    var seen = {};
+    matches = matches.filter(function (m) {
+      var key = m.position + ":" + m.matched_text.toLowerCase();
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
+    }).sort(function (a, b) { return a.position - b.position; });
+
+    if (matches.length) {
+      findings.push({
+        rule_id: rule.id,
+        rule: rule.label,
+        why_it_matters: rule.why,
+        match_count: matches.length,
+        matches: matches
+      });
+    }
+  });
+
+  return findings;
+}
+
+/* The sentence that must survive into every policy response. Kept as one
+   constant so the wording cannot drift between the two routes that say it. */
+var AD_POLICY_NOT_APPROVAL =
+  "A CLEAN SCAN IS NOT APPROVAL. This checks the wording of the copy against known policy " +
+  "triggers and nothing else. The platforms review things BizForce cannot see — your landing " +
+  "page, your images and video, your account history, your targeting, the category your account " +
+  "is classified in, and human reviewers who do not always agree with each other. Copy with no " +
+  "matches here is rejected every day, and copy with matches runs every day. Treat this as a " +
+  "list of things worth rewriting before you submit, never as a prediction of what the platform " +
+  "will do.";
+
+app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var product = safeText(req.body.product, 500);
+      var angle = safeText(req.body.angle, 500);
+      var platformKey = String(safeText(req.body.platform, 40) || "").toLowerCase().trim();
+      var audience = safeText(req.body.audience, 300);
+
+      if (!product) {
+        return res.status(400).json({ error: "A product is required — what is being advertised." });
+      }
+      if (!angle) {
+        return res.status(400).json({
+          error: "An angle is required — the argument the ad is making, for example \"saves an hour a week\"."
+        });
+      }
+
+      /* The platform is validated against the table rather than defaulted,
+         because the limits ARE the output. Defaulting an unrecognised platform to
+         Google would measure Meta copy against the wrong numbers and report it as
+         compliant — a wrong answer delivered confidently, which is worse than a
+         refusal naming the platforms that are supported. */
+      if (!Object.prototype.hasOwnProperty.call(AD_PLATFORMS, platformKey)) {
+        return res.status(400).json({
+          error: "platform must be one of the platforms whose limits BizForce measures against.",
+          valid_platforms: Object.keys(AD_PLATFORMS)
+        });
+      }
+
+      var platform = AD_PLATFORMS[platformKey];
+      var assetTypes = Object.keys(platform.assets);
+      var businessProfile = await loadProfileForTool(userId);
+
+      var adsBrain =
+        "You are the BizForce AI Ads Agent. You write ad copy that fits the platform's asset limits " +
+        "exactly, because copy that overruns is either rejected at upload or cut off mid-sentence in " +
+        "the feed. You write to one angle per ad rather than listing features.";
+
+      var limitLines = assetTypes.map(function (t) {
+        var spec = platform.assets[t];
+        return "- " + t + ": " + spec.max + " characters (" +
+          (spec.kind === "hard" ? "HARD LIMIT, rejected if longer" : "truncation point, cut off if longer") + ")";
+      }).join("\n");
+
+      var instruction =
+        "Write ad copy for " + platform.label + ".\n\n" +
+        "ASSET LIMITS:\n" + limitLines + "\n" + platform.asset_counts + "\n\n" +
+        "OUTPUT FORMAT — one asset per line, exactly two fields separated by | and nothing else:\n" +
+        "ASSET_TYPE | the copy\n" +
+        "where ASSET_TYPE is one of: " + assetTypes.join(", ") + "\n" +
+        "No preamble, no numbering, no headings, no commentary.\n\n" +
+        "RULES:\n" +
+        "- Stay inside the character limits above. Count as you write.\n" +
+        (platformKey === "google_rsa"
+          ? "- Give 8 headlines and 3 descriptions so there is a set to choose from.\n"
+          : "- Give 3 primary text options, 3 headlines and 2 descriptions.\n") +
+        "- No claims about results, no guarantees, no before-and-after framing, and do not address " +
+        "the viewer's personal attributes. Those are policy rejections, not style choices.\n" +
+        "- Invent no statistics, prices, review counts or awards. If a figure would help, write " +
+        "[FIGURE NEEDED].";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(adsBrain, businessProfile, {}, []) +
+        "\n\nPRODUCT:\n" + product +
+        "\n\nANGLE:\n" + angle +
+        (audience ? "\n\nAUDIENCE:\n" + audience : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var assets = [];
+      var unknownTypes = [];
+
+      parseToolLines(raw).forEach(function (line) {
+        if (line.indexOf("|") === -1) return;
+        var parts = line.split("|");
+        var type = String(parts[0] || "").toUpperCase().replace(/[^A-Z_]/g, "");
+        var copy = parts.slice(1).join("|").trim();
+        if (!copy) return;
+        if (/^ASSET_?TYPE$/.test(type)) return;            // header row
+
+        if (!Object.prototype.hasOwnProperty.call(platform.assets, type)) {
+          unknownTypes.push({ type: type, text: copy });
+          return;
+        }
+        assets.push(measureAdAsset(type, copy, platform.assets[type]));
+      });
+
+      if (!assets.length) {
+        return res.status(502).json({
+          error: "The ad copy could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          unrecognised_asset_types: unknownTypes,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var byType = {};
+      assetTypes.forEach(function (t) {
+        var ofType = assets.filter(function (a) { return a.type === t; });
+        byType[t] = {
+          count: ofType.length,
+          limit: platform.assets[t].max,
+          limit_kind: platform.assets[t].kind,
+          within_limit: ofType.filter(function (a) { return a.within_limit; }).length,
+          over_limit: ofType.filter(function (a) { return !a.within_limit; }).length,
+          longest: ofType.length ? Math.max.apply(null, ofType.map(function (a) { return a.length; })) : 0,
+          note: platform.assets[t].note
+        };
+      });
+
+      var over = assets.filter(function (a) { return !a.within_limit; });
+      var hardOver = over.filter(function (a) { return a.limit_kind === "hard"; });
+
+      // The copy is also run through the policy scan, because an asset that fits
+      // perfectly and cannot be published is not finished copy.
+      var policyFindings = scanAdPolicy(assets.map(function (a) { return a.text; }).join("\n"));
+
+      return res.json({
+        success: true,
+        platform: platformKey,
+        platform_label: platform.label,
+        product: product,
+        angle: angle,
+        assets: assets,
+        limits: platform.assets,
+        measured: {
+          assets_returned: assets.length,
+          by_type: byType,
+          within_limit: assets.length - over.length,
+          over_limit: over.length,
+          over_a_hard_limit: hardOver.length,
+          unrecognised_asset_types: unknownTypes,
+          policy_rules_triggered: policyFindings.length,
+          note: hardOver.length
+            ? hardOver.length + " asset(s) exceed a HARD limit and will be rejected at upload as " +
+              "written. Shorten those before submitting."
+            : (over.length
+                ? over.length + " asset(s) pass the truncation point and will be cut short in the " +
+                  "feed. They will run, but the end will not be read."
+                : "Every asset is inside its limit.")
+        },
+        policy_scan: {
+          findings: policyFindings,
+          rules_checked: AD_POLICY_RULES.map(function (r) { return r.id; }),
+          clean_scan_is_not_approval: true,
+          statement: AD_POLICY_NOT_APPROVAL
+        },
+        provenance: toolProvenance(
+          [
+            "Every asset's character count against this platform's limit",
+            "Whether each fits, and by how many characters it overruns",
+            "Whether the limit it breaks is enforced at upload or is a truncation point",
+            "Which advertising-policy phrasing rules the copy matches, and where"
+          ],
+          [
+            "All of the copy itself",
+            "Whether the angle is persuasive",
+            "Whether this will actually be approved or perform"
+          ],
+          "No ad platform was contacted. BizForce has no access to your ad account, no impression, " +
+          "click or conversion data, and no way to submit or pre-check an ad — so nothing here is a " +
+          "performance estimate or an approval. " + AD_POLICY_NOT_APPROVAL,
+          {
+            ad_platform_contacted: false,
+            account_data_read: false,
+            performance_data: false,
+            policy_approval_obtained: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[ads/copy] Error:", error);
+      next(error);
+    }
+  });
+
+/* Scans supplied copy and returns what is likely to trip a policy. No model call
+   at all on the scan itself — the matching is deterministic, so the answer is the
+   same every time and can be re-run on edited copy without spending anything.
+   The model is used only for the rewrite suggestions, and only when something
+   matched. */
+app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var copy = safeText(req.body.copy || req.body.ad_copy || req.body.text, 6000);
+      var wantRewrites = req.body.suggest_rewrites !== false;
+
+      if (!copy) {
+        return res.status(400).json({ error: "Ad copy is required — the text to check." });
+      }
+
+      var findings = scanAdPolicy(copy);
+      var totalMatches = findings.reduce(function (sum, f) { return sum + f.match_count; }, 0);
+
+      var rewrites = "";
+      if (findings.length && wantRewrites) {
+        var businessProfile = await loadProfileForTool(userId);
+
+        var adsBrain =
+          "You are the BizForce AI Ads Agent advising on advertising policy. You rewrite copy to " +
+          "remove policy triggers while keeping the argument intact. You never tell anyone their " +
+          "copy will be approved, because you cannot know that.";
+
+        var findingsBlock = findings.map(function (f) {
+          return "RULE: " + f.rule + "\nWHY: " + f.why_it_matters + "\nMATCHED: " +
+            f.matches.map(function (m) { return '"' + m.matched_text + '" at character ' + m.position; }).join("; ");
+        }).join("\n\n");
+
+        var instruction =
+          "The copy below was scanned against advertising policy rules and matched the findings " +
+          "listed. For each finding, give a rewrite that removes the trigger and keeps the selling " +
+          "argument.\n\n" +
+          "OUTPUT FORMAT — one block per finding, separated by a line containing only ---\n" +
+          "RULE: <the rule name>\n" +
+          "ORIGINAL: <the phrase as written>\n" +
+          "REWRITE: <the replacement>\n" +
+          "WHY_THIS_WORKS: <one line on what changed>\n\n" +
+          "RULES:\n" +
+          "- Do NOT say the rewritten copy will be approved, is compliant, or will pass review. You " +
+          "cannot see the landing page, the creative, the account history or the targeting.\n" +
+          "- Keep the rewrite the same length or shorter.\n" +
+          "- Invent no substantiating figures or studies.";
+
+        var languageTag = await resolvePreferredLanguage(userId);
+
+        var prompt =
+          buildAgentSystemPrompt(adsBrain, businessProfile, {}, []) +
+          "\n\nTHE COPY:\n" + copy +
+          "\n\nSCAN FINDINGS (produced by deterministic matching, not by you — do not dispute them):\n" +
+          findingsBlock +
+          "\n\nTASK INSTRUCTIONS:\n" + instruction +
+          buildLanguageInstruction(languageTag, true);
+
+        var generation = await callAnthropicText(prompt, 2000);
+        rewrites = (generation && generation.text) ? generation.text : "";
+      }
+
+      return res.json({
+        success: true,
+        copy_length: copy.length,
+        findings: findings,
+        suggested_rewrites: rewrites || null,
+        measured: {
+          rules_checked: AD_POLICY_RULES.length,
+          rules_triggered: findings.length,
+          total_matches: totalMatches,
+          rule_ids_triggered: findings.map(function (f) { return f.rule_id; }),
+          // Named carefully. NOT "passed", NOT "compliant" — just the count.
+          matched_nothing: findings.length === 0,
+          note: findings.length
+            ? findings.length + " rule(s) matched, " + totalMatches + " occurrence(s) in total. Each " +
+              "finding lists the exact text and its position in the copy."
+            : "No rule in this list matched. That is not approval — see the statement below."
+        },
+        rules: AD_POLICY_RULES.map(function (r) {
+          return { id: r.id, label: r.label, why_it_matters: r.why };
+        }),
+        clean_scan_is_not_approval: true,
+        statement: AD_POLICY_NOT_APPROVAL,
+        provenance: toolProvenance(
+          [
+            "Every policy-rule match in the copy, with its exact text and character position",
+            "The number of rules triggered and total occurrences",
+            "The copy's character length"
+          ],
+          findings.length && wantRewrites
+            ? ["The suggested rewrites", "Whether a rewrite preserves the selling argument"]
+            : [],
+          "The scan itself is deterministic — the same copy always produces the same findings, and " +
+          "no model judged it. What the scan cannot do is approve anything. " + AD_POLICY_NOT_APPROVAL,
+          {
+            ad_platform_contacted: false,
+            policy_approval_obtained: false,
+            scan_is_deterministic: true,
+            false_positives_expected: true
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[ads/policy-check] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Reputation Agent tools ───────────────────────────────────────────────────
+
+/* A public reply to a bad review gets worse the longer it runs. Past roughly this
+   many words it stops reading as an acknowledgement and starts reading as a
+   defence, and the audience is not the reviewer — it is the next person reading
+   the reviews, who sees a business arguing. So the count is measured and reported
+   rather than left to judgement. */
+var REVIEW_RESPONSE_MAX_WORDS = 90;
+
+/* Phrasing that disputes the reviewer rather than acknowledging them. Scanned in
+   the OUTPUT, not just forbidden in the prompt, because this is the one thing
+   this route must not produce and an instruction is not a guarantee.
+
+   A reply that argues — "our records show", "as we explained", "you were told" —
+   converts one unhappy customer into a public exchange that every future reader
+   sees. The reply cannot win it: the reviewer has the last word by default, and
+   onlookers side with the person, not the business. */
+var REVIEW_DISPUTE_PATTERNS = [
+  { pattern: /\bour records (show|indicate)\b/i,            label: "citing records against the reviewer" },
+  { pattern: /\bas (we|i) (explained|told you|said)\b/i,     label: "asserting a prior explanation" },
+  { pattern: /\byou were (told|informed|advised|aware)\b/i,  label: "telling the reviewer what they knew" },
+  { pattern: /\byou (failed|neglected|did ?n.t) (to )?\b/i,  label: "assigning fault to the reviewer" },
+  { pattern: /\b(this|that) is (not|n.t) (true|accurate|correct|what happened)\b/i, label: "denying the account" },
+  { pattern: /\bnever happened\b/i,                          label: "denying the account" },
+  { pattern: /\bwe disagree\b/i,                             label: "stating disagreement" },
+  { pattern: /\bin fact,?\b/i,                               label: "correcting the reviewer" },
+  { pattern: /\bactually,?\b/i,                              label: "correcting the reviewer" },
+  { pattern: /\bhowever,? (we|our|you)\b/i,                  label: "pivoting to a rebuttal" },
+  { pattern: /\bunfortunately,? you\b/i,                     label: "pivoting to the reviewer's conduct" },
+  { pattern: /\bper our (policy|terms)\b/i,                  label: "answering a complaint with policy" },
+  { pattern: /\bno other customer\b/i,                       label: "contrasting with other customers" },
+  { pattern: /\bmust have\b/i,                               label: "speculating about what the reviewer did" }
+];
+
+function scanReviewResponse(text) {
+  var value = String(text || "");
+  var found = [];
+  REVIEW_DISPUTE_PATTERNS.forEach(function (rule) {
+    var m = value.match(rule.pattern);
+    if (m) {
+      found.push({
+        matched_text: m[0],
+        position: m.index,
+        problem: rule.label
+      });
+    }
+  });
+  return found;
+}
+
+app.post("/api/agents/reputation/review-response", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var reviewText = safeText(req.body.review || req.body.review_text, 3000);
+      var situation = safeText(req.body.situation || req.body.context, 2000);
+      var rating = toolInt(req.body.rating || req.body.stars);
+
+      if (!reviewText) {
+        return res.status(400).json({ error: "The review is required — the text being responded to." });
+      }
+      if (rating === null || rating < 1 || rating > 5) {
+        return res.status(400).json({
+          error: "A star rating from 1 to 5 is required — the reply to a one-star review is not the reply to a four-star one."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var repBrain =
+        "You are the BizForce AI Reputation Agent writing a public reply to a review. You know the " +
+        "audience is not the reviewer but the next person reading the reviews, and that a reply which " +
+        "argues loses in front of that audience no matter who was right.";
+
+      var instruction =
+        "Write one public reply to the review below.\n\n" +
+        "OUTPUT FORMAT — these exact labels:\n" +
+        "REPLY: <the public reply>\n" +
+        "WHY_THIS_APPROACH: <one line on the choice made>\n\n" +
+        "THE SHAPE OF THE REPLY, AND IT IS NOT NEGOTIABLE:\n" +
+        "1. Acknowledge what the reviewer experienced, in their terms.\n" +
+        "2. Offer to continue it privately, naming a channel.\n" +
+        "3. Stop.\n\n" +
+        "HARD RULES:\n" +
+        "- Do NOT dispute, correct, contradict or reinterpret the reviewer's account. Not with " +
+        "records, not with policy, not with what they were told, not with 'actually' or 'in fact', " +
+        "and not by implying they misunderstood. Even where they are wrong.\n" +
+        "- Do NOT explain the business's side. A public reply is not the place and it reads as a " +
+        "defence to everyone else.\n" +
+        "- Do NOT mention other customers or other reviews.\n" +
+        "- Under " + REVIEW_RESPONSE_MAX_WORDS + " words. A long reply reads as an argument.\n" +
+        "- No discount, refund, credit or gift offered in the public reply. Take it to the private " +
+        "channel first.\n" +
+        "- Invent no facts about the order, the visit or the resolution. If a specific is needed, " +
+        "write [DETAIL NEEDED].";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(repBrain, businessProfile, {}, []) +
+        "\n\nSTAR RATING: " + rating + " of 5" +
+        "\n\nTHE REVIEW:\n" + reviewText +
+        (situation ? "\n\nWHAT ACTUALLY HAPPENED, FROM THE BUSINESS:\n" + situation +
+          "\n(Context for your understanding only. Do NOT put it in the reply as a correction.)" : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 1200);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, ["REPLY", "WHY_THIS_APPROACH"]);
+      var reply = parsed.REPLY || "";
+
+      if (!reply) {
+        return res.status(502).json({
+          error: "The reply could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var words = countWords(reply);
+      var disputes = scanReviewResponse(reply);
+
+      /* NOT MARKED READY IF IT ARGUES. The instruction above forbids disputing
+         the reviewer; this is the check that the instruction was followed. A
+         draft that argues is still returned — suppressing it entirely would hide
+         what happened and leave the caller with nothing — but it is returned
+         marked not ready, with the offending phrases named, so it cannot be
+         copied into a public reply without someone seeing the problem first. */
+      var readyToPost = disputes.length === 0 && words > 0 && words <= REVIEW_RESPONSE_MAX_WORDS;
+
+      return res.json({
+        success: true,
+        rating: rating,
+        reply: reply,
+        why_this_approach: parsed.WHY_THIS_APPROACH || "",
+        ready_to_post: readyToPost,
+        measured: {
+          word_count: words,
+          word_limit: REVIEW_RESPONSE_MAX_WORDS,
+          within_word_limit: words > 0 && words <= REVIEW_RESPONSE_MAX_WORDS,
+          words_over_limit: words > REVIEW_RESPONSE_MAX_WORDS ? words - REVIEW_RESPONSE_MAX_WORDS : 0,
+          disputing_phrases_found: disputes,
+          disputes_the_reviewer: disputes.length > 0,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: disputes.length
+            ? "This draft contains phrasing that disputes the reviewer, which is the one thing a " +
+              "public reply must not do. Marked not ready to post. Rewrite or remove the phrases " +
+              "listed before publishing — the audience is the next reader, and they side with the " +
+              "person, not the business."
+            : (words > REVIEW_RESPONSE_MAX_WORDS
+                ? "This draft is " + (words - REVIEW_RESPONSE_MAX_WORDS) + " words over the " +
+                  REVIEW_RESPONSE_MAX_WORDS + "-word limit. A long reply reads as a defence. Cut it."
+                : "This draft acknowledges and moves the conversation private, within the word limit.")
+        },
+        provenance: toolProvenance(
+          [
+            "The reply's word count against the " + REVIEW_RESPONSE_MAX_WORDS + "-word limit",
+            "Whether the reply contains phrasing that disputes the reviewer, and which phrases",
+            "Any [PLACEHOLDERS] left for you to fill in"
+          ],
+          [
+            "The reply itself and its tone",
+            "Whether this is the right approach for this particular reviewer"
+          ],
+          "No review platform was read or written to. BizForce did not fetch this review, cannot post " +
+          "this reply, and has no visibility into your rating, review count or history. It also cannot " +
+          "tell you whether the reviewer will respond or remove the review.",
+          {
+            review_platform_contacted: false,
+            review_fetched: false,
+            reply_posted: false,
+            rating_data_read: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[reputation/review-response] Error:", error);
+      next(error);
+    }
+  });
+
+/* Incentives. The line is not a style preference: offering anything of value in
+   exchange for a review breaches the terms of Google, Yelp, Trustpilot, Amazon
+   and the App Store, and in the US it is an FTC matter as well. The consequence
+   is not a warning — it is review removal, rating suppression, or account action,
+   and it lands on the business that sent the request.
+
+   So this is scanned in the OUTPUT as well as forbidden in the prompt, the same
+   way the dispute check works, because the failure is expensive and an
+   instruction is not a guarantee. */
+var REVIEW_INCENTIVE_PATTERNS = [
+  { pattern: /\b(discount|% off|percent off)\b/i,                        label: "offering a discount" },
+  { pattern: /\bcoupon\b/i,                                              label: "offering a coupon" },
+  { pattern: /\bgift card\b/i,                                           label: "offering a gift card" },
+  { pattern: /\bfree (gift|product|item|sample|shipping|month|drink|meal)\b/i, label: "offering something free" },
+  { pattern: /\bstore credit\b/i,                                        label: "offering credit" },
+  { pattern: /\b(raffle|giveaway|sweepstake|prize draw|prize)\b/i,        label: "entry into a draw" },
+  { pattern: /\benter(ed)? (you )?(in)?to (a|our) (draw|raffle|giveaway)\b/i, label: "entry into a draw" },
+  { pattern: /\bin (exchange|return) for\b/i,                            label: "explicit exchange" },
+  { pattern: /\b(reward|incentive|bonus|perk)\b/i,                       label: "offering a reward" },
+  { pattern: /\bloyalty points\b/i,                                      label: "offering points" },
+  { pattern: /\bwe.ll (send|give|offer) you\b/i,                         label: "promising something in return" },
+  { pattern: /\b(5|five)[\s-]?star\b/i,                                  label: "asking for a specific rating" },
+  { pattern: /\bpositive review\b/i,                                     label: "asking for a positive review" },
+  { pattern: /\bgood review\b/i,                                         label: "asking for a positive review" }
+];
+
+function scanReviewIncentives(text) {
+  var value = String(text || "");
+  var found = [];
+  REVIEW_INCENTIVE_PATTERNS.forEach(function (rule) {
+    var m = value.match(rule.pattern);
+    if (m) found.push({ matched_text: m[0], position: m.index, problem: rule.label });
+  });
+  return found;
+}
+
+var REVIEW_INCENTIVE_STATEMENT =
+  "INCENTIVISING REVIEWS BREACHES THE TERMS OF EVERY MAJOR PLATFORM. Offering a discount, a " +
+  "coupon, a gift card, credit, a prize-draw entry or anything else of value in exchange for a " +
+  "review violates Google's, Yelp's, Trustpilot's, Amazon's and Apple's policies, and in the US " +
+  "the FTC treats undisclosed incentivised reviews as deceptive. Asking specifically for a " +
+  "five-star or positive review — rather than for a review — breaches the same policies. The " +
+  "penalty falls on the business: reviews removed, ratings suppressed, or the listing actioned. " +
+  "Nothing in this sequence offers anything in return, and it should stay that way.";
+
+app.post("/api/agents/reputation/review-request", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var moment = safeText(req.body.moment || req.body.journey_moment, 500);
+      var channel = safeText(req.body.channel, 120);
+      var platform = safeText(req.body.platform || req.body.review_platform, 120);
+
+      if (!moment) {
+        return res.status(400).json({
+          error: "The moment in the customer journey is required — for example \"three days after " +
+            "delivery\" or \"after a repeat order\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var repBrain =
+        "You are the BizForce AI Reputation Agent building a review request sequence. You know that " +
+        "the timing of the ask does more than the wording, and that offering anything in exchange for " +
+        "a review breaches every major platform's terms and exposes the business to review removal.";
+
+      var instruction =
+        "Design a review request sequence for the moment below.\n\n" +
+        "OUTPUT FORMAT — one block per message, separated by a line containing only ---\n" +
+        "DELAY_DAYS: <whole number of days after the moment; 0 for the first message>\n" +
+        "CHANNEL: <email, SMS, in person, receipt, packaging insert>\n" +
+        "PURPOSE: <one line>\n" +
+        "MESSAGE: <the copy>\n\n" +
+        "HARD RULES — these are terms-of-service matters, not style:\n" +
+        "- Offer NOTHING in exchange. No discount, coupon, gift card, credit, free item, prize draw, " +
+        "loyalty points, or any other reward, whether framed as thanks or as an incentive.\n" +
+        "- Ask for a review, never for a POSITIVE review and never for a star rating. Do not write " +
+        "'five-star', 'positive review' or 'good review'.\n" +
+        "- Do not ask the customer to contact you first if unhappy in order to filter out bad " +
+        "reviews; review gating is itself a policy breach.\n" +
+        "- Two or three messages at most. A fourth is pestering.\n" +
+        "- Invent no figures, no review counts and no claims about the business.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(repBrain, businessProfile, {}, []) +
+        "\n\nMOMENT IN THE CUSTOMER JOURNEY:\n" + moment +
+        (channel ? "\n\nPREFERRED CHANNEL:\n" + channel : "") +
+        (platform ? "\n\nREVIEW PLATFORM:\n" + platform : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var cumulative = 0;
+      var messages = [];
+
+      splitToolBlocks(raw).forEach(function (block) {
+        var f = parseLabeledFields(block, ["DELAY_DAYS", "CHANNEL", "PURPOSE", "MESSAGE"]);
+        if (!f.MESSAGE) return;
+
+        // Same rule as the email sequence: an unreadable delay is null, never 0,
+        // because 0 means "at the moment itself" and is a real instruction.
+        var delay = toolInt(f.DELAY_DAYS);
+        if (delay !== null && delay >= 0) cumulative += delay;
+
+        var incentives = scanReviewIncentives([f.MESSAGE, f.PURPOSE].join("\n"));
+
+        messages.push({
+          message_number: messages.length + 1,
+          delay_days: delay !== null && delay >= 0 ? delay : null,
+          cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
+          channel: f.CHANNEL || "",
+          purpose: f.PURPOSE || "",
+          message: f.MESSAGE,
+          word_count: countWords(f.MESSAGE),
+          incentive_phrases_found: incentives,
+          offers_an_incentive: incentives.length > 0
+        });
+      });
+
+      if (!messages.length) {
+        return res.status(502).json({
+          error: "The request sequence could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var offending = messages.filter(function (m) { return m.offers_an_incentive; });
+      var withDelay = messages.filter(function (m) { return m.delay_days !== null; });
+
+      return res.json({
+        success: true,
+        moment: moment,
+        review_platform: platform || null,
+        messages: messages,
+        // Not ready if anything in it offers something in return. The caller gets
+        // the draft and the reason, rather than a sequence that would get their
+        // reviews removed.
+        ready_to_send: offending.length === 0,
+        measured: {
+          message_count: messages.length,
+          total_span_days: withDelay.reduce(function (sum, m) { return sum + m.delay_days; }, 0),
+          messages_with_an_unreadable_delay: messages.length - withDelay.length,
+          messages_offering_an_incentive: offending.length,
+          incentive_rules_checked: REVIEW_INCENTIVE_PATTERNS.length,
+          longest_message_words: Math.max.apply(null, messages.map(function (m) { return m.word_count; })),
+          note: offending.length
+            ? offending.length + " message(s) offer something in exchange for a review, or ask for a " +
+              "specific rating. Marked not ready to send — this is a terms-of-service breach, not a " +
+              "tone problem. Remove the offers before using any of this."
+            : "No message in this sequence offers anything in exchange for a review."
+        },
+        platform_terms: {
+          incentives_permitted: false,
+          asking_for_a_positive_review_permitted: false,
+          review_gating_permitted: false,
+          statement: REVIEW_INCENTIVE_STATEMENT
+        },
+        provenance: toolProvenance(
+          [
+            "The number of messages and the total span in days",
+            "Each message's word count",
+            "Whether any message offers an incentive or asks for a specific rating, and which phrase did"
+          ],
+          [
+            "The sequence timing and all of the copy",
+            "Whether this moment is the right one to ask at",
+            "How any customer will respond"
+          ],
+          "No review platform was read or written to, and nothing was sent. BizForce cannot see your " +
+          "reviews, your rating, your request history or whether anyone has reviewed you before, so " +
+          "nothing here estimates how many reviews this will produce. " + REVIEW_INCENTIVE_STATEMENT,
+          {
+            review_platform_contacted: false,
+            messages_sent: false,
+            rating_data_read: false,
+            incentives_included: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[reputation/review-request] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Social Agent tools ───────────────────────────────────────────────────────
+
+/* Per-platform limits. `max` is the hard cap the platform enforces;
+   `truncates_at` is where the post is visually cut behind a "more" link, which is
+   a different and usually much smaller number. Writing to the hard cap and
+   ignoring the truncation point is how a post ends up with its argument below the
+   fold.
+
+   Hashtag guidance carries the same split: `hashtag_max` is enforced where one
+   exists, `hashtag_practical` is the point past which hashtags stop helping and
+   start reading as reach-farming. The second is a judgement and is labelled as
+   one. */
+var SOCIAL_PLATFORMS = {
+  x: {
+    label: "X (Twitter)",
+    max: 280, kind: "hard",
+    truncates_at: null,
+    hashtag_max: null, hashtag_practical: 2,
+    note: "280 characters is enforced; a longer post cannot be published as a single post."
+  },
+  instagram: {
+    label: "Instagram",
+    max: 2200, kind: "hard",
+    truncates_at: 125,
+    hashtag_max: 30, hashtag_practical: 5,
+    note: "2,200 characters is enforced. The caption is cut at roughly 125 characters behind " +
+          "\"more\", so the opening line carries the post. 30 hashtags is the enforced maximum."
+  },
+  linkedin: {
+    label: "LinkedIn",
+    max: 3000, kind: "hard",
+    truncates_at: 210,
+    hashtag_max: null, hashtag_practical: 5,
+    note: "3,000 characters is enforced. The post is cut at roughly 210 characters behind " +
+          "\"see more\" on desktop, and less on mobile."
+  },
+  tiktok: {
+    label: "TikTok",
+    max: 2200, kind: "hard",
+    truncates_at: 100,
+    hashtag_max: null, hashtag_practical: 5,
+    note: "2,200 characters is enforced for the caption. Very little of it is visible over the " +
+          "video before it is cut, so the first line is effectively the caption."
+  }
+};
+
+/* Hashtags counted in code. The pattern deliberately requires a letter after the
+   hash so that "#1 bestseller" is not counted as a hashtag — it is not one, and
+   counting it would inflate the number and fire the practical-limit warning on a
+   post that has no hashtags at all. */
+function countHashtags(text) {
+  var matches = String(text || "").match(/#[A-Za-z][A-Za-z0-9_]*/g) || [];
+  var seen = {};
+  var unique = [];
+  matches.forEach(function (tag) {
+    var key = tag.toLowerCase();
+    if (seen[key]) return;
+    seen[key] = true;
+    unique.push(tag);
+  });
+  return { total: matches.length, unique: unique, unique_count: unique.length };
+}
+
+function measureSocialPost(text, spec) {
+  var value = String(text || "").trim();
+  var tags = countHashtags(value);
+
+  return {
+    length: value.length,
+    limit: spec.max,
+    limit_kind: spec.kind,
+    within_limit: value.length > 0 && value.length <= spec.max,
+    chars_over_limit: value.length > spec.max ? value.length - spec.max : 0,
+    truncates_at: spec.truncates_at,
+    visible_before_truncation: spec.truncates_at
+      ? value.slice(0, spec.truncates_at)
+      : null,
+    chars_hidden_by_truncation: spec.truncates_at && value.length > spec.truncates_at
+      ? value.length - spec.truncates_at
+      : 0,
+    word_count: countWords(value),
+    hashtag_count: tags.total,
+    unique_hashtags: tags.unique,
+    hashtag_max: spec.hashtag_max,
+    hashtag_practical_max: spec.hashtag_practical,
+    within_hashtag_max: spec.hashtag_max === null ? null : tags.total <= spec.hashtag_max,
+    within_hashtag_practical_max: tags.total <= spec.hashtag_practical
+  };
+}
+
+app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var idea = safeText(req.body.idea, 1000);
+      var platformKey = String(safeText(req.body.platform, 40) || "").toLowerCase().trim();
+
+      if (!idea) {
+        return res.status(400).json({ error: "An idea is required — what the post is about." });
+      }
+
+      /* Validated, not defaulted, for the same reason the ads platform is: the
+         limits are the output, and measuring an X post against LinkedIn's 3,000
+         characters would report a 900-character post as fine when it cannot be
+         published at all. */
+      if (!Object.prototype.hasOwnProperty.call(SOCIAL_PLATFORMS, platformKey)) {
+        return res.status(400).json({
+          error: "platform must be one of the platforms whose limits BizForce measures against.",
+          valid_platforms: Object.keys(SOCIAL_PLATFORMS)
+        });
+      }
+
+      var spec = SOCIAL_PLATFORMS[platformKey];
+      var businessProfile = await loadProfileForTool(userId);
+
+      var socialBrain =
+        "You are the BizForce AI Social Agent. You write for one platform at a time, because the same " +
+        "words do not work across them: the length, the opening line and the hashtag convention are " +
+        "all different, and a post written for everywhere reads as written for nowhere.";
+
+      var instruction =
+        "Write one " + spec.label + " post for the idea below.\n\n" +
+        "PLATFORM CONSTRAINTS:\n" +
+        "- Hard limit: " + spec.max + " characters. Longer cannot be published.\n" +
+        (spec.truncates_at
+          ? "- Cut off at roughly " + spec.truncates_at + " characters behind a \"more\" link, so the " +
+            "first " + spec.truncates_at + " characters have to carry the post on their own.\n"
+          : "") +
+        "- Hashtags: " +
+          (spec.hashtag_max ? "at most " + spec.hashtag_max + " allowed, " : "") +
+          "and past about " + spec.hashtag_practical + " they stop helping.\n\n" +
+        "OUTPUT FORMAT — these exact labels:\n" +
+        "POST: <the post text, including any hashtags where they belong>\n" +
+        "HOOK_NOTE: <one line on what the opening is doing>\n\n" +
+        "RULES:\n" +
+        "- Stay inside the character limit. Count as you write.\n" +
+        (spec.truncates_at ? "- Put the point in the first sentence, before the cut.\n" : "") +
+        "- No engagement bait, no 'comment below if', no follow-for-follow.\n" +
+        "- Invent no numbers — no follower counts, no sales figures, no review counts, no " +
+        "percentages. If a figure would help, write [FIGURE NEEDED].";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(socialBrain, businessProfile, {}, []) +
+        "\n\nIDEA:\n" + idea +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 1500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, ["POST", "HOOK_NOTE"]);
+      var post = parsed.POST || "";
+
+      if (!post) {
+        return res.status(502).json({
+          error: "The post could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var m = measureSocialPost(post, spec);
+
+      return res.json({
+        success: true,
+        platform: platformKey,
+        platform_label: spec.label,
+        post: post,
+        hook_note: parsed.HOOK_NOTE || "",
+        measured: Object.assign({}, m, {
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: !m.within_limit
+            ? "This post is " + m.chars_over_limit + " characters over " + spec.label + "'s hard " +
+              "limit of " + spec.max + " and cannot be published as written."
+            : (m.chars_hidden_by_truncation > 0
+                ? "This post fits, but roughly " + m.chars_hidden_by_truncation + " characters sit " +
+                  "past the point where " + spec.label + " cuts it behind a \"more\" link. Check that " +
+                  "the point is made before character " + spec.truncates_at + "."
+                : "This post is within the limit and, as far as length goes, visible without expanding.")
+        }),
+        platform_limits: {
+          max_characters: spec.max,
+          limit_kind: spec.kind,
+          truncates_at: spec.truncates_at,
+          hashtag_max: spec.hashtag_max,
+          hashtag_practical_max: spec.hashtag_practical,
+          note: spec.note,
+          practical_caveat: "The truncation point and the practical hashtag number are approximations " +
+            "that move with the client and the layout. The character maximum is the enforced one."
+        },
+        provenance: toolProvenance(
+          [
+            "The post's character count against " + spec.label + "'s enforced maximum",
+            "How much sits past the truncation point, and what is visible before it",
+            "The hashtag count, the unique hashtags, and whether that is within the platform maximum " +
+              "and the practical number",
+            "Word count"
+          ],
+          [
+            "The post itself and its hook",
+            "Whether this idea suits this platform",
+            "Anything about how it will be received"
+          ],
+          "No social platform was read or posted to. BizForce has no access to your account, your " +
+          "follower count, your past engagement or any platform analytics — so nothing here is a " +
+          "reach estimate, an engagement prediction, or a claim that this post will perform. It is a " +
+          "draft measured against published limits.",
+          {
+            social_platform_contacted: false,
+            account_data_read: false,
+            follower_data_read: false,
+            engagement_data_read: false,
+            post_published: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[social/post] Error:", error);
+      next(error);
+    }
+  });
+
+app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var goal = safeText(req.body.goal, 500);
+      var cadence = safeText(req.body.cadence, 200);
+      var platformsIn = Array.isArray(req.body.platforms) ? req.body.platforms : [];
+      var weeks = toolInt(req.body.weeks);
+      var weekSpan = (weeks !== null && weeks >= 1 && weeks <= 12) ? weeks : 4;
+
+      if (!goal) {
+        return res.status(400).json({ error: "A goal is required — what this plan is for." });
+      }
+      if (!cadence) {
+        return res.status(400).json({
+          error: "A cadence is required — how often you intend to post, for example \"three times a week\"."
+        });
+      }
+
+      /* Unknown platform names are kept as free text rather than rejected: a
+         calendar can legitimately name a channel BizForce does not measure post
+         limits for, and refusing the whole plan over it would be worse than
+         saying which ones are measurable. The response lists both sets. */
+      var knownPlatforms = [];
+      var unknownPlatforms = [];
+      platformsIn.slice(0, 10).forEach(function (p) {
+        var key = String(safeText(p, 40) || "").toLowerCase().trim();
+        if (!key) return;
+        if (Object.prototype.hasOwnProperty.call(SOCIAL_PLATFORMS, key)) knownPlatforms.push(key);
+        else unknownPlatforms.push(key);
+      });
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var socialBrain =
+        "You are the BizForce AI Social Agent building a posting plan. You know a calendar is only " +
+        "useful if it says what goes out on which day and what each post is trying to do, and that a " +
+        "plan nobody can sustain is worse than a smaller one they can.";
+
+      var instruction =
+        "Build a " + weekSpan + "-week posting plan for the goal and cadence below.\n\n" +
+        "OUTPUT FORMAT — one block per entry, separated by a line containing only ---\n" +
+        "DAY: <whole number, the day of the plan; day 1 is the first day>\n" +
+        "PLATFORM: <one platform per entry>\n" +
+        "FORMAT: <the post format, for example carousel, short video, text post, photo, thread>\n" +
+        "HOOK: <the opening line or premise of the post>\n" +
+        "PURPOSE: <one line on what this post is doing for the goal>\n\n" +
+        "RULES:\n" +
+        "- DAY must be a plain whole number, counting from 1, not a date and not a weekday name.\n" +
+        "- Match the cadence given. Do not quietly plan more posts than was asked for.\n" +
+        "- One platform per entry. If the same content goes to two platforms, that is two entries, " +
+        "because the format and hook should differ.\n" +
+        "- Invent no metrics. No reach, engagement, follower or conversion figures, and no claims " +
+        "that a format performs better than another.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(socialBrain, businessProfile, {}, []) +
+        "\n\nGOAL:\n" + goal +
+        "\n\nCADENCE:\n" + cadence +
+        (knownPlatforms.length || unknownPlatforms.length
+          ? "\n\nPLATFORMS:\n" + knownPlatforms.concat(unknownPlatforms).join(", ")
+          : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 4000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var entries = [];
+      splitToolBlocks(raw).forEach(function (block) {
+        var f = parseLabeledFields(block, ["DAY", "PLATFORM", "FORMAT", "HOOK", "PURPOSE"]);
+        if (!f.HOOK && !f.FORMAT) return;
+
+        /* Days as numbers, the same decision the email sequence makes about
+           delays and for the same reason: a plan is a schedule, and "mid-week"
+           cannot be sorted, counted per week, or put in a calendar. An unreadable
+           day is null rather than 1, because 1 is a real day and guessing it would
+           put a post on the first day of the plan that nobody scheduled. */
+        var day = toolInt(f.DAY);
+        var platformKey = String(f.PLATFORM || "").toLowerCase().trim();
+
+        entries.push({
+          day: day !== null && day >= 1 ? day : null,
+          week: day !== null && day >= 1 ? Math.ceil(day / 7) : null,
+          platform: f.PLATFORM || "",
+          platform_is_measurable: Object.prototype.hasOwnProperty.call(SOCIAL_PLATFORMS, platformKey),
+          format: f.FORMAT || "",
+          hook: f.HOOK || "",
+          purpose: f.PURPOSE || ""
+        });
+      });
+
+      if (!entries.length) {
+        return res.status(502).json({
+          error: "The posting plan could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var dated = entries.filter(function (e) { return e.day !== null; });
+      var days = dated.map(function (e) { return e.day; });
+
+      var perWeek = {};
+      dated.forEach(function (e) {
+        perWeek["week_" + e.week] = (perWeek["week_" + e.week] || 0) + 1;
+      });
+
+      var perPlatform = {};
+      entries.forEach(function (e) {
+        var key = e.platform || "(unspecified)";
+        perPlatform[key] = (perPlatform[key] || 0) + 1;
+      });
+
+      // Sorted by day so the plan reads as a schedule. Entries with no readable
+      // day go last rather than being dropped or treated as day 0.
+      entries.sort(function (a, b) {
+        if (a.day === null && b.day === null) return 0;
+        if (a.day === null) return 1;
+        if (b.day === null) return -1;
+        return a.day - b.day;
+      });
+
+      return res.json({
+        success: true,
+        goal: goal,
+        cadence: cadence,
+        weeks_planned: weekSpan,
+        entries: entries,
+        measured: {
+          entry_count: entries.length,
+          entries_with_an_unreadable_day: entries.length - dated.length,
+          first_day: days.length ? Math.min.apply(null, days) : null,
+          last_day: days.length ? Math.max.apply(null, days) : null,
+          span_days: days.length ? (Math.max.apply(null, days) - Math.min.apply(null, days) + 1) : 0,
+          posts_per_week: perWeek,
+          posts_per_platform: perPlatform,
+          average_posts_per_week: dated.length ? Math.round((dated.length / weekSpan) * 10) / 10 : 0,
+          platforms_whose_limits_are_measurable: knownPlatforms,
+          platforms_named_but_not_measured: unknownPlatforms.concat(
+            entries.filter(function (e) { return e.platform && !e.platform_is_measurable; })
+              .map(function (e) { return e.platform; })
+          ).filter(function (v, i, a) { return a.indexOf(v) === i; }),
+          note: (entries.length - dated.length)
+            ? (entries.length - dated.length) + " entry/entries had a day that could not be read as a " +
+              "whole number. Those are reported as null rather than as day 1, because day 1 is a real " +
+              "day and guessing it would schedule a post nobody planned."
+            : "Every entry has a day as a whole number, and the plan is sorted by it."
+        },
+        provenance: toolProvenance(
+          [
+            "The number of entries, the first and last day, and the span",
+            "Posts per week and per platform, and the weekly average",
+            "Which named platforms BizForce can measure post limits for"
+          ],
+          [
+            "The plan itself — every day, format, hook and purpose",
+            "Whether this cadence is sustainable for you",
+            "Whether any of it will grow an audience"
+          ],
+          "No social platform was read. BizForce has no access to your accounts, your follower " +
+          "counts, your past engagement or any platform analytics, so nothing here is a reach or " +
+          "growth estimate and no format is claimed to outperform another. It is a schedule to " +
+          "execute and then measure in your own platform analytics.",
+          {
+            social_platform_contacted: false,
+            account_data_read: false,
+            follower_data_read: false,
+            engagement_data_read: false,
+            posts_scheduled: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[social/calendar] Error:", error);
+      next(error);
+    }
+  });
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
