@@ -18044,6 +18044,311 @@ app.put("/api/agent-autonomy", requireAuth, async function (req, res, next) {
   }
 });
 
+// ── Agent schedules ──────────────────────────────────────────────────────────
+//
+// WHEN an agent runs itself. agent_autonomy above is whether it MAY, and the two
+// are deliberately separate rows in separate tables: both must be true for a
+// scheduled run to happen. A schedule is a request, not a permission, so nothing
+// here enrols anybody — whatever ends up driving these runs still has to check
+// agent_autonomy, and an agent whose autonomy is off does not run because a
+// schedule exists. Migration 102's header says the same thing from the schema
+// side.
+//
+// Unique on (user_id, agent_type), the same shape agent_autonomy uses, so one
+// schedule pairs with one consent row per user per agent.
+//
+// Nothing reads this table on a timer yet. These routes are the API only.
+
+// Exactly what a caller needs to render and edit a schedule. last_run_on is
+// included because it is the one piece of runner state worth showing — "this
+// last ran on the 3rd" — and it is read-only through these routes; see the
+// upsert below for why it is never written here.
+var AGENT_SCHEDULE_FIELDS =
+  "agent_type, task_type, prompt, cadence, hour_utc, day_of_week, day_of_month, " +
+  "enabled, last_run_on, created_at, updated_at";
+
+/* A second copy of migration 102's cadence CHECK, and the duplication is the
+   point rather than an oversight. 064 refused to copy the agent roster into the
+   schema because that list lives in JavaScript, grows, and would drift silently.
+   This is the opposite case and the same reasoning as 062: three values, closed,
+   and not expected to change — and the alternative to checking here is letting
+   the constraint raise, which reaches the caller as a 500 that names a
+   constraint rather than a 400 that names the field. If a fourth cadence is ever
+   added it has to move in the same commit as the migration. */
+var AGENT_SCHEDULE_CADENCES = ["daily", "weekly", "monthly"];
+
+/* An integer or null, never a coercion. Number("") and Number(null) are both 0,
+   and 0 is a real hour and a real weekday, so a blank or absent field run
+   through Number() would arrive in the database as midnight on Sunday — a
+   schedule the server chose and the caller never asked for. Booleans are
+   rejected for the same reason: Number(true) is 1.
+
+   A numeric string is accepted because JSON form values routinely arrive as
+   "7" and there is no value whose string form means something different from
+   its number form here. That is not true of the autonomy route's boolean, which
+   is why that one is strict about the type itself — "false" is truthy, so
+   coercing it would read a request to turn something off as consent to turn it
+   on. No such trap exists for an hour. */
+function agentScheduleInt(value) {
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    var parsed = Number(value.trim());
+    return Number.isInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+app.get("/api/agent-schedules", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("agent_schedules")
+      .select(AGENT_SCHEDULE_FIELDS)
+      .eq("user_id", req.user.id)
+      .order("agent_type", { ascending: true });
+
+    /* Thrown, never softened into an empty list, for the same reason the
+       autonomy and self-review reads throw. `{ schedules: [] }` is not a
+       neutral fallback — it is the claim "you have no schedules", which a read
+       that failed cannot make, and the consequence here is concrete and
+       compounding rather than merely confusing: a user told they have none sets
+       them again, the upsert lands on (user_id, agent_type), and where they
+       wanted one agent running on a cadence they now believe they have one
+       while the row says something else. Worse with a second agent, where the
+       re-entry is a new row and the result is two scheduled agents. An error
+       status says the only true thing available: we do not know. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ schedules: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/agent-schedules", requireAuth, async function (req, res, next) {
+  try {
+    var body      = req.body || {};
+    var agentType = body.agent_type;
+    var taskType  = body.task_type;
+    var prompt    = body.prompt;
+    var cadence   = body.cadence;
+
+    /* agent_type validated exactly the way the autonomy route above validates
+       it: against the live AGENT_SYSTEM_PROMPTS object via hasOwnProperty, not
+       against a copied array, and with no lowercasing or trimming of its own.
+       Same check, same reason — one roster in this system — and deliberately
+       the same strictness, because a schedule row has to pair with an autonomy
+       row for the same agent_type and a value either route accepted and the
+       other refused would be a schedule that can never be consented to.
+
+       hasOwnProperty rather than `in`: "constructor", "toString" and "valueOf"
+       are all `in` any object literal and would otherwise validate as agents. */
+    if (typeof agentType !== "string" ||
+        !Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType)) {
+      return res.status(400).json({
+        error: "agent_type must be one of the registered agents.",
+        valid_agent_types: Object.keys(AGENT_SYSTEM_PROMPTS)
+      });
+    }
+
+    /* REFUSED HERE, NOT COERCED. This is the validation that matters most on
+       this route, and it is a deliberate divergence from the task submission
+       path rather than an inconsistency with it.
+
+       handleAiTaskRequest coerces an unrecognised task_type to "general",
+       warns once per process, and tells the caller nothing. That is a defensible
+       trade for a single submission: the task runs, it runs the general
+       instruction, and someone asked for it once.
+
+       A schedule is not a single submission. Coerced here, the wrong value is
+       STORED, and every run it drives from then on quietly executes the general
+       instruction instead of the one that was asked for — on a cadence,
+       indefinitely, with a single stale log line from the first occurrence as
+       the only trace that anything is wrong. Nothing errors, nothing retries,
+       and the row reads back exactly as the caller wrote it. The failure is
+       invisible from both ends.
+
+       So the value is named in the refusal. "Not accepted" without saying what
+       was rejected is the same silence in a politer form. */
+    if (typeof taskType !== "string" || !allowedTaskTypes.includes(taskType)) {
+      return res.status(400).json({
+        error: "task_type " + JSON.stringify(String(taskType)) + " is not a recognised task type. " +
+          "It is refused rather than run as a general task, because a schedule would repeat " +
+          "that substitution on every run.",
+        valid_task_types: allowedTaskTypes
+      });
+    }
+
+    /* Trimmed before the length test and stored trimmed, so this agrees with
+       the column's own CHECK — length(btrim(prompt)) > 0 — instead of accepting
+       a whitespace-only prompt here and having the database refuse it as a 500. */
+    if (typeof prompt !== "string" || prompt.trim() === "") {
+      return res.status(400).json({
+        error: "prompt is required and cannot be blank — it is what the agent will be asked to do."
+      });
+    }
+    prompt = prompt.trim();
+
+    if (typeof cadence !== "string" || !AGENT_SCHEDULE_CADENCES.includes(cadence)) {
+      return res.status(400).json({
+        error: "cadence must be one of: " + AGENT_SCHEDULE_CADENCES.join(", ") + ".",
+        valid_cadences: AGENT_SCHEDULE_CADENCES
+      });
+    }
+
+    /* Absent means the column default, 7, because PUT here replaces a schedule
+       rather than patching one. Worth stating plainly since it cuts the other
+       way too: a caller who sends everything EXCEPT hour_utc is asking for 07:00
+       UTC, not asking to keep whatever hour was stored before. */
+    var hourUtc = 7;
+    if (body.hour_utc !== undefined && body.hour_utc !== null) {
+      hourUtc = agentScheduleInt(body.hour_utc);
+      if (hourUtc === null || hourUtc < 0 || hourUtc > 23) {
+        return res.status(400).json({
+          error: "hour_utc must be a whole number from 0 to 23 (the UTC hour the run should start)."
+        });
+      }
+    }
+
+    /* THE DAY FIELD THE CADENCE DOES NOT USE IS SET TO NULL, not left out.
+       Omitting it from the payload would leave whatever was stored before, so
+       switching a weekly schedule to daily would keep a day_of_week the cadence
+       no longer consults — a row that contradicts itself, passes every CHECK
+       (both are conditional on cadence), and misleads anyone reading it later,
+       including whatever writes the runner. Writing null is what makes the row
+       mean one thing.
+
+       Both day checks spell out the required case rather than leaning on the
+       constraint, because migration 102's header records why the constraints
+       alone were not enough to lean on: a CHECK rejects only FALSE, and NULL
+       between 0 and 6 is NULL, so the earlier form of that constraint accepted
+       a weekly schedule naming no day. The constraint was fixed; a caller still
+       deserves a 400 that names the field over a 500 that names a constraint. */
+    var dayOfWeek  = null;
+    var dayOfMonth = null;
+
+    if (cadence === "weekly") {
+      dayOfWeek = agentScheduleInt(body.day_of_week);
+      if (dayOfWeek === null || dayOfWeek < 0 || dayOfWeek > 6) {
+        return res.status(400).json({
+          error: "A weekly schedule needs day_of_week, a whole number from 0 (Sunday) to 6 (Saturday)."
+        });
+      }
+    }
+
+    if (cadence === "monthly") {
+      dayOfMonth = agentScheduleInt(body.day_of_month);
+      if (dayOfMonth === null || dayOfMonth < 1 || dayOfMonth > 31) {
+        return res.status(400).json({
+          error: "A monthly schedule needs day_of_month, a whole number from 1 to 31. " +
+            "A day past the end of a short month runs on that month's last day."
+        });
+      }
+    }
+
+    /* An upsert on (user_id, agent_type), safe because migration 102 creates
+       agent_schedules_user_agent_key as a FULL unique index — no WHERE clause —
+       so ON CONFLICT can target it. That is the difference from
+       revenue_events_stripe_event_id_key, which is partial and therefore not a
+       valid conflict target. Same pattern as the autonomy upsert above.
+
+       THREE COLUMNS ARE DELIBERATELY ABSENT FROM THIS PAYLOAD, because
+       onConflict compiles to ON CONFLICT DO UPDATE SET <every key present> and
+       a key here is a key overwritten on every edit:
+
+         created_at  — the business_profiles upsert had exactly this bug: every
+                       save rewrote the creation time to now, so the row claimed
+                       to have been created when it was last edited, and the
+                       original was unrecoverable. The column defaults to now()
+                       on insert, so leaving it out is both the fix and correct.
+
+         last_run_on — the runner's column, not this route's. Overwriting it on
+                       an edit would either re-run a job already done today or
+                       suppress one that has not run, depending on which way it
+                       moved. Editing a schedule says nothing about whether it
+                       has run.
+
+         enabled     — not accepted from the body on this route, so not written.
+                       Defaults to true on insert, which is right because
+                       creating a schedule IS the request for it; and preserved
+                       on update, so an edit does not silently re-enable a
+                       schedule somebody had switched off.
+
+       updated_at IS set, and must be. This table has no trigger: migration 067
+       attached agent_autonomy_set_updated_at to agent_autonomy only, and 102
+       creates none, so the column would otherwise sit at created_at forever and
+       read as "never changed" — the exact state 064's column comment warned
+       about before 067 existed. */
+    const { data, error } = await supabase
+      .from("agent_schedules")
+      .upsert({
+        user_id:      req.user.id,
+        agent_type:   agentType,
+        task_type:    taskType,
+        prompt:       prompt,
+        cadence:      cadence,
+        hour_utc:     hourUtc,
+        day_of_week:  dayOfWeek,
+        day_of_month: dayOfMonth,
+        updated_at:   nowIso()
+      }, { onConflict: "user_id,agent_type" })
+      .select(AGENT_SCHEDULE_FIELDS)
+      .single();
+
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ schedule: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/agent-schedules/:agent_type", requireAuth, async function (req, res, next) {
+  try {
+    /* Matched on BOTH agent_type and user_id, the same way the birth-records
+       delete is. The agent_type alone would identify every user's schedule for
+       that agent, which is exactly what must not be enough to delete one; the
+       user_id predicate is what makes another account's row a miss rather than
+       a breach.
+
+       agent_type is NOT validated against the roster here, deliberately. An
+       unregistered value simply matches nothing and falls through to the 404
+       below — the same answer a real agent with no schedule gets, and the same
+       answer someone else's schedule gets. Validating it first would answer a
+       different question (is this a real agent) with a different status, which
+       is more than a delete needs to say. */
+    const { data, error } = await supabase
+      .from("agent_schedules")
+      .delete()
+      .eq("user_id", req.user.id)
+      .eq("agent_type", req.params.agent_type)
+      .select("agent_type");
+
+    if (error) {
+      throw error;
+    }
+
+    /* One answer for three cases: no such schedule, no such agent, and a
+       schedule belonging to somebody else. They are indistinguishable from here
+       and should be — a caller learning which of the three applied would be
+       learning whether another account has a schedule for that agent. Reported
+       as not-found rather than as a success, so nobody is told something was
+       deleted when nothing was. */
+    if (!data || !data.length) {
+      return res.status(404).json({ error: "No schedule for that agent belongs to your account." });
+    }
+
+    return res.json({ deleted: data[0].agent_type });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Birth records ────────────────────────────────────────────────────────────
 //
 // Chart subjects other than the account holder — the second person in a
