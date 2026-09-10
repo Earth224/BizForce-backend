@@ -20593,6 +20593,1103 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
     }
   });
 
+// ── Broker Agent tools ───────────────────────────────────────────────────────
+
+/* The sections a term sheet actually has. Returned separately and reported
+   present-or-missing the way the press release's are, because the same thing is
+   true of both: a term sheet missing its conditions precedent is not a term sheet
+   with a gap, it is a document that does not do the job. Conditions precedent are
+   what the deal depends on; without them there is nothing to fail. */
+var TERM_SHEET_SECTIONS = ["PARTIES", "STRUCTURE", "CONSIDERATION", "CONDITIONS_PRECEDENT",
+  "WARRANTIES", "EXCLUSIVITY", "GOVERNING_LAW", "EXPIRY"];
+
+/* WHICH SECTIONS ARE USUALLY BINDING, and this distinction is the one a
+   non-lawyer gets wrong.
+
+   A term sheet is mostly a statement of intent that binds nobody — the structure
+   and the consideration are there to be renegotiated in the definitive
+   agreement. But a handful of clauses bind on signature, and exclusivity is the
+   expensive one: it stops the seller talking to anyone else for its duration,
+   which is a real obligation given in exchange for nothing until the deal closes.
+   Governing law and expiry bind too.
+
+   Reported rather than enforced, because which clauses bind is a matter of how
+   they are drafted and of jurisdiction, and this code cannot read either. What it
+   can do is say which of the sections present are the ones to put in front of a
+   lawyer first. */
+var TERM_SHEET_USUALLY_BINDING = ["EXCLUSIVITY", "GOVERNING_LAW", "EXPIRY"];
+var TERM_SHEET_USUALLY_NON_BINDING = ["STRUCTURE", "CONSIDERATION", "WARRANTIES"];
+
+/* The statement that must survive into every term sheet response. One constant so
+   the wording cannot drift, and carried in the provenance object as fields rather
+   than only as prose. */
+var TERM_SHEET_NOT_LEGAL_ADVICE =
+  "THIS IS A FRAMEWORK, NOT A LEGAL DOCUMENT, AND NO LAWYER HAS SEEN IT. It is a structure for " +
+  "a conversation and a checklist of what a term sheet usually covers — not an instrument to " +
+  "sign, send, or rely on. Nothing in it has been reviewed for enforceability, for the law of any " +
+  "jurisdiction, or against the facts of your deal. Most of a term sheet is non-binding by " +
+  "design, but SOME CLAUSES BIND ON SIGNATURE — exclusivity above all, which stops the other side " +
+  "talking to anyone else while giving them nothing until close — and the binding provisions are " +
+  "precisely the part a non-lawyer gets wrong. Take this to a lawyer before it goes to a " +
+  "counterparty, and take the exclusivity, governing-law and expiry clauses first.";
+
+app.post("/api/agents/broker/term-sheet", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var deal = safeText(req.body.deal || req.body.deal_shape, 2000);
+      var dealType = safeText(req.body.deal_type, 120);
+      var parties = safeText(req.body.parties, 500);
+      var consideration = safeText(req.body.consideration, 500);
+      var governingLaw = safeText(req.body.governing_law || req.body.jurisdiction, 200);
+
+      if (!deal) {
+        return res.status(400).json({
+          error: "The deal shape is required — what is being agreed, between whom, and roughly on what terms."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var brokerBrain =
+        "You are the BizForce AI Broker Agent. You identify deal flow, structure partnership " +
+        "opportunities, build negotiation briefs and outline due diligence. You draft term sheet " +
+        "FRAMEWORKS — structures for a conversation — and you never present one as an instrument " +
+        "to sign. You know which clauses in a term sheet bind on signature and which do not.";
+
+      var instruction =
+        "Draft a term sheet FRAMEWORK for the deal below.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line, in this order:\n" +
+        "PARTIES: <who is on each side, and in what capacity>\n" +
+        "STRUCTURE: <what form the deal takes>\n" +
+        "CONSIDERATION: <what moves, and when>\n" +
+        "CONDITIONS_PRECEDENT: <what must be true before completion; list them>\n" +
+        "WARRANTIES: <what each side is asked to stand behind>\n" +
+        "EXCLUSIVITY: <whether there is a lock-out, for how long, and on whom it binds>\n" +
+        "GOVERNING_LAW: <which law governs and where disputes are heard>\n" +
+        "EXPIRY: <when this offer lapses if not signed>\n\n" +
+        "RULES:\n" +
+        "- Every label must appear. A framework missing its conditions precedent has nothing for " +
+        "the deal to depend on.\n" +
+        "- Mark clearly, in the EXCLUSIVITY section itself, that it is usually BINDING on signature.\n" +
+        "- Do NOT state that any clause is enforceable, standard, or market. You have not read the " +
+        "law of any jurisdiction and you have not seen the other side's position.\n" +
+        "- Invent NO figures. No valuation, no percentage, no fee, no timeline in weeks unless it " +
+        "was given below. Write [FIGURE NEEDED] where one belongs.\n" +
+        "- Do not write this as a letter or an agreement. It is a framework for a conversation.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(brokerBrain, businessProfile, {}, []) +
+        "\n\nTHE DEAL:\n" + deal +
+        (dealType ? "\n\nDEAL TYPE:\n" + dealType : "") +
+        (parties ? "\n\nPARTIES:\n" + parties : "") +
+        (consideration ? "\n\nCONSIDERATION:\n" + consideration : "") +
+        (governingLaw ? "\n\nGOVERNING LAW / JURISDICTION:\n" + governingLaw : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, TERM_SHEET_SECTIONS);
+      var present = TERM_SHEET_SECTIONS.filter(function (s) { return !!parsed[s]; });
+      var missing = TERM_SHEET_SECTIONS.filter(function (s) { return !parsed[s]; });
+
+      if (!present.length) {
+        return res.status(502).json({
+          error: "The term sheet framework could not be read back from the model, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var sections = {};
+      TERM_SHEET_SECTIONS.forEach(function (s) { sections[s.toLowerCase()] = parsed[s] || ""; });
+
+      // Conditions precedent are the section most worth counting rather than
+      // merely confirming: one vague condition is not the same as five specific
+      // ones, and the count is the difference between a real gate and a gesture.
+      var cpItems = parsed.CONDITIONS_PRECEDENT ? parseToolLines(parsed.CONDITIONS_PRECEDENT) : [];
+
+      return res.json({
+        success: true,
+        deal_type: dealType || null,
+        framework: sections,
+        measured: {
+          sections_present: present,
+          sections_missing: missing,
+          is_complete: missing.length === 0,
+          conditions_precedent_count: cpItems.length,
+          usually_binding_sections_present: TERM_SHEET_USUALLY_BINDING.filter(function (s) {
+            return present.indexOf(s) !== -1;
+          }),
+          usually_binding_sections_missing: TERM_SHEET_USUALLY_BINDING.filter(function (s) {
+            return present.indexOf(s) === -1;
+          }),
+          usually_non_binding_sections_present: TERM_SHEET_USUALLY_NON_BINDING.filter(function (s) {
+            return present.indexOf(s) !== -1;
+          }),
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          word_count: countWords(raw),
+          note: missing.length
+            ? "Missing: " + missing.join(", ") + ". " +
+              (missing.indexOf("CONDITIONS_PRECEDENT") !== -1
+                ? "Conditions precedent in particular — without them the deal depends on nothing and there is nothing to fail."
+                : "Fill those in before this goes to anyone.")
+            : (cpItems.length <= 1
+                ? "All eight sections are present, but conditions precedent reads as " +
+                  cpItems.length + " item. That is usually a list, not a sentence."
+                : "All eight sections are present, with " + cpItems.length + " conditions precedent.")
+        },
+        binding_guidance: {
+          usually_binding: TERM_SHEET_USUALLY_BINDING,
+          usually_non_binding: TERM_SHEET_USUALLY_NON_BINDING,
+          note: "Which clauses actually bind depends on how they are drafted and on the governing " +
+            "law, neither of which BizForce can read. This is which ones to put in front of a " +
+            "lawyer first, not a ruling on what binds."
+        },
+        legal_statement: TERM_SHEET_NOT_LEGAL_ADVICE,
+        provenance: toolProvenance(
+          [
+            "Which of the eight term sheet sections came back and which are missing",
+            "How many conditions precedent were listed",
+            "Which of the usually-binding sections are present",
+            "Word count, and any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "All of the drafting — every section's wording",
+            "The deal structure proposed",
+            "What the conditions precedent should be",
+            "Whether any of this is appropriate for your deal or your jurisdiction"
+          ],
+          TERM_SHEET_NOT_LEGAL_ADVICE,
+          {
+            is_a_legal_document: false,
+            reviewed_by_a_lawyer: false,
+            enforceability_checked: false,
+            jurisdiction_law_read: false,
+            binding_provisions_verified: false,
+            counterparty_position_known: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[broker/term-sheet] Error:", error);
+      next(error);
+    }
+  });
+
+/* The five areas a diligence list has to cover. Grouped and COUNTED PER AREA,
+   because the failure mode of a generated diligence list is not that it is short
+   — it is that it is lopsided. Thirty financial items and two legal ones reads as
+   thorough and leaves the side that actually kills deals unexamined. The count
+   per area is what makes that visible. */
+var DUE_DILIGENCE_AREAS = ["FINANCIAL", "LEGAL", "COMMERCIAL", "OPERATIONAL", "PEOPLE"];
+
+// Below this, an area has been gestured at rather than covered. Reported, not
+// enforced — some deals genuinely carry little of one area — but a one-item area
+// should have to be a decision rather than an oversight.
+var DUE_DILIGENCE_THIN_AREA_THRESHOLD = 3;
+
+app.post("/api/agents/broker/due-diligence", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var dealType = safeText(req.body.deal_type || req.body.deal, 300);
+      var context = safeText(req.body.context || req.body.details, 1500);
+
+      if (!dealType) {
+        return res.status(400).json({
+          error: "A deal type is required — for example \"acquiring a small e-commerce brand\" or " +
+            "\"taking on a reseller partner\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var brokerBrain =
+        "You are the BizForce AI Broker Agent outlining due diligence. You know that a diligence " +
+        "list fails by being lopsided rather than by being short: the areas nobody enjoys — legal, " +
+        "people — are the ones that kill deals after signature.";
+
+      var instruction =
+        "Outline a due diligence checklist for the deal type below, covering all five areas.\n\n" +
+        "OUTPUT FORMAT — one item per line, exactly two fields separated by | and nothing else:\n" +
+        "AREA | the thing to request, check or verify\n" +
+        "where AREA is one of: " + DUE_DILIGENCE_AREAS.join(", ") + "\n" +
+        "No preamble, no headings, no numbering, no closing note.\n\n" +
+        "RULES:\n" +
+        "- Cover ALL FIVE areas with at least " + DUE_DILIGENCE_THIN_AREA_THRESHOLD + " items each. " +
+        "A list that is mostly financial is the most common way this goes wrong.\n" +
+        "- Each item is one specific thing to request or verify, phrased so that two people would " +
+        "agree whether it had been done. Not \"review the financials\" but which statement, for " +
+        "which period.\n" +
+        "- Invent no figures, thresholds or timelines specific to this business.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(brokerBrain, businessProfile, {}, []) +
+        "\n\nDEAL TYPE:\n" + dealType +
+        (context ? "\n\nCONTEXT:\n" + context : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var grouped = {};
+      DUE_DILIGENCE_AREAS.forEach(function (a) { grouped[a.toLowerCase()] = []; });
+      var unrecognisedAreas = [];
+
+      parseToolLines(raw).forEach(function (line) {
+        if (line.indexOf("|") === -1) return;
+        var parts = line.split("|");
+        var area = String(parts[0] || "").toUpperCase().replace(/[^A-Z]/g, "");
+        var item = parts.slice(1).join("|").trim();
+        if (!item) return;
+        if (/^AREA$/.test(area)) return;               // header row
+
+        if (DUE_DILIGENCE_AREAS.indexOf(area) === -1) {
+          unrecognisedAreas.push({ area: area, item: item });
+          return;
+        }
+        grouped[area.toLowerCase()].push({
+          item: item,
+          word_count: countWords(item),
+          possibly_multiple_actions: /\band then\b|;/i.test(item)
+        });
+      });
+
+      var total = DUE_DILIGENCE_AREAS.reduce(function (sum, a) {
+        return sum + grouped[a.toLowerCase()].length;
+      }, 0);
+
+      if (!total) {
+        return res.status(502).json({
+          error: "The diligence checklist could not be read back from the model, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          unrecognised_areas: unrecognisedAreas,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var perArea = {};
+      DUE_DILIGENCE_AREAS.forEach(function (a) { perArea[a.toLowerCase()] = grouped[a.toLowerCase()].length; });
+
+      var emptyAreas = DUE_DILIGENCE_AREAS.filter(function (a) { return perArea[a.toLowerCase()] === 0; });
+      var thinAreas = DUE_DILIGENCE_AREAS.filter(function (a) {
+        var n = perArea[a.toLowerCase()];
+        return n > 0 && n < DUE_DILIGENCE_THIN_AREA_THRESHOLD;
+      });
+
+      var counts = DUE_DILIGENCE_AREAS.map(function (a) { return perArea[a.toLowerCase()]; });
+      var largest = Math.max.apply(null, counts);
+      var smallest = Math.min.apply(null, counts);
+
+      return res.json({
+        success: true,
+        deal_type: dealType,
+        checklist: grouped,
+        measured: {
+          total_items: total,
+          items_per_area: perArea,
+          areas_with_nothing: emptyAreas,
+          thin_areas: thinAreas,
+          thin_area_threshold: DUE_DILIGENCE_THIN_AREA_THRESHOLD,
+          largest_area_items: largest,
+          smallest_area_items: smallest,
+          // The lopsidedness, as one number. 1 is even; a high ratio is the
+          // failure this measurement exists to surface.
+          imbalance_ratio: smallest > 0 ? Math.round((largest / smallest) * 10) / 10 : null,
+          unrecognised_areas: unrecognisedAreas,
+          items_possibly_holding_more_than_one_action: DUE_DILIGENCE_AREAS.reduce(function (n, a) {
+            return n + grouped[a.toLowerCase()].filter(function (i) {
+              return i.possibly_multiple_actions;
+            }).length;
+          }, 0),
+          note: emptyAreas.length
+            ? "Nothing at all under: " + emptyAreas.join(", ") + ". A diligence list missing a " +
+              "whole area is not a diligence list — those are the areas that kill deals after " +
+              "signature, not before."
+            : (thinAreas.length
+                ? "Thin coverage under: " + thinAreas.join(", ") + " (fewer than " +
+                  DUE_DILIGENCE_THIN_AREA_THRESHOLD + " items). Worth deciding deliberately whether " +
+                  "that is right for this deal rather than accepting it."
+                : "All five areas covered, " + smallest + " to " + largest + " items each.")
+        },
+        provenance: toolProvenance(
+          [
+            "The total item count and the count in each of the five areas",
+            "Which areas are empty and which are thin",
+            "The imbalance ratio between the largest and smallest area",
+            "Items whose wording suggests more than one action"
+          ],
+          [
+            "Every item on the list",
+            "Whether these are the right checks for this deal",
+            "What the answers will turn out to be"
+          ],
+          "Nothing about the target was read. BizForce has no access to the counterparty's " +
+          "accounts, filings, contracts or systems, so this is a list of what to ask for — not " +
+          "findings, and not a view on whether the deal is sound.",
+          {
+            target_data_read: false,
+            filings_checked: false,
+            documents_reviewed: false,
+            reviewed_by_a_lawyer: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[broker/due-diligence] Error:", error);
+      next(error);
+    }
+  });
+
+// ── R&D Agent tools ──────────────────────────────────────────────────────────
+
+/* THIS AGENT READS NOTHING. That is the single most important fact about it, and
+   it is the one a user is most likely to assume away — "market research" and
+   "competitive intelligence" both sound like they involve looking something up.
+   Nothing is looked up. Every figure this agent states is a recollection from
+   training data, not a measurement, and training data has a cutoff.
+
+   So the provenance on both routes below is blunt rather than hedged, and the
+   assertions are fields so a UI renders them rather than relying on a caveat
+   sentence surviving a layout. */
+var RD_READS_NOTHING =
+  "NOTHING EXTERNAL WAS READ. No market data, no competitor data, no trend data, no pricing page, " +
+  "no filing, no review site, no analyst report and no search. There is no research step in this " +
+  "route at all — everything here is the model's general knowledge as it stood at training, which " +
+  "has a cutoff and does not include anything recent. A market size, a growth rate or a " +
+  "competitor fact stated here is a RECOLLECTION, not a measurement, and recollections of numbers " +
+  "are the thing language models get wrong most confidently. Verify every figure before a decision " +
+  "rests on it.";
+
+var RD_PROVENANCE_FLAGS = {
+  market_data_read: false,
+  competitor_data_read: false,
+  trend_data_read: false,
+  pricing_pages_read: false,
+  filings_read: false,
+  review_sites_read: false,
+  web_search_performed: false,
+  figures_verified: false
+};
+
+var RD_BRIEF_SECTIONS = ["QUESTION", "KNOWN", "ASSUMED", "WOULD_CHANGE", "RECOMMENDATION"];
+
+app.post("/api/agents/rd/brief", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var question = safeText(req.body.question, 1000);
+      var context = safeText(req.body.context || req.body.details, 2000);
+      var decision = safeText(req.body.decision, 500);
+
+      if (!question) {
+        return res.status(400).json({
+          error: "A question is required — what the briefing has to answer."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var rdBrain =
+        "You are the BizForce AI R&D Agent writing an executive briefing. You read nothing and you " +
+        "say so: every fact you state is recollection from training, not research. You separate " +
+        "what is known from what you are assuming, and you are specific about the assumptions, " +
+        "because a briefing that assumes nothing is hiding its assumptions rather than lacking them.";
+
+      var instruction =
+        "Write an executive briefing answering the question below.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line:\n" +
+        "QUESTION: <the question restated as the one you are actually answering>\n" +
+        "KNOWN: <what is established; one item per line>\n" +
+        "ASSUMED: <what you are assuming in order to answer; one item per line>\n" +
+        "WOULD_CHANGE: <what would change the answer, and which way; one item per line>\n" +
+        "RECOMMENDATION: <what to do, and what to do first>\n\n" +
+        "THE ASSUMED SECTION IS THE POINT OF THIS BRIEFING. You are working from training-data " +
+        "recollection with no research step, so you are assuming a great deal. List those " +
+        "assumptions specifically — at least three, and name them as assumptions rather than " +
+        "presenting them as findings. A briefing with an empty or token ASSUMED section is not " +
+        "a confident briefing, it is a dishonest one.\n\n" +
+        "RULES:\n" +
+        "- Put anything you cannot verify in ASSUMED, not in KNOWN. If you half-remember a market " +
+        "figure, it is an assumption.\n" +
+        "- Do NOT state market sizes, growth rates, adoption percentages or competitor figures as " +
+        "fact. Where one matters, write [FIGURE NEEDED] and say in WOULD_CHANGE what finding it " +
+        "would change.\n" +
+        "- Do not describe anything here as research, analysis of data, or a finding.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(rdBrain, businessProfile, {}, []) +
+        "\n\nTHE QUESTION:\n" + question +
+        (decision ? "\n\nTHE DECISION THAT RESTS ON IT:\n" + decision : "") +
+        (context ? "\n\nCONTEXT:\n" + context : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, RD_BRIEF_SECTIONS);
+      var present = RD_BRIEF_SECTIONS.filter(function (s) { return !!parsed[s]; });
+
+      if (!present.length) {
+        return res.status(502).json({
+          error: "The briefing could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var knownItems = parsed.KNOWN ? parseToolLines(parsed.KNOWN) : [];
+      var assumedItems = parsed.ASSUMED ? parseToolLines(parsed.ASSUMED) : [];
+      var changeItems = parsed.WOULD_CHANGE ? parseToolLines(parsed.WOULD_CHANGE) : [];
+
+      return res.json({
+        success: true,
+        brief: {
+          question: parsed.QUESTION || question,
+          known: knownItems.map(function (x) { return x; }),
+          assumed: assumedItems.map(function (x) { return x; }),
+          would_change: changeItems.map(function (x) { return x; }),
+          recommendation: parsed.RECOMMENDATION || ""
+        },
+        measured: {
+          sections_present: present,
+          sections_missing: RD_BRIEF_SECTIONS.filter(function (s) { return present.indexOf(s) === -1; }),
+          known_count: knownItems.length,
+          assumption_count: assumedItems.length,
+          would_change_count: changeItems.length,
+          /* THE ASSUMPTION COUNT IS THE HEADLINE MEASUREMENT. An agent that reads
+             nothing and declares no assumptions has not been careful, it has been
+             silent about the thing that matters most. Zero is reported as a
+             problem rather than as a clean result. */
+          assumptions_declared: assumedItems.length > 0,
+          known_to_assumed_ratio: assumedItems.length > 0
+            ? Math.round((knownItems.length / assumedItems.length) * 10) / 10
+            : null,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: assumedItems.length === 0
+            ? "THIS BRIEFING DECLARES NO ASSUMPTIONS, which is not a sign of confidence. Nothing " +
+              "external was read, so a great deal is being assumed — it has simply not been " +
+              "written down. Treat every statement in KNOWN as unverified until you check it."
+            : (assumedItems.length < 3
+                ? "Only " + assumedItems.length + " assumption(s) declared against " +
+                  knownItems.length + " item(s) in KNOWN. Given that nothing was researched, that " +
+                  "ratio is probably optimistic."
+                : assumedItems.length + " assumptions declared against " + knownItems.length +
+                  " item(s) in KNOWN, and " + changeItems.length + " thing(s) that would change " +
+                  "the answer.")
+        },
+        provenance: toolProvenance(
+          [
+            "Which briefing sections came back",
+            "How many items are in KNOWN, in ASSUMED and in WOULD_CHANGE",
+            "Whether any assumptions were declared at all",
+            "Any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "Everything in the briefing — every item in KNOWN included",
+            "The recommendation",
+            "Any market, competitor or trend statement, which is recollection rather than research"
+          ],
+          RD_READS_NOTHING,
+          RD_PROVENANCE_FLAGS
+        )
+      });
+    } catch (error) {
+      console.error("[rd/brief] Error:", error);
+      next(error);
+    }
+  });
+
+/* The figures a model invents most confidently, and the ones a business decision
+   most rests on. Scanned in the OUTPUT rather than only forbidden in the prompt,
+   for the same reason the review-dispute and incentive scans are: the failure is
+   expensive and an instruction is not a guarantee.
+
+   A competitor revenue figure reads as research. It is not research — there was
+   no research step — and a number in that position will be believed because of
+   where it sits, not because of what backs it. */
+var RD_INVENTED_FIGURE_PATTERNS = [
+  { pattern: /\$\s?\d[\d,.]*\s*(k|m|b|bn|million|billion|thousand)?\b/i,
+    label: "a currency figure" },
+  { pattern: /\b\d[\d,.]*\s*(million|billion|thousand)\s+(in\s+)?(revenue|sales|funding|arr|mrr|valuation)\b/i,
+    label: "a revenue, funding or valuation figure" },
+  { pattern: /\b(revenue|arr|mrr|valuation|funding|raised)\s+(of|at|is|was|around|approximately|circa|~)?\s*\$?\s?\d/i,
+    label: "a revenue, funding or valuation figure" },
+  { pattern: /\b\d[\d,.]*\s*(employees|staff|headcount|people|engineers)\b/i,
+    label: "a headcount figure" },
+  { pattern: /\bheadcount\s+(of|is|was|around|approximately|circa|~)?\s*\d/i,
+    label: "a headcount figure" },
+  { pattern: /\b\d{1,3}(\.\d+)?\s*%\s*(of\s+)?(the\s+)?(market|market share|share|category)\b/i,
+    label: "a market share figure" },
+  { pattern: /\bmarket share\s+(of|is|was|around|approximately|circa|~)?\s*\d/i,
+    label: "a market share figure" },
+  { pattern: /\b(series\s+[a-d]|seed round)\s+(of|at|worth|raising|raised)?\s*\$?\s?\d/i,
+    label: "a funding round figure" }
+];
+
+function scanInventedFigures(text) {
+  var value = String(text || "");
+  var found = [];
+
+  RD_INVENTED_FIGURE_PATTERNS.forEach(function (rule) {
+    var global = new RegExp(rule.pattern.source, rule.pattern.flags.indexOf("g") === -1
+      ? rule.pattern.flags + "g" : rule.pattern.flags);
+    var m;
+    while ((m = global.exec(value)) !== null) {
+      if (m[0].length === 0) { global.lastIndex += 1; continue; }
+      found.push({
+        matched_text: m[0].trim(),
+        position: m.index,
+        problem: rule.label
+      });
+    }
+  });
+
+  // Same offset caught by two patterns is one finding.
+  var seen = {};
+  return found.filter(function (f) {
+    var key = f.position + ":" + f.matched_text.toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).sort(function (a, b) { return a.position - b.position; });
+}
+
+app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var competitorsIn = Array.isArray(req.body.competitors)
+        ? req.body.competitors
+        : String(safeText(req.body.competitors, 1000) || "").split(",");
+
+      var competitors = competitorsIn
+        .map(function (c) { return safeText(typeof c === "string" ? c : (c && c.name), 120); })
+        .map(function (c) { return String(c || "").trim(); })
+        .filter(function (c) { return c.length > 0; })
+        .slice(0, 10);
+
+      var dimensions = safeText(req.body.dimensions, 500);
+      var ownProduct = safeText(req.body.your_product || req.body.own_product, 500);
+
+      if (!competitors.length) {
+        return res.status(400).json({
+          error: "At least one named competitor is required — pass `competitors` as an array of " +
+            "names or a comma-separated string."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var rdBrain =
+        "You are the BizForce AI R&D Agent producing a competitive comparison. YOU HAVE READ " +
+        "NOTHING: no website, no pricing page, no review site, no filing. Everything you say is " +
+        "recollection from training, which has a cutoff, and companies change. You never state a " +
+        "competitor's revenue, headcount, funding or market share as a number, because those are " +
+        "the figures you are most likely to invent and the ones a decision most rests on.";
+
+      var instruction =
+        "Compare the competitors named below.\n\n" +
+        "OUTPUT FORMAT — one block per competitor, separated by a line containing only ---\n" +
+        "COMPETITOR: <name as given>\n" +
+        "POSITIONING: <how they appear to position themselves>\n" +
+        "STRENGTHS: <what they appear to do well; one per line>\n" +
+        "WEAKNESSES: <where they appear weak; one per line>\n" +
+        "CONFIDENCE: <high, medium or low — how well you actually recall this company>\n" +
+        "VERIFY_FIRST: <the specific things the reader must check before relying on any of this>\n\n" +
+        "ABSOLUTE RULES ON NUMBERS:\n" +
+        "- Do NOT output a number for revenue, ARR, MRR, valuation, funding raised, headcount, " +
+        "employee count or market share. Not an estimate, not a range, not 'approximately'. " +
+        "Write FIGURE NEEDED instead, every time.\n" +
+        "- Do not state prices. You have not read a pricing page. Write FIGURE NEEDED.\n" +
+        "- Where you are recalling rather than knowing, say so in the text, and set CONFIDENCE low.\n" +
+        "- If you do not recognise a name at all, say that plainly in POSITIONING and set " +
+        "CONFIDENCE to low rather than inventing a company.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(rdBrain, businessProfile, {}, []) +
+        "\n\nCOMPETITORS:\n" + competitors.join("\n") +
+        (ownProduct ? "\n\nWHAT WE SELL:\n" + ownProduct : "") +
+        (dimensions ? "\n\nCOMPARE ON:\n" + dimensions : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var entries = [];
+      splitToolBlocks(raw).forEach(function (block) {
+        var f = parseLabeledFields(block,
+          ["COMPETITOR", "POSITIONING", "STRENGTHS", "WEAKNESSES", "CONFIDENCE", "VERIFY_FIRST"]);
+        if (!f.COMPETITOR && !f.POSITIONING) return;
+
+        var blockText = [f.POSITIONING, f.STRENGTHS, f.WEAKNESSES, f.VERIFY_FIRST]
+          .filter(Boolean).join("\n");
+        var figures = scanInventedFigures(blockText);
+        var confidence = String(f.CONFIDENCE || "").toLowerCase().trim();
+
+        entries.push({
+          competitor: f.COMPETITOR || "",
+          positioning: f.POSITIONING || "",
+          strengths: f.STRENGTHS ? parseToolLines(f.STRENGTHS) : [],
+          weaknesses: f.WEAKNESSES ? parseToolLines(f.WEAKNESSES) : [],
+          confidence: /^(high|medium|low)$/.test(confidence) ? confidence : "unstated",
+          verify_first: f.VERIFY_FIRST || "",
+          figure_needed_markers: (blockText.match(/FIGURE NEEDED/gi) || []).length,
+          unverifiable_figures_found: figures,
+          states_a_figure_it_should_not: figures.length > 0
+        });
+      });
+
+      if (!entries.length) {
+        return res.status(502).json({
+          error: "The competitor comparison could not be read back from the model, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var offending = entries.filter(function (e) { return e.states_a_figure_it_should_not; });
+      var namedButMissing = competitors.filter(function (name) {
+        return !entries.some(function (e) {
+          return e.competitor.toLowerCase().indexOf(name.toLowerCase()) !== -1;
+        });
+      });
+
+      return res.json({
+        success: true,
+        competitors_requested: competitors,
+        comparison: entries,
+        /* Not a gate in the ready_to_post sense — this is a comparison to read
+           rather than a draft to publish — but the flag is prominent because a
+           figure in this output will be believed for where it sits rather than
+           for what backs it. */
+        contains_unverifiable_figures: offending.length > 0,
+        measured: {
+          competitors_requested: competitors.length,
+          competitors_returned: entries.length,
+          competitors_named_but_not_covered: namedButMissing,
+          entries_stating_a_figure_they_should_not: offending.length,
+          unverifiable_figures_total: entries.reduce(function (n, e) {
+            return n + e.unverifiable_figures_found.length;
+          }, 0),
+          figure_needed_markers_total: entries.reduce(function (n, e) {
+            return n + e.figure_needed_markers;
+          }, 0),
+          confidence_breakdown: entries.reduce(function (acc, e) {
+            acc[e.confidence] = (acc[e.confidence] || 0) + 1;
+            return acc;
+          }, {}),
+          low_or_unstated_confidence: entries.filter(function (e) {
+            return e.confidence === "low" || e.confidence === "unstated";
+          }).length,
+          note: offending.length
+            ? offending.length + " entry/entries state a revenue, funding, headcount or market-share " +
+              "figure, which this route is built not to produce. Those numbers were not looked up " +
+              "and should be deleted rather than checked — treat each one as invented until proven " +
+              "otherwise."
+            : "No entry states a revenue, funding, headcount or market-share figure. Where one " +
+              "would help, the text says FIGURE NEEDED (" +
+              entries.reduce(function (n, e) { return n + e.figure_needed_markers; }, 0) +
+              " time(s)), which is the honest answer from a route that reads nothing."
+        },
+        provenance: toolProvenance(
+          [
+            "How many named competitors came back and which did not",
+            "Every revenue, funding, headcount or market-share figure in the output, and where",
+            "How many FIGURE NEEDED markers were left",
+            "The stated confidence on each entry"
+          ],
+          [
+            "Every word of the comparison — positioning, strengths, weaknesses",
+            "The confidence rating itself, which is the model rating its own recall",
+            "Whether any of these companies are still doing what it says they are"
+          ],
+          RD_READS_NOTHING,
+          RD_PROVENANCE_FLAGS
+        )
+      });
+    } catch (error) {
+      console.error("[rd/competitor-scan] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Community Agent tools ────────────────────────────────────────────────────
+
+/* Onboarding timings come back as NUMBERS, the same decision the email sequence
+   and the social calendar make and for the same reason: a sequence is a schedule.
+   "Shortly after joining" cannot be built into a tool, compared against another
+   step, or checked against the end of week one. Day 0 is the moment of joining.
+
+   Week one is measured specifically because it is the window that decides
+   retention: a member who has done nothing by day 7 has usually gone, and an
+   onboarding plan whose first action lands in week three is not an onboarding
+   plan. */
+var COMMUNITY_WEEK_ONE_DAYS = 7;
+
+app.post("/api/agents/community/onboarding", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var communityType = safeText(req.body.community_type || req.body.community, 300);
+      var platform = safeText(req.body.platform, 120);
+      var goal = safeText(req.body.goal, 500);
+
+      if (!communityType) {
+        return res.status(400).json({
+          error: "A community type is required — for example \"paid Discord for ceramicists\" or " +
+            "\"free Slack for agency owners\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var communityBrain =
+        "You are the BizForce AI Community Agent designing member onboarding. You know the first " +
+        "week decides retention: a member who has not posted, met anyone or received anything by " +
+        "day seven has usually gone quietly, and no later sequence recovers them.";
+
+      var instruction =
+        "Design a member onboarding sequence for the community below.\n\n" +
+        "OUTPUT FORMAT — one block per step, separated by a line containing only ---\n" +
+        "DAY: <whole number of days after joining; 0 is the moment they join>\n" +
+        "WHAT_HAPPENS: <the step itself — what the member sees, receives or is asked to do>\n" +
+        "WHO_DOES_IT: <the member, a moderator, an automation>\n" +
+        "PURPOSE: <one line on what this step is for>\n\n" +
+        "Then, AFTER the last step, a final block separated by --- containing:\n" +
+        "WEEK_ONE_OUTCOME: <what a new member should have DONE by the end of day " +
+        COMMUNITY_WEEK_ONE_DAYS + " — specific actions, not feelings; one per line>\n\n" +
+        "RULES:\n" +
+        "- DAY must be a plain whole number, counting from 0. Not a weekday name, not 'shortly'.\n" +
+        "- Most steps must fall inside the first " + COMMUNITY_WEEK_ONE_DAYS + " days. A sequence " +
+        "whose first real action is in week three is not onboarding.\n" +
+        "- The WEEK_ONE_OUTCOME items must be things someone could verify from the platform — " +
+        "posted once, replied to someone, completed a profile — not 'feels welcome'.\n" +
+        "- Invent no member counts, engagement rates or retention figures. You have no data on " +
+        "this community.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(communityBrain, businessProfile, {}, []) +
+        "\n\nCOMMUNITY TYPE:\n" + communityType +
+        (platform ? "\n\nPLATFORM:\n" + platform : "") +
+        (goal ? "\n\nGOAL:\n" + goal : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var steps = [];
+      var weekOneOutcome = [];
+
+      splitToolBlocks(raw).forEach(function (block) {
+        var outcome = parseLabeledFields(block, ["WEEK_ONE_OUTCOME"]);
+        if (outcome.WEEK_ONE_OUTCOME) {
+          weekOneOutcome = parseToolLines(outcome.WEEK_ONE_OUTCOME);
+          return;
+        }
+
+        var f = parseLabeledFields(block, ["DAY", "WHAT_HAPPENS", "WHO_DOES_IT", "PURPOSE"]);
+        if (!f.WHAT_HAPPENS) return;
+
+        /* An unreadable day is null, never 0. Zero means "the moment they join",
+           which is a real and specific instruction, and defaulting an unparsed
+           field to it would put a step at the join moment that nobody designed
+           there. */
+        var day = toolInt(f.DAY);
+
+        steps.push({
+          step: steps.length + 1,
+          day: day !== null && day >= 0 ? day : null,
+          within_week_one: day !== null && day >= 0 ? day <= COMMUNITY_WEEK_ONE_DAYS : null,
+          what_happens: f.WHAT_HAPPENS,
+          who_does_it: f.WHO_DOES_IT || "",
+          purpose: f.PURPOSE || ""
+        });
+      });
+
+      if (!steps.length) {
+        return res.status(502).json({
+          error: "The onboarding sequence could not be read back from the model, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var dated = steps.filter(function (s) { return s.day !== null; });
+      var days = dated.map(function (s) { return s.day; });
+      var inWeekOne = dated.filter(function (s) { return s.within_week_one; });
+
+      // Sorted by day so the sequence reads as a schedule; unreadable days last
+      // rather than dropped or treated as day 0.
+      steps.sort(function (a, b) {
+        if (a.day === null && b.day === null) return 0;
+        if (a.day === null) return 1;
+        if (b.day === null) return -1;
+        return a.day - b.day;
+      });
+
+      return res.json({
+        success: true,
+        community_type: communityType,
+        platform: platform || null,
+        steps: steps,
+        week_one_outcome: weekOneOutcome,
+        measured: {
+          step_count: steps.length,
+          steps_with_an_unreadable_day: steps.length - dated.length,
+          first_day: days.length ? Math.min.apply(null, days) : null,
+          last_day: days.length ? Math.max.apply(null, days) : null,
+          span_days: days.length ? (Math.max.apply(null, days) - Math.min.apply(null, days)) : 0,
+          steps_within_week_one: inWeekOne.length,
+          steps_after_week_one: dated.length - inWeekOne.length,
+          week_one_days: COMMUNITY_WEEK_ONE_DAYS,
+          starts_on_join_day: days.length ? Math.min.apply(null, days) === 0 : false,
+          week_one_outcome_items: weekOneOutcome.length,
+          week_one_outcome_stated: weekOneOutcome.length > 0,
+          /* BOTH PROBLEMS ARE REPORTED, not whichever is tested first. An
+             if/else here let a missing week-one outcome hide the fact that
+             nothing happened in week one either — two separate failures, and
+             collapsing them means fixing the one that was mentioned and
+             shipping the other. */
+          note: (function () {
+            var problems = [];
+            if (!inWeekOne.length) {
+              problems.push("Nothing in this sequence happens inside the first " +
+                COMMUNITY_WEEK_ONE_DAYS + " days, which is the window that decides whether a " +
+                "member stays.");
+            }
+            if (!weekOneOutcome.length) {
+              problems.push("No week-one outcome was stated, so there is nothing to tell you " +
+                "whether onboarding worked — without it this is a list of messages rather than a " +
+                "sequence with an end.");
+            }
+            if (problems.length) return problems.join(" ");
+            return inWeekOne.length + " of " + dated.length + " step(s) land inside week one, with " +
+              weekOneOutcome.length + " verifiable outcome(s) expected by day " +
+              COMMUNITY_WEEK_ONE_DAYS + ".";
+          })()
+        },
+        provenance: toolProvenance(
+          [
+            "The number of steps, the first and last day, and the span",
+            "How many steps fall inside the first " + COMMUNITY_WEEK_ONE_DAYS + " days",
+            "Whether a week-one outcome was stated, and how many items it has",
+            "Steps whose day could not be read as a whole number"
+          ],
+          [
+            "The sequence itself — every step, its timing and its purpose",
+            "The week-one outcomes proposed",
+            "Whether this will retain anybody"
+          ],
+          "No community platform was read. BizForce has no access to your members, your join rate, " +
+          "your activity or your retention, so nothing here estimates how this will perform — it is " +
+          "a sequence to run and then measure in your own platform's analytics.",
+          {
+            community_platform_read: false,
+            member_data_read: false,
+            retention_data_read: false,
+            messages_sent: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[community/onboarding] Error:", error);
+      next(error);
+    }
+  });
+
+/* Frequencies a ritual can have. Validated against this list rather than taken as
+   free text, because the whole measurement on this route is the split between
+   them and a ritual whose frequency reads "occasionally" cannot be counted.
+
+   WEEKLY IS WHAT BUILDS A HABIT. A monthly ritual is an event someone may
+   remember; a weekly one becomes the reason they open the app. A calendar that is
+   all monthly looks like a plan and produces no rhythm, which is why the counts
+   are reported per frequency and a calendar with no weekly ritual is called out. */
+var COMMUNITY_FREQUENCIES = ["daily", "weekly", "fortnightly", "monthly", "quarterly"];
+
+app.post("/api/agents/community/engagement-calendar", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var cadence = safeText(req.body.cadence, 300);
+      var communityType = safeText(req.body.community_type || req.body.community, 300);
+      var capacity = safeText(req.body.capacity || req.body.team, 300);
+
+      if (!cadence) {
+        return res.status(400).json({
+          error: "A cadence is required — how much you can sustain, for example \"one thing a week " +
+            "plus something monthly\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var communityBrain =
+        "You are the BizForce AI Community Agent designing recurring rituals. You know that weekly " +
+        "is what builds a habit and monthly is what builds an event, that a community needs both, " +
+        "and that a ritual nobody can sustain is worse than one fewer ritual.";
+
+      var instruction =
+        "Design the recurring rituals for this community.\n\n" +
+        "OUTPUT FORMAT — one block per ritual, separated by a line containing only ---\n" +
+        "RITUAL: <its name, as members would refer to it>\n" +
+        "FREQUENCY: <one of: " + COMMUNITY_FREQUENCIES.join(", ") + ">\n" +
+        "PURPOSE: <what it is for — what it produces that nothing else does>\n" +
+        "WHO_RUNS_IT: <a moderator, a member, an automation>\n" +
+        "EFFORT: <roughly what it costs to run each time, in words not hours>\n\n" +
+        "RULES:\n" +
+        "- FREQUENCY must be exactly one of the listed words. Not 'occasionally', not 'as needed'.\n" +
+        "- Include at least one WEEKLY ritual. Monthly alone produces events, not a habit.\n" +
+        "- Match the stated cadence. Do not design more than can be sustained.\n" +
+        "- Each ritual must have a distinct purpose. Two rituals doing the same job is one ritual " +
+        "and one chore.\n" +
+        "- Invent no member counts, attendance figures or engagement rates.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(communityBrain, businessProfile, {}, []) +
+        "\n\nCADENCE YOU CAN SUSTAIN:\n" + cadence +
+        (communityType ? "\n\nCOMMUNITY TYPE:\n" + communityType : "") +
+        (capacity ? "\n\nWHO IS AVAILABLE TO RUN IT:\n" + capacity : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var rituals = [];
+      var unrecognisedFrequencies = [];
+
+      splitToolBlocks(raw).forEach(function (block) {
+        var f = parseLabeledFields(block, ["RITUAL", "FREQUENCY", "PURPOSE", "WHO_RUNS_IT", "EFFORT"]);
+        if (!f.RITUAL && !f.PURPOSE) return;
+
+        var freqRaw = String(f.FREQUENCY || "").toLowerCase().trim();
+        // First listed frequency appearing in the value, so "every week (weekly)"
+        // still resolves rather than falling through as unrecognised.
+        var freq = COMMUNITY_FREQUENCIES.filter(function (cand) {
+          return freqRaw.indexOf(cand) !== -1;
+        })[0] || null;
+
+        if (!freq && freqRaw) unrecognisedFrequencies.push(freqRaw);
+
+        rituals.push({
+          ritual: f.RITUAL || "",
+          frequency: freq,
+          frequency_as_written: f.FREQUENCY || "",
+          purpose: f.PURPOSE || "",
+          who_runs_it: f.WHO_RUNS_IT || "",
+          effort: f.EFFORT || ""
+        });
+      });
+
+      if (!rituals.length) {
+        return res.status(502).json({
+          error: "The engagement calendar could not be read back from the model, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var byFrequency = {};
+      COMMUNITY_FREQUENCIES.forEach(function (freq) {
+        byFrequency[freq] = rituals.filter(function (r) { return r.frequency === freq; }).length;
+      });
+      var unreadable = rituals.filter(function (r) { return r.frequency === null; }).length;
+
+      var weekly = byFrequency.weekly + byFrequency.daily;   // daily builds a habit too
+      var monthly = byFrequency.monthly + byFrequency.quarterly;
+
+      // Rituals per month, which is the number that says whether a cadence is
+      // sustainable. Weighted by frequency rather than counting rituals.
+      var perMonthWeight = { daily: 30, weekly: 4.33, fortnightly: 2.17, monthly: 1, quarterly: 0.33 };
+      var occurrencesPerMonth = COMMUNITY_FREQUENCIES.reduce(function (sum, freq) {
+        return sum + (byFrequency[freq] * perMonthWeight[freq]);
+      }, 0);
+
+      return res.json({
+        success: true,
+        cadence: cadence,
+        community_type: communityType || null,
+        rituals: rituals,
+        measured: {
+          ritual_count: rituals.length,
+          by_frequency: byFrequency,
+          habit_building_count: weekly,
+          event_building_count: monthly,
+          rituals_with_an_unreadable_frequency: unreadable,
+          unrecognised_frequencies: unrecognisedFrequencies,
+          has_a_weekly_ritual: byFrequency.weekly > 0,
+          has_any_habit_ritual: weekly > 0,
+          estimated_occurrences_per_month: Math.round(occurrencesPerMonth * 10) / 10,
+          rituals_with_no_stated_owner: rituals.filter(function (r) { return !r.who_runs_it; }).length,
+          note: weekly === 0
+            ? "NOTHING IN THIS CALENDAR IS WEEKLY OR MORE OFTEN. Monthly rituals produce events " +
+              "people may remember; weekly ones produce the habit of showing up. A calendar that " +
+              "is all monthly looks like a plan and builds no rhythm — add at least one weekly " +
+              "ritual before running this."
+            : (monthly === 0
+                ? weekly + " habit-building ritual(s) and nothing monthly. Worth adding one larger " +
+                  "recurring moment; weekly rhythm without an event gives members nothing to turn up for."
+                : weekly + " habit-building ritual(s) against " + monthly + " event-building one(s), " +
+                  "roughly " + (Math.round(occurrencesPerMonth * 10) / 10) + " occurrence(s) a month to run.")
+        },
+        frequency_options: COMMUNITY_FREQUENCIES,
+        provenance: toolProvenance(
+          [
+            "The number of rituals and the count at each frequency",
+            "How many are habit-building (weekly or daily) against event-building (monthly or quarterly)",
+            "The estimated number of occurrences to run per month",
+            "Rituals whose frequency could not be read, or that name no owner"
+          ],
+          [
+            "Every ritual, its purpose and its stated effort",
+            "Whether these suit this community",
+            "Whether anyone will attend"
+          ],
+          "No community platform was read. BizForce has no access to your members, your attendance " +
+          "or your engagement history, so nothing here predicts turnout — and the occurrences-per-" +
+          "month figure is arithmetic on the frequencies above, not a measurement of what you can " +
+          "sustain.",
+          {
+            community_platform_read: false,
+            member_data_read: false,
+            attendance_data_read: false,
+            engagement_data_read: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[community/engagement-calendar] Error:", error);
+      next(error);
+    }
+  });
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
