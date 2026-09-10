@@ -17707,25 +17707,42 @@ var ETSY_MAX_TAGS         = 13;
 var ETSY_MAX_TAG_LENGTH   = 20;
 
 /* Says, in the response body rather than only in prose the caller may not read,
-   where every number came from. This platform reads no marketplace API and has
-   no access to Etsy search volume, so anything resembling a volume figure is
-   model knowledge — a recollection of how people talk about a category, not a
-   measurement of what anyone searched for.
+   where every number came from. Carried as structured fields so a UI can render
+   the distinction rather than having to trust that a caveat sentence survived
+   into the layout.
 
-   Carried as structured fields so a UI can render the distinction rather than
-   having to trust that a caveat sentence survived into the layout. */
-function etsyProvenance(measured, inferred) {
-  return {
+   `measured_from` is what the server computed — arithmetic over the request, or
+   over text the model returned. `inferred_by_model` is everything else. The
+   division is not decoration: a character count and a claim about what buyers
+   search for are different kinds of statement, and a response that presents them
+   in the same voice invites the second to be trusted like the first.
+
+   Shared by every agent tool that has one of these, so the shape a UI renders is
+   the same everywhere and a new tool cannot quietly invent a different one.
+   `extra` carries the per-agent assertions about what was NOT read. */
+function toolProvenance(measured, inferred, caveat, extra) {
+  return Object.assign({
     measured_from: measured,
     inferred_by_model: inferred,
-    marketplace_api_used: false,
-    search_volume_data: false,
-    caveat:
-      "BizForce reads no Etsy API and has no access to Etsy search-volume data. " +
-      "Anything describing demand, popularity or competition here is the model's " +
-      "general knowledge of the marketplace, not a measurement. Treat it as a " +
-      "starting hypothesis to test in your own Etsy stats, not as data."
-  };
+    external_data_sources_read: [],
+    caveat: caveat
+  }, extra || {});
+}
+
+/* This platform reads no marketplace API and has no access to Etsy search
+   volume, so anything resembling a volume figure is model knowledge — a
+   recollection of how people talk about a category, not a measurement of what
+   anyone searched for. */
+function etsyProvenance(measured, inferred) {
+  return toolProvenance(
+    measured,
+    inferred,
+    "BizForce reads no Etsy API and has no access to Etsy search-volume data. " +
+    "Anything describing demand, popularity or competition here is the model's " +
+    "general knowledge of the marketplace, not a measurement. Treat it as a " +
+    "starting hypothesis to test in your own Etsy stats, not as data.",
+    { marketplace_api_used: false, search_volume_data: false }
+  );
 }
 
 /* Character budgets, computed here rather than asked of the model.
@@ -18097,6 +18114,1042 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
       });
     } catch (error) {
       console.error("[etsy/pricing-strategy] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Shared text measurement for the agent tools ──────────────────────────────
+//
+// Everything here is arithmetic over a string. It lives in one place because
+// three different agents need the same answers, and because these are exactly
+// the numbers a language model should never be asked for: a subject line is 47
+// characters or it is not, and a model that says 45 is wrong in a way nobody
+// notices until the line is cut off in someone's inbox.
+
+/* Where an email subject line gets cut off. Both are approximations of a moving
+   target — the real cutoff depends on client, device width, font and whether a
+   preheader is shown — so they are named as approximate and used as thresholds
+   rather than reported as precise truth. 41 is the usual figure quoted for
+   portrait phone previews, 60 for a desktop list view. */
+var SUBJECT_MOBILE_PREVIEW_CHARS  = 41;
+var SUBJECT_DESKTOP_PREVIEW_CHARS = 60;
+
+/* Phrases that commonly raise a spam score. This is a real, checkable property
+   of a string, which is why it belongs here rather than in a prompt — but what
+   it checks is WORDING, not deliverability. A line containing none of these can
+   still land in spam (domain reputation, authentication, list hygiene), and one
+   containing "free" can deliver perfectly well. The response says so rather than
+   letting an empty list read as a clean bill of health. */
+var SPAM_TRIGGER_PHRASES = [
+  "act now", "apply now", "buy now", "call now", "click here", "click below",
+  "congratulations", "credit card", "double your", "earn money", "extra income",
+  "fast cash", "for free", "free access", "free gift", "free money", "free trial",
+  "guarantee", "guaranteed", "increase sales", "limited time", "lowest price",
+  "make money", "miracle", "no catch", "no cost", "no credit check", "no fees",
+  "no obligation", "no strings", "offer expires", "only $", "order now",
+  "risk free", "risk-free", "satisfaction guaranteed", "save big", "special promotion",
+  "this won't last", "urgent", "while supplies last", "winner", "you have been selected"
+];
+
+function escapeForRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function countWords(text) {
+  var trimmed = String(text || "").trim();
+  if (!trimmed) return 0;
+  return trimmed.split(/\s+/).length;
+}
+
+/* An integer or null, never a coercion. Number("") and Number(null) are both 0,
+   and 0 is a legitimate send delay meaning "immediately", so a blank field run
+   through Number() would become a real instruction the model never gave. */
+function toolInt(value) {
+  if (typeof value === "number") return Number.isInteger(value) ? value : null;
+  if (typeof value === "string" && value.trim() !== "") {
+    var m = value.trim().match(/-?\d+/);
+    if (!m) return null;
+    var n = Number(m[0]);
+    return Number.isInteger(n) ? n : null;
+  }
+  return null;
+}
+
+/* Everything checkable about a subject line, measured. Used by the Email agent's
+   subject-line tool and by the Publicist's pitch, because a pitch subject is an
+   email subject and the inbox does not care which agent wrote it. */
+function measureSubjectLine(subject) {
+  var text = String(subject || "").trim();
+  var lower = text.toLowerCase();
+
+  var found = SPAM_TRIGGER_PHRASES.filter(function (phrase) {
+    // Word-boundary matched where the phrase is word-like, so "only $" and
+    // "risk-free" still match while "urgent" does not fire inside "urgently".
+    if (/^[a-z ]+$/.test(phrase)) {
+      return new RegExp("\\b" + escapeForRegex(phrase) + "\\b").test(lower);
+    }
+    return lower.indexOf(phrase) !== -1;
+  });
+
+  // Words in ALL CAPS, which is a separate wording signal from the phrase list.
+  // Two letters minimum so "I" and initials are not counted as shouting.
+  var capsWords = (text.match(/\b[A-Z]{2,}\b/g) || []);
+
+  return {
+    subject: text,
+    length: text.length,
+    word_count: countWords(text),
+    fits_mobile_preview: text.length > 0 && text.length <= SUBJECT_MOBILE_PREVIEW_CHARS,
+    fits_desktop_preview: text.length > 0 && text.length <= SUBJECT_DESKTOP_PREVIEW_CHARS,
+    chars_over_mobile: text.length > SUBJECT_MOBILE_PREVIEW_CHARS
+      ? text.length - SUBJECT_MOBILE_PREVIEW_CHARS : 0,
+    chars_over_desktop: text.length > SUBJECT_DESKTOP_PREVIEW_CHARS
+      ? text.length - SUBJECT_DESKTOP_PREVIEW_CHARS : 0,
+    spam_trigger_phrases: found,
+    all_caps_words: capsWords,
+    exclamation_marks: (text.match(/!/g) || []).length
+  };
+}
+
+/* Quoted passages of at least a few words, counting both straight and curly
+   quotation marks. Used to answer one question about a press release: does it
+   contain a direct quote at all? A release with none reads as a notice, and an
+   editor looking for a line to lift finds nothing.
+
+   The minimum length is what keeps it honest: matching bare quotation marks
+   would count a quoted product name or a scare-quoted adjective as a quote from
+   a person. This is still a heuristic over punctuation and the response presents
+   it as a count of quoted passages, not as a verified attribution. */
+function countQuotedPassages(text) {
+  var raw = String(text || "");
+  var straight = raw.match(/"[^"]{15,}"/g) || [];
+  var curly    = raw.match(/“[^”]{15,}”/g) || [];
+  return straight.length + curly.length;
+}
+
+/* Pulls LABEL: value sections out of model output, where a value may run over
+   many lines until the next label. The labels are the boundaries, so a body
+   paragraph containing a colon does not split the block.
+
+   First occurrence of a label wins. A model that repeats a section is giving two
+   answers to one question, and silently concatenating them would invent a third. */
+function parseLabeledFields(text, fields) {
+  var raw = String(text || "").replace(/\r\n/g, "\n");
+  var pattern = new RegExp(
+    "^[ \\t>*#-]*(" + fields.map(escapeForRegex).join("|") + ")[ \\t]*:[ \\t]*",
+    "gim"
+  );
+
+  var marks = [], m;
+  while ((m = pattern.exec(raw)) !== null) {
+    marks.push({ field: m[1].toUpperCase(), start: m.index, contentStart: m.index + m[0].length });
+  }
+
+  var out = {};
+  marks.forEach(function (mark, i) {
+    var end = i + 1 < marks.length ? marks[i + 1].start : raw.length;
+    if (!Object.prototype.hasOwnProperty.call(out, mark.field)) {
+      out[mark.field] = raw.slice(mark.contentStart, end).trim();
+    }
+  });
+  return out;
+}
+
+/* Splits model output into blocks on a line of three or more dashes, which is
+   what the prompts below ask for between repeated items. Dropped blanks, so a
+   trailing separator does not produce an empty step. */
+function splitToolBlocks(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .split(/^[ \t]*-{3,}[ \t]*$/m)
+    .map(function (b) { return b.trim(); })
+    .filter(function (b) { return b.length > 0; });
+}
+
+/* One line per item, bullets and numbering stripped. Shared by the checklist
+   tool; returns [] rather than guessing, so the caller can report a parse
+   failure as a parse failure. */
+function parseToolLines(text) {
+  return String(text || "").replace(/\r\n/g, "\n").split("\n")
+    .map(function (line) { return line.replace(/^\s*(?:[-*•–]|\[\s*\]|\d+[.)])\s*/, "").trim(); })
+    .filter(function (line) { return line.length > 0; });
+}
+
+// Loads the business profile for prompt context. Three agents below each need
+// it and none of them needs it to succeed, so a failure is an empty object
+// rather than an error: a tool that refuses to run because the profile lookup
+// blinked is worse than one that runs with less context.
+async function loadProfileForTool(userId) {
+  try {
+    var result = await supabase
+      .from("business_profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+    return result.data || {};
+  } catch (profileErr) {
+    return {};
+  }
+}
+
+// ── Email Agent tools ────────────────────────────────────────────────────────
+
+/* Sequence steps are returned with their delays as NUMBERS. The delays are the
+   structure of a sequence — "day 0, day 2, day 5, day 12" is the thing being
+   designed — and prose like "a couple of days later" cannot be scheduled,
+   compared, or summed. A caller that wants to build the sequence in an email
+   tool needs integers. */
+app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var goal = safeText(req.body.goal, 500);
+      var audience = safeText(req.body.audience, 500);
+      var sequenceType = safeText(req.body.sequence_type || req.body.type, 60);
+      var requestedSteps = toolInt(req.body.steps);
+
+      if (!goal) {
+        return res.status(400).json({
+          error: "A goal is required — what this sequence is for, for example \"win back customers who have not ordered in 90 days\"."
+        });
+      }
+      if (!audience) {
+        return res.status(400).json({ error: "An audience is required — who is receiving this sequence." });
+      }
+
+      var stepTarget = (requestedSteps !== null && requestedSteps >= 2 && requestedSteps <= 12)
+        ? requestedSteps : 5;
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var emailBrain =
+        "You are the BizForce AI Email Agent. You build email sequences, subject lines, retention " +
+        "flows, winback flows and nurture campaigns. You write subject lines that survive a mobile " +
+        "preview, and you know that the cadence of a sequence carries as much of its effect as the copy.";
+
+      var instruction =
+        "Design a " + stepTarget + "-step email sequence for the goal and audience below.\n\n" +
+        "OUTPUT FORMAT — one block per step, separated by a line containing only ---\n" +
+        "Use these exact labels, each on its own line:\n" +
+        "DELAY_DAYS: <whole number of days after the previous email; use 0 for the first email>\n" +
+        "PURPOSE: <one line: what this email is doing in the sequence>\n" +
+        "SUBJECT: <the subject line>\n" +
+        "BODY:\n<the email body, as many lines as needed>\n\n" +
+        "RULES:\n" +
+        "- DELAY_DAYS must be a plain whole number. The first step is 0.\n" +
+        "- Keep subject lines under " + SUBJECT_DESKTOP_PREVIEW_CHARS + " characters where the message allows it.\n" +
+        "- Do not state open rates, click rates, conversion percentages or any other performance " +
+        "figure. You have no data on this sender's list. Write the sequence, not a forecast.\n" +
+        "- No preamble before the first block and no summary after the last.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(emailBrain, businessProfile, {}, []) +
+        "\n\nGOAL:\n" + goal +
+        "\n\nAUDIENCE:\n" + audience +
+        (sequenceType ? "\n\nSEQUENCE TYPE:\n" + sequenceType : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        /* surfaceSeesUserText is TRUE: goal and audience are the user's own words,
+           quoted above. */
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 4000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var blocks = splitToolBlocks(raw);
+      var cumulative = 0;
+      var steps = [];
+
+      blocks.forEach(function (block) {
+        var f = parseLabeledFields(block, ["DELAY_DAYS", "PURPOSE", "SUBJECT", "BODY"]);
+        if (!f.SUBJECT && !f.BODY) return;   // not a step block
+
+        /* A delay that could not be read becomes null, NOT 0. Zero means "send
+           immediately", which is a real instruction, and defaulting an unparsed
+           field to it would schedule a send the model never asked for. The
+           cumulative day stops advancing at the first unreadable delay rather
+           than silently treating it as same-day. */
+        var delay = toolInt(f.DELAY_DAYS);
+        if (delay !== null && delay >= 0) cumulative += delay;
+
+        var subjectMeasurement = measureSubjectLine(f.SUBJECT || "");
+
+        steps.push({
+          step: steps.length + 1,
+          delay_days: delay !== null && delay >= 0 ? delay : null,
+          cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
+          purpose: f.PURPOSE || "",
+          subject: subjectMeasurement.subject,
+          body: f.BODY || "",
+          subject_measurement: subjectMeasurement
+        });
+      });
+
+      if (!steps.length) {
+        return res.status(502).json({
+          error: "The sequence could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var withDelay = steps.filter(function (s) { return s.delay_days !== null; });
+      var unreadableDelays = steps.length - withDelay.length;
+
+      return res.json({
+        success: true,
+        goal: goal,
+        audience: audience,
+        sequence_type: sequenceType || null,
+        steps: steps,
+        measured: {
+          step_count: steps.length,
+          steps_requested: stepTarget,
+          total_span_days: withDelay.reduce(function (sum, s) { return sum + s.delay_days; }, 0),
+          steps_with_an_unreadable_delay: unreadableDelays,
+          subjects_over_mobile_preview: steps.filter(function (s) {
+            return !s.subject_measurement.fits_mobile_preview;
+          }).length,
+          subjects_over_desktop_preview: steps.filter(function (s) {
+            return !s.subject_measurement.fits_desktop_preview;
+          }).length,
+          subjects_with_spam_trigger_phrases: steps.filter(function (s) {
+            return s.subject_measurement.spam_trigger_phrases.length > 0;
+          }).length,
+          note: unreadableDelays
+            ? unreadableDelays + " step(s) had a delay that could not be read as a whole number. Those " +
+              "are reported as null rather than as 0, because 0 would mean send immediately."
+            : "Every step's delay was read as a whole number of days."
+        },
+        provenance: toolProvenance(
+          [
+            "The number of steps and the total span in days",
+            "Every subject line's character count and preview fit",
+            "Spam-trigger phrase matches in each subject line"
+          ],
+          [
+            "The sequence structure and cadence — which day each email should land on",
+            "Every subject line and body",
+            "The stated purpose of each step",
+            "Whether this sequence will work for this audience"
+          ],
+          "No email was sent and no list was read. BizForce has no open-rate, click-rate or " +
+          "deliverability data for this sender, so nothing here is a prediction of performance — " +
+          "it is a draft sequence to send from your own email tool and measure there.",
+          { emails_sent: false, list_data_read: false, performance_data: false }
+        )
+      });
+    } catch (error) {
+      console.error("[email/sequence] Error:", error);
+      next(error);
+    }
+  });
+
+/* Subject-line variants, each one MEASURED. Length, both preview cutoffs, and
+   spam-trigger wording are all properties of the string, so the server settles
+   them. The model's job is to write lines worth measuring. */
+app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var purpose = safeText(req.body.purpose || req.body.email_purpose, 500);
+      var audience = safeText(req.body.audience, 300);
+      var requested = toolInt(req.body.count);
+      var variantTarget = (requested !== null && requested >= 3 && requested <= 25) ? requested : 12;
+
+      if (!purpose) {
+        return res.status(400).json({
+          error: "The email's purpose is required — what the email is for, for example \"announce a restock to past buyers\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var emailBrain =
+        "You are the BizForce AI Email Agent, writing subject lines. You know that a subject line is " +
+        "read in a preview pane, often on a phone, and that the first " + SUBJECT_MOBILE_PREVIEW_CHARS +
+        " characters carry most of the decision.";
+
+      var instruction =
+        "Write " + variantTarget + " subject line variants for the email described below.\n\n" +
+        "OUTPUT FORMAT — one per line, exactly two fields separated by | and nothing else:\n" +
+        "subject line | angle\n" +
+        "where angle is a two-or-three word description of the approach (for example: curiosity, " +
+        "direct offer, social proof, urgency, question, personal).\n" +
+        "No preamble, no numbering, no headings, no summary.\n\n" +
+        "RULES:\n" +
+        "- Vary the approach across the set; do not give twelve versions of one idea.\n" +
+        "- Aim for most of them to be under " + SUBJECT_MOBILE_PREVIEW_CHARS + " characters so they " +
+        "survive a phone preview. A couple of longer ones are fine for contrast.\n" +
+        "- Do NOT claim open rates, lift percentages, or that any line 'performs better'. You have no " +
+        "data for this sender. Describe the angle, not a result.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(emailBrain, businessProfile, {}, []) +
+        "\n\nEMAIL PURPOSE:\n" + purpose +
+        (audience ? "\n\nAUDIENCE:\n" + audience : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 1500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var variants = [];
+      parseToolLines(raw).forEach(function (line) {
+        if (line.indexOf("|") === -1) return;
+        var parts = line.split("|").map(function (p) { return p.trim(); });
+        var subject = parts[0];
+        if (!subject || subject.length > 200) return;
+        if (/^subject(\s+line)?$/i.test(subject)) return;   // a header row
+        variants.push(Object.assign(measureSubjectLine(subject), { angle: parts[1] || "" }));
+      });
+
+      if (!variants.length) {
+        return res.status(502).json({
+          error: "The subject lines could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var mobileSafe = variants.filter(function (v) { return v.fits_mobile_preview; });
+
+      return res.json({
+        success: true,
+        purpose: purpose,
+        thresholds: {
+          mobile_preview_chars: SUBJECT_MOBILE_PREVIEW_CHARS,
+          desktop_preview_chars: SUBJECT_DESKTOP_PREVIEW_CHARS,
+          note: "Both are approximations. The real cutoff depends on the mail client, the device " +
+            "width, the font and whether a preheader is shown, so treat these as guides rather than " +
+            "exact limits."
+        },
+        variants: variants,
+        measured: {
+          variants_returned: variants.length,
+          fit_mobile_preview: mobileSafe.length,
+          fit_desktop_preview: variants.filter(function (v) { return v.fits_desktop_preview; }).length,
+          contain_spam_trigger_phrases: variants.filter(function (v) {
+            return v.spam_trigger_phrases.length > 0;
+          }).length,
+          contain_all_caps_words: variants.filter(function (v) { return v.all_caps_words.length > 0; }).length,
+          shortest: Math.min.apply(null, variants.map(function (v) { return v.length; })),
+          longest: Math.max.apply(null, variants.map(function (v) { return v.length; }))
+        },
+        provenance: toolProvenance(
+          [
+            "Every variant's character count and word count",
+            "Whether each fits the ~" + SUBJECT_MOBILE_PREVIEW_CHARS + " character mobile preview and " +
+              "the ~" + SUBJECT_DESKTOP_PREVIEW_CHARS + " character desktop preview",
+            "Which spam-trigger phrases appear, and where",
+            "ALL-CAPS words and exclamation marks"
+          ],
+          [
+            "The subject lines themselves",
+            "The angle label on each",
+            "Any sense of which one is worth sending"
+          ],
+          "The spam-phrase check is a check on WORDING, not on deliverability. A line with no matches " +
+          "can still land in spam — that depends on your domain reputation, authentication and list " +
+          "hygiene, none of which BizForce can see. And no open-rate or click-rate data was read, so " +
+          "nothing here says which line performs better. That is what a test in your own tool is for.",
+          { deliverability_tested: false, performance_data: false }
+        )
+      });
+    } catch (error) {
+      console.error("[email/subject-lines] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Publicist Agent tools ────────────────────────────────────────────────────
+
+/* A press release has a FORM, and the form is most of the craft. A generic agent
+   asked for a press release writes an essay about the news; an editor receiving
+   that does not read past the first line. The sections below are returned
+   separately and the response reports which ones actually came back, because a
+   release with no boilerplate or no contact block is not a release — it is copy
+   nobody can publish. */
+var PRESS_RELEASE_SECTIONS = ["HEADLINE", "SUBHEAD", "DATELINE", "LEDE", "BODY", "BOILERPLATE", "CONTACT"];
+
+// Wire-service convention for a headline; past this it is cut in listings and
+// email clients. A guide, not a rule Etsy-style, so it is reported rather than
+// enforced.
+var PRESS_HEADLINE_MAX_CHARS = 100;
+
+// A lede answers who, what, when, where and why in one breath. Much past this
+// and it has stopped being a lede.
+var PRESS_LEDE_MAX_WORDS = 45;
+
+app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var news = safeText(req.body.news || req.body.announcement, 2000);
+      var companyName = safeText(req.body.company_name || req.body.company, 200);
+      var city = safeText(req.body.city || req.body.location, 120);
+      var quoteFrom = safeText(req.body.quote_from || req.body.spokesperson, 200);
+      var contactDetails = safeText(req.body.contact || req.body.contact_details, 500);
+
+      if (!news) {
+        return res.status(400).json({
+          error: "The news is required — what is being announced."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+      var fallbackCompany = companyName || safeText(businessProfile.business_name, 200) || "";
+
+      var publicistBrain =
+        "You are the BizForce AI Publicist Agent. You write press releases in wire format, craft media " +
+        "pitches, build PR campaigns and shape brand narratives. You write for an editor who will " +
+        "decide in one line whether to keep reading.";
+
+      var instruction =
+        "Write a press release for the news below, in wire format.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line, in this order:\n" +
+        "HEADLINE: <one line, title case, under " + PRESS_HEADLINE_MAX_CHARS + " characters>\n" +
+        "SUBHEAD: <one supporting line>\n" +
+        "DATELINE: <CITY, State — Month Day, Year>\n" +
+        "LEDE: <one paragraph, under " + PRESS_LEDE_MAX_WORDS + " words, answering who, what, when, where and why>\n" +
+        "BODY:\n<three to five paragraphs, including at least one direct quote in quotation marks>\n" +
+        "BOILERPLATE:\n<the standing About paragraph for the company>\n" +
+        "CONTACT:\n<name, title, email, phone>\n\n" +
+        "RULES:\n" +
+        "- Every label must appear. A release missing its boilerplate or contact block cannot be published.\n" +
+        "- Invent NO figures. Do not state funding amounts, customer counts, growth percentages, market " +
+        "size or revenue unless they appear in the news below. If a number would strengthen the release " +
+        "and you were not given it, write [FIGURE NEEDED] so the sender can fill it in.\n" +
+        "- Attribute quotes only to a person named in the input. If none is named, write " +
+        "[SPOKESPERSON NAME], [TITLE] rather than inventing someone.\n" +
+        "- Do not add a ### end marker; it is added automatically.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(publicistBrain, businessProfile, {}, []) +
+        "\n\nTHE NEWS:\n" + news +
+        (fallbackCompany ? "\n\nCOMPANY NAME:\n" + fallbackCompany : "") +
+        (city ? "\n\nDATELINE CITY:\n" + city : "") +
+        (quoteFrom ? "\n\nQUOTE SHOULD BE ATTRIBUTED TO:\n" + quoteFrom : "") +
+        (contactDetails ? "\n\nPRESS CONTACT DETAILS:\n" + contactDetails : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, PRESS_RELEASE_SECTIONS);
+
+      var present = PRESS_RELEASE_SECTIONS.filter(function (s) { return !!parsed[s]; });
+      var missing = PRESS_RELEASE_SECTIONS.filter(function (s) { return !parsed[s]; });
+
+      /* Nothing parsed at all is a formatting failure, reported as one. A
+         partial parse is NOT: the sections that came back are real and usable,
+         and the response names the missing ones rather than quietly presenting an
+         incomplete release as a finished one. */
+      if (!present.length) {
+        return res.status(502).json({
+          error: "The press release could not be read back from the model in wire format, so nothing is " +
+            "being reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var headline = parsed.HEADLINE || "";
+      var lede = parsed.LEDE || "";
+      var bodyText = parsed.BODY || "";
+
+      return res.json({
+        success: true,
+        release: {
+          headline: headline,
+          subhead: parsed.SUBHEAD || "",
+          dateline: parsed.DATELINE || "",
+          lede: lede,
+          body: bodyText,
+          boilerplate: parsed.BOILERPLATE || "",
+          contact: parsed.CONTACT || "",
+          // The wire convention for "the release ends here". Added by the server
+          // so it is always present and always correct, rather than being one
+          // more thing the model might forget.
+          end_marker: "###"
+        },
+        measured: {
+          sections_present: present,
+          sections_missing: missing,
+          is_complete: missing.length === 0,
+          headline_length: headline.length,
+          headline_within_guide: headline.length > 0 && headline.length <= PRESS_HEADLINE_MAX_CHARS,
+          headline_chars_over_guide: headline.length > PRESS_HEADLINE_MAX_CHARS
+            ? headline.length - PRESS_HEADLINE_MAX_CHARS : 0,
+          lede_word_count: countWords(lede),
+          lede_within_guide: countWords(lede) > 0 && countWords(lede) <= PRESS_LEDE_MAX_WORDS,
+          body_word_count: countWords(bodyText),
+          body_paragraph_count: bodyText ? bodyText.split(/\n\s*\n/).filter(function (p) {
+            return p.trim().length > 0;
+          }).length : 0,
+          // A release with no quote reads as a notice. Counting quotation pairs
+          // is crude but it is a fact, and it is better than assuming.
+          direct_quotes_found: countQuotedPassages(bodyText),
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || [])
+        },
+        guides: {
+          headline_max_chars: PRESS_HEADLINE_MAX_CHARS,
+          lede_max_words: PRESS_LEDE_MAX_WORDS,
+          note: "Wire-service conventions, not hard limits. They are reported so you can see where " +
+            "this release sits against them."
+        },
+        provenance: toolProvenance(
+          [
+            "Which of the seven wire-format sections came back and which are missing",
+            "Headline character count against the " + PRESS_HEADLINE_MAX_CHARS + "-character convention",
+            "Lede and body word counts, and body paragraph count",
+            "Quotation marks found in the body, and any [PLACEHOLDERS] left for you to fill in"
+          ],
+          [
+            "All of the writing — headline, subhead, lede, body, boilerplate",
+            "The framing and news angle",
+            "Whether this is newsworthy to any particular editor"
+          ],
+          "Nothing external was read. No journalist, outlet or publication was contacted or looked up, " +
+          "and no figure in this release was verified — any number came from what you supplied or is " +
+          "marked [FIGURE NEEDED]. Check every fact before sending.",
+          { outlets_contacted: false, figures_verified: false, media_database_read: false }
+        )
+      });
+    } catch (error) {
+      console.error("[publicist/press-release] Error:", error);
+      next(error);
+    }
+  });
+
+/* A pitch over this and it does not get read. Enforced in the sense that the
+   response states plainly whether the draft is within it and by how much it is
+   over — not buried in prose the sender skims past. */
+var PITCH_MAX_WORDS = 200;
+
+app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var angle = safeText(req.body.angle || req.body.story_angle, 1000);
+      var outletType = safeText(req.body.outlet_type || req.body.outlet, 200);
+      var journalistName = safeText(req.body.journalist || req.body.journalist_name, 200);
+
+      if (!angle) {
+        return res.status(400).json({
+          error: "A story angle is required — why this is a story, not what your company does."
+        });
+      }
+      if (!outletType) {
+        return res.status(400).json({
+          error: "An outlet type is required — for example \"regional business desk\", \"trade publication\", \"design blog\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var publicistBrain =
+        "You are the BizForce AI Publicist Agent writing a cold media pitch. You know a journalist " +
+        "reads the subject line and the first two sentences, and that a pitch over " + PITCH_MAX_WORDS +
+        " words is deleted unread. You pitch the story, never the company.";
+
+      var instruction =
+        "Write one cold pitch email for the angle and outlet below.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line:\n" +
+        "SUBJECT: <the subject line, under " + SUBJECT_DESKTOP_PREVIEW_CHARS + " characters>\n" +
+        "BODY:\n<the pitch email, UNDER " + PITCH_MAX_WORDS + " WORDS TOTAL>\n" +
+        "WHY_THIS_OUTLET: <one line on why this angle suits this kind of outlet>\n\n" +
+        "RULES:\n" +
+        "- The body must be under " + PITCH_MAX_WORDS + " words. This is the single hardest constraint " +
+        "here. Count as you write and cut rather than run over.\n" +
+        "- Lead with the story, not with an introduction of the company.\n" +
+        "- Invent NO figures and no third-party interest. Do not claim coverage elsewhere, customer " +
+        "numbers, growth or market size unless given below. Write [FIGURE NEEDED] if one is wanted.\n" +
+        "- Do not invent a journalist's name, past article or beat. Refer to them generically if none " +
+        "is given.\n" +
+        "- No placeholder pleasantries and no 'I hope this finds you well'.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(publicistBrain, businessProfile, {}, []) +
+        "\n\nSTORY ANGLE:\n" + angle +
+        "\n\nOUTLET TYPE:\n" + outletType +
+        (journalistName ? "\n\nJOURNALIST:\n" + journalistName : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 1500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, ["SUBJECT", "BODY", "WHY_THIS_OUTLET"]);
+      var subjectMeasurement = measureSubjectLine(parsed.SUBJECT || "");
+      var body = parsed.BODY || "";
+      var bodyWords = countWords(body);
+
+      if (!body) {
+        return res.status(502).json({
+          error: "The pitch body could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      return res.json({
+        success: true,
+        pitch: {
+          subject: subjectMeasurement.subject,
+          body: body,
+          why_this_outlet: parsed.WHY_THIS_OUTLET || ""
+        },
+        outlet_type: outletType,
+        measured: {
+          body_word_count: bodyWords,
+          word_limit: PITCH_MAX_WORDS,
+          within_word_limit: bodyWords > 0 && bodyWords <= PITCH_MAX_WORDS,
+          words_over_limit: bodyWords > PITCH_MAX_WORDS ? bodyWords - PITCH_MAX_WORDS : 0,
+          body_sentence_count: (body.match(/[.!?](\s|$)/g) || []).length,
+          subject_measurement: subjectMeasurement,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: bodyWords > PITCH_MAX_WORDS
+            ? "This pitch is " + (bodyWords - PITCH_MAX_WORDS) + " words over the " + PITCH_MAX_WORDS +
+              "-word limit. Cut it before sending; a pitch this long is usually not read to the end."
+            : "This pitch is within the " + PITCH_MAX_WORDS + "-word limit."
+        },
+        provenance: toolProvenance(
+          [
+            "The body's word count against the " + PITCH_MAX_WORDS + "-word limit, and the overage",
+            "The subject line's character count and preview fit",
+            "Sentence count, and any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "The pitch itself, subject and body",
+            "Why the angle is said to suit this outlet type",
+            "Whether any real journalist would be interested"
+          ],
+          "No media database was read and no outlet or journalist was looked up. BizForce cannot see " +
+          "who covers this beat, what they have written, or whether they are accepting pitches — " +
+          "'outlet type' here is a description you supplied, not a matched publication. Research the " +
+          "recipient yourself before sending.",
+          { media_database_read: false, journalist_verified: false, outlet_matched: false }
+        )
+      });
+    } catch (error) {
+      console.error("[publicist/pitch] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Operations Agent tools ───────────────────────────────────────────────────
+
+/* An SOP's steps are returned as STRUCTURED ITEMS, each with what can go wrong
+   and how you know it worked. That shape is the difference between a procedure
+   and an essay about a procedure: a step with no failure mode is a step nobody
+   has thought through, and a step with no verification cannot be audited. The
+   response counts how many steps have each, so an SOP that looks thorough and
+   is not can be seen to be thin. */
+var SOP_STEP_FIELDS = ["ACTION", "OWNER", "RISK", "VERIFY"];
+
+app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var processName = safeText(req.body.process || req.body.process_name, 300);
+      var processContext = safeText(req.body.context || req.body.details, 2000);
+      var ownerRole = safeText(req.body.owner || req.body.owner_role, 200);
+
+      if (!processName) {
+        return res.status(400).json({
+          error: "A process is required — what this procedure covers, for example \"packing and shipping a retail order\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var opsBrain =
+        "You are the BizForce AI Operations Agent. You write standard operating procedures, workflows, " +
+        "automation systems and fulfillment checklists. You write for the person doing the job on their " +
+        "first day, and you know an SOP is only useful if each step says how you know it worked.";
+
+      var instruction =
+        "Write a standard operating procedure for the process below.\n\n" +
+        "OUTPUT FORMAT — first a header block with these exact labels:\n" +
+        "PURPOSE: <why this procedure exists, one or two lines>\n" +
+        "SCOPE: <what it covers and what it explicitly does not>\n" +
+        "OWNER: <the role accountable for this procedure, not a person's name>\n" +
+        "FREQUENCY: <how often this is performed>\n" +
+        "SUCCESS_CRITERIA: <how anyone can tell the whole procedure completed correctly>\n\n" +
+        "Then a line containing only ---\n" +
+        "Then one block per step, each separated by a line containing only ---, using these labels:\n" +
+        "ACTION: <one specific thing to do, in the imperative>\n" +
+        "OWNER: <role performing this step>\n" +
+        "RISK: <what commonly goes wrong at this step>\n" +
+        "VERIFY: <how you confirm this step was done correctly>\n\n" +
+        "RULES:\n" +
+        "- Every step must have all four labels. A step with no RISK has not been thought through and a " +
+        "step with no VERIFY cannot be audited.\n" +
+        "- One action per step. If a step contains 'and then', split it.\n" +
+        "- Invent no timings, costs, error rates or throughput figures. You do not know this business's " +
+        "numbers. Describe the work, not its statistics.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(opsBrain, businessProfile, {}, []) +
+        "\n\nPROCESS:\n" + processName +
+        (processContext ? "\n\nCONTEXT:\n" + processContext : "") +
+        (ownerRole ? "\n\nOWNING ROLE:\n" + ownerRole : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 4000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var blocks = splitToolBlocks(raw);
+
+      /* The header is blocks[0] ONLY if it is not itself a step. OWNER is a label
+         in both the header and a step, so a model that omits the header block
+         entirely would otherwise have its first step's OWNER read as the owner of
+         the whole procedure — one role quietly promoted to accountable for the
+         document because of where it happened to appear. Testing for ACTION is
+         what tells the two apart. */
+      var headerBlock = (blocks.length && !/^[ \t>*#-]*ACTION[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
+      var header = parseLabeledFields(headerBlock,
+        ["PURPOSE", "SCOPE", "OWNER", "FREQUENCY", "SUCCESS_CRITERIA"]);
+
+      var steps = [];
+      blocks.forEach(function (block, index) {
+        // The first block is the header unless it parses as a step.
+        /* A block with no ACTION is the header, or noise. Note that a model which
+           omits the --- after the header leaves the header and the first step in
+           one block; that parses correctly as both, which is why the header is
+           read from blocks[0] separately rather than by skipping it here. */
+        var f = parseLabeledFields(block, SOP_STEP_FIELDS);
+        if (!f.ACTION) return;
+
+        var action = f.ACTION;
+        steps.push({
+          step: steps.length + 1,
+          action: action,
+          owner: f.OWNER || "",
+          risk: f.RISK || "",
+          verification: f.VERIFY || "",
+          has_risk: !!f.RISK,
+          has_verification: !!f.VERIFY,
+          word_count: countWords(action),
+          /* A crude but honest check on "one action per step". It flags rather
+             than rewrites, because "receive and inspect" may well be one action
+             in context and the server is not the judge of that. */
+          possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(action)
+        });
+      });
+
+      if (!steps.length) {
+        return res.status(502).json({
+          error: "The procedure's steps could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var withRisk = steps.filter(function (s) { return s.has_risk; }).length;
+      var withVerify = steps.filter(function (s) { return s.has_verification; }).length;
+
+      return res.json({
+        success: true,
+        sop: {
+          process: processName,
+          purpose: header.PURPOSE || "",
+          scope: header.SCOPE || "",
+          owner: header.OWNER || ownerRole || "",
+          frequency: header.FREQUENCY || "",
+          success_criteria: header.SUCCESS_CRITERIA || "",
+          steps: steps
+        },
+        measured: {
+          step_count: steps.length,
+          steps_with_a_failure_mode: withRisk,
+          steps_with_a_verification: withVerify,
+          steps_missing_a_failure_mode: steps.length - withRisk,
+          steps_missing_a_verification: steps.length - withVerify,
+          fully_specified_steps: steps.filter(function (s) {
+            return s.has_risk && s.has_verification;
+          }).length,
+          steps_possibly_holding_more_than_one_action: steps.filter(function (s) {
+            return s.possibly_multiple_actions;
+          }).length,
+          header_sections_missing: ["PURPOSE", "SCOPE", "OWNER", "FREQUENCY", "SUCCESS_CRITERIA"]
+            .filter(function (k) { return !header[k]; }),
+          note: (steps.length - withVerify) > 0
+            ? (steps.length - withVerify) + " step(s) have no verification, so those cannot be audited " +
+              "as written. Worth filling in before this SOP is handed to anyone."
+            : "Every step carries a verification."
+        },
+        provenance: toolProvenance(
+          [
+            "The number of steps",
+            "How many steps carry a failure mode and how many carry a verification",
+            "Which header sections are missing",
+            "Steps whose wording suggests more than one action"
+          ],
+          [
+            "The procedure itself — every step, risk and verification",
+            "The purpose, scope and success criteria",
+            "Whether this is how this business should actually do the work"
+          ],
+          "Nothing about your actual operation was read. BizForce has no visibility into how this " +
+          "process runs today, how long it takes, what it costs or where it currently fails, so this " +
+          "is a draft procedure to correct against reality — not a description of your current one.",
+          { current_process_observed: false, timings_measured: false, systems_inspected: false }
+        )
+      });
+    } catch (error) {
+      console.error("[operations/sop] Error:", error);
+      next(error);
+    }
+  });
+
+/* A checklist stops working past a certain length — people start skimming it and
+   ticking without reading, which is worse than no checklist because it creates a
+   record saying the work was checked. So the item count is reported prominently
+   and flagged past this figure rather than left for someone to notice. */
+var CHECKLIST_PRACTICAL_MAX_ITEMS = 15;
+
+app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var task = safeText(req.body.task || req.body.recurring_task, 300);
+      var frequency = safeText(req.body.frequency, 120);
+      var taskContext = safeText(req.body.context || req.body.details, 1500);
+
+      if (!task) {
+        return res.status(400).json({
+          error: "A recurring task is required — what this checklist is for, for example \"weekly inventory count\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var opsBrain =
+        "You are the BizForce AI Operations Agent writing a working checklist. Each item is one thing " +
+        "a person can do and then verifiably tick. You know a checklist that runs long stops being " +
+        "read and starts being ticked, which is worse than having none.";
+
+      var instruction =
+        "Write a checklist for the recurring task below.\n\n" +
+        "OUTPUT FORMAT — one item per line, nothing else. No numbering, no bullets, no headings, no " +
+        "preamble, no closing note.\n\n" +
+        "RULES:\n" +
+        "- Each line is ONE action, phrased in the imperative, that a person can complete and verify. " +
+        "Not 'review the inventory' but something specific enough that two people would agree whether " +
+        "it was done.\n" +
+        "- One action per line. If a line would contain 'and then', make it two lines.\n" +
+        "- Aim for at most " + CHECKLIST_PRACTICAL_MAX_ITEMS + " items. If the task genuinely needs " +
+        "more, it is really two checklists — say so on the last line, beginning that line with NOTE:\n" +
+        "- Invent no durations, costs or quantities specific to this business. You do not know them.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(opsBrain, businessProfile, {}, []) +
+        "\n\nRECURRING TASK:\n" + task +
+        (frequency ? "\n\nFREQUENCY:\n" + frequency : "") +
+        (taskContext ? "\n\nCONTEXT:\n" + taskContext : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var lines = parseToolLines(raw);
+      var notes = [];
+      var items = [];
+
+      lines.forEach(function (line) {
+        if (/^note\s*:/i.test(line)) {
+          notes.push(line.replace(/^note\s*:\s*/i, "").trim());
+          return;
+        }
+        // A trailing colon with nothing after it is a heading the model was asked
+        // not to produce; it is not an action and must not become an item.
+        if (/:$/.test(line) && countWords(line) <= 6) return;
+
+        items.push({
+          item: items.length + 1,
+          action: line,
+          word_count: countWords(line),
+          possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(line)
+        });
+      });
+
+      if (!items.length) {
+        return res.status(502).json({
+          error: "The checklist could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var overPractical = items.length > CHECKLIST_PRACTICAL_MAX_ITEMS;
+
+      return res.json({
+        success: true,
+        task: task,
+        frequency: frequency || null,
+        items: items,
+        notes: notes,
+        measured: {
+          item_count: items.length,
+          practical_maximum: CHECKLIST_PRACTICAL_MAX_ITEMS,
+          within_practical_maximum: !overPractical,
+          items_over_practical_maximum: overPractical ? items.length - CHECKLIST_PRACTICAL_MAX_ITEMS : 0,
+          items_possibly_holding_more_than_one_action: items.filter(function (i) {
+            return i.possibly_multiple_actions;
+          }).length,
+          longest_item_words: Math.max.apply(null, items.map(function (i) { return i.word_count; })),
+          average_item_words: Math.round(
+            items.reduce(function (sum, i) { return sum + i.word_count; }, 0) / items.length
+          ),
+          note: overPractical
+            ? "This checklist has " + items.length + " items, past the " + CHECKLIST_PRACTICAL_MAX_ITEMS +
+              " that a person reliably reads rather than skims. Consider splitting it into two — a long " +
+              "checklist that gets ticked without being read is worse than none, because it leaves a " +
+              "record saying the work was checked."
+            : "This checklist has " + items.length + " items, within the length a person reads rather " +
+              "than skims."
+        },
+        provenance: toolProvenance(
+          [
+            "The number of items",
+            "Whether that is within the " + CHECKLIST_PRACTICAL_MAX_ITEMS + "-item practical maximum",
+            "Word counts per item, and the longest and average",
+            "Items whose wording suggests more than one action"
+          ],
+          [
+            "The checklist items themselves",
+            "Whether these are the right steps for this task",
+            "Anything about how long the task takes"
+          ],
+          "Nothing about your actual operation was read. BizForce cannot see how this task is done " +
+          "today, what tools or systems are involved, or where it currently goes wrong, so this is a " +
+          "draft to correct against the real work.",
+          { current_process_observed: false, timings_measured: false, systems_inspected: false }
+        )
+      });
+    } catch (error) {
+      console.error("[operations/checklist] Error:", error);
       next(error);
     }
   });
