@@ -19347,6 +19347,94 @@ var AD_POLICY_RULES = [
       /\bbigger\b.{0,20}\bharder\b/i,
       /\bboost your (sex|libido|testosterone)\b/i
     ]
+  },
+  {
+    /* A DIFFERENT AUTHORITY FROM THE SIX ABOVE, which is why it is its own rule
+       group rather than more patterns bolted onto cure_or_treat_claims.
+
+       Those six are advertising-platform policy: what Meta and Google reject.
+       This one is the FDA, and the two are not the same rulebook. A phrase can
+       pass every platform rule, run as an ad without complaint, and still be an
+       unlawful claim on the label or the page it points at. The enforcement is
+       also different in kind — a platform rejects an ad, the FDA sends a warning
+       letter to the company.
+
+       THE LINE IS STRUCTURE/FUNCTION VERSUS DISEASE. A structure/function claim
+       describes an effect on the normal working of the body and is permitted:
+       "supports healthy circulation", "helps maintain normal energy levels". A
+       disease claim says or implies the product affects a disease, and it is not
+       permitted on a supplement at all. "Helps with blood sugar" is a disease
+       claim, because blood sugar is a clinical marker tied to diabetes.
+
+       THE VERB DOES NOT SAVE IT. "Helps with", "supports", "improves",
+       "promotes", "aids" and "maintains" are read identically once what follows
+       is a disease, a body system in a diseased state, or a measurable clinical
+       marker. Softening the verb is the most common attempt at a fix and it
+       changes nothing; what has to change is the object.
+
+       So the patterns below are built on that shape — permissive verb followed by
+       a named condition, symptom or marker — plus the markers that are a disease
+       claim on their own in a supplement context, because "blurred vision" on a
+       label is not rescued by the sentence it sits in. */
+    id: "fda_disease_claims",
+    label: "FDA disease claim (not a structure/function claim)",
+    why: "THIS IS THE FDA'S RULEBOOK, NOT AN AD PLATFORM'S, and a phrase can pass every " +
+         "platform policy above and still be unlawful here. The FDA permits structure/function " +
+         "claims — \"supports healthy circulation\" — and prohibits disease claims on a dietary " +
+         "supplement. A disease claim is anything that says or implies the product diagnoses, " +
+         "treats, cures, mitigates or prevents a disease, and it includes naming a clinical " +
+         "marker or a symptom of one: \"helps with blood sugar\" is a disease claim because blood " +
+         "sugar is a diabetes marker, and \"blurred vision\" is a symptom rather than a function. " +
+         "Changing the verb does not help; \"supports\", \"helps with\" and \"improves\" are read " +
+         "the same way once a disease, a diseased body system, or a measurable marker follows " +
+         "them. THE \"NOT EVALUATED BY THE FDA\" DISCLAIMER DOES NOT PROTECT A DISEASE CLAIM — " +
+         "that disclaimer accompanies a lawful structure/function claim; it does not make an " +
+         "unlawful claim lawful, and the FDA says so explicitly. This is the language that draws " +
+         "warning letters.",
+    patterns: [
+      /* Clinical markers. A disease claim on their own, in any sentence, which is
+         why these are matched bare rather than only behind a verb. The first two
+         are the phrases from the real label that exposed this gap: both passed
+         the six platform rules clean. */
+      /\bblood sugar\b/i,
+      /\bblurred vision\b/i,
+      /\bblood glucose\b/i,
+      /\bglucose levels?\b/i,
+      /\ba1c\b/i, /\bhba1c\b/i,
+      /\binsulin (resistance|sensitivity|levels?)\b/i,
+      /\bblood pressure\b/i,
+      /\bcholesterol\b/i,
+      /\b(ldl|hdl|triglycerides?)\b/i,
+      /\bbone density\b/i,
+      /\bthyroid (function|levels?|hormone)\b/i,
+
+      /* Permissive verb followed by a condition, symptom or marker. The verb list
+         is deliberately broad because the softer ones are the ones people reach
+         for when told the claim is too strong. */
+      /\b(help|helps|helping|aid|aids|support|supports|supporting|improve|improves|improving|promote|promotes|maintain|maintains|reduce|reduces|reducing|relieve|relieves|lower|lowers|lowering|boost|boosts|manage|manages|managing|combat|combats|fight|fights|fighting|ease|eases|soothe|soothes|address|addresses|target|targets)\s+(?:your\s+|the\s+|with\s+|against\s+|healthy\s+|normal\s+)*(diabetes|diabetic|blood sugar|blood glucose|blood pressure|hypertension|cholesterol|arthritis|joint pain|joint inflammation|inflammation|anxiety|depression|depressive|insomnia|sleeplessness|apnea|migraine|migraines|asthma|eczema|psoriasis|acne|ibs|crohn|colitis|ulcer|ulcers|reflux|gerd|osteoporosis|alzheimer|dementia|parkinson|cancer|tumour|tumor|heart disease|cardiovascular disease|kidney disease|liver disease|fatty liver|neuropathy|glaucoma|cataracts|macular|retinopathy|vision loss|hearing loss|menopause|infertility|erectile dysfunction|adhd|autism|epilepsy|seizures|fibromyalgia|lupus|thyroid disease|hypothyroid|hyperthyroid|gout|hemorrhoids|varicose veins|obesity)\b/i,
+
+      /* Vision and joints specifically, because "improves vision" and "joint pain
+         relief" are the two a supplement label reaches for most and neither is a
+         function claim — vision loss is a symptom and pain is a symptom. */
+      /\b(improve|improves|improving|restore|restores|restoring|sharpen|sharpens|correct|corrects)\s+(?:your\s+|the\s+)?(vision|eyesight|sight|hearing)\b/i,
+      /\b(joint|back|nerve|muscle|chronic)\s+pain\s+(relief|reliever|remedy)\b/i,
+      /\brelieves?\s+(?:your\s+|the\s+)?(joint|back|nerve|muscle|chronic|arthritis)\s+pain\b/i,
+
+      /* Immunity against a NAMED illness. Generic "supports immune function" is a
+         lawful structure/function claim and is deliberately NOT matched; naming
+         the illness it defends against is what crosses the line. */
+      /\b(immunity|immune (support|system|defence|defense|function))\s+(against|from)\s+\w+/i,
+      /\b(protects?|defends?|guards?)\s+against\s+(colds?|flu|influenza|covid|coronavirus|infection|infections|viruses|virus|bacteria|disease|illness|cancer)\b/i,
+      /\b(prevents?|stops?)\s+(colds?|flu|influenza|covid|coronavirus|infection|infections|cancer|disease)\b/i,
+
+      /* Anything phrased as helping with a diagnosed condition, however hedged. */
+      /\b(diagnosed with|suffering from|suffer from|living with)\b/i,
+      /\b(clinically|medically)\s+(diagnosed|significant)\b/i,
+      /\bfor (people|those|anyone|patients) with\s+\w+/i,
+      /\b(symptoms?|flare[\s-]?ups?)\s+of\b/i,
+      /\brelief from\b/i,
+      /\bdrug[\s-]?free (alternative|treatment|relief)\b/i
+    ]
   }
 ];
 
@@ -19411,14 +19499,24 @@ function scanAdPolicy(copy) {
 
 /* The sentence that must survive into every policy response. Kept as one
    constant so the wording cannot drift between the two routes that say it. */
+/* Updated when the FDA rule group was added, because the statement has to say
+   what the scan now covers. Two different authorities with two different tests
+   are being checked, and a reader who assumes only one of them is being checked
+   draws the wrong conclusion from a clean result in either direction. */
 var AD_POLICY_NOT_APPROVAL =
-  "A CLEAN SCAN IS NOT APPROVAL. This checks the wording of the copy against known policy " +
-  "triggers and nothing else. The platforms review things BizForce cannot see — your landing " +
-  "page, your images and video, your account history, your targeting, the category your account " +
-  "is classified in, and human reviewers who do not always agree with each other. Copy with no " +
-  "matches here is rejected every day, and copy with matches runs every day. Treat this as a " +
-  "list of things worth rewriting before you submit, never as a prediction of what the platform " +
-  "will do.";
+  "A CLEAN SCAN IS NOT APPROVAL FROM ANYBODY. This checks the wording of the copy against two " +
+  "separate rulebooks and nothing else: advertising-platform policy — what Meta and Google " +
+  "reject — and FDA claim structure, the line between a permitted structure/function claim and " +
+  "a prohibited disease claim. They are different authorities with different tests and different " +
+  "consequences: a platform rejects an ad, the FDA writes to the company. Copy can pass one and " +
+  "fail the other. Neither check can see what either authority actually reviews — your landing " +
+  "page, your label, your images and video, your account history, your targeting, the category " +
+  "your account is classified in, the substantiation you hold, and human reviewers who do not " +
+  "always agree with each other. Copy with no matches here is rejected every day, and copy with " +
+  "matches runs every day. And note that the \"not evaluated by the FDA\" disclaimer does not " +
+  "make a disease claim lawful — it accompanies a lawful claim, it does not rescue an unlawful " +
+  "one. Treat this as a list of things worth rewriting before you publish or submit, never as a " +
+  "prediction of what a platform will do and never as legal or regulatory advice.";
 
 app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
