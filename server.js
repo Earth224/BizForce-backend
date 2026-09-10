@@ -22610,7 +22610,30 @@ function verticalConfidence(value) {
   return hit || "unstated";
 }
 
-app.post("/api/agents/vertical/positioning", requireAuth, requireActiveSubscription, aiLimiter,
+/* ── THE RULE: THE PATH SEGMENT IS ALWAYS THE REGISTERED AGENT TYPE ──────────
+   These two are "vertical_marketing", with the underscore, because that is the
+   key in AGENT_SYSTEM_PROMPTS. They were briefly "vertical" and that was a bug
+   waiting for a frontend.
+
+   WHY IT IS NOT NEGOTIABLE. scripts/agent-profile.js builds every tool URL as
+   /api/agents/<agentType>/<tool id>, where agentType comes from that page's
+   AGENT_PROFILE_CONFIG — which carries the registered type, since the same value
+   is what GET /api/agents/:type and the autonomy and schedule routes are keyed
+   on. So a route whose path differs from its agent type is simply unreachable
+   from its own page, and it 404s rather than failing loudly.
+
+   The alternative was a per-tool path override in the config. That was rejected:
+   agent-profile.js knows nothing agent-specific by design — it is one mechanism
+   serving eighteen pages, and the first special case in it is the one that makes
+   the second one reasonable. Changing a path here costs nothing while no client
+   calls it; a path override costs something forever.
+
+   SO: when adding a tool for an agent whose type has an underscore —
+   vertical_marketing is the only one today — the path takes the underscore too.
+   Renamed rather than aliased, because nothing called the old path and a second
+   name for one thing is a question about which is canonical every time anyone
+   reads it afterwards. */
+app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
       var userId = req.user.id;
@@ -22739,7 +22762,9 @@ app.post("/api/agents/vertical/positioning", requireAuth, requireActiveSubscript
     }
   });
 
-app.post("/api/agents/vertical/objections", requireAuth, requireActiveSubscription, aiLimiter,
+// Same rule as above: the path segment is the registered agent type, underscore
+// and all, because agent-profile.js derives the URL from it and has no override.
+app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
       var userId = req.user.id;
