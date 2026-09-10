@@ -22929,6 +22929,927 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
     }
   });
 
+// ── Content Agent tools ──────────────────────────────────────────────────────
+//
+// NOT article generation. agents/content.html already has a real editor and its
+// own tables — content_library, posts, social_drafts — and the brain already
+// produces a publish-ready article. These are the two things that page cannot
+// do: decide the shape BEFORE anything is written, and measure an article that
+// already exists.
+
+/* Words ignored when testing whether two outline sections cover the same ground.
+   Without this, every pair of sections looks similar because they all share "the",
+   "and", "to" and the keyword itself. */
+var OUTLINE_STOPWORDS = ("a an and are as at be by for from has how in is it its of on or that the to " +
+  "what when where which who why will with your you this these those").split(" ");
+
+/* How much two sections may overlap before they are reporting the same thing.
+   Jaccard over word sets, so 0.5 means half the meaningful words are shared.
+   Chosen against measured pairs: real duplicates score 0.56 to 0.75 and genuinely
+   distinct sections 0 to 0.33, so the line sits in the gap rather than being
+   picked for looking round. Reported, never rewritten — whether two sections
+   genuinely differ is a judgement about the subject, not about the strings.
+
+   WHAT IT CANNOT CATCH, stated because a check whose limits are unknown gets
+   trusted past them: this is lexical, so two sections that duplicate each other
+   in different words — "Why X helps" against "Benefits of X" — share no
+   meaningful tokens and score 0. Semantic duplication passes this check. It
+   catches the common case, which is the same heading rephrased. */
+var OUTLINE_OVERLAP_THRESHOLD = 0.5;
+
+/* A crude suffix strip, and it is load bearing rather than a nicety.
+
+   Outline headings vary in number and tense constantly — "Benefits of solar
+   panels" against "Solar panel benefits explained" — and without this they share
+   only two words out of five and score 0.4, under the threshold, so the most
+   obvious kind of duplicate section goes unflagged. With it they share three of
+   four and score 0.75. Measured on real pairs rather than guessed: the duplicates
+   land at 0.56 to 0.75 and the genuinely distinct pairs at 0 to 0.33, which is
+   what makes 0.5 a usable line rather than an arbitrary one.
+
+   Crude on purpose. It is not a stemmer, it strips four endings, and it will
+   conflate words it should not ("bus" is not "bu" — which is why nothing under
+   three characters survives). The cost of a wrong merge here is one false overlap
+   report that a person dismisses; the cost of missing the plural is the check not
+   working at all. */
+function outlineStem(word) {
+  return String(word)
+    .replace(/ies$/, "y")
+    .replace(/(ing|ed|es|s)$/, "");
+}
+
+function outlineWordSet(text) {
+  var words = String(text || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/);
+  var set = {};
+  words.forEach(function (w) {
+    if (!w || w.length < 3) return;
+    if (OUTLINE_STOPWORDS.indexOf(w) !== -1) return;
+    var stemmed = outlineStem(w);
+    if (stemmed.length < 3) return;
+    set[stemmed] = true;
+  });
+  return Object.keys(set);
+}
+
+/* Proportion of shared meaningful words — intersection over union. Returns 0 when
+   either side has no meaningful words rather than dividing by zero, because two
+   empty sections are not "identical", they are two sections with nothing to
+   compare. */
+function jaccardOverlap(a, b) {
+  var setA = outlineWordSet(a), setB = outlineWordSet(b);
+  if (!setA.length || !setB.length) return 0;
+
+  var inB = {};
+  setB.forEach(function (w) { inB[w] = true; });
+
+  var shared = setA.filter(function (w) { return inB[w]; }).length;
+  var union = setA.length + setB.length - shared;
+  if (union <= 0) return 0;
+  return Math.round((shared / union) * 100) / 100;
+}
+
+app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var keyword = safeText(req.body.keyword || req.body.topic, 200);
+      var audience = safeText(req.body.audience, 500);
+      var angle = safeText(req.body.angle, 500);
+
+      if (!keyword) {
+        return res.status(400).json({
+          error: "A keyword or topic is required — what the article is being written to rank for."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var contentBrain =
+        "You are the BizForce AI Content Agent, a senior SEO copywriter, working on the OUTLINE " +
+        "rather than the article. You decide what the piece covers and in what order before a word " +
+        "of it is written, and you know that sections which repeat each other make a thin article " +
+        "look like a thorough one.";
+
+      var instruction =
+        "Produce a full article outline for the keyword below.\n\n" +
+        "OUTPUT FORMAT — first a header block with these exact labels:\n" +
+        "H1: <the article title>\n" +
+        "SEARCH_INTENT: <what someone searching this actually wants — informational, commercial, " +
+        "navigational or transactional, and what that means here in one line>\n" +
+        "QUESTIONS_TO_ANSWER: <the questions the piece must answer to satisfy that intent; one per line>\n\n" +
+        "Then a line containing only ---\n" +
+        "Then one block per H2 section, each separated by a line containing only ---, using:\n" +
+        "H2: <the section heading>\n" +
+        "COVERS: <what this section covers that no other section does>\n" +
+        "WHY_HERE: <why it sits at this point in the order>\n\n" +
+        "RULES:\n" +
+        "- EVERY SECTION MUST COVER DISTINCT GROUND. Do not produce \"Benefits of X\" and \"Why X " +
+        "helps\" as two sections; that is one section and a padded word count.\n" +
+        "- Order the sections by what the reader needs first, not by what is easiest to write.\n" +
+        "- Invent no statistics, study results, or figures. Write [FIGURE NEEDED] where one belongs.\n" +
+        "- Do not write the article. Headings and coverage only.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(contentBrain, businessProfile, {}, []) +
+        "\n\nKEYWORD / TOPIC:\n" + keyword +
+        (audience ? "\n\nAUDIENCE:\n" + audience : "") +
+        (angle ? "\n\nANGLE:\n" + angle : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var blocks = splitToolBlocks(raw);
+      var headerBlock = (blocks.length && !/^[ \t>*#-]*H2[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
+      var header = parseLabeledFields(headerBlock, ["H1", "SEARCH_INTENT", "QUESTIONS_TO_ANSWER"]);
+
+      var sections = [];
+      blocks.forEach(function (block) {
+        var f = parseLabeledFields(block, ["H2", "COVERS", "WHY_HERE"]);
+        if (!f.H2) return;
+        sections.push({
+          position: sections.length + 1,
+          h2: f.H2,
+          covers: f.COVERS || "",
+          why_here: f.WHY_HERE || "",
+          has_coverage_note: !!f.COVERS
+        });
+      });
+
+      if (!sections.length) {
+        return res.status(502).json({
+          error: "The outline could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      /* OVERLAP, MEASURED PAIRWISE. The failure this exists to catch is a
+         nine-section outline where four sections say the same thing — it reads as
+         thorough, it produces a long thin article, and it is invisible unless the
+         sections are compared with each other rather than read one at a time. */
+      var overlaps = [];
+      var i, j;
+      for (i = 0; i < sections.length; i++) {
+        for (j = i + 1; j < sections.length; j++) {
+          var score = jaccardOverlap(
+            sections[i].h2 + " " + sections[i].covers,
+            sections[j].h2 + " " + sections[j].covers
+          );
+          if (score >= OUTLINE_OVERLAP_THRESHOLD) {
+            overlaps.push({
+              sections: [sections[i].position, sections[j].position],
+              headings: [sections[i].h2, sections[j].h2],
+              overlap: score
+            });
+          }
+        }
+      }
+
+      var overlappingPositions = {};
+      overlaps.forEach(function (o) {
+        overlappingPositions[o.sections[0]] = true;
+        overlappingPositions[o.sections[1]] = true;
+      });
+
+      var questions = header.QUESTIONS_TO_ANSWER
+        ? parseToolLines(header.QUESTIONS_TO_ANSWER) : [];
+
+      return res.json({
+        success: true,
+        keyword: keyword,
+        outline: {
+          h1: header.H1 || "",
+          search_intent: header.SEARCH_INTENT || "",
+          questions_to_answer: questions,
+          sections: sections
+        },
+        measured: {
+          section_count: sections.length,
+          question_count: questions.length,
+          sections_without_a_coverage_note: sections.filter(function (s) {
+            return !s.has_coverage_note;
+          }).length,
+          h1_present: !!header.H1,
+          search_intent_stated: !!header.SEARCH_INTENT,
+          overlapping_section_pairs: overlaps,
+          sections_overlapping_another: Object.keys(overlappingPositions).length,
+          overlap_threshold: OUTLINE_OVERLAP_THRESHOLD,
+          keyword_in_h1: header.H1
+            ? header.H1.toLowerCase().indexOf(keyword.toLowerCase()) !== -1 : null,
+          note: (function () {
+            var problems = [];
+            if (overlaps.length) {
+              problems.push(Object.keys(overlappingPositions).length + " of " + sections.length +
+                " section(s) cover ground another section already covers (" +
+                overlaps.map(function (o) {
+                  return "#" + o.sections[0] + " and #" + o.sections[1];
+                }).join(", ") + "). Merge them — a nine-section outline where four say the same " +
+                "thing is a thin article wearing a table of contents.");
+            }
+            if (!header.SEARCH_INTENT) {
+              problems.push("No search intent was stated, so there is nothing to say what this " +
+                "outline is serving.");
+            }
+            if (!questions.length) {
+              problems.push("No questions were listed, so there is no test of whether the finished " +
+                "piece answered anything.");
+            }
+            if (problems.length) return problems.join(" ");
+            return sections.length + " distinct section(s), " + questions.length +
+              " question(s) to answer, and no two sections overlapping past " +
+              OUTLINE_OVERLAP_THRESHOLD + ".";
+          })()
+        },
+        provenance: toolProvenance(
+          [
+            "The section and question counts",
+            "Pairwise word overlap between every pair of sections, and which pairs exceed the threshold",
+            "Whether an H1 and a search intent were stated, and whether the keyword is in the H1"
+          ],
+          [
+            "The outline itself — every heading, what it covers and the order",
+            "The search intent judgement",
+            "Whether this is what someone searching that keyword actually wants"
+          ],
+          "No search engine was queried. BizForce read no SERP, no competing article, no keyword " +
+          "volume and no ranking data, so the search intent and the section choices are the model's " +
+          "judgement rather than an observation of what currently ranks. The overlap figures are " +
+          "arithmetic on the words in this outline and are exact.",
+          {
+            serp_read: false,
+            competing_articles_read: false,
+            keyword_volume_data: false,
+            ranking_data_read: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[content/outline] Error:", error);
+      next(error);
+    }
+  });
+
+/* Headings, out of markdown or HTML. Both appear in this product — the content
+   editor stores HTML, and a model asked for an article returns markdown — so an
+   audit that understood only one would report "no headings" on half its input,
+   which is a measurement that is wrong rather than absent. */
+function extractArticleHeadings(text) {
+  var raw = String(text || "").replace(/\r\n/g, "\n");
+  var found = [];
+
+  var mdRe = /^[ \t]*(#{1,6})[ \t]+(.+)$/gm, m;
+  while ((m = mdRe.exec(raw)) !== null) {
+    found.push({ level: m[1].length, text: m[2].trim(), index: m.index });
+  }
+
+  var htmlRe = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, h;
+  while ((h = htmlRe.exec(raw)) !== null) {
+    found.push({
+      level: Number(h[1]),
+      text: h[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+      index: h.index
+    });
+  }
+
+  return found.sort(function (a, b) { return a.index - b.index; });
+}
+
+/* Whether the heading order nests correctly: exactly one H1, and no level
+   skipped on the way down (an H2 followed by an H4 leaves a rung missing, which
+   breaks both the document outline and how a screen reader announces it). */
+function auditHeadingNesting(headings) {
+  var problems = [];
+  var h1s = headings.filter(function (h) { return h.level === 1; });
+
+  if (h1s.length === 0) problems.push("No H1 at all.");
+  if (h1s.length > 1) problems.push(h1s.length + " H1s — an article has one.");
+  if (headings.length && headings[0].level !== 1) {
+    problems.push("The first heading is an H" + headings[0].level + " rather than the H1.");
+  }
+
+  var i;
+  for (i = 1; i < headings.length; i++) {
+    var jump = headings[i].level - headings[i - 1].level;
+    if (jump > 1) {
+      problems.push("H" + headings[i - 1].level + " is followed by H" + headings[i].level +
+        " (\"" + headings[i].text.slice(0, 40) + "\"), skipping a level.");
+    }
+  }
+
+  return problems;
+}
+
+// Past this a paragraph is a wall. Reported rather than enforced — a long
+// paragraph can be the right choice — but it should be a choice.
+var ARTICLE_LONG_PARAGRAPH_WORDS = 150;
+
+app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var article = safeText(req.body.article || req.body.text || req.body.content, 60000);
+      var keyword = safeText(req.body.keyword, 200);
+
+      if (!article) {
+        return res.status(400).json({
+          error: "Article text is required — paste the piece you want measured."
+        });
+      }
+
+      var headings = extractArticleHeadings(article);
+      var nestingProblems = auditHeadingNesting(headings);
+
+      /* TWO DIFFERENT STRIPS, because two different questions are being asked.
+
+         `allText` keeps heading TEXT and drops only the markup, because a
+         heading's words are words on the page: an article's word count includes
+         its title, and so must the keyword count. Counting occurrences over body
+         text alone reported 1 for a piece whose keyword appears in the H1 and the
+         opening line, which is a figure that contradicts the keyword_in_h1 field
+         sitting beside it.
+
+         `bodyOnly` removes headings entirely, because a heading is not a
+         paragraph. Without this a six-word H2 is measured as a short paragraph and
+         drags the paragraph average down. */
+      var allText = article
+        .replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<[^>]+>/g, " ");
+
+      var bodyOnly = article
+        .replace(/<h[1-6]\b[^>]*>[\s\S]*?<\/h[1-6]>/gi, "\n\n")
+        .replace(/^[ \t]*#{1,6}[ \t]+.+$/gm, "\n\n")
+        .replace(/<\/p>/gi, "\n\n")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<[^>]+>/g, " ");
+
+      var paragraphs = bodyOnly.split(/\n\s*\n/)
+        .map(function (p) { return p.replace(/\s+/g, " ").trim(); })
+        .filter(function (p) { return p.length > 0; });
+
+      var paragraphWords = paragraphs.map(function (p) { return countWords(p); });
+      var totalWords = countWords(allText.replace(/\s+/g, " "));
+      var plain = allText;
+
+      var keywordLower = keyword.toLowerCase();
+      var hasKeyword = function (text) {
+        return keywordLower ? String(text || "").toLowerCase().indexOf(keywordLower) !== -1 : null;
+      };
+
+      var h1 = headings.filter(function (h) { return h.level === 1; })[0] || null;
+      var firstParagraph = paragraphs[0] || "";
+
+      /* SECTIONS WITH NO KEYWORD PRESENCE. A section is a heading and the body
+         under it up to the next heading of the same or a higher level. Counting
+         keyword presence per section rather than over the whole article is what
+         distinguishes a piece that is about the keyword from one that mentions it
+         twice in the intro and then wanders. */
+      var sections = [];
+      if (keywordLower) {
+        headings.forEach(function (heading, idx) {
+          if (heading.level === 1) return;
+          var start = heading.index;
+          var next = headings.slice(idx + 1).filter(function (h) {
+            return h.level <= heading.level;
+          })[0];
+          var end = next ? next.index : article.length;
+          var body = article.slice(start, end).replace(/<[^>]+>/g, " ");
+          sections.push({
+            heading: heading.text,
+            level: heading.level,
+            word_count: countWords(body),
+            keyword_present: body.toLowerCase().indexOf(keywordLower) !== -1
+          });
+        });
+      }
+
+      var sectionsWithoutKeyword = sections.filter(function (s) { return !s.keyword_present; });
+
+      // Occurrences across the whole piece, and the density it implies.
+      var occurrences = 0;
+      if (keywordLower) {
+        var hay = plain.toLowerCase();
+        var at = hay.indexOf(keywordLower);
+        while (at !== -1) { occurrences += 1; at = hay.indexOf(keywordLower, at + keywordLower.length); }
+      }
+
+      var longParagraphs = paragraphWords.filter(function (n) {
+        return n > ARTICLE_LONG_PARAGRAPH_WORDS;
+      }).length;
+
+      return res.json({
+        success: true,
+        keyword: keyword || null,
+        measured: {
+          word_count: totalWords,
+          paragraph_count: paragraphs.length,
+          longest_paragraph_words: paragraphWords.length ? Math.max.apply(null, paragraphWords) : 0,
+          shortest_paragraph_words: paragraphWords.length ? Math.min.apply(null, paragraphWords) : 0,
+          average_paragraph_words: paragraphWords.length
+            ? Math.round(paragraphWords.reduce(function (a, b) { return a + b; }, 0) / paragraphWords.length)
+            : 0,
+          paragraphs_over_long: longParagraphs,
+          long_paragraph_threshold: ARTICLE_LONG_PARAGRAPH_WORDS,
+
+          heading_count: headings.length,
+          headings: headings.map(function (h) { return { level: h.level, text: h.text }; }),
+          headings_by_level: headings.reduce(function (acc, h) {
+            acc["h" + h.level] = (acc["h" + h.level] || 0) + 1;
+            return acc;
+          }, {}),
+          heading_nesting_correct: nestingProblems.length === 0,
+          heading_nesting_problems: nestingProblems,
+
+          /* Null rather than false when no keyword was supplied. False would read
+             as "the keyword is not in the H1", which is a finding; null is the
+             absence of a question. */
+          keyword_supplied: !!keyword,
+          keyword_in_h1: h1 ? hasKeyword(h1.text) : (keywordLower ? false : null),
+          keyword_in_first_paragraph: keywordLower ? hasKeyword(firstParagraph) : null,
+          keyword_occurrences: keywordLower ? occurrences : null,
+          keyword_density_percent: (keywordLower && totalWords > 0)
+            ? Math.round((occurrences / totalWords) * 10000) / 100
+            : null,
+          section_count: sections.length,
+          sections_without_the_keyword: sectionsWithoutKeyword.length,
+          sections_without_the_keyword_named: sectionsWithoutKeyword.map(function (s) {
+            return s.heading;
+          }),
+          sections: sections,
+
+          note: (function () {
+            var problems = [];
+            if (nestingProblems.length) {
+              problems.push("Heading structure: " + nestingProblems.join(" "));
+            }
+            if (keywordLower && h1 && !hasKeyword(h1.text)) {
+              problems.push("The keyword is not in the H1.");
+            }
+            if (keywordLower && !hasKeyword(firstParagraph)) {
+              problems.push("The keyword is not in the first paragraph.");
+            }
+            if (sectionsWithoutKeyword.length) {
+              problems.push(sectionsWithoutKeyword.length + " of " + sections.length +
+                " section(s) never mention the keyword: " +
+                sectionsWithoutKeyword.map(function (s) { return "\"" + s.heading + "\""; }).join(", ") + ".");
+            }
+            if (longParagraphs) {
+              problems.push(longParagraphs + " paragraph(s) run past " +
+                ARTICLE_LONG_PARAGRAPH_WORDS + " words.");
+            }
+            if (!keyword) {
+              problems.push("No keyword was supplied, so the keyword measurements are null rather " +
+                "than failures — structure and length were measured regardless.");
+            }
+            if (problems.length) return problems.join(" ");
+            return totalWords + " words across " + paragraphs.length + " paragraph(s) and " +
+              headings.length + " heading(s), nesting correct, keyword present in the H1, the " +
+              "opening and every section.";
+          })()
+        },
+        provenance: toolProvenance(
+          [
+            "Word count, paragraph count, and the longest, shortest and average paragraph",
+            "Every heading, its level, and whether the nesting skips a level or repeats an H1",
+            "Whether the keyword is in the H1 and the first paragraph, how many times it appears, and its density",
+            "Which sections never mention the keyword"
+          ],
+          [],
+          "Every figure here is counted from the text you supplied and nothing was inferred — this " +
+          "route makes no model call at all, so the same article always produces the same numbers. " +
+          "What it cannot tell you is whether the article is any good, whether it will rank, or what " +
+          "competing pages do: no SERP was read and there is no ranking data anywhere in this platform.",
+          {
+            model_call_made: false,
+            serp_read: false,
+            ranking_data_read: false,
+            competing_articles_read: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[content/audit] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Executive Agent tool ─────────────────────────────────────────────────────
+//
+// A DISPATCHER, NOT A DOCUMENT, and that distinction is the whole reason this
+// route is different in kind from the other twenty-six.
+//
+// "The SEO agent should improve rankings" is a sentence. It reads like a plan, it
+// survives a skim, and nobody can do anything with it. "The SEO agent, via POST
+// /api/agents/seo/optimize, on this URL" is a thing the user can go and run.
+// Twenty-six real tools now exist across thirteen agents, so an executive plan
+// that does not name them is leaving the only actionable part out.
+//
+// WHICH MEANS THE PLAN HAS TO BE CHECKED AGAINST REALITY. A plan that dispatches
+// work to a route returning 404 is worse than a plan in prose, because prose does
+// not pretend to be executable. So every assignment is validated against the
+// routes that are actually registered, and the ratio of assignments naming a real
+// tool to assignments that are only prose is reported as the measure of whether
+// this came out a dispatcher or a document.
+
+/* The tool catalogue, READ OFF THE LIVE EXPRESS ROUTER rather than maintained as a
+   list beside it.
+
+   This is the point of the whole route: a hardcoded catalogue would drift the
+   moment a tool was added or renamed, and it would drift silently — the plan would
+   go on naming a route that no longer exists, which is exactly the failure this
+   validation is for. app._router.stack is what is actually mounted, so the
+   catalogue cannot be wrong about what exists.
+
+   Computed lazily and cached, because at module-evaluation time most of these
+   routes have not been registered yet. Filtered to registered agent types, so a
+   future /api/agents/something/else for an unregistered agent is not offered as a
+   destination. */
+var agentToolCatalogueCache = null;
+
+function agentToolCatalogue() {
+  if (agentToolCatalogueCache) return agentToolCatalogueCache;
+
+  var stack = (app._router && app._router.stack) || [];
+  var catalogue = {};
+
+  stack.forEach(function (layer) {
+    if (!layer.route || !layer.route.path || !layer.route.methods) return;
+    if (!layer.route.methods.post) return;
+
+    var match = String(layer.route.path).match(/^\/api\/agents\/([a-z_]+)\/([a-z0-9-]+)$/);
+    if (!match) return;
+
+    var agentType = match[1], tool = match[2];
+    if (!Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType)) return;
+
+    if (!catalogue[agentType]) catalogue[agentType] = [];
+    if (catalogue[agentType].indexOf(tool) === -1) catalogue[agentType].push(tool);
+  });
+
+  Object.keys(catalogue).forEach(function (k) { catalogue[k].sort(); });
+  agentToolCatalogueCache = catalogue;
+  return catalogue;
+}
+
+/* Orders the assignments by their dependencies, and names any cycle.
+
+   Kahn's algorithm, in waves: wave 1 is everything that depends on nothing, wave 2
+   is everything whose dependencies are all in wave 1, and so on. Waves are more
+   useful than a flat ordering here because they say what can start AT THE SAME
+   TIME, which is the question someone reading a plan actually has.
+
+   WHATEVER IS LEFT OVER IS IN A CYCLE. A plan where A waits on B and B waits on A
+   cannot start — not "is inefficient", cannot start — and it is the kind of thing
+   that reads perfectly well in prose because each line is individually sensible.
+   Reported with the members named, because "there is a circular dependency" is not
+   actionable and "1 waits on 3, 3 waits on 1" is.
+
+   A reference to an assignment that does not exist is reported separately rather
+   than silently dropped: dropping it would turn a typo into an assignment that
+   appears ready to start. */
+function orderExecutiveAssignments(assignments) {
+  var ids = assignments.map(function (a) { return a.id; });
+  var known = {};
+  ids.forEach(function (id) { known[id] = true; });
+
+  var deps = {};
+  var unresolved = [];
+
+  assignments.forEach(function (a) {
+    deps[a.id] = [];
+    (a.depends_on || []).forEach(function (d) {
+      if (!known[d]) {
+        unresolved.push({ assignment: a.id, references: d });
+        return;
+      }
+      if (d === a.id) {
+        // Self-dependency is a cycle of one; kept so it surfaces below.
+        deps[a.id].push(d);
+        return;
+      }
+      if (deps[a.id].indexOf(d) === -1) deps[a.id].push(d);
+    });
+  });
+
+  var resolved = {};
+  var waves = [];
+  var remaining = ids.slice();
+
+  while (remaining.length) {
+    var wave = remaining.filter(function (id) {
+      return deps[id].every(function (d) { return resolved[d]; });
+    });
+
+    if (!wave.length) break;   // everything left is in a cycle
+
+    wave.forEach(function (id) { resolved[id] = true; });
+    waves.push(wave);
+    remaining = remaining.filter(function (id) { return !resolved[id]; });
+  }
+
+  return {
+    waves: waves,
+    circular: remaining,
+    circular_detail: remaining.map(function (id) {
+      return { assignment: id, waits_on: deps[id].filter(function (d) { return !resolved[d]; }) };
+    }),
+    unresolved_references: unresolved
+  };
+}
+
+app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var goal = safeText(req.body.goal, 2000);
+      var horizon = safeText(req.body.horizon || req.body.timeline, 200);
+      var constraints = safeText(req.body.constraints, 1000);
+
+      if (!goal) {
+        return res.status(400).json({
+          error: "A goal is required — what the plan has to achieve."
+        });
+      }
+
+      var catalogue = agentToolCatalogue();
+      var agentsWithTools = Object.keys(catalogue).sort();
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var executiveBrain =
+        "You are the BizForce AI Executive Agent, acting as a chief operating officer. You break a " +
+        "request into coordinated assignments for the other agents. You are a DISPATCHER: an " +
+        "assignment that does not name which agent and which of its actual tools to run is a " +
+        "sentence rather than a task, and you do not produce sentences.";
+
+      /* The real catalogue goes INTO the prompt. The model cannot name a tool
+         correctly by recollection — these routes were added over several days and
+         nothing in training knows them — so it is given the list and told to use
+         it. The validation below then checks what came back, because being given
+         the list is not the same as using it. */
+      var catalogueBlock = "THE TOOLS THAT ACTUALLY EXIST. These are read from the live server, so " +
+        "this list is exact. An assignment naming anything else is useless.\n\n" +
+        agentsWithTools.map(function (agent) {
+          return agent + ":\n" + catalogue[agent].map(function (t) {
+            return "  - " + t + "   (POST /api/agents/" + agent + "/" + t + ")";
+          }).join("\n");
+        }).join("\n\n") +
+        "\n\nAgents with NO tools of their own, which can still take an assignment in prose but " +
+        "cannot be dispatched to a route: " +
+        Object.keys(AGENT_SYSTEM_PROMPTS).filter(function (a) {
+          return !catalogue[a];
+        }).sort().join(", ") + ".";
+
+      var instruction =
+        "Break the goal below into coordinated assignments.\n\n" +
+        "OUTPUT FORMAT — one block per assignment, separated by a line containing only ---\n" +
+        "ID: <a number, starting at 1, counting up>\n" +
+        "AGENT: <the agent type, exactly as spelled in the catalogue>\n" +
+        "TOOL: <the tool id from the catalogue, exactly; or NONE if no existing tool fits>\n" +
+        "TASK: <what that agent is being asked to do, specifically>\n" +
+        "INPUT: <what to put into that tool — the actual field values where you can be specific>\n" +
+        "DEPENDS_ON: <the ID numbers this cannot start before, comma separated; or NONE>\n" +
+        "SUCCESS_SIGNAL: <how you would know it worked — something observable, not \"improved\">\n" +
+        "PRIORITY: <high, medium or low>\n\n" +
+        "HARD RULES:\n" +
+        "- USE THE CATALOGUE. Copy the agent type and tool id exactly as they appear above. Do not " +
+        "invent a tool that would be useful; if none fits, write TOOL: NONE and say in TASK what is " +
+        "being asked for in prose.\n" +
+        "- Prefer an assignment that names a real tool over one that does not. A plan made of prose " +
+        "is a plan nobody can start.\n" +
+        "- DEPENDS_ON must reference ID numbers in this same plan. Do not create a loop: if 1 waits " +
+        "on 3, then 3 cannot wait on 1.\n" +
+        "- SUCCESS_SIGNAL must be observable. \"Rankings improve\" is not; \"the audit reports every " +
+        "section carrying the keyword\" is.\n" +
+        "- Invent no figures, deadlines in weeks, budgets or KPI targets unless they were given below. " +
+        "Write [FIGURE NEEDED].\n" +
+        "- Six to twelve assignments. Fewer is not a coordinated plan; more is a backlog.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(executiveBrain, businessProfile, {}, []) +
+        "\n\nTHE GOAL:\n" + goal +
+        (horizon ? "\n\nHORIZON:\n" + horizon : "") +
+        (constraints ? "\n\nCONSTRAINTS:\n" + constraints : "") +
+        "\n\n" + catalogueBlock +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 4000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var assignments = [];
+      var usedIds = {};
+
+      splitToolBlocks(raw).forEach(function (block) {
+        var f = parseLabeledFields(block,
+          ["ID", "AGENT", "TOOL", "TASK", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]);
+        if (!f.AGENT && !f.TASK) return;
+
+        /* An unreadable or duplicate ID is replaced by position rather than
+           dropped, because an assignment is still an assignment — but the
+           substitution is recorded so a dependency graph built on guessed ids is
+           not presented as if the model had numbered them. */
+        var declaredId = toolInt(f.ID);
+        var id = (declaredId !== null && declaredId > 0 && !usedIds[declaredId])
+          ? declaredId : (assignments.length + 1);
+        var idWasSubstituted = id !== declaredId;
+        usedIds[id] = true;
+
+        var agentType = String(f.AGENT || "").toLowerCase().trim();
+        var tool = String(f.TOOL || "").toLowerCase().trim();
+        if (/^(none|n\/a|-|null)$/.test(tool)) tool = "";
+
+        var agentExists = Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType);
+        var agentHasTools = agentExists && !!catalogue[agentType];
+        var toolExists = agentHasTools && tool && catalogue[agentType].indexOf(tool) !== -1;
+
+        var problems = [];
+        if (!agentType) problems.push("no agent named");
+        else if (!agentExists) problems.push("\"" + agentType + "\" is not a registered agent");
+        if (tool && !agentExists) problems.push("tool cannot be checked against an unknown agent");
+        else if (tool && !agentHasTools) {
+          problems.push("\"" + agentType + "\" has no tools, so \"" + tool + "\" cannot exist");
+        } else if (tool && !toolExists) {
+          problems.push("\"" + tool + "\" is not a tool of \"" + agentType + "\" (it has: " +
+            catalogue[agentType].join(", ") + ")");
+        }
+
+        var depends = [];
+        if (f.DEPENDS_ON && !/^(none|n\/a|-)$/i.test(f.DEPENDS_ON.trim())) {
+          f.DEPENDS_ON.split(/[,;]/).forEach(function (part) {
+            var d = toolInt(part);
+            if (d !== null && d > 0) depends.push(d);
+          });
+        }
+
+        var priority = String(f.PRIORITY || "").toLowerCase().trim();
+
+        assignments.push({
+          id: id,
+          id_was_substituted: idWasSubstituted,
+          agent: agentType,
+          agent_exists: agentExists,
+          tool: tool || null,
+          tool_exists: !!toolExists,
+          /* THE ONLY THING THAT MAKES THIS DISPATCHABLE. Present when both the
+             agent and the tool check out, absent otherwise — never constructed
+             from an unvalidated name, because a plausible-looking URL that 404s is
+             the failure this whole route guards against. */
+          route: toolExists ? "POST /api/agents/" + agentType + "/" + tool : null,
+          task: f.TASK || "",
+          input: f.INPUT || "",
+          depends_on: depends,
+          success_signal: f.SUCCESS_SIGNAL || "",
+          has_observable_success_signal: !!f.SUCCESS_SIGNAL,
+          priority: /^(high|medium|low)$/.test(priority) ? priority : "unstated",
+          problems: problems,
+          is_dispatchable: !!toolExists && problems.length === 0
+        });
+      });
+
+      if (!assignments.length) {
+        return res.status(502).json({
+          error: "The plan could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var ordering = orderExecutiveAssignments(assignments);
+
+      var dispatchable = assignments.filter(function (a) { return a.is_dispatchable; });
+      var proseOnly = assignments.filter(function (a) { return !a.tool && a.agent_exists; });
+      var broken = assignments.filter(function (a) { return a.problems.length > 0; });
+
+      /* THE RATIO. Whether this came out a dispatcher or a document, as one
+         number. Computed over all assignments, so a plan padded with prose scores
+         lower rather than being flattered by its dispatchable minority. */
+      var realToolRatio = Math.round((dispatchable.length / assignments.length) * 100);
+
+      return res.json({
+        success: true,
+        goal: goal,
+        horizon: horizon || null,
+        assignments: assignments,
+        execution_order: {
+          waves: ordering.waves,
+          wave_count: ordering.waves.length,
+          can_start_now: ordering.waves.length ? ordering.waves[0] : [],
+          circular_dependencies: ordering.circular,
+          circular_detail: ordering.circular_detail,
+          unresolved_references: ordering.unresolved_references,
+          note: ordering.circular.length
+            ? "CIRCULAR DEPENDENCY. Assignment(s) " + ordering.circular.join(", ") + " wait on each " +
+              "other and cannot start in any order — " +
+              ordering.circular_detail.map(function (c) {
+                return "#" + c.assignment + " waits on " + (c.waits_on.join(", ") || "itself");
+              }).join("; ") + ". Break the loop before running any of this."
+            : (ordering.unresolved_references.length
+                ? ordering.waves.length + " wave(s), but " + ordering.unresolved_references.length +
+                  " dependency reference(s) point at assignments that do not exist in this plan."
+                : ordering.waves.length + " wave(s); " +
+                  (ordering.waves.length ? ordering.waves[0].length : 0) + " assignment(s) can start now.")
+        },
+        measured: {
+          assignment_count: assignments.length,
+          /* The headline pair. */
+          naming_a_real_tool: dispatchable.length,
+          prose_only: proseOnly.length,
+          real_tool_ratio_percent: realToolRatio,
+          with_problems: broken.length,
+          problems_by_assignment: broken.map(function (a) {
+            return { id: a.id, agent: a.agent, tool: a.tool, problems: a.problems };
+          }),
+          unregistered_agents_named: assignments.filter(function (a) { return !a.agent_exists; })
+            .map(function (a) { return a.agent; })
+            .filter(function (v, i, arr) { return v && arr.indexOf(v) === i; }),
+          nonexistent_tools_named: assignments.filter(function (a) {
+            return a.agent_exists && a.tool && !a.tool_exists;
+          }).map(function (a) { return a.agent + "/" + a.tool; }),
+          ids_substituted: assignments.filter(function (a) { return a.id_was_substituted; }).length,
+          without_a_success_signal: assignments.filter(function (a) {
+            return !a.has_observable_success_signal;
+          }).length,
+          by_priority: assignments.reduce(function (acc, a) {
+            acc[a.priority] = (acc[a.priority] || 0) + 1;
+            return acc;
+          }, {}),
+          agents_assigned: assignments.map(function (a) { return a.agent; })
+            .filter(function (v, i, arr) { return v && arr.indexOf(v) === i; }).sort(),
+          catalogue_size: agentsWithTools.reduce(function (n, a) {
+            return n + catalogue[a].length;
+          }, 0),
+          note: (function () {
+            var problems = [];
+            if (broken.length) {
+              problems.push(broken.length + " assignment(s) name an agent or tool that does not " +
+                "exist and are NOT dispatchable — those would 404. A plan that looks runnable and " +
+                "is not is worse than one written in prose.");
+            }
+            if (ordering.circular.length) {
+              problems.push("There is a circular dependency; see execution_order.");
+            }
+            problems.push(dispatchable.length + " of " + assignments.length + " assignment(s) (" +
+              realToolRatio + "%) name a real tool and can be run as written" +
+              (proseOnly.length ? ", " + proseOnly.length + " are prose only" : "") + ".");
+            if (realToolRatio < 50) {
+              problems.push("Under half of this plan is dispatchable, which makes it closer to a " +
+                "document than a dispatcher.");
+            }
+            return problems.join(" ");
+          })()
+        },
+        catalogue_used: {
+          agents_with_tools: agentsWithTools,
+          tools: catalogue,
+          agents_without_tools: Object.keys(AGENT_SYSTEM_PROMPTS).filter(function (a) {
+            return !catalogue[a];
+          }).sort(),
+          note: "Read from the live Express router at request time, so it is exactly what is mounted " +
+            "rather than a list maintained alongside it. Every assignment above was checked against " +
+            "this."
+        },
+        provenance: toolProvenance(
+          [
+            "Whether each assignment's agent is registered and its tool actually exists, checked " +
+              "against the live router",
+            "How many assignments name a real tool against how many are prose only, and the ratio",
+            "The dependency waves, and any circular dependency or reference to a missing assignment",
+            "Which agents were assigned, the priority spread, and assignments with no success signal"
+          ],
+          [
+            "The plan itself — every assignment, its task, its input and its ordering",
+            "Which agent should do what, and whether the chosen tool is the right one for the goal",
+            "The priorities and the success signals",
+            "Whether doing all of this would achieve the goal"
+          ],
+          "Nothing was dispatched. This route validates that the assignments point at tools that " +
+          "exist; it does not run them, queue them, or check that the inputs would be accepted. An " +
+          "assignment marked dispatchable means the route is real, not that the work is right or that " +
+          "the input is valid. No external data of any kind was read.",
+          {
+            assignments_executed: false,
+            inputs_validated: false,
+            routes_called: false,
+            external_data_read: false,
+            catalogue_read_from_live_router: true
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[executive/plan] Error:", error);
+      next(error);
+    }
+  });
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
