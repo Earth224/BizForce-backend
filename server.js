@@ -17665,6 +17665,442 @@ app.get("/api/agents/seo/optimize-count", requireAuth, async function (req, res,
   }
 });
 
+// ── Etsy Agent tools ─────────────────────────────────────────────────────────
+//
+// The two Etsy tools that can be built HONESTLY today. Three others — a listing
+// optimizer, a shop audit and a competitor shop analysis — are deliberately NOT
+// here, and the reason is recorded because it is not obvious and will otherwise
+// be rediscovered by whoever tries next.
+//
+// ETSY PAGES CANNOT BE FETCHED SERVER-SIDE. www.etsy.com is fronted by DataDome,
+// a commercial bot-management service. Every content path — /listing/<id>,
+// /shop/<name>, /search, /c/<category>, and the homepage — answers a plain
+// server fetch with HTTP 403 and a JavaScript challenge page ("Please enable JS
+// and disable any ad blocker"), about 780 bytes, containing no listing markup at
+// all. That was measured from this machine against those exact paths, with a
+// bot User-Agent and again with a complete browser header set including
+// sec-ch-ua and Sec-Fetch-*. Same 403 every time. Only /robots.txt answers 200,
+// because it is served by Apache in front of the bot manager rather than behind
+// it.
+//
+// So the question of whether Etsy renders listings server-side never arises: the
+// request does not reach the page. This is NOT the extractSeoPageData technique
+// failing to parse something — there is nothing to parse. A tool built on that
+// fetch would report on a 403 error page while telling the user it had audited
+// their shop, which is precisely the class of failure this codebase has spent
+// two days removing.
+//
+// Note that robots.txt does NOT forbid this: /listing/<id> and /shop/<name> are
+// allowed for User-agent: *, with only sub-paths (/stubs/, /favoriters, /sold)
+// disallowed. Permission is not the obstacle; the enforcement layer is.
+//
+// The real route to those three tools is the Etsy Open API v3, which needs a
+// registered app and a key. This project has neither — there is no ETSY_* value
+// in the environment and nothing here calls api.etsy.com — so wiring that up is
+// a credentials-and-onboarding change, not something to fake in the meantime.
+
+// Etsy's real listing constraints. These are the craft: a generic agent writing
+// "a good title" knows none of them, and a title one character over or a
+// fourteenth tag is simply rejected by Etsy.
+var ETSY_MAX_TITLE_LENGTH = 140;
+var ETSY_MAX_TAGS         = 13;
+var ETSY_MAX_TAG_LENGTH   = 20;
+
+/* Says, in the response body rather than only in prose the caller may not read,
+   where every number came from. This platform reads no marketplace API and has
+   no access to Etsy search volume, so anything resembling a volume figure is
+   model knowledge — a recollection of how people talk about a category, not a
+   measurement of what anyone searched for.
+
+   Carried as structured fields so a UI can render the distinction rather than
+   having to trust that a caveat sentence survived into the layout. */
+function etsyProvenance(measured, inferred) {
+  return {
+    measured_from: measured,
+    inferred_by_model: inferred,
+    marketplace_api_used: false,
+    search_volume_data: false,
+    caveat:
+      "BizForce reads no Etsy API and has no access to Etsy search-volume data. " +
+      "Anything describing demand, popularity or competition here is the model's " +
+      "general knowledge of the marketplace, not a measurement. Treat it as a " +
+      "starting hypothesis to test in your own Etsy stats, not as data."
+  };
+}
+
+/* Character budgets, computed here rather than asked of the model.
+
+   The split matters and is the point of this helper: whether "hand poured soy
+   candle" fits in a 20-character tag is arithmetic, and arithmetic is something
+   the server can do exactly, every time. Asking a language model to count
+   characters produces a number that is usually right, which is worse than one
+   that is always right, because the failures are invisible and land as listings
+   Etsy rejects. So the model proposes the keywords and this function measures
+   them. */
+function etsyMeasureKeyword(keyword) {
+  var text = String(keyword || "").trim();
+  return {
+    keyword: text,
+    length: text.length,
+    fits_tag: text.length > 0 && text.length <= ETSY_MAX_TAG_LENGTH,
+    over_tag_limit_by: text.length > ETSY_MAX_TAG_LENGTH ? text.length - ETSY_MAX_TAG_LENGTH : 0,
+    word_count: text ? text.split(/\s+/).length : 0
+  };
+}
+
+/* One "keyword | intent | rationale" line per suggestion, parsed loosely enough
+   to survive the model adding a bullet or numbering, and strictly enough that a
+   line which is not a suggestion does not become one.
+
+   Returns [] rather than guessing when nothing parses. The caller reports that
+   honestly instead of presenting an empty list as "no keywords found", which
+   would be a claim about the marketplace rather than about the parse. */
+function parseEtsyKeywordLines(text) {
+  var out = [];
+  String(text || "").split(/\r?\n/).forEach(function (line) {
+    var cleaned = line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim();
+    if (!cleaned || cleaned.indexOf("|") === -1) return;
+
+    var parts = cleaned.split("|").map(function (p) { return p.trim(); });
+    var keyword = parts[0];
+    if (!keyword || keyword.length > 120) return;
+    // A header row like "keyword | intent | why" is not a suggestion.
+    if (/^keywords?$/i.test(keyword)) return;
+
+    out.push({
+      keyword: keyword,
+      intent: parts[1] || "",
+      rationale: parts.slice(2).join(" | ") || ""
+    });
+  });
+  return out;
+}
+
+/* ── POST /api/agents/etsy/keyword-research ──────────────────────────────────
+   A seed term in, Etsy-shaped keyword suggestions out. Needs no page fetch,
+   which is why it exists while the listing tools do not.
+
+   Every suggestion comes back with its character budget measured, so the caller
+   can see at a glance which ones are usable as tags at all — the single most
+   common way an Etsy keyword list is useless in practice is that half of it does
+   not fit in a tag. */
+app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var seed = safeText(req.body.seed || req.body.keyword || req.body.term, 120);
+      var context = safeText(req.body.context || req.body.product_description, 1000);
+
+      if (!seed) {
+        return res.status(400).json({
+          error: "A seed term is required — the word or phrase you would start from, for example \"soy candle\"."
+        });
+      }
+
+      var profileResult = await supabase
+        .from("business_profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+      var businessProfile = profileResult.data || {};
+
+      var etsyBrain =
+        "You are the BizForce AI Etsy Agent. You know Etsy's search mechanics and its hard listing " +
+        "constraints: titles are capped at " + ETSY_MAX_TITLE_LENGTH + " characters, a listing carries " +
+        "at most " + ETSY_MAX_TAGS + " tags, and each tag is capped at " + ETSY_MAX_TAG_LENGTH + " characters. " +
+        "Etsy matches multi-word tags as phrases, so long-tail buyer phrasing outperforms single broad words.";
+
+      var instruction =
+        "Suggest 24 Etsy keyword candidates for the seed term below.\n\n" +
+        "OUTPUT FORMAT — one candidate per line, exactly three fields separated by | and nothing else:\n" +
+        "keyword | intent | rationale\n" +
+        "where intent is one of: buyer, browser, gift, niche.\n" +
+        "No preamble, no headings, no numbering, no closing summary.\n\n" +
+        "RULES:\n" +
+        "- Favour long-tail buyer phrasing over single broad words.\n" +
+        "- Aim for at least 14 candidates that are " + ETSY_MAX_TAG_LENGTH + " characters or fewer so they " +
+        "can be used as tags directly. Longer ones are still welcome as title phrases; mark their intent normally.\n" +
+        "- Do NOT invent search volumes, competition scores, or any numeric metric. You have no such data. " +
+        "The rationale must be qualitative reasoning about buyer language, not a fabricated statistic.\n" +
+        "- Do not repeat the seed term verbatim as a candidate.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(etsyBrain, businessProfile, {}, []) +
+        "\n\nSEED TERM:\n" + seed +
+        (context ? "\n\nWHAT THE SELLER MAKES:\n" + context : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        /* surfaceSeesUserText is TRUE: `seed` and `context` are the seller's own
+           words and are quoted into the prompt above. */
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseEtsyKeywordLines(raw);
+
+      /* Measured here, not requested from the model. */
+      var keywords = parsed.map(function (row) {
+        return Object.assign(etsyMeasureKeyword(row.keyword), {
+          intent: row.intent,
+          rationale: row.rationale
+        });
+      });
+
+      var tagReady = keywords.filter(function (k) { return k.fits_tag; });
+
+      /* A parse that produced nothing is reported as a parse failure, with the
+         raw text handed back, rather than as an empty keyword list. An empty
+         list would read as "there are no good keywords for this term", which is
+         a statement about Etsy; what actually happened is a statement about this
+         response. */
+      if (!keywords.length) {
+        return res.status(502).json({
+          error: "The keyword list could not be read back from the model, so nothing is being reported. " +
+            "No keywords were found is NOT the same as none exist — this is a formatting failure, not a result.",
+          raw_output: raw,
+          provenance: etsyProvenance([], [])
+        });
+      }
+
+      return res.json({
+        success: true,
+        seed: seed,
+        constraints: {
+          max_title_length: ETSY_MAX_TITLE_LENGTH,
+          max_tags: ETSY_MAX_TAGS,
+          max_tag_length: ETSY_MAX_TAG_LENGTH
+        },
+        keywords: keywords,
+        /* The first 13 tag-ready candidates, which is exactly what fits on one
+           listing. Presented as a starting set to edit, not as a ranking: there
+           is no volume data here to rank by, and ordering them by a number that
+           does not exist is the failure this whole response shape guards
+           against. Order is the model's suggestion order, stated as such. */
+        suggested_tag_set: tagReady.slice(0, ETSY_MAX_TAGS).map(function (k) { return k.keyword; }),
+        counts: {
+          suggested: keywords.length,
+          tag_ready: tagReady.length,
+          too_long_for_a_tag: keywords.length - tagReady.length
+        },
+        provenance: etsyProvenance(
+          [
+            "Character length of every suggested keyword",
+            "Whether each fits Etsy's " + ETSY_MAX_TAG_LENGTH + "-character tag limit",
+            "Word counts and the tag-ready totals below"
+          ],
+          [
+            "The keyword suggestions themselves",
+            "The buyer-intent label on each",
+            "The rationale text",
+            "Any sense of which terms are worth targeting"
+          ]
+        ),
+        suggested_tag_set_note:
+          "These are the first " + ETSY_MAX_TAGS + " suggestions that fit the tag limit, in the order the " +
+          "model proposed them. They are NOT ranked by search volume — no volume data was read."
+      });
+    } catch (error) {
+      console.error("[etsy/keyword-research] Error:", error);
+      next(error);
+    }
+  });
+
+/* ── POST /api/agents/etsy/pricing-strategy ──────────────────────────────────
+   The seller's own listing and the comparables they supply, in; a pricing
+   rationale out.
+
+   COMPARABLES ARE SUPPLIED BY THE CALLER, not fetched. That is a real limitation
+   and it is stated in the response rather than hidden: this route cannot reach
+   Etsy (see the block comment above), so it cannot find comparable listings, and
+   it cannot verify that the ones handed to it are real, current, or actually
+   comparable. What it CAN do exactly is arithmetic over the numbers given, and
+   that arithmetic is the measured half of the answer. */
+app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var listingTitle = safeText(req.body.listing_title || req.body.title, 200);
+      var listingDescription = safeText(req.body.listing_description || req.body.description, 2000);
+
+      var currentPrice = Number(req.body.current_price);
+      var hasCurrentPrice = Number.isFinite(currentPrice) && currentPrice >= 0;
+
+      var unitCost = Number(req.body.unit_cost);
+      var hasUnitCost = Number.isFinite(unitCost) && unitCost >= 0;
+
+      if (!listingTitle) {
+        return res.status(400).json({ error: "listing_title is required — the item you are pricing." });
+      }
+
+      /* Comparables are parsed defensively: a row without a usable price is kept
+         but excluded from the statistics rather than silently coerced to 0, which
+         would drag every average down and produce a confidently wrong median. */
+      var rawComparables = Array.isArray(req.body.comparables) ? req.body.comparables : [];
+      if (rawComparables.length > 50) {
+        return res.status(400).json({ error: "At most 50 comparables can be considered at once." });
+      }
+
+      var comparables = rawComparables.map(function (row) {
+        var item = row && typeof row === "object" ? row : {};
+        var price = Number(item.price);
+        return {
+          title: safeText(item.title, 200) || "",
+          price: Number.isFinite(price) && price >= 0 ? price : null,
+          note: safeText(item.note, 200) || ""
+        };
+      });
+
+      var priced = comparables.filter(function (c) { return c.price !== null; });
+      var prices = priced.map(function (c) { return c.price; }).sort(function (a, b) { return a - b; });
+
+      function median(sorted) {
+        if (!sorted.length) return null;
+        var mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+      }
+      function round2(n) { return n === null ? null : Math.round(n * 100) / 100; }
+
+      /* Every one of these is computed from the caller's own numbers. They are
+         measured in the only sense available here: measured FROM THE INPUT, not
+         from Etsy. The response says exactly that rather than letting "median
+         competitor price" imply a survey of the marketplace. */
+      var stats = {
+        comparables_supplied: comparables.length,
+        comparables_with_a_price: priced.length,
+        min: prices.length ? round2(prices[0]) : null,
+        max: prices.length ? round2(prices[prices.length - 1]) : null,
+        median: round2(median(prices)),
+        mean: prices.length
+          ? round2(prices.reduce(function (a, b) { return a + b; }, 0) / prices.length)
+          : null
+      };
+
+      var position = null;
+      if (hasCurrentPrice && prices.length) {
+        var below = prices.filter(function (p) { return p < currentPrice; }).length;
+        position = {
+          your_price: round2(currentPrice),
+          cheaper_than_supplied: prices.length - below - prices.filter(function (p) { return p === currentPrice; }).length,
+          more_expensive_than_supplied: below,
+          percentile_among_supplied: Math.round((below / prices.length) * 100),
+          versus_median: stats.median === null ? null : round2(currentPrice - stats.median)
+        };
+      }
+
+      var margin = null;
+      if (hasCurrentPrice && hasUnitCost) {
+        var gross = currentPrice - unitCost;
+        margin = {
+          unit_cost: round2(unitCost),
+          gross_per_sale: round2(gross),
+          gross_margin_percent: currentPrice > 0 ? Math.round((gross / currentPrice) * 100) : null,
+          note: "Before Etsy's listing, transaction, payment-processing and any offsite-ads fees, " +
+            "which are not modelled here because they depend on your shop's settings and location."
+        };
+      }
+
+      var profileResult = await supabase
+        .from("business_profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+      var businessProfile = profileResult.data || {};
+
+      var etsyBrain =
+        "You are the BizForce AI Etsy Agent, advising on pricing for a handmade or small-batch " +
+        "marketplace listing. You understand Etsy buyer psychology, perceived value in handmade " +
+        "categories, and that Etsy takes listing, transaction and payment-processing fees.";
+
+      var measuredBlock =
+        "THE SELLER'S LISTING:\n" +
+        "Title: " + listingTitle +
+        (listingDescription ? "\nDescription: " + listingDescription : "") +
+        "\nCurrent price: " + (hasCurrentPrice ? currentPrice : "not supplied") +
+        "\nUnit cost: " + (hasUnitCost ? unitCost : "not supplied") +
+        "\n\nCOMPARABLE LISTINGS — SUPPLIED BY THE SELLER, NOT FETCHED OR VERIFIED (" +
+        comparables.length + " given, " + priced.length + " with a usable price):\n" +
+        (comparables.length
+          ? comparables.map(function (c, i) {
+              return (i + 1) + ". " + (c.title || "(untitled)") + " — " +
+                (c.price === null ? "no usable price given" : c.price) +
+                (c.note ? " (" + c.note + ")" : "");
+            }).join("\n")
+          : "None supplied.") +
+        "\n\nARITHMETIC ALREADY COMPUTED FROM THOSE NUMBERS (do not recompute, do not contradict):\n" +
+        JSON.stringify({ stats: stats, position: position, margin: margin }, null, 2);
+
+      var instruction =
+        "Give a pricing RATIONALE for this listing, in these sections:\n" +
+        "(1) WHERE THIS PRICE SITS — read the arithmetic above back to the seller in plain words. " +
+        "Use only those figures; do not invent others.\n" +
+        "(2) WHAT THE COMPARABLES DO AND DO NOT TELL US — be explicit that they were supplied by the " +
+        "seller and not verified, and say what would make them a weak basis for a decision " +
+        "(too few, not actually comparable, unknown recency).\n" +
+        "(3) PRICE OPTIONS — two or three concrete price points with the reasoning for each, including " +
+        "what each signals to an Etsy buyer.\n" +
+        "(4) WHAT TO TEST AND HOW YOU WOULD KNOW — what the seller should watch in their own Etsy " +
+        "stats to find out whether a change worked.\n\n" +
+        "HARD RULES:\n" +
+        "- You have NO Etsy search-volume, sales-volume, or competitor data beyond the list above. " +
+        "Do not state or imply any market figure you were not given.\n" +
+        "- Do not describe the supplied comparables as 'the market' or 'competitors on Etsy' — they are " +
+        "a handful of listings someone typed in.\n" +
+        "- If too few comparables were supplied to reason from, say so plainly instead of proceeding.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(etsyBrain, businessProfile, {}, []) +
+        "\n\n" + measuredBlock +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        /* surfaceSeesUserText is TRUE: the listing title, description and the
+           comparable titles are all the seller's own text, quoted above. */
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2500);
+      var rationale = (generation && generation.text) ? generation.text : "";
+
+      return res.json({
+        success: true,
+        listing_title: listingTitle,
+        measured: {
+          stats: stats,
+          your_position: position,
+          margin: margin,
+          note: "Computed from the numbers supplied in this request. 'Median' and 'mean' describe the " +
+            "comparables you provided — not Etsy, and not your category."
+        },
+        rationale: rationale,
+        provenance: etsyProvenance(
+          [
+            "Minimum, maximum, median and mean of the comparable prices you supplied",
+            "Where your price sits among those you supplied",
+            "Gross margin, if you supplied a unit cost"
+          ],
+          [
+            "The pricing rationale and every price point suggested",
+            "What a price signals to a buyer",
+            "Anything about demand, competition or what similar items actually sell for"
+          ]
+        ),
+        limitations: {
+          comparables_were_supplied_not_fetched: true,
+          comparables_verified: false,
+          etsy_fees_modelled: false,
+          sales_volume_data: false,
+          detail: "BizForce cannot read Etsy listing pages (they are served behind bot protection that " +
+            "refuses server-side requests), so it cannot find or check comparable listings. Everything " +
+            "above rests on the " + comparables.length + " comparable(s) supplied in this request."
+        }
+      });
+    } catch (error) {
+      console.error("[etsy/pricing-strategy] Error:", error);
+      next(error);
+    }
+  });
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
