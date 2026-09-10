@@ -2556,8 +2556,101 @@ function subscriptionExpiryState(subscription) {
 // access with nothing anywhere to reconcile it. There is still no sweep; this
 // is a check at the point of use, which is the only place that can see the row
 // and the clock at the same time.
-async function getUserPlan(userId) {
+/* ── THE ADMIN EXEMPTION ──────────────────────────────────────────────────────
+   WHY THIS EXISTS, because a reader will reasonably ask whether it is a backdoor.
+
+   requireActiveSubscription blocked the platform owner's own account twice in one
+   day. First from a subscriptions row left behind by a cancelled Stripe
+   subscription. Then, after the row was corrected by hand, cancelling in Stripe
+   fired customer.subscription.updated and the webhook wrote the cancelled status
+   straight back over the fix — which is the system working exactly as designed,
+   and is the whole point: A MANUAL ROW EDIT CANNOT SURVIVE A WEBHOOK. Any grant
+   of access that lives in the subscriptions table is a grant that the next Stripe
+   event may revoke.
+
+   The owner has to be able to use the product in order to sell it. Demos,
+   screenshots, support, checking that a route works at all — none of that is
+   possible from behind a 402, and all of it is work the business depends on.
+
+   So the exemption is read from users.role, which no webhook writes. The gate
+   previously read only the subscriptions table and ignored role entirely.
+
+   WHAT IT IS NOT. It does not fabricate a subscription row and it does not claim
+   a paid plan. `subscription` stays whatever is really there — usually null, or
+   the genuinely cancelled row — and the plan is named "admin_exempt" with its own
+   config rather than borrowing all_access, so nothing downstream can read this
+   user as a paying subscriber. `exempt` is true and `access_reason` says "admin".
+   Anything asking why this account has access gets the honest answer.
+
+   The capabilities are unlimited because the owner needs to exercise every part of
+   the product, and because the one real plan is unlimited too — so this grants
+   nothing a subscriber does not have. It is an exemption from PAYING, not a
+   larger entitlement. */
+var ADMIN_EXEMPT_PLAN = "admin_exempt";
+
+var ADMIN_EXEMPT_CONFIG = {
+  name: "Admin (exempt)",
+  // Zero rather than 199: this account is not paying, and a price here would be
+  // the one number a billing report could mistake for revenue.
+  price: 0,
+  maxAgents: -1,
+  maxWebsites: -1,
+  monthlyTasks: -1,
+  /* Derived from AGENT_SYSTEM_PROMPTS for the same reason PLAN_CONFIG.all_access
+     derives it: a second hand-maintained copy of the agent roster drifts, and the
+     drift is silent. */
+  get allowedAgents() { return Object.keys(AGENT_SYSTEM_PROMPTS); }
+};
+
+function isExemptRole(user) {
+  return !!user && String(user.role || "").toLowerCase() === "admin";
+}
+
+/* `user` is optional. requireActiveSubscription already holds req.user, so it
+   passes it and costs nothing; the four enforce* callers have only a userId, so
+   the role is looked up for them. Looked up rather than assumed, because a gate
+   that guesses at a role is a gate. */
+async function getUserPlan(userId, user) {
+  var subject = user;
+  if (!subject) {
+    try {
+      subject = await getUserById(userId);
+    } catch (lookupError) {
+      /* A FAILED ROLE LOOKUP GRANTS NOTHING. It falls through to the ordinary
+         subscription path, so the worst case is that an admin is refused during a
+         database fault — the same answer every other user gets — rather than a
+         fault being read as an exemption. */
+      console.error("[entitlement] Role lookup failed for user " + userId + ": " +
+        (lookupError.message || lookupError) + " — falling back to the subscription check.");
+      subject = null;
+    }
+  }
+
   const subscription = await getActiveSubscription(userId);
+
+  if (isExemptRole(subject)) {
+    /* Logged on every use, not once per process. This is an account using the
+       product without paying for it, and that should be visible in the logs rather
+       than inferable from its absence. */
+    console.log("[entitlement] ADMIN EXEMPTION — user " + userId + " (role admin) granted access " +
+      "without an active subscription. subscription row: " +
+      (subscription ? "present, status \"" + subscription.status + "\"" : "none") +
+      ". This is users.role, not a subscription, and no webhook can revoke it.");
+
+    return {
+      plan: ADMIN_EXEMPT_PLAN,
+      config: ADMIN_EXEMPT_CONFIG,
+      // The real row, whatever it is. Never a fabricated one.
+      subscription: subscription || null,
+      active: true,
+      expired: false,
+      inactive_reason: null,
+      /* The two fields that keep this honest. A caller that wants to know whether
+         this account is PAYING must read `exempt` rather than `active`. */
+      exempt: true,
+      access_reason: "admin"
+    };
+  }
 
   if (!subscription) {
     return {
@@ -2566,7 +2659,9 @@ async function getUserPlan(userId) {
       subscription: null,
       active: false,
       expired: false,
-      inactive_reason: "no_subscription"
+      inactive_reason: "no_subscription",
+      exempt: false,
+      access_reason: null
     };
   }
 
@@ -2607,7 +2702,14 @@ async function getUserPlan(userId) {
     subscription,
     active,
     expired: expiry.proven,
-    inactive_reason: active ? null : (statusEntitles ? "expired" : "status")
+    inactive_reason: active ? null : (statusEntitles ? "expired" : "status"),
+    /* Present and FALSE on every ordinary path, so `exempt` can be read as a
+       boolean everywhere rather than being undefined for subscribers and true for
+       admins — a field that is sometimes missing gets tested with a truthiness
+       check, and a truthiness check is how an absent field becomes a wrong answer.
+       `access_reason` says "subscription" because that is what granted it. */
+    exempt: false,
+    access_reason: active ? "subscription" : null
   };
 }
 
@@ -2766,18 +2868,29 @@ async function requireAdmin(req, res, next) {
 
 async function requireActiveSubscription(req, res, next) {
   try {
-    const planState = await getUserPlan(req.user.id);
+    /* req.user is passed so the role is read from the row requireAuth already
+       fetched rather than looked up a second time on every gated request. */
+    const planState = await getUserPlan(req.user.id, req.user);
 
     if (!planState.active) {
       return res.status(402).json({
         error: "Active subscription required",
-        upgrade_required: true
+        upgrade_required: true,
+        // Which refusal it was, so a UI can tell "never subscribed" from "your row
+        // went stale" instead of showing one message for both.
+        reason: planState.inactive_reason
       });
     }
 
     req.subscription = planState.subscription;
     req.plan = planState.plan;
     req.planConfig = planState.config;
+    /* Carried onto the request so a downstream handler can tell an exempt admin
+       from a paying subscriber. Nothing reads these today — req.plan and
+       req.planConfig have never been read either — but a handler that needs to
+       know should not have to re-derive it, and `active` alone cannot tell it. */
+    req.planExempt = planState.exempt === true;
+    req.planAccessReason = planState.access_reason;
     next();
   } catch (error) {
     next(error);
@@ -23609,17 +23722,27 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         "Break the goal below into coordinated assignments.\n\n" +
         "OUTPUT FORMAT — one block per assignment, separated by a line containing only ---\n" +
         "ID: <a number, starting at 1, counting up>\n" +
-        "AGENT: <the agent type, exactly as spelled in the catalogue>\n" +
+        "AGENT: <the agent type exactly as spelled in the catalogue, or the literal word YOU>\n" +
         "TOOL: <the tool id from the catalogue, exactly; or NONE if no existing tool fits>\n" +
         "TASK: <what that agent is being asked to do, specifically>\n" +
         "INPUT: <what to put into that tool — the actual field values where you can be specific>\n" +
         "DEPENDS_ON: <the ID numbers this cannot start before, comma separated; or NONE>\n" +
         "SUCCESS_SIGNAL: <how you would know it worked — something observable, not \"improved\">\n" +
         "PRIORITY: <high, medium or low>\n\n" +
+        "AGENT: YOU — FOR WORK ONLY THE FOUNDER CAN DO, and use it rather than forcing that work " +
+        "onto an agent. YOU means the person this plan is for. Talking to a customer, making a " +
+        "decision, signing something, getting a testimonial, choosing a price, hiring someone: none " +
+        "of that is an agent's job and no tool does it. Assign it to YOU, set TOOL: NONE, and write " +
+        "the task as something the reader will actually do. A YOU assignment is expected and correct " +
+        "— it is not a gap in the plan, and it is often the most important line in it.\n" +
+        "There is no agent called \"general\" and never has been. If you were about to use it, the " +
+        "work is either a real agent's or it is YOURS.\n\n" +
         "HARD RULES:\n" +
         "- USE THE CATALOGUE. Copy the agent type and tool id exactly as they appear above. Do not " +
         "invent a tool that would be useful; if none fits, write TOOL: NONE and say in TASK what is " +
         "being asked for in prose.\n" +
+        "- Do NOT give a YOU assignment a tool. If a tool can do it, it belongs to the agent that " +
+        "owns the tool.\n" +
         "- Prefer an assignment that names a real tool over one that does not. A plan made of prose " +
         "is a plan nobody can start.\n" +
         "- DEPENDS_ON must reference ID numbers in this same plan. Do not create a loop: if 1 waits " +
@@ -23666,19 +23789,55 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         var tool = String(f.TOOL || "").toLowerCase().trim();
         if (/^(none|n\/a|-|null)$/.test(tool)) tool = "";
 
+        /* ── FOUNDER WORK IS A THIRD KIND OF ASSIGNMENT ────────────────────────
+           AGENT: YOU means the person the plan is for.
+
+           Some of the most important work in a plan cannot be dispatched to
+           anything. "Secure testimonials from your first five subscribers" is
+           founder work — no tool does it, no agent can be sent to do it, and it may
+           matter more than everything around it. Before this, a model with nowhere
+           to put that reached for "general", which is not a registered agent, so
+           the assignment was correctly marked not runnable and then wrongly
+           counted as an error. The validator was right and the plan was right; the
+           vocabulary was missing.
+
+           So YOU is not dispatchable and has no route — both true, and both stated
+           — but it is NOT A PROBLEM. It is not counted as one, does not render as
+           broken, and is excluded from the real-tool ratio rather than dragging it
+           down, because that ratio measures how much of the AGENT work names a real
+           tool. Founder work has no tool to name, so counting it as a miss would
+           make a well-judged plan score worse than a vague one. */
+        var isFounderTask = agentType === "you";
+
         var agentExists = Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType);
         var agentHasTools = agentExists && !!catalogue[agentType];
         var toolExists = agentHasTools && tool && catalogue[agentType].indexOf(tool) !== -1;
 
         var problems = [];
-        if (!agentType) problems.push("no agent named");
-        else if (!agentExists) problems.push("\"" + agentType + "\" is not a registered agent");
-        if (tool && !agentExists) problems.push("tool cannot be checked against an unknown agent");
-        else if (tool && !agentHasTools) {
-          problems.push("\"" + agentType + "\" has no tools, so \"" + tool + "\" cannot exist");
-        } else if (tool && !toolExists) {
-          problems.push("\"" + tool + "\" is not a tool of \"" + agentType + "\" (it has: " +
-            catalogue[agentType].join(", ") + ")");
+        if (isFounderTask) {
+          /* One real problem is still possible here: naming a tool for work only a
+             person can do. That is a contradiction rather than a typo, so it is
+             reported — but it is the only thing that can go wrong with a YOU
+             assignment. */
+          if (tool) {
+            problems.push("an assignment for YOU cannot name a tool (\"" + tool +
+              "\") — if a tool can do it, give it to the agent that owns the tool");
+          }
+        } else {
+          if (!agentType) problems.push("no agent named");
+          else if (!agentExists) {
+            problems.push("\"" + agentType + "\" is not a registered agent" +
+              (agentType === "general"
+                ? " — for work only you can do, use AGENT: YOU rather than \"general\""
+                : ""));
+          }
+          if (tool && !agentExists) problems.push("tool cannot be checked against an unknown agent");
+          else if (tool && !agentHasTools) {
+            problems.push("\"" + agentType + "\" has no tools, so \"" + tool + "\" cannot exist");
+          } else if (tool && !toolExists) {
+            problems.push("\"" + tool + "\" is not a tool of \"" + agentType + "\" (it has: " +
+              catalogue[agentType].join(", ") + ")");
+          }
         }
 
         var depends = [];
@@ -23694,8 +23853,13 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         assignments.push({
           id: id,
           id_was_substituted: idWasSubstituted,
-          agent: agentType,
-          agent_exists: agentExists,
+          agent: isFounderTask ? "you" : agentType,
+          /* True for YOU as well, because "you" IS a valid destination — it is just
+             not an agent. A renderer testing agent_exists to decide whether to show
+             an assignment as legitimate gets the right answer without knowing about
+             founder tasks. */
+          agent_exists: isFounderTask ? true : agentExists,
+          is_founder_task: isFounderTask,
           tool: tool || null,
           tool_exists: !!toolExists,
           /* THE ONLY THING THAT MAKES THIS DISPATCHABLE. Present when both the
@@ -23725,14 +23889,30 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
 
       var ordering = orderExecutiveAssignments(assignments);
 
+      /* THREE COUNTS, NOT TWO. Founder work, dispatchable work, and work that is
+         genuinely broken are three different things and collapsing any two of them
+         loses the distinction that makes the plan readable. */
+      var founderTasks = assignments.filter(function (a) { return a.is_founder_task; });
       var dispatchable = assignments.filter(function (a) { return a.is_dispatchable; });
-      var proseOnly = assignments.filter(function (a) { return !a.tool && a.agent_exists; });
+      var proseOnly = assignments.filter(function (a) {
+        return !a.tool && a.agent_exists && !a.is_founder_task;
+      });
       var broken = assignments.filter(function (a) { return a.problems.length > 0; });
 
-      /* THE RATIO. Whether this came out a dispatcher or a document, as one
-         number. Computed over all assignments, so a plan padded with prose scores
-         lower rather than being flattered by its dispatchable minority. */
-      var realToolRatio = Math.round((dispatchable.length / assignments.length) * 100);
+      /* THE RATIO, over AGENT work only. Whether this came out a dispatcher or a
+         document, as one number — but founder assignments are excluded from the
+         denominator, because no tool exists for "call your first five customers"
+         and counting it as a miss would score a well-judged plan below a vague one.
+         Prose assignments to real agents DO count against it: those are cases where
+         a tool might have fitted and none was named.
+
+         Guarded against a plan that is entirely founder work, where the denominator
+         is zero: the ratio is null rather than NaN, because "no agent work to
+         dispatch" is not "0% dispatchable". */
+      var agentWorkCount = assignments.length - founderTasks.length;
+      var realToolRatio = agentWorkCount > 0
+        ? Math.round((dispatchable.length / agentWorkCount) * 100)
+        : null;
 
       return res.json({
         success: true,
@@ -23760,11 +23940,22 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         },
         measured: {
           assignment_count: assignments.length,
-          /* The headline pair. */
+          /* THE THREE COUNTS. Dispatchable agent work, founder work, and genuinely
+             broken assignments. Reported separately because they call for three
+             different reactions: run it, do it yourself, or fix the plan. */
           naming_a_real_tool: dispatchable.length,
-          prose_only: proseOnly.length,
-          real_tool_ratio_percent: realToolRatio,
+          for_the_founder: founderTasks.length,
           with_problems: broken.length,
+          prose_only: proseOnly.length,
+          agent_work_count: agentWorkCount,
+          real_tool_ratio_percent: realToolRatio,
+          ratio_note: "Of AGENT work only — the " + founderTasks.length +
+            " founder assignment(s) are excluded from the denominator, because no tool " +
+            "exists for work only you can do and counting it as a miss would score a " +
+            "well-judged plan below a vague one.",
+          founder_assignments: founderTasks.map(function (a) {
+            return { id: a.id, task: a.task };
+          }),
           problems_by_assignment: broken.map(function (a) {
             return { id: a.id, agent: a.agent, tool: a.tool, problems: a.problems };
           }),
@@ -23797,12 +23988,22 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
             if (ordering.circular.length) {
               problems.push("There is a circular dependency; see execution_order.");
             }
-            problems.push(dispatchable.length + " of " + assignments.length + " assignment(s) (" +
-              realToolRatio + "%) name a real tool and can be run as written" +
-              (proseOnly.length ? ", " + proseOnly.length + " are prose only" : "") + ".");
-            if (realToolRatio < 50) {
-              problems.push("Under half of this plan is dispatchable, which makes it closer to a " +
-                "document than a dispatcher.");
+            if (agentWorkCount > 0) {
+              problems.push(dispatchable.length + " of " + agentWorkCount + " agent assignment(s) (" +
+                realToolRatio + "%) name a real tool and can be run as written" +
+                (proseOnly.length ? ", " + proseOnly.length + " are prose only" : "") + ".");
+            } else {
+              problems.push("Every assignment in this plan is founder work, so there is no agent " +
+                "work to dispatch and no ratio to report.");
+            }
+            /* Founder work is reported as a fact, never as a shortfall. */
+            if (founderTasks.length) {
+              problems.push(founderTasks.length + " assignment(s) are for you rather than an agent — " +
+                "work no tool can do, which is where the plan expects your own time.");
+            }
+            if (realToolRatio !== null && realToolRatio < 50) {
+              problems.push("Under half of the agent work is dispatchable, which makes that part " +
+                "closer to a document than a dispatcher.");
             }
             return problems.join(" ");
           })()
