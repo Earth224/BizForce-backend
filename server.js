@@ -21690,6 +21690,1220 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
     }
   });
 
+// ── Analytics Agent tools ────────────────────────────────────────────────────
+
+/* A percentage, or null. NEVER a division by zero and never a NaN dressed as a
+   figure.
+
+   The guard is `whole <= 0`, and the null it returns means something specific:
+   not "0%" but "there is no rate here". A stage nobody reached has no conversion
+   rate into the next one — 0/0 is not zero percent, and rendering it as 0% would
+   put a precise-looking figure where there is no information. Infinity and NaN
+   are worse again: both survive JSON.stringify as null or as a number-shaped
+   thing, and a NaN in a funnel report looks like a bug in the product rather than
+   an absence in the data.
+
+   One decimal place, because funnel rates are read and compared, and two decimals
+   on a count of 37 implies a precision the input does not have. */
+function funnelRate(part, whole) {
+  var p = Number(part), w = Number(whole);
+  if (!Number.isFinite(p) || !Number.isFinite(w) || w <= 0) return null;
+  return Math.round((p / w) * 1000) / 10;
+}
+
+/* BENCHMARK CLAIMS, the expensive failure on this agent.
+
+   "The industry average conversion rate is 2.35%" is the most confidently
+   fabricated statistic in marketing. It is specific, it is plausible, it sounds
+   researched, and a business will re-plan a quarter around it. This agent reads
+   no industry data and holds none — there is no benchmark source in this
+   codebase, no dataset, no API — so every such statement is a recollection of the
+   shape of a number rather than a number.
+
+   Scanned in the OUTPUT with positions, the same way the competitor scan looks
+   for invented figures, because the prompt forbidding it is not a guarantee and
+   this is the one a reader cannot tell apart from a real citation. */
+var ANALYTICS_BENCHMARK_PATTERNS = [
+  { pattern: /\bindustry (average|standard|benchmark|norm|typical)\b/i, label: "an industry benchmark claim" },
+  { pattern: /\b(average|typical|standard|benchmark)\s+(conversion|click|open|bounce|churn|retention|cart|close)\s*(rate|ratio)?\b/i,
+    label: "a benchmark rate claim" },
+  { pattern: /\bbenchmark(s|ed|ing)?\b/i, label: "a benchmark claim" },
+  { pattern: /\b(most|many|typical)\s+(businesses|companies|brands|stores|sites|saas|agencies)\b/i,
+    label: "a claim about what most businesses do" },
+  { pattern: /\btop (performers|quartile|decile|10\s*%|quartile)\b/i, label: "a top-performer comparison" },
+  { pattern: /\b(on average|typically|usually)\b[^.]{0,40}\d+(\.\d+)?\s*%/i, label: "an averaged percentage" },
+  { pattern: /\b\d+(\.\d+)?\s*%\s*(is|would be)\s+(average|typical|standard|good|normal|healthy)\b/i,
+    label: "a figure described as typical" },
+  { pattern: /\b(average|typical|standard)\s+is\s+(around|about|approximately|roughly|~)?\s*\d/i,
+    label: "a stated average" },
+  { pattern: /\bcompared (to|with) (the )?(industry|market|others|competitors)\b/i,
+    label: "a comparison to the industry" },
+  { pattern: /\b(good|healthy|poor|bad|strong|weak)\s+(conversion|churn|retention|bounce)\s*rate\s+(is|would be)\b/i,
+    label: "a rate described as good or bad by an unstated standard" }
+];
+
+function scanBenchmarkClaims(text) {
+  var value = String(text || "");
+  var found = [];
+
+  ANALYTICS_BENCHMARK_PATTERNS.forEach(function (rule) {
+    var global = new RegExp(rule.pattern.source, rule.pattern.flags.indexOf("g") === -1
+      ? rule.pattern.flags + "g" : rule.pattern.flags);
+    var m;
+    while ((m = global.exec(value)) !== null) {
+      if (m[0].length === 0) { global.lastIndex += 1; continue; }
+      var start = m.index;
+      var ctxStart = Math.max(0, start - 30);
+      var ctxEnd = Math.min(value.length, start + m[0].length + 30);
+      found.push({
+        matched_text: m[0].trim(),
+        position: start,
+        problem: rule.label,
+        context: (ctxStart > 0 ? "…" : "") +
+                 value.slice(ctxStart, ctxEnd).replace(/\s+/g, " ").trim() +
+                 (ctxEnd < value.length ? "…" : "")
+      });
+    }
+  });
+
+  var seen = {};
+  return found.filter(function (f) {
+    var key = f.position + ":" + f.matched_text.toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).sort(function (a, b) { return a.position - b.position; });
+}
+
+var ANALYTICS_NO_BENCHMARKS =
+  "BIZFORCE HOLDS NO INDUSTRY DATA. There is no benchmark dataset, no industry feed and no " +
+  "comparison source anywhere in this platform, so any statement here about what is average, " +
+  "typical, standard or good is the model's recollection of the shape of a number rather than a " +
+  "measurement of anything. \"The industry average conversion rate is 2.35%\" is the most " +
+  "confidently fabricated statistic in marketing — it is specific, plausible and unsourced, and a " +
+  "business will re-plan a quarter around it. The arithmetic below is computed from the figures " +
+  "YOU supplied and is exact. Everything beyond that is interpretation, and any benchmark in it " +
+  "should be treated as invented until you find a source for it.";
+
+app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var funnelName = safeText(req.body.funnel_name || req.body.name, 200);
+      var context = safeText(req.body.context, 1000);
+
+      var rawStages = Array.isArray(req.body.stages) ? req.body.stages : [];
+      if (rawStages.length > 20) {
+        return res.status(400).json({ error: "At most 20 stages can be analysed at once." });
+      }
+
+      /* A stage needs a name and a usable count. A row whose count cannot be read
+         is REJECTED rather than treated as zero: zero is a real and meaningful
+         count in a funnel — nobody reached this stage — and silently substituting
+         it would manufacture a 100% drop that the data never showed. */
+      var stages = [];
+      var badRows = [];
+      rawStages.forEach(function (row, index) {
+        var item = row && typeof row === "object" ? row : {};
+        var name = safeText(item.name || item.stage, 120);
+        var count = Number(item.count);
+
+        if (!name) { badRows.push({ position: index + 1, reason: "no stage name" }); return; }
+        if (!Number.isFinite(count) || count < 0) {
+          badRows.push({ position: index + 1, name: name, reason: "count is not a number at or above zero" });
+          return;
+        }
+        stages.push({ name: name, count: Math.round(count) });
+      });
+
+      if (stages.length < 2) {
+        return res.status(400).json({
+          error: "At least two usable stages are required — pass `stages` as an array of " +
+            "{ name, count }. A funnel needs something to convert from and something to convert to.",
+          unusable_rows: badRows
+        });
+      }
+
+      /* THE ARITHMETIC, ALL OF IT, HERE. The model is given these numbers and is
+         forbidden to recompute or contradict them. A conversion rate is division;
+         there is no reason for a language model to be anywhere near it, and every
+         reason for the figure a business acts on to be exact and reproducible. */
+      var computed = stages.map(function (stage, i) {
+        var prev = i === 0 ? null : stages[i - 1];
+        var dropped = prev ? prev.count - stage.count : null;
+
+        return {
+          position: i + 1,
+          name: stage.name,
+          count: stage.count,
+          conversion_from_previous_percent: prev ? funnelRate(stage.count, prev.count) : null,
+          dropped_from_previous: dropped,
+          drop_rate_from_previous_percent: prev ? funnelRate(dropped, prev.count) : null,
+          // A stage larger than the one before it is a data problem, not a funnel.
+          // Flagged rather than corrected, because which number is wrong is not
+          // something this code can know.
+          larger_than_previous: prev ? stage.count > prev.count : false,
+          share_of_entry_percent: funnelRate(stage.count, stages[0].count)
+        };
+      });
+
+      var first = stages[0], last = stages[stages.length - 1];
+
+      /* The largest drop, by COUNT LOST rather than by rate. Both are reported,
+         but the count is what the business feels: a 90% drop from 10 people is 9
+         people, and a 30% drop from 10,000 is 3,000. Ranking by rate would point
+         the reader at the smaller problem. */
+      var biggestByCount = null, biggestByRate = null;
+      computed.forEach(function (stage, i) {
+        if (i === 0 || stage.dropped_from_previous === null) return;
+        if (!biggestByCount || stage.dropped_from_previous > biggestByCount.dropped_from_previous) {
+          biggestByCount = stage;
+        }
+        if (stage.drop_rate_from_previous_percent !== null &&
+            (!biggestByRate || stage.drop_rate_from_previous_percent > biggestByRate.drop_rate_from_previous_percent)) {
+          biggestByRate = stage;
+        }
+      });
+
+      function describeDrop(stage) {
+        if (!stage) return null;
+        var prev = computed[stage.position - 2];
+        return {
+          between: (prev ? prev.name : "?") + " → " + stage.name,
+          from_count: prev ? prev.count : null,
+          to_count: stage.count,
+          lost: stage.dropped_from_previous,
+          drop_rate_percent: stage.drop_rate_from_previous_percent
+        };
+      }
+
+      var zeroStages = computed.filter(function (s) { return s.count === 0; })
+        .map(function (s) { return s.name; });
+      var increasing = computed.filter(function (s) { return s.larger_than_previous; })
+        .map(function (s) { return s.name; });
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var analyticsBrain =
+        "You are the BizForce AI Analytics Agent. You read funnels that have already been computed " +
+        "for you and you say what they might mean. You never recompute the arithmetic and you never " +
+        "cite an industry benchmark, because you have no industry data — BizForce holds none.";
+
+      var figuresBlock =
+        "THE FUNNEL, ALREADY COMPUTED (exact; do not recompute, do not contradict):\n" +
+        JSON.stringify({
+          stages: computed,
+          overall_conversion_percent: funnelRate(last.count, first.count),
+          entered: first.count,
+          completed: last.count,
+          total_lost: first.count - last.count,
+          largest_drop_by_count: describeDrop(biggestByCount),
+          largest_drop_by_rate: describeDrop(biggestByRate)
+        }, null, 2);
+
+      var instruction =
+        "Interpret the funnel above in these sections:\n" +
+        "WHAT_THE_NUMBERS_SAY: <read the computed figures back in plain words; use only those figures>\n" +
+        "LIKELY_CAUSES: <for the largest drop, what commonly causes a drop at that kind of stage; one per line>\n" +
+        "WHAT_TO_CHECK_FIRST: <the single thing to look at first, and why that one>\n" +
+        "WHAT_WOULD_CONFIRM_IT: <what evidence would confirm or rule out each likely cause>\n\n" +
+        "HARD RULES:\n" +
+        "- Do NOT state, imply or allude to an industry average, benchmark, typical rate, standard " +
+        "rate, or what most businesses see. You have NO industry data. Not even as a rough figure, " +
+        "not even hedged. If you want to say a rate is low, say what it is low RELATIVE TO in this " +
+        "same funnel, or say you cannot tell.\n" +
+        "- Do not recompute any percentage. They are above and they are exact.\n" +
+        "- Do not invent traffic sources, device splits, or any dimension that is not in the data.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(analyticsBrain, businessProfile, {}, []) +
+        (funnelName ? "\n\nFUNNEL:\n" + funnelName : "") +
+        (context ? "\n\nCONTEXT:\n" + context : "") +
+        "\n\n" + figuresBlock +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw,
+        ["WHAT_THE_NUMBERS_SAY", "LIKELY_CAUSES", "WHAT_TO_CHECK_FIRST", "WHAT_WOULD_CONFIRM_IT"]);
+
+      /* The interpretation is scanned, the arithmetic is not — there is nothing to
+         scan in a number this server computed. */
+      var benchmarks = scanBenchmarkClaims(raw);
+
+      return res.json({
+        success: true,
+        funnel_name: funnelName || null,
+        /* THE NUMBERS, SEPARATE FROM THE WORDS. The arithmetic is in `measured`
+           and the model's reading of it is in `interpretation`, as two different
+           keys, so a page cannot render them as one voice without deciding to. */
+        measured: {
+          stages: computed,
+          entered: first.count,
+          completed: last.count,
+          total_lost: first.count - last.count,
+          overall_conversion_percent: funnelRate(last.count, first.count),
+          largest_drop_by_count: describeDrop(biggestByCount),
+          largest_drop_by_rate: describeDrop(biggestByRate),
+          stages_with_zero_count: zeroStages,
+          stages_larger_than_the_previous: increasing,
+          unusable_rows: badRows,
+          benchmark_claims_in_the_interpretation: benchmarks,
+          interpretation_cites_a_benchmark: benchmarks.length > 0,
+          note: (function () {
+            var notes = [];
+            if (zeroStages.length) {
+              notes.push("No conversion rate is reported out of " + zeroStages.join(", ") +
+                " — nobody reached that stage, and 0 of 0 is not 0%, it is no rate at all.");
+            }
+            if (increasing.length) {
+              notes.push("These stages are LARGER than the one before them: " + increasing.join(", ") +
+                ". A funnel cannot grow; one of those counts is measuring something different.");
+            }
+            if (badRows.length) {
+              notes.push(badRows.length + " row(s) could not be read and were left out rather than " +
+                "counted as zero.");
+            }
+            if (benchmarks.length) {
+              notes.push("The interpretation cites " + benchmarks.length + " benchmark-shaped " +
+                "claim(s). BizForce holds no industry data, so treat each as invented.");
+            }
+            if (!notes.length) {
+              notes.push("Entered " + first.count + ", completed " + last.count + " — " +
+                funnelRate(last.count, first.count) + "% overall, with the biggest single loss " +
+                "between " + (describeDrop(biggestByCount) || {}).between + ".");
+            }
+            return notes.join(" ");
+          })()
+        },
+        interpretation: {
+          what_the_numbers_say: parsed.WHAT_THE_NUMBERS_SAY || "",
+          likely_causes: parsed.LIKELY_CAUSES ? parseToolLines(parsed.LIKELY_CAUSES) : [],
+          what_to_check_first: parsed.WHAT_TO_CHECK_FIRST || "",
+          what_would_confirm_it: parsed.WHAT_WOULD_CONFIRM_IT || ""
+        },
+        provenance: toolProvenance(
+          [
+            "Every conversion rate, drop count and drop rate in the funnel",
+            "The overall conversion rate and the total lost",
+            "Which single step loses the most people, by count and by rate",
+            "Stages with a zero count, stages larger than the one before, and rows that could not be read",
+            "Benchmark-shaped claims in the interpretation, with their positions"
+          ],
+          [
+            "The interpretation — what the numbers might mean",
+            "The likely causes of the largest drop",
+            "What to check first",
+            "Anything resembling a benchmark, which is recollection and not data"
+          ],
+          ANALYTICS_NO_BENCHMARKS,
+          {
+            industry_data_read: false,
+            benchmark_source_exists: false,
+            analytics_platform_read: false,
+            traffic_data_read: false,
+            figures_supplied_by_caller: true
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[analytics/funnel] Error:", error);
+      next(error);
+    }
+  });
+
+app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var periodLabel = safeText(req.body.period || req.body.period_label, 200);
+      var context = safeText(req.body.context, 1000);
+
+      var rawMetrics = Array.isArray(req.body.metrics) ? req.body.metrics : [];
+      if (rawMetrics.length > 30) {
+        return res.status(400).json({ error: "At most 30 metrics can be reviewed at once." });
+      }
+
+      var metrics = [];
+      var badRows = [];
+      rawMetrics.forEach(function (row, index) {
+        var item = row && typeof row === "object" ? row : {};
+        var name = safeText(item.name || item.metric, 120);
+        var current = Number(item.current !== undefined ? item.current : item.value);
+        var previous = Number(item.previous);
+        var unit = safeText(item.unit, 20);
+        var direction = String(safeText(item.better, 20) || "up").toLowerCase();
+
+        if (!name) { badRows.push({ position: index + 1, reason: "no metric name" }); return; }
+        if (!Number.isFinite(current)) {
+          badRows.push({ position: index + 1, name: name, reason: "current value is not a number" });
+          return;
+        }
+
+        var hasPrevious = Number.isFinite(previous);
+        var change = hasPrevious ? current - previous : null;
+
+        metrics.push({
+          name: name,
+          current: current,
+          previous: hasPrevious ? previous : null,
+          unit: unit || null,
+          change: change,
+          /* Percent change needs a non-zero base. From zero there IS no percent
+             change — going from 0 to 40 is not a 4000% rise, it is a start — so
+             the field is null and the absolute change carries the meaning. */
+          change_percent: (hasPrevious && previous !== 0 && change !== null)
+            ? Math.round((change / Math.abs(previous)) * 1000) / 10
+            : null,
+          direction: change === null ? "unknown" : (change > 0 ? "up" : (change < 0 ? "down" : "flat")),
+          better_when: (direction === "down" ? "down" : "up"),
+          // Whether the movement is in the direction the caller said is good.
+          moved_favourably: change === null ? null
+            : (change === 0 ? null : ((change > 0) === (direction !== "down")))
+        });
+      });
+
+      if (!metrics.length) {
+        return res.status(400).json({
+          error: "At least one usable metric is required — pass `metrics` as an array of " +
+            "{ name, current, previous, unit, better }, where `better` is \"up\" or \"down\".",
+          unusable_rows: badRows
+        });
+      }
+
+      var withPrevious = metrics.filter(function (m) { return m.previous !== null; });
+      var improved = withPrevious.filter(function (m) { return m.moved_favourably === true; });
+      var worsened = withPrevious.filter(function (m) { return m.moved_favourably === false; });
+      var fromZero = metrics.filter(function (m) {
+        return m.previous === 0 && m.change !== null;
+      }).map(function (m) { return m.name; });
+
+      // Ranked by the size of the unfavourable move, so "what to look at first"
+      // has an arithmetic answer before the model offers an opinion.
+      var worstMoves = worsened.slice().sort(function (a, b) {
+        var ap = a.change_percent === null ? 0 : Math.abs(a.change_percent);
+        var bp = b.change_percent === null ? 0 : Math.abs(b.change_percent);
+        return bp - ap;
+      }).map(function (m) {
+        return { name: m.name, change: m.change, change_percent: m.change_percent };
+      });
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var analyticsBrain =
+        "You are the BizForce AI Analytics Agent reviewing KPIs whose changes have already been " +
+        "computed for you. You say what to look at first and why. You hold no industry data and you " +
+        "never cite a benchmark.";
+
+      var figuresBlock =
+        "THE METRICS, CHANGES ALREADY COMPUTED (exact; do not recompute, do not contradict):\n" +
+        JSON.stringify({
+          period: periodLabel || null,
+          metrics: metrics,
+          improved: improved.map(function (m) { return m.name; }),
+          worsened: worsened.map(function (m) { return m.name; }),
+          largest_unfavourable_moves: worstMoves.slice(0, 5)
+        }, null, 2);
+
+      var instruction =
+        "Review the metrics above in these sections:\n" +
+        "WHAT_MOVED: <the changes in plain words, using only the figures above>\n" +
+        "LOOK_AT_FIRST: <which metric to investigate first and why that one>\n" +
+        "WHAT_MIGHT_EXPLAIN_IT: <plausible explanations for the largest unfavourable move; one per line>\n" +
+        "WHAT_IS_MISSING: <what you would need to tell cause from coincidence here>\n\n" +
+        "HARD RULES:\n" +
+        "- NO benchmarks. Do not say what is average, typical, standard, healthy, good or what most " +
+        "businesses see. BizForce holds no industry data. If you want to call a number low, say what " +
+        "it is low relative to IN THIS DATA, or say you cannot tell.\n" +
+        "- Do not recompute the changes. They are above and exact.\n" +
+        "- Where a metric has no previous value, say the change is unknown rather than implying one.\n" +
+        "- Do not invent segments, channels or causes that the data cannot show.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(analyticsBrain, businessProfile, {}, []) +
+        (context ? "\n\nCONTEXT:\n" + context : "") +
+        "\n\n" + figuresBlock +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw,
+        ["WHAT_MOVED", "LOOK_AT_FIRST", "WHAT_MIGHT_EXPLAIN_IT", "WHAT_IS_MISSING"]);
+      var benchmarks = scanBenchmarkClaims(raw);
+
+      return res.json({
+        success: true,
+        period: periodLabel || null,
+        measured: {
+          metric_count: metrics.length,
+          metrics: metrics,
+          metrics_with_a_previous_value: withPrevious.length,
+          metrics_without_a_previous_value: metrics.length - withPrevious.length,
+          improved: improved.map(function (m) { return m.name; }),
+          worsened: worsened.map(function (m) { return m.name; }),
+          flat_or_unknown: metrics.filter(function (m) { return m.moved_favourably === null; })
+            .map(function (m) { return m.name; }),
+          largest_unfavourable_moves: worstMoves,
+          metrics_rising_from_zero: fromZero,
+          unusable_rows: badRows,
+          benchmark_claims_in_the_review: benchmarks,
+          review_cites_a_benchmark: benchmarks.length > 0,
+          note: (function () {
+            var notes = [];
+            if (fromZero.length) {
+              notes.push("No percent change is reported for " + fromZero.join(", ") +
+                " — the previous value was zero, and a rise from zero is a start rather than a " +
+                "percentage.");
+            }
+            if (badRows.length) {
+              notes.push(badRows.length + " row(s) could not be read and were left out.");
+            }
+            if (benchmarks.length) {
+              notes.push("The review cites " + benchmarks.length + " benchmark-shaped claim(s). " +
+                "BizForce holds no industry data, so treat each as invented.");
+            }
+            if (!notes.length) {
+              notes.push(improved.length + " metric(s) moved favourably, " + worsened.length +
+                " unfavourably, out of " + withPrevious.length + " with something to compare against.");
+            }
+            return notes.join(" ");
+          })()
+        },
+        review: {
+          what_moved: parsed.WHAT_MOVED || "",
+          look_at_first: parsed.LOOK_AT_FIRST || "",
+          what_might_explain_it: parsed.WHAT_MIGHT_EXPLAIN_IT
+            ? parseToolLines(parsed.WHAT_MIGHT_EXPLAIN_IT) : [],
+          what_is_missing: parsed.WHAT_IS_MISSING || ""
+        },
+        provenance: toolProvenance(
+          [
+            "Every change and percent change, from the values you supplied",
+            "Which metrics moved favourably and which did not, against the direction you declared",
+            "The largest unfavourable moves, ranked",
+            "Metrics rising from zero, and rows that could not be read",
+            "Benchmark-shaped claims in the review, with their positions"
+          ],
+          [
+            "The review — what moved, what to look at first, what might explain it",
+            "Every explanation offered",
+            "Anything resembling a benchmark, which is recollection and not data"
+          ],
+          ANALYTICS_NO_BENCHMARKS,
+          {
+            industry_data_read: false,
+            benchmark_source_exists: false,
+            analytics_platform_read: false,
+            figures_supplied_by_caller: true
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[analytics/kpi-review] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Influencer Agent tools ───────────────────────────────────────────────────
+
+/* A first contact message past this is not read. Creators receive many, read the
+   first lines, and a long opener reads as a template — which it is. Measured
+   rather than mentioned, for the same reason the pitch word limit is. */
+var INFLUENCER_FIRST_DM_MAX_WORDS = 80;
+
+/* DISCLOSURE, and this is the expensive failure on this agent.
+
+   An undisclosed paid partnership is an FTC matter, and the liability falls on the
+   BRAND as well as the creator — the advertiser is responsible for what its paid
+   creators say and for ensuring disclosure happens. So disclosure is not a
+   courtesy to mention in a footnote; it is a term of the deal, and an offer that
+   leaves it to the creator's judgement is the brand accepting a risk it may not
+   know it has taken.
+
+   These patterns are what "optional" looks like in an offer. Scanned in the
+   OUTPUT, the way the review-request scan looks for incentives, because the
+   prompt is not a guarantee and the cost of this one lands on the user. */
+var DISCLOSURE_OPTOUT_PATTERNS = [
+  { pattern: /\bif you (want|wish|like|prefer|feel)\b/i,             label: "disclosure framed as optional" },
+  { pattern: /\bup to you\b/i,                                        label: "disclosure left to the creator" },
+  { pattern: /\byour (call|choice|discretion|preference)\b/i,          label: "disclosure left to the creator" },
+  { pattern: /\bat your discretion\b/i,                               label: "disclosure left to the creator" },
+  { pattern: /\bno need to (mention|disclose|tag|say|declare)\b/i,     label: "disclosure actively discouraged" },
+  { pattern: /\b(don't|do not|dont)\s+(need|have)\s+to\s+(mention|disclose|tag|declare)\b/i,
+    label: "disclosure actively discouraged" },
+  { pattern: /\boptional(ly)?\b/i,                                    label: "something marked optional" },
+  { pattern: /\bfeel free to\b/i,                                     label: "disclosure framed as optional" },
+  { pattern: /\b(you can|could) (mention|disclose|tag|add)\b/i,        label: "disclosure framed as permissive" },
+  { pattern: /\bnot (required|necessary|mandatory)\b/i,                label: "a requirement described as not required" },
+  { pattern: /\bwhere (possible|appropriate|relevant)\b/i,             label: "disclosure hedged as situational" },
+  { pattern: /\bif (asked|required|necessary)\b/i,                     label: "disclosure made conditional" },
+  { pattern: /\bsubtl(e|y)\b/i,                                        label: "disclosure asked to be subtle" },
+  { pattern: /\bdoesn'?t need to be obvious\b/i,                       label: "disclosure asked to be unobtrusive" },
+  /* Both word orders. "organic feel" and "feeling organic" are the same request —
+     make the paid post not look paid — and a pattern that caught only the first
+     would pass the second, which is the more natural way to write it. */
+  { pattern: /\borganic(ally)?\s+(feel|feeling|look|looking|post|content|vibe)\b/i,
+    label: "paid content framed as organic" },
+  { pattern: /\b(feel|feels|feeling|look|looks|looking|seem|seems|keep it)\s+organic\b/i,
+    label: "paid content framed as organic" },
+  { pattern: /\b(authentic|natural|casual)\s+(feel|feeling|vibe)\b/i,
+    label: "paid content framed as unpaid" }
+];
+
+function scanDisclosureOptOuts(text) {
+  var value = String(text || "");
+  var found = [];
+  DISCLOSURE_OPTOUT_PATTERNS.forEach(function (rule) {
+    var m = value.match(rule.pattern);
+    if (m) found.push({ matched_text: m[0], position: m.index, problem: rule.label });
+  });
+  return found.sort(function (a, b) { return a.position - b.position; });
+}
+
+var INFLUENCER_DISCLOSURE_STATEMENT =
+  "DISCLOSURE IS A TERM OF THE DEAL, NOT A COURTESY. An undisclosed paid partnership breaches FTC " +
+  "endorsement rules, and the liability falls on the BRAND as well as the creator — the advertiser " +
+  "is responsible for ensuring its paid creators disclose, and for what they say. Disclosure must " +
+  "be clear and hard to miss: #ad or #sponsored placed where it is seen without expanding a " +
+  "caption, stated aloud in video, and not buried among other tags. It cannot be left to the " +
+  "creator's judgement, cannot be conditional on anyone asking, and cannot be made subtle to " +
+  "preserve an organic feel. An offer that leaves it optional is the brand accepting a risk it may " +
+  "not know it has taken. This applies wherever the creator's audience is, and rules differ by " +
+  "country — check the ones that apply to yours.";
+
+app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var creator = safeText(req.body.creator || req.body.creator_description, 1000);
+      var campaign = safeText(req.body.campaign, 1000);
+      var channel = safeText(req.body.channel, 80);
+
+      if (!creator) {
+        return res.status(400).json({
+          error: "A creator description is required — who they are and what they make."
+        });
+      }
+      if (!campaign) {
+        return res.status(400).json({
+          error: "A campaign is required — what you are asking them to be part of."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var influencerBrain =
+        "You are the BizForce AI Influencer Agent writing a first contact message. You know a " +
+        "creator receives many of these, reads the first line and deletes most of them, and that " +
+        "length is the fastest way to be ignored. You lead with what is specific to them.";
+
+      var instruction =
+        "Write ONE first-contact message to the creator described below.\n\n" +
+        "OUTPUT FORMAT — these exact labels:\n" +
+        "MESSAGE: <the message, UNDER " + INFLUENCER_FIRST_DM_MAX_WORDS + " WORDS>\n" +
+        "WHY_THIS_OPENING: <one line on what the first sentence is doing>\n\n" +
+        "RULES:\n" +
+        "- Under " + INFLUENCER_FIRST_DM_MAX_WORDS + " words. This is the hardest constraint here; " +
+        "cut rather than run over.\n" +
+        "- Open with something specific to THIS creator, not with who you are.\n" +
+        "- Say plainly that it is a paid collaboration if it is one. Vagueness about money wastes " +
+        "their time and reads as a trap.\n" +
+        "- Invent NO figures — no follower counts, no view counts, no fee, no reach. Write " +
+        "[FIGURE NEEDED] where one belongs.\n" +
+        "- No flattery that could be sent to anyone, and no 'I love your content'.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(influencerBrain, businessProfile, {}, []) +
+        "\n\nTHE CREATOR:\n" + creator +
+        "\n\nTHE CAMPAIGN:\n" + campaign +
+        (channel ? "\n\nCHANNEL:\n" + channel : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 1200);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, ["MESSAGE", "WHY_THIS_OPENING"]);
+      var message = parsed.MESSAGE || "";
+
+      if (!message) {
+        return res.status(502).json({
+          error: "The message could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var words = countWords(message);
+      var firstSentence = (message.match(/^[^.!?]*[.!?]/) || [message])[0].trim();
+
+      return res.json({
+        success: true,
+        outreach: {
+          message: message,
+          why_this_opening: parsed.WHY_THIS_OPENING || ""
+        },
+        channel: channel || null,
+        measured: {
+          word_count: words,
+          word_limit: INFLUENCER_FIRST_DM_MAX_WORDS,
+          within_word_limit: words > 0 && words <= INFLUENCER_FIRST_DM_MAX_WORDS,
+          words_over_limit: words > INFLUENCER_FIRST_DM_MAX_WORDS
+            ? words - INFLUENCER_FIRST_DM_MAX_WORDS : 0,
+          character_count: message.length,
+          sentence_count: (message.match(/[.!?](\s|$)/g) || []).length,
+          // The line that decides whether the rest is read.
+          first_sentence: firstSentence,
+          first_sentence_words: countWords(firstSentence),
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: words > INFLUENCER_FIRST_DM_MAX_WORDS
+            ? "This is " + (words - INFLUENCER_FIRST_DM_MAX_WORDS) + " words over the " +
+              INFLUENCER_FIRST_DM_MAX_WORDS + "-word limit. A first message this long is usually " +
+              "not read to the end — cut it before sending."
+            : "Within the " + INFLUENCER_FIRST_DM_MAX_WORDS + "-word limit, opening on a " +
+              countWords(firstSentence) + "-word sentence."
+        },
+        provenance: toolProvenance(
+          [
+            "The message's word and character count against the " + INFLUENCER_FIRST_DM_MAX_WORDS + "-word limit",
+            "The first sentence and its length",
+            "Sentence count, and any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "The message itself and its opening",
+            "Whether this creator is a fit for the campaign",
+            "Whether they will reply"
+          ],
+          "No platform was read and nothing was sent. BizForce has no access to this creator's " +
+          "profile, follower count, engagement or rates — it has not looked them up, and any figure " +
+          "about them would be invented. Research the creator yourself before sending.",
+          {
+            creator_profile_read: false,
+            follower_data_read: false,
+            engagement_data_read: false,
+            rates_looked_up: false,
+            message_sent: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[influencer/outreach] Error:", error);
+      next(error);
+    }
+  });
+
+/* The terms a collaboration offer has to cover. DISCLOSURE is one of them rather
+   than an appendix, and its absence is reported as a missing term, because an
+   offer silent on disclosure is the failure this scan exists to catch. */
+var PARTNERSHIP_OFFER_SECTIONS = ["DELIVERABLES", "USAGE_RIGHTS", "EXCLUSIVITY",
+  "TIMELINE", "PAYMENT_TERMS", "DISCLOSURE"];
+
+app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var collaboration = safeText(req.body.collaboration || req.body.shape, 2000);
+      var creator = safeText(req.body.creator, 500);
+      var budget = safeText(req.body.budget, 200);
+      var territory = safeText(req.body.territory || req.body.market, 200);
+
+      if (!collaboration) {
+        return res.status(400).json({
+          error: "The collaboration shape is required — what the creator would make, for what, and roughly on what basis."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var influencerBrain =
+        "You are the BizForce AI Influencer Agent drafting a collaboration offer. You treat " +
+        "DISCLOSURE AS A TERM, not a courtesy: an undisclosed paid partnership breaches FTC rules " +
+        "and the brand carries the liability, so the offer states the requirement plainly and never " +
+        "leaves it to the creator's judgement.";
+
+      var instruction =
+        "Draft a collaboration offer for the shape below.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line, in this order:\n" +
+        "DELIVERABLES: <what the creator makes, how many, to what spec>\n" +
+        "USAGE_RIGHTS: <where the brand may use it, for how long, in what media>\n" +
+        "EXCLUSIVITY: <whether the creator is restricted from competitors, how narrowly, for how long>\n" +
+        "TIMELINE: <key dates from brief to publication>\n" +
+        "PAYMENT_TERMS: <amount, trigger, and when it is paid>\n" +
+        "DISCLOSURE: <the disclosure requirement, stated as a REQUIREMENT>\n\n" +
+        "RULES ON DISCLOSURE — these are not style preferences:\n" +
+        "- State it as required. Not encouraged, not appreciated, not 'if you usually do'.\n" +
+        "- Say WHERE it must appear so it is seen without expanding a caption, and that it must be " +
+        "spoken aloud in video content.\n" +
+        "- Do NOT write that it is optional, at the creator's discretion, up to them, only if asked, " +
+        "subtle, or anything that preserves an 'organic' feel. Do not use the word optional anywhere " +
+        "in the offer.\n" +
+        "- Say that the brand is responsible for ensuring it happens.\n\n" +
+        "OTHER RULES:\n" +
+        "- Every label must appear. An offer missing usage rights or exclusivity is the part that " +
+        "gets argued about later.\n" +
+        "- Invent NO figures. No fee, no follower count, no view target, no rate. Write " +
+        "[FIGURE NEEDED] where one belongs, including in PAYMENT_TERMS if no budget was given.\n" +
+        "- Do not claim any term is standard or market rate. You have not surveyed anything.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(influencerBrain, businessProfile, {}, []) +
+        "\n\nTHE COLLABORATION:\n" + collaboration +
+        (creator ? "\n\nTHE CREATOR:\n" + creator : "") +
+        (budget ? "\n\nBUDGET:\n" + budget : "") +
+        (territory ? "\n\nTERRITORY / MARKET:\n" + territory : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw, PARTNERSHIP_OFFER_SECTIONS);
+      var present = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !!parsed[s]; });
+      var missing = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !parsed[s]; });
+
+      if (!present.length) {
+        return res.status(502).json({
+          error: "The offer could not be read back from the model, so nothing is being reported. " +
+            "This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var offer = {};
+      PARTNERSHIP_OFFER_SECTIONS.forEach(function (s) { offer[s.toLowerCase()] = parsed[s] || ""; });
+
+      /* Scanned across the WHOLE offer, not only the disclosure section: "you can
+         mention it if you like" three lines below a correctly worded requirement
+         undoes the requirement, and it would pass a check that only read the
+         DISCLOSURE field. */
+      var optOuts = scanDisclosureOptOuts(raw);
+      var disclosureMissing = !parsed.DISCLOSURE;
+
+      /* NOT READY TO SEND if disclosure is absent or softened. Both are the same
+         failure arriving from different directions, and the brand carries the
+         liability either way. */
+      var readyToSend = !disclosureMissing && optOuts.length === 0;
+
+      return res.json({
+        success: true,
+        offer: offer,
+        ready_to_send: readyToSend,
+        measured: {
+          sections_present: present,
+          sections_missing: missing,
+          is_complete: missing.length === 0,
+          disclosure_section_present: !disclosureMissing,
+          disclosure_optout_phrases_found: optOuts,
+          disclosure_left_optional: optOuts.length > 0,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          word_count: countWords(raw),
+          note: (function () {
+            var problems = [];
+            if (disclosureMissing) {
+              problems.push("THE OFFER HAS NO DISCLOSURE TERM. An undisclosed paid partnership " +
+                "breaches FTC rules and the brand carries the liability, so this cannot go out " +
+                "as written.");
+            }
+            if (optOuts.length) {
+              problems.push("Language in this offer makes disclosure optional or discretionary (" +
+                optOuts.map(function (o) { return '"' + o.matched_text + '"'; }).join(", ") +
+                "). Disclosure is a term, not a preference — remove those before sending.");
+            }
+            var otherMissing = missing.filter(function (s) { return s !== "DISCLOSURE"; });
+            if (otherMissing.length) {
+              problems.push("Also missing: " + otherMissing.join(", ") +
+                " — those are the terms that get argued about after the work is done.");
+            }
+            if (problems.length) return problems.join(" ");
+            return "All six terms present, with disclosure stated as a requirement.";
+          })()
+        },
+        disclosure_statement: INFLUENCER_DISCLOSURE_STATEMENT,
+        provenance: toolProvenance(
+          [
+            "Which of the six offer terms came back and which are missing",
+            "Whether a disclosure term is present at all",
+            "Every phrase in the offer that makes disclosure optional or discretionary, with its position",
+            "Word count, and any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "All of the drafting — every term's wording",
+            "What the deliverables, rights and exclusivity should be",
+            "Whether any of this is a fair deal for either side"
+          ],
+          INFLUENCER_DISCLOSURE_STATEMENT +
+          " Separately: nothing was read. BizForce has no access to this creator's profile, rates or " +
+          "audience, has surveyed no market rates, and this offer has not been reviewed by a lawyer.",
+          {
+            reviewed_by_a_lawyer: false,
+            market_rates_surveyed: false,
+            creator_profile_read: false,
+            ftc_compliance_verified: false,
+            offer_sent: false
+          }
+        )
+      });
+    } catch (error) {
+      console.error("[influencer/partnership-offer] Error:", error);
+      next(error);
+    }
+  });
+
+// ── Vertical Marketing Agent tools ───────────────────────────────────────────
+
+/* THE HONEST CONSTRAINT ON THIS AGENT IS DEPTH OF KNOWLEDGE, and it is different
+   in kind from the constraints on the others.
+
+   Its entire value is knowing a trade from the inside — the words the trade uses
+   for its own work, the channels its buyers actually read, the objection it raises
+   first. For a large vertical the model's recollection of that is reasonable. For
+   a niche one it may be thin, generic, or years out of date, and the failure is
+   not a missing figure but a wrong WORD: someone in the trade reads "clients"
+   where the trade says "accounts", or a channel nobody has used since 2019, and
+   the whole piece loses credibility in a sentence.
+
+   That failure is invisible to everyone except someone in the trade. So the output
+   states a confidence level per response, the way the competitor scan does, and
+   the provenance says plainly that nothing about the industry was researched and
+   that a practitioner would spot a wrong term instantly. */
+var VERTICAL_CONFIDENCE_LEVELS = ["high", "medium", "low"];
+
+var VERTICAL_DEPTH_CAVEAT =
+  "NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED. No trade publication, no forum, no association, no " +
+  "competitor site and no search — this is the model's recollection of how the trade talks, which " +
+  "is better for large verticals than niche ones and may be years out of date. The specific risk " +
+  "here is not a wrong number but a WRONG WORD: the term the trade does not actually use, or a " +
+  "channel its buyers abandoned. Someone who works in this industry would spot that instantly and " +
+  "stop reading, while nobody outside it would notice at all. Have a practitioner read this before " +
+  "it goes out, and treat the confidence level below as the model's own estimate of its recall " +
+  "rather than as a measurement.";
+
+var VERTICAL_PROVENANCE_FLAGS = {
+  industry_research_performed: false,
+  trade_publications_read: false,
+  practitioner_reviewed: false,
+  channel_data_read: false,
+  terminology_verified: false,
+  web_search_performed: false
+};
+
+// Pulls the confidence level out of a parsed section, normalised, or "unstated".
+function verticalConfidence(value) {
+  var raw = String(value || "").toLowerCase().trim();
+  var hit = VERTICAL_CONFIDENCE_LEVELS.filter(function (level) {
+    return raw.indexOf(level) !== -1;
+  })[0];
+  return hit || "unstated";
+}
+
+app.post("/api/agents/vertical/positioning", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var industry = safeText(req.body.industry || req.body.vertical, 200);
+      var offering = safeText(req.body.offering || req.body.product, 1000);
+      var audience = safeText(req.body.audience, 500);
+
+      if (!industry) {
+        return res.status(400).json({
+          error: "An industry is required — the one vertical this positioning is for, for example " +
+            "\"independent dental practices\" or \"commercial roofing contractors\"."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var verticalBrain =
+        "You are the BizForce AI Vertical Marketing Agent. You write for ONE industry at a time in " +
+        "that trade's own language, and you know that using the wrong word for the trade's own work " +
+        "loses a reader in one sentence. You have researched nothing, so you state how well you " +
+        "actually know the vertical and you flag the terms you are least sure of.";
+
+      var instruction =
+        "Produce positioning for the industry below.\n\n" +
+        "OUTPUT FORMAT — these exact labels, each on its own line:\n" +
+        "POSITIONING: <the positioning statement, in the trade's own language>\n" +
+        "TRADE_LANGUAGE: <the terms this trade uses for its own work, and the outsider words they " +
+        "replace, as \"insider term — not: outsider term\"; one per line>\n" +
+        "CHANNELS: <where this trade's buyers actually look — publications, associations, events, " +
+        "forums, whatever is real for them; one per line>\n" +
+        "WHAT_NOT_TO_SAY: <words or framings that mark the writer as an outsider; one per line>\n" +
+        "CONFIDENCE: <high, medium or low — how well you actually know this vertical>\n" +
+        "VERIFY_WITH_A_PRACTITIONER: <the specific terms and channels above you are least sure of; " +
+        "one per line>\n\n" +
+        "RULES:\n" +
+        "- Set CONFIDENCE honestly. A niche trade you half-recall is low, and saying so is more " +
+        "useful than confident-sounding generic marketing language.\n" +
+        "- List the channels you are least sure still exist under VERIFY_WITH_A_PRACTITIONER.\n" +
+        "- Invent no market sizes, buyer counts, growth rates or channel audience figures. Write " +
+        "[FIGURE NEEDED] where one belongs.\n" +
+        "- Do not produce generic B2B language that would fit any industry. If you cannot be " +
+        "specific to this trade, set CONFIDENCE low and say so.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(verticalBrain, businessProfile, {}, []) +
+        "\n\nINDUSTRY:\n" + industry +
+        (offering ? "\n\nWHAT IS BEING SOLD:\n" + offering : "") +
+        (audience ? "\n\nWHO IN THAT INDUSTRY:\n" + audience : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 2500);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var parsed = parseLabeledFields(raw,
+        ["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE",
+         "VERIFY_WITH_A_PRACTITIONER"]);
+
+      if (!parsed.POSITIONING && !parsed.CHANNELS) {
+        return res.status(502).json({
+          error: "The positioning could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var tradeLanguage = parsed.TRADE_LANGUAGE ? parseToolLines(parsed.TRADE_LANGUAGE) : [];
+      var channels = parsed.CHANNELS ? parseToolLines(parsed.CHANNELS) : [];
+      var notToSay = parsed.WHAT_NOT_TO_SAY ? parseToolLines(parsed.WHAT_NOT_TO_SAY) : [];
+      var verifyWith = parsed.VERIFY_WITH_A_PRACTITIONER
+        ? parseToolLines(parsed.VERIFY_WITH_A_PRACTITIONER) : [];
+      var confidence = verticalConfidence(parsed.CONFIDENCE);
+
+      return res.json({
+        success: true,
+        industry: industry,
+        positioning: {
+          statement: parsed.POSITIONING || "",
+          trade_language: tradeLanguage,
+          channels: channels,
+          what_not_to_say: notToSay,
+          verify_with_a_practitioner: verifyWith
+        },
+        confidence: confidence,
+        measured: {
+          confidence_stated: confidence !== "unstated",
+          confidence: confidence,
+          trade_terms_offered: tradeLanguage.length,
+          channels_offered: channels.length,
+          outsider_tells_listed: notToSay.length,
+          items_flagged_for_a_practitioner: verifyWith.length,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: confidence === "unstated"
+            ? "No confidence level was stated, so there is nothing to tell you how well the model " +
+              "actually knows this trade. Treat the terminology as unverified."
+            : (confidence === "low"
+                ? "Confidence is LOW on this vertical. The terminology is the part most likely to be " +
+                  "wrong, and a practitioner would notice in a sentence — get one to read it before " +
+                  "this goes out."
+                : confidence + " confidence, with " + tradeLanguage.length + " trade term(s) and " +
+                  channels.length + " channel(s) offered, and " + verifyWith.length +
+                  " item(s) the model itself flagged for checking.")
+        },
+        provenance: toolProvenance(
+          [
+            "Whether a confidence level was stated, and what it is",
+            "How many trade terms, channels and outsider tells were offered",
+            "How many items the model flagged for a practitioner to check",
+            "Any [PLACEHOLDERS] left for you"
+          ],
+          [
+            "All of the positioning and every word of the trade language",
+            "Every channel named, and whether its buyers are still there",
+            "The confidence level itself, which is the model rating its own recall"
+          ],
+          VERTICAL_DEPTH_CAVEAT,
+          VERTICAL_PROVENANCE_FLAGS
+        )
+      });
+    } catch (error) {
+      console.error("[vertical/positioning] Error:", error);
+      next(error);
+    }
+  });
+
+app.post("/api/agents/vertical/objections", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var industry = safeText(req.body.industry || req.body.vertical, 200);
+      var offer = safeText(req.body.offer || req.body.offering, 1500);
+      var priceContext = safeText(req.body.price_context || req.body.price, 300);
+
+      if (!industry) {
+        return res.status(400).json({
+          error: "An industry is required — the vertical whose objections you want."
+        });
+      }
+      if (!offer) {
+        return res.status(400).json({
+          error: "An offer is required — what is being sold to that industry."
+        });
+      }
+
+      var businessProfile = await loadProfileForTool(userId);
+
+      var verticalBrain =
+        "You are the BizForce AI Vertical Marketing Agent working on objections. You know that every " +
+        "trade raises its own first objection and that it is usually not price, and you know you have " +
+        "researched nothing — so you say how well you actually know this trade rather than sounding " +
+        "certain.";
+
+      var instruction =
+        "Give the objections this trade raises to the offer below, and how each is answered.\n\n" +
+        "OUTPUT FORMAT — one block per objection, separated by a line containing only ---\n" +
+        "OBJECTION: <how someone in this trade would actually say it, in their words>\n" +
+        "WHAT_IS_BEHIND_IT: <what they are really worried about>\n" +
+        "ANSWER: <how to answer it, in the trade's language>\n" +
+        "PROOF_THAT_HELPS: <what evidence answers it better than words do>\n" +
+        "LIKELIHOOD: <how often this one comes up in this trade: common, occasional, rare>\n\n" +
+        "Then, after the last objection, a final block separated by --- containing:\n" +
+        "CONFIDENCE: <high, medium or low — how well you actually know this trade's objections>\n" +
+        "VERIFY_WITH_A_PRACTITIONER: <which of these you are least sure are real for this trade; " +
+        "one per line>\n\n" +
+        "RULES:\n" +
+        "- Phrase each objection the way the trade says it, not in marketing language.\n" +
+        "- Do not make price the first objection unless it genuinely is for this trade.\n" +
+        "- Invent no figures, no ROI claims, no payback periods. Write [FIGURE NEEDED].\n" +
+        "- Set CONFIDENCE honestly; a trade you half-recall is low.";
+
+      var languageTag = await resolvePreferredLanguage(userId);
+
+      var prompt =
+        buildAgentSystemPrompt(verticalBrain, businessProfile, {}, []) +
+        "\n\nINDUSTRY:\n" + industry +
+        "\n\nTHE OFFER:\n" + offer +
+        (priceContext ? "\n\nPRICE CONTEXT:\n" + priceContext : "") +
+        "\n\nTASK INSTRUCTIONS:\n" + instruction +
+        buildLanguageInstruction(languageTag, true);
+
+      var generation = await callAnthropicText(prompt, 3000);
+      var raw = (generation && generation.text) ? generation.text : "";
+
+      var objections = [];
+      var confidence = "unstated";
+      var verifyWith = [];
+
+      splitToolBlocks(raw).forEach(function (block) {
+        var tail = parseLabeledFields(block, ["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"]);
+        var body = parseLabeledFields(block,
+          ["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"]);
+
+        if (!body.OBJECTION) {
+          if (tail.CONFIDENCE) confidence = verticalConfidence(tail.CONFIDENCE);
+          if (tail.VERIFY_WITH_A_PRACTITIONER) {
+            verifyWith = parseToolLines(tail.VERIFY_WITH_A_PRACTITIONER);
+          }
+          return;
+        }
+
+        var likelihood = String(body.LIKELIHOOD || "").toLowerCase().trim();
+        objections.push({
+          position: objections.length + 1,
+          objection: body.OBJECTION,
+          what_is_behind_it: body.WHAT_IS_BEHIND_IT || "",
+          answer: body.ANSWER || "",
+          proof_that_helps: body.PROOF_THAT_HELPS || "",
+          likelihood: /^(common|occasional|rare)$/.test(likelihood) ? likelihood : "unstated",
+          has_an_answer: !!body.ANSWER,
+          has_proof: !!body.PROOF_THAT_HELPS
+        });
+      });
+
+      if (!objections.length) {
+        return res.status(502).json({
+          error: "The objections could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
+      }
+
+      var byLikelihood = {};
+      ["common", "occasional", "rare", "unstated"].forEach(function (k) {
+        byLikelihood[k] = objections.filter(function (o) { return o.likelihood === k; }).length;
+      });
+
+      var withoutAnswer = objections.filter(function (o) { return !o.has_an_answer; }).length;
+      var withoutProof = objections.filter(function (o) { return !o.has_proof; }).length;
+
+      return res.json({
+        success: true,
+        industry: industry,
+        objections: objections,
+        confidence: confidence,
+        verify_with_a_practitioner: verifyWith,
+        measured: {
+          objection_count: objections.length,
+          by_likelihood: byLikelihood,
+          objections_without_an_answer: withoutAnswer,
+          objections_without_proof: withoutProof,
+          confidence_stated: confidence !== "unstated",
+          confidence: confidence,
+          items_flagged_for_a_practitioner: verifyWith.length,
+          placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
+          note: (function () {
+            var problems = [];
+            if (confidence === "unstated") {
+              problems.push("No confidence level was stated, so there is nothing to tell you how " +
+                "well the model knows this trade's objections.");
+            } else if (confidence === "low") {
+              problems.push("Confidence is LOW on this trade. These may be generic objections " +
+                "rather than the ones this industry actually raises — a practitioner would know in " +
+                "a sentence.");
+            }
+            if (withoutProof) {
+              problems.push(withoutProof + " objection(s) have no supporting proof named. An " +
+                "objection answered with words alone is usually answered again next call.");
+            }
+            if (withoutAnswer) {
+              problems.push(withoutAnswer + " objection(s) have no answer at all.");
+            }
+            if (problems.length) return problems.join(" ");
+            return objections.length + " objection(s), " + byLikelihood.common +
+              " of them common, each with an answer and supporting proof, at " + confidence +
+              " confidence.";
+          })()
+        },
+        provenance: toolProvenance(
+          [
+            "The number of objections and the count at each likelihood",
+            "How many have an answer and how many name supporting proof",
+            "Whether a confidence level was stated, and what it is",
+            "How many items the model flagged for a practitioner to check"
+          ],
+          [
+            "Every objection, its wording, and whether this trade actually raises it",
+            "Every answer and every piece of proof suggested",
+            "The likelihood labels and the confidence level, which are the model rating its own recall"
+          ],
+          VERTICAL_DEPTH_CAVEAT,
+          VERTICAL_PROVENANCE_FLAGS
+        )
+      });
+    } catch (error) {
+      console.error("[vertical/objections] Error:", error);
+      next(error);
+    }
+  });
+
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const [profile, subscription, usageResult, agentsResult, tasksResult, dealsResult, messagesResult, notificationsResult] =
