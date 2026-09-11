@@ -1365,7 +1365,22 @@ function getAssignmentAgentLabel(agentType) {
   return labels[agentType] || String(agentType || "agent").toUpperCase() + " Agent";
 }
 
-function buildAssignmentExecutionResult(assignment) {
+/* A TEMPLATE. THIS RUNS NO AGENT AND MAKES NO MODEL CALL.
+
+   Everything below is assembled from the assignment row's own fields — mission,
+   priority, timeline, tasks, kpis, risks — plus a fixed per-agent checklist. No
+   tool route is invoked, no model is asked anything, and nothing is executed.
+
+   It used to be headed "<AGENT> EXECUTION REPORT" with "Status: Complete" and
+   "Mission Accepted", and the row was then written completed — a report of work
+   that never happened, which is the exact defect this codebase removes on sight.
+   Every line now says what it is: a starting plan to follow.
+
+   IF THIS EVER GAINS A REAL RUN — a tool dispatch or a model call — the heading,
+   the opening sentence and the status the caller writes must change with it in
+   the same commit. A template that starts doing work while still calling itself
+   a template is the same lie in the other direction. */
+function buildAssignmentStartingPlan(assignment) {
   var agentType = String(assignment.agent_type || "general").toLowerCase().trim().replace(/\s+agent$/i, "");
   var agentLabel = getAssignmentAgentLabel(agentType);
   var mission = assignment.mission || "No mission provided";
@@ -1375,7 +1390,7 @@ function buildAssignmentExecutionResult(assignment) {
   var kpis = normalizeJsonbArray(assignment.kpis);
   var risks = normalizeJsonbArray(assignment.risks);
   var handoffAgent = AGENT_ORCHESTRATION_HANDOFFS[agentType];
-  var handoffLabel = handoffAgent ? getAssignmentAgentLabel(handoffAgent) : "No automatic handoff configured";
+  var handoffLabel = handoffAgent ? getAssignmentAgentLabel(handoffAgent) : "";
 
   var executionPlans = {
     seo: [
@@ -1450,39 +1465,41 @@ function buildAssignmentExecutionResult(assignment) {
 
   var successCriteria = formatAssignmentBulletList(
     kpis,
-    "- Mission deliverables completed within the stated timeline.\n- Priority actions executed and documented.\n- Next-step handoff prepared for downstream agents."
+    "- Deliver the mission outputs within the stated timeline.\n- Carry out and document the priority actions.\n- Prepare the next-step handoff for downstream agents."
   );
 
+  /* A suggestion, not an event. Nothing has been handed to anyone: the line
+     names where the work could go once it has actually been done. */
   var handoffBlock = handoffAgent
-    ? "Hand off to " + handoffLabel + " with completed context, deliverables, and success criteria for the next stage."
-    : handoffLabel;
+    ? "Suggested next agent: " + handoffLabel + ". Consider handing off there once this work is actually done, with the deliverables and success criteria above."
+    : "No automatic handoff is configured for this agent.";
 
   return [
-    agentLabel.toUpperCase() + " EXECUTION REPORT",
-    "Status: Complete",
+    agentLabel.toUpperCase() + " STARTING PLAN (TEMPLATE)",
+    "This is a starting checklist generated from the assignment's own fields. No agent has run and nothing has been executed.",
     "",
-    "Mission Accepted",
+    "Mission",
     mission,
     "",
     "Priority: " + priority,
     "Timeline: " + timeline,
     "",
-    "Execution Plan",
+    "Plan to follow",
     executionPlanItems.join("\n"),
     "",
-    "Immediate Next Actions",
+    "First actions to take",
     immediateActions,
     "",
-    "Deliverables",
+    "Deliverables to produce",
     deliverables,
     "",
-    "Risks / Dependencies",
+    "Risks / dependencies to watch",
     risksBlock,
     "",
-    "Success Criteria",
+    "Success criteria to meet",
     successCriteria,
     "",
-    "Recommended Handoff",
+    "Recommended handoff",
     handoffBlock
   ].join("\n");
 }
@@ -13057,22 +13074,25 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
         var localMission = safeText(req.body.mission, 5000) || "";
         var localPriority = safeText(req.body.priority, 120) || "";
         var localTimeline = safeText(req.body.timeline, 500) || "";
+        /* "pending", not "completed". Nothing below runs the assignment: the
+           text is a template built from these fields (or whatever the client
+           sent as `result`), and no agent has done any of it. */
         var localAssignment = {
           id: assignmentId,
           agent_type: localAgentType,
           mission: localMission,
           priority: localPriority,
           timeline: localTimeline,
-          status: "completed",
+          status: "pending",
           tasks: normalizeJsonbArray(req.body.tasks)
         };
         var localResult = safeText(req.body.result, 20000);
 
         if (!localResult) {
-          localResult = buildAssignmentExecutionResult(localAssignment);
+          localResult = buildAssignmentStartingPlan(localAssignment);
         }
 
-        console.log("ASSIGNMENT START COMPLETED", {
+        console.log("ASSIGNMENT START TEMPLATE PRODUCED", {
           user_id: userId,
           assignment_id: assignmentId,
           agent_type: localAgentType,
@@ -13094,10 +13114,12 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
             mission: localMission,
             priority: localPriority,
             timeline: localTimeline,
-            status: "completed"
+            status: "pending"
           },
           result: localResult,
-          orchestration: frontendOrchestration
+          orchestration: frontendOrchestration,
+          // Stated outright so no client can read a template as a run.
+          executed: false
         });
       }
 
@@ -13178,16 +13200,23 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
     }
 
     // From here the row is in_progress and this request owns it. Everything up to
-    // the completed write is wrapped so a throw cannot leave it that way: an
+    // the release write is wrapped so a throw cannot leave it that way: an
     // assignment stuck in_progress is unclaimable by the filter above and there is
     // no sweeper to free it, so the failure would be permanent.
+    //
+    // RELEASED TO "pending", NOT WRITTEN "completed". What happens in this window
+    // is a template being assembled from the row's own fields — no agent runs and
+    // nothing is executed — so the row has not been done and must not say it has.
+    // pending is claimable, which keeps the assignment startable by real dispatch
+    // when that exists. The claim above still holds while the template is built,
+    // so two concurrent starts still cannot both produce one.
     try {
-      var executionResult = buildAssignmentExecutionResult(claimUpdate.data);
+      var startingPlan = buildAssignmentStartingPlan(claimUpdate.data);
 
-      var completedUpdate = await supabase
+      var releasedUpdate = await supabase
         .from("agent_assignments")
         .update({
-          status: "completed",
+          status: "pending",
           updated_at: nowIso()
         })
         .eq("id", assignmentId)
@@ -13195,8 +13224,8 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
         .select("*")
         .single();
 
-      if (completedUpdate.error) {
-        throw completedUpdate.error;
+      if (releasedUpdate.error) {
+        throw releasedUpdate.error;
       }
     } catch (workError) {
       // Bookkeeping about a failure that has already happened, and best-effort on
@@ -13226,7 +13255,7 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
       throw workError;
     }
 
-    console.log("ASSIGNMENT START COMPLETED", {
+    console.log("ASSIGNMENT START TEMPLATE PRODUCED", {
       user_id: userId,
       assignment_id: assignmentId,
       agent_type: agentType
@@ -13234,15 +13263,17 @@ app.post("/api/assignments/:id/start", requireAuth, async function (req, res, ne
 
     var orchestration = await orchestrateAgentWorkflow({
       userId: userId,
-      assignment: completedUpdate.data,
-      resultText: executionResult
+      assignment: releasedUpdate.data,
+      resultText: startingPlan
     });
 
     return res.json({
       ok: true,
-      assignment: completedUpdate.data,
-      result: executionResult,
-      orchestration: orchestration
+      assignment: releasedUpdate.data,
+      result: startingPlan,
+      orchestration: orchestration,
+      // Stated outright so no client can read a template as a run.
+      executed: false
     });
   } catch (error) {
     console.error("ASSIGNMENT START ERROR:", error);
