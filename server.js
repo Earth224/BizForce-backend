@@ -1766,7 +1766,11 @@ async function orchestrateAgentWorkflow(options) {
              nothing to mirror. */
           buildLanguageInstruction(salesHandoffLanguageTag, false);
 
-        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700);
+        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700, null, undefined, {
+          user_id: userId,
+          agent_type: "sales",
+          route: "orchestrateAgentWorkflow handoff " + agentType + " -> sales"
+        });
         var salesOutput = salesGeneration.text;
         orchestrationResult.sales_call_result = salesOutput;
 
@@ -6533,6 +6537,20 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
       messages: messages
     });
 
+    /* One of five model calls in this file that do NOT go through
+       callAnthropicText — they build their own Anthropic client because they
+       need a `system` block, which that helper does not take. The ledger has to
+       cover them too: a table documented as recording every model call, silently
+       missing the Oracle and the business chat, would read as complete while
+       understating the bill. */
+    await recordModelCall({
+      userId:    req.user.id,
+      agentType: null,
+      route:     "POST /api/business-chat",
+      model:     aiResponse.model || "claude-haiku-4-5-20251001",
+      usage:     aiResponse.usage
+    });
+
     var aiText = (aiResponse.content || [])
       .filter(function (block) { return block.type === "text"; })
       .map(function (block) { return block.text; })
@@ -10048,7 +10066,10 @@ async function generateStoreProposalsForUser(userId) {
     '"tags" (array of strings), "status" (one of: active, paused, sold)\n' +
     "  Omit every field you are not changing. Do not repeat a field with its current value.";
 
-  const completion = await callAnthropicText(promptText, 2000, userId);
+  const completion = await callAnthropicText(promptText, 2000, userId, undefined, {
+    agent_type: "store",
+    route: "generateStoreProposalsForUser"
+  });
 
   // Strip a leading/trailing markdown fence before parsing — models add one
   // even when told not to.
@@ -10706,7 +10727,10 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     // cuts the article off mid-sentence or stops before ---BODY--- arrives at
     // all, and the second one throws the whole response away after the model
     // has already done all the work. stopReason below names that case outright.
-    const completion = await callAnthropicText(promptText, 32000, req.user.id, "claude-sonnet-5");
+    const completion = await callAnthropicText(promptText, 32000, req.user.id, "claude-sonnet-5", {
+      agent_type: "seo",
+      route: "POST /api/agents/seo/generate-post"
+    });
 
     let raw = String((completion && completion.text) || "").trim();
     raw = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
@@ -10901,7 +10925,159 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
   }
 });
 
-async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001") {
+/* ── model_calls, the spend ledger (migration 103) ────────────────────────────
+
+   One row per completed model call. Before this, response.usage arrived from
+   the API on every single call and was dropped on the floor: there was no token
+   count anywhere in this system, no cost table, and no answer to "what did today
+   cost" at any price.
+
+   NEVER THROWS, AND THAT IS THE ENTIRE CONTRACT. By the time this function runs
+   the model call has already returned and the money is already spent. A caller
+   that lost its output because the bookkeeping failed would be strictly worse
+   off than one with a gap in its ledger — it would have paid for work it never
+   received. Every failure below is caught, logged, and swallowed.
+
+   LOGGED AS A MISSING LEDGER ENTRY, never as a generic error. A ledger with
+   silent gaps is worse than no ledger, because it reads as complete: somebody
+   will eventually sum this table and believe the total. So the failure log names
+   the user, the agent, the route, the model and the token counts that went
+   unrecorded — enough to reconstruct the row by hand — and says in words that
+   any total computed from model_calls is now low.
+
+   NOTHING IS EVER ESTIMATED. input_tokens and output_tokens come from
+   response.usage or they are zero. A plausible guess in a spend ledger is worse
+   than a zero: the zero is visibly wrong and sends somebody to the logs, while a
+   guess is indistinguishable from a measurement forever after.
+
+   created_at and created_on are left to their column defaults, so the day a row
+   is filed under comes from the database clock rather than from this process —
+   which matters because created_on is the column a per-user daily cap will
+   group by, and two replicas with skewed clocks must not disagree about what
+   "today" is. */
+
+/* Reads one token count out of response.usage and says whether it was actually
+   there. The caller has to know the difference, because a zero written because
+   usage was absent is not a measurement of zero.
+
+   Rejects non-integers and negatives rather than coercing them. A negative
+   would fail model_calls_tokens_not_negative and cost the entire row — losing
+   the record of the call to save a field of it — and Math.floor on a surprise
+   value is an estimate wearing a cast. */
+function readUsageTokens(usage, field) {
+  if (!usage || typeof usage !== "object") {
+    return { value: 0, measured: false };
+  }
+
+  var raw = usage[field];
+
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) {
+    return { value: 0, measured: false };
+  }
+
+  return { value: raw, measured: true };
+}
+
+async function recordModelCall(details) {
+  var d = details || {};
+  var route = d.route || null;
+  var userId = d.userId || null;
+  var agentType = d.agentType || null;
+  var modelName = String(d.model || "").trim();
+
+  try {
+    /* model is NOT NULL in the table. A call whose model could not be read is
+       still a real call that still cost money, so it is recorded under a
+       visible placeholder rather than dropped — and logged, because "unknown"
+       in that column means this code could not read the response, not that
+       Anthropic served an unknown model. */
+    if (!modelName) {
+      modelName = "unknown";
+      console.error("[ledger] MISSING MODEL NAME on a model_calls row for route " +
+        JSON.stringify(route) + ", user " + (userId || "null") + ". Recorded as \"unknown\": " +
+        "the call is in the ledger but cannot be priced from it.");
+    }
+
+    var input = readUsageTokens(d.usage, "input_tokens");
+    var output = readUsageTokens(d.usage, "output_tokens");
+
+    if (!input.measured || !output.measured) {
+      console.error("[ledger] UNREADABLE TOKEN USAGE for route " + JSON.stringify(route) +
+        ", model " + modelName + ", user " + (userId || "null") + ". response.usage was " +
+        JSON.stringify(d.usage) + ". Writing ZEROS — this row counts the call but NOT its " +
+        "tokens, and no token count has been estimated to fill the gap.");
+    }
+
+    /* Prompt-cache tokens are billed and model_calls has no column for them.
+       Nothing in this codebase sets cache_control today, so in practice these
+       fields are absent and this branch never fires. It is here so that the day
+       somebody enables caching the undercount announces itself, instead of
+       being silently absorbed into a total that still reads as complete. */
+    if (d.usage && typeof d.usage === "object") {
+      var cacheWrite = Number(d.usage.cache_creation_input_tokens || 0);
+      var cacheRead = Number(d.usage.cache_read_input_tokens || 0);
+
+      if (cacheWrite > 0 || cacheRead > 0) {
+        console.error("[ledger] CACHE TOKENS NOT RECORDED for route " + JSON.stringify(route) +
+          ": cache_creation_input_tokens=" + cacheWrite + ", cache_read_input_tokens=" +
+          cacheRead + ". model_calls has no column for either, so this row UNDERSTATES the " +
+          "billed input for this call.");
+      }
+    }
+
+    var insertResult = await supabase
+      .from("model_calls")
+      .insert({
+        user_id: userId,
+        agent_type: agentType,
+        route: route,
+        model: modelName,
+        input_tokens: input.value,
+        output_tokens: output.value,
+        chain_id: d.chainId || null,
+        chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0
+      });
+
+    if (insertResult.error) {
+      console.error("[ledger] MISSING LEDGER ENTRY — the model_calls insert failed: " +
+        (insertResult.error.message || JSON.stringify(insertResult.error)) + ". The call WAS " +
+        "made and WAS billed: user " + (userId || "null") + ", agent " + (agentType || "null") +
+        ", route " + JSON.stringify(route) + ", model " + modelName + ", " + input.value +
+        " input / " + output.value + " output tokens. That spend is NOT in model_calls, so any " +
+        "total computed from the table is LOW by this amount.");
+      return false;
+    }
+
+    return true;
+  } catch (ledgerError) {
+    console.error("[ledger] MISSING LEDGER ENTRY — the model_calls insert threw: " +
+      ((ledgerError && ledgerError.message) || ledgerError) + ". The call WAS made and WAS " +
+      "billed: user " + (userId || "null") + ", agent " + (agentType || "null") + ", route " +
+      JSON.stringify(route) + ", model " + modelName + ". That spend is NOT in model_calls, so " +
+      "any total computed from the table is LOW by this call.");
+    return false;
+  }
+}
+
+async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001", ledger = {}) {
+  /* `ledger` is a FIFTH parameter carrying the spend attribution — user_id,
+     agent_type, route, chain_id, chain_depth — rather than reusing `userId`
+     above for it, and that separation is load-bearing.
+
+     THE THIRD ARGUMENT SELECTS WHOSE ANTHROPIC KEY PAYS. It is handed to
+     resolveAnthropicKey, which looks for a stored BYO key for that user and
+     falls back to the platform key only when there is none. So a call site
+     that started passing a user there in order to get its ledger row
+     attributed would also move that call off the platform key and onto the
+     user's own — thirty-odd sites doing that at once is a billing migration
+     wearing the clothes of bookkeeping. The comment at POST
+     /api/insights/page drew this distinction before this table existed; this
+     keeps it.
+
+     Falls back to the billing userId when ledger.user_id is absent, because a
+     site that passes a user for billing demonstrably knows who it is. */
+  var ledgerContext = ledger || {};
+  var ledgerUserId = ledgerContext.user_id || userId || null;
   var apiKey = await resolveAnthropicKey(userId);
   // Haiku keeps the original 120s budget so no existing caller changes. A
   // non-default model is here because the task is large — Sonnet writing
@@ -10955,6 +11131,26 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
          (.text everywhere, .stopReason at two sites) and none spreads it,
          serialises it, or iterates its keys, so an extra field reaches nobody
          who did not ask for it. */
+      /* The ledger row, written before the text is handed back. AWAITED rather
+         than fired and forgotten, because several callers run inside
+         setImmediate work that nothing downstream waits on, where a detached
+         insert can lose the race with the end of the request. recordModelCall
+         never throws, so awaiting it cannot turn a result that has already been
+         paid for into an error.
+
+         response.usage is passed through untouched rather than read here, so
+         the one decision about whether a field is a real count lives in one
+         place. */
+      await recordModelCall({
+        userId:     ledgerUserId,
+        agentType:  ledgerContext.agent_type,
+        route:      ledgerContext.route || "callAnthropicText (call site supplied no route)",
+        model:      response.model || model,
+        usage:      response.usage,
+        chainId:    ledgerContext.chain_id,
+        chainDepth: ledgerContext.chain_depth
+      });
+
       return {
         text: text || "",
         stopReason: response.stop_reason || "",
@@ -10963,6 +11159,19 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
 
     } catch (err) {
       lastError = err;
+
+      /* A THROWN ATTEMPT WRITES NO ROW, and that is a stated gap rather than an
+         oversight. There is no response, so there is no usage, and a row of
+         zeros here would be indistinguishable in the table from a completed
+         call that reported no tokens — two different facts sharing one shape is
+         the confusion this ledger exists to prevent. It is logged instead, and
+         logged loudly, because a premature close AFTER the model had already
+         generated output is billed and is invisible to model_calls. */
+      console.error("[ledger] UNRECORDED ATTEMPT — callAnthropicText attempt " + attempt +
+        " of " + maxAttempts + " for route " + JSON.stringify(ledgerContext.route || "unknown") +
+        ", user " + (ledgerUserId || "null") + " threw before any usage was returned (" +
+        (err.code || err.message) + "). No model_calls row was written; if the request reached " +
+        "the model, that spend is outside the ledger.");
 
       var msgLower = (err.message || "").toLowerCase();
       var isNetworkError =
@@ -11085,7 +11294,7 @@ function executiveLanguageBlock(languageTag, surfaceSeesUserText) {
   return instruction ? instruction + EXECUTIVE_ASSIGNMENT_LANGUAGE_GUARD : "";
 }
 
-async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialStopReason, languageTag) {
+async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialStopReason, languageTag, ledgerContext) {
   var output = String(initialOutput || "").trim();
   var missing = getMissingExecutiveAssignmentHeadings(userPrompt, output);
   var stopReason = initialStopReason || "";
@@ -11118,7 +11327,9 @@ async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialSto
        task does not cost two preference reads. */
     executiveLanguageBlock(languageTag, false);
 
-  var repairResult = await callAnthropicText(repairPrompt, 4096);
+  var repairResult = await callAnthropicText(repairPrompt, 4096, null, undefined, ledgerContext || {
+    route: "finalizeExecutiveTaskOutput repair (caller supplied no ledger context)"
+  });
   output = mergeExecutiveAssignmentOutput(output, repairResult.text);
   missing = getMissingExecutiveAssignmentHeadings(userPrompt, output);
 
@@ -11152,7 +11363,11 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           ? executiveLanguageBlock(taskLanguageTag, true)
           : buildLanguageInstruction(taskLanguageTag, true);
 
-        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens);
+        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, null, undefined, {
+          user_id: userId,
+          agent_type: agentType,
+          route: "processAiTask"
+        });
         var output = generation.text;
         var executiveComplete = true;
 
@@ -11161,7 +11376,19 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             userPrompt || finalPrompt,
             output,
             generation.stopReason,
-            taskLanguageTag
+            taskLanguageTag,
+            /* The repair pass is a second billed call on the same task, and
+               without this it would file an unattributed row while the call it
+               is repairing filed an attributed one — the same task appearing
+               twice in the ledger under two different users, one of them null.
+               The route is distinct from "processAiTask" on purpose, so the
+               repair's share of the spend can be measured rather than hidden
+               inside the first call's total. */
+            {
+              user_id: userId,
+              agent_type: agentType,
+              route: "processAiTask (executive repair pass)"
+            }
           );
 
           output = executiveResult.output;
@@ -13727,6 +13954,22 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
       });
     }
 
+    /* ONE row, after the try/catch rather than one inside each branch, because
+       exactly one of the two calls returned: the sonnet attempt either produced
+       this response or threw, and a throw produced no usage to record. The model
+       name is read off the response, so the row says which of the two actually
+       served the call instead of this code guessing from which branch it thinks
+       it is in. The failed sonnet attempt is NOT recorded, for the same reason a
+       thrown attempt inside callAnthropicText is not — there is no usage — and
+       the log line above is the only trace it leaves. */
+    await recordModelCall({
+      userId:    req.user.id,
+      agentType: "oracle",
+      route:     "POST /api/oracle",
+      model:     aiResponse && aiResponse.model,
+      usage:     aiResponse && aiResponse.usage
+    });
+
     // 5. Extract text + guard empty
     var aiText = (aiResponse.content || [])
       .filter(function (block) { return block.type === "text"; })
@@ -13909,7 +14152,10 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
               "the VALUES are written in the chosen language. This output is parsed by a program, not read by a person: " +
               "a translated key is not a stylistic choice, it is a parse failure.";
 
-            var reflectionResult = await callAnthropicText(reflectionPrompt, 500, req.user.id);
+            var reflectionResult = await callAnthropicText(reflectionPrompt, 500, req.user.id, undefined, {
+              agent_type: "oracle",
+              route: "POST /api/oracle (reflection)"
+            });
             var reflectionRaw = (reflectionResult && reflectionResult.text) ? reflectionResult.text.trim() : "";
             var reflectionCleaned = reflectionRaw.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
 
@@ -14800,7 +15046,10 @@ app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
       buildLanguageInstruction(invocationLanguageTag, false);
 
     try {
-      var invocationResult = await callAnthropicText(invocationPrompt, 200, req.user.id);
+      var invocationResult = await callAnthropicText(invocationPrompt, 200, req.user.id, undefined, {
+        agent_type: "oracle",
+        route: "GET /api/oracle/invocation"
+      });
       var invocationText = (invocationResult && invocationResult.text ? invocationResult.text.trim() : "") || null;
       return res.json({ invocation: invocationText });
     } catch (invocationAiErr) {
@@ -17410,6 +17659,14 @@ app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, n
       messages: messages
     });
 
+    await recordModelCall({
+      userId:    req.user.id,
+      agentType: "oracle",
+      route:     "POST /api/oracle/chat",
+      model:     response.model || "claude-haiku-4-5-20251001",
+      usage:     response.usage
+    });
+
     return res.json({ response: response.content[0].text });
   } catch (err) {
     next(err);
@@ -17459,7 +17716,10 @@ app.post("/api/insights/page", requireAuth, aiLimiter, async function (req, res,
          stored preference this appends nothing and the insight stays English. */
       buildLanguageInstruction(insightLanguageTag, false);
 
-    var result = await callAnthropicText(prompt, 150);
+    var result = await callAnthropicText(prompt, 150, null, undefined, {
+      user_id: req.user.id,
+      route: "POST /api/insights/page"
+    });
     var insight = (result && result.text ? result.text.trim() : "") ||
       "The signs are quiet on this page for now — return once your business profile has more to draw from.";
 
@@ -17700,7 +17960,11 @@ app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiL
     }
 
     var taskRecord = pendingInsert.data;
-    var generation = await callAnthropicText(finalPrompt, 3000);
+    var generation = await callAnthropicText(finalPrompt, 3000, null, undefined, {
+      user_id: req.user.id,
+      agent_type: "seo",
+      route: "POST /api/agents/seo/optimize"
+    });
     var output = generation.text;
 
     var updateResult = await supabase
@@ -17965,7 +18229,11 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
            words and are quoted into the prompt above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000);
+      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "etsy",
+        route: "POST /api/agents/etsy/keyword-research"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseEtsyKeywordLines(raw);
@@ -18189,7 +18457,11 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
            comparable titles are all the seller's own text, quoted above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500);
+      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "etsy",
+        route: "POST /api/agents/etsy/pricing-strategy"
+      });
       var rationale = (generation && generation.text) ? generation.text : "";
 
       return res.json({
@@ -18467,7 +18739,11 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
            quoted above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000);
+      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "email",
+        route: "POST /api/agents/email/sequence"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var blocks = splitToolBlocks(raw);
@@ -18608,7 +18884,11 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500);
+      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "email",
+        route: "POST /api/agents/email/subject-lines"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var variants = [];
@@ -18754,7 +19034,11 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "publicist",
+        route: "POST /api/agents/publicist/press-release"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, PRESS_RELEASE_SECTIONS);
@@ -18900,7 +19184,11 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500);
+      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "publicist",
+        route: "POST /api/agents/publicist/pitch"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, ["SUBJECT", "BODY", "WHY_THIS_OUTLET"]);
@@ -19024,7 +19312,11 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000);
+      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "operations",
+        route: "POST /api/agents/operations/sop"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var blocks = splitToolBlocks(raw);
@@ -19182,7 +19474,11 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000);
+      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "operations",
+        route: "POST /api/agents/operations/checklist"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var lines = parseToolLines(raw);
@@ -19703,7 +19999,11 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000);
+      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "ads",
+        route: "POST /api/agents/ads/copy"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var assets = [];
@@ -19872,7 +20172,11 @@ app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription,
           "\n\nTASK INSTRUCTIONS:\n" + instruction +
           buildLanguageInstruction(languageTag, true);
 
-        var generation = await callAnthropicText(prompt, 2000);
+        var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+          user_id: req.user.id,
+          agent_type: "ads",
+          route: "POST /api/agents/ads/policy-check"
+        });
         rewrites = (generation && generation.text) ? generation.text : "";
       }
 
@@ -20030,7 +20334,11 @@ app.post("/api/agents/reputation/review-response", requireAuth, requireActiveSub
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1200);
+      var generation = await callAnthropicText(prompt, 1200, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "reputation",
+        route: "POST /api/agents/reputation/review-response"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, ["REPLY", "WHY_THIS_APPROACH"]);
@@ -20201,7 +20509,11 @@ app.post("/api/agents/reputation/review-request", requireAuth, requireActiveSubs
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000);
+      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "reputation",
+        route: "POST /api/agents/reputation/review-request"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var cumulative = 0;
@@ -20448,7 +20760,11 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500);
+      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "social",
+        route: "POST /api/agents/social/post"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, ["POST", "HOOK_NOTE"]);
@@ -20591,7 +20907,11 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000);
+      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "social",
+        route: "POST /api/agents/social/calendar"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var entries = [];
@@ -20803,7 +21123,11 @@ app.post("/api/agents/broker/term-sheet", requireAuth, requireActiveSubscription
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "broker",
+        route: "POST /api/agents/broker/term-sheet"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, TERM_SHEET_SECTIONS);
@@ -20951,7 +21275,11 @@ app.post("/api/agents/broker/due-diligence", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "broker",
+        route: "POST /api/agents/broker/due-diligence"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var grouped = {};
@@ -21150,7 +21478,11 @@ app.post("/api/agents/rd/brief", requireAuth, requireActiveSubscription, aiLimit
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "rd",
+        route: "POST /api/agents/rd/brief"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, RD_BRIEF_SECTIONS);
@@ -21343,7 +21675,11 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "rd",
+        route: "POST /api/agents/rd/competitor-scan"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var entries = [];
@@ -21509,7 +21845,11 @@ app.post("/api/agents/community/onboarding", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "community",
+        route: "POST /api/agents/community/onboarding"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var steps = [];
@@ -21691,7 +22031,11 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "community",
+        route: "POST /api/agents/community/engagement-calendar"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var rituals = [];
@@ -22038,7 +22382,11 @@ app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription,
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500);
+      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "analytics",
+        route: "POST /api/agents/analytics/funnel"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw,
@@ -22245,7 +22593,11 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500);
+      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "analytics",
+        route: "POST /api/agents/analytics/kpi-review"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw,
@@ -22443,7 +22795,11 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1200);
+      var generation = await callAnthropicText(prompt, 1200, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "influencer",
+        route: "POST /api/agents/influencer/outreach"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, ["MESSAGE", "WHY_THIS_OPENING"]);
@@ -22580,7 +22936,11 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "influencer",
+        route: "POST /api/agents/influencer/partnership-offer"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw, PARTNERSHIP_OFFER_SECTIONS);
@@ -22800,7 +23160,11 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500);
+      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "vertical_marketing",
+        route: "POST /api/agents/vertical_marketing/positioning"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var parsed = parseLabeledFields(raw,
@@ -22932,7 +23296,11 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000);
+      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "vertical_marketing",
+        route: "POST /api/agents/vertical_marketing/objections"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var objections = [];
@@ -23172,7 +23540,11 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500);
+      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "content",
+        route: "POST /api/agents/content/outline"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var blocks = splitToolBlocks(raw);
@@ -23764,7 +24136,11 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000);
+      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+        user_id: req.user.id,
+        agent_type: "executive",
+        route: "POST /api/agents/executive/plan"
+      });
       var raw = (generation && generation.text) ? generation.text : "";
 
       var assignments = [];
@@ -24294,7 +24670,13 @@ app.post("/api/self-reviews/run", requireAuth, aiLimiter, async function (req, r
     // cycle — but it is in scope right here.
     var review = await generateSelfReview({
       supabase:          supabase,
-      callAnthropicText: callAnthropicText,
+      callAnthropicText: function (selfReviewPrompt, selfReviewMaxTokens) {
+        return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, null, undefined, {
+          user_id: req.user.id,
+          agent_type: "executive",
+          route: "generateSelfReview (" + periodType + ")"
+        });
+      },
       userId:            req.user.id,
       periodType:        periodType,
       now:               new Date()
@@ -31866,6 +32248,14 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
       messages:   [{ role: "user", content: [{ type: "text", text: prompt }] }]
     });
 
+    await recordModelCall({
+      userId:    req.user.id,
+      agentType: "sales",
+      route:     "POST /api/leads/draft-reply",
+      model:     response.model || "claude-haiku-4-5-20251001",
+      usage:     response.usage
+    });
+
     var reply = (response.content && response.content[0] && response.content[0].text) || "";
 
     return res.json({ reply: reply.trim() });
@@ -32938,7 +33328,11 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptErr.message || attemptErr);
   }
 
-  var generation = await callAnthropicText(finalPrompt, 700);
+  var generation = await callAnthropicText(finalPrompt, 700, null, undefined, {
+    user_id: userId,
+    agent_type: "sales",
+    route: "convertSingleLead"
+  });
   var output = generation.text;
 
   // Parse the model's strict-JSON response into the clean public reply
@@ -35122,7 +35516,13 @@ async function runSelfReviewPass() {
 
         var review = await generateSelfReview({
           supabase:          supabase,
-          callAnthropicText: callAnthropicText,
+          callAnthropicText: function (selfReviewPrompt, selfReviewMaxTokens) {
+            return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, null, undefined, {
+              user_id: userId,
+              agent_type: "executive",
+              route: "generateSelfReview (" + periodType + ")"
+            });
+          },
           userId:            userId,
           periodType:        periodType,
           now:               new Date()
