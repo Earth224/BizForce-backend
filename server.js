@@ -4447,6 +4447,37 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
     const plan = subscription ? String(subscription.plan || "free").toLowerCase() : "free";
     const isActive = subscription ? ["active", "trialing"].includes(subscription.status) : false;
 
+    /* `access` is the entitlement answer, from the same function every gate in
+       this file asks. The three user.subscription_* fields above are NOT that:
+       they are read off the subscriptions row alone, so an admin whose row is
+       canceled is reported as "free" / false here while every gated route lets
+       them through — dashboard.html and billing.html render "not subscribed" to
+       the one account that can never be. Those fields keep their exact values,
+       because two pages parse them; this is an addition beside them.
+
+       NULL ON FAILURE, NEVER FALSE. A plan lookup that threw is an unknown, and
+       a page that reads `active: false` would tell a paying customer they have
+       lapsed on the strength of a database blip. The existing fields still go
+       out, so the response is never worse than it was before this existed. */
+    let access = null;
+    try {
+      const planState = await getUserPlan(req.user.id, req.user);
+      if (planState) {
+        access = {
+          active: planState.active,
+          exempt: planState.exempt,
+          access_reason: planState.access_reason,
+          inactive_reason: planState.inactive_reason
+        };
+      } else {
+        console.error("[auth/me] getUserPlan returned no result for user " + req.user.id +
+          " — access reported as null (unknown).");
+      }
+    } catch (planError) {
+      console.error("[auth/me] getUserPlan failed for user " + req.user.id + ": " +
+        ((planError && planError.message) || planError) + " — access reported as null (unknown).");
+    }
+
     return res.json({
       user: Object.assign({}, publicUser(req.user), {
         subscription_status: subscription ? subscription.status : "free",
@@ -4454,7 +4485,8 @@ app.get("/api/auth/me", requireAuth, async function (req, res, next) {
         subscription_active: isActive
       }),
       profile,
-      subscription
+      subscription,
+      access
     });
   } catch (error) {
     next(error);
