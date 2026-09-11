@@ -18842,6 +18842,14 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "etsy",
+        taskType: "etsy/keyword-research",
+        title: "Etsy · Keyword research: " + seed
+      });
+
       var profileResult = await supabase
         .from("business_profiles")
         .select("*")
@@ -18905,6 +18913,9 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
          a statement about Etsy; what actually happened is a statement about this
          response. */
       if (!keywords.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("etsy/keyword-research: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The keyword list could not be read back from the model, so nothing is being reported. " +
             "No keywords were found is NOT the same as none exist — this is a formatting failure, not a result.",
@@ -18913,7 +18924,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         });
       }
 
-      return res.json({
+      var responseBody = {
         success: true,
         seed: seed,
         constraints: {
@@ -18949,9 +18960,22 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         suggested_tag_set_note:
           "These are the first " + ETSY_MAX_TAGS + " suggestions that fit the tag limit, in the order the " +
           "model proposed them. They are NOT ranked by search volume — no volume data was read."
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[etsy/keyword-research] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -18990,6 +19014,14 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
       if (rawComparables.length > 50) {
         return res.status(400).json({ error: "At most 50 comparables can be considered at once." });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "etsy",
+        taskType: "etsy/pricing-strategy",
+        title: "Etsy · Pricing strategy: " + listingTitle
+      });
 
       var comparables = rawComparables.map(function (row) {
         var item = row && typeof row === "object" ? row : {};
@@ -19115,7 +19147,7 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
       });
       var rationale = (generation && generation.text) ? generation.text : "";
 
-      return res.json({
+      var responseBody = {
         success: true,
         listing_title: listingTitle,
         measured: {
@@ -19147,9 +19179,22 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
             "refuses server-side requests), so it cannot find or check comparable listings. Everything " +
             "above rests on the " + comparables.length + " comparable(s) supplied in this request."
         }
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[etsy/pricing-strategy] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -19353,6 +19398,14 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
         return res.status(400).json({ error: "An audience is required — who is receiving this sequence." });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "email",
+        taskType: "email/sequence",
+        title: "Email · Sequence: " + goal
+      });
+
       var stepTarget = (requestedSteps !== null && requestedSteps >= 2 && requestedSteps <= 12)
         ? requestedSteps : 5;
 
@@ -19427,6 +19480,9 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
       });
 
       if (!steps.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("email/sequence: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The sequence could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -19438,7 +19494,7 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
       var withDelay = steps.filter(function (s) { return s.delay_days !== null; });
       var unreadableDelays = steps.length - withDelay.length;
 
-      return res.json({
+      var responseBody = {
         success: true,
         goal: goal,
         audience: audience,
@@ -19480,9 +19536,22 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
           "it is a draft sequence to send from your own email tool and measure there.",
           { emails_sent: false, list_data_read: false, performance_data: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[email/sequence] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -19504,6 +19573,14 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
           error: "The email's purpose is required — what the email is for, for example \"announce a restock to past buyers\"."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "email",
+        taskType: "email/subject-lines",
+        title: "Email · Subject lines: " + purpose
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -19553,6 +19630,9 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
       });
 
       if (!variants.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("email/subject-lines: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The subject lines could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -19563,7 +19643,7 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
 
       var mobileSafe = variants.filter(function (v) { return v.fits_mobile_preview; });
 
-      return res.json({
+      var responseBody = {
         success: true,
         purpose: purpose,
         thresholds: {
@@ -19604,9 +19684,22 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
           "nothing here says which line performs better. That is what a test in your own tool is for.",
           { deliverability_tested: false, performance_data: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[email/subject-lines] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -19645,6 +19738,14 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
           error: "The news is required — what is being announced."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "publicist",
+        taskType: "publicist/press-release",
+        title: "Publicist · Press release: " + news.replace(/\s+/g, " ").slice(0, 120)
+      });
 
       var businessProfile = await loadProfileForTool(userId);
       var fallbackCompany = companyName || safeText(businessProfile.business_name, 200) || "";
@@ -19702,6 +19803,9 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
          and the response names the missing ones rather than quietly presenting an
          incomplete release as a finished one. */
       if (!present.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("publicist/press-release: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The press release could not be read back from the model in wire format, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -19714,7 +19818,7 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
       var lede = parsed.LEDE || "";
       var bodyText = parsed.BODY || "";
 
-      return res.json({
+      var responseBody = {
         success: true,
         release: {
           headline: headline,
@@ -19771,9 +19875,22 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
           "marked [FIGURE NEEDED]. Check every fact before sending.",
           { outlets_contacted: false, figures_verified: false, media_database_read: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[publicist/press-release] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -19801,6 +19918,14 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
           error: "An outlet type is required — for example \"regional business desk\", \"trade publication\", \"design blog\"."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "publicist",
+        taskType: "publicist/pitch",
+        title: "Publicist · Pitch: " + angle.replace(/\s+/g, " ").slice(0, 120)
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -19848,6 +19973,9 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
       var bodyWords = countWords(body);
 
       if (!body) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("publicist/pitch: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The pitch body could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -19856,7 +19984,7 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
         });
       }
 
-      return res.json({
+      var responseBody = {
         success: true,
         pitch: {
           subject: subjectMeasurement.subject,
@@ -19894,9 +20022,22 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
           "recipient yourself before sending.",
           { media_database_read: false, journalist_verified: false, outlet_matched: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[publicist/pitch] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -19924,6 +20065,14 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
           error: "A process is required — what this procedure covers, for example \"packing and shipping a retail order\"."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "operations",
+        taskType: "operations/sop",
+        title: "Operations · SOP: " + processName
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -20010,6 +20159,9 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
       });
 
       if (!steps.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("operations/sop: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The procedure's steps could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -20021,7 +20173,7 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
       var withRisk = steps.filter(function (s) { return s.has_risk; }).length;
       var withVerify = steps.filter(function (s) { return s.has_verification; }).length;
 
-      return res.json({
+      var responseBody = {
         success: true,
         sop: {
           process: processName,
@@ -20068,9 +20220,22 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
           "is a draft procedure to correct against reality — not a description of your current one.",
           { current_process_observed: false, timings_measured: false, systems_inspected: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[operations/sop] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -20094,6 +20259,14 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
           error: "A recurring task is required — what this checklist is for, for example \"weekly inventory count\"."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "operations",
+        taskType: "operations/checklist",
+        title: "Operations · Checklist: " + task
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -20154,6 +20327,9 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
       });
 
       if (!items.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("operations/checklist: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The checklist could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20164,7 +20340,7 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
 
       var overPractical = items.length > CHECKLIST_PRACTICAL_MAX_ITEMS;
 
-      return res.json({
+      var responseBody = {
         success: true,
         task: task,
         frequency: frequency || null,
@@ -20207,9 +20383,22 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
           "draft to correct against the real work.",
           { current_process_observed: false, timings_measured: false, systems_inspected: false }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[operations/checklist] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -20608,6 +20797,14 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "ads",
+        taskType: "ads/copy",
+        title: "Ads · Copy: " + product
+      });
+
       var platform = AD_PLATFORMS[platformKey];
       var assetTypes = Object.keys(platform.assets);
       var businessProfile = await loadProfileForTool(userId);
@@ -20676,6 +20873,9 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
       });
 
       if (!assets.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("ads/copy: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The ad copy could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20706,7 +20906,7 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
       // perfectly and cannot be published is not finished copy.
       var policyFindings = scanAdPolicy(assets.map(function (a) { return a.text; }).join("\n"));
 
-      return res.json({
+      var responseBody = {
         success: true,
         platform: platformKey,
         platform_label: platform.label,
@@ -20758,9 +20958,22 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
             policy_approval_obtained: false
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[ads/copy] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
