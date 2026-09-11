@@ -23099,6 +23099,14 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "community",
+        taskType: "community/engagement-calendar",
+        title: "Community · Engagement calendar: " + (communityType || cadence)
+      });
+
       var businessProfile = await loadProfileForTool(userId);
 
       var communityBrain =
@@ -23166,6 +23174,9 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
       });
 
       if (!rituals.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("community/engagement-calendar: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The engagement calendar could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23190,7 +23201,7 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
         return sum + (byFrequency[freq] * perMonthWeight[freq]);
       }, 0);
 
-      return res.json({
+      var responseBody = {
         success: true,
         cadence: cadence,
         community_type: communityType || null,
@@ -23241,9 +23252,22 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
             engagement_data_read: false
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[community/engagement-calendar] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -23382,6 +23406,14 @@ app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription,
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "analytics",
+        taskType: "analytics/funnel",
+        title: "Analytics · Funnel: " + (funnelName || (stages.length + " stages"))
+      });
+
       /* THE ARITHMETIC, ALL OF IT, HERE. The model is given these numbers and is
          forbidden to recompute or contradict them. A conversion rate is division;
          there is no reason for a language model to be anywhere near it, and every
@@ -23497,7 +23529,7 @@ app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription,
          scan in a number this server computed. */
       var benchmarks = scanBenchmarkClaims(raw);
 
-      return res.json({
+      var responseBody = {
         success: true,
         funnel_name: funnelName || null,
         /* THE NUMBERS, SEPARATE FROM THE WORDS. The arithmetic is in `measured`
@@ -23571,9 +23603,22 @@ app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription,
             figures_supplied_by_caller: true
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[analytics/funnel] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -23636,6 +23681,14 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
           unusable_rows: badRows
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "analytics",
+        taskType: "analytics/kpi-review",
+        title: "Analytics · KPI review: " + (periodLabel || (metrics.length + " metrics"))
+      });
 
       var withPrevious = metrics.filter(function (m) { return m.previous !== null; });
       var improved = withPrevious.filter(function (m) { return m.moved_favourably === true; });
@@ -23705,7 +23758,7 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
         ["WHAT_MOVED", "LOOK_AT_FIRST", "WHAT_MIGHT_EXPLAIN_IT", "WHAT_IS_MISSING"]);
       var benchmarks = scanBenchmarkClaims(raw);
 
-      return res.json({
+      var responseBody = {
         success: true,
         period: periodLabel || null,
         measured: {
@@ -23771,9 +23824,22 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
             figures_supplied_by_caller: true
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[analytics/kpi-review] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -23864,6 +23930,14 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "influencer",
+        taskType: "influencer/outreach",
+        title: "Influencer · Outreach: " + creator.replace(/\s+/g, " ").slice(0, 120)
+      });
+
       var businessProfile = await loadProfileForTool(userId);
 
       var influencerBrain =
@@ -23907,6 +23981,9 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
       var message = parsed.MESSAGE || "";
 
       if (!message) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("influencer/outreach: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The message could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -23918,7 +23995,7 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
       var words = countWords(message);
       var firstSentence = (message.match(/^[^.!?]*[.!?]/) || [message])[0].trim();
 
-      return res.json({
+      var responseBody = {
         success: true,
         outreach: {
           message: message,
@@ -23966,9 +24043,22 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
             message_sent: false
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[influencer/outreach] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -23993,6 +24083,14 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
           error: "The collaboration shape is required — what the creator would make, for what, and roughly on what basis."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "influencer",
+        taskType: "influencer/partnership-offer",
+        title: "Influencer · Partnership offer: " + (creator || collaboration.replace(/\s+/g, " ").slice(0, 120))
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -24049,6 +24147,9 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
       var missing = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !parsed[s]; });
 
       if (!present.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("influencer/partnership-offer: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The offer could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24072,7 +24173,7 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
          liability either way. */
       var readyToSend = !disclosureMissing && optOuts.length === 0;
 
-      return res.json({
+      var responseBody = {
         success: true,
         offer: offer,
         ready_to_send: readyToSend,
@@ -24130,9 +24231,22 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
             offer_sent: false
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[influencer/partnership-offer] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -24222,6 +24336,14 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "vertical_marketing",
+        taskType: "vertical_marketing/positioning",
+        title: "Vertical marketing · Positioning: " + industry
+      });
+
       var businessProfile = await loadProfileForTool(userId);
 
       var verticalBrain =
@@ -24273,6 +24395,9 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
          "VERIFY_WITH_A_PRACTITIONER"]);
 
       if (!parsed.POSITIONING && !parsed.CHANNELS) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("vertical_marketing/positioning: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The positioning could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -24288,7 +24413,7 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
         ? parseToolLines(parsed.VERIFY_WITH_A_PRACTITIONER) : [];
       var confidence = verticalConfidence(parsed.CONFIDENCE);
 
-      return res.json({
+      var responseBody = {
         success: true,
         industry: industry,
         positioning: {
@@ -24333,9 +24458,22 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
           VERTICAL_DEPTH_CAVEAT,
           VERTICAL_PROVENANCE_FLAGS
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[vertical/positioning] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -24360,6 +24498,14 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
           error: "An offer is required — what is being sold to that industry."
         });
       }
+
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "vertical_marketing",
+        taskType: "vertical_marketing/objections",
+        title: "Vertical marketing · Objections: " + industry
+      });
 
       var businessProfile = await loadProfileForTool(userId);
 
@@ -24435,6 +24581,9 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
       });
 
       if (!objections.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("vertical_marketing/objections: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The objections could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -24451,7 +24600,7 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
       var withoutAnswer = objections.filter(function (o) { return !o.has_an_answer; }).length;
       var withoutProof = objections.filter(function (o) { return !o.has_proof; }).length;
 
-      return res.json({
+      var responseBody = {
         success: true,
         industry: industry,
         objections: objections,
@@ -24504,9 +24653,22 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
           VERTICAL_DEPTH_CAVEAT,
           VERTICAL_PROVENANCE_FLAGS
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[vertical/objections] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -24604,6 +24766,14 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "content",
+        taskType: "content/outline",
+        title: "Content · Outline: " + keyword
+      });
+
       var businessProfile = await loadProfileForTool(userId);
 
       var contentBrain =
@@ -24666,6 +24836,9 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
       });
 
       if (!sections.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("content/outline: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The outline could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24705,7 +24878,7 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
       var questions = header.QUESTIONS_TO_ANSWER
         ? parseToolLines(header.QUESTIONS_TO_ANSWER) : [];
 
-      return res.json({
+      var responseBody = {
         success: true,
         keyword: keyword,
         outline: {
@@ -24773,9 +24946,22 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
             ranking_data_read: false
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[content/outline] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -25180,6 +25366,14 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "executive",
+        taskType: "executive/plan",
+        title: "Executive · Plan: " + goal.replace(/\s+/g, " ").slice(0, 120)
+      });
+
       var catalogue = agentToolCatalogue();
       var agentsWithTools = Object.keys(catalogue).sort();
 
@@ -25374,6 +25568,9 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       });
 
       if (!assignments.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("executive/plan: the model's output could not be read back, so nothing was reported."));
         return res.status(502).json({
           error: "The plan could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -25409,7 +25606,7 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         ? Math.round((dispatchable.length / agentWorkCount) * 100)
         : null;
 
-      return res.json({
+      var responseBody = {
         success: true,
         goal: goal,
         horizon: horizon || null,
@@ -25539,9 +25736,22 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
             catalogue_read_from_live_router: true
           }
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[executive/plan] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
