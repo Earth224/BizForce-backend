@@ -3507,16 +3507,60 @@ if (userError) {
 
     const { data: existing, error: subscriptionLookupError } = await supabase
       .from("subscriptions")
-      .select("user_id")
+      .select("user_id, stripe_subscription_id")
       .eq("stripe_customer_id", customerId)
       .maybeSingle();
 
+    // Thrown, not logged. Logging here let the branch fall through to "no row"
+    // and return 200 for a delivery that was never processed, so a database
+    // blip silently dropped a renewal or a cancellation with no retry. A throw
+    // returns 500 and Stripe redelivers.
     if (subscriptionLookupError) {
-      console.error("SUBSCRIPTION_EVENT lookup failed: " +
+      console.error("SUBSCRIPTION_EVENT lookup failed for Stripe subscription " + subscription.id +
+        " — event " + event.id + ": " +
+        (subscriptionLookupError.message || subscriptionLookupError));
+      throw new Error(event.type + ": subscriptions lookup failed for Stripe subscription " +
+        subscription.id + " (event " + event.id + "): " +
         (subscriptionLookupError.message || subscriptionLookupError));
     }
 
+    /* ONE ROW PER USER, MANY SUBSCRIPTIONS PER CUSTOMER. The lookup is by
+       customer and the upsert conflicts on user_id, so every subscription a
+       customer has ever held lands on the same row — and an event about an
+       OLDER one overwrote the row for the current one. A customer who cancelled
+       a first subscription and bought again then received the old one's
+       trailing "canceled" update on top of the new, paying row, and was locked
+       out for money they had just spent.
+
+       The event is written when any of these holds: the row has no subscription
+       id yet (checkout can write it null); it is the same subscription; the
+       event is a creation, which is by definition the newest subscription and
+       replaces whatever the row held; or the event's status entitles — an
+       active or trialing subscription is a paying customer whichever id it
+       carries, and refusing it would be the lockout in the other direction.
+       What is refused is exactly the harmful case: an update about a different
+       subscription carrying a non-entitling status. */
     if (existing && existing.user_id) {
+      const storedSubscriptionId = existing.stripe_subscription_id;
+      const sameOrEmpty = storedSubscriptionId == null || storedSubscriptionId === subscription.id;
+      const isCreated = event.type === "customer.subscription.created";
+      const statusEntitles = subscription.status === "active" || subscription.status === "trialing";
+
+      if (!sameOrEmpty && !isCreated && !statusEntitles) {
+        console.log("SUBSCRIPTION_EVENT ignored — customer.subscription.updated for Stripe subscription " +
+          subscription.id + " with status \"" + subscription.status + "\", but the row for customer " +
+          customerId + " holds subscription " + storedSubscriptionId +
+          ". This is an update to an older subscription; writing its status would overwrite the " +
+          "current one. Nothing written. Event " + event.id + ".");
+        return;
+      }
+
+      if (!sameOrEmpty && isCreated) {
+        console.log("SUBSCRIPTION_EVENT replacing Stripe subscription " + storedSubscriptionId +
+          " with newly created subscription " + subscription.id + " on the row for customer " +
+          customerId + " — event " + event.id + ".");
+      }
+
       const subscriptionPeriod = subscriptionPeriodIso(subscription);
       const { error: subscriptionUpsertError } = await supabase.from("subscriptions").upsert(
         {
@@ -3591,8 +3635,14 @@ if (userError) {
       .eq("stripe_subscription_id", deletedSubscriptionId)
       .maybeSingle();
 
+    // Thrown so Stripe retries. Logging here fell through to the "no row" path
+    // and returned 200 for a revocation that never happened.
     if (bySubscriptionError) {
-      console.error("SUBSCRIPTION_DELETED lookup by stripe_subscription_id failed: " +
+      console.error("SUBSCRIPTION_DELETED lookup by stripe_subscription_id failed for Stripe subscription " +
+        deletedSubscriptionId + " — event " + event.id + ": " +
+        (bySubscriptionError.message || bySubscriptionError));
+      throw new Error("customer.subscription.deleted: lookup by stripe_subscription_id failed for Stripe subscription " +
+        deletedSubscriptionId + " (event " + event.id + "): " +
         (bySubscriptionError.message || bySubscriptionError));
     }
 
@@ -3616,7 +3666,11 @@ if (userError) {
         .maybeSingle();
 
       if (byCustomerError) {
-        console.error("SUBSCRIPTION_DELETED lookup by stripe_customer_id failed: " +
+        console.error("SUBSCRIPTION_DELETED lookup by stripe_customer_id failed for Stripe subscription " +
+          deletedSubscriptionId + " (customer " + deletedCustomerId + ") — event " + event.id + ": " +
+          (byCustomerError.message || byCustomerError));
+        throw new Error("customer.subscription.deleted: lookup by stripe_customer_id failed for Stripe subscription " +
+          deletedSubscriptionId + " (event " + event.id + "): " +
           (byCustomerError.message || byCustomerError));
       }
 
