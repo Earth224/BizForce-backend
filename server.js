@@ -6528,6 +6528,10 @@ app.post("/api/business-chat", requireAuth, async function (req, res, next) {
     }
 
     const apiKey = await resolveAnthropicKey(req.user.id);
+    /* The cap before the client, for the same reason it sits before the
+       client in callAnthropicText: nothing below this line is free. */
+    await enforceDailyModelCallLimit(req.user.id, "POST /api/business-chat");
+
     const anthropicClient = new Anthropic({ apiKey: apiKey });
 
     var aiResponse = await anthropicClient.messages.create({
@@ -10925,6 +10929,233 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
   }
 });
 
+/* ── the per-user daily model-call cap ────────────────────────────────────────
+
+   The first thing in this system that can actually stop a runaway. model_calls
+   (migration 103) records every call with a user_id and a created_on UTC date,
+   and model_calls_user_day_idx exists for precisely the count below.
+
+   IT LIVES HERE, NOT IN MIDDLEWARE, AND THAT IS THE WHOLE POINT. aiLimiter is
+   an app.use/route-level limiter, so it is only reached by a request that
+   actually travels the Express stack — and the calls most likely to run away do
+   not. runScheduledAgentTask synthesises a req/res and invokes
+   handleAiTaskRequest as a function; orchestrateAgentWorkflow calls
+   callAnthropicText directly; processAiTask runs under setImmediate after its
+   response has already gone out. A cap in middleware would have the same hole
+   aiLimiter has. Placed at the call itself, an internal caller cannot route
+   around it, because there is no other way to reach the model.
+
+   AN EXEMPT ADMIN IS CAPPED LIKE ANYONE ELSE, DELIBERATELY, and there is no
+   role check anywhere below — the absence is the feature. getUserPlan's
+   ADMIN_EXEMPT path and requireActiveSubscription's req.planExempt are about
+   WHETHER SOMEBODY HAS PAID. This is about WHAT SOMETHING COSTS, and the two are
+   unrelated: an admin running a fan-out-3 chain to depth 5 spends 363 calls
+   exactly as fast as a trialing user would, and the Anthropic bill does not ask
+   who authorised it. The next person to read this will assume the exemption
+   carries through, because everywhere else in this file it does. It does not
+   here. Do not add a role check to make this consistent with the entitlement
+   gate; they are guarding different things.
+
+   THE DEFAULT IS 250 and it is derived rather than picked. The other ceilings in
+   this file are AGENT_SCHEDULE_MAX_PER_TICK at 25 per hourly tick,
+   SELF_REVIEW_MAX_PER_TICK at 10, and SALES_AUTOLOOP_DAILY_DRAFT_CAP at 50 per
+   day. A user doing genuinely heavy legitimate work — every one of the 31 agent
+   tool routes twice, plus a full 25-schedule tick, plus a self-review — is
+   around 90 calls. 250 leaves real headroom above that while still sitting well
+   below an unbounded chain: fan-out 3 reaches 363 calls by depth 5, so a
+   runaway trips this before it finishes compounding. */
+var MODEL_CALL_DAILY_LIMIT_DEFAULT = 250;
+
+/* The UTC day key, in the exact form created_on holds. toISOString is always
+   UTC, so slicing its date half cannot drift with the host timezone the way a
+   locale-formatted date would — and it must not, because created_on's column
+   default is (now() at time zone 'utc')::date and a client computing "today"
+   in local time would query the wrong day for anyone west of Greenwich. */
+function modelCallUtcDay(now) {
+  return (now instanceof Date ? now : new Date()).toISOString().slice(0, 10);
+}
+
+/* THREE OUTCOMES, NOT TWO, the same shape as agentScheduleMaxPerTick and for
+   the same recorded reason. Absent or blank means the default — nobody
+   configured it, so the default is the intent. A positive whole number is
+   honoured. Anything else returns null, which REFUSES THE CALL.
+
+   FAIL CLOSED HERE. A value that is present but unreadable means somebody set a
+   spend limit and what they meant cannot be determined, and the one thing that
+   must not happen then is spending money against a guess. A gate that opens
+   when it cannot read itself is not a gate.
+
+   Number("") is 0 rather than NaN, so the blank case is separated out first —
+   otherwise a whitespace-only variable would read as a deliberate limit of zero
+   and silently refuse every call in the product. */
+function modelCallDailyLimit() {
+  var raw = process.env.MODEL_CALLS_DAILY_LIMIT_PER_USER;
+
+  if (raw == null || String(raw).trim() === "") {
+    return MODEL_CALL_DAILY_LIMIT_DEFAULT;
+  }
+
+  var parsed = Number(String(raw).trim());
+  if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  return null;
+}
+
+/* When the count resets: the next UTC midnight, because created_on is a UTC
+   date. Returned as both an instant and a rough human interval, since "resets
+   at 00:00 UTC" is not useful to somebody who does not know what time that is
+   where they are. */
+function modelCallLimitReset(now) {
+  var base = (now instanceof Date ? now : new Date());
+  var next = new Date(Date.UTC(
+    base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() + 1, 0, 0, 0, 0
+  ));
+  var msLeft = next.getTime() - base.getTime();
+  var hours = Math.floor(msLeft / 3600000);
+  var minutes = Math.floor((msLeft % 3600000) / 60000);
+
+  return { at: next.toISOString(), in_text: hours + "h " + minutes + "m" };
+}
+
+/* The refusal. status 429 so the global error handler at the bottom of this file
+   passes the message straight through — it masks 500s and only 500s, precisely
+   so that something which threw deliberately can speak for itself.
+
+   THE MESSAGE IS THE FEATURE. A user who cannot tell a cap from a crash reports
+   it as a crash, and somebody then spends an afternoon looking for a bug that is
+   a configured limit working correctly. So it says what happened, what the limit
+   is, which variable sets it, how many calls are on the clock, and when the
+   count resets in both absolute and relative terms. It also states that no model
+   call was made, because the alternative reading — that the work was done and
+   then withheld — would send somebody looking for output that does not exist. */
+function dailyModelCallLimitError(limit, used, route, now) {
+  var reset = modelCallLimitReset(now);
+  var error = new Error(
+    "Daily model-call limit reached. This account has used " + used + " of " + limit +
+    " model calls allowed per UTC day (MODEL_CALLS_DAILY_LIMIT_PER_USER). No model call " +
+    "was made for this request. The count resets at " + reset.at + " (UTC midnight), in " +
+    reset.in_text + "."
+  );
+  error.status = 429;
+  error.code = "DAILY_MODEL_CALL_LIMIT";
+  error.limit = limit;
+  error.used = used;
+  error.resets_at = reset.at;
+  error.route = route || null;
+  return error;
+}
+
+function unreadableModelCallLimitError(raw) {
+  var error = new Error(
+    "Model calls are refused because the daily limit is misconfigured. " +
+    "MODEL_CALLS_DAILY_LIMIT_PER_USER is set to " + JSON.stringify(String(raw)) + ", which is " +
+    "not a positive whole number. A spend limit that cannot be read is not applied as a guess. " +
+    "Unset it to use the default of " + MODEL_CALL_DAILY_LIMIT_DEFAULT + ", or set it to a " +
+    "positive integer."
+  );
+  error.status = 503;
+  error.code = "DAILY_MODEL_CALL_LIMIT_MISCONFIGURED";
+  return error;
+}
+
+/* Throws to refuse, returns to allow. Called immediately before every model
+   call in this file — the one in callAnthropicText and the five that build
+   their own Anthropic client.
+
+   FAILS OPEN ON AN UNREADABLE COUNT, WHICH IS THE OPPOSITE DECISION FROM
+   modelCallDailyLimit ABOVE, so the reasoning has to be written down or the
+   inconsistency looks like an oversight.
+
+   The two cases are not symmetric. An unreadable LIMIT is a configuration
+   somebody typed: it is static, it is wrong until a human fixes it, and honouring
+   it as a guess would mean spending real money against a number nobody chose.
+   Refusing is cheap — it is one misconfigured deploy away from being noticed, and
+   nothing is lost but the time to fix the variable.
+
+   An unreadable COUNT is a transient database failure. It is not per-user and it
+   is not per-request: if the ledger query fails it fails for everybody at once,
+   so failing closed there would take the entire product offline — every agent,
+   every route, every user — in response to a blip that may last seconds. And it
+   would do so to prevent a risk that is not present: this cap exists to stop a
+   runaway chain, and a runaway is a sustained pattern, not a single call. A few
+   minutes of uncounted calls while Postgres recovers costs a bounded amount of
+   money. Refusing every request because we could not count costs the product.
+
+   So the count failing proceeds and logs loudly. The log is how the gap becomes
+   visible rather than silent — the same reason the ledger's own failures are
+   logged as MISSING LEDGER ENTRY rather than as generic errors. */
+async function enforceDailyModelCallLimit(userId, route) {
+  var limit = modelCallDailyLimit();
+
+  if (limit === null) {
+    var raw = process.env.MODEL_CALLS_DAILY_LIMIT_PER_USER;
+    console.error("[cap] REFUSING MODEL CALL — MODEL_CALLS_DAILY_LIMIT_PER_USER is set to " +
+      JSON.stringify(String(raw)) + ", which is not a positive whole number. Failing closed: a " +
+      "spend limit that cannot be read is not applied as a guess. Route " +
+      JSON.stringify(route || null) + ", user " + (userId || "null") + ".");
+    throw unreadableModelCallLimitError(raw);
+  }
+
+  /* No user, no per-user cap — there is nothing to count against. After the
+     ledger pass every call site in this file supplies one, so this branch should
+     be unreachable; it logs rather than silently passing, because a call that
+     became unattributed is also a call that just became uncappable, and that is
+     worth knowing about before it is the shape of a runaway. */
+  if (!userId) {
+    console.error("[cap] UNCAPPED MODEL CALL — no user id was supplied for route " +
+      JSON.stringify(route || null) + ", so the per-user daily limit cannot be applied to it. " +
+      "The call proceeds. Every call site is supposed to supply a user; this one did not.");
+    return { allowed: true, counted: false, limit: limit, used: null };
+  }
+
+  var today = modelCallUtcDay();
+
+  /* head: true with count exact — the row bodies are never needed, only how
+     many there are, and this is the query model_calls_user_day_idx was built
+     for: equality on user_id then equality on created_on. */
+  var countResult;
+  try {
+    countResult = await supabase
+      .from("model_calls")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("created_on", today);
+  } catch (countThrew) {
+    console.error("[cap] COUNT UNAVAILABLE — the model_calls count for user " + userId +
+      " on " + today + " threw: " + ((countThrew && countThrew.message) || countThrew) +
+      ". FAILING OPEN: this call proceeds UNCOUNTED against the daily limit of " + limit +
+      ". A ledger query that stuttered must not take the product offline for every user at " +
+      "once; the cap guards against a sustained runaway, not against one call.");
+    return { allowed: true, counted: false, limit: limit, used: null };
+  }
+
+  if (countResult.error || typeof countResult.count !== "number") {
+    console.error("[cap] COUNT UNAVAILABLE — the model_calls count for user " + userId +
+      " on " + today + " could not be read (" +
+      (countResult.error ? (countResult.error.message || JSON.stringify(countResult.error))
+                         : "count was " + JSON.stringify(countResult.count)) +
+      "). FAILING OPEN: this call proceeds UNCOUNTED against the daily limit of " + limit +
+      ". A ledger query that stuttered must not take the product offline for every user at " +
+      "once; the cap guards against a sustained runaway, not against one call.");
+    return { allowed: true, counted: false, limit: limit, used: null };
+  }
+
+  var used = countResult.count;
+
+  /* >= , not >. The count is of calls ALREADY made, so at used === limit the
+     allowance is spent and the next call would be the limit-plus-first. */
+  if (used >= limit) {
+    console.warn("[cap] DAILY LIMIT REACHED — user " + userId + " has " + used + " model call(s) " +
+      "on " + today + ", limit " + limit + " (MODEL_CALLS_DAILY_LIMIT_PER_USER). Refusing route " +
+      JSON.stringify(route || null) + " BEFORE the model call. Resets at UTC midnight.");
+    throw dailyModelCallLimitError(limit, used, route);
+  }
+
+  return { allowed: true, counted: true, limit: limit, used: used };
+}
+
 /* ── model_calls, the spend ledger (migration 103) ────────────────────────────
 
    One row per completed model call. Before this, response.usage arrived from
@@ -11078,6 +11309,27 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
      site that passes a user for billing demonstrably knows who it is. */
   var ledgerContext = ledger || {};
   var ledgerUserId = ledgerContext.user_id || userId || null;
+
+  /* THE CAP, BEFORE ANYTHING IS SPENT. First statement past the attribution, so
+     it runs ahead of the key lookup, ahead of the client, and ahead of the retry
+     loop — nothing here costs money until this has returned. Enforcing after the
+     call would only record the overage, which the ledger already does.
+
+     CHECKED ONCE, OUTSIDE THE RETRY LOOP, ON PURPOSE. The three attempts below
+     are one authorised call surviving a flaky socket, not three calls. Counting
+     or re-checking per attempt would let a bad network spend a user's allowance
+     three times faster than a good one, and would refuse a retry mid-flight over
+     a count that moved underneath it.
+
+     It throws to refuse, and the throw is the whole mechanism: every caller of
+     this function already has to handle it throwing — the API throws on its own
+     account — so the refusal travels the paths that already exist. A route
+     caller reaches next(error) and the 429 goes out with its message intact;
+     processAiTask writes it into ai_tasks.result where the user can read it; the
+     schedule runner records a failed schedule and tries again at its hour
+     tomorrow. */
+  await enforceDailyModelCallLimit(ledgerUserId, ledgerContext.route || "callAnthropicText");
+
   var apiKey = await resolveAnthropicKey(userId);
   // Haiku keeps the original 120s budget so no existing caller changes. A
   // non-default model is here because the task is large — Sonnet writing
@@ -13936,6 +14188,12 @@ app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async funct
     // 4. Call Claude — prefer sonnet, fall back to haiku on error
     var aiResponse;
     const oracleApiKey = await resolveAnthropicKey(req.user.id);
+    /* Checked ONCE for both the sonnet attempt and its haiku fallback. The
+       fallback is the same authorised call retried on a different model, not a
+       second request, and a user whose sonnet call failed should not have the
+       recovery refused by a count that moved in between. */
+    await enforceDailyModelCallLimit(req.user.id, "POST /api/oracle");
+
     const oracleAnthropicClient = new Anthropic({ apiKey: oracleApiKey, timeout: 300000 });
     try {
       aiResponse = await oracleAnthropicClient.messages.create({
@@ -17650,6 +17908,8 @@ app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, n
       oracleChatLanguageInstruction;
 
     const oracleChatApiKey = await resolveAnthropicKey(req.user.id);
+    await enforceDailyModelCallLimit(req.user.id, "POST /api/oracle/chat");
+
     const oracleChatAnthropicClient = new Anthropic({ apiKey: oracleChatApiKey });
 
     var response = await oracleChatAnthropicClient.messages.create({
@@ -32240,6 +32500,8 @@ app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) 
     }
 
     const draftReplyApiKey = await resolveAnthropicKey(req.user.id);
+    await enforceDailyModelCallLimit(req.user.id, "POST /api/leads/draft-reply");
+
     const draftReplyAnthropicClient = new Anthropic({ apiKey: draftReplyApiKey });
 
     var response = await draftReplyAnthropicClient.messages.create({
