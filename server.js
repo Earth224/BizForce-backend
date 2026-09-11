@@ -3565,30 +3565,110 @@ if (userError) {
 
   if (event.type === "customer.subscription.deleted") {
     const subscription = event.data.object;
+    const deletedSubscriptionId = subscription.id;
+    const deletedCustomerId = subscription.customer;
 
-    const { data: existing } = await supabase
+    // Thrown, not logged, for the same reason the checkout branch throws: this
+    // row IS the entitlement. Before this the two updates below discarded their
+    // results, so a failed revocation returned 200 to Stripe, was never
+    // retried, and left an "active" row on a customer who had cancelled — with
+    // every log reporting success. A throw makes the delivery fail visibly in
+    // the Stripe dashboard and get retried. The message names the table so the
+    // person replaying it knows which row to check.
+    function throwDeletedWriteError(table, writeError) {
+      const detail = (writeError && writeError.message) ? writeError.message : String(writeError);
+      console.error("SUBSCRIPTION_DELETED " + table + " update failed for Stripe subscription " +
+        deletedSubscriptionId + " — event " + event.id + ": " + detail);
+      throw new Error("customer.subscription.deleted: " + table + " update failed for Stripe subscription " +
+        deletedSubscriptionId + " (event " + event.id + "): " + detail);
+    }
+
+    let matched = null;
+
+    const { data: bySubscription, error: bySubscriptionError } = await supabase
       .from("subscriptions")
-      .select("user_id")
-      .eq("stripe_subscription_id", subscription.id)
+      .select("user_id, stripe_subscription_id")
+      .eq("stripe_subscription_id", deletedSubscriptionId)
       .maybeSingle();
 
-    if (existing && existing.user_id) {
-      await supabase
-        .from("subscriptions")
-        .update({
-          status: "canceled",
-          cancel_at_period_end: true,
-          updated_at: nowIso()
-        })
-        .eq("user_id", existing.user_id);
+    if (bySubscriptionError) {
+      console.error("SUBSCRIPTION_DELETED lookup by stripe_subscription_id failed: " +
+        (bySubscriptionError.message || bySubscriptionError));
+    }
 
-      await supabase
-        .from("profiles")
-        .update({
-          subscription_status: "canceled",
-          updated_at: nowIso()
-        })
-        .eq("user_id", existing.user_id);
+    if (bySubscription && bySubscription.user_id) {
+      matched = bySubscription;
+    } else {
+      // checkout.session.completed writes stripe_subscription_id as null when
+      // the session carried no subscription id, so the row this event is about
+      // can exist without the id it is keyed on. Fall back to the customer.
+      //
+      // Updated ONLY when that row has no subscription id yet. A row holding a
+      // DIFFERENT id is the customer's current subscription, and this event is
+      // about an older one — cancelling the current row would lock out someone
+      // who is paying. Filling the id in on the null row is deliberate: it is
+      // the id this event just proved belongs to that row, and it means the
+      // next event for it matches on the first lookup.
+      const { data: byCustomer, error: byCustomerError } = await supabase
+        .from("subscriptions")
+        .select("user_id, stripe_subscription_id")
+        .eq("stripe_customer_id", deletedCustomerId)
+        .maybeSingle();
+
+      if (byCustomerError) {
+        console.error("SUBSCRIPTION_DELETED lookup by stripe_customer_id failed: " +
+          (byCustomerError.message || byCustomerError));
+      }
+
+      if (byCustomer && byCustomer.user_id) {
+        if (byCustomer.stripe_subscription_id == null) {
+          matched = byCustomer;
+        } else {
+          console.log("SUBSCRIPTION_DELETED ignored — Stripe subscription " + deletedSubscriptionId +
+            " matches no row, and the row for customer " + deletedCustomerId +
+            " holds subscription " + byCustomer.stripe_subscription_id +
+            ". This is a deleted event for an older subscription; the current row is left as it is. Event " +
+            event.id + ".");
+          return;
+        }
+      }
+    }
+
+    if (!matched) {
+      console.log("SUBSCRIPTION_DELETED no subscriptions row for Stripe subscription " +
+        deletedSubscriptionId + " or customer " + deletedCustomerId + " — event " + event.id +
+        ". Nothing written.");
+      return;
+    }
+
+    const subscriptionUpdate = {
+      status: "canceled",
+      cancel_at_period_end: true,
+      updated_at: nowIso()
+    };
+    if (matched.stripe_subscription_id == null) {
+      subscriptionUpdate.stripe_subscription_id = deletedSubscriptionId;
+    }
+
+    const { error: deletedSubscriptionError } = await supabase
+      .from("subscriptions")
+      .update(subscriptionUpdate)
+      .eq("user_id", matched.user_id);
+
+    if (deletedSubscriptionError) {
+      throwDeletedWriteError("subscriptions", deletedSubscriptionError);
+    }
+
+    const { error: deletedProfileError } = await supabase
+      .from("profiles")
+      .update({
+        subscription_status: "canceled",
+        updated_at: nowIso()
+      })
+      .eq("user_id", matched.user_id);
+
+    if (deletedProfileError) {
+      throwDeletedWriteError("profiles", deletedProfileError);
     }
   }
 
