@@ -36344,8 +36344,9 @@ async function runAgentSchedulePass(now, maxPerTick) {
   var launched = 0;
   var attempts = 0;
   var failed   = 0;
-  var skippedNoAutonomy = 0;
-  var skippedInvalid    = 0;
+  var skippedNoAutonomy   = 0;
+  var skippedNotEntitled  = 0;
+  var skippedInvalid      = 0;
   var firstFailure = null;
   var ceilingReached = false;
 
@@ -36356,6 +36357,38 @@ async function runAgentSchedulePass(now, maxPerTick) {
     }
     console.error("[AgentSchedules] " + schedule.agent_type + " for user " +
       schedule.user_id + " failed: " + detail);
+  }
+
+  /* ── THE ENTITLEMENT GATE ───────────────────────────────────────────────
+     A SCHEDULE DOES NOT OUTLIVE THE SUBSCRIPTION THAT PAID FOR IT.
+
+     The manual task route sits behind requireActiveSubscription. This runner
+     does not: runScheduledAgentTask synthesises a request and calls
+     handleAiTaskRequest as a function, so nothing on that path ever asked
+     whether the account is still paying. A schedule created while subscribed
+     kept running — and kept spending on the platform key — after the
+     subscription lapsed, every day, at its hour, with nothing to stop it.
+
+     Resolved through getUserPlan so the answer here is the same one the gate
+     gives a manual request: an entitled subscription or the admin exemption is
+     `active: true`, and NOTHING ELSE IS. The test is `=== true` on purpose — a
+     malformed result must read as "no", not as truthy.
+
+     Cached per user for the tick, not per schedule. A user with several due
+     schedules costs one plan lookup, and the cached value includes a failure:
+     if the first lookup threw, retrying it for the same user's next schedule
+     would be asking the same broken database the same question. */
+  var planByUser = {};
+
+  async function scheduledUserPlan(userId) {
+    if (!Object.prototype.hasOwnProperty.call(planByUser, userId)) {
+      try {
+        planByUser[userId] = { plan: await getUserPlan(userId), error: null };
+      } catch (planErr) {
+        planByUser[userId] = { plan: null, error: planErr };
+      }
+    }
+    return planByUser[userId];
   }
 
   /* Narrowed in the query to what could possibly be due this hour; the cadence
@@ -36386,7 +36419,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
     console.log("[AgentSchedules] Nothing due at " + today + " " +
       (hour < 10 ? "0" : "") + hour + ":00 UTC.");
     return {
-      due: 0, launched: 0, failed: 0, skippedNoAutonomy: 0, skippedInvalid: 0,
+      due: 0, launched: 0, failed: 0, skippedNoAutonomy: 0, skippedNotEntitled: 0, skippedInvalid: 0,
       firstFailure: null, ceilingReached: false
     };
   }
@@ -36475,6 +36508,40 @@ async function runAgentSchedulePass(now, maxPerTick) {
       continue;
     }
 
+    /* Checked here, AFTER the autonomy and validity skips and BEFORE the
+       ceiling. After, so a user who never consented costs no plan lookup.
+       Before, so a skipped schedule does not consume an attempt: the ceiling is
+       a spend limit, a skip spends nothing, and letting it count would let a
+       handful of lapsed accounts crowd paying ones out of the hour.
+
+       Neither skip below writes last_run_on. The schedule did not run, and the
+       row must say so — stamping it would make a lapsed account's schedule look
+       like it ran and make a renewed one wait a day for no reason.
+
+       FAIL CLOSED on an error. A plan that could not be read is not a plan that
+       entitles; running on a guess would spend money for an account nobody
+       could confirm is paying. Counted as a failure, so the hour's job_runs row
+       does not close clean over a broken entitlement read. */
+    var entitlement = await scheduledUserPlan(schedule.user_id);
+
+    if (entitlement.error || !entitlement.plan) {
+      skippedNotEntitled += 1;
+      noteFailure(schedule, "entitlement could not be determined, so it was not run: " +
+        (entitlement.error
+          ? ((entitlement.error && entitlement.error.message) || String(entitlement.error))
+          : "getUserPlan returned no result"));
+      continue;
+    }
+
+    if (entitlement.plan.active !== true) {
+      skippedNotEntitled += 1;
+      console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " +
+        schedule.user_id + " — no active subscription (inactive_reason " +
+        JSON.stringify(entitlement.plan.inactive_reason || null) + "). A schedule does not " +
+        "outlive the subscription that paid for it; not run, last_run_on not set.");
+      continue;
+    }
+
     /* THE CEILING COUNTS ATTEMPTS, NOT SUCCESSES, and that is the decision that
        makes it a spend limit rather than a throughput limit. An attempt is what
        can cost money; counting only the ones that succeeded would let a tick make
@@ -36543,6 +36610,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
 
   console.log("[AgentSchedules] Pass finished — " + launched + " launched, " + failed +
     " failed, " + skippedNoAutonomy + " skipped for autonomy being off, " +
+    skippedNotEntitled + " skipped for no active subscription, " +
     skippedInvalid + " skipped as unrunnable, out of " + due.length + " due.");
 
   return {
@@ -36550,6 +36618,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
     launched: launched,
     failed: failed,
     skippedNoAutonomy: skippedNoAutonomy,
+    skippedNotEntitled: skippedNotEntitled,
     skippedInvalid: skippedInvalid,
     firstFailure: firstFailure,
     ceilingReached: ceilingReached
