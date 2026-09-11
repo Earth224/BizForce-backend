@@ -6340,7 +6340,27 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/business-chat", requireAuth, async function (req, res, next) {
+/* GATED. This was one of only two authenticated model-call routes in this file
+   without requireActiveSubscription, against 31 agent tool routes that all carry
+   it, and the omission read as policy when it was an omission.
+
+   It is not an evaluation surface. This is a persistent, multi-turn advisor
+   grounded in the caller's business_profiles row, with its history kept in
+   chat_messages — it is the thing somebody subscribes FOR, not the thing they
+   need in order to decide whether to. It is linked from dashboard.html alone,
+   which is already inside the product. Left open, a signed-up account that never
+   pays could hold an unbounded conversation with the model on the PLATFORM key:
+   this route passes req.user.id to resolveAnthropicKey, so a caller with no
+   stored key of their own — which is every caller who has not set one up — bills
+   ANTHROPIC_API_KEY, 250 turns a day, for as long as the account exists.
+
+   THE GET BELOW IS DELIBERATELY LEFT OPEN, and that is not an inconsistency.
+   It reads chat_messages and makes no model call, so it costs nothing; gating it
+   would mean an account whose subscription lapsed could no longer read a
+   conversation it already had and already paid for. Losing access to your own
+   past words is a different decision from losing the ability to write new ones,
+   and it is not the one being made here. */
+app.post("/api/business-chat", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     var message = safeText(req.body.message, 4000);
     if (!message) {
@@ -17933,7 +17953,42 @@ app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, n
   }
 });
 
-app.post("/api/insights/page", requireAuth, aiLimiter, async function (req, res, next) {
+/* GATED, and the case for leaving it open was weighed rather than skipped,
+   because this one genuinely looks like a taster: it is the only live-model
+   surface a signed-up-but-unpaid account could reach, it sits on billing.html
+   among other orientation pages, and billing.html is where somebody decides.
+
+   It is gated anyway, for three reasons.
+
+   The drawer does not need it to do its job. scripts/termaximus-guide.js renders
+   TWO sections, and the orienting one — Page Guidance — is entirely static,
+   several hand-written sentences per page, untouched by this. The Insights
+   section has its own static fallback (PAGE_INSIGHT, with a generic placeholder
+   behind it), so a refused call leaves a finished sentence where a finished
+   sentence belongs. A prospective subscriber sees a complete drawer either way.
+
+   One sentence in a closed drawer is not a product demo. The thing that would
+   actually show somebody what they are buying is an agent tool route, and all 31
+   of those are already gated — so the status quo was not "a taster was left open
+   on purpose", it was this route being inconsistent with the policy every other
+   one follows.
+
+   And it was unbounded per signup. 44 pages load that script; before the
+   frontend change that moved the fetch onto the drawer's opening and cached it
+   per page per session, this billed on every page load of every one of them.
+   Even on demand it is one call per page per sitting, on the platform key,
+   forever, for an account that may never pay.
+
+   requireActiveSubscription BEFORE aiLimiter, matching the order all 31 tool
+   routes use: refuse the caller who is not entitled before spending a slot in
+   the rate limiter's window on them.
+
+   THE FRONTEND ALREADY HANDLES THE 402 CORRECTLY. The guide's fetch is
+   `r.ok ? r.json() : Promise.reject(r.status)`, so a 402 takes the catch, which
+   writes the static fallback sentence and records the attempt as failed — the
+   fallback appears and no retry follows. Nothing on the frontend needs changing
+   for this. */
+app.post("/api/insights/page", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var page = safeText(req.body.page, 200) || "this page";
 
