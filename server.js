@@ -18587,6 +18587,176 @@ function toolProvenance(measured, inferred, caveat, extra) {
   }, extra || {});
 }
 
+/* ── Persisting a tool run ───────────────────────────────────────────────────
+   Every tool route above and below returned its body and wrote nothing down:
+   the run was spent, shown once, and gone. This records each one on ai_tasks
+   — the table Task History already reads — as a row whose `output` (jsonb,
+   migration 104) is the response body exactly as sent and whose `result` is
+   a readable rendering of it, so the row displays in the existing history
+   list without a frontend change.
+
+   THE ORDER OF FAILURES IS THE DESIGN.
+   - The insert happens before the model call and a failed insert THROWS, so a
+     run that cannot be recorded spends nothing. seo/optimize did this too.
+   - The completion update happens after the model call and a failed update
+     DOES NOT throw: the money is spent and the work exists, and refusing to
+     hand it over because the bookkeeping failed would leave the user paying
+     for nothing. It logs UNPERSISTED TOOL OUTPUT and returns false, and the
+     route says so in the response as `persisted: false`.
+   - fail() marks the row failed on any error after the insert. seo/optimize
+     never did this, so a model call that threw left a "processing" row that
+     said so forever. Nothing here should leave one.
+
+   taskType is the route path after /api/agents/ ("rd/competitor-scan") so the
+   meta line in Task History names the tool; title is the human-readable line
+   the history list shows — the tool name plus the primary input, never JSON. */
+var TOOL_RESULT_MARKDOWN_CAP = 20000;
+
+function renderToolOutputMarkdown(output) {
+  function heading(key) {
+    return String(key).replace(/_/g, " ").replace(/^\w/, function (c) { return c.toUpperCase(); });
+  }
+  function scalar(value) {
+    if (value === null || value === undefined) return "—";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    // Anything else that reached here is a nested object in a scalar position;
+    // JSON is the honest fallback, never the [object Object] the default gives.
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  }
+  function isPlainObject(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  function renderObject(obj, indent) {
+    var pad = new Array(indent + 1).join("  ");
+    return Object.keys(obj).map(function (key) {
+      var value = obj[key];
+      if (Array.isArray(value)) {
+        if (!value.length) return pad + "- " + heading(key) + ": none";
+        return pad + "- " + heading(key) + ":\n" + renderArray(value, indent + 1);
+      }
+      if (isPlainObject(value)) {
+        var inner = renderObject(value, indent + 1);
+        return pad + "- " + heading(key) + ":" + (inner ? "\n" + inner : " {}");
+      }
+      return pad + "- " + heading(key) + ": " + scalar(value);
+    }).join("\n");
+  }
+  function renderArray(arr, indent) {
+    var pad = new Array(indent + 1).join("  ");
+    return arr.map(function (item) {
+      if (Array.isArray(item)) return pad + "- " + item.map(scalar).join(", ");
+      if (isPlainObject(item)) {
+        var inner = renderObject(item, indent + 1);
+        return pad + "-" + (inner ? "\n" + inner : " {}");
+      }
+      return pad + "- " + scalar(item);
+    }).join("\n");
+  }
+
+  if (!isPlainObject(output)) return scalar(output);
+
+  var sections = Object.keys(output).filter(function (key) { return key !== "success"; })
+    .map(function (key) {
+      var value = output[key];
+      var body;
+      if (value === null || value === undefined) body = "—";
+      else if (typeof value === "string") body = value;
+      else if (Array.isArray(value)) body = value.length ? renderArray(value, 0) : "None";
+      else if (isPlainObject(value)) body = Object.keys(value).length ? renderObject(value, 0) : "{}";
+      else body = scalar(value);
+      return "## " + heading(key) + "\n\n" + body;
+    });
+
+  var markdown = sections.join("\n\n");
+  if (markdown.length > TOOL_RESULT_MARKDOWN_CAP) {
+    var note = "\n\n_Truncated for display at " + TOOL_RESULT_MARKDOWN_CAP +
+      " characters; the full structured result is stored with this task._";
+    markdown = markdown.slice(0, TOOL_RESULT_MARKDOWN_CAP - note.length) + note;
+  }
+  return markdown;
+}
+
+async function startToolRun(req, options) {
+  var userId = req.user.id;
+  var agentType = options.agentType;
+  var taskType = options.taskType;
+  var title = String(options.title || taskType).slice(0, 200);
+
+  var pendingInsert = await supabase
+    .from("ai_tasks")
+    .insert({
+      user_id: userId,
+      agent_type: agentType,
+      task_type: taskType,
+      prompt: title,
+      result: null,
+      status: "processing"
+    })
+    .select("id")
+    .single();
+
+  if (pendingInsert.error) {
+    throw new Error("Could not record the " + taskType + " run before starting it: " +
+      (pendingInsert.error.message || pendingInsert.error) + ". Nothing was spent.");
+  }
+
+  var taskId = pendingInsert.data.id;
+
+  return {
+    taskId: taskId,
+
+    complete: async function (output) {
+      var now = nowIso();
+      var update = await supabase
+        .from("ai_tasks")
+        .update({
+          status: "completed",
+          output: output,
+          result: renderToolOutputMarkdown(output),
+          completed_at: now,
+          updated_at: now
+        })
+        .eq("id", taskId)
+        .eq("user_id", userId);
+
+      if (update.error) {
+        console.error("UNPERSISTED TOOL OUTPUT — task " + taskId + " (" + taskType + ") for user " +
+          userId + " completed but the ai_tasks update failed: " +
+          (update.error.message || update.error) + ". The response was still delivered; the row " +
+          "is left as processing.");
+        return false;
+      }
+      return true;
+    },
+
+    fail: async function (error) {
+      var message = (error && error.message) ? error.message : String(error);
+      var now = nowIso();
+      try {
+        var update = await supabase
+          .from("ai_tasks")
+          .update({
+            status: "failed",
+            error: message,
+            result: "Task failed: " + message,
+            completed_at: now,
+            updated_at: now
+          })
+          .eq("id", taskId)
+          .eq("user_id", userId);
+        if (update.error) {
+          console.error("[tool-run] Could not mark task " + taskId + " (" + taskType + ") failed for user " +
+            userId + ": " + (update.error.message || update.error));
+        }
+      } catch (markErr) {
+        console.error("[tool-run] Marking task " + taskId + " (" + taskType + ") failed threw for user " +
+          userId + ": " + ((markErr && markErr.message) || markErr));
+      }
+    }
+  };
+}
+
 /* This platform reads no marketplace API and has no access to Etsy search
    volume, so anything resembling a volume figure is model knowledge — a
    recollection of how people talk about a category, not a measurement of what
@@ -22119,6 +22289,14 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
         });
       }
 
+      // After validation, before anything is spent: a 400 records nothing, and a
+      // run that cannot be recorded throws here rather than running unrecorded.
+      var run = await startToolRun(req, {
+        agentType: "rd",
+        taskType: "rd/competitor-scan",
+        title: "R&D · Competitor scan: " + competitors.join(", ")
+      });
+
       var businessProfile = await loadProfileForTool(userId);
 
       var rdBrain =
@@ -22188,6 +22366,9 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
       });
 
       if (!entries.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("The competitor comparison could not be read back from the model."));
         return res.status(502).json({
           error: "The competitor comparison could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -22203,7 +22384,7 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
         });
       });
 
-      return res.json({
+      var responseBody = {
         success: true,
         competitors_requested: competitors,
         comparison: entries,
@@ -22255,9 +22436,22 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
           RD_READS_NOTHING,
           RD_PROVENANCE_FLAGS
         )
-      });
+      };
+
+      // Persisted as the body exactly as sent, minus the two bookkeeping keys
+      // added below. `persisted` is false only when the run happened and the
+      // record of it did not — the user still gets the work either way.
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[rd/competitor-scan] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
@@ -24227,6 +24421,14 @@ app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, ai
         });
       }
 
+      // After validation. The primary input is the keyword when given, else the
+      // opening of the article; either way a readable line, never the body.
+      var run = await startToolRun(req, {
+        agentType: "content",
+        taskType: "content/audit",
+        title: "Content · Audit: " + (keyword || article.replace(/\s+/g, " ").trim().slice(0, 120))
+      });
+
       var headings = extractArticleHeadings(article);
       var nestingProblems = auditHeadingNesting(headings);
 
@@ -24308,7 +24510,7 @@ app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, ai
         return n > ARTICLE_LONG_PARAGRAPH_WORDS;
       }).length;
 
-      return res.json({
+      var responseBody = {
         success: true,
         keyword: keyword || null,
         measured: {
@@ -24397,9 +24599,19 @@ app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, ai
             competing_articles_read: false
           }
         )
-      });
+      };
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
     } catch (error) {
       console.error("[content/audit] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
       next(error);
     }
   });
