@@ -1623,15 +1623,19 @@ async function orchestrateAgentWorkflow(options) {
     collaboration_created: false,
     sales_call_result: null
   };
+  /* "starting_plan_produced", not "completed". What reaches this function from
+     POST /api/assignments/:id/start is a template built from the row's own
+     fields; the assignment is released pending and no agent has run. The memory
+     row must say what happened, not what the old heading used to claim. */
   var memoryMetadata = {
     assignment_id: assignmentId,
     mission: assignment.mission || "",
-    status: "completed"
+    status: "starting_plan_produced"
   };
   var memoryContent = truncateOrchestratorPreview(resultText, 2000);
 
   if (!memoryContent) {
-    memoryContent = "Assignment completed.";
+    memoryContent = "Starting plan produced; no agent has run.";
   }
 
   if (isFrontendAssignment) {
@@ -1653,7 +1657,7 @@ async function orchestrateAgentWorkflow(options) {
         memory_key: agentType + "_completed_assignment",
         memory_value: memoryContent,
         memory_type: "insight",
-        title: agentType.toUpperCase() + " completed assignment",
+        title: agentType.toUpperCase() + " starting plan produced (no agent has run)",
         content: memoryContent,
         metadata: normalizeMemoryMetadata(memoryMetadata),
         created_at: timestamp,
