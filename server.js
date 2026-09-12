@@ -19,6 +19,7 @@ const { createClient } = require("@supabase/supabase-js");
 const Astronomy = require("astronomy-engine");
 const cityTimezones = require("city-timezones");
 const { Resend } = require("resend");
+const { AsyncLocalStorage } = require("async_hooks");
 
 /* Plain require, not a dynamic import: @simplewebauthn/server ships a dual
    build and its exports map resolves "require" to ./script/index.js, so the
@@ -11497,6 +11498,20 @@ async function recordModelCall(details) {
   }
 }
 
+/* ── The chain scope ─────────────────────────────────────────────────────────
+   How a dispatched tool's model calls learn which chain they belong to WITHOUT
+   any tool route changing. Every tool route builds its own ledger object —
+   { user_id, agent_type, route } — and passes it here; none of them knows about
+   chains and none of them should have to. dispatchToolCall runs the handler
+   inside agentChainScope.run({ id, depth }, ...), and because the handler's
+   awaits all happen inside that async context, this function can read the
+   scope when the ledger object arrives without a chain and fill it in.
+
+   A ledger object that already carries chain_id wins: an explicit value is a
+   caller saying what it knows, and the scope is only for callers that cannot.
+   Outside any dispatch the store is undefined and nothing changes. */
+var agentChainScope = new AsyncLocalStorage();
+
 async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001", ledger = {}) {
   /* `ledger` is a FIFTH parameter carrying the spend attribution — user_id,
      agent_type, route, chain_id, chain_depth — rather than reusing `userId`
@@ -11515,6 +11530,18 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
      Falls back to the billing userId when ledger.user_id is absent, because a
      site that passes a user for billing demonstrably knows who it is. */
   var ledgerContext = ledger || {};
+
+  /* Chain identity from the dispatch scope, when the call site supplied none.
+     See agentChainScope above. Copied rather than mutated, so a ledger object a
+     caller reuses across calls is not silently rewritten. */
+  var chainScope = agentChainScope.getStore();
+  if (chainScope && ledgerContext.chain_id == null) {
+    ledgerContext = Object.assign({}, ledgerContext, {
+      chain_id: chainScope.id,
+      chain_depth: chainScope.depth
+    });
+  }
+
   var ledgerUserId = ledgerContext.user_id || userId || null;
 
   /* THE CAP, BEFORE ANYTHING IS SPENT. First statement past the attribution, so
@@ -25602,6 +25629,288 @@ app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
   });
 });
 
+/* ══════════════════════════════════════════════════════════════════════════
+   THE AGENT CHAIN DISPATCHER — shipped inert.
+
+   NOTHING CALLS dispatchToolCall in this commit. No route, no job, no plan. It
+   exists so that when something does, the limits and refusals are already the
+   first thing it meets rather than an afterthought bolted on after a runaway.
+
+   WHAT IT DOES. Runs one agent tool — one of the POST /api/agents/<agent>/<tool>
+   handlers — from server code, on behalf of a user, as one step of a chain. It
+   reaches the handler the only way an inline app.post handler can be reached:
+   by walking app._router.stack for that exact path and taking the route's final
+   handler. That bypasses requireAuth, requireActiveSubscription and aiLimiter —
+   the same bypass runScheduledAgentTask has — so every one of those gates is
+   re-applied here, explicitly, before anything is spent:
+
+     gate       ENABLE_AGENT_CHAINING must be exactly "true"
+     limits     CHAIN_MAX_DEPTH, CHAIN_MAX_FANOUT, CHAIN_MAX_CALLS
+     target     the agent/tool must be in the live router AND not in
+                CHAIN_NON_DISPATCHABLE_TOOLS
+     body       TOOL_INPUT_SPECS' required fields must be present
+     entitlement getUserPlan(userId).active must be exactly true; a lookup
+                that throws FAILS CLOSED
+
+   Every refusal is a named reason, because "false" cannot be acted on and a
+   chain that stops needs to say why in the ledger and the log.
+
+   WHAT A CHAIN IS. { id, depth, callsSoFar }. id is a uuid the originator mints
+   once and every hop carries; depth is the hop count of the CALLER (the
+   originating call is 0, so the first dispatched tool runs at depth 1); callsSoFar
+   is the total dispatched so far in this chain, whatever its shape. The caller
+   owns callsSoFar — this function checks it, it does not keep it. Fan-out is
+   tracked here, per (chain id, caller depth): the number of dispatches one step
+   has made, so a step cannot spray a dozen tools sequentially and pass a limit
+   meant to stop exactly that.
+
+   THE LEDGER SEES THE CHAIN. The handler runs inside agentChainScope, so every
+   callAnthropicText inside it records chain_id and chain_depth on model_calls
+   without any tool route knowing chains exist. That is the first thing this
+   codebase can point at when asked "which chain spent this, and how deep".
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Routes the catalogue admits that a chain may NOT run. Each one takes an
+   action in the world or on live state — posting a generated article, writing a
+   proposal set, fetching and reporting on a live site, sending outreach, or
+   changing a lead's status. A tool that only writes text for a person to read is
+   a safe thing to chain; a tool that acts is not, however good the plan looks.
+   Refused by name so the reason is legible in the log. */
+var CHAIN_NON_DISPATCHABLE_TOOLS = [
+  "store/generate-proposals",
+  "seo/generate-post",
+  "seo/optimize",
+  "sales/convert",
+  "sales/lead-status"
+];
+
+/* The three limits. Each: absent or blank → the default; a whole number →
+   clamped into range; anything else → the default, with an error logged once at
+   read time, because a limit typed wrongly should be seen and must never widen
+   to "no limit". Clamps: depth 1..5, fan-out 1..10, total calls 1..50 — the top
+   of each is already far more than any plan this product produces, and beyond
+   them the variable would be functioning as an off switch rather than a limit. */
+function chainLimit(envName, defaultValue, min, max) {
+  var raw = process.env[envName];
+  if (raw == null || String(raw).trim() === "") return defaultValue;
+  var parsed = Number(String(raw).trim());
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    console.error("[chain] " + envName + " is set to " + JSON.stringify(String(raw)) +
+      ", which is not a whole number; using the default of " + defaultValue + ".");
+    return defaultValue;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function chainMaxDepth()  { return chainLimit("CHAIN_MAX_DEPTH",  2, 1, 5); }
+function chainMaxFanout() { return chainLimit("CHAIN_MAX_FANOUT", 3, 1, 10); }
+function chainMaxCalls()  { return chainLimit("CHAIN_MAX_CALLS", 10, 1, 50); }
+
+function agentChainingEnabled() {
+  return process.env.ENABLE_AGENT_CHAINING === "true";
+}
+
+/* Fan-out bookkeeping: dispatches attempted from (chain id, caller depth).
+   Counted on attempt, not success — an attempt is what can cost money. Bounded:
+   past CHAIN_FANOUT_TRACK_CAP keys the oldest are dropped, so a long-lived
+   process cannot grow this without limit. */
+var CHAIN_FANOUT_TRACK_CAP = 5000;
+var chainFanoutCounts = new Map();
+
+function chainFanoutKey(chain) {
+  return String(chain.id) + "|" + String(chain.depth);
+}
+
+function chainFanoutSoFar(chain) {
+  return chainFanoutCounts.get(chainFanoutKey(chain)) || 0;
+}
+
+function chainFanoutNote(chain) {
+  var key = chainFanoutKey(chain);
+  chainFanoutCounts.set(key, (chainFanoutCounts.get(key) || 0) + 1);
+  if (chainFanoutCounts.size > CHAIN_FANOUT_TRACK_CAP) {
+    chainFanoutCounts.delete(chainFanoutCounts.keys().next().value);
+  }
+}
+
+/* Present means: defined, not null, not a blank string, not an empty array.
+   A field can be satisfied by any of its declared aliases. */
+function chainBodyHas(body, field) {
+  var names = [field.name].concat(field.aliases || []);
+  return names.some(function (name) {
+    var v = body[name];
+    if (v === undefined || v === null) return false;
+    if (typeof v === "string" && v.trim() === "") return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    return true;
+  });
+}
+
+/* The handler, from the live router, for exactly this path. Never guessed: no
+   path, no handler. The final entry in the route's stack is the handler itself;
+   the entries before it are requireAuth / requireActiveSubscription / aiLimiter. */
+function resolveToolRouteHandler(path) {
+  var stack = (app._router && app._router.stack) || [];
+  for (var i = 0; i < stack.length; i++) {
+    var layer = stack[i];
+    if (!layer.route || layer.route.path !== path || !layer.route.methods || !layer.route.methods.post) continue;
+    var routeStack = layer.route.stack || [];
+    if (!routeStack.length) return null;
+    var last = routeStack[routeStack.length - 1];
+    return (last && typeof last.handle === "function") ? last.handle : null;
+  }
+  return null;
+}
+
+function chainRefusal(reason, detail) {
+  return { ok: false, status: null, body: null, refused_reason: reason, detail: detail || null };
+}
+
+async function dispatchToolCall(options) {
+  var opts = options || {};
+  var userId = opts.userId;
+  var agentType = String(opts.agentType || "").toLowerCase().trim();
+  var tool = String(opts.tool || "").toLowerCase().trim();
+  var body = (opts.body && typeof opts.body === "object" && !Array.isArray(opts.body)) ? opts.body : {};
+  var chain = opts.chain || {};
+  var key = agentType + "/" + tool;
+
+  // 1. the gate
+  if (!agentChainingEnabled()) {
+    return chainRefusal("chaining_disabled",
+      "ENABLE_AGENT_CHAINING is not exactly \"true\"; no chain may dispatch.");
+  }
+
+  // 2. the chain itself must be well formed
+  if (!chain.id || typeof chain.id !== "string") {
+    return chainRefusal("chain_id_missing", "A dispatch needs the chain's id so its spend can be attributed.");
+  }
+  var callerDepth = Number(chain.depth);
+  var callsSoFar = Number(chain.callsSoFar);
+  if (!Number.isInteger(callerDepth) || callerDepth < 0) {
+    return chainRefusal("chain_depth_invalid", "chain.depth must be a whole number >= 0 (the originating call is 0).");
+  }
+  if (!Number.isInteger(callsSoFar) || callsSoFar < 0) {
+    return chainRefusal("chain_calls_invalid", "chain.callsSoFar must be a whole number >= 0.");
+  }
+
+  // 3. the three limits, cheapest first, all before anything is spent
+  var maxCalls = chainMaxCalls();
+  if (callsSoFar >= maxCalls) {
+    return chainRefusal("chain_total_calls_reached",
+      "This chain has already made " + callsSoFar + " tool call(s); CHAIN_MAX_CALLS is " + maxCalls + ".");
+  }
+  var maxDepth = chainMaxDepth();
+  var nextDepth = callerDepth + 1;
+  if (nextDepth > maxDepth) {
+    return chainRefusal("chain_depth_reached",
+      "A dispatch from depth " + callerDepth + " would run at depth " + nextDepth + "; CHAIN_MAX_DEPTH is " + maxDepth + ".");
+  }
+  var maxFanout = chainMaxFanout();
+  var fanoutSoFar = chainFanoutSoFar({ id: chain.id, depth: callerDepth });
+  if (fanoutSoFar >= maxFanout) {
+    return chainRefusal("chain_fanout_reached",
+      "The step at depth " + callerDepth + " of this chain has already dispatched " + fanoutSoFar +
+      " tool(s); CHAIN_MAX_FANOUT is " + maxFanout + ".");
+  }
+
+  // 4. the target must be a real, dispatchable tool
+  if (CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {
+    return chainRefusal("tool_takes_external_action",
+      key + " acts on the world or on live state (posting, sending, writing lead state); a chain may not take external action.");
+  }
+  var route = agentToolRoutes().filter(function (r) { return r.key === key; })[0];
+  if (!route) {
+    return chainRefusal("tool_not_in_router", key + " is not a mounted agent tool route.");
+  }
+  if (!Array.isArray(route.spec)) {
+    return chainRefusal("tool_has_no_spec", key + " has no entry in TOOL_INPUT_SPECS, so its required inputs cannot be checked.");
+  }
+
+  // 5. the body must satisfy the spec's required fields
+  var missing = route.spec.filter(function (f) { return f.required && !chainBodyHas(body, f); })
+    .map(function (f) { return f.name; });
+  if (missing.length) {
+    return chainRefusal("body_missing_required_fields",
+      key + " requires " + missing.join(", ") + " (per TOOL_INPUT_SPECS) and the body does not carry " +
+      (missing.length === 1 ? "it" : "them") + ".");
+  }
+
+  // 6. entitlement, re-applied because the middleware is bypassed. Fails closed.
+  if (!userId) {
+    return chainRefusal("user_missing", "A dispatch needs the user it runs for.");
+  }
+  var planState;
+  try {
+    planState = await getUserPlan(userId);
+  } catch (planErr) {
+    return chainRefusal("entitlement_unknown",
+      "getUserPlan threw for user " + userId + ": " + ((planErr && planErr.message) || planErr) +
+      ". Failing closed: an entitlement that cannot be read does not entitle.");
+  }
+  if (!planState || planState.active !== true) {
+    return chainRefusal("not_entitled",
+      "User " + userId + " has no active subscription" +
+      (planState && planState.inactive_reason ? " (" + planState.inactive_reason + ")" : "") + ".");
+  }
+
+  // 7. the handler, from the live router
+  var handler = resolveToolRouteHandler(route.path);
+  if (!handler) {
+    return chainRefusal("handler_not_found", "No POST handler is mounted at " + route.path + ".");
+  }
+
+  // Everything is checked. This attempt counts toward the step's fan-out now,
+  // before the handler runs, because from here it can cost money.
+  chainFanoutNote({ id: chain.id, depth: callerDepth });
+
+  console.log("[chain] dispatch " + key + " for user " + userId + " — chain " + chain.id +
+    ", depth " + nextDepth + ", call " + (callsSoFar + 1) + " of at most " + maxCalls + ".");
+
+  /* The res shim, matching runScheduledAgentTask's: statusCode, status(code)
+     (chainable) and json(payload) (resolves). Those are the only two response
+     methods any tool route calls — verified across every handler: res.status()
+     and res.json() and nothing else. Not implemented, because no tool route uses
+     them: send, end, set/header, type, redirect, sendStatus, cookie, locals. A
+     handler that reached for one of those would throw, and the throw is caught
+     below as a failed dispatch rather than a silent success. next(err) — how
+     Express handlers report their own failures — is where most real errors land. */
+  return new Promise(function (resolve) {
+    var settled = false;
+    function done(result) { if (!settled) { settled = true; resolve(result); } }
+
+    var req = { user: { id: userId }, body: body };
+    var res = {
+      statusCode: 200,
+      status: function (code) { this.statusCode = code; return this; },
+      json: function (payload) {
+        done({
+          ok: this.statusCode >= 200 && this.statusCode < 300,
+          status: this.statusCode,
+          body: payload,
+          refused_reason: null
+        });
+        return this;
+      }
+    };
+    function next(err) {
+      done({
+        ok: false,
+        status: 500,
+        body: null,
+        refused_reason: "handler_error",
+        detail: (err && err.message) || String(err || "next() called")
+      });
+    }
+
+    agentChainScope.run({ id: chain.id, depth: nextDepth }, function () {
+      Promise.resolve()
+        .then(function () { return handler(req, res, next); })
+        .catch(function (err) { next(err); });
+    });
+  });
+}
+
 /* Orders the assignments by their dependencies, and names any cycle.
 
    Kahn's algorithm, in waves: wave 1 is everything that depends on nothing, wave 2
@@ -37911,6 +38220,17 @@ app.listen(PORT, function () {
     checkToolInputSpecsAgainstRouter();
   } catch (specCheckErr) {
     console.error("[tool-specs] The spec check itself failed: " + ((specCheckErr && specCheckErr.message) || specCheckErr));
+  }
+
+  /* The chain dispatcher's gate, stated in both directions so the log always
+     says which way it is set. Nothing calls dispatchToolCall yet; when
+     something does, this line is how an operator knows whether it can run. */
+  if (agentChainingEnabled()) {
+    console.log("[startup] agent chaining ENABLED (ENABLE_AGENT_CHAINING=\"true\") — dispatchToolCall may run tools; " +
+      "CHAIN_MAX_DEPTH=" + chainMaxDepth() + ", CHAIN_MAX_FANOUT=" + chainMaxFanout() + ", CHAIN_MAX_CALLS=" + chainMaxCalls() +
+      ". Nothing dispatches yet in this build.");
+  } else {
+    console.log("[startup] agent chaining disabled (ENABLE_AGENT_CHAINING not exactly \"true\"); dispatchToolCall refuses every call.");
   }
 
   startLeadRadar().catch(function (err) {
