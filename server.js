@@ -25746,6 +25746,95 @@ function chainBodyHas(body, field) {
   });
 }
 
+/* ── Turning a plan's INPUTS block into a body the tool would accept ────────
+   The executive plan asks the model for `field = value` lines under INPUTS:,
+   one per declared field of the chosen tool. What comes back is text, and the
+   model's idea of complete is not evidence, so the block is parsed here and
+   then checked against the tool's TOOL_INPUT_SPECS entry with the same test
+   dispatchToolCall applies (chainBodyHas) — a plan cannot mark an assignment
+   dispatchable on a body the dispatcher would refuse.
+
+   COERCIONS, and only these, because each is unambiguous:
+     string_array  a comma-separated string becomes an array of trimmed items
+     number        a string that is exactly one finite number becomes that number
+     object_array  a string that JSON-parses to an array becomes that array
+                   (funnel stages, KPI metrics and comparables have no other
+                   textual form)
+     boolean       the exact strings "true" / "false" become booleans
+   Anything that does not fit stays exactly as given, and presence is then
+   judged as the dispatcher would judge it. Fields the spec does not declare are
+   dropped and named, never passed through — a body is not the place for the
+   model's extra ideas. */
+function parseToolInputsBlock(text) {
+  var raw = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!raw || /^(none|n\/a|-|null)$/i.test(raw)) return null;
+
+  var parsed = {};
+  var any = false;
+  raw.split("\n").forEach(function (line) {
+    var m = /^[ \t>*#-]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:=|:)[ \t]*(.*)$/.exec(line);
+    if (!m) return;
+    var name = m[1].toLowerCase();
+    var value = m[2].trim();
+    if (Object.prototype.hasOwnProperty.call(parsed, name)) return;   // first mention wins
+    parsed[name] = value;
+    any = true;
+  });
+  return any ? parsed : null;
+}
+
+function coerceToolInputValue(field, value) {
+  if (typeof value !== "string") return value;
+  var trimmed = value.trim();
+  if (field.type === "string_array") {
+    return trimmed.split(",").map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
+  }
+  if (field.type === "number") {
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
+    return value;
+  }
+  if (field.type === "object_array") {
+    if (/^\[/.test(trimmed)) {
+      try { var arr = JSON.parse(trimmed); if (Array.isArray(arr)) return arr; } catch (e) { /* stays as given */ }
+    }
+    return value;
+  }
+  if (field.type === "boolean") {
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+    return value;
+  }
+  return value;
+}
+
+/* Returns { inputs, missing, dropped }. `inputs` is null when the model gave no
+   block at all — never an invented value in its place — and `missing` then names
+   every required field. */
+function validateToolInputs(spec, parsed) {
+  var required = (spec || []).filter(function (f) { return f.required; });
+  if (!parsed) {
+    return { inputs: null, missing: required.map(function (f) { return f.name; }), dropped: [] };
+  }
+
+  var byName = {};
+  (spec || []).forEach(function (f) {
+    byName[f.name] = f;
+    (f.aliases || []).forEach(function (a) { if (!byName[a]) byName[a] = f; });
+  });
+
+  var inputs = {};
+  var dropped = [];
+  Object.keys(parsed).forEach(function (key) {
+    var field = byName[key];
+    if (!field) { dropped.push(key); return; }
+    if (Object.prototype.hasOwnProperty.call(inputs, field.name)) return;   // canonical name already set
+    inputs[field.name] = coerceToolInputValue(field, parsed[key]);
+  });
+
+  var missing = required.filter(function (f) { return !chainBodyHas(inputs, f); }).map(function (f) { return f.name; });
+  return { inputs: inputs, missing: missing, dropped: dropped };
+}
+
 /* The handler, from the live router, for exactly this path. Never guessed: no
    path, no handler. The final entry in the route's stack is the handler itself;
    the entries before it are requireAuth / requireActiveSubscription / aiLimiter. */
@@ -26028,6 +26117,37 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
           return !catalogue[a];
         }).sort().join(", ") + ".";
 
+      /* THE FIELDS GO IN TOO. A plan is one model call that may name a dozen
+         different tools, so the model cannot be handed one tool's fields — it is
+         handed every dispatchable tool's declared fields, read from
+         TOOL_INPUT_SPECS via the same router walk that built the catalogue, and
+         told to fill in the ones for whichever tool each assignment names. Tools
+         a chain may not run are listed with the reason and no fields, so the
+         model is not invited to fill in a body for something that will be refused. */
+      var specByKey = {};
+      agentToolRoutes().forEach(function (r) { specByKey[r.key] = r.spec; });
+
+      var fieldsBlock = "WHAT EACH TOOL TAKES. Under INPUTS: give one line per field, as `field_name = value`, " +
+        "using ONLY the field names listed for the tool you chose. Fill every field marked required; " +
+        "fill optional ones when the goal gives you something real to put there, and leave them out " +
+        "otherwise. For a string_array field, separate items with commas. For an object_array field, " +
+        "write a JSON array on one line. Never invent a value to fill a field — if the goal does not " +
+        "supply it, leave the field out and it will be reported as missing.\n\n" +
+        agentsWithTools.map(function (agent) {
+          return catalogue[agent].map(function (t) {
+            var key = agent + "/" + t;
+            if (CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {
+              return key + ": not chainable — this tool acts on the world (posting, sending, writing lead " +
+                "state). Assign such work in prose, or to YOU.";
+            }
+            var spec = specByKey[key];
+            if (!Array.isArray(spec) || !spec.length) return key + ": takes no inputs.";
+            return key + ":\n" + spec.map(function (f) {
+              return "  " + f.name + " (" + f.type + ", " + (f.required ? "required" : "optional") + "): " + f.description;
+            }).join("\n");
+          }).join("\n");
+        }).join("\n\n");
+
       var instruction =
         "Break the goal below into coordinated assignments.\n\n" +
         "OUTPUT FORMAT — one block per assignment, separated by a line containing only ---\n" +
@@ -26036,6 +26156,9 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         "TOOL: <the tool id from the catalogue, exactly; or NONE if no existing tool fits>\n" +
         "TASK: <what that agent is being asked to do, specifically>\n" +
         "INPUT: <what to put into that tool — the actual field values where you can be specific>\n" +
+        "INPUTS:\n" +
+        "  <field_name> = <value>   (one line per field of the chosen tool, from WHAT EACH TOOL TAKES; " +
+        "omit this section entirely when TOOL is NONE)\n" +
         "DEPENDS_ON: <the ID numbers this cannot start before, comma separated; or NONE>\n" +
         "SUCCESS_SIGNAL: <how you would know it worked — something observable, not \"improved\">\n" +
         "PRIORITY: <high, medium or low>\n\n" +
@@ -26071,6 +26194,7 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         (horizon ? "\n\nHORIZON:\n" + horizon : "") +
         (constraints ? "\n\nCONSTRAINTS:\n" + constraints : "") +
         "\n\n" + catalogueBlock +
+        "\n\n" + fieldsBlock +
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
@@ -26085,8 +26209,10 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       var usedIds = {};
 
       splitToolBlocks(raw).forEach(function (block) {
+        // INPUTS before INPUT so the longer label is tried first at a position
+        // where both could match.
         var f = parseLabeledFields(block,
-          ["ID", "AGENT", "TOOL", "TASK", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]);
+          ["ID", "AGENT", "TOOL", "TASK", "INPUTS", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]);
         if (!f.AGENT && !f.TASK) return;
 
         /* An unreadable or duplicate ID is replaced by position rather than
@@ -26154,6 +26280,27 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
           }
         }
 
+        /* A real tool a chain may not run. The tool exists and the route is real,
+           so the assignment is not broken in the catalogue sense — but it can never
+           be dispatched, and the plan has to say so rather than leave a reader to
+           discover it from a refusal later. */
+        var toolKey = toolExists ? agentType + "/" + tool : null;
+        if (toolKey && CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(toolKey) !== -1) {
+          problems.push(toolKey + " acts on the world (posting, sending, writing lead state) and cannot " +
+            "be dispatched by a chain — assign this work in prose, or to YOU");
+        }
+
+        /* THE BODY, VALIDATED HERE. What the model wrote under INPUTS is parsed
+           and checked against the tool's own TOOL_INPUT_SPECS entry with the same
+           test the dispatcher applies. The model's claim that a body is complete
+           counts for nothing; `inputs_missing` is what the spec says is absent.
+           Nothing is invented: no block means inputs null and every required field
+           listed as missing. */
+        var inputCheck = { inputs: null, missing: [], dropped: [] };
+        if (toolExists && Array.isArray(specByKey[toolKey])) {
+          inputCheck = validateToolInputs(specByKey[toolKey], parseToolInputsBlock(f.INPUTS));
+        }
+
         var depends = [];
         if (f.DEPENDS_ON && !/^(none|n\/a|-)$/i.test(f.DEPENDS_ON.trim())) {
           f.DEPENDS_ON.split(/[,;]/).forEach(function (part) {
@@ -26183,12 +26330,23 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
           route: toolExists ? "POST /api/agents/" + agentType + "/" + tool : null,
           task: f.TASK || "",
           input: f.INPUT || "",
+          /* The request body a dispatch would send, validated against the tool's
+             spec — or null when the model gave none. `inputs_missing` is the
+             spec's verdict, not the model's; `inputs_dropped` names what the model
+             supplied that no field of this tool accepts. */
+          inputs: inputCheck.inputs,
+          inputs_missing: inputCheck.missing,
+          inputs_dropped: inputCheck.dropped,
           depends_on: depends,
           success_signal: f.SUCCESS_SIGNAL || "",
           has_observable_success_signal: !!f.SUCCESS_SIGNAL,
           priority: /^(high|medium|low)$/.test(priority) ? priority : "unstated",
           problems: problems,
-          is_dispatchable: !!toolExists && problems.length === 0
+          /* Dispatchable now means: the tool is real, nothing is wrong with the
+             assignment, AND the body it carries satisfies the tool's required
+             fields. Before this the third condition did not exist, so a plan
+             could call an assignment dispatchable with nothing to dispatch. */
+          is_dispatchable: !!toolExists && problems.length === 0 && inputCheck.missing.length === 0
         });
       });
 
@@ -26210,7 +26368,13 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
          genuinely broken are three different things and collapsing any two of them
          loses the distinction that makes the plan readable. */
       var founderTasks = assignments.filter(function (a) { return a.is_founder_task; });
-      var dispatchable = assignments.filter(function (a) { return a.is_dispatchable; });
+      /* "Naming a real tool" is exactly that — a real tool and nothing wrong with the
+         assignment — and is what the two measured keys below have always counted.
+         is_dispatchable is now stricter (it also needs the body to be complete), so
+         it is deliberately NOT what these two count: the keys keep their meaning,
+         and the per-assignment inputs_missing says which of these are not yet
+         runnable. */
+      var dispatchable = assignments.filter(function (a) { return a.tool_exists && a.problems.length === 0; });
       var proseOnly = assignments.filter(function (a) {
         return !a.tool && a.agent_exists && !a.is_founder_task;
       });
