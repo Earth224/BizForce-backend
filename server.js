@@ -27172,6 +27172,447 @@ app.post("/api/self-reviews/run", requireAuth, aiLimiter, async function (req, r
   }
 });
 
+// ── Saved prompts ────────────────────────────────────────────────────────────
+//
+// A task somebody wrote once and re-runs. The text may carry blanks written as
+// {{name}}, and the client supplies a value for each at run time.
+//
+// Every route here is behind requireAuth and every query filters on
+// req.user.id in the query itself. No id is read from a body or a query string
+// to select rows, so there is no parameter a caller could supply to read or
+// change somebody else's prompts: an :id belonging to another user matches no
+// row and answers 404, which is also the right answer for an id that does not
+// exist at all — the two are indistinguishable to the caller on purpose.
+
+var SAVED_PROMPT_NAME_MAX = 100;
+var SAVED_PROMPT_TEXT_MAX = 20000;
+var SAVED_PROMPT_LIST_LIMIT = 200;
+
+/* THE BLANK SYNTAX, AND IT IS DELIBERATELY NARROW.
+
+     {{name}}     a blank called "name"
+     {{ name }}   the same blank — whitespace inside the braces is not part of
+                  the name, so a prompt written either way asks for one value
+
+   The name is letters, digits and underscores. Anything else between braces —
+   a space in the middle, a hyphen, a dot, an empty pair — is NOT a blank, and
+   it is not quietly left in the text either: the run refuses it, because the
+   one thing that must never happen is a model being sent "{{first name}}" and
+   answering as though that were the instruction.
+
+   The same blank may appear as many times as the author likes. Its value is
+   collected once and substituted everywhere it occurs.
+
+   An unclosed "{{" is caught by the same rule: after substitution the text must
+   contain no braces of either kind, and a stray one refuses the run rather than
+   travelling to the model. That is stricter than it strictly needs to be — a
+   prompt that genuinely wants to talk ABOUT double braces cannot be run — and
+   that is the trade accepted here, because the alternative failure is silent and
+   lands in the model's output. */
+var SAVED_PROMPT_BLANK_PATTERN = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
+
+/* The prompt text is the ONLY source of truth for which blanks exist. Not a
+   column, not a list the client sends, not something recorded at save time —
+   any of those can disagree with the text, and when they do the text is what
+   reaches the model. Parsing it on every run means they cannot disagree. */
+function savedPromptBlanks(text) {
+  var names = [];
+  var seen = {};
+  var pattern = new RegExp(SAVED_PROMPT_BLANK_PATTERN.source, "g");
+  var match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    var name = match[1];
+    if (!Object.prototype.hasOwnProperty.call(seen, name)) {
+      seen[name] = true;
+      names.push(name);
+    }
+  }
+
+  return names;
+}
+
+/* What is left once every real blank is removed. If that still holds "{{" or
+   "}}" the prompt carries something brace-shaped that this syntax cannot fill —
+   a malformed name, or an unclosed pair. */
+function savedPromptBraceLeftovers(text) {
+  var stripped = String(text).replace(new RegExp(SAVED_PROMPT_BLANK_PATTERN.source, "g"), "");
+  var found = stripped.match(/\{\{[^{}]{0,64}\}?\}?|\}\}/g);
+  return found ? found.slice(0, 5) : [];
+}
+
+function savedPromptFieldProblem(body, required) {
+  var name = body.name;
+  var agentType = body.agent_type;
+  var prompt = body.prompt;
+
+  if (required || name !== undefined) {
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return { error: "name must be a non-empty string." };
+    }
+    if (name.trim().length > SAVED_PROMPT_NAME_MAX) {
+      return {
+        error: "name must be at most " + SAVED_PROMPT_NAME_MAX + " characters.",
+        max_name_length: SAVED_PROMPT_NAME_MAX
+      };
+    }
+  }
+
+  /* hasOwnProperty rather than `in` or a truthy read, the same way the
+     agent-autonomy route does it: "constructor", "toString" and "valueOf" are
+     all `in` any object literal and would otherwise validate as agent types,
+     storing a prompt under an agent that has no system prompt and would be
+     answered by the general brain instead. */
+  if (required || agentType !== undefined) {
+    if (typeof agentType !== "string" ||
+        !Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType)) {
+      return {
+        error: "agent_type must be one of the registered agents.",
+        valid_agent_types: Object.keys(AGENT_SYSTEM_PROMPTS)
+      };
+    }
+  }
+
+  if (required || prompt !== undefined) {
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+      return { error: "prompt must be a non-empty string." };
+    }
+    if (prompt.trim().length > SAVED_PROMPT_TEXT_MAX) {
+      return {
+        error: "prompt must be at most " + SAVED_PROMPT_TEXT_MAX + " characters.",
+        max_prompt_length: SAVED_PROMPT_TEXT_MAX
+      };
+    }
+  }
+
+  return null;
+}
+
+/* 23505 IS THE UNIQUE VIOLATION, AND IT IS CAUGHT RATHER THAN PRE-CHECKED.
+   A "does this name exist already" SELECT before the INSERT answers a question
+   about a moment that has passed: two requests a millisecond apart both read
+   "no", both insert, and the index refuses one of them anyway — so the pre-check
+   cannot remove this branch, only add a race to it. The index is the authority;
+   this turns its answer into a sentence. */
+function savedPromptDuplicate(error) {
+  return !!error && (error.code === "23505" || String(error.code) === "23505");
+}
+
+var SAVED_PROMPT_DUPLICATE_MESSAGE =
+  "You already have a saved prompt with that name. Names are compared ignoring " +
+  "case and surrounding spaces, so pick a different one or rename the existing prompt.";
+
+app.get("/api/saved-prompts", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("saved_prompts")
+      .select("id, name, agent_type, prompt, created_at, updated_at, last_used_at, use_count")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(SAVED_PROMPT_LIST_LIMIT);
+
+    /* Thrown, never softened into an empty list, for the reason
+       GET /api/self-reviews gives: `{ prompts: [] }` is not a neutral fallback,
+       it is the claim "you have saved nothing" — and a read that failed has no
+       standing to make it. A user whose prompts are all still there would be
+       shown an empty library and might well write them again. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ prompts: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/saved-prompts", requireAuth, async function (req, res, next) {
+  try {
+    var body = req.body || {};
+    var problem = savedPromptFieldProblem(body, true);
+    if (problem) {
+      return res.status(400).json(problem);
+    }
+
+    const { data, error } = await supabase
+      .from("saved_prompts")
+      .insert({
+        user_id: req.user.id,
+        name: body.name.trim(),
+        agent_type: body.agent_type,
+        prompt: body.prompt.trim()
+      })
+      .select("id, name, agent_type, prompt, created_at, updated_at, last_used_at, use_count")
+      .single();
+
+    if (savedPromptDuplicate(error)) {
+      return res.status(409).json({ error: SAVED_PROMPT_DUPLICATE_MESSAGE });
+    }
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ prompt: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/saved-prompts/:id", requireAuth, async function (req, res, next) {
+  try {
+    var body = req.body || {};
+
+    /* Each field gated on !== undefined, so an absent key leaves the column
+       alone. A partial update is the normal case here — renaming a prompt should
+       not require resending twenty thousand characters of text. */
+    var problem = savedPromptFieldProblem(body, false);
+    if (problem) {
+      return res.status(400).json(problem);
+    }
+
+    var updates = { updated_at: nowIso() };
+    if (body.name !== undefined) updates.name = body.name.trim();
+    if (body.agent_type !== undefined) updates.agent_type = body.agent_type;
+    if (body.prompt !== undefined) updates.prompt = body.prompt.trim();
+
+    if (Object.keys(updates).length === 1) {
+      return res.status(400).json({
+        error: "Send at least one of name, agent_type or prompt."
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("saved_prompts")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id, name, agent_type, prompt, created_at, updated_at, last_used_at, use_count")
+      .maybeSingle();
+
+    if (savedPromptDuplicate(error)) {
+      return res.status(409).json({ error: SAVED_PROMPT_DUPLICATE_MESSAGE });
+    }
+
+    if (error) {
+      throw error;
+    }
+
+    /* No row updated. The user_id filter is part of the same statement, so this
+       covers both "no such prompt" and "not yours" — and answers them
+       identically, because telling the two apart would confirm the existence of
+       another account's prompt to whoever guessed its id. */
+    if (!data) {
+      return res.status(404).json({ error: "No saved prompt with that id." });
+    }
+
+    return res.json({ prompt: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/saved-prompts/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("saved_prompts")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "No saved prompt with that id." });
+    }
+
+    return res.json({ deleted: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* THE SAME GATES AS POST /api/ai/tasks, and for the same reasons. Running a
+   saved prompt is running a task: it costs a model call and it is the identical
+   work, so requireActiveSubscription and aiLimiter apply here too. Without them
+   this route would be a way around both — the cheapest possible bypass, since
+   the prompt is already stored and a caller need only press it repeatedly. */
+app.post("/api/saved-prompts/:id/run", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      const { data: row, error } = await supabase
+        .from("saved_prompts")
+        .select("id, name, agent_type, prompt, use_count")
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!row) {
+        return res.status(404).json({ error: "No saved prompt with that id." });
+      }
+
+      var blanks = savedPromptBlanks(row.prompt);
+      var leftovers = savedPromptBraceLeftovers(row.prompt);
+
+      if (leftovers.length) {
+        return res.status(400).json({
+          error: "This prompt contains braces that are not a usable blank, so it was not run. " +
+            "A blank is written {{name}}, where the name is letters, digits and underscores.",
+          unusable: leftovers
+        });
+      }
+
+      var values = req.body && typeof req.body.values === "object" && req.body.values !== null &&
+        !Array.isArray(req.body.values) ? req.body.values : {};
+
+      /* EVERY BLANK MUST HAVE A REAL VALUE. Not a default, not an empty string,
+         not the blank's own name: a prompt that reads "write to {{customer}}"
+         with nothing for customer is not a task anyone asked for, and sending it
+         with the blank emptied produces confident nonsense rather than an error.
+         A value that is missing, not a string, or only whitespace all count the
+         same way — there is nothing to put in the text. */
+      var missing = [];
+      var filled = {};
+
+      blanks.forEach(function (name) {
+        var value = Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
+        if (typeof value !== "string" || value.trim().length === 0) {
+          missing.push(name);
+          return;
+        }
+        filled[name] = value;
+      });
+
+      if (missing.length) {
+        return res.status(400).json({
+          error: "Every blank in this prompt needs a value. Missing: " + missing.join(", ") + ".",
+          missing_blanks: missing,
+          blanks: blanks
+        });
+      }
+
+      /* Values the prompt has no blank for. Not an error — a client reusing one
+         form for several prompts will send them, and refusing would make that
+         client's life harder for no gain — but they are REPORTED, because a
+         value silently doing nothing is how somebody spends an afternoon
+         wondering why their input is not in the output. */
+      var ignored = Object.keys(values).filter(function (key) {
+        return blanks.indexOf(key) === -1;
+      });
+
+      /* Every occurrence of each blank is replaced, so a name used twice is
+         filled twice from the one value collected for it. The replacement is a
+         function rather than a string so a value containing "$&" or "$1" is
+         inserted literally instead of being read as a backreference. */
+      var finalPrompt = String(row.prompt).replace(
+        new RegExp(SAVED_PROMPT_BLANK_PATTERN.source, "g"),
+        function (whole, name) {
+          return Object.prototype.hasOwnProperty.call(filled, name) ? filled[name] : whole;
+        }
+      );
+
+      /* Belt and braces, literally: nothing brace-shaped may reach the model. The
+         leftovers check above should already have caught it, so this firing means
+         a value itself carried "{{" — which would arrive at the model looking like
+         an unfilled blank. */
+      if (finalPrompt.indexOf("{{") !== -1 || finalPrompt.indexOf("}}") !== -1) {
+        return res.status(400).json({
+          error: "The filled-in prompt still contains {{ }} braces, so it was not run. " +
+            "Check the values for stray braces."
+        });
+      }
+
+      /* RUN THROUGH handleAiTaskRequest, THE SAME FUNCTION POST /api/ai/tasks
+         USES — not a copy of it. That function is where an agent task actually
+         happens: the agent-type alias resolution, the task-type check, the
+         high-risk approval pattern, the memory and business-profile reads, the
+         model call, the ai_tasks row and the response shape all live in it. A
+         second implementation here would be a second thing to keep in step, and
+         the first divergence would be invisible — a saved prompt quietly running
+         under different rules from the same task typed by hand.
+
+         The request is a prototype clone carrying a rewritten body, so req.user
+         and everything else the function reads are the caller's own, unchanged. */
+      var taskReq = Object.create(req);
+      taskReq.body = {
+        agent_type: row.agent_type,
+        task_type: (req.body && req.body.task_type) || "general",
+        prompt: finalPrompt
+      };
+
+      /* The response is wrapped rather than intercepted: handleAiTaskRequest
+         answers the caller itself, and this adds which saved prompt was run and
+         which values were ignored to that answer without touching how the task
+         is reported. */
+      var status = 200;
+      var taskRes = Object.create(res);
+      taskRes.status = function (code) {
+        status = code;
+        return taskRes;
+      };
+      taskRes.json = function (payload) {
+        var launched = status >= 200 && status < 300;
+        var body = payload;
+
+        if (launched && body && typeof body === "object" && !Array.isArray(body)) {
+          body = Object.assign({}, body, {
+            saved_prompt: { id: row.id, name: row.name, agent_type: row.agent_type },
+            blanks_filled: blanks,
+            ignored_values: ignored
+          });
+        }
+
+        if (launched) {
+          recordSavedPromptUse(row);
+        }
+
+        return res.status(status).json(body);
+      };
+
+      return await handleAiTaskRequest(taskReq, taskRes, next);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+/* THE COUNTER MUST NOT BE ABLE TO FAIL THE RUN. By the time this is called the
+   task has been launched and the caller has been answered; a rejected UPDATE
+   here would turn a successful, already-billed run into an error response about
+   a usage statistic. So it is fired and forgotten, and a failure is logged
+   loudly enough to find — the count being wrong is a reporting defect, and
+   telling somebody their task failed when it did not is a lie.
+
+   Incremented from the value read at the start of the run rather than by a
+   database expression, which is what the client library allows here; two runs
+   overlapping can therefore lose a count. That is the acceptable end of this
+   trade: use_count is a hint about which prompts are worth keeping, not a
+   ledger. */
+function recordSavedPromptUse(row) {
+  Promise.resolve(
+    supabase
+      .from("saved_prompts")
+      .update({
+        use_count: (typeof row.use_count === "number" ? row.use_count : 0) + 1,
+        last_used_at: nowIso()
+      })
+      .eq("id", row.id)
+  ).then(function (result) {
+    if (result && result.error) {
+      console.error("[saved-prompts] use_count not updated for %s: the task ran and was returned; only the counter failed.", row.id, result.error);
+    }
+  }, function (err) {
+    console.error("[saved-prompts] use_count not updated for %s: the task ran and was returned; only the counter failed.", row.id, err);
+  });
+}
+
 // ── Agent autonomy opt-ins ───────────────────────────────────────────────────
 //
 // A user reading and setting their own per-agent consent to autonomous work.
