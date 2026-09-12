@@ -26000,6 +26000,146 @@ async function dispatchToolCall(options) {
   });
 }
 
+/* ── POST /api/assignments/dispatch ──────────────────────────────────────────
+   Runs ONE assignment of a stored executive plan through dispatchToolCall.
+
+   THE TOOL'S BODY COMES FROM THE SERVER, NOT THE CLIENT. The client names a plan
+   (an ai_tasks row this user owns, task_type executive/plan) and an assignment
+   in it; the request body the tool receives is the `inputs` object the plan
+   route already validated against TOOL_INPUT_SPECS and stored in
+   ai_tasks.output. Exactly two fields are read from req.body —
+   executive_task_id and assignment_id — by name; nothing else on the body is
+   referenced anywhere in this handler, so there is no path by which an extra
+   field could reach the dispatcher or the tool.
+
+   ONE DISPATCH PER REQUEST. This route never loops, never follows depends_on,
+   and never runs a second assignment. Each request mints a fresh chain id and
+   starts at depth 0 with no calls so far; the dispatcher applies the gate and
+   every limit from there.
+
+   A REFUSAL IS AN ANSWER, NOT A SERVER ERROR: it returns 200 with ok false and
+   the named reason. The request was well formed and was understood; what it
+   asked for is not allowed, or not possible, and the caller needs to read why.
+   Only a malformed request — a non-uuid task id, a missing assignment id — is
+   a 400, because that is the caller's mistake rather than a decision.
+
+   Writes nothing to agent_collaborations or agent_assignments. The dispatched
+   tool persists its own ai_tasks row through startToolRun, and that row — with
+   its task_type, output and the chain id on every model_calls entry — is the
+   record of what ran. */
+function dispatchRefusal(res, reason, detail) {
+  return res.json({
+    ok: false,
+    status: null,
+    refused_reason: reason,
+    detail: detail || null,
+    chain_id: null,
+    result: null
+  });
+}
+
+app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      // The only two things read from the body, by name.
+      var executiveTaskId = String(req.body.executive_task_id || "").trim();
+      var assignmentIdRaw = req.body.assignment_id;
+
+      if (!isValidUuid(executiveTaskId)) {
+        return res.status(400).json({ error: "executive_task_id must be the uuid of an executive plan task." });
+      }
+      var assignmentId = Number(assignmentIdRaw);
+      if (assignmentIdRaw === undefined || assignmentIdRaw === null || assignmentIdRaw === "" ||
+          !Number.isInteger(assignmentId) || assignmentId < 1) {
+        return res.status(400).json({ error: "assignment_id must be the whole-number id of an assignment in that plan." });
+      }
+
+      // Scoped to the caller in the query itself, so another user's plan is not
+      // read at all — it simply does not come back.
+      var rowResult = await supabase
+        .from("ai_tasks")
+        .select("id, user_id, task_type, status, output")
+        .eq("id", executiveTaskId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (rowResult.error) {
+        throw rowResult.error;
+      }
+      var row = rowResult.data;
+
+      if (!row) {
+        return dispatchRefusal(res, "plan_not_found",
+          "No task " + executiveTaskId + " belongs to this user.");
+      }
+      if (row.task_type !== "executive/plan") {
+        return dispatchRefusal(res, "not_an_executive_plan",
+          "Task " + executiveTaskId + " is a " + JSON.stringify(row.task_type || null) +
+          " task, not an executive/plan; only a plan's assignments can be dispatched.");
+      }
+      if (!row.output || typeof row.output !== "object") {
+        return dispatchRefusal(res, "plan_has_no_output",
+          "Task " + executiveTaskId + " has no stored output" +
+          (row.status && row.status !== "completed" ? " (its status is " + JSON.stringify(row.status) + ")" : "") +
+          "; there is nothing to dispatch from.");
+      }
+
+      var assignments = Array.isArray(row.output.assignments) ? row.output.assignments : [];
+      var assignment = assignments.filter(function (a) { return a && Number(a.id) === assignmentId; })[0];
+      if (!assignment) {
+        return dispatchRefusal(res, "assignment_not_in_plan",
+          "Plan " + executiveTaskId + " has no assignment with id " + assignmentId +
+          " (it has: " + (assignments.map(function (a) { return a && a.id; }).filter(function (v) { return v != null; }).join(", ") || "none") + ").");
+      }
+
+      /* The plan's own verdict, checked exactly. is_dispatchable already folds in
+         tool existence, problems and the body's required fields; the reason is
+         read back out so the caller is told which of those it was. */
+      if (assignment.is_dispatchable !== true) {
+        var why = [];
+        if (Array.isArray(assignment.problems) && assignment.problems.length) {
+          why.push("problems: " + assignment.problems.join("; "));
+        }
+        if (Array.isArray(assignment.inputs_missing) && assignment.inputs_missing.length) {
+          why.push("inputs_missing: " + assignment.inputs_missing.join(", "));
+        }
+        if (assignment.is_founder_task === true) {
+          why.push("this is founder work (AGENT: YOU) — no tool does it");
+        }
+        if (!assignment.tool) {
+          why.push("no tool is named");
+        }
+        return dispatchRefusal(res, "assignment_not_dispatchable",
+          "Assignment " + assignmentId + " is not dispatchable" + (why.length ? " — " + why.join("; ") : "") + ".");
+      }
+
+      var chainId = crypto.randomUUID();
+
+      var dispatched = await dispatchToolCall({
+        userId: userId,
+        agentType: assignment.agent,
+        tool: assignment.tool,
+        // The stored, validated body. Never anything from this request.
+        body: (assignment.inputs && typeof assignment.inputs === "object") ? assignment.inputs : {},
+        chain: { id: chainId, depth: 0, callsSoFar: 0 }
+      });
+
+      return res.json({
+        ok: dispatched.ok === true,
+        status: dispatched.status,
+        refused_reason: dispatched.refused_reason || null,
+        detail: dispatched.detail || null,
+        chain_id: chainId,
+        // The tool's own response body, untouched — it already carries task_id and persisted.
+        result: dispatched.body
+      });
+    } catch (error) {
+      console.error("[assignments/dispatch] Error:", error);
+      next(error);
+    }
+  });
+
 /* Orders the assignments by their dependencies, and names any cycle.
 
    Kahn's algorithm, in waves: wave 1 is everything that depends on nothing, wave 2
