@@ -5563,6 +5563,21 @@ app.delete("/api/user/api-key", requireAuth, async function (req, res, next) {
 
 var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
 
+/* The three agent card orderings, and the validation set for agent_card_order.
+
+   THE LIST LIVES IN TWO PLACES AND CANNOT BE REDUCED TO ONE. The frontend
+   needs it synchronously, before the cards paint — scripts/bf-agent-order.js
+   declares the same three in ORDERINGS and sorts by them — and an API round
+   trip there would make the grid visibly re-sort after load. So the server
+   holds the authoritative copy and the 400 below names it, which is what keeps
+   a drifted client from writing a value the grids cannot render.
+
+   Deliberately no CHECK constraint on the column, the same reasoning
+   mist_position and preferred_language are written to: the valid set is a JS
+   constant validated in the route, so adding a fourth ordering is a code change
+   rather than a migration. */
+var AGENT_CARD_ORDERS = ["importance", "alphabetical", "random"];
+
 /* BCP-47 tag -> the English name of the language.
 
    ONE OBJECT DOING TWO JOBS, ON PURPOSE. The keys are the validation set for
@@ -5870,7 +5885,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
   try {
     const { data: row, error } = await supabase
       .from("user_preferences")
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language")
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -5900,6 +5915,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         mist_position: "top-right",
         notifications_enabled: true,
         preferred_language: null,
+        agent_card_order: null,
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -5909,6 +5925,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       mist_position: row.mist_position,
       notifications_enabled: row.notifications_enabled,
       preferred_language: row.preferred_language,
+      agent_card_order: row.agent_card_order,
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -5929,6 +5946,44 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
         return res.status(400).json({ error: "Invalid mist_position" });
       }
       updates.mist_position = req.body.mist_position;
+    }
+
+    /* THE SAME THREE CASES preferred_language has, for the same reason:
+
+         key absent            -> leave the stored value alone
+         key present and null  -> store null: no ordering has been chosen, and
+                                  the client falls back to its own default
+         key present, a string -> validate against AGENT_CARD_ORDERS, then store
+
+       NULL IS A REAL VALUE HERE, not a missing one, so it must be storable.
+       Without the middle case a user who picked an ordering could never get
+       back to "I have not chosen" — a truthiness check would read null as "not
+       sent" and leave the old value in place, with no error and no way back
+       except editing the row by hand.
+
+       THE 400 NAMES THE THREE. The frontend carries its own copy of this list
+       (scripts/bf-agent-order.js, ORDERINGS) because it sorts before paint, so
+       the two can drift; a refusal that just said "invalid" would leave whoever
+       hit it with no way to tell which side is stale. valid_agent_card_orders
+       is the server saying what it will actually accept, the same way the
+       preferred_language refusal returns valid_language_tags.
+
+       The typeof guard keeps non-null non-strings out of the stored path
+       explicitly rather than relying on indexOf to reject them by accident. */
+    if (req.body.agent_card_order !== undefined) {
+      if (req.body.agent_card_order === null) {
+        updates.agent_card_order = null;
+      } else if (
+        typeof req.body.agent_card_order !== "string" ||
+        AGENT_CARD_ORDERS.indexOf(req.body.agent_card_order) === -1
+      ) {
+        return res.status(400).json({
+          error: "agent_card_order must be null or one of the supported orderings.",
+          valid_agent_card_orders: AGENT_CARD_ORDERS
+        });
+      } else {
+        updates.agent_card_order = req.body.agent_card_order;
+      }
     }
 
     if (req.body.notifications_enabled !== undefined) {
