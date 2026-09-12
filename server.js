@@ -5563,20 +5563,34 @@ app.delete("/api/user/api-key", requireAuth, async function (req, res, next) {
 
 var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
 
-/* The three agent card orderings, and the validation set for agent_card_order.
+/* The agent card orderings, and the validation set for agent_card_order.
+
+   "random" WAS REMOVED DELIBERATELY. DO NOT ADD IT BACK TO MATCH THE FRONTEND.
+   Reshuffling the cards on every load was never wanted in the product, and the
+   frontend is the side that has to catch up: scripts/bf-agent-order.js still
+   declares three in ORDERINGS and settings.html still offers Random in its
+   select, so until those are cut a user who picks it gets the 400 below. That
+   refusal is the intended behaviour, not the drift — this list is the one that
+   says what the product supports.
 
    THE LIST LIVES IN TWO PLACES AND CANNOT BE REDUCED TO ONE. The frontend
-   needs it synchronously, before the cards paint — scripts/bf-agent-order.js
-   declares the same three in ORDERINGS and sorts by them — and an API round
-   trip there would make the grid visibly re-sort after load. So the server
-   holds the authoritative copy and the 400 below names it, which is what keeps
-   a drifted client from writing a value the grids cannot render.
+   needs it synchronously, before the cards paint — an API round trip there
+   would make the grid visibly re-sort after load. So the server holds the
+   authoritative copy and the 400 names it, which is what keeps a drifted client
+   from writing a value the product no longer offers.
+
+   REMOVING A VALUE HERE DOES NOT REWRITE THE ROWS THAT ALREADY HOLD IT. Rows
+   storing "random" from before this change are returned by the GET exactly as
+   stored — the API reports what is in the database rather than editing history
+   to match the current list, and the client decides what to do with a value it
+   no longer offers. Only writing it back is refused.
 
    Deliberately no CHECK constraint on the column, the same reasoning
    mist_position and preferred_language are written to: the valid set is a JS
-   constant validated in the route, so adding a fourth ordering is a code change
-   rather than a migration. */
-var AGENT_CARD_ORDERS = ["importance", "alphabetical", "random"];
+   constant validated in the route, so changing the set is a code change rather
+   than a migration — which is exactly why this removal needs no migration and
+   leaves the stored rows alone. */
+var AGENT_CARD_ORDERS = ["importance", "alphabetical"];
 
 /* BCP-47 tag -> the English name of the language.
 
