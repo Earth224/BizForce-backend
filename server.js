@@ -25294,13 +25294,228 @@ app.post("/api/agents/content/audit", requireAuth, requireActiveSubscription, ai
    routes have not been registered yet. Filtered to registered agent types, so a
    future /api/agents/something/else for an unregistered agent is not offered as a
    destination. */
-var agentToolCatalogueCache = null;
 
-function agentToolCatalogue() {
-  if (agentToolCatalogueCache) return agentToolCatalogueCache;
+/* ── TOOL_INPUT_SPECS: what each tool route actually accepts ────────────────
+   The catalogue above answers "which tools exist". It cannot answer "what does
+   this tool take", and without that answer nothing can hand a tool a request:
+   the executive plan's assignments carry a validated route and a paragraph of
+   prose, and prose is not a body.
+
+   EVERY ENTRY WAS READ OFF THE ROUTE'S OWN VALIDATION, NOT INVENTED. `required`
+   means the route returns 400 without the field (or without any of its aliases);
+   everything else is read if present and otherwise defaulted. Aliases are the
+   alternative body keys the route accepts for the same value, as written in its
+   `req.body.a || req.body.b` reads. Where a route constrains a value — a platform
+   key, a rating range, an item count — the description says so.
+
+   Types: string, string_array, number, object_array; plus boolean and object,
+   which two routes genuinely take (ads/policy-check's suggest_rewrites flag and
+   sales/convert's segment filter) and which it would be a lie to squeeze into
+   the other four.
+
+   THIS LIST CAN DRIFT FROM THE ROUTES, and a drifted spec is worse than none —
+   it would describe a body the route rejects while looking authoritative. So
+   checkToolInputSpecsAgainstRouter runs at boot and logs every route with no
+   spec and every spec with no route. It logs rather than throws: a missing spec
+   should not take the product down, but it must not pass unnoticed either.
+
+   Five entries are routes the catalogue's regex has always admitted that are
+   not "measured/provenance" tools — store/generate-proposals, seo/generate-post,
+   seo/optimize, sales/convert, sales/lead-status. They are specified because the
+   catalogue lists them; a spec that covered only the routes it would prefer to
+   exist would be exactly the drift the guard is for. */
+function toolField(name, type, required, description, aliases) {
+  var field = { name: name, type: type, required: required, description: description };
+  if (aliases && aliases.length) field.aliases = aliases;
+  return field;
+}
+
+var TOOL_INPUT_SPECS = {
+  "etsy/keyword-research": [
+    toolField("seed", "string", true, "The seed term to research, up to 120 characters.", ["keyword", "term"]),
+    toolField("context", "string", false, "Product description or context, up to 1000 characters.", ["product_description"])
+  ],
+  "etsy/pricing-strategy": [
+    toolField("listing_title", "string", true, "Title of the listing being priced, up to 200 characters.", ["title"]),
+    toolField("listing_description", "string", false, "Listing description, up to 2000 characters.", ["description"]),
+    toolField("current_price", "number", false, "Current price; ignored unless a finite number >= 0."),
+    toolField("unit_cost", "number", false, "Unit cost; ignored unless a finite number >= 0."),
+    toolField("comparables", "object_array", false, "Up to 50 comparable listings as { price } objects; more than 50 is a 400.")
+  ],
+  "email/sequence": [
+    toolField("goal", "string", true, "What the sequence is for, up to 500 characters."),
+    toolField("audience", "string", true, "Who receives it, up to 500 characters."),
+    toolField("sequence_type", "string", false, "Kind of sequence, up to 60 characters.", ["type"]),
+    toolField("steps", "number", false, "Requested number of steps, 2-12; otherwise the default is used.")
+  ],
+  "email/subject-lines": [
+    toolField("purpose", "string", true, "Purpose of the email, up to 500 characters.", ["email_purpose"]),
+    toolField("audience", "string", false, "Who receives it, up to 300 characters."),
+    toolField("count", "number", false, "Requested number of variants, 3-25; otherwise 12.")
+  ],
+  "publicist/press-release": [
+    toolField("news", "string", true, "The announcement, up to 2000 characters.", ["announcement"]),
+    toolField("company_name", "string", false, "Company name, up to 200 characters.", ["company"]),
+    toolField("city", "string", false, "Dateline city, up to 120 characters.", ["location"]),
+    toolField("quote_from", "string", false, "Spokesperson to quote, up to 200 characters.", ["spokesperson"]),
+    toolField("contact", "string", false, "Press contact details, up to 500 characters.", ["contact_details"])
+  ],
+  "publicist/pitch": [
+    toolField("angle", "string", true, "The story angle, up to 1000 characters.", ["story_angle"]),
+    toolField("outlet_type", "string", true, "Type of outlet being pitched, up to 200 characters.", ["outlet"]),
+    toolField("journalist", "string", false, "Journalist's name, up to 200 characters.", ["journalist_name"])
+  ],
+  "operations/sop": [
+    toolField("process", "string", true, "The process to document, up to 300 characters.", ["process_name"]),
+    toolField("context", "string", false, "Details about the process, up to 2000 characters.", ["details"]),
+    toolField("owner", "string", false, "Role that owns the process, up to 200 characters.", ["owner_role"])
+  ],
+  "operations/checklist": [
+    toolField("task", "string", true, "The recurring task, up to 300 characters.", ["recurring_task"]),
+    toolField("frequency", "string", false, "How often it recurs, up to 120 characters."),
+    toolField("context", "string", false, "Details about the task, up to 1500 characters.", ["details"])
+  ],
+  "ads/copy": [
+    toolField("product", "string", true, "What is being advertised, up to 500 characters."),
+    toolField("angle", "string", true, "The angle of the ad, up to 500 characters."),
+    toolField("platform", "string", true, "Must be a key of AD_PLATFORMS (e.g. google_rsa, meta); anything else is a 400."),
+    toolField("audience", "string", false, "Target audience, up to 300 characters.")
+  ],
+  "ads/policy-check": [
+    toolField("copy", "string", true, "The ad copy to check, up to 6000 characters.", ["ad_copy", "text"]),
+    toolField("suggest_rewrites", "boolean", false, "false to skip the rewrite model call; anything else asks for rewrites.")
+  ],
+  "reputation/review-response": [
+    toolField("review", "string", true, "The review text being responded to, up to 3000 characters.", ["review_text"]),
+    toolField("rating", "number", true, "Star rating, a whole number 1-5; missing or out of range is a 400.", ["stars"]),
+    toolField("situation", "string", false, "What happened, up to 2000 characters.", ["context"])
+  ],
+  "reputation/review-request": [
+    toolField("moment", "string", true, "The customer-journey moment to ask at, up to 500 characters.", ["journey_moment"]),
+    toolField("channel", "string", false, "Channel for the request, up to 120 characters."),
+    toolField("platform", "string", false, "Review platform, up to 120 characters.", ["review_platform"])
+  ],
+  "social/post": [
+    toolField("idea", "string", true, "What the post is about, up to 1000 characters."),
+    toolField("platform", "string", true, "Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin); anything else is a 400.")
+  ],
+  "social/calendar": [
+    toolField("goal", "string", true, "What the plan is for, up to 500 characters."),
+    toolField("cadence", "string", true, "Posting cadence, up to 200 characters."),
+    toolField("platforms", "string_array", false, "Platforms to plan for."),
+    toolField("weeks", "number", false, "Weeks to plan, 1-12; otherwise 4.")
+  ],
+  "broker/term-sheet": [
+    toolField("deal", "string", true, "The shape of the deal, up to 2000 characters.", ["deal_shape"]),
+    toolField("deal_type", "string", false, "Type of deal, up to 120 characters."),
+    toolField("parties", "string", false, "The parties, up to 500 characters."),
+    toolField("consideration", "string", false, "The consideration, up to 500 characters."),
+    toolField("governing_law", "string", false, "Governing law or jurisdiction, up to 200 characters.", ["jurisdiction"])
+  ],
+  "broker/due-diligence": [
+    toolField("deal_type", "string", true, "Type of deal, up to 300 characters.", ["deal"]),
+    toolField("context", "string", false, "Details about the deal, up to 1500 characters.", ["details"])
+  ],
+  "rd/brief": [
+    toolField("question", "string", true, "The research question, up to 1000 characters."),
+    toolField("context", "string", false, "Background, up to 2000 characters.", ["details"]),
+    toolField("decision", "string", false, "The decision the brief informs, up to 500 characters.")
+  ],
+  "rd/competitor-scan": [
+    toolField("competitors", "string_array", true, "Competitor names as an array (or a comma-separated string); at least one, at most 10 used."),
+    toolField("dimensions", "string", false, "What to compare on, up to 500 characters."),
+    toolField("your_product", "string", false, "What you sell, up to 500 characters.", ["own_product"])
+  ],
+  "community/onboarding": [
+    toolField("community_type", "string", true, "Kind of community, up to 300 characters.", ["community"]),
+    toolField("platform", "string", false, "Where it lives, up to 120 characters."),
+    toolField("goal", "string", false, "What onboarding is for, up to 500 characters.")
+  ],
+  "community/engagement-calendar": [
+    toolField("cadence", "string", true, "Engagement cadence, up to 300 characters."),
+    toolField("community_type", "string", false, "Kind of community, up to 300 characters.", ["community"]),
+    toolField("capacity", "string", false, "Team capacity, up to 300 characters.", ["team"])
+  ],
+  "analytics/funnel": [
+    toolField("stages", "object_array", true, "Funnel stages as { name, count } objects; at least 2 valid stages, at most 20."),
+    toolField("funnel_name", "string", false, "Name of the funnel, up to 200 characters.", ["name"]),
+    toolField("context", "string", false, "Context for the reading, up to 1000 characters.")
+  ],
+  "analytics/kpi-review": [
+    toolField("metrics", "object_array", true, "Metrics as { name, current, previous, unit?, better? } objects; at least 1 valid, at most 30."),
+    toolField("period", "string", false, "The period label, up to 200 characters.", ["period_label"]),
+    toolField("context", "string", false, "Context for the review, up to 1000 characters.")
+  ],
+  "influencer/outreach": [
+    toolField("creator", "string", true, "Who the creator is, up to 1000 characters.", ["creator_description"]),
+    toolField("campaign", "string", true, "The campaign, up to 1000 characters."),
+    toolField("channel", "string", false, "Outreach channel, up to 80 characters.")
+  ],
+  "influencer/partnership-offer": [
+    toolField("collaboration", "string", true, "The shape of the collaboration, up to 2000 characters.", ["shape"]),
+    toolField("creator", "string", false, "The creator, up to 500 characters."),
+    toolField("budget", "string", false, "Budget, up to 200 characters."),
+    toolField("territory", "string", false, "Territory or market, up to 200 characters.", ["market"])
+  ],
+  "vertical_marketing/positioning": [
+    toolField("industry", "string", true, "The vertical, up to 200 characters.", ["vertical"]),
+    toolField("offering", "string", false, "What is offered, up to 1000 characters.", ["product"]),
+    toolField("audience", "string", false, "Who buys, up to 500 characters.")
+  ],
+  "vertical_marketing/objections": [
+    toolField("industry", "string", true, "The vertical, up to 200 characters.", ["vertical"]),
+    toolField("offer", "string", true, "The offer being objected to, up to 1500 characters.", ["offering"]),
+    toolField("price_context", "string", false, "Pricing context, up to 300 characters.", ["price"])
+  ],
+  "content/outline": [
+    toolField("keyword", "string", true, "Target keyword or topic, up to 200 characters.", ["topic"]),
+    toolField("audience", "string", false, "Who it is for, up to 500 characters."),
+    toolField("angle", "string", false, "The angle, up to 500 characters.")
+  ],
+  "content/audit": [
+    toolField("article", "string", true, "The article text to measure, up to 60000 characters.", ["text", "content"]),
+    toolField("keyword", "string", false, "Target keyword to measure against, up to 200 characters.")
+  ],
+  "executive/plan": [
+    toolField("goal", "string", true, "The goal to plan for, up to 2000 characters."),
+    toolField("horizon", "string", false, "Time horizon, up to 200 characters.", ["timeline"]),
+    toolField("constraints", "string", false, "Constraints, up to 1000 characters.")
+  ],
+
+  /* Routes the catalogue regex admits that are not measured/provenance tools. */
+  "seo/optimize": [
+    toolField("website", "string", true, "The URL to optimise; normalised, and a 400 when missing or unusable.", ["url"]),
+    toolField("business_description", "string", false, "Description of the business, up to 2000 characters.", ["description", "brand_description"])
+  ],
+  "seo/generate-post": [
+    toolField("topic", "string", false, "Post topic, up to 200 characters; not validated as required."),
+    toolField("money_url", "string", false, "Absolute http(s) URL of the money page; a malformed value is a 422."),
+    toolField("money_anchor", "string", false, "Anchor text for the money link, up to 120 characters."),
+    toolField("site_name", "string", false, "Name of the external site, up to 80 characters."),
+    toolField("site_context", "string", false, "Context about the site, up to 600 characters."),
+    toolField("compliance_profile", "string", false, "Must be a key of COMPLIANCE_PROFILES when given; an unknown name is a 422.")
+  ],
+  "sales/convert": [
+    toolField("lead_post_uri", "string", false, "A specific lead's post URI to convert; unknown URI is a 404."),
+    toolField("segment", "object", false, "Segment filter object; when absent the route selects leads itself.")
+  ],
+  "sales/lead-status": [
+    toolField("lead_post_uri", "string", true, "The lead's post URI, up to 500 characters."),
+    toolField("status", "string", true, "One of SALES_LEAD_STATUSES (new, drafted, contacted, replied, converted); anything else is a 400.")
+  ],
+  "store/generate-proposals": []
+};
+
+/* One walk of the router, cached. Both catalogue shapes derive from it so they
+   cannot disagree about which routes exist. */
+var agentToolRoutesCache = null;
+
+function agentToolRoutes() {
+  if (agentToolRoutesCache) return agentToolRoutesCache;
 
   var stack = (app._router && app._router.stack) || [];
-  var catalogue = {};
+  var routes = [];
+  var seen = {};
 
   stack.forEach(function (layer) {
     if (!layer.route || !layer.route.path || !layer.route.methods) return;
@@ -25312,14 +25527,80 @@ function agentToolCatalogue() {
     var agentType = match[1], tool = match[2];
     if (!Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType)) return;
 
-    if (!catalogue[agentType]) catalogue[agentType] = [];
-    if (catalogue[agentType].indexOf(tool) === -1) catalogue[agentType].push(tool);
+    var key = agentType + "/" + tool;
+    if (seen[key]) return;
+    seen[key] = true;
+
+    routes.push({
+      agent: agentType,
+      tool: tool,
+      key: key,
+      path: layer.route.path,
+      spec: Object.prototype.hasOwnProperty.call(TOOL_INPUT_SPECS, key) ? TOOL_INPUT_SPECS[key] : null
+    });
   });
 
+  routes.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
+  agentToolRoutesCache = routes;
+  return routes;
+}
+
+/* The names-only shape, { agent: [tool, ...] }, unchanged for its existing
+   caller (the executive plan's validation). */
+function agentToolCatalogue() {
+  var catalogue = {};
+  agentToolRoutes().forEach(function (r) {
+    if (!catalogue[r.agent]) catalogue[r.agent] = [];
+    catalogue[r.agent].push(r.tool);
+  });
   Object.keys(catalogue).forEach(function (k) { catalogue[k].sort(); });
-  agentToolCatalogueCache = catalogue;
   return catalogue;
 }
+
+/* The same catalogue with each tool's declared inputs beside its name:
+   { agent: [{ tool, path, spec }, ...] }. `spec` is null for a route with no
+   entry in TOOL_INPUT_SPECS — visible, never silently defaulted to []. */
+function agentToolCatalogueWithSpecs() {
+  var catalogue = {};
+  agentToolRoutes().forEach(function (r) {
+    if (!catalogue[r.agent]) catalogue[r.agent] = [];
+    catalogue[r.agent].push({ tool: r.tool, path: r.path, spec: r.spec });
+  });
+  return catalogue;
+}
+
+/* THE BOOT GUARD. Logs, never throws. Returns what it found so it can be tested. */
+function checkToolInputSpecsAgainstRouter() {
+  var routes = agentToolRoutes();
+  var routeKeys = {};
+  routes.forEach(function (r) { routeKeys[r.key] = true; });
+
+  var routesWithoutSpec = routes.filter(function (r) { return r.spec === null; }).map(function (r) { return r.key; });
+  var specsWithoutRoute = Object.keys(TOOL_INPUT_SPECS).filter(function (k) { return !routeKeys[k]; });
+
+  if (routesWithoutSpec.length) {
+    console.error("[tool-specs] " + routesWithoutSpec.length + " agent tool route(s) have NO entry in TOOL_INPUT_SPECS: " +
+      routesWithoutSpec.join(", ") + ". Nothing can know what these routes accept until an entry is added.");
+  }
+  if (specsWithoutRoute.length) {
+    console.error("[tool-specs] " + specsWithoutRoute.length + " TOOL_INPUT_SPECS entry/entries name a route that is NOT mounted: " +
+      specsWithoutRoute.join(", ") + ". The spec describes something that does not exist; remove it or restore the route.");
+  }
+  if (!routesWithoutSpec.length && !specsWithoutRoute.length) {
+    console.log("[tool-specs] " + routes.length + " agent tool route(s), every one with a declared input spec.");
+  }
+
+  return { routes: routes.length, routes_without_spec: routesWithoutSpec, specs_without_route: specsWithoutRoute };
+}
+
+/* The registry, inspectable. Read-only, per authenticated user like every other
+   agent surface; it exposes route shapes, not data. */
+app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
+  return res.json({
+    success: true,
+    agents: agentToolCatalogueWithSpecs()
+  });
+});
 
 /* Orders the assignments by their dependencies, and names any cycle.
 
@@ -37622,6 +37903,16 @@ app.listen(PORT, function () {
   console.log("[startup] SUBSCRIPTION_GRACE_DAYS=" + SUBSCRIPTION_GRACE_DAYS +
     " (days past current_period_end before a subscription stops entitling; " +
     "a null or unparseable period never revokes)");
+
+  /* Every route is mounted by the time this callback runs, so the router walk
+     is complete. Logs and continues on a mismatch; a drifted spec must be seen,
+     not fatal. */
+  try {
+    checkToolInputSpecsAgainstRouter();
+  } catch (specCheckErr) {
+    console.error("[tool-specs] The spec check itself failed: " + ((specCheckErr && specCheckErr.message) || specCheckErr));
+  }
+
   startLeadRadar().catch(function (err) {
     console.error("[LeadRadar] startup error:", err.message || err);
   });
