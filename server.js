@@ -5565,13 +5565,11 @@ var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
 
 /* The agent card orderings, and the validation set for agent_card_order.
 
-   "random" WAS REMOVED DELIBERATELY. DO NOT ADD IT BACK TO MATCH THE FRONTEND.
-   Reshuffling the cards on every load was never wanted in the product, and the
-   frontend is the side that has to catch up: scripts/bf-agent-order.js still
-   declares three in ORDERINGS and settings.html still offers Random in its
-   select, so until those are cut a user who picks it gets the 400 below. That
-   refusal is the intended behaviour, not the drift — this list is the one that
-   says what the product supports.
+   "random" WAS REMOVED DELIBERATELY. DO NOT ADD IT BACK. Reshuffling the cards
+   on every load was never wanted in the product. The frontend has since caught
+   up — scripts/bf-agent-order.js declares these same two in ORDERINGS and
+   settings.html no longer offers Random — so the two sides agree, and this list
+   is the one that says what the product supports.
 
    THE LIST LIVES IN TWO PLACES AND CANNOT BE REDUCED TO ONE. The frontend
    needs it synchronously, before the cards paint — an API round trip there
@@ -5591,6 +5589,95 @@ var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
    than a migration — which is exactly why this removal needs no migration and
    leaves the stored rows alone. */
 var AGENT_CARD_ORDERS = ["importance", "alphabetical"];
+
+/* The dashboard feature card orderings, and the validation set for
+   dashboard_card_order. A different grid from the agent cards above, with a
+   different set, so it gets its own constant rather than sharing one.
+
+     "default"      the order the page is written in. The 26 cards are static
+                    markup in dashboard.html and that sequence is a deliberate
+                    editorial order, so it is a real choice rather than the
+                    absence of one.
+     "custom"       the arrangement the user made themselves, stored as a list
+                    of data-card slugs in dashboard_card_custom.
+     "alphabetical" by the card title the reader sees.
+     "importance"   the product's own ranking of what matters first.
+
+   Deliberately no CHECK constraint on the column, the same reasoning
+   mist_position, preferred_language and agent_card_order are written to: the
+   valid set is a JS constant validated in the route, so changing it is a code
+   change rather than a migration. */
+var DASHBOARD_CARD_ORDERS = ["default", "custom", "alphabetical", "importance"];
+
+/* Bounds for a stored custom arrangement. Deliberately NOT a list of the 26
+   slugs that exist today: a card added or renamed in dashboard.html must not
+   require a server edit to become storable, and it would be the kind of edit
+   nobody remembers to make — the arrangement would save fine in testing and
+   400 in production the first time somebody dragged the new card. The shape is
+   what is validated; the meaning is the client's, and it ignores slugs it does
+   not recognise at display time.
+
+   The caps exist so the column cannot be used as free storage: 100 entries is
+   four times the current card count, and 64 characters is far longer than any
+   real slug. Both refuse loudly rather than truncating, because silently
+   dropping half of somebody's arrangement is worse than not saving it. */
+var DASHBOARD_CARD_SLUG_PATTERN = /^[a-z0-9-]+$/;
+var DASHBOARD_CARD_SLUG_MAX_LENGTH = 64;
+var DASHBOARD_CARD_CUSTOM_MAX_ENTRIES = 100;
+
+/* Returns null when the value is a usable arrangement, or a string saying what
+   is wrong with it. The message is the product here: a client that just posted
+   a drag-and-drop result needs to know WHICH rule it broke, because "invalid"
+   sends somebody reading their own array by eye looking for a typo that may be
+   a duplicate twelve entries away. */
+function dashboardCardCustomProblem(value) {
+  if (!Array.isArray(value)) {
+    return "dashboard_card_custom must be null or an array of card slugs.";
+  }
+
+  if (value.length > DASHBOARD_CARD_CUSTOM_MAX_ENTRIES) {
+    return "dashboard_card_custom may hold at most " + DASHBOARD_CARD_CUSTOM_MAX_ENTRIES +
+      " entries; this request had " + value.length + ".";
+  }
+
+  var seen = {};
+
+  for (var i = 0; i < value.length; i++) {
+    var slug = value[i];
+
+    if (typeof slug !== "string") {
+      return "dashboard_card_custom entry " + i + " is not a string.";
+    }
+
+    if (slug.length === 0) {
+      return "dashboard_card_custom entry " + i + " is empty.";
+    }
+
+    if (slug.length > DASHBOARD_CARD_SLUG_MAX_LENGTH) {
+      return "dashboard_card_custom entry " + i + " is longer than " +
+        DASHBOARD_CARD_SLUG_MAX_LENGTH + " characters.";
+    }
+
+    if (!DASHBOARD_CARD_SLUG_PATTERN.test(slug)) {
+      return "dashboard_card_custom entry " + i + " (" + JSON.stringify(slug) +
+        ") is not a valid card slug: lowercase letters, digits and hyphens only.";
+    }
+
+    /* hasOwnProperty, not a plain lookup: "constructor" and "toString" resolve
+       through the prototype chain of any object literal and would be reported
+       as duplicates on their first appearance. They are valid slugs by the
+       pattern above, so the bookkeeping must not invent a reason to refuse
+       them. */
+    if (Object.prototype.hasOwnProperty.call(seen, slug)) {
+      return "dashboard_card_custom lists " + JSON.stringify(slug) +
+        " more than once; entry " + i + " is a duplicate.";
+    }
+
+    seen[slug] = true;
+  }
+
+  return null;
+}
 
 /* BCP-47 tag -> the English name of the language.
 
@@ -5899,7 +5986,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
   try {
     const { data: row, error } = await supabase
       .from("user_preferences")
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order")
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, dashboard_card_order, dashboard_card_custom")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -5930,6 +6017,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         notifications_enabled: true,
         preferred_language: null,
         agent_card_order: null,
+        dashboard_card_order: null,
+        dashboard_card_custom: null,
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -5940,6 +6029,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       notifications_enabled: row.notifications_enabled,
       preferred_language: row.preferred_language,
       agent_card_order: row.agent_card_order,
+      dashboard_card_order: row.dashboard_card_order,
+      dashboard_card_custom: row.dashboard_card_custom,
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -5997,6 +6088,62 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
         });
       } else {
         updates.agent_card_order = req.body.agent_card_order;
+      }
+    }
+
+    /* The same three cases again: absent leaves the column alone, null is a
+       real value meaning no choice recorded, a string is validated then stored.
+
+       THE TWO DASHBOARD FIELDS ARE VALIDATED INDEPENDENTLY AND ON PURPOSE.
+       Setting dashboard_card_order to "custom" with no arrangement sent and
+       none stored is ACCEPTED, not refused. Refusing would mean this route
+       reading the existing row to decide, which turns a partial update into a
+       read-modify-write and makes the two-request flow every drag-and-drop UI
+       performs — save the order, then save the arrangement — fail on its first
+       half. It would also be a rule the client could not satisfy in one call
+       when the user picks "custom" from a menu BEFORE arranging anything.
+
+       The state is coherent without it: "custom" with an empty arrangement is
+       an arrangement of nothing, and the client shows the cards in the order
+       the page is written in — the same thing "default" shows — until the user
+       arranges them. Nothing is lost and nothing is ambiguous. */
+    if (req.body.dashboard_card_order !== undefined) {
+      if (req.body.dashboard_card_order === null) {
+        updates.dashboard_card_order = null;
+      } else if (
+        typeof req.body.dashboard_card_order !== "string" ||
+        DASHBOARD_CARD_ORDERS.indexOf(req.body.dashboard_card_order) === -1
+      ) {
+        return res.status(400).json({
+          error: "dashboard_card_order must be null or one of the supported orderings.",
+          valid_dashboard_card_orders: DASHBOARD_CARD_ORDERS
+        });
+      } else {
+        updates.dashboard_card_order = req.body.dashboard_card_order;
+      }
+    }
+
+    /* The arrangement itself. Stored as sent, order intact — the order IS the
+       data here, so nothing is sorted, deduplicated in place or normalised on
+       the way in. A slug the server has never heard of is stored too: the list
+       of cards lives in dashboard.html, and a server that had to be taught each
+       new card would refuse arrangements containing it. */
+    if (req.body.dashboard_card_custom !== undefined) {
+      if (req.body.dashboard_card_custom === null) {
+        updates.dashboard_card_custom = null;
+      } else {
+        var customProblem = dashboardCardCustomProblem(req.body.dashboard_card_custom);
+
+        if (customProblem) {
+          return res.status(400).json({
+            error: customProblem,
+            max_entries: DASHBOARD_CARD_CUSTOM_MAX_ENTRIES,
+            max_slug_length: DASHBOARD_CARD_SLUG_MAX_LENGTH,
+            slug_pattern: DASHBOARD_CARD_SLUG_PATTERN.source
+          });
+        }
+
+        updates.dashboard_card_custom = req.body.dashboard_card_custom;
       }
     }
 
