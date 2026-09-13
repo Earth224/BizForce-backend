@@ -18995,6 +18995,53 @@ function renderToolOutputMarkdown(output) {
   return markdown;
 }
 
+/* ── WHAT A PARSE FAILURE LEAVES BEHIND ─────────────────────────────────────
+
+   A tool route that cannot read the model's reply answers 502 with the raw text
+   in the body, and until now that was the only copy: the response went to the
+   caller, the ai_tasks row was marked failed with a sentence, and the text
+   itself was gone at the end of the request. The next person asking "what did
+   the model actually say" had nothing to read — not the operator, not the user,
+   not whoever is deciding whether the prompt or the parser is at fault.
+
+   ai_tasks.output (migration 104) is the place for it: it already holds the
+   structured body of a successful tool run, and it was null on every failure.
+
+   WHAT IS STORED, AND NOTHING ELSE:
+     parse_failure         true, so a failed row can be told from any other
+     raw_output            the model's text, truncated to 4000 characters
+     raw_output_length     the TRUE length before truncation
+     raw_output_truncated  whether anything was cut
+
+   THE PROMPT IS NOT STORED. It contains the business profile and whatever the
+   user typed, and none of that is needed to answer the question this row
+   exists to answer. The reply is the evidence; the prompt is already
+   reconstructible from the request that produced it.
+
+   4000 CHARACTERS IS A DELIBERATE CEILING. These routes ask for up to 4000
+   tokens, so an untruncated reply can run to tens of kilobytes per failed row;
+   the first 4000 characters are enough to see whether the model answered in
+   prose, used the wrong labels, or returned nothing at all. The true length is
+   stored beside it so a truncated row never looks like a short reply. */
+var TOOL_FAILURE_RAW_MAX = 4000;
+
+function toolFailureOutput(details) {
+  /* Missing, empty, or not a string all land here as "" with a length of 0.
+     Storing null instead would make "the model said nothing" indistinguishable
+     from "nobody recorded what the model said", and those are different
+     failures. */
+  var raw = (details && typeof details.raw === "string") ? details.raw : "";
+  var length = raw.length;
+  var truncated = length > TOOL_FAILURE_RAW_MAX;
+
+  return {
+    parse_failure: true,
+    raw_output: truncated ? raw.slice(0, TOOL_FAILURE_RAW_MAX) : raw,
+    raw_output_length: length,
+    raw_output_truncated: truncated
+  };
+}
+
 async function startToolRun(req, options) {
   var userId = req.user.id;
   var agentType = options.agentType;
@@ -19048,26 +19095,57 @@ async function startToolRun(req, options) {
       return true;
     },
 
-    fail: async function (error) {
+    /* THE SECOND ARGUMENT IS OPTIONAL AND THE DEFAULT IS UNCHANGED BEHAVIOUR.
+       Every existing caller passes an error and nothing else; those write no
+       output key at all, so the column keeps whatever it had — null — exactly as
+       before. A caller that has the model's reply in hand passes { raw: text }
+       and it is stored in the SAME update that marks the row failed, so a row is
+       never briefly failed-without-evidence or evidenced-without-being-failed. */
+    fail: async function (error, details) {
       var message = (error && error.message) ? error.message : String(error);
       var now = nowIso();
+      var patch = {
+        status: "failed",
+        error: message,
+        result: "Task failed: " + message,
+        completed_at: now,
+        updated_at: now
+      };
+      if (details) {
+        patch.output = toolFailureOutput(details);
+      }
+
       try {
         var update = await supabase
           .from("ai_tasks")
-          .update({
-            status: "failed",
-            error: message,
-            result: "Task failed: " + message,
-            completed_at: now,
-            updated_at: now
-          })
+          .update(patch)
           .eq("id", taskId)
           .eq("user_id", userId);
         if (update.error) {
           console.error("[tool-run] Could not mark task " + taskId + " (" + taskType + ") failed for user " +
             userId + ": " + (update.error.message || update.error));
+
+          /* MARKING IT FAILED MATTERS MORE THAN KEEPING THE EVIDENCE. If the
+             write carrying output was refused — a column type, a size limit,
+             anything about the jsonb — the row would otherwise be left saying
+             "processing" for a run that is over, which is the failure this
+             helper exists to prevent. So it is retried once WITHOUT the output,
+             and the loss of the evidence is logged rather than silent. */
+          if (patch.output) {
+            delete patch.output;
+            var retry = await supabase
+              .from("ai_tasks")
+              .update(patch)
+              .eq("id", taskId)
+              .eq("user_id", userId);
+            console.error("[tool-run] Retried task " + taskId + " (" + taskType + ") without the parse-failure " +
+              "output: " + (retry.error ? ("that failed too: " + (retry.error.message || retry.error)) :
+              "the row is marked failed, but the raw model text was NOT stored."));
+          }
         }
       } catch (markErr) {
+        /* Thrown, not returned: logged and swallowed, because the caller is on
+           its way to a 502 and a bookkeeping failure must not become a 500. */
         console.error("[tool-run] Marking task " + taskId + " (" + taskType + ") failed threw for user " +
           userId + ": " + ((markErr && markErr.message) || markErr));
       }
@@ -19233,7 +19311,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
       if (!keywords.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("etsy/keyword-research: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("etsy/keyword-research: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The keyword list could not be read back from the model, so nothing is being reported. " +
             "No keywords were found is NOT the same as none exist — this is a formatting failure, not a result.",
@@ -19800,7 +19878,7 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("email/sequence: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("email/sequence: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The sequence could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -19950,7 +20028,7 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
       if (!variants.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("email/subject-lines: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("email/subject-lines: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The subject lines could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20123,7 +20201,7 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("publicist/press-release: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("publicist/press-release: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The press release could not be read back from the model in wire format, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -20293,7 +20371,7 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
       if (!body) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("publicist/pitch: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("publicist/pitch: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The pitch body could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20479,7 +20557,7 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("operations/sop: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("operations/sop: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The procedure's steps could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -20647,7 +20725,7 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
       if (!items.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("operations/checklist: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("operations/checklist: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The checklist could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -21193,7 +21271,7 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
       if (!assets.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("ads/copy: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("ads/copy: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The ad copy could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -21558,7 +21636,7 @@ app.post("/api/agents/reputation/review-response", requireAuth, requireActiveSub
       if (!reply) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("reputation/review-response: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("reputation/review-response: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The reply could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -21781,7 +21859,7 @@ app.post("/api/agents/reputation/review-request", requireAuth, requireActiveSubs
       if (!messages.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("reputation/review-request: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("reputation/review-request: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The request sequence could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -22032,7 +22110,7 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
       if (!post) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("social/post: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("social/post: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The post could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -22224,7 +22302,7 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
       if (!entries.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The posting plan could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -22444,7 +22522,7 @@ app.post("/api/agents/broker/term-sheet", requireAuth, requireActiveSubscription
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("broker/term-sheet: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("broker/term-sheet: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The term sheet framework could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -22643,7 +22721,7 @@ app.post("/api/agents/broker/due-diligence", requireAuth, requireActiveSubscript
       if (!total) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("broker/due-diligence: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("broker/due-diligence: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The diligence checklist could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -22846,7 +22924,7 @@ app.post("/api/agents/rd/brief", requireAuth, requireActiveSubscription, aiLimit
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("rd/brief: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("rd/brief: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The briefing could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -23088,7 +23166,7 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
       if (!entries.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("The competitor comparison could not be read back from the model."));
+        await run.fail(new Error("The competitor comparison could not be read back from the model."), { raw: raw });
         return res.status(502).json({
           error: "The competitor comparison could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23287,7 +23365,7 @@ app.post("/api/agents/community/onboarding", requireAuth, requireActiveSubscript
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("community/onboarding: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("community/onboarding: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The onboarding sequence could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23494,7 +23572,7 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
       if (!rituals.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("community/engagement-calendar: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("community/engagement-calendar: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The engagement calendar could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -24301,7 +24379,7 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
       if (!message) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("influencer/outreach: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("influencer/outreach: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The message could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24467,7 +24545,7 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("influencer/partnership-offer: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("influencer/partnership-offer: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The offer could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24715,7 +24793,7 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
       if (!parsed.POSITIONING && !parsed.CHANNELS) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("vertical_marketing/positioning: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("vertical_marketing/positioning: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The positioning could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -24901,7 +24979,7 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
       if (!objections.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("vertical_marketing/objections: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("vertical_marketing/objections: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The objections could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -25156,7 +25234,7 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
       if (!sections.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("content/outline: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("content/outline: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The outline could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -26829,7 +26907,7 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       if (!assignments.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("executive/plan: the model's output could not be read back, so nothing was reported."));
+        await run.fail(new Error("executive/plan: the model's output could not be read back, so nothing was reported."), { raw: raw });
         return res.status(502).json({
           error: "The plan could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
