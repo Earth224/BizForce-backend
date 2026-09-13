@@ -25876,6 +25876,90 @@ function checkToolInputSpecsAgainstRouter() {
   return { routes: routes.length, routes_without_spec: routesWithoutSpec, specs_without_route: specsWithoutRoute };
 }
 
+/* ── THE GUARD THAT WOULD HAVE CAUGHT tool-specs ────────────────────────────
+
+   checkToolInputSpecsAgainstRouter above answers "does every route have a
+   spec". It cannot answer the question that actually broke this API: IS THIS
+   ROUTE REACHABLE. /api/agents/tool-specs was registered, had a spec, passed
+   that check, and served nothing for its entire life, because
+   /api/agents/:type was registered earlier and Express matches in registration
+   order. The failure looked exactly like a route that was never mounted, and
+   nothing in the boot log disagreed.
+
+   WHAT THIS CHECKS. For each route layer, whether an EARLIER layer sharing a
+   method would match this layer's OWN PATH STRING first. Testing the path
+   string rather than a set of sampled URLs is deliberate: it is exact for a
+   literal path, which is the case that matters, and for a parameterised path
+   it asks "would an earlier pattern swallow a route spelled like this" —
+   which is the right question when two single-segment patterns collide, e.g.
+   an earlier /api/agents/:id against a later /api/agents/:type.
+
+   ITS LIMIT, STATED: it compares patterns, not every possible request. An
+   earlier route whose pattern matches only SOME of a later route's requests
+   (a regex path, an optional segment) can pass here and still shadow in
+   practice. It is a floor, not a proof.
+
+   LOGS, NEVER THROWS. A shadowed route is a product defect, not a reason to
+   refuse to start: the other three hundred routes work, and taking the service
+   down would turn one broken endpoint into an outage. Loud, not fatal — the
+   same rule checkToolInputSpecsAgainstRouter follows. */
+function checkRoutesForShadowing() {
+  var started = Date.now();
+  var stack = (app._router && app._router.stack) || [];
+
+  var layers = [];
+  stack.forEach(function (layer) {
+    if (!layer.route || !layer.route.path || typeof layer.route.path !== "string") return;
+    layers.push(layer);
+  });
+
+  var shadowed = [];
+
+  for (var i = 0; i < layers.length; i++) {
+    var later = layers[i];
+    for (var j = 0; j < i; j++) {
+      var earlier = layers[j];
+
+      /* Only a shared method can shadow: an earlier POST never swallows a GET. */
+      var sharesMethod = Object.keys(later.route.methods).some(function (m) {
+        return earlier.route.methods[m] === true;
+      });
+      if (!sharesMethod) continue;
+
+      if (!earlier.regexp || !earlier.regexp.test(later.route.path)) continue;
+
+      shadowed.push({
+        method: Object.keys(later.route.methods).join(",").toUpperCase(),
+        shadowed_path: later.route.path,
+        shadowed_by: earlier.route.path,
+        shadowed_index: i,
+        shadowed_by_index: j
+      });
+      break; // the first earlier match is the one that answers; more is noise
+    }
+  }
+
+  if (shadowed.length) {
+    console.error("[routes] " + shadowed.length + " registered route(s) are UNREACHABLE — an earlier route " +
+      "matches the same path first, so these never receive a request:");
+    shadowed.forEach(function (s) {
+      console.error("[routes]   " + s.method + " " + s.shadowed_path +
+        " is swallowed by " + s.shadowed_by + " (layer #" + s.shadowed_by_index +
+        " is registered before layer #" + s.shadowed_index + "). Move the literal route above it.");
+    });
+  } else {
+    console.log("[routes] " + layers.length + " route layer(s), none shadowed by an earlier match.");
+  }
+
+  /* Reported so the cost is visible rather than assumed. The walk is O(n^2) in
+     route layers and runs ONCE, inside the app.listen callback — never per
+     request. */
+  console.log("[routes] reachability walk took " + (Date.now() - started) + "ms for " +
+    layers.length + " layer(s).");
+
+  return { layers: layers.length, shadowed: shadowed };
+}
+
 /* THE /api/agents/tool-specs ROUTE USED TO BE REGISTERED HERE, and was
    unreachable for it. It is now registered above app.get("/api/agents/:type")
    — search for TOOL-SPECS MUST STAY ABOVE. Nothing else moved; the catalogue
@@ -39667,6 +39751,15 @@ app.listen(PORT, function () {
     checkToolInputSpecsAgainstRouter();
   } catch (specCheckErr) {
     console.error("[tool-specs] The spec check itself failed: " + ((specCheckErr && specCheckErr.message) || specCheckErr));
+  }
+
+  /* Same place, same rule: every route is mounted by the time this callback
+     runs, so the walk sees the finished router. Wrapped for the same reason —
+     a check that throws must not be the thing that stops the server. */
+  try {
+    checkRoutesForShadowing();
+  } catch (shadowCheckErr) {
+    console.error("[routes] The reachability check itself failed: " + ((shadowCheckErr && shadowCheckErr.message) || shadowCheckErr));
   }
 
   /* The chain dispatcher's gate, stated in both directions so the log always
