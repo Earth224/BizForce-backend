@@ -34,9 +34,25 @@
    run. Everything downstream of that reply — the parse, the failure branch,
    the ai_tasks write — is the shipped code.
 
-   IT CLEANS UP AFTER ITSELF. Every ai_tasks row it creates is deleted by id at
-   the end, so a check run leaves no residue in anybody's task history. The
-   rows are read back BEFORE deletion, which is the point of the exercise.
+   IT CLEANS UP AFTER ITSELF, IN EVERY TABLE IT WRITES, AND PROVES IT.
+
+   TWO TABLES ARE WRITTEN by a tool run, not one:
+     ai_tasks     the run's own row, created by startToolRun
+     model_calls  the SPEND LEDGER, written by callAnthropicText on every
+                  model call that returns — including a stubbed one
+
+   An earlier version of this script tracked only ai_tasks and reported "no
+   residue" while leaving fourteen ledger rows behind under a real user's id.
+   That is the failure this section exists to prevent: the claim was about what
+   cleanup had been ASKED to do, not about what was left in the tables.
+
+   So every row this script causes is recorded by id as it appears, in both
+   tables, and the closing report DELETES them and then READS THE TABLES BACK
+   to count what actually remains. It reports the verified number, not the
+   attempt. Anything it could not remove is named with its table and id.
+
+   IT CREATES NO ACCOUNT. It picks an existing users row to attribute its rows
+   to, and never inserts into users, profiles or auth.
 
    Usage:  node scripts/checkToolFailureOutput.js
    Needs the same .env the server needs (SUPABASE_URL, SUPABASE_SERVICE_KEY).
@@ -102,7 +118,35 @@ const supabase = createClient(
 );
 
 let failures = 0;
-const created = [];
+
+/* EVERY ROW THIS RUN CAUSES, BY TABLE. Recorded as it appears rather than
+   inferred at the end from a time window: a window catches rows somebody else
+   wrote in the same seconds, and misses one written a moment late. */
+const created = { ai_tasks: [], model_calls: [] };
+
+/* The high-water mark of model_calls.id before the run. Every ledger row this
+   script causes is written after it, under the user it borrowed, so the ids to
+   clean up are exactly those above the mark for that user — read from the table
+   after each call rather than assumed. */
+let ledgerMark = 0;
+
+async function noteLedgerRows(userId) {
+  const { data, error } = await supabase
+    .from("model_calls")
+    .select("id")
+    .eq("user_id", userId)
+    .gt("id", ledgerMark)
+    .order("id", { ascending: true });
+  if (error) { console.error("    (could not read model_calls to track it: " + error.message + ")"); return; }
+  (data || []).forEach(function (row) {
+    if (created.model_calls.indexOf(row.id) === -1) created.model_calls.push(row.id);
+    if (row.id > ledgerMark) ledgerMark = row.id;
+  });
+}
+
+function noteTaskRow(row) {
+  if (row && row.id && created.ai_tasks.indexOf(row.id) === -1) created.ai_tasks.push(row.id);
+}
 function check(label, ok, detail) {
   if (ok) console.log("    pass  " + label);
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
@@ -181,6 +225,18 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
 
   const since = new Date(Date.now() - 60000).toISOString();
 
+  /* Read before anything runs, so nothing already in the ledger is ever a
+     candidate for deletion by this script. */
+  const { data: highest } = await supabase
+    .from("model_calls").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
+  ledgerMark = highest ? highest.id : 0;
+  const ledgerBefore = await supabase
+    .from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  const tasksBefore = await supabase
+    .from("ai_tasks").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  console.log("before this run — model_calls for that user: " + ledgerBefore.count +
+    ", ai_tasks for that user: " + tasksBefore.count + " (ledger high-water id " + ledgerMark + ")\n");
+
   /* ── 1. a successful run ────────────────────────────────────────────────── */
   console.log("1) social/calendar SUCCEEDS");
   nextModelText = PARSEABLE_CALENDAR;
@@ -191,7 +247,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     weeks: 2
   });
   const okRow = await latestTaskRow(userId, "social/calendar", since);
-  if (okRow) created.push(okRow.id);
+  noteTaskRow(okRow); await noteLedgerRows(userId);
   console.log("   HTTP " + ok.status + "   row " + (okRow && okRow.id));
   check("the route answered 200", ok.status === 200, ok.status + " " + JSON.stringify(ok.body && ok.body.error));
   check("an ai_tasks row exists", !!okRow);
@@ -211,7 +267,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     cadence: "twice a week"
   });
   const badRow = await latestTaskRow(userId, "social/calendar", since);
-  if (badRow && created.indexOf(badRow.id) === -1) created.push(badRow.id);
+  noteTaskRow(badRow); await noteLedgerRows(userId);
   console.log("   HTTP " + bad.status + "   row " + (badRow && badRow.id));
   check("the route answered 502", bad.status === 502, bad.status);
   check("the 502 body still carries raw_output", bad.body && bad.body.raw_output === UNPARSEABLE);
@@ -243,7 +299,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     cadence: "twice a week"
   });
   const longRow = await latestTaskRow(userId, "social/calendar", since);
-  if (longRow && created.indexOf(longRow.id) === -1) created.push(longRow.id);
+  noteTaskRow(longRow); await noteLedgerRows(userId);
   console.log("   HTTP " + longRun.status + "   stored " +
     (longRow && longRow.output && String(longRow.output.raw_output).length) + " of " +
     (longRow && longRow.output && longRow.output.raw_output_length) + " characters");
@@ -265,7 +321,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     listing_title: "check run — control route"
   });
   const controlRow = await latestTaskRow(userId, "etsy/pricing-strategy", since);
-  if (controlRow) created.push(controlRow.id);
+  noteTaskRow(controlRow); await noteLedgerRows(userId);
   console.log("   HTTP " + control.status + "   row " + (controlRow && controlRow.id) +
     "   status " + (controlRow && controlRow.status));
   check("it still answers", control.status === 200 || control.status === 502, control.status);
@@ -293,7 +349,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     cadence: "twice a week"
   });
   const thrownRow = await latestTaskRow(userId, "social/calendar", since);
-  if (thrownRow && created.indexOf(thrownRow.id) === -1) created.push(thrownRow.id);
+  noteTaskRow(thrownRow); await noteLedgerRows(userId);
   console.log("   HTTP " + thrown.status + "   row " + (thrownRow && thrownRow.id) +
     "   output " + (thrownRow && JSON.stringify(thrownRow.output)));
   check("the route did not answer 2xx", thrown.status !== 200, thrown.status);
@@ -315,7 +371,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     cadence: "twice a week"
   });
   const emptyRow = await latestTaskRow(userId, "social/calendar", since);
-  if (emptyRow && created.indexOf(emptyRow.id) === -1) created.push(emptyRow.id);
+  noteTaskRow(emptyRow); await noteLedgerRows(userId);
   console.log("   HTTP " + empty.status + "   output " + (emptyRow && JSON.stringify(emptyRow.output)));
   check("still a 502", empty.status === 502, empty.status);
   check("output is stored, not null", !!(emptyRow && emptyRow.output));
@@ -325,13 +381,59 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   check("raw_output_length is 0", emptyRow && emptyRow.output && emptyRow.output.raw_output_length === 0);
   check("nothing threw", empty.status !== 500, empty.status);
 
-  /* ── clean up ───────────────────────────────────────────────────────────── */
+  /* ── cleanup, and then the only thing worth reporting: what is left ─────── */
   console.log("\ncleanup");
-  if (created.length) {
-    const { error: delErr } = await supabase.from("ai_tasks").delete().in("id", created);
-    check("every check row deleted (" + created.length + ")", !delErr, delErr && delErr.message);
+  console.log("  rows this run caused — ai_tasks: " + created.ai_tasks.length +
+    ", model_calls: " + created.model_calls.length);
+
+  const leftovers = [];
+
+  for (const table of ["ai_tasks", "model_calls"]) {
+    const ids = created[table];
+    if (!ids.length) { console.log("  " + table + ": nothing to delete"); continue; }
+
+    const { error: delErr } = await supabase.from(table).delete().in("id", ids);
+    if (delErr) console.log("  " + table + ": delete reported " + delErr.message);
+
+    /* THE REPORT IS THE READ-BACK, NOT THE DELETE. A delete that returned no
+       error is not evidence the rows are gone; counting them is. */
+    const { count, error: countErr } = await supabase
+      .from(table).select("id", { count: "exact", head: true }).in("id", ids);
+    if (countErr) {
+      console.log("  " + table + ": COULD NOT VERIFY — " + countErr.message);
+      leftovers.push(table + ": verification failed (" + ids.length + " ids unknown)");
+      failures++;
+      continue;
+    }
+    console.log("  " + table + ": " + ids.length + " written, " + count + " still present after deletion");
+    if (count > 0) {
+      const { data: stuck } = await supabase.from(table).select("id").in("id", ids);
+      leftovers.push(table + ": " + (stuck || []).map(r => r.id).join(", "));
+    }
+  }
+
+  /* A second, independent look: whatever this user has in those two tables now,
+     compared with what they had before the run. It catches a row this script
+     caused but failed to record — the exact way the previous version went wrong. */
+  const ledgerAfter = await supabase
+    .from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  const tasksAfter = await supabase
+    .from("ai_tasks").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  console.log("  model_calls for that user: " + ledgerBefore.count + " before, " + ledgerAfter.count + " after");
+  console.log("  ai_tasks for that user:    " + tasksBefore.count + " before, " + tasksAfter.count + " after");
+
+  check("no ai_tasks row from this run remains", !leftovers.some(l => l.indexOf("ai_tasks") === 0), leftovers.join(" | "));
+  check("no model_calls row from this run remains", !leftovers.some(l => l.indexOf("model_calls") === 0), leftovers.join(" | "));
+  check("that user's model_calls count is back to where it started",
+    ledgerAfter.count === ledgerBefore.count, ledgerBefore.count + " -> " + ledgerAfter.count);
+  check("that user's ai_tasks count is back to where it started",
+    tasksAfter.count === tasksBefore.count, tasksBefore.count + " -> " + tasksAfter.count);
+
+  if (leftovers.length) {
+    console.log("\n  RESIDUE LEFT BEHIND — remove these by hand:");
+    leftovers.forEach(l => console.log("    " + l));
   } else {
-    console.log("    nothing to delete");
+    console.log("\n  verified by reading both tables back: 0 rows from this run remain.");
   }
 
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED"));
