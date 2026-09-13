@@ -119,15 +119,20 @@ const supabase = createClient(
 
 let failures = 0;
 
-/* EVERY ROW THIS RUN CAUSES, BY TABLE. Recorded as it appears rather than
-   inferred at the end from a time window: a window catches rows somebody else
-   wrote in the same seconds, and misses one written a moment late. */
-const created = { ai_tasks: [], model_calls: [] };
+/* EVERY ROW THIS RUN CAUSES, RECORDED AS IT HAPPENS AND REMOVED ON EVERY WAY
+   OUT — the end of the run, a throw, an unhandled rejection, a Ctrl-C. Twice
+   a crash mid-run left rows behind because cleanup only ran on the happy
+   path; scripts/checkRunResidue.js is where that is fixed, once, for all
+   three scripts. */
+const { createResidueGuard } = require("./checkRunResidue");
+const residue = createResidueGuard({
+  supabase: supabase,
+  name: "toolFailureOutput",
+  tables: ["ai_tasks", "model_calls"]
+});
+residue.install();
 
-/* The high-water mark of model_calls.id before the run. Every ledger row this
-   script causes is written after it, under the user it borrowed, so the ids to
-   clean up are exactly those above the mark for that user — read from the table
-   after each call rather than assumed. */
+const created = residue.ids;
 let ledgerMark = 0;
 
 async function noteLedgerRows(userId) {
@@ -139,13 +144,13 @@ async function noteLedgerRows(userId) {
     .order("id", { ascending: true });
   if (error) { console.error("    (could not read model_calls to track it: " + error.message + ")"); return; }
   (data || []).forEach(function (row) {
-    if (created.model_calls.indexOf(row.id) === -1) created.model_calls.push(row.id);
-    if (row.id > ledgerMark) ledgerMark = row.id;
+    residue.record("model_calls", row.id);
+    if (row.id > ledgerMark) { ledgerMark = row.id; residue.setLedgerMark(ledgerMark); }
   });
 }
 
 function noteTaskRow(row) {
-  if (row && row.id && created.ai_tasks.indexOf(row.id) === -1) created.ai_tasks.push(row.id);
+  if (row && row.id) residue.record("ai_tasks", row.id);
 }
 function check(label, ok, detail) {
   if (ok) console.log("    pass  " + label);
@@ -221,6 +226,10 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   if (userErr) throw userErr;
   if (!someUser) { console.error("No users row to attribute the check rows to. Nothing was run."); process.exit(1); }
   const userId = someUser.id;
+
+  /* BEFORE ANYTHING IS WRITTEN: whatever a previous crashed run of this script
+     left behind, removed by id and reported. */
+  await residue.sweepPrevious(userId);
   console.log("using user " + userId + " for the check rows (all deleted at the end)\n");
 
   const since = new Date(Date.now() - 60000).toISOString();
@@ -230,6 +239,7 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   const { data: highest } = await supabase
     .from("model_calls").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
   ledgerMark = highest ? highest.id : 0;
+  residue.setLedgerMark(ledgerMark);
   const ledgerBefore = await supabase
     .from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", userId);
   const tasksBefore = await supabase
@@ -394,31 +404,11 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   console.log("  rows this run caused — ai_tasks: " + created.ai_tasks.length +
     ", model_calls: " + created.model_calls.length);
 
-  const leftovers = [];
-
-  for (const table of ["ai_tasks", "model_calls"]) {
-    const ids = created[table];
-    if (!ids.length) { console.log("  " + table + ": nothing to delete"); continue; }
-
-    const { error: delErr } = await supabase.from(table).delete().in("id", ids);
-    if (delErr) console.log("  " + table + ": delete reported " + delErr.message);
-
-    /* THE REPORT IS THE READ-BACK, NOT THE DELETE. A delete that returned no
-       error is not evidence the rows are gone; counting them is. */
-    const { count, error: countErr } = await supabase
-      .from(table).select("id", { count: "exact", head: true }).in("id", ids);
-    if (countErr) {
-      console.log("  " + table + ": COULD NOT VERIFY — " + countErr.message);
-      leftovers.push(table + ": verification failed (" + ids.length + " ids unknown)");
-      failures++;
-      continue;
-    }
-    console.log("  " + table + ": " + ids.length + " written, " + count + " still present after deletion");
-    if (count > 0) {
-      const { data: stuck } = await supabase.from(table).select("id").in("id", ids);
-      leftovers.push(table + ": " + (stuck || []).map(r => r.id).join(", "));
-    }
-  }
+  /* Deleted and VERIFIED by the shared guard, which also runs this on a throw,
+     an unhandled rejection or a Ctrl-C — see scripts/checkRunResidue.js. */
+  const cleanupResult = await residue.cleanup("end of run");
+  const leftovers = cleanupResult.leftovers.map(function (l) { return l.table + ": " + l.ids.join(", "); });
+  if (leftovers.length) failures++;
 
   /* A second, independent look: whatever this user has in those two tables now,
      compared with what they had before the run. It catches a row this script

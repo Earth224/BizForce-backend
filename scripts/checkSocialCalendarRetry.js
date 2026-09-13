@@ -105,7 +105,20 @@ const supabase = createClient(
 );
 
 let failures = 0;
-const created = { ai_tasks: [], model_calls: [] };
+/* EVERY ROW THIS RUN CAUSES, RECORDED AS IT HAPPENS AND REMOVED ON EVERY WAY
+   OUT — the end of the run, a throw, an unhandled rejection, a Ctrl-C. Twice
+   a crash mid-run left rows behind because cleanup only ran on the happy
+   path; scripts/checkRunResidue.js is where that is fixed, once, for all
+   three scripts. */
+const { createResidueGuard } = require("./checkRunResidue");
+const residue = createResidueGuard({
+  supabase: supabase,
+  name: "socialCalendarRetry",
+  tables: ["ai_tasks", "model_calls"]
+});
+residue.install();
+
+const created = residue.ids;
 let ledgerMark = 0;
 
 function check(label, ok, detail) {
@@ -119,14 +132,14 @@ async function noteLedgerRows(userId) {
     .eq("user_id", userId).gt("id", ledgerMark).order("id", { ascending: true });
   if (error) { console.error("    (could not read model_calls: " + error.message + ")"); return []; }
   (data || []).forEach(function (row) {
-    if (created.model_calls.indexOf(row.id) === -1) created.model_calls.push(row.id);
-    if (row.id > ledgerMark) ledgerMark = row.id;
+    residue.record("model_calls", row.id);
+    if (row.id > ledgerMark) { ledgerMark = row.id; residue.setLedgerMark(ledgerMark); }
   });
   return data || [];
 }
 
 function noteTaskRow(row) {
-  if (row && row.id && created.ai_tasks.indexOf(row.id) === -1) created.ai_tasks.push(row.id);
+  if (row && row.id) residue.record("ai_tasks", row.id);
 }
 
 function handlerFor(routePath) {
@@ -196,9 +209,13 @@ function reset(queue, throwAt) {
   if (!someUser) { console.error("No users row to attribute check rows to."); process.exit(1); }
   const userId = someUser.id;
 
+  /* Before anything is written: what a previous crashed run left. */
+  await residue.sweepPrevious(userId);
+
   const { data: highest } = await supabase
     .from("model_calls").select("id").order("id", { ascending: false }).limit(1).maybeSingle();
   ledgerMark = highest ? highest.id : 0;
+  residue.setLedgerMark(ledgerMark);
   const ledgerBefore = await supabase.from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", userId);
   const tasksBefore = await supabase.from("ai_tasks").select("id", { count: "exact", head: true }).eq("user_id", userId);
   console.log("user " + userId);
@@ -339,24 +356,9 @@ function reset(queue, throwAt) {
   console.log("\ncleanup");
   console.log("  rows this run caused — ai_tasks: " + created.ai_tasks.length +
     ", model_calls: " + created.model_calls.length);
-  const leftovers = [];
-  for (const table of ["ai_tasks", "model_calls"]) {
-    const ids = created[table];
-    if (!ids.length) { console.log("  " + table + ": nothing to delete"); continue; }
-    const { error: delErr } = await supabase.from(table).delete().in("id", ids);
-    if (delErr) console.log("  " + table + ": delete reported " + delErr.message);
-    const { count, error: countErr } = await supabase
-      .from(table).select("id", { count: "exact", head: true }).in("id", ids);
-    if (countErr) {
-      console.log("  " + table + ": COULD NOT VERIFY — " + countErr.message);
-      leftovers.push(table + ": verification failed"); failures++; continue;
-    }
-    console.log("  " + table + ": " + ids.length + " written, " + count + " still present after deletion");
-    if (count > 0) {
-      const { data: stuck } = await supabase.from(table).select("id").in("id", ids);
-      leftovers.push(table + ": " + (stuck || []).map(function (r) { return r.id; }).join(", "));
-    }
-  }
+  const cleanupResult = await residue.cleanup("end of run");
+  const leftovers = cleanupResult.leftovers.map(function (l) { return l.table + ": " + l.ids.join(", "); });
+  if (leftovers.length) failures++;
   const ledgerAfter = await supabase.from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", userId);
   const tasksAfter = await supabase.from("ai_tasks").select("id", { count: "exact", head: true }).eq("user_id", userId);
   console.log("  model_calls for that user: " + ledgerBefore.count + " before, " + ledgerAfter.count + " after");
