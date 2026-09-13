@@ -19025,21 +19025,45 @@ function renderToolOutputMarkdown(output) {
    stored beside it so a truncated row never looks like a short reply. */
 var TOOL_FAILURE_RAW_MAX = 4000;
 
+/* One attempt's text, in the shape both the success and the failure records
+   use, so a reader never has to learn two spellings of the same fact. */
+function toolAttemptRecord(raw) {
+  var text = (typeof raw === "string") ? raw : "";
+  var length = text.length;
+  var truncated = length > TOOL_FAILURE_RAW_MAX;
+  return {
+    raw_output: truncated ? text.slice(0, TOOL_FAILURE_RAW_MAX) : text,
+    raw_output_length: length,
+    raw_output_truncated: truncated
+  };
+}
+
 function toolFailureOutput(details) {
   /* Missing, empty, or not a string all land here as "" with a length of 0.
      Storing null instead would make "the model said nothing" indistinguishable
      from "nobody recorded what the model said", and those are different
      failures. */
-  var raw = (details && typeof details.raw === "string") ? details.raw : "";
-  var length = raw.length;
-  var truncated = length > TOOL_FAILURE_RAW_MAX;
+  var record = toolAttemptRecord(details && details.raw);
 
-  return {
+  var out = {
     parse_failure: true,
-    raw_output: truncated ? raw.slice(0, TOOL_FAILURE_RAW_MAX) : raw,
-    raw_output_length: length,
-    raw_output_truncated: truncated
+    raw_output: record.raw_output,
+    raw_output_length: record.raw_output_length,
+    raw_output_truncated: record.raw_output_truncated
   };
+
+  /* A ROUTE THAT TRIED TWICE SAYS SO, WITH BOTH TEXTS. The keys above keep
+     their meaning for every caller that made one call — raw_output is the reply
+     that was in hand when the route gave up — and `attempts` is added only when
+     a caller passes one, numbered so first and second are never ambiguous. */
+  if (details && Array.isArray(details.attempts) && details.attempts.length) {
+    out.attempts = details.attempts.map(function (attempt, i) {
+      return Object.assign({ attempt: i + 1 }, toolAttemptRecord(attempt && attempt.raw));
+    });
+    out.attempt_count = out.attempts.length;
+  }
+
+  return out;
 }
 
 async function startToolRun(req, options) {
@@ -19071,13 +19095,19 @@ async function startToolRun(req, options) {
   return {
     taskId: taskId,
 
-    complete: async function (output) {
+    /* THE SECOND ARGUMENT IS OPTIONAL AND CHANGES NOTHING FOR EXISTING CALLERS.
+       It is merged into the stored `output` and NOT into the markdown `result`:
+       `result` is what Task History renders to a person, and a record of how the
+       answer was obtained is not part of the answer. A caller that passes one
+       argument writes exactly what it wrote before. */
+    complete: async function (output, extra) {
       var now = nowIso();
+      var stored = extra ? Object.assign({}, output, extra) : output;
       var update = await supabase
         .from("ai_tasks")
         .update({
           status: "completed",
-          output: output,
+          output: stored,
           result: renderToolOutputMarkdown(output),
           completed_at: now,
           updated_at: now
@@ -22193,6 +22223,51 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
     }
   });
 
+/* ── THE ONE RETRY, AND WHY THIS ROUTE HAS ONE ──────────────────────────────
+
+   MEASURED, NOT SUSPECTED. The same prompt — byte for byte, 2,158 input tokens
+   whether it comes from the agent page or from a routine — succeeded twice and
+   failed twice. Both failures came back SHORT, 613 and 410 output tokens
+   against a 4,000 limit, and parsed to zero entries. The model answers this
+   prompt in an unusable shape a large fraction of the time, and the route's
+   response was to spend the money, discard the answer and return 502.
+
+   A second call is cheap next to that. ONE, never more: a loop that retries
+   until it works is a loop that bills until it works, and if two calls cannot
+   produce five labelled fields the third will not either — the fault is the
+   prompt or the model, and both are worth finding out about rather than
+   papering over at the user's expense.
+
+   THE RETRY IS A CORRECTION, NOT A REPEAT. Sending the same instruction again
+   asks the model to do the thing it just did. This says what arrived, what was
+   wrong with it, and what the reader's parser actually needs — in the plainest
+   terms the format can be stated, with no reference to the original wording. */
+var SOCIAL_CALENDAR_SHAPE_CORRECTION =
+  "\n\nSTOP. YOUR PREVIOUS ANSWER COULD NOT BE READ AND WAS DISCARDED.\n\n" +
+  "It was not a formatting preference that failed — the program reading your answer found no " +
+  "entries in it at all, so the user received nothing. Write it again, in exactly the shape " +
+  "below and in no other shape.\n\n" +
+  "THE SHAPE:\n" +
+  "- One block per calendar entry.\n" +
+  "- Between one block and the next, a line containing only three hyphens: ---\n" +
+  "- Inside every block, these five lines, each starting with the label in capitals " +
+  "followed immediately by a colon:\n" +
+  "    DAY:\n" +
+  "    PLATFORM:\n" +
+  "    FORMAT:\n" +
+  "    HOOK:\n" +
+  "    PURPOSE:\n" +
+  "- Every one of the five labels appears in every block. A block missing HOOK and FORMAT is " +
+  "thrown away.\n\n" +
+  "WHAT MUST NOT BE THERE:\n" +
+  "- No sentence before the first block. The answer starts with DAY:\n" +
+  "- No sentence after the last block. The answer ends with the last PURPOSE line.\n" +
+  "- No summary, no offer to adjust it, no explanation of what you did.\n" +
+  "- No table, no pipes, no markdown headings, no bullet characters, no numbered list.\n" +
+  "- No JSON, no code fence, no backticks.\n\n" +
+  "Everything else asked for above still applies: the same goal, the same cadence, the same " +
+  "platforms, no invented figures.";
+
 app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
@@ -22268,6 +22343,35 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
+      /* The parse, in one place, because it now runs twice. Nothing about it
+         changed: same splitter, same five labels, same rules for a day. */
+      function parseCalendarEntries(text) {
+        var parsed = [];
+        splitToolBlocks(text).forEach(function (block) {
+          var f = parseLabeledFields(block, ["DAY", "PLATFORM", "FORMAT", "HOOK", "PURPOSE"]);
+          if (!f.HOOK && !f.FORMAT) return;
+
+          /* Days as numbers, the same decision the email sequence makes about
+             delays and for the same reason: a plan is a schedule, and "mid-week"
+             cannot be sorted, counted per week, or put in a calendar. An unreadable
+             day is null rather than 1, because 1 is a real day and guessing it would
+             put a post on the first day of the plan that nobody scheduled. */
+          var day = toolInt(f.DAY);
+          var platformKey = String(f.PLATFORM || "").toLowerCase().trim();
+
+          parsed.push({
+            day: day !== null && day >= 1 ? day : null,
+            week: day !== null && day >= 1 ? Math.ceil(day / 7) : null,
+            platform: f.PLATFORM || "",
+            platform_is_measurable: Object.prototype.hasOwnProperty.call(SOCIAL_PLATFORMS, platformKey),
+            format: f.FORMAT || "",
+            hook: f.HOOK || "",
+            purpose: f.PURPOSE || ""
+          });
+        });
+        return parsed;
+      }
+
       var generation = await callAnthropicText(prompt, 4000, null, undefined, {
         user_id: req.user.id,
         agent_type: "social",
@@ -22275,40 +22379,65 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
       });
       var raw = (generation && generation.text) ? generation.text : "";
 
-      var entries = [];
-      splitToolBlocks(raw).forEach(function (block) {
-        var f = parseLabeledFields(block, ["DAY", "PLATFORM", "FORMAT", "HOOK", "PURPOSE"]);
-        if (!f.HOOK && !f.FORMAT) return;
+      var entries = parseCalendarEntries(raw);
 
-        /* Days as numbers, the same decision the email sequence makes about
-           delays and for the same reason: a plan is a schedule, and "mid-week"
-           cannot be sorted, counted per week, or put in a calendar. An unreadable
-           day is null rather than 1, because 1 is a real day and guessing it would
-           put a post on the first day of the plan that nobody scheduled. */
-        var day = toolInt(f.DAY);
-        var platformKey = String(f.PLATFORM || "").toLowerCase().trim();
-
-        entries.push({
-          day: day !== null && day >= 1 ? day : null,
-          week: day !== null && day >= 1 ? Math.ceil(day / 7) : null,
-          platform: f.PLATFORM || "",
-          platform_is_measurable: Object.prototype.hasOwnProperty.call(SOCIAL_PLATFORMS, platformKey),
-          format: f.FORMAT || "",
-          hook: f.HOOK || "",
-          purpose: f.PURPOSE || ""
-        });
-      });
+      /* WHAT THE RETRY IS FOR, AND THE ONLY THING IT IS FOR: a first reply that
+         parsed to nothing. Every other way this route can fail — a rejected
+         input, a transport error out of callAnthropicText, an entitlement
+         refusal — has already returned or thrown before this line, and none of
+         them reaches a second call. */
+      var firstRaw = raw;
+      var retryRecord = null;
 
       if (!entries.length) {
-        // An error path: the row must not stay "processing" for a run that
-        // returned nothing usable.
-        await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."), { raw: raw });
-        return res.status(502).json({
-          error: "The posting plan could not be read back from the model, so nothing is being " +
-            "reported. This is a formatting failure, not an empty result.",
-          raw_output: raw,
-          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        console.warn("[social/calendar] First reply parsed to 0 entries for user " + userId +
+          " (" + firstRaw.length + " characters). Retrying once with the shape correction.");
+
+        /* EXACTLY ONE. Not a loop, not conditional on how the first one failed,
+           and not repeated if the second is also unreadable. */
+        var retryGeneration = await callAnthropicText(prompt + SOCIAL_CALENDAR_SHAPE_CORRECTION, 4000, null, undefined, {
+          user_id: req.user.id,
+          agent_type: "social",
+          /* The same route string the first call used, so the two rows sit
+             together in the ledger and nothing that groups spend by route has to
+             learn a second spelling. The retry bills the same key, because it is
+             the same request. */
+          route: "POST /api/agents/social/calendar"
         });
+        var retryRaw = (retryGeneration && retryGeneration.text) ? retryGeneration.text : "";
+
+        entries = parseCalendarEntries(retryRaw);
+        raw = retryRaw;
+
+        if (entries.length) {
+          /* Recorded, not celebrated. The user gets the normal answer; the row
+             carries the fact that it took two calls and what the first one said,
+             so "how often does this happen" is a query rather than a guess. */
+          console.warn("[social/calendar] Retry parsed " + entries.length + " entries for user " + userId + ".");
+          retryRecord = {
+            parse_retry: Object.assign({
+              retried: true,
+              attempts: 2,
+              reason: "The first reply parsed to zero entries, so the prompt was sent once more with a shape correction."
+            }, { first_attempt: toolAttemptRecord(firstRaw) })
+          };
+        } else {
+          console.error("[social/calendar] Retry ALSO parsed 0 entries for user " + userId +
+            " (" + retryRaw.length + " characters). Giving up; two model calls were billed.");
+
+          // An error path: the row must not stay "processing" for a run that
+          // returned nothing usable. Both attempts are kept, labelled.
+          await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."), {
+            raw: retryRaw,
+            attempts: [{ raw: firstRaw }, { raw: retryRaw }]
+          });
+          return res.status(502).json({
+            error: "The posting plan could not be read back from the model, so nothing is being " +
+              "reported. This is a formatting failure, not an empty result.",
+            raw_output: retryRaw,
+            provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+          });
+        }
       }
 
       var dated = entries.filter(function (e) { return e.day !== null; });
@@ -22388,7 +22517,9 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      /* The response the caller gets is unchanged in shape whether this took one
+         call or two; only the stored row differs. */
+      var persisted = await run.complete(responseBody, retryRecord);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,

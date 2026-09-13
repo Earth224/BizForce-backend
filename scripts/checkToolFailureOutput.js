@@ -286,10 +286,18 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
     badRow && badRow.output && badRow.output.raw_output_length);
   check("output.raw_output_truncated is false for a short reply",
     badRow && badRow.output && badRow.output.raw_output_truncated === false);
-  check("the prompt was NOT stored",
-    badRow && badRow.output && Object.keys(badRow.output).sort().join(",") ===
-      "parse_failure,raw_output,raw_output_length,raw_output_truncated",
+  /* The point is that the prompt is not stored — asserted directly, and by
+     allowing only the keys this record is permitted to carry. social/calendar is
+     the retry pilot, so its failed rows also carry attempts/attempt_count; a
+     frozen key list would fail on that without anything being wrong. */
+  var ALLOWED_FAILURE_KEYS = ["parse_failure", "raw_output", "raw_output_length",
+    "raw_output_truncated", "attempts", "attempt_count"];
+  check("no key beyond the failure record is stored",
+    badRow && badRow.output && Object.keys(badRow.output).every(function (k) { return ALLOWED_FAILURE_KEYS.indexOf(k) !== -1; }),
     badRow && badRow.output && Object.keys(badRow.output).join(","));
+  check("the prompt was NOT stored",
+    badRow && badRow.output && JSON.stringify(badRow.output).indexOf("BizForce AI Social Agent") === -1 &&
+    JSON.stringify(badRow.output).indexOf("TASK INSTRUCTIONS") === -1);
 
   /* ── 3. truncation ──────────────────────────────────────────────────────── */
   console.log("\n3) a reply longer than 4000 characters");
