@@ -27613,6 +27613,456 @@ function recordSavedPromptUse(row) {
   });
 }
 
+// ── Routines ─────────────────────────────────────────────────────────────────
+//
+// A named sequence of agent tool calls somebody assembled, run on demand. Each
+// step is { agent, tool, inputs }; steps run in array order, one at a time,
+// through dispatchToolCall — so ENABLE_AGENT_CHAINING, CHAIN_MAX_DEPTH,
+// CHAIN_MAX_FANOUT, CHAIN_MAX_CALLS, the entitlement re-check and the daily
+// model-call cap all apply exactly as they do to any other chain. Nothing here
+// re-implements any of that.
+//
+// A STEP DOES NOT READ THE PREVIOUS STEP'S OUTPUT. The inputs are the ones
+// stored on the routine, every time. That is a limitation and it is deliberate:
+// threading output into input is where a chain stops being a list somebody can
+// read and starts being a program, and none of the limits above were designed
+// for a program.
+//
+// Every route is behind requireAuth and every query filters on req.user.id in
+// the query itself, so an :id belonging to somebody else matches no row and
+// answers 404 — the same answer an id that does not exist gets.
+
+var ROUTINE_NAME_MAX = 100;
+
+/* HOW MANY STEPS A ROUTINE MAY HOLD, READ LIVE AND NEVER HARDCODED.
+
+   chainMaxCalls() and chainMaxFanout() both read their environment variable at
+   call time (clamped: calls 1-50, fan-out 1-10), so this follows a limit changed
+   on the server without an edit here.
+
+   IT IS THE LOWER OF THE TWO, AND FAN-OUT IS USUALLY THE LOWER ONE. Every step
+   of a routine dispatches from the same chain id at the same depth, and
+   dispatchToolCall counts fan-out per (chain id, caller depth) — so the steps of
+   a routine are siblings in one fan-out bucket, not a ladder. With the default
+   CHAIN_MAX_FANOUT of 3 and CHAIN_MAX_CALLS of 10, a six-step routine would save
+   happily and then refuse its fourth step every single time it ran.
+
+   Capping at the lower limit is the whole point of reading them live: a routine
+   that cannot finish should be impossible to save, not a surprise at run time.
+
+   DO NOT "FIX" THIS BACK TO chainMaxCalls() ALONE. It looks like the wrong
+   limit because the cap is about how many calls a routine makes, and
+   CHAIN_MAX_CALLS is the call limit — but the steps are siblings, not a ladder,
+   so fan-out is what actually stops them, and it is the smaller number by
+   default. A routine capped at CHAIN_MAX_CALLS would save nine steps and refuse
+   the fourth one at run time, every time, with nothing in the save path to
+   explain why. */
+function routineMaxSteps() {
+  return Math.min(chainMaxCalls(), chainMaxFanout());
+}
+
+/* One step, checked with the dispatcher's own machinery rather than a copy of
+   it: agentToolRoutes() is the live router walk, CHAIN_NON_DISPATCHABLE_TOOLS is
+   the live exclusion list, and chainBodyHas is the exact function
+   dispatchToolCall uses to decide whether a required field is present. A second
+   implementation of any of those would drift, and the drift would show up as a
+   routine that saves and then refuses itself.
+
+   Returns null when the step is fine, or a sentence naming what is wrong. The
+   caller adds the position. */
+function routineStepProblem(step) {
+  if (!step || typeof step !== "object" || Array.isArray(step)) {
+    return "is not an object with agent, tool and inputs.";
+  }
+
+  var agent = typeof step.agent === "string" ? step.agent.toLowerCase().trim() : "";
+  var tool = typeof step.tool === "string" ? step.tool.toLowerCase().trim() : "";
+
+  if (!agent) return "names no agent.";
+  if (!tool) return "names no tool.";
+
+  if (!step.inputs || typeof step.inputs !== "object" || Array.isArray(step.inputs)) {
+    return "has no inputs object (send {} if the tool needs nothing).";
+  }
+
+  var key = agent + "/" + tool;
+
+  if (CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {
+    return "names " + key + ", which acts on the world or on live state and may never be dispatched by a chain.";
+  }
+
+  var route = agentToolRoutes().filter(function (r) { return r.key === key; })[0];
+  if (!route) {
+    return "names " + key + ", which is not a mounted agent tool route.";
+  }
+  if (!Array.isArray(route.spec)) {
+    return "names " + key + ", which has no entry in TOOL_INPUT_SPECS, so its required inputs cannot be checked.";
+  }
+
+  var missing = route.spec.filter(function (f) { return f.required && !chainBodyHas(step.inputs, f); })
+    .map(function (f) { return f.name; });
+
+  if (missing.length) {
+    return "is missing " + missing.join(", ") + ", which " + key + " requires (per TOOL_INPUT_SPECS).";
+  }
+
+  return null;
+}
+
+/* The whole array. THE POSITION IS ONE-BASED IN EVERY MESSAGE — "step 2", never
+   "index 1" — because the person reading it is looking at a list they wrote, and
+   nothing in that list is numbered from zero. */
+function routineStepsProblem(steps) {
+  var maxSteps = routineMaxSteps();
+
+  if (!Array.isArray(steps)) {
+    return { error: "steps must be an array of { agent, tool, inputs } objects.", max_steps: maxSteps };
+  }
+
+  if (steps.length === 0) {
+    return { error: "A routine needs at least one step.", max_steps: maxSteps };
+  }
+
+  if (steps.length > maxSteps) {
+    return {
+      error: "A routine may hold at most " + maxSteps + " steps; this one has " + steps.length + ". " +
+        "The limit is the lower of CHAIN_MAX_CALLS (" + chainMaxCalls() + ") and CHAIN_MAX_FANOUT (" +
+        chainMaxFanout() + "), because every step of a routine dispatches from one chain at one depth.",
+      max_steps: maxSteps
+    };
+  }
+
+  for (var i = 0; i < steps.length; i++) {
+    var problem = routineStepProblem(steps[i]);
+    if (problem) {
+      return { error: "Step " + (i + 1) + " " + problem, step: i + 1, max_steps: maxSteps };
+    }
+  }
+
+  return null;
+}
+
+function routineNameProblem(name) {
+  if (typeof name !== "string" || name.trim().length === 0) {
+    return { error: "name must be a non-empty string." };
+  }
+  if (name.trim().length > ROUTINE_NAME_MAX) {
+    return { error: "name must be at most " + ROUTINE_NAME_MAX + " characters.", max_name_length: ROUTINE_NAME_MAX };
+  }
+  return null;
+}
+
+var ROUTINE_DUPLICATE_MESSAGE =
+  "You already have a routine with that name. Names are compared ignoring case " +
+  "and surrounding spaces, so pick a different one or rename the existing routine.";
+
+app.get("/api/routines", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("routines")
+      .select("id, name, steps, created_at, updated_at, last_run_at, run_count")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    /* Thrown, never softened into an empty list, for the reason
+       GET /api/self-reviews and GET /api/saved-prompts both give: `{ routines: [] }`
+       is the claim "you have built nothing", and a read that failed cannot make
+       it. Somebody shown an empty list might well build it all again. */
+    if (error) {
+      throw error;
+    }
+
+    return res.json({ routines: data, max_steps: routineMaxSteps() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/routines", requireAuth, async function (req, res, next) {
+  try {
+    var body = req.body || {};
+
+    var nameProblem = routineNameProblem(body.name);
+    if (nameProblem) {
+      return res.status(400).json(nameProblem);
+    }
+
+    var stepsProblem = routineStepsProblem(body.steps);
+    if (stepsProblem) {
+      return res.status(400).json(stepsProblem);
+    }
+
+    const { data, error } = await supabase
+      .from("routines")
+      .insert({
+        user_id: req.user.id,
+        name: body.name.trim(),
+        steps: body.steps
+      })
+      .select("id, name, steps, created_at, updated_at, last_run_at, run_count")
+      .single();
+
+    /* 23505 caught rather than pre-checked, the same way POST /api/saved-prompts
+       handles it: a SELECT before the INSERT answers a question about a moment
+       that has passed, so it adds a race without removing this branch. */
+    if (error && String(error.code) === "23505") {
+      return res.status(409).json({ error: ROUTINE_DUPLICATE_MESSAGE });
+    }
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(201).json({ routine: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/routines/:id", requireAuth, async function (req, res, next) {
+  try {
+    var body = req.body || {};
+    var updates = { updated_at: nowIso() };
+
+    if (body.name !== undefined) {
+      var nameProblem = routineNameProblem(body.name);
+      if (nameProblem) {
+        return res.status(400).json(nameProblem);
+      }
+      updates.name = body.name.trim();
+    }
+
+    /* The steps are re-validated in full on an update. A routine is only ever as
+       runnable as its current steps, and an update that skipped the check would
+       let a valid routine be edited into one that refuses itself. */
+    if (body.steps !== undefined) {
+      var stepsProblem = routineStepsProblem(body.steps);
+      if (stepsProblem) {
+        return res.status(400).json(stepsProblem);
+      }
+      updates.steps = body.steps;
+    }
+
+    if (Object.keys(updates).length === 1) {
+      return res.status(400).json({ error: "Send at least one of name or steps." });
+    }
+
+    const { data, error } = await supabase
+      .from("routines")
+      .update(updates)
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id, name, steps, created_at, updated_at, last_run_at, run_count")
+      .maybeSingle();
+
+    if (error && String(error.code) === "23505") {
+      return res.status(409).json({ error: ROUTINE_DUPLICATE_MESSAGE });
+    }
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "No routine with that id." });
+    }
+
+    return res.json({ routine: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/routines/:id", requireAuth, async function (req, res, next) {
+  try {
+    const { data, error } = await supabase
+      .from("routines")
+      .delete()
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "No routine with that id." });
+    }
+
+    return res.json({ deleted: true, id: data.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* THE SAME GATES THE SAVED-PROMPT RUN ROUTE USES. Running a routine is running
+   agent tools, one after another, and each one can cost a model call — so
+   requireActiveSubscription and aiLimiter apply here as they do there. The
+   dispatcher re-checks entitlement per step as well, which is not redundant:
+   this middleware is what stops an unentitled caller before anything runs, and
+   the dispatcher's own check is what stops a subscription that lapsed between
+   two steps. */
+app.post("/api/routines/:id/run", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      const { data: row, error } = await supabase
+        .from("routines")
+        .select("id, name, steps, run_count")
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!row) {
+        return res.status(404).json({ error: "No routine with that id." });
+      }
+
+      var steps = Array.isArray(row.steps) ? row.steps : [];
+
+      /* RE-VALIDATED AGAINST THE LIVE ROUTER BEFORE THE FIRST STEP RUNS, not
+         trusted because it validated at save time. A tool can be renamed,
+         removed, or moved onto the non-dispatchable list between saving a routine
+         and running it, and the specs can gain a required field. Finding that out
+         at step four means three steps have already run and been paid for; the
+         whole routine is refused instead, naming the step, so nothing half-runs
+         on a routine that was never going to finish. */
+      var problem = routineStepsProblem(steps);
+      if (problem) {
+        return res.status(400).json(Object.assign({
+          routine: { id: row.id, name: row.name },
+          ran: false
+        }, problem));
+      }
+
+      /* ONE CHAIN ID FOR THE WHOLE ROUTINE, so every step's model calls are
+         attributed to the same chain in the ledger and the total-call limit sees
+         one chain rather than N unrelated dispatches.
+
+         depth: 0 on every step. dispatchToolCall reads chain.depth as the CALLER's
+         depth and runs the tool at depth + 1, so every step runs at depth 1 —
+         siblings of each other, not a ladder. Passing i as the depth would say the
+         steps are nested inside each other, which is not what a routine is, and it
+         would hit CHAIN_MAX_DEPTH after two or three steps for no reason.
+
+         callsSoFar: i, the number of calls this chain has already made. Step 1
+         passes 0, step 2 passes 1, and so on, so CHAIN_MAX_CALLS counts the whole
+         routine as one chain exactly as intended. Passing 0 every time would make
+         the cap unenforceable from here; passing the step number would double-count
+         the first call. */
+      var chainId = crypto.randomUUID();
+
+      /* Counted when the run BEGINS, per the route's contract, and fired without
+         being awaited: a counter that cannot be written must not turn a routine
+         that ran into an error response about a usage statistic. */
+      recordRoutineRun(row);
+
+      var outcomes = [];
+      var failedStep = null;
+
+      for (var i = 0; i < steps.length; i++) {
+        var step = steps[i];
+        var position = i + 1;
+        var agent = String(step.agent || "").toLowerCase().trim();
+        var tool = String(step.tool || "").toLowerCase().trim();
+
+        /* STOPPED AT THE FIRST FAILURE, and the rest are reported as what they
+           are: never run. Continuing past a failure would spend money on steps
+           whose premise is gone, and reporting nothing for them would leave the
+           reader to guess whether they ran and returned nothing. */
+        if (failedStep !== null) {
+          outcomes.push({
+            step: position,
+            agent: agent,
+            tool: tool,
+            status: "not_run",
+            detail: "The routine stopped at step " + failedStep + "; this step was never dispatched."
+          });
+          continue;
+        }
+
+        var dispatched = await dispatchToolCall({
+          userId: req.user.id,
+          agentType: agent,
+          tool: tool,
+          body: (step.inputs && typeof step.inputs === "object" && !Array.isArray(step.inputs)) ? step.inputs : {},
+          chain: { id: chainId, depth: 0, callsSoFar: i }
+        });
+
+        if (dispatched && dispatched.ok === true) {
+          outcomes.push({
+            step: position,
+            agent: agent,
+            tool: tool,
+            status: "ok",
+            http_status: dispatched.status,
+            result: dispatched.body
+          });
+        } else {
+          failedStep = position;
+          outcomes.push({
+            step: position,
+            agent: agent,
+            tool: tool,
+            status: "failed",
+            http_status: (dispatched && dispatched.status) || null,
+            refused_reason: (dispatched && dispatched.refused_reason) || null,
+            detail: (dispatched && dispatched.detail) || null,
+            result: (dispatched && dispatched.body) || null
+          });
+        }
+      }
+
+      /* ok IS THE WHOLE ROUTINE'S ANSWER, not the last step's. A routine that
+         stopped at step 2 of 4 answers ok:false with status "failed_at_step" and
+         every step accounted for — the shape POST /api/assignments/dispatch
+         already uses, where a refusal is a 200 whose body says ok:false. A partial
+         run that answered ok:true would be read as a completed routine by anything
+         checking the obvious field. */
+      return res.json({
+        ok: failedStep === null,
+        status: failedStep === null ? "completed" : "failed_at_step",
+        failed_step: failedStep,
+        chain_id: chainId,
+        routine: { id: row.id, name: row.name },
+        steps_total: steps.length,
+        steps_run: outcomes.filter(function (o) { return o.status !== "not_run"; }).length,
+        steps: outcomes
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+/* Fired and forgotten for the reason recordSavedPromptUse is: by the time this
+   matters the routine is running, and a rejected UPDATE here would turn a run
+   that happened into an error about a counter. Incremented from the value read
+   at the start rather than by a database expression, so two overlapping runs can
+   lose a count — run_count is a hint about which routines are worth keeping, not
+   a ledger. */
+function recordRoutineRun(row) {
+  Promise.resolve(
+    supabase
+      .from("routines")
+      .update({
+        run_count: (typeof row.run_count === "number" ? row.run_count : 0) + 1,
+        last_run_at: nowIso()
+      })
+      .eq("id", row.id)
+  ).then(function (result) {
+    if (result && result.error) {
+      console.error("[routines] run_count not updated for %s: the routine ran and its outcomes were returned; only the counter failed.", row.id, result.error);
+    }
+  }, function (err) {
+    console.error("[routines] run_count not updated for %s: the routine ran and its outcomes were returned; only the counter failed.", row.id, err);
+  });
+}
+
 // ── Agent autonomy opt-ins ───────────────────────────────────────────────────
 //
 // A user reading and setting their own per-agent consent to autonomous work.
