@@ -19066,6 +19066,166 @@ function toolFailureOutput(details) {
   return out;
 }
 
+/* ══ ONE RETRY ON A ZERO PARSE — THE SHARED MECHANISM ════════════════════════
+
+   MEASURED ON social/calendar FIRST. The same prompt, byte for byte, succeeded
+   twice and failed twice; both failures came back short and parsed to zero
+   entries. The route's answer was to spend the money, throw the reply away and
+   return 502. One corrective retry turned half of those into results, so it is
+   now every parse-failure route's behaviour rather than one route's.
+
+   EXACTLY ONE, AND ONLY ON A ZERO PARSE. Not on a rejected input — those return
+   before any model call. Not on a transport error — callAnthropicText throws and
+   the route's catch has it. Not on an entitlement refusal. A loop that retried
+   until it worked would bill until it worked, and if two attempts cannot produce
+   the labels the parser needs, the fault is the prompt or the model and is worth
+   finding out about rather than paying to hide.
+
+   BOTH CALLS ARE LEDGERED, under the same route string and the same key: the
+   retry is part of the same request, and spend that is real must be visible.
+
+   THE PARSE IS THE CALLER'S. This runs the route's own parsing code, unchanged,
+   against each reply — passed in as a function so that a route reading H2/COVERS
+   and a route reading DAY/PLATFORM both keep their own rules. What comes back is
+   whatever that route counts; anything with a positive length ends the attempt. */
+async function toolGenerateWithOneRetry(options) {
+  var opts = options || {};
+  var firstRaw = null;
+
+  for (var attempt = 1; attempt <= 2; attempt++) {
+    var promptForAttempt = attempt === 1 ? opts.prompt : (opts.prompt + opts.correction);
+
+    var generation = await callAnthropicText(promptForAttempt, opts.maxTokens, null, undefined, opts.ledger);
+    var text = (generation && generation.text) ? generation.text : "";
+
+    /* The route's own parse, in the route's own scope. It assigns the route's
+       variables as it always did; the count is what this needs. */
+    var produced = opts.parse(text);
+
+    /* WHAT COUNTS AS PARSED IS THE ROUTE'S OWN TEST. Some of these routes count
+       entries, some hold a single string, one tests two fields at once — so the
+       callback returns the route's own guard, negated, and anything truthy here
+       ends the attempt. Arrays and strings are measured rather than coerced, so
+       an empty one is never mistaken for a result. */
+    var count = Array.isArray(produced) ? produced.length
+      : (typeof produced === "string" ? produced.trim().length
+      : (typeof produced === "number" ? produced : (produced ? 1 : 0)));
+
+    if (count > 0) {
+      return {
+        raw: text,
+        count: count,
+        retried: attempt === 2,
+        first_raw: firstRaw,
+        /* Passed to run.complete as its second argument. Null on a first-attempt
+           success, so a row that needed one call is distinguishable in the
+           database from one that needed two. */
+        completionExtra: attempt === 2 ? toolRetryRecord(firstRaw) : null,
+        failureDetails: null
+      };
+    }
+
+    if (attempt === 2) {
+      console.error("[" + opts.label + "] The retry ALSO parsed nothing (" + text.length +
+        " characters). Giving up; two model calls were billed.");
+      return {
+        raw: text,
+        count: 0,
+        retried: true,
+        first_raw: firstRaw,
+        completionExtra: null,
+        /* Both attempts, labelled, for run.fail. */
+        failureDetails: { raw: text, attempts: [{ raw: firstRaw }, { raw: text }] }
+      };
+    }
+
+    firstRaw = text;
+    console.warn("[" + opts.label + "] First reply parsed to nothing (" + text.length +
+      " characters). Retrying once with the shape correction.");
+  }
+}
+
+/* What a successful second attempt leaves in ai_tasks.output. */
+function toolRetryRecord(firstRaw) {
+  return {
+    parse_retry: {
+      retried: true,
+      attempts: 2,
+      reason: "The first reply parsed to nothing, so the prompt was sent once more with a shape correction.",
+      first_attempt: toolAttemptRecord(firstRaw)
+    }
+  };
+}
+
+/* ── THE CORRECTIONS ────────────────────────────────────────────────────────
+
+   EACH ROUTE'S CORRECTION NAMES THAT ROUTE'S OWN LABELS. A correction telling
+   the model to emit DAY and PLATFORM to a parser looking for H2 and COVERS would
+   be worse than no retry at all: it would spend a second call teaching the model
+   to produce something unreadable. So the labels are passed in by the route that
+   owns them, and the three builders below cover the three shapes these parsers
+   actually have — blocks, sections, and one item per line.
+
+   They read as corrections rather than repeats: what arrived, what was wrong
+   with it, and what the reader needs, without restating the original wording. */
+function toolCorrectionPreamble() {
+  return "\n\nSTOP. YOUR PREVIOUS ANSWER COULD NOT BE READ AND WAS DISCARDED.\n\n" +
+    "It was not a formatting preference that failed — the program reading your answer found " +
+    "nothing in it it could use, so the person who asked received nothing at all. Write it " +
+    "again, in exactly the shape below and in no other shape.\n\n";
+}
+
+function toolCorrectionProhibitions(extra) {
+  return "\nWHAT MUST NOT BE THERE:\n" +
+    "- No sentence of introduction before the first line of the answer.\n" +
+    "- No summary, no sign-off, no offer to adjust it, no explanation of what you did.\n" +
+    "- No table, no pipes, no markdown headings, no bullet characters, no numbered list.\n" +
+    "- No JSON, no code fence, no backticks.\n" +
+    (extra ? extra + "\n" : "") +
+    "\nEverything the original instructions asked for still applies — the same subject, the " +
+    "same constraints, and no invented figures.";
+}
+
+/* Blocks separated by a line of three hyphens, each carrying labelled lines. */
+function toolBlockShapeCorrection(config) {
+  var labels = config.labels || [];
+  return toolCorrectionPreamble() +
+    "THE SHAPE:\n" +
+    "- One block per " + config.unit + ".\n" +
+    "- Between one block and the next, a line containing only three hyphens: ---\n" +
+    "- Inside every block, one line per label, each line starting with the label in capitals " +
+    "followed immediately by a colon:\n" +
+    labels.map(function (l) { return "    " + l + ":\n"; }).join("") +
+    (config.required
+      ? "- A block without " + config.required + " is thrown away.\n"
+      : "- Every label appears in every block.\n") +
+    toolCorrectionProhibitions(config.extra);
+}
+
+/* One document, divided into labelled sections, no separators. */
+function toolSectionShapeCorrection(config) {
+  var labels = config.labels || [];
+  return toolCorrectionPreamble() +
+    "THE SHAPE:\n" +
+    "- One " + config.unit + ", written as these sections in this order, each starting with the " +
+    "label in capitals followed immediately by a colon on its own line:\n" +
+    labels.map(function (l) { return "    " + l + ":\n"; }).join("") +
+    "- Every one of those labels must appear, spelled exactly as above, including the " +
+    "underscores. The text of each section follows its label.\n" +
+    toolCorrectionProhibitions(config.extra);
+}
+
+/* One item per line, in a fixed per-line shape. */
+function toolLineShapeCorrection(config) {
+  return toolCorrectionPreamble() +
+    "THE SHAPE:\n" +
+    "- One " + config.unit + " per line, and nothing else on that line.\n" +
+    "- Every line looks exactly like this:\n" +
+    "    " + config.lineFormat + "\n" +
+    (config.example ? "- For example:\n    " + config.example + "\n" : "") +
+    toolCorrectionProhibitions(config.extra);
+}
+
 async function startToolRun(req, options) {
   var userId = req.user.id;
   var agentType = options.agentType;
@@ -19314,34 +19474,53 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
            words and are quoted into the prompt above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+      var parsed, keywords, tagReady;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "etsy/keyword-research",
+        prompt: prompt,
+        maxTokens: 2000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "etsy",
         route: "POST /api/agents/etsy/keyword-research"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseEtsyKeywordLines(raw);
-
-      /* Measured here, not requested from the model. */
-      var keywords = parsed.map(function (row) {
-        return Object.assign(etsyMeasureKeyword(row.keyword), {
-          intent: row.intent,
-          rationale: row.rationale
+      },
+        correction: toolLineShapeCorrection({
+          unit: "keyword",
+          lineFormat: "keyword | intent | why it is worth targeting",
+          example: "personalised dog collar | buyer | names the product and the gift angle",
+          extra: "- The two vertical bars are required. No header row, no numbering."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseEtsyKeywordLines(raw);
+  
+        /* Measured here, not requested from the model. */
+        keywords = parsed.map(function (row) {
+          return Object.assign(etsyMeasureKeyword(row.keyword), {
+            intent: row.intent,
+            rationale: row.rationale
+          });
         });
+  
+        tagReady = keywords.filter(function (k) { return k.fits_tag; });
+  
+        /* A parse that produced nothing is reported as a parse failure, with the
+           raw text handed back, rather than as an empty keyword list. An empty
+           list would read as "there are no good keywords for this term", which is
+           a statement about Etsy; what actually happened is a statement about this
+           response. */
+          return !(!keywords.length);
+        }
       });
-
-      var tagReady = keywords.filter(function (k) { return k.fits_tag; });
-
-      /* A parse that produced nothing is reported as a parse failure, with the
-         raw text handed back, rather than as an empty keyword list. An empty
-         list would read as "there are no good keywords for this term", which is
-         a statement about Etsy; what actually happened is a statement about this
-         response. */
+      var raw = attempt.raw;
       if (!keywords.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("etsy/keyword-research: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("etsy/keyword-research: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The keyword list could not be read back from the model, so nothing is being reported. " +
             "No keywords were found is NOT the same as none exist — this is a formatting failure, not a result.",
@@ -19391,7 +19570,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -19869,46 +20048,64 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
            quoted above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+      var blocks, cumulative, steps;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "email/sequence",
+        prompt: prompt,
+        maxTokens: 4000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "email",
         route: "POST /api/agents/email/sequence"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var blocks = splitToolBlocks(raw);
-      var cumulative = 0;
-      var steps = [];
-
-      blocks.forEach(function (block) {
-        var f = parseLabeledFields(block, ["DELAY_DAYS", "PURPOSE", "SUBJECT", "BODY"]);
-        if (!f.SUBJECT && !f.BODY) return;   // not a step block
-
-        /* A delay that could not be read becomes null, NOT 0. Zero means "send
-           immediately", which is a real instruction, and defaulting an unparsed
-           field to it would schedule a send the model never asked for. The
-           cumulative day stops advancing at the first unreadable delay rather
-           than silently treating it as same-day. */
-        var delay = toolInt(f.DELAY_DAYS);
-        if (delay !== null && delay >= 0) cumulative += delay;
-
-        var subjectMeasurement = measureSubjectLine(f.SUBJECT || "");
-
-        steps.push({
-          step: steps.length + 1,
-          delay_days: delay !== null && delay >= 0 ? delay : null,
-          cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
-          purpose: f.PURPOSE || "",
-          subject: subjectMeasurement.subject,
-          body: f.BODY || "",
-          subject_measurement: subjectMeasurement
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "email in the sequence",
+          labels: ["DELAY_DAYS", "PURPOSE", "SUBJECT", "BODY"],
+          extra: "- DELAY_DAYS is a whole number of days since the previous email."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        blocks = splitToolBlocks(raw);
+        cumulative = 0;
+        steps = [];
+  
+        blocks.forEach(function (block) {
+          var f = parseLabeledFields(block, ["DELAY_DAYS", "PURPOSE", "SUBJECT", "BODY"]);
+          if (!f.SUBJECT && !f.BODY) return;   // not a step block
+  
+          /* A delay that could not be read becomes null, NOT 0. Zero means "send
+             immediately", which is a real instruction, and defaulting an unparsed
+             field to it would schedule a send the model never asked for. The
+             cumulative day stops advancing at the first unreadable delay rather
+             than silently treating it as same-day. */
+          var delay = toolInt(f.DELAY_DAYS);
+          if (delay !== null && delay >= 0) cumulative += delay;
+  
+          var subjectMeasurement = measureSubjectLine(f.SUBJECT || "");
+  
+          steps.push({
+            step: steps.length + 1,
+            delay_days: delay !== null && delay >= 0 ? delay : null,
+            cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
+            purpose: f.PURPOSE || "",
+            subject: subjectMeasurement.subject,
+            body: f.BODY || "",
+            subject_measurement: subjectMeasurement
+          });
         });
+  
+          return !(!steps.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("email/sequence: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("email/sequence: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The sequence could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -19967,7 +20164,7 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -20038,27 +20235,46 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+      var variants;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "email/subject-lines",
+        prompt: prompt,
+        maxTokens: 1500,
+        ledger: {
         user_id: req.user.id,
         agent_type: "email",
         route: "POST /api/agents/email/subject-lines"
+      },
+        correction: toolLineShapeCorrection({
+          unit: "subject line",
+          lineFormat: "the subject line | the angle it takes",
+          example: "Your seat is still open | urgency, without a deadline claim",
+          extra: "- The vertical bar is required. The subject is at most 200 characters. No header row."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        variants = [];
+        parseToolLines(raw).forEach(function (line) {
+          if (line.indexOf("|") === -1) return;
+          var parts = line.split("|").map(function (p) { return p.trim(); });
+          var subject = parts[0];
+          if (!subject || subject.length > 200) return;
+          if (/^subject(\s+line)?$/i.test(subject)) return;   // a header row
+          variants.push(Object.assign(measureSubjectLine(subject), { angle: parts[1] || "" }));
+        });
+  
+          return !(!variants.length);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var variants = [];
-      parseToolLines(raw).forEach(function (line) {
-        if (line.indexOf("|") === -1) return;
-        var parts = line.split("|").map(function (p) { return p.trim(); });
-        var subject = parts[0];
-        if (!subject || subject.length > 200) return;
-        if (/^subject(\s+line)?$/i.test(subject)) return;   // a header row
-        variants.push(Object.assign(measureSubjectLine(subject), { angle: parts[1] || "" }));
-      });
-
+      var raw = attempt.raw;
       if (!variants.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("email/subject-lines: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("email/subject-lines: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The subject lines could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20115,7 +20331,7 @@ app.post("/api/agents/email/subject-lines", requireAuth, requireActiveSubscripti
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -20212,26 +20428,43 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var parsed, present, missing;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "publicist/press-release",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "publicist",
         route: "POST /api/agents/publicist/press-release"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "press release",
+          labels: PRESS_RELEASE_SECTIONS
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, PRESS_RELEASE_SECTIONS);
+  
+        present = PRESS_RELEASE_SECTIONS.filter(function (s) { return !!parsed[s]; });
+        missing = PRESS_RELEASE_SECTIONS.filter(function (s) { return !parsed[s]; });
+  
+        /* Nothing parsed at all is a formatting failure, reported as one. A
+           partial parse is NOT: the sections that came back are real and usable,
+           and the response names the missing ones rather than quietly presenting an
+           incomplete release as a finished one. */
+          return !(!present.length);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, PRESS_RELEASE_SECTIONS);
-
-      var present = PRESS_RELEASE_SECTIONS.filter(function (s) { return !!parsed[s]; });
-      var missing = PRESS_RELEASE_SECTIONS.filter(function (s) { return !parsed[s]; });
-
-      /* Nothing parsed at all is a formatting failure, reported as one. A
-         partial parse is NOT: the sections that came back are real and usable,
-         and the response names the missing ones rather than quietly presenting an
-         incomplete release as a finished one. */
+      var raw = attempt.raw;
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("publicist/press-release: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("publicist/press-release: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The press release could not be read back from the model in wire format, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -20306,7 +20539,7 @@ app.post("/api/agents/publicist/press-release", requireAuth, requireActiveSubscr
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -20386,22 +20619,39 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+      var parsed, subjectMeasurement, body, bodyWords;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "publicist/pitch",
+        prompt: prompt,
+        maxTokens: 1500,
+        ledger: {
         user_id: req.user.id,
         agent_type: "publicist",
         route: "POST /api/agents/publicist/pitch"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "pitch",
+          labels: ["SUBJECT", "BODY", "WHY_THIS_OUTLET"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, ["SUBJECT", "BODY", "WHY_THIS_OUTLET"]);
+        subjectMeasurement = measureSubjectLine(parsed.SUBJECT || "");
+        body = parsed.BODY || "";
+        bodyWords = countWords(body);
+  
+          return !(!body);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, ["SUBJECT", "BODY", "WHY_THIS_OUTLET"]);
-      var subjectMeasurement = measureSubjectLine(parsed.SUBJECT || "");
-      var body = parsed.BODY || "";
-      var bodyWords = countWords(body);
-
+      var raw = attempt.raw;
       if (!body) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("publicist/pitch: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("publicist/pitch: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The pitch body could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20453,7 +20703,7 @@ app.post("/api/agents/publicist/pitch", requireAuth, requireActiveSubscription, 
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -20538,56 +20788,75 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+      var blocks, headerBlock, header, steps;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "operations/sop",
+        prompt: prompt,
+        maxTokens: 4000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "operations",
         route: "POST /api/agents/operations/sop"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var blocks = splitToolBlocks(raw);
-
-      /* The header is blocks[0] ONLY if it is not itself a step. OWNER is a label
-         in both the header and a step, so a model that omits the header block
-         entirely would otherwise have its first step's OWNER read as the owner of
-         the whole procedure — one role quietly promoted to accountable for the
-         document because of where it happened to appear. Testing for ACTION is
-         what tells the two apart. */
-      var headerBlock = (blocks.length && !/^[ \t>*#-]*ACTION[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
-      var header = parseLabeledFields(headerBlock,
-        ["PURPOSE", "SCOPE", "OWNER", "FREQUENCY", "SUCCESS_CRITERIA"]);
-
-      var steps = [];
-      blocks.forEach(function (block, index) {
-        // The first block is the header unless it parses as a step.
-        /* A block with no ACTION is the header, or noise. Note that a model which
-           omits the --- after the header leaves the header and the first step in
-           one block; that parses correctly as both, which is why the header is
-           read from blocks[0] separately rather than by skipping it here. */
-        var f = parseLabeledFields(block, SOP_STEP_FIELDS);
-        if (!f.ACTION) return;
-
-        var action = f.ACTION;
-        steps.push({
-          step: steps.length + 1,
-          action: action,
-          owner: f.OWNER || "",
-          risk: f.RISK || "",
-          verification: f.VERIFY || "",
-          has_risk: !!f.RISK,
-          has_verification: !!f.VERIFY,
-          word_count: countWords(action),
-          /* A crude but honest check on "one action per step". It flags rather
-             than rewrites, because "receive and inspect" may well be one action
-             in context and the server is not the judge of that. */
-          possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(action)
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "step of the procedure",
+          labels: [].concat(["PURPOSE", "SCOPE", "OWNER", "FREQUENCY", "SUCCESS_CRITERIA"], SOP_STEP_FIELDS),
+          extra: "- The FIRST block is the header, carrying the purpose, scope, owner, frequency and " +
+            "success criteria; every block after it is a step."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        blocks = splitToolBlocks(raw);
+  
+        /* The header is blocks[0] ONLY if it is not itself a step. OWNER is a label
+           in both the header and a step, so a model that omits the header block
+           entirely would otherwise have its first step's OWNER read as the owner of
+           the whole procedure — one role quietly promoted to accountable for the
+           document because of where it happened to appear. Testing for ACTION is
+           what tells the two apart. */
+        headerBlock = (blocks.length && !/^[ \t>*#-]*ACTION[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
+        header = parseLabeledFields(headerBlock,
+          ["PURPOSE", "SCOPE", "OWNER", "FREQUENCY", "SUCCESS_CRITERIA"]);
+  
+        steps = [];
+        blocks.forEach(function (block, index) {
+          // The first block is the header unless it parses as a step.
+          /* A block with no ACTION is the header, or noise. Note that a model which
+             omits the --- after the header leaves the header and the first step in
+             one block; that parses correctly as both, which is why the header is
+             read from blocks[0] separately rather than by skipping it here. */
+          var f = parseLabeledFields(block, SOP_STEP_FIELDS);
+          if (!f.ACTION) return;
+  
+          var action = f.ACTION;
+          steps.push({
+            step: steps.length + 1,
+            action: action,
+            owner: f.OWNER || "",
+            risk: f.RISK || "",
+            verification: f.VERIFY || "",
+            has_risk: !!f.RISK,
+            has_verification: !!f.VERIFY,
+            word_count: countWords(action),
+            /* A crude but honest check on "one action per step". It flags rather
+               than rewrites, because "receive and inspect" may well be one action
+               in context and the server is not the judge of that. */
+            possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(action)
+          });
         });
+  
+          return !(!steps.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("operations/sop: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("operations/sop: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The procedure's steps could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -20651,7 +20920,7 @@ app.post("/api/agents/operations/sop", requireAuth, requireActiveSubscription, a
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -20724,38 +20993,58 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+      var lines, notes, items;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "operations/checklist",
+        prompt: prompt,
+        maxTokens: 2000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "operations",
         route: "POST /api/agents/operations/checklist"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var lines = parseToolLines(raw);
-      var notes = [];
-      var items = [];
-
-      lines.forEach(function (line) {
-        if (/^note\s*:/i.test(line)) {
-          notes.push(line.replace(/^note\s*:\s*/i, "").trim());
-          return;
-        }
-        // A trailing colon with nothing after it is a heading the model was asked
-        // not to produce; it is not an action and must not become an item.
-        if (/:$/.test(line) && countWords(line) <= 6) return;
-
-        items.push({
-          item: items.length + 1,
-          action: line,
-          word_count: countWords(line),
-          possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(line)
+      },
+        correction: toolLineShapeCorrection({
+          unit: "checklist item",
+          lineFormat: "the action itself, written as something a person does",
+          example: "Check the till float against yesterday's closing figure",
+          extra: "- A line may instead begin NOTE: to add a note rather than an action.\n" +
+            "- No section headings: a short line ending in a colon is discarded."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        lines = parseToolLines(raw);
+        notes = [];
+        items = [];
+  
+        lines.forEach(function (line) {
+          if (/^note\s*:/i.test(line)) {
+            notes.push(line.replace(/^note\s*:\s*/i, "").trim());
+            return;
+          }
+          // A trailing colon with nothing after it is a heading the model was asked
+          // not to produce; it is not an action and must not become an item.
+          if (/:$/.test(line) && countWords(line) <= 6) return;
+  
+          items.push({
+            item: items.length + 1,
+            action: line,
+            word_count: countWords(line),
+            possibly_multiple_actions: /\band then\b|\bafter that\b|;/i.test(line)
+          });
         });
+  
+          return !(!items.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!items.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("operations/checklist: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("operations/checklist: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The checklist could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -20814,7 +21103,7 @@ app.post("/api/agents/operations/checklist", requireAuth, requireActiveSubscript
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -21273,35 +21562,55 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+      var assets, unknownTypes;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "ads/copy",
+        prompt: prompt,
+        maxTokens: 2000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "ads",
         route: "POST /api/agents/ads/copy"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var assets = [];
-      var unknownTypes = [];
-
-      parseToolLines(raw).forEach(function (line) {
-        if (line.indexOf("|") === -1) return;
-        var parts = line.split("|");
-        var type = String(parts[0] || "").toUpperCase().replace(/[^A-Z_]/g, "");
-        var copy = parts.slice(1).join("|").trim();
-        if (!copy) return;
-        if (/^ASSET_?TYPE$/.test(type)) return;            // header row
-
-        if (!Object.prototype.hasOwnProperty.call(platform.assets, type)) {
-          unknownTypes.push({ type: type, text: copy });
-          return;
+      },
+        correction: toolLineShapeCorrection({
+          unit: "asset",
+          lineFormat: "ASSET_TYPE | the copy for that asset",
+          example: "HEADLINE | Fresh bread, baked before you wake",
+          extra: "- The vertical bar is required, and the part before it must be one of the asset " +
+            "types named above, spelled the same way."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        assets = [];
+        unknownTypes = [];
+  
+        parseToolLines(raw).forEach(function (line) {
+          if (line.indexOf("|") === -1) return;
+          var parts = line.split("|");
+          var type = String(parts[0] || "").toUpperCase().replace(/[^A-Z_]/g, "");
+          var copy = parts.slice(1).join("|").trim();
+          if (!copy) return;
+          if (/^ASSET_?TYPE$/.test(type)) return;            // header row
+  
+          if (!Object.prototype.hasOwnProperty.call(platform.assets, type)) {
+            unknownTypes.push({ type: type, text: copy });
+            return;
+          }
+          assets.push(measureAdAsset(type, copy, platform.assets[type]));
+        });
+  
+          return !(!assets.length);
         }
-        assets.push(measureAdAsset(type, copy, platform.assets[type]));
       });
-
+      var raw = attempt.raw;
       if (!assets.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("ads/copy: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("ads/copy: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The ad copy could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -21389,7 +21698,7 @@ app.post("/api/agents/ads/copy", requireAuth, requireActiveSubscription, aiLimit
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -21653,20 +21962,37 @@ app.post("/api/agents/reputation/review-response", requireAuth, requireActiveSub
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1200, null, undefined, {
+      var parsed, reply;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "reputation/review-response",
+        prompt: prompt,
+        maxTokens: 1200,
+        ledger: {
         user_id: req.user.id,
         agent_type: "reputation",
         route: "POST /api/agents/reputation/review-response"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "reply",
+          labels: ["REPLY", "WHY_THIS_APPROACH"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, ["REPLY", "WHY_THIS_APPROACH"]);
+        reply = parsed.REPLY || "";
+  
+          return !(!reply);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, ["REPLY", "WHY_THIS_APPROACH"]);
-      var reply = parsed.REPLY || "";
-
+      var raw = attempt.raw;
       if (!reply) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("reputation/review-response: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("reputation/review-response: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The reply could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -21735,7 +22061,7 @@ app.post("/api/agents/reputation/review-response", requireAuth, requireActiveSub
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -21852,44 +22178,62 @@ app.post("/api/agents/reputation/review-request", requireAuth, requireActiveSubs
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+      var cumulative, messages;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "reputation/review-request",
+        prompt: prompt,
+        maxTokens: 2000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "reputation",
         route: "POST /api/agents/reputation/review-request"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var cumulative = 0;
-      var messages = [];
-
-      splitToolBlocks(raw).forEach(function (block) {
-        var f = parseLabeledFields(block, ["DELAY_DAYS", "CHANNEL", "PURPOSE", "MESSAGE"]);
-        if (!f.MESSAGE) return;
-
-        // Same rule as the email sequence: an unreadable delay is null, never 0,
-        // because 0 means "at the moment itself" and is a real instruction.
-        var delay = toolInt(f.DELAY_DAYS);
-        if (delay !== null && delay >= 0) cumulative += delay;
-
-        var incentives = scanReviewIncentives([f.MESSAGE, f.PURPOSE].join("\n"));
-
-        messages.push({
-          message_number: messages.length + 1,
-          delay_days: delay !== null && delay >= 0 ? delay : null,
-          cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
-          channel: f.CHANNEL || "",
-          purpose: f.PURPOSE || "",
-          message: f.MESSAGE,
-          word_count: countWords(f.MESSAGE),
-          incentive_phrases_found: incentives,
-          offers_an_incentive: incentives.length > 0
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "message in the sequence",
+          labels: ["DELAY_DAYS", "CHANNEL", "PURPOSE", "MESSAGE"],
+          extra: "- DELAY_DAYS is a whole number of days since the purchase."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        cumulative = 0;
+        messages = [];
+  
+        splitToolBlocks(raw).forEach(function (block) {
+          var f = parseLabeledFields(block, ["DELAY_DAYS", "CHANNEL", "PURPOSE", "MESSAGE"]);
+          if (!f.MESSAGE) return;
+  
+          // Same rule as the email sequence: an unreadable delay is null, never 0,
+          // because 0 means "at the moment itself" and is a real instruction.
+          var delay = toolInt(f.DELAY_DAYS);
+          if (delay !== null && delay >= 0) cumulative += delay;
+  
+          var incentives = scanReviewIncentives([f.MESSAGE, f.PURPOSE].join("\n"));
+  
+          messages.push({
+            message_number: messages.length + 1,
+            delay_days: delay !== null && delay >= 0 ? delay : null,
+            cumulative_day: delay !== null && delay >= 0 ? cumulative : null,
+            channel: f.CHANNEL || "",
+            purpose: f.PURPOSE || "",
+            message: f.MESSAGE,
+            word_count: countWords(f.MESSAGE),
+            incentive_phrases_found: incentives,
+            offers_an_incentive: incentives.length > 0
+          });
         });
+  
+          return !(!messages.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!messages.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("reputation/review-request: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("reputation/review-request: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The request sequence could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -21955,7 +22299,7 @@ app.post("/api/agents/reputation/review-request", requireAuth, requireActiveSubs
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -22127,20 +22471,37 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1500, null, undefined, {
+      var parsed, post;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "social/post",
+        prompt: prompt,
+        maxTokens: 1500,
+        ledger: {
         user_id: req.user.id,
         agent_type: "social",
         route: "POST /api/agents/social/post"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "post",
+          labels: ["POST", "HOOK_NOTE"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, ["POST", "HOOK_NOTE"]);
+        post = parsed.POST || "";
+  
+          return !(!post);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, ["POST", "HOOK_NOTE"]);
-      var post = parsed.POST || "";
-
+      var raw = attempt.raw;
       if (!post) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("social/post: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("social/post: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The post could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -22208,7 +22569,7 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -22222,51 +22583,6 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
       next(error);
     }
   });
-
-/* ── THE ONE RETRY, AND WHY THIS ROUTE HAS ONE ──────────────────────────────
-
-   MEASURED, NOT SUSPECTED. The same prompt — byte for byte, 2,158 input tokens
-   whether it comes from the agent page or from a routine — succeeded twice and
-   failed twice. Both failures came back SHORT, 613 and 410 output tokens
-   against a 4,000 limit, and parsed to zero entries. The model answers this
-   prompt in an unusable shape a large fraction of the time, and the route's
-   response was to spend the money, discard the answer and return 502.
-
-   A second call is cheap next to that. ONE, never more: a loop that retries
-   until it works is a loop that bills until it works, and if two calls cannot
-   produce five labelled fields the third will not either — the fault is the
-   prompt or the model, and both are worth finding out about rather than
-   papering over at the user's expense.
-
-   THE RETRY IS A CORRECTION, NOT A REPEAT. Sending the same instruction again
-   asks the model to do the thing it just did. This says what arrived, what was
-   wrong with it, and what the reader's parser actually needs — in the plainest
-   terms the format can be stated, with no reference to the original wording. */
-var SOCIAL_CALENDAR_SHAPE_CORRECTION =
-  "\n\nSTOP. YOUR PREVIOUS ANSWER COULD NOT BE READ AND WAS DISCARDED.\n\n" +
-  "It was not a formatting preference that failed — the program reading your answer found no " +
-  "entries in it at all, so the user received nothing. Write it again, in exactly the shape " +
-  "below and in no other shape.\n\n" +
-  "THE SHAPE:\n" +
-  "- One block per calendar entry.\n" +
-  "- Between one block and the next, a line containing only three hyphens: ---\n" +
-  "- Inside every block, these five lines, each starting with the label in capitals " +
-  "followed immediately by a colon:\n" +
-  "    DAY:\n" +
-  "    PLATFORM:\n" +
-  "    FORMAT:\n" +
-  "    HOOK:\n" +
-  "    PURPOSE:\n" +
-  "- Every one of the five labels appears in every block. A block missing HOOK and FORMAT is " +
-  "thrown away.\n\n" +
-  "WHAT MUST NOT BE THERE:\n" +
-  "- No sentence before the first block. The answer starts with DAY:\n" +
-  "- No sentence after the last block. The answer ends with the last PURPOSE line.\n" +
-  "- No summary, no offer to adjust it, no explanation of what you did.\n" +
-  "- No table, no pipes, no markdown headings, no bullet characters, no numbered list.\n" +
-  "- No JSON, no code fence, no backticks.\n\n" +
-  "Everything else asked for above still applies: the same goal, the same cadence, the same " +
-  "platforms, no invented figures.";
 
 app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
@@ -22343,14 +22659,32 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      /* The parse, in one place, because it now runs twice. Nothing about it
-         changed: same splitter, same five labels, same rules for a day. */
-      function parseCalendarEntries(text) {
-        var parsed = [];
-        splitToolBlocks(text).forEach(function (block) {
+      var entries;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "social/calendar",
+        prompt: prompt,
+        maxTokens: 4000,
+        ledger: {
+        user_id: req.user.id,
+        agent_type: "social",
+        route: "POST /api/agents/social/calendar"
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "calendar entry",
+          labels: ["DAY", "PLATFORM", "FORMAT", "HOOK", "PURPOSE"],
+          extra: "- DAY is a plain whole number counting from 1, not a date and not a weekday name."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        entries = [];
+        splitToolBlocks(raw).forEach(function (block) {
           var f = parseLabeledFields(block, ["DAY", "PLATFORM", "FORMAT", "HOOK", "PURPOSE"]);
           if (!f.HOOK && !f.FORMAT) return;
-
+  
           /* Days as numbers, the same decision the email sequence makes about
              delays and for the same reason: a plan is a schedule, and "mid-week"
              cannot be sorted, counted per week, or put in a calendar. An unreadable
@@ -22358,8 +22692,8 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
              put a post on the first day of the plan that nobody scheduled. */
           var day = toolInt(f.DAY);
           var platformKey = String(f.PLATFORM || "").toLowerCase().trim();
-
-          parsed.push({
+  
+          entries.push({
             day: day !== null && day >= 1 ? day : null,
             week: day !== null && day >= 1 ? Math.ceil(day / 7) : null,
             platform: f.PLATFORM || "",
@@ -22369,75 +22703,21 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
             purpose: f.PURPOSE || ""
           });
         });
-        return parsed;
-      }
-
-      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
-        user_id: req.user.id,
-        agent_type: "social",
-        route: "POST /api/agents/social/calendar"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var entries = parseCalendarEntries(raw);
-
-      /* WHAT THE RETRY IS FOR, AND THE ONLY THING IT IS FOR: a first reply that
-         parsed to nothing. Every other way this route can fail — a rejected
-         input, a transport error out of callAnthropicText, an entitlement
-         refusal — has already returned or thrown before this line, and none of
-         them reaches a second call. */
-      var firstRaw = raw;
-      var retryRecord = null;
-
-      if (!entries.length) {
-        console.warn("[social/calendar] First reply parsed to 0 entries for user " + userId +
-          " (" + firstRaw.length + " characters). Retrying once with the shape correction.");
-
-        /* EXACTLY ONE. Not a loop, not conditional on how the first one failed,
-           and not repeated if the second is also unreadable. */
-        var retryGeneration = await callAnthropicText(prompt + SOCIAL_CALENDAR_SHAPE_CORRECTION, 4000, null, undefined, {
-          user_id: req.user.id,
-          agent_type: "social",
-          /* The same route string the first call used, so the two rows sit
-             together in the ledger and nothing that groups spend by route has to
-             learn a second spelling. The retry bills the same key, because it is
-             the same request. */
-          route: "POST /api/agents/social/calendar"
-        });
-        var retryRaw = (retryGeneration && retryGeneration.text) ? retryGeneration.text : "";
-
-        entries = parseCalendarEntries(retryRaw);
-        raw = retryRaw;
-
-        if (entries.length) {
-          /* Recorded, not celebrated. The user gets the normal answer; the row
-             carries the fact that it took two calls and what the first one said,
-             so "how often does this happen" is a query rather than a guess. */
-          console.warn("[social/calendar] Retry parsed " + entries.length + " entries for user " + userId + ".");
-          retryRecord = {
-            parse_retry: Object.assign({
-              retried: true,
-              attempts: 2,
-              reason: "The first reply parsed to zero entries, so the prompt was sent once more with a shape correction."
-            }, { first_attempt: toolAttemptRecord(firstRaw) })
-          };
-        } else {
-          console.error("[social/calendar] Retry ALSO parsed 0 entries for user " + userId +
-            " (" + retryRaw.length + " characters). Giving up; two model calls were billed.");
-
-          // An error path: the row must not stay "processing" for a run that
-          // returned nothing usable. Both attempts are kept, labelled.
-          await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."), {
-            raw: retryRaw,
-            attempts: [{ raw: firstRaw }, { raw: retryRaw }]
-          });
-          return res.status(502).json({
-            error: "The posting plan could not be read back from the model, so nothing is being " +
-              "reported. This is a formatting failure, not an empty result.",
-            raw_output: retryRaw,
-            provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
-          });
+  
+          return !(!entries.length);
         }
+      });
+      var raw = attempt.raw;
+      if (!entries.length) {
+        // An error path: the row must not stay "processing" for a run that
+        // returned nothing usable.
+        await run.fail(new Error("social/calendar: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
+        return res.status(502).json({
+          error: "The posting plan could not be read back from the model, so nothing is being " +
+            "reported. This is a formatting failure, not an empty result.",
+          raw_output: raw,
+          provenance: toolProvenance([], [], "Nothing was measured, because nothing parsed.")
+        });
       }
 
       var dated = entries.filter(function (e) { return e.day !== null; });
@@ -22517,9 +22797,7 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      /* The response the caller gets is unchanged in shape whether this took one
-         call or two; only the stored row differs. */
-      var persisted = await run.complete(responseBody, retryRecord);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -22639,21 +22917,38 @@ app.post("/api/agents/broker/term-sheet", requireAuth, requireActiveSubscription
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var parsed, present, missing;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "broker/term-sheet",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "broker",
         route: "POST /api/agents/broker/term-sheet"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "term sheet",
+          labels: TERM_SHEET_SECTIONS
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, TERM_SHEET_SECTIONS);
+        present = TERM_SHEET_SECTIONS.filter(function (s) { return !!parsed[s]; });
+        missing = TERM_SHEET_SECTIONS.filter(function (s) { return !parsed[s]; });
+  
+          return !(!present.length);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, TERM_SHEET_SECTIONS);
-      var present = TERM_SHEET_SECTIONS.filter(function (s) { return !!parsed[s]; });
-      var missing = TERM_SHEET_SECTIONS.filter(function (s) { return !parsed[s]; });
-
+      var raw = attempt.raw;
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("broker/term-sheet: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("broker/term-sheet: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The term sheet framework could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -22736,7 +23031,7 @@ app.post("/api/agents/broker/term-sheet", requireAuth, requireActiveSubscription
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -22815,44 +23110,63 @@ app.post("/api/agents/broker/due-diligence", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var grouped, unrecognisedAreas, total;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "broker/due-diligence",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "broker",
         route: "POST /api/agents/broker/due-diligence"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var grouped = {};
-      DUE_DILIGENCE_AREAS.forEach(function (a) { grouped[a.toLowerCase()] = []; });
-      var unrecognisedAreas = [];
-
-      parseToolLines(raw).forEach(function (line) {
-        if (line.indexOf("|") === -1) return;
-        var parts = line.split("|");
-        var area = String(parts[0] || "").toUpperCase().replace(/[^A-Z]/g, "");
-        var item = parts.slice(1).join("|").trim();
-        if (!item) return;
-        if (/^AREA$/.test(area)) return;               // header row
-
-        if (DUE_DILIGENCE_AREAS.indexOf(area) === -1) {
-          unrecognisedAreas.push({ area: area, item: item });
-          return;
-        }
-        grouped[area.toLowerCase()].push({
-          item: item,
-          word_count: countWords(item),
-          possibly_multiple_actions: /\band then\b|;/i.test(item)
+      },
+        correction: toolLineShapeCorrection({
+          unit: "diligence item",
+          lineFormat: "AREA | the document or answer being requested",
+          example: "FINANCIAL | Monthly P&L for the last 24 months",
+          extra: "- The vertical bar is required, and the area must be one of the areas named above."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        grouped = {};
+        DUE_DILIGENCE_AREAS.forEach(function (a) { grouped[a.toLowerCase()] = []; });
+        unrecognisedAreas = [];
+  
+        parseToolLines(raw).forEach(function (line) {
+          if (line.indexOf("|") === -1) return;
+          var parts = line.split("|");
+          var area = String(parts[0] || "").toUpperCase().replace(/[^A-Z]/g, "");
+          var item = parts.slice(1).join("|").trim();
+          if (!item) return;
+          if (/^AREA$/.test(area)) return;               // header row
+  
+          if (DUE_DILIGENCE_AREAS.indexOf(area) === -1) {
+            unrecognisedAreas.push({ area: area, item: item });
+            return;
+          }
+          grouped[area.toLowerCase()].push({
+            item: item,
+            word_count: countWords(item),
+            possibly_multiple_actions: /\band then\b|;/i.test(item)
+          });
         });
+  
+        total = DUE_DILIGENCE_AREAS.reduce(function (sum, a) {
+          return sum + grouped[a.toLowerCase()].length;
+        }, 0);
+  
+          return !(!total);
+        }
       });
-
-      var total = DUE_DILIGENCE_AREAS.reduce(function (sum, a) {
-        return sum + grouped[a.toLowerCase()].length;
-      }, 0);
-
+      var raw = attempt.raw;
       if (!total) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("broker/due-diligence: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("broker/due-diligence: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The diligence checklist could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -22933,7 +23247,7 @@ app.post("/api/agents/broker/due-diligence", requireAuth, requireActiveSubscript
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -23042,20 +23356,37 @@ app.post("/api/agents/rd/brief", requireAuth, requireActiveSubscription, aiLimit
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var parsed, present;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "rd/brief",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "rd",
         route: "POST /api/agents/rd/brief"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "brief",
+          labels: RD_BRIEF_SECTIONS
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, RD_BRIEF_SECTIONS);
+        present = RD_BRIEF_SECTIONS.filter(function (s) { return !!parsed[s]; });
+  
+          return !(!present.length);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, RD_BRIEF_SECTIONS);
-      var present = RD_BRIEF_SECTIONS.filter(function (s) { return !!parsed[s]; });
-
+      var raw = attempt.raw;
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("rd/brief: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("rd/brief: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The briefing could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -23124,7 +23455,7 @@ app.post("/api/agents/rd/brief", requireAuth, requireActiveSubscription, aiLimit
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -23263,41 +23594,58 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var entries;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "rd/competitor-scan",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "rd",
         route: "POST /api/agents/rd/competitor-scan"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var entries = [];
-      splitToolBlocks(raw).forEach(function (block) {
-        var f = parseLabeledFields(block,
-          ["COMPETITOR", "POSITIONING", "STRENGTHS", "WEAKNESSES", "CONFIDENCE", "VERIFY_FIRST"]);
-        if (!f.COMPETITOR && !f.POSITIONING) return;
-
-        var blockText = [f.POSITIONING, f.STRENGTHS, f.WEAKNESSES, f.VERIFY_FIRST]
-          .filter(Boolean).join("\n");
-        var figures = scanInventedFigures(blockText);
-        var confidence = String(f.CONFIDENCE || "").toLowerCase().trim();
-
-        entries.push({
-          competitor: f.COMPETITOR || "",
-          positioning: f.POSITIONING || "",
-          strengths: f.STRENGTHS ? parseToolLines(f.STRENGTHS) : [],
-          weaknesses: f.WEAKNESSES ? parseToolLines(f.WEAKNESSES) : [],
-          confidence: /^(high|medium|low)$/.test(confidence) ? confidence : "unstated",
-          verify_first: f.VERIFY_FIRST || "",
-          figure_needed_markers: (blockText.match(/FIGURE NEEDED/gi) || []).length,
-          unverifiable_figures_found: figures,
-          states_a_figure_it_should_not: figures.length > 0
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "competitor",
+          labels: ["COMPETITOR", "POSITIONING", "STRENGTHS", "WEAKNESSES", "CONFIDENCE", "VERIFY_FIRST"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        entries = [];
+        splitToolBlocks(raw).forEach(function (block) {
+          var f = parseLabeledFields(block,
+            ["COMPETITOR", "POSITIONING", "STRENGTHS", "WEAKNESSES", "CONFIDENCE", "VERIFY_FIRST"]);
+          if (!f.COMPETITOR && !f.POSITIONING) return;
+  
+          var blockText = [f.POSITIONING, f.STRENGTHS, f.WEAKNESSES, f.VERIFY_FIRST]
+            .filter(Boolean).join("\n");
+          var figures = scanInventedFigures(blockText);
+          var confidence = String(f.CONFIDENCE || "").toLowerCase().trim();
+  
+          entries.push({
+            competitor: f.COMPETITOR || "",
+            positioning: f.POSITIONING || "",
+            strengths: f.STRENGTHS ? parseToolLines(f.STRENGTHS) : [],
+            weaknesses: f.WEAKNESSES ? parseToolLines(f.WEAKNESSES) : [],
+            confidence: /^(high|medium|low)$/.test(confidence) ? confidence : "unstated",
+            verify_first: f.VERIFY_FIRST || "",
+            figure_needed_markers: (blockText.match(/FIGURE NEEDED/gi) || []).length,
+            unverifiable_figures_found: figures,
+            states_a_figure_it_should_not: figures.length > 0
+          });
         });
+  
+          return !(!entries.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!entries.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("The competitor comparison could not be read back from the model."), { raw: raw });
+        await run.fail(new Error("The competitor comparison could not be read back from the model."), attempt.failureDetails);
         return res.status(502).json({
           error: "The competitor comparison could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23370,7 +23718,7 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -23457,46 +23805,63 @@ app.post("/api/agents/community/onboarding", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var steps, weekOneOutcome;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "community/onboarding",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "community",
         route: "POST /api/agents/community/onboarding"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var steps = [];
-      var weekOneOutcome = [];
-
-      splitToolBlocks(raw).forEach(function (block) {
-        var outcome = parseLabeledFields(block, ["WEEK_ONE_OUTCOME"]);
-        if (outcome.WEEK_ONE_OUTCOME) {
-          weekOneOutcome = parseToolLines(outcome.WEEK_ONE_OUTCOME);
-          return;
-        }
-
-        var f = parseLabeledFields(block, ["DAY", "WHAT_HAPPENS", "WHO_DOES_IT", "PURPOSE"]);
-        if (!f.WHAT_HAPPENS) return;
-
-        /* An unreadable day is null, never 0. Zero means "the moment they join",
-           which is a real and specific instruction, and defaulting an unparsed
-           field to it would put a step at the join moment that nobody designed
-           there. */
-        var day = toolInt(f.DAY);
-
-        steps.push({
-          step: steps.length + 1,
-          day: day !== null && day >= 0 ? day : null,
-          within_week_one: day !== null && day >= 0 ? day <= COMMUNITY_WEEK_ONE_DAYS : null,
-          what_happens: f.WHAT_HAPPENS,
-          who_does_it: f.WHO_DOES_IT || "",
-          purpose: f.PURPOSE || ""
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "onboarding step",
+          labels: [].concat(["WEEK_ONE_OUTCOME"], ["DAY", "WHAT_HAPPENS", "WHO_DOES_IT", "PURPOSE"])
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        steps = [];
+        weekOneOutcome = [];
+  
+        splitToolBlocks(raw).forEach(function (block) {
+          var outcome = parseLabeledFields(block, ["WEEK_ONE_OUTCOME"]);
+          if (outcome.WEEK_ONE_OUTCOME) {
+            weekOneOutcome = parseToolLines(outcome.WEEK_ONE_OUTCOME);
+            return;
+          }
+  
+          var f = parseLabeledFields(block, ["DAY", "WHAT_HAPPENS", "WHO_DOES_IT", "PURPOSE"]);
+          if (!f.WHAT_HAPPENS) return;
+  
+          /* An unreadable day is null, never 0. Zero means "the moment they join",
+             which is a real and specific instruction, and defaulting an unparsed
+             field to it would put a step at the join moment that nobody designed
+             there. */
+          var day = toolInt(f.DAY);
+  
+          steps.push({
+            step: steps.length + 1,
+            day: day !== null && day >= 0 ? day : null,
+            within_week_one: day !== null && day >= 0 ? day <= COMMUNITY_WEEK_ONE_DAYS : null,
+            what_happens: f.WHAT_HAPPENS,
+            who_does_it: f.WHO_DOES_IT || "",
+            purpose: f.PURPOSE || ""
+          });
         });
+  
+          return !(!steps.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!steps.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("community/onboarding: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("community/onboarding: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The onboarding sequence could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23586,7 +23951,7 @@ app.post("/api/agents/community/onboarding", requireAuth, requireActiveSubscript
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -23667,43 +24032,60 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var rituals, unrecognisedFrequencies;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "community/engagement-calendar",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "community",
         route: "POST /api/agents/community/engagement-calendar"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var rituals = [];
-      var unrecognisedFrequencies = [];
-
-      splitToolBlocks(raw).forEach(function (block) {
-        var f = parseLabeledFields(block, ["RITUAL", "FREQUENCY", "PURPOSE", "WHO_RUNS_IT", "EFFORT"]);
-        if (!f.RITUAL && !f.PURPOSE) return;
-
-        var freqRaw = String(f.FREQUENCY || "").toLowerCase().trim();
-        // First listed frequency appearing in the value, so "every week (weekly)"
-        // still resolves rather than falling through as unrecognised.
-        var freq = COMMUNITY_FREQUENCIES.filter(function (cand) {
-          return freqRaw.indexOf(cand) !== -1;
-        })[0] || null;
-
-        if (!freq && freqRaw) unrecognisedFrequencies.push(freqRaw);
-
-        rituals.push({
-          ritual: f.RITUAL || "",
-          frequency: freq,
-          frequency_as_written: f.FREQUENCY || "",
-          purpose: f.PURPOSE || "",
-          who_runs_it: f.WHO_RUNS_IT || "",
-          effort: f.EFFORT || ""
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "ritual",
+          labels: ["RITUAL", "FREQUENCY", "PURPOSE", "WHO_RUNS_IT", "EFFORT"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        rituals = [];
+        unrecognisedFrequencies = [];
+  
+        splitToolBlocks(raw).forEach(function (block) {
+          var f = parseLabeledFields(block, ["RITUAL", "FREQUENCY", "PURPOSE", "WHO_RUNS_IT", "EFFORT"]);
+          if (!f.RITUAL && !f.PURPOSE) return;
+  
+          var freqRaw = String(f.FREQUENCY || "").toLowerCase().trim();
+          // First listed frequency appearing in the value, so "every week (weekly)"
+          // still resolves rather than falling through as unrecognised.
+          var freq = COMMUNITY_FREQUENCIES.filter(function (cand) {
+            return freqRaw.indexOf(cand) !== -1;
+          })[0] || null;
+  
+          if (!freq && freqRaw) unrecognisedFrequencies.push(freqRaw);
+  
+          rituals.push({
+            ritual: f.RITUAL || "",
+            frequency: freq,
+            frequency_as_written: f.FREQUENCY || "",
+            purpose: f.PURPOSE || "",
+            who_runs_it: f.WHO_RUNS_IT || "",
+            effort: f.EFFORT || ""
+          });
         });
+  
+          return !(!rituals.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!rituals.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("community/engagement-calendar: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("community/engagement-calendar: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The engagement calendar could not be read back from the model, so nothing is " +
             "being reported. This is a formatting failure, not an empty result.",
@@ -23784,7 +24166,7 @@ app.post("/api/agents/community/engagement-calendar", requireAuth, requireActive
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -24497,20 +24879,37 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 1200, null, undefined, {
+      var parsed, message;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "influencer/outreach",
+        prompt: prompt,
+        maxTokens: 1200,
+        ledger: {
         user_id: req.user.id,
         agent_type: "influencer",
         route: "POST /api/agents/influencer/outreach"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "outreach message",
+          labels: ["MESSAGE", "WHY_THIS_OPENING"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, ["MESSAGE", "WHY_THIS_OPENING"]);
+        message = parsed.MESSAGE || "";
+  
+          return !(!message);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, ["MESSAGE", "WHY_THIS_OPENING"]);
-      var message = parsed.MESSAGE || "";
-
+      var raw = attempt.raw;
       if (!message) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("influencer/outreach: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("influencer/outreach: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The message could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24575,7 +24974,7 @@ app.post("/api/agents/influencer/outreach", requireAuth, requireActiveSubscripti
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -24662,21 +25061,38 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var parsed, present, missing;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "influencer/partnership-offer",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "influencer",
         route: "POST /api/agents/influencer/partnership-offer"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "partnership offer",
+          labels: PARTNERSHIP_OFFER_SECTIONS
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw, PARTNERSHIP_OFFER_SECTIONS);
+        present = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !!parsed[s]; });
+        missing = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !parsed[s]; });
+  
+          return !(!present.length);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw, PARTNERSHIP_OFFER_SECTIONS);
-      var present = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !!parsed[s]; });
-      var missing = PARTNERSHIP_OFFER_SECTIONS.filter(function (s) { return !parsed[s]; });
-
+      var raw = attempt.raw;
       if (!present.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("influencer/partnership-offer: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("influencer/partnership-offer: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The offer could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -24763,7 +25179,7 @@ app.post("/api/agents/influencer/partnership-offer", requireAuth, requireActiveS
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -24910,21 +25326,38 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+      var parsed;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "vertical_marketing/positioning",
+        prompt: prompt,
+        maxTokens: 2500,
+        ledger: {
         user_id: req.user.id,
         agent_type: "vertical_marketing",
         route: "POST /api/agents/vertical_marketing/positioning"
+      },
+        correction: toolSectionShapeCorrection({
+          unit: "positioning statement",
+          labels: ["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        parsed = parseLabeledFields(raw,
+          ["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE",
+           "VERIFY_WITH_A_PRACTITIONER"]);
+  
+          return !(!parsed.POSITIONING && !parsed.CHANNELS);
+        }
       });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var parsed = parseLabeledFields(raw,
-        ["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE",
-         "VERIFY_WITH_A_PRACTITIONER"]);
-
+      var raw = attempt.raw;
       if (!parsed.POSITIONING && !parsed.CHANNELS) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("vertical_marketing/positioning: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("vertical_marketing/positioning: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The positioning could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -24990,7 +25423,7 @@ app.post("/api/agents/vertical_marketing/positioning", requireAuth, requireActiv
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -25070,47 +25503,64 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 3000, null, undefined, {
+      var objections, confidence, verifyWith;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "vertical_marketing/objections",
+        prompt: prompt,
+        maxTokens: 3000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "vertical_marketing",
         route: "POST /api/agents/vertical_marketing/objections"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var objections = [];
-      var confidence = "unstated";
-      var verifyWith = [];
-
-      splitToolBlocks(raw).forEach(function (block) {
-        var tail = parseLabeledFields(block, ["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"]);
-        var body = parseLabeledFields(block,
-          ["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"]);
-
-        if (!body.OBJECTION) {
-          if (tail.CONFIDENCE) confidence = verticalConfidence(tail.CONFIDENCE);
-          if (tail.VERIFY_WITH_A_PRACTITIONER) {
-            verifyWith = parseToolLines(tail.VERIFY_WITH_A_PRACTITIONER);
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "objection",
+          labels: [].concat(["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"], ["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"])
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        objections = [];
+        confidence = "unstated";
+        verifyWith = [];
+  
+        splitToolBlocks(raw).forEach(function (block) {
+          var tail = parseLabeledFields(block, ["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"]);
+          var body = parseLabeledFields(block,
+            ["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"]);
+  
+          if (!body.OBJECTION) {
+            if (tail.CONFIDENCE) confidence = verticalConfidence(tail.CONFIDENCE);
+            if (tail.VERIFY_WITH_A_PRACTITIONER) {
+              verifyWith = parseToolLines(tail.VERIFY_WITH_A_PRACTITIONER);
+            }
+            return;
           }
-          return;
-        }
-
-        var likelihood = String(body.LIKELIHOOD || "").toLowerCase().trim();
-        objections.push({
-          position: objections.length + 1,
-          objection: body.OBJECTION,
-          what_is_behind_it: body.WHAT_IS_BEHIND_IT || "",
-          answer: body.ANSWER || "",
-          proof_that_helps: body.PROOF_THAT_HELPS || "",
-          likelihood: /^(common|occasional|rare)$/.test(likelihood) ? likelihood : "unstated",
-          has_an_answer: !!body.ANSWER,
-          has_proof: !!body.PROOF_THAT_HELPS
+  
+          var likelihood = String(body.LIKELIHOOD || "").toLowerCase().trim();
+          objections.push({
+            position: objections.length + 1,
+            objection: body.OBJECTION,
+            what_is_behind_it: body.WHAT_IS_BEHIND_IT || "",
+            answer: body.ANSWER || "",
+            proof_that_helps: body.PROOF_THAT_HELPS || "",
+            likelihood: /^(common|occasional|rare)$/.test(likelihood) ? likelihood : "unstated",
+            has_an_answer: !!body.ANSWER,
+            has_proof: !!body.PROOF_THAT_HELPS
+          });
         });
+  
+          return !(!objections.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!objections.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("vertical_marketing/objections: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("vertical_marketing/objections: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The objections could not be read back from the model, so nothing is being " +
             "reported. This is a formatting failure, not an empty result.",
@@ -25185,7 +25635,7 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -25338,34 +25788,53 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+      var blocks, headerBlock, header, sections;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "content/outline",
+        prompt: prompt,
+        maxTokens: 2500,
+        ledger: {
         user_id: req.user.id,
         agent_type: "content",
         route: "POST /api/agents/content/outline"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var blocks = splitToolBlocks(raw);
-      var headerBlock = (blocks.length && !/^[ \t>*#-]*H2[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
-      var header = parseLabeledFields(headerBlock, ["H1", "SEARCH_INTENT", "QUESTIONS_TO_ANSWER"]);
-
-      var sections = [];
-      blocks.forEach(function (block) {
-        var f = parseLabeledFields(block, ["H2", "COVERS", "WHY_HERE"]);
-        if (!f.H2) return;
-        sections.push({
-          position: sections.length + 1,
-          h2: f.H2,
-          covers: f.COVERS || "",
-          why_here: f.WHY_HERE || "",
-          has_coverage_note: !!f.COVERS
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "section of the outline",
+          labels: [].concat(["H1", "SEARCH_INTENT", "QUESTIONS_TO_ANSWER"], ["H2", "COVERS", "WHY_HERE"]),
+          extra: "- The FIRST block is the header, carrying H1, SEARCH_INTENT and QUESTIONS_TO_ANSWER; " +
+            "every block after it is a section."
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        blocks = splitToolBlocks(raw);
+        headerBlock = (blocks.length && !/^[ \t>*#-]*H2[ \t]*:/im.test(blocks[0])) ? blocks[0] : "";
+        header = parseLabeledFields(headerBlock, ["H1", "SEARCH_INTENT", "QUESTIONS_TO_ANSWER"]);
+  
+        sections = [];
+        blocks.forEach(function (block) {
+          var f = parseLabeledFields(block, ["H2", "COVERS", "WHY_HERE"]);
+          if (!f.H2) return;
+          sections.push({
+            position: sections.length + 1,
+            h2: f.H2,
+            covers: f.COVERS || "",
+            why_here: f.WHY_HERE || "",
+            has_coverage_note: !!f.COVERS
+          });
         });
+  
+          return !(!sections.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!sections.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("content/outline: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("content/outline: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The outline could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -25478,7 +25947,7 @@ app.post("/api/agents/content/outline", requireAuth, requireActiveSubscription, 
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
@@ -26883,162 +27352,179 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 4000, null, undefined, {
+      var assignments, usedIds;
+
+      var attempt = await toolGenerateWithOneRetry({
+        label: "executive/plan",
+        prompt: prompt,
+        maxTokens: 4000,
+        ledger: {
         user_id: req.user.id,
         agent_type: "executive",
         route: "POST /api/agents/executive/plan"
-      });
-      var raw = (generation && generation.text) ? generation.text : "";
-
-      var assignments = [];
-      var usedIds = {};
-
-      splitToolBlocks(raw).forEach(function (block) {
-        // INPUTS before INPUT so the longer label is tried first at a position
-        // where both could match.
-        var f = parseLabeledFields(block,
-          ["ID", "AGENT", "TOOL", "TASK", "INPUTS", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]);
-        if (!f.AGENT && !f.TASK) return;
-
-        /* An unreadable or duplicate ID is replaced by position rather than
-           dropped, because an assignment is still an assignment — but the
-           substitution is recorded so a dependency graph built on guessed ids is
-           not presented as if the model had numbered them. */
-        var declaredId = toolInt(f.ID);
-        var id = (declaredId !== null && declaredId > 0 && !usedIds[declaredId])
-          ? declaredId : (assignments.length + 1);
-        var idWasSubstituted = id !== declaredId;
-        usedIds[id] = true;
-
-        var agentType = String(f.AGENT || "").toLowerCase().trim();
-        var tool = String(f.TOOL || "").toLowerCase().trim();
-        if (/^(none|n\/a|-|null)$/.test(tool)) tool = "";
-
-        /* ── FOUNDER WORK IS A THIRD KIND OF ASSIGNMENT ────────────────────────
-           AGENT: YOU means the person the plan is for.
-
-           Some of the most important work in a plan cannot be dispatched to
-           anything. "Secure testimonials from your first five subscribers" is
-           founder work — no tool does it, no agent can be sent to do it, and it may
-           matter more than everything around it. Before this, a model with nowhere
-           to put that reached for "general", which is not a registered agent, so
-           the assignment was correctly marked not runnable and then wrongly
-           counted as an error. The validator was right and the plan was right; the
-           vocabulary was missing.
-
-           So YOU is not dispatchable and has no route — both true, and both stated
-           — but it is NOT A PROBLEM. It is not counted as one, does not render as
-           broken, and is excluded from the real-tool ratio rather than dragging it
-           down, because that ratio measures how much of the AGENT work names a real
-           tool. Founder work has no tool to name, so counting it as a miss would
-           make a well-judged plan score worse than a vague one. */
-        var isFounderTask = agentType === "you";
-
-        var agentExists = Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType);
-        var agentHasTools = agentExists && !!catalogue[agentType];
-        var toolExists = agentHasTools && tool && catalogue[agentType].indexOf(tool) !== -1;
-
-        var problems = [];
-        if (isFounderTask) {
-          /* One real problem is still possible here: naming a tool for work only a
-             person can do. That is a contradiction rather than a typo, so it is
-             reported — but it is the only thing that can go wrong with a YOU
-             assignment. */
-          if (tool) {
-            problems.push("an assignment for YOU cannot name a tool (\"" + tool +
-              "\") — if a tool can do it, give it to the agent that owns the tool");
+      },
+        correction: toolBlockShapeCorrection({
+          unit: "assignment",
+          labels: ["ID", "AGENT", "TOOL", "TASK", "INPUTS", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]
+        }),
+        /* The route's own parse, unchanged, against whichever reply is in hand.
+           It assigns the variables declared above exactly as it did inline, and
+           returns this route's own guard, negated: truthy means it parsed. */
+        parse: function (raw) {
+  
+        assignments = [];
+        usedIds = {};
+  
+        splitToolBlocks(raw).forEach(function (block) {
+          // INPUTS before INPUT so the longer label is tried first at a position
+          // where both could match.
+          var f = parseLabeledFields(block,
+            ["ID", "AGENT", "TOOL", "TASK", "INPUTS", "INPUT", "DEPENDS_ON", "SUCCESS_SIGNAL", "PRIORITY"]);
+          if (!f.AGENT && !f.TASK) return;
+  
+          /* An unreadable or duplicate ID is replaced by position rather than
+             dropped, because an assignment is still an assignment — but the
+             substitution is recorded so a dependency graph built on guessed ids is
+             not presented as if the model had numbered them. */
+          var declaredId = toolInt(f.ID);
+          var id = (declaredId !== null && declaredId > 0 && !usedIds[declaredId])
+            ? declaredId : (assignments.length + 1);
+          var idWasSubstituted = id !== declaredId;
+          usedIds[id] = true;
+  
+          var agentType = String(f.AGENT || "").toLowerCase().trim();
+          var tool = String(f.TOOL || "").toLowerCase().trim();
+          if (/^(none|n\/a|-|null)$/.test(tool)) tool = "";
+  
+          /* ── FOUNDER WORK IS A THIRD KIND OF ASSIGNMENT ────────────────────────
+             AGENT: YOU means the person the plan is for.
+  
+             Some of the most important work in a plan cannot be dispatched to
+             anything. "Secure testimonials from your first five subscribers" is
+             founder work — no tool does it, no agent can be sent to do it, and it may
+             matter more than everything around it. Before this, a model with nowhere
+             to put that reached for "general", which is not a registered agent, so
+             the assignment was correctly marked not runnable and then wrongly
+             counted as an error. The validator was right and the plan was right; the
+             vocabulary was missing.
+  
+             So YOU is not dispatchable and has no route — both true, and both stated
+             — but it is NOT A PROBLEM. It is not counted as one, does not render as
+             broken, and is excluded from the real-tool ratio rather than dragging it
+             down, because that ratio measures how much of the AGENT work names a real
+             tool. Founder work has no tool to name, so counting it as a miss would
+             make a well-judged plan score worse than a vague one. */
+          var isFounderTask = agentType === "you";
+  
+          var agentExists = Object.prototype.hasOwnProperty.call(AGENT_SYSTEM_PROMPTS, agentType);
+          var agentHasTools = agentExists && !!catalogue[agentType];
+          var toolExists = agentHasTools && tool && catalogue[agentType].indexOf(tool) !== -1;
+  
+          var problems = [];
+          if (isFounderTask) {
+            /* One real problem is still possible here: naming a tool for work only a
+               person can do. That is a contradiction rather than a typo, so it is
+               reported — but it is the only thing that can go wrong with a YOU
+               assignment. */
+            if (tool) {
+              problems.push("an assignment for YOU cannot name a tool (\"" + tool +
+                "\") — if a tool can do it, give it to the agent that owns the tool");
+            }
+          } else {
+            if (!agentType) problems.push("no agent named");
+            else if (!agentExists) {
+              problems.push("\"" + agentType + "\" is not a registered agent" +
+                (agentType === "general"
+                  ? " — for work only you can do, use AGENT: YOU rather than \"general\""
+                  : ""));
+            }
+            if (tool && !agentExists) problems.push("tool cannot be checked against an unknown agent");
+            else if (tool && !agentHasTools) {
+              problems.push("\"" + agentType + "\" has no tools, so \"" + tool + "\" cannot exist");
+            } else if (tool && !toolExists) {
+              problems.push("\"" + tool + "\" is not a tool of \"" + agentType + "\" (it has: " +
+                catalogue[agentType].join(", ") + ")");
+            }
           }
-        } else {
-          if (!agentType) problems.push("no agent named");
-          else if (!agentExists) {
-            problems.push("\"" + agentType + "\" is not a registered agent" +
-              (agentType === "general"
-                ? " — for work only you can do, use AGENT: YOU rather than \"general\""
-                : ""));
+  
+          /* A real tool a chain may not run. The tool exists and the route is real,
+             so the assignment is not broken in the catalogue sense — but it can never
+             be dispatched, and the plan has to say so rather than leave a reader to
+             discover it from a refusal later. */
+          var toolKey = toolExists ? agentType + "/" + tool : null;
+          if (toolKey && CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(toolKey) !== -1) {
+            problems.push(toolKey + " acts on the world (posting, sending, writing lead state) and cannot " +
+              "be dispatched by a chain — assign this work in prose, or to YOU");
           }
-          if (tool && !agentExists) problems.push("tool cannot be checked against an unknown agent");
-          else if (tool && !agentHasTools) {
-            problems.push("\"" + agentType + "\" has no tools, so \"" + tool + "\" cannot exist");
-          } else if (tool && !toolExists) {
-            problems.push("\"" + tool + "\" is not a tool of \"" + agentType + "\" (it has: " +
-              catalogue[agentType].join(", ") + ")");
+  
+          /* THE BODY, VALIDATED HERE. What the model wrote under INPUTS is parsed
+             and checked against the tool's own TOOL_INPUT_SPECS entry with the same
+             test the dispatcher applies. The model's claim that a body is complete
+             counts for nothing; `inputs_missing` is what the spec says is absent.
+             Nothing is invented: no block means inputs null and every required field
+             listed as missing. */
+          var inputCheck = { inputs: null, missing: [], dropped: [] };
+          if (toolExists && Array.isArray(specByKey[toolKey])) {
+            inputCheck = validateToolInputs(specByKey[toolKey], parseToolInputsBlock(f.INPUTS));
           }
-        }
-
-        /* A real tool a chain may not run. The tool exists and the route is real,
-           so the assignment is not broken in the catalogue sense — but it can never
-           be dispatched, and the plan has to say so rather than leave a reader to
-           discover it from a refusal later. */
-        var toolKey = toolExists ? agentType + "/" + tool : null;
-        if (toolKey && CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(toolKey) !== -1) {
-          problems.push(toolKey + " acts on the world (posting, sending, writing lead state) and cannot " +
-            "be dispatched by a chain — assign this work in prose, or to YOU");
-        }
-
-        /* THE BODY, VALIDATED HERE. What the model wrote under INPUTS is parsed
-           and checked against the tool's own TOOL_INPUT_SPECS entry with the same
-           test the dispatcher applies. The model's claim that a body is complete
-           counts for nothing; `inputs_missing` is what the spec says is absent.
-           Nothing is invented: no block means inputs null and every required field
-           listed as missing. */
-        var inputCheck = { inputs: null, missing: [], dropped: [] };
-        if (toolExists && Array.isArray(specByKey[toolKey])) {
-          inputCheck = validateToolInputs(specByKey[toolKey], parseToolInputsBlock(f.INPUTS));
-        }
-
-        var depends = [];
-        if (f.DEPENDS_ON && !/^(none|n\/a|-)$/i.test(f.DEPENDS_ON.trim())) {
-          f.DEPENDS_ON.split(/[,;]/).forEach(function (part) {
-            var d = toolInt(part);
-            if (d !== null && d > 0) depends.push(d);
+  
+          var depends = [];
+          if (f.DEPENDS_ON && !/^(none|n\/a|-)$/i.test(f.DEPENDS_ON.trim())) {
+            f.DEPENDS_ON.split(/[,;]/).forEach(function (part) {
+              var d = toolInt(part);
+              if (d !== null && d > 0) depends.push(d);
+            });
+          }
+  
+          var priority = String(f.PRIORITY || "").toLowerCase().trim();
+  
+          assignments.push({
+            id: id,
+            id_was_substituted: idWasSubstituted,
+            agent: isFounderTask ? "you" : agentType,
+            /* True for YOU as well, because "you" IS a valid destination — it is just
+               not an agent. A renderer testing agent_exists to decide whether to show
+               an assignment as legitimate gets the right answer without knowing about
+               founder tasks. */
+            agent_exists: isFounderTask ? true : agentExists,
+            is_founder_task: isFounderTask,
+            tool: tool || null,
+            tool_exists: !!toolExists,
+            /* THE ONLY THING THAT MAKES THIS DISPATCHABLE. Present when both the
+               agent and the tool check out, absent otherwise — never constructed
+               from an unvalidated name, because a plausible-looking URL that 404s is
+               the failure this whole route guards against. */
+            route: toolExists ? "POST /api/agents/" + agentType + "/" + tool : null,
+            task: f.TASK || "",
+            input: f.INPUT || "",
+            /* The request body a dispatch would send, validated against the tool's
+               spec — or null when the model gave none. `inputs_missing` is the
+               spec's verdict, not the model's; `inputs_dropped` names what the model
+               supplied that no field of this tool accepts. */
+            inputs: inputCheck.inputs,
+            inputs_missing: inputCheck.missing,
+            inputs_dropped: inputCheck.dropped,
+            depends_on: depends,
+            success_signal: f.SUCCESS_SIGNAL || "",
+            has_observable_success_signal: !!f.SUCCESS_SIGNAL,
+            priority: /^(high|medium|low)$/.test(priority) ? priority : "unstated",
+            problems: problems,
+            /* Dispatchable now means: the tool is real, nothing is wrong with the
+               assignment, AND the body it carries satisfies the tool's required
+               fields. Before this the third condition did not exist, so a plan
+               could call an assignment dispatchable with nothing to dispatch. */
+            is_dispatchable: !!toolExists && problems.length === 0 && inputCheck.missing.length === 0
           });
-        }
-
-        var priority = String(f.PRIORITY || "").toLowerCase().trim();
-
-        assignments.push({
-          id: id,
-          id_was_substituted: idWasSubstituted,
-          agent: isFounderTask ? "you" : agentType,
-          /* True for YOU as well, because "you" IS a valid destination — it is just
-             not an agent. A renderer testing agent_exists to decide whether to show
-             an assignment as legitimate gets the right answer without knowing about
-             founder tasks. */
-          agent_exists: isFounderTask ? true : agentExists,
-          is_founder_task: isFounderTask,
-          tool: tool || null,
-          tool_exists: !!toolExists,
-          /* THE ONLY THING THAT MAKES THIS DISPATCHABLE. Present when both the
-             agent and the tool check out, absent otherwise — never constructed
-             from an unvalidated name, because a plausible-looking URL that 404s is
-             the failure this whole route guards against. */
-          route: toolExists ? "POST /api/agents/" + agentType + "/" + tool : null,
-          task: f.TASK || "",
-          input: f.INPUT || "",
-          /* The request body a dispatch would send, validated against the tool's
-             spec — or null when the model gave none. `inputs_missing` is the
-             spec's verdict, not the model's; `inputs_dropped` names what the model
-             supplied that no field of this tool accepts. */
-          inputs: inputCheck.inputs,
-          inputs_missing: inputCheck.missing,
-          inputs_dropped: inputCheck.dropped,
-          depends_on: depends,
-          success_signal: f.SUCCESS_SIGNAL || "",
-          has_observable_success_signal: !!f.SUCCESS_SIGNAL,
-          priority: /^(high|medium|low)$/.test(priority) ? priority : "unstated",
-          problems: problems,
-          /* Dispatchable now means: the tool is real, nothing is wrong with the
-             assignment, AND the body it carries satisfies the tool's required
-             fields. Before this the third condition did not exist, so a plan
-             could call an assignment dispatchable with nothing to dispatch. */
-          is_dispatchable: !!toolExists && problems.length === 0 && inputCheck.missing.length === 0
         });
+  
+          return !(!assignments.length);
+        }
       });
-
+      var raw = attempt.raw;
       if (!assignments.length) {
         // An error path: the row must not stay "processing" for a run that
         // returned nothing usable.
-        await run.fail(new Error("executive/plan: the model's output could not be read back, so nothing was reported."), { raw: raw });
+        await run.fail(new Error("executive/plan: the model's output could not be read back, so nothing was reported."), attempt.failureDetails);
         return res.status(502).json({
           error: "The plan could not be read back from the model, so nothing is being reported. " +
             "This is a formatting failure, not an empty result.",
@@ -27215,7 +27701,7 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
       // record of it did not — the user still gets the work either way.
-      var persisted = await run.complete(responseBody);
+      var persisted = await run.complete(responseBody, attempt.completionExtra);
 
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
