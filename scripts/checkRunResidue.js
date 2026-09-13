@@ -42,12 +42,123 @@ const path = require("path");
 function journalPath(name) {
   return path.join(os.tmpdir(), "bizforce-check-residue-" + name + ".json");
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   WHOSE ACCOUNT THESE SCRIPTS ARE ALLOWED TO TOUCH.
+
+   The scripts used to take the first row out of the users table with no ORDER
+   BY and write their rows under it. That was untidy while cleanup only
+   inserted; it became dangerous the moment cleanup learned to delete every
+   ai_tasks row for that account created since the run began. An unordered
+   LIMIT 1 comes back in whatever order the heap hands over, and that can
+   change after any update or vacuum — so the pick was never stable, only
+   lucky. A run that landed on the owner would have deleted real task rows, and
+   that account holds 7,943 of them.
+
+   So the subject is named explicitly, in the environment, and there is no
+   fallback. An unset variable stops the run: guessing is the bug.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The owner's live account. Never a subject, under any circumstances. */
+const OWNER_ACCOUNT_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+const SUBJECT_ENV = "BIZFORCE_CHECK_USER_ID";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/* The account these checks are meant to run under: nobody can sign in as it
+   (its password_hash is the literal string "hash123", and /api/auth/login is
+   bcrypt.compare, which that can never satisfy) and it owns no rows in any
+   table the checks touch. Named here only so the refusal can suggest it. */
+const SUGGESTED_SUBJECT_ID = "53e6b330-d31c-4958-a10b-516397e7b9c9";
+
+function refuse(lines) {
+  console.error("");
+  lines.forEach(function (l) { console.error("[residue] " + l); });
+  console.error("");
+  process.exit(1);
+}
+
+/* CALL THIS BEFORE ANYTHING ELSE. It either returns the id that every write
+   and every delete in the run is confined to, or it ends the process having
+   touched nothing. There is deliberately no default and no table read. */
+function resolveSubjectAccount() {
+  const raw = (process.env[SUBJECT_ENV] || "").trim();
+
+  if (!raw) {
+    refuse([
+      "REFUSING TO RUN: no subject account was named.",
+      "",
+      "These checks write rows to ai_tasks and to the model_calls spend ledger",
+      "and then delete them. Which account that happens to be is not something",
+      "worth guessing at, so it is no longer guessed at.",
+      "",
+      "Set " + SUBJECT_ENV + " to the user id the checks may use:",
+      "",
+      "  PowerShell:  $env:" + SUBJECT_ENV + " = \"" + SUGGESTED_SUBJECT_ID + "\"",
+      "  bash:        export " + SUBJECT_ENV + "=" + SUGGESTED_SUBJECT_ID,
+      "",
+      "Nothing has been written or deleted."
+    ]);
+  }
+
+  if (!UUID_RE.test(raw)) {
+    refuse([
+      "REFUSING TO RUN: " + SUBJECT_ENV + " is not a uuid (" + raw + ").",
+      "Nothing has been written or deleted."
+    ]);
+  }
+
+  assertNotOwner(raw, SUBJECT_ENV + " names the owner's account");
+  return raw.toLowerCase();
+}
+
+/* THE HARD REFUSAL. Called before every write path and before every sweep,
+   rather than once at startup: a single check at the top is a check that a
+   later code path can walk around. */
+function assertNotOwner(id, context) {
+  if (!id) return;
+  if (String(id).toLowerCase() !== OWNER_ACCOUNT_ID) return;
+  refuse([
+    "REFUSING TO RUN: " + context + ".",
+    "",
+    OWNER_ACCOUNT_ID + " is the owner's live account. These checks delete every",
+    "ai_tasks row for their subject created since the run began, so pointing",
+    "them at it would destroy real work.",
+    "",
+    "Nothing has been written or deleted."
+  ]);
+}
+
+/* PER ROW, NOT PER QUERY. A filter in a query is a request; this is the check.
+   Any row that comes back belonging to somebody else is left alone and said
+   out loud, because a delete list that quietly contains one row it should not
+   is the exact failure this file exists to prevent. */
+function isSubjectRow(row, subject, table) {
+  if (!row) return false;
+  const owner = String(row.user_id || "").toLowerCase();
+  if (owner && owner === String(subject).toLowerCase()) return true;
+  console.error("[residue] REFUSING to delete " + table + " row " + row.id +
+    ": it belongs to " + (owner || "nobody") + ", not to the subject account " + subject + ".");
+  return false;
+}
+
 
 function createResidueGuard(options) {
   const supabase = options.supabase;
   const name = options.name;
   const tables = options.tables || ["ai_tasks", "model_calls"];
   const file = journalPath(name);
+
+  /* THE ONE ACCOUNT THIS RUN MAY TOUCH, fixed at construction. Every delete
+     below is checked against it row by row, so a query that somehow returns
+     somebody else's row cannot become a deletion. */
+  const subject = String(options.subject || "").toLowerCase();
+  if (!subject) {
+    refuse([
+      "REFUSING TO RUN: createResidueGuard was given no subject account.",
+      "Call resolveSubjectAccount() and pass the result as options.subject.",
+      "Nothing has been written or deleted."
+    ]);
+  }
+  assertNotOwner(subject, "the residue guard was pointed at the owner's account");
 
   const state = {
     name: name,
@@ -79,6 +190,15 @@ function createResidueGuard(options) {
 
   /* ── what a previous run left ────────────────────────────────────────────── */
   async function sweepPrevious(userId) {
+    /* Before the first read, let alone the first delete. */
+    assertNotOwner(userId, "the startup sweep was pointed at the owner's account");
+    if (userId && String(userId).toLowerCase() !== subject) {
+      refuse([
+        "REFUSING TO RUN: the sweep was given " + userId + " but this run's subject is " + subject + ".",
+        "Nothing has been written or deleted."
+      ]);
+    }
+
     const found = { journal: null, rows: {}, removed: 0, failed: [] };
     tables.forEach(function (t) { found.rows[t] = []; });
 
@@ -99,6 +219,23 @@ function createResidueGuard(options) {
         ((e && e.message) || e) + ". Falling back to the ledger high-water sweep.");
     }
 
+    if (previous && previous.user_id && String(previous.user_id).toLowerCase() !== subject) {
+      /* A JOURNAL IS NOT AUTHORITY OVER SOMEBODY ELSE'S ROWS. Older journals
+         predate the subject rule and can name whichever account the unordered
+         pick happened to land on. Such a journal is reported, kept, and not
+         acted on: deleting rows under an account this run was never allowed to
+         touch is the thing being prevented, and a stale file is no reason to
+         do it. */
+      console.error("[residue] The journal at " + file + " belongs to " + previous.user_id +
+        ", not to this run's subject " + subject + ". NOT sweeping it.");
+      console.error("[residue] If those rows are residue, remove them by hand — ids:");
+      tables.forEach(function (t) {
+        const ids = (previous.ids && previous.ids[t]) || [];
+        if (ids.length) console.error("[residue]   " + t + ": " + ids.join(", "));
+      });
+      previous = null;
+    }
+
     if (previous) {
       found.journal = { started_at: previous.started_at, user_id: previous.user_id };
       for (const table of tables) {
@@ -108,7 +245,7 @@ function createResidueGuard(options) {
            belonging to somebody else are never removed on its say-so. */
         const { data, error } = await supabase.from(table).select("id, user_id").in("id", ids);
         if (error) { found.failed.push(table + ": could not read (" + error.message + ")"); continue; }
-        const mine = (data || []).filter(function (r) { return !previous.user_id || r.user_id === previous.user_id; });
+        const mine = (data || []).filter(function (r) { return isSubjectRow(r, subject, table); });
         if (!mine.length) continue;
         const mineIds = mine.map(function (r) { return r.id; });
         found.rows[table] = found.rows[table].concat(mineIds);
@@ -121,9 +258,10 @@ function createResidueGuard(options) {
          run recorded, under the account it was using. */
       if (previous.user_id && typeof previous.ledger_mark === "number" && tables.indexOf("model_calls") !== -1) {
         const { data, error } = await supabase.from("model_calls")
-          .select("id").eq("user_id", previous.user_id).gt("id", previous.ledger_mark);
+          .select("id, user_id").eq("user_id", previous.user_id).gt("id", previous.ledger_mark);
         if (!error && data && data.length) {
-          const extra = data.map(function (r) { return r.id; })
+          const extra = data.filter(function (r) { return isSubjectRow(r, subject, "model_calls"); })
+            .map(function (r) { return r.id; })
             .filter(function (id) { return found.rows.model_calls.indexOf(id) === -1; });
           if (extra.length) {
             found.rows.model_calls = found.rows.model_calls.concat(extra);
@@ -144,12 +282,13 @@ function createResidueGuard(options) {
         const until = new Date(new Date(previousLastSeen).getTime() + 60000).toISOString();
         for (const table of tables) {
           if (table === "model_calls") continue;   /* swept by id, just above */
-          const { data, error } = await supabase.from(table).select("id")
+          const { data, error } = await supabase.from(table).select("id, user_id")
             .eq("user_id", previous.user_id)
             .gte("created_at", previous.started_at)
             .lte("created_at", until);
           if (error) { found.failed.push(table + ": could not read the crash window (" + error.message + ")"); continue; }
-          const extra = (data || []).map(function (r) { return r.id; })
+          const extra = (data || []).filter(function (r) { return isSubjectRow(r, subject, table); })
+            .map(function (r) { return r.id; })
             .filter(function (id) { return found.rows[table].indexOf(id) === -1; });
           if (!extra.length) continue;
           found.rows[table] = found.rows[table].concat(extra);
@@ -228,22 +367,33 @@ function createResidueGuard(options) {
     const caught = [];
     if (!state.user_id) return caught;
 
+    /* This is the sweep that deletes by time rather than by id, so it is the
+       one with the most to lose from a wrong account. Checked again here,
+       immediately before the deletes, and then row by row below. */
+    assertNotOwner(state.user_id, "the cleanup window sweep was pointed at the owner's account");
+
     /* ai_tasks: this user, created at or after the run began. */
     const tasks = await supabase.from("ai_tasks")
-      .select("id").eq("user_id", state.user_id).gte("created_at", state.started_at);
+      .select("id, user_id").eq("user_id", state.user_id).gte("created_at", state.started_at);
     if (!tasks.error && tasks.data && tasks.data.length) {
-      const ids = tasks.data.map(function (r) { return r.id; });
-      const del = await supabase.from("ai_tasks").delete().in("id", ids);
-      caught.push({ table: "ai_tasks", ids: ids, removed: !del.error, why: del.error ? del.error.message : null });
+      const ids = tasks.data.filter(function (r) { return isSubjectRow(r, subject, "ai_tasks"); })
+        .map(function (r) { return r.id; });
+      if (ids.length) {
+        const del = await supabase.from("ai_tasks").delete().in("id", ids);
+        caught.push({ table: "ai_tasks", ids: ids, removed: !del.error, why: del.error ? del.error.message : null });
+      }
     }
 
     /* model_calls: this user, above the id that existed before the run. */
     const calls = await supabase.from("model_calls")
-      .select("id").eq("user_id", state.user_id).gt("id", state.ledger_mark);
+      .select("id, user_id").eq("user_id", state.user_id).gt("id", state.ledger_mark);
     if (!calls.error && calls.data && calls.data.length) {
-      const ids = calls.data.map(function (r) { return r.id; });
-      const del = await supabase.from("model_calls").delete().in("id", ids);
-      caught.push({ table: "model_calls", ids: ids, removed: !del.error, why: del.error ? del.error.message : null });
+      const ids = calls.data.filter(function (r) { return isSubjectRow(r, subject, "model_calls"); })
+        .map(function (r) { return r.id; });
+      if (ids.length) {
+        const del = await supabase.from("model_calls").delete().in("id", ids);
+        caught.push({ table: "model_calls", ids: ids, removed: !del.error, why: del.error ? del.error.message : null });
+      }
     }
 
     return caught;
@@ -272,7 +422,15 @@ function createResidueGuard(options) {
       const ids = state.ids[table];
       if (!ids.length) { console.log("[residue] " + table + ": nothing to delete"); continue; }
 
-      const del = await supabase.from(table).delete().in("id", ids);
+      /* Even here, where the ids came from this run's own journal: read the
+         rows back and delete only those the subject actually owns. */
+      const owners = await supabase.from(table).select("id, user_id").in("id", ids);
+      const deletable = owners.error ? ids
+        : (owners.data || []).filter(function (r) { return isSubjectRow(r, subject, table); })
+            .map(function (r) { return r.id; });
+      if (!owners.error && !deletable.length) { console.log("[residue] " + table + ": nothing of the subject's to delete"); continue; }
+
+      const del = await supabase.from(table).delete().in("id", deletable);
       if (del.error) console.error("[residue] " + table + ": delete reported " + del.error.message);
 
       const { count, error } = await supabase.from(table).select("id", { count: "exact", head: true }).in("id", ids);
@@ -402,4 +560,12 @@ function createResidueGuard(options) {
   };
 }
 
-module.exports = { createResidueGuard: createResidueGuard, journalPath: journalPath };
+module.exports = {
+  createResidueGuard: createResidueGuard,
+  journalPath: journalPath,
+  resolveSubjectAccount: resolveSubjectAccount,
+  assertNotOwner: assertNotOwner,
+  isSubjectRow: isSubjectRow,
+  OWNER_ACCOUNT_ID: OWNER_ACCOUNT_ID,
+  SUBJECT_ENV: SUBJECT_ENV
+};

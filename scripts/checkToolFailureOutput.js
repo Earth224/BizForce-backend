@@ -60,6 +60,12 @@
 
 require("dotenv").config();
 
+/* WHOSE ACCOUNT, DECIDED BEFORE ANYTHING ELSE HAPPENS — before the server is
+   required, before a single row is written. If no subject is named, this ends
+   the process here and says what to set. See scripts/checkRunResidue.js. */
+const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
+const SUBJECT_USER_ID = resolveSubjectAccount();
+
 const path = require("path");
 const REPO = path.join(__dirname, "..");
 
@@ -124,10 +130,10 @@ let failures = 0;
    a crash mid-run left rows behind because cleanup only ran on the happy
    path; scripts/checkRunResidue.js is where that is fixed, once, for all
    three scripts. */
-const { createResidueGuard } = require("./checkRunResidue");
 const residue = createResidueGuard({
   supabase: supabase,
   name: "toolFailureOutput",
+  subject: SUBJECT_USER_ID,
   tables: ["ai_tasks", "model_calls"]
 });
 residue.install();
@@ -221,11 +227,9 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
 
   /* A real user id is required by ai_tasks.user_id's foreign key. Any existing
      one will do; every row this script writes is deleted again below. */
-  const { data: someUser, error: userErr } = await supabase
-    .from("users").select("id").limit(1).maybeSingle();
-  if (userErr) throw userErr;
-  if (!someUser) { console.error("No users row to attribute the check rows to. Nothing was run."); process.exit(1); }
-  const userId = someUser.id;
+  /* NOT "whichever row comes back first" — the account named in the
+     environment and checked at startup. */
+  const userId = SUBJECT_USER_ID;
 
   /* BEFORE ANYTHING IS WRITTEN: whatever a previous crashed run of this script
      left behind, removed by id and reported. */

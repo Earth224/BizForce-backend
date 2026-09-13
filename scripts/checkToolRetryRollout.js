@@ -31,6 +31,12 @@
 
 require("dotenv").config();
 
+/* WHOSE ACCOUNT, DECIDED BEFORE ANYTHING ELSE HAPPENS — before the server is
+   required, before a single row is written. If no subject is named, this ends
+   the process here and says what to set. See scripts/checkRunResidue.js. */
+const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
+const SUBJECT_USER_ID = resolveSubjectAccount();
+
 const path = require("path");
 const REPO = path.join(__dirname, "..");
 
@@ -89,10 +95,10 @@ let failures = 0;
    a crash mid-run left rows behind because cleanup only ran on the happy
    path; scripts/checkRunResidue.js is where that is fixed, once, for all
    three scripts. */
-const { createResidueGuard } = require("./checkRunResidue");
 const residue = createResidueGuard({
   supabase: supabase,
   name: "toolRetryRollout",
+  subject: SUBJECT_USER_ID,
   tables: ["ai_tasks", "model_calls"]
 });
 residue.install();
@@ -203,9 +209,8 @@ const ROUTES = [
 (async function () {
   console.log("checkToolRetryRollout — live database\n");
 
-  const { data: someUser } = await supabase.from("users").select("id").limit(1).maybeSingle();
-  if (!someUser) { console.error("no users row to attribute check rows to"); process.exit(1); }
-  const userId = someUser.id;
+  /* The account named in the environment, not whichever row came first. */
+  const userId = SUBJECT_USER_ID;
 
   /* Before anything is written: what a previous crashed run left. */
   await residue.sweepPrevious(userId);
