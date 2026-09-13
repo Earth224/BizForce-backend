@@ -9307,6 +9307,46 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── TOOL-SPECS MUST STAY ABOVE /api/agents/:type ───────────────────────────
+
+   THIS REGISTRATION'S POSITION IS ITS CORRECTNESS. Express matches in
+   registration order, and the route directly below this one — /api/agents/:type
+   — matches ANY single segment, tool-specs included. Registered after it, as
+   this route was until now, it never received a single request: every call
+   reached the :type handler, which looked for an agent of type "tool-specs",
+   found none, and answered 404 "agent not found". Registered and reachable are
+   not the same thing, and only the second one is visible to a caller.
+
+   It sits immediately above :type rather than anywhere else that would also
+   work, because THIS is where the rule has to be read. A future literal route
+   under /api/agents is going to be written next to its siblings, and the
+   sibling it must beat is the one on the very next line.
+
+   agentToolCatalogueWithSpecs() is declared further down the file and is a
+   function declaration, so it is hoisted; it walks app._router.stack at REQUEST
+   time, by which point every route in the file is mounted. Moving the
+   registration earlier moves when the route is MOUNTED, not when the walk runs,
+   so the catalogue it returns is unchanged.
+
+   The registry, inspectable. Read-only, per authenticated user like every other
+   agent surface; it exposes route shapes, not data. */
+app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
+  return res.json({
+    success: true,
+    agents: agentToolCatalogueWithSpecs()
+  });
+});
+
+/* A LITERAL GET UNDER /api/agents MUST BE REGISTERED ABOVE THIS ROUTE.
+
+   :type matches any single segment, so it swallows /api/agents/<word> for every
+   word — and it answers 404 "agent not found", which reads exactly like a route
+   that was never mounted. /api/agents/tool-specs spent its whole life that way;
+   the boot check reports any route shadowed this way, but the cheapest place to
+   get it right is here, while writing the route.
+
+   Two-segment paths (/api/agents/seo/optimize-count, /api/agents/sales/leads)
+   are unaffected: :type matches one segment only. */
 app.get("/api/agents/:type", requireAuth, async function (req, res, next) {
   try {
     const type = String(req.params.type || "").toLowerCase().trim();
@@ -25836,14 +25876,10 @@ function checkToolInputSpecsAgainstRouter() {
   return { routes: routes.length, routes_without_spec: routesWithoutSpec, specs_without_route: specsWithoutRoute };
 }
 
-/* The registry, inspectable. Read-only, per authenticated user like every other
-   agent surface; it exposes route shapes, not data. */
-app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
-  return res.json({
-    success: true,
-    agents: agentToolCatalogueWithSpecs()
-  });
-});
+/* THE /api/agents/tool-specs ROUTE USED TO BE REGISTERED HERE, and was
+   unreachable for it. It is now registered above app.get("/api/agents/:type")
+   — search for TOOL-SPECS MUST STAY ABOVE. Nothing else moved; the catalogue
+   helpers it calls are still the two functions above this line. */
 
 /* ══════════════════════════════════════════════════════════════════════════
    THE AGENT CHAIN DISPATCHER — shipped inert.
