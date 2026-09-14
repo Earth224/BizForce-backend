@@ -1,0 +1,118 @@
+-- 110_marketplace_listings_revoke_anon_select.sql
+--
+-- TAKE AWAY ANON'S READ OF marketplace_listings.
+--
+-- THE EXPOSURE. RLS FILTERS ROWS, NOT COLUMNS. The row policy on this table is
+-- correct and is not what is being changed here:
+--
+--   CREATE POLICY marketplace_listings_select_all ON marketplace_listings
+--     FOR SELECT USING (status = 'active' OR seller_id = auth.uid());
+--
+-- It does exactly what it says: an anonymous reader sees the active listings
+-- and not the paused ones — verified against the live database, where the
+-- service role sees 6 rows and anon sees the 3 active ones. What it cannot do
+-- is limit WHICH COLUMNS of those rows come back, because no row policy can.
+-- So anon receives all 18 columns of every active listing, including
+-- digital_file_path and digital_file_name — the object path and filename of a
+-- paid digital good, which migration 042 states is to be served only through a
+-- time-limited signed URL, "never a public URL".
+--
+-- NOT HYPOTHETICAL, AND NOT WAITING ON A FIRST UPLOAD. A seller has already
+-- uploaded a file: one row carries a real digital_file_path and the filename of
+-- the product. That row is 'paused', so the row policy hides it from anon
+-- today. The day it is set to 'active' — the ordinary thing a seller does to
+-- sell something — its path and filename become anonymously readable. The gap
+-- between the current state and the leak is one status change by the person
+-- least likely to know this is here.
+--
+-- WHAT THE LEAK IS AND IS NOT. The bucket is private and was verified so: an
+-- anonymous GET of the public URL for bf-digital-goods answers 400, and an
+-- anonymous createSignedUrl is refused. Knowing the path does not fetch the
+-- file. This is disclosure of the filename, the seller's uuid and the upload
+-- timestamp, not a download. Worth fixing, worth not overstating.
+--
+-- ── WHY REVOKE RATHER THAN A COLUMN-LEVEL GRANT ───────────────────────────
+--
+-- A column-level GRANT SELECT (id, title, ...) TO anon would also close the
+-- leak, and it was the first candidate. It is rejected because NOTHING READS
+-- THIS TABLE AS ANON:
+--
+--   * No browser code anywhere in the frontend constructs a Supabase client.
+--     A search for supabase.co, createClient and SUPABASE_ANON across every
+--     .html and .js in the frontend repo returns nothing. The anon key is used
+--     for auth and nothing else.
+--   * Every storefront page goes through the server API instead:
+--     listing.html -> GET /api/marketplace/listings/:id, and
+--     garage-sale.html -> GET /api/marketplace/listings.
+--   * Both of those routes use the module-level client built with
+--     SUPABASE_SERVICE_KEY, which bypasses RLS and holds its own grants.
+--
+-- So a column-level grant would be a permission with no reader, carrying a
+-- list of columns that must be kept in step with a storefront query it is not
+-- connected to. The next column added to this table would be exposed or not
+-- exposed by whether someone remembered this file. A grant nothing uses is a
+-- grant that will be forgotten, and the safe version of a forgotten grant is
+-- one that does not exist.
+--
+-- If a public storefront ever does need to read this table directly, the thing
+-- to add is a VIEW over the columns it needs, granted to anon — not this grant
+-- back. A view names its columns in one place and cannot silently widen when
+-- the table gains a column.
+--
+-- THE SERVICE KEY IS UNAFFECTED. service_role holds its own explicit grant and
+-- additionally bypasses RLS; revoking from anon cannot touch it. Both listing
+-- routes keep working exactly as they do now, which
+-- scripts/checkMarketplaceAnonRead.js verifies by invoking the real route
+-- handlers rather than a copy of their queries.
+--
+-- RE-RUNNABLE. REVOKE of a privilege that is not held is a no-op, not an
+-- error, so running this twice changes nothing the second time.
+--
+-- PURELY RESTRICTIVE. No column is dropped, no row is written, no row is
+-- deleted, no existing migration is renumbered. 110 was unused; 109 was the
+-- highest before this.
+
+-- The named grant. Supabase grants table privileges to anon explicitly, so
+-- this is the one that matters.
+REVOKE SELECT ON public.marketplace_listings FROM anon;
+
+-- Belt and braces, and harmless: if the privilege was ever granted to PUBLIC
+-- instead of to the named role, the statement above would leave the read
+-- intact and this one closes it. Where no such grant exists this is a no-op.
+-- It cannot affect service_role or the table owner, both of which hold
+-- explicit grants that a REVOKE FROM PUBLIC does not reach.
+REVOKE SELECT ON public.marketplace_listings FROM PUBLIC;
+
+-- ── DELIBERATELY NOT IN THIS FILE ─────────────────────────────────────────
+--
+-- marketplace_listings.media. It exists in the live database with no DDL in
+-- any migration, and documenting it was considered here and rejected.
+--
+-- Its type and nullability ARE established: PostgREST reports format "jsonb",
+-- and lists media among the table's required properties, which is how it
+-- describes a NOT NULL column. Its DEFAULT is not established, and could not
+-- be read without access to information_schema, which this project's
+-- credentials do not provide.
+--
+-- The reason that matters rather than being a technicality: the same PostgREST
+-- description reports no default for `tags`, and migration 006 shows tags is
+-- `text[] NOT NULL DEFAULT '{}'`. The source is demonstrably unreliable for
+-- defaults on exactly the class of column media belongs to. Writing
+-- "DEFAULT '[]'::jsonb" here on the strength of it would be a guess that looks
+-- like a record, and it would be believed by whoever rebuilds this database
+-- from source — at which point a wrong default is worse than no definition,
+-- because nothing would report the difference.
+--
+-- What documenting it needs is one read of information_schema.columns for
+-- column_default, is_nullable and data_type. Then an
+-- ALTER TABLE ... ADD COLUMN IF NOT EXISTS matching what is actually there,
+-- which is a no-op against this database and correct in a rebuilt one.
+--
+-- ── ALSO NOT IN THIS FILE, AND WORTH A DECISION ───────────────────────────
+--
+-- The `authenticated` role's SELECT on this table is untouched. This product
+-- does not use Supabase Auth at all — auth.users is empty and sessions are a
+-- custom JWT over public.users — so no request ever runs as `authenticated`
+-- either, and that grant is as unused as anon's was. It is left alone because
+-- the change asked for was anon's read, and widening a security change beyond
+-- what was asked is its own kind of mistake.
