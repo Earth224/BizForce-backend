@@ -1788,7 +1788,7 @@ async function orchestrateAgentWorkflow(options) {
              nothing to mirror. */
           buildLanguageInstruction(salesHandoffLanguageTag, false);
 
-        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700, null, undefined, {
+        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700, userId, undefined, {
           user_id: userId,
           agent_type: "sales",
           route: "orchestrateAgentWorkflow handoff " + agentType + " -> sales"
@@ -11763,7 +11763,7 @@ async function recordModelCall(details) {
       }
     }
 
-    var insertResult = await supabase
+    let insertResult = await supabase
       .from("model_calls")
       .insert({
         user_id: userId,
@@ -11773,8 +11773,46 @@ async function recordModelCall(details) {
         input_tokens: input.value,
         output_tokens: output.value,
         chain_id: d.chainId || null,
-        chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0
+        chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0,
+        /* WHICH KEY PAID. Migration 109. Passed in rather than re-derived here,
+           because the only moment this is knowable for certain is the moment
+           the key was resolved — asking user_api_keys again now would answer a
+           question about the present, not about the call that was just made. */
+        funded_by: d.fundedBy || null,
+        fallback_reason: d.fallbackReason || null
       });
+
+    /* THE LEDGER MUST SURVIVE AN UNAPPLIED MIGRATION.
+       funded_by and fallback_reason arrive in migration 109. This code can
+       reach production before that migration is applied — the database is not
+       rebuilt from source and migrations are run by hand — and PostgREST
+       rejects the WHOLE insert when it names a column that does not exist. So
+       a deploy in the wrong order would not merely lose the new columns, it
+       would lose every ledger row: the spend would still happen and nothing
+       would record it.
+
+       One retry without the two new fields, then. The row lands either way and
+       the log says exactly which column is missing and what to apply. The same
+       shape run.fail already uses when ai_tasks.output is refused. */
+    if (insertResult.error && /funded_by|fallback_reason/i.test(insertResult.error.message || "")) {
+      console.error("[ledger] model_calls has no funded_by/fallback_reason column — migration " +
+        "109_model_calls_funded_by.sql has not been applied to this database. Re-inserting the " +
+        "row WITHOUT the funding columns so the spend is still recorded. Which key paid for this " +
+        "call is NOT being captured until that migration is applied.");
+
+      insertResult = await supabase
+        .from("model_calls")
+        .insert({
+          user_id: userId,
+          agent_type: agentType,
+          route: route,
+          model: modelName,
+          input_tokens: input.value,
+          output_tokens: output.value,
+          chain_id: d.chainId || null,
+          chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0
+        });
+    }
 
     if (insertResult.error) {
       console.error("[ledger] MISSING LEDGER ENTRY — the model_calls insert failed: " +
@@ -11816,15 +11854,24 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
      agent_type, route, chain_id, chain_depth — rather than reusing `userId`
      above for it, and that separation is load-bearing.
 
-     THE THIRD ARGUMENT SELECTS WHOSE ANTHROPIC KEY PAYS. It is handed to
-     resolveAnthropicKey, which looks for a stored BYO key for that user and
-     falls back to the platform key only when there is none. So a call site
-     that started passing a user there in order to get its ledger row
-     attributed would also move that call off the platform key and onto the
-     user's own — thirty-odd sites doing that at once is a billing migration
-     wearing the clothes of bookkeeping. The comment at POST
-     /api/insights/page drew this distinction before this table existed; this
-     keeps it.
+     THE THIRD ARGUMENT SELECTS WHOSE ANTHROPIC KEY PAYS; ledger.user_id only
+     says who the spend is ATTRIBUTED to. The two are still separate arguments
+     and the separation is still load-bearing — but they no longer disagree by
+     default, which they used to.
+
+     WHAT CHANGED AND WHY. Every user-facing call site passed null here, so
+     every agent task ran on the platform key even when the user had stored
+     their own. settings.html says "Bring your own Anthropic API key so your AI
+     agents run on your own account", and for agent work that was not true. The
+     twelve call sites a person's action reaches now pass their user id.
+
+     THE ONE SITE THAT STILL PASSES NULL ON PURPOSE is convertSingleLead: it
+     drafts outreach replies sent from the platform's OWN Bluesky and Mastodon
+     accounts, to find customers for this product. That is the platform's
+     marketing, not work done for the account it is attributed to, so the
+     platform pays for it. Its ledger row still names the user, because that is
+     whose pipeline the lead belongs to — which is exactly the case the two
+     arguments exist to express.
 
      Falls back to the billing userId when ledger.user_id is absent, because a
      site that passes a user for billing demonstrably knows who it is. */
@@ -11863,7 +11910,20 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
      tomorrow. */
   await enforceDailyModelCallLimit(ledgerUserId, ledgerContext.route || "callAnthropicText");
 
-  var apiKey = await resolveAnthropicKey(userId);
+  /* .withSource rather than the plain resolver: the ledger row below has to
+     record which key actually paid, and this is the only moment that is
+     knowable. See lib/resolveAnthropicKey.js. */
+  var resolvedKey = await resolveAnthropicKey.withSource(userId);
+  var apiKey = resolvedKey.key;
+
+  /* THE FALLBACK, SAID OUT LOUD. Only when a user was actually named: a call
+     that named nobody was always going to be platform-funded and saying so on
+     every background call would bury the case that matters. */
+  if (userId && resolvedKey.source === "platform" && resolvedKey.reason !== "decrypt_failed") {
+    console.warn("[key] user " + userId + " has no usable stored Anthropic key (" +
+      resolvedKey.reason + ") — this call is funded by the PLATFORM key. Route: " +
+      (ledgerContext.route || "unknown") + ". Recorded in model_calls.funded_by.");
+  }
   // Haiku keeps the original 120s budget so no existing caller changes. A
   // non-default model is here because the task is large — Sonnet writing
   // 16000 tokens takes far longer than Haiku ever does.
@@ -11933,7 +11993,9 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
         model:      response.model || model,
         usage:      response.usage,
         chainId:    ledgerContext.chain_id,
-        chainDepth: ledgerContext.chain_depth
+        chainDepth: ledgerContext.chain_depth,
+        fundedBy:      resolvedKey.source,
+        fallbackReason: resolvedKey.reason
       });
 
       return {
@@ -12112,7 +12174,7 @@ async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialSto
        task does not cost two preference reads. */
     executiveLanguageBlock(languageTag, false);
 
-  var repairResult = await callAnthropicText(repairPrompt, 4096, null, undefined, ledgerContext || {
+  var repairResult = await callAnthropicText(repairPrompt, 4096, (ledgerContext && ledgerContext.user_id) || null, undefined, ledgerContext || {
     route: "finalizeExecutiveTaskOutput repair (caller supplied no ledger context)"
   });
   output = mergeExecutiveAssignmentOutput(output, repairResult.text);
@@ -12148,7 +12210,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           ? executiveLanguageBlock(taskLanguageTag, true)
           : buildLanguageInstruction(taskLanguageTag, true);
 
-        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, null, undefined, {
+        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, userId, undefined, {
           user_id: userId,
           agent_type: agentType,
           route: "processAiTask"
@@ -18574,7 +18636,7 @@ app.post("/api/insights/page", requireAuth, requireActiveSubscription, aiLimiter
          stored preference this appends nothing and the insight stays English. */
       buildLanguageInstruction(insightLanguageTag, false);
 
-    var result = await callAnthropicText(prompt, 150, null, undefined, {
+    var result = await callAnthropicText(prompt, 150, req.user.id, undefined, {
       user_id: req.user.id,
       route: "POST /api/insights/page"
     });
@@ -18818,7 +18880,7 @@ app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiL
     }
 
     var taskRecord = pendingInsert.data;
-    var generation = await callAnthropicText(finalPrompt, 3000, null, undefined, {
+    var generation = await callAnthropicText(finalPrompt, 3000, req.user.id, undefined, {
       user_id: req.user.id,
       agent_type: "seo",
       route: "POST /api/agents/seo/optimize"
@@ -19154,7 +19216,7 @@ async function toolGenerateWithOneRetry(options) {
   for (var attempt = 1; attempt <= 2; attempt++) {
     var promptForAttempt = attempt === 1 ? opts.prompt : (opts.prompt + opts.correction);
 
-    var generation = await callAnthropicText(promptForAttempt, opts.maxTokens, null, undefined, opts.ledger);
+    var generation = await callAnthropicText(promptForAttempt, opts.maxTokens, (opts.ledger && opts.ledger.user_id) || null, undefined, opts.ledger);
     var text = (generation && generation.text) ? generation.text : "";
 
     /* The route's own parse, in the route's own scope. It assigns the route's
@@ -19804,7 +19866,7 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
            comparable titles are all the seller's own text, quoted above. */
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+      var generation = await callAnthropicText(prompt, 2500, req.user.id, undefined, {
         user_id: req.user.id,
         agent_type: "etsy",
         route: "POST /api/agents/etsy/pricing-strategy"
@@ -21838,7 +21900,7 @@ app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription,
           "\n\nTASK INSTRUCTIONS:\n" + instruction +
           buildLanguageInstruction(languageTag, true);
 
-        var generation = await callAnthropicText(prompt, 2000, null, undefined, {
+        var generation = await callAnthropicText(prompt, 2000, req.user.id, undefined, {
           user_id: req.user.id,
           agent_type: "ads",
           route: "POST /api/agents/ads/policy-check"
@@ -24483,7 +24545,7 @@ app.post("/api/agents/analytics/funnel", requireAuth, requireActiveSubscription,
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+      var generation = await callAnthropicText(prompt, 2500, req.user.id, undefined, {
         user_id: req.user.id,
         agent_type: "analytics",
         route: "POST /api/agents/analytics/funnel"
@@ -24715,7 +24777,7 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
         "\n\nTASK INSTRUCTIONS:\n" + instruction +
         buildLanguageInstruction(languageTag, true);
 
-      var generation = await callAnthropicText(prompt, 2500, null, undefined, {
+      var generation = await callAnthropicText(prompt, 2500, req.user.id, undefined, {
         user_id: req.user.id,
         agent_type: "analytics",
         route: "POST /api/agents/analytics/kpi-review"
@@ -28025,7 +28087,7 @@ app.post("/api/self-reviews/run", requireAuth, requireActiveSubscription, aiLimi
     var review = await generateSelfReview({
       supabase:          supabase,
       callAnthropicText: function (selfReviewPrompt, selfReviewMaxTokens) {
-        return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, null, undefined, {
+        return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, req.user.id, undefined, {
           user_id: req.user.id,
           agent_type: "executive",
           route: "generateSelfReview (" + periodType + ")"
@@ -37578,6 +37640,20 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     console.error("[sales/convert] ATTEMPT NOT COUNTED for " + lead.post_uri + " — this lead can be redrafted past the ceiling of " + DRAFT_ATTEMPT_CEILING + ", every attempt a paid call:", attemptErr.message || attemptErr);
   }
 
+  /* NULL HERE IS THE DECISION, NOT AN OVERSIGHT. Every other call site moved
+     onto the user own key; this one did not.
+
+     What this drafts is a reply sent from the platform OWN Bluesky and
+     Mastodon accounts, to a stranger, to find customers for this product. The
+     user_id below is whose lead pipeline the row belongs to — not who asked
+     for the work and not who should pay for it. Billing a user own Anthropic
+     key for the platform marketing would be worse than the bug this commit
+     fixes, because they never asked for it and would have no way to see why
+     their spend went up.
+
+     Its ledger row is still attributed to the user and now also records
+     funded_by = platform with fallback_reason = no_user, so this shows up in
+     the same query as everything else rather than being invisible. */
   var generation = await callAnthropicText(finalPrompt, 700, null, undefined, {
     user_id: userId,
     agent_type: "sales",
@@ -39938,7 +40014,7 @@ async function runSelfReviewPass() {
         var review = await generateSelfReview({
           supabase:          supabase,
           callAnthropicText: function (selfReviewPrompt, selfReviewMaxTokens) {
-            return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, null, undefined, {
+            return callAnthropicText(selfReviewPrompt, selfReviewMaxTokens, userId, undefined, {
               user_id: userId,
               agent_type: "executive",
               route: "generateSelfReview (" + periodType + ")"
@@ -40899,5 +40975,9 @@ module.exports = {
 
   /* Replaces the answer every background pass gets from getUserPlan, so a check
      can show its refusal assertions failing. Null in every real run. */
-  __setPassPlanLookup: function (fn) { PASS_PLAN_LOOKUP.override = fn || null; }
+  __setPassPlanLookup: function (fn) { PASS_PLAN_LOOKUP.override = fn || null; },
+
+  /* For scripts/checkKeyFunding.js, which has to observe which KEY a call was
+     made with. That is decided inside this function and nowhere else. */
+  __callAnthropicText: callAnthropicText
 };
