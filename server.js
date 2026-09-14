@@ -27124,6 +27124,51 @@ function chainFanoutNote(chain) {
   }
 }
 
+/* ── HOW FAST A USER MAY DISPATCH, WHICHEVER CHAIN IT IS ──────────────────
+   THE STEP CAP WAS DOING THIS JOB AND SHOULD NOT HAVE BEEN. A dispatched step
+   reaches its handler by walking the router, which means it never passes
+   aiLimiter — the 20-requests-per-minute bound every hand-clicked agent route
+   sits behind. Capping routines at three steps hid that: three was slow enough
+   not to matter. Ten is not, so the bound it was standing in for has to exist
+   for real.
+
+   MATCHED TO aiLimiter AT 20 A MINUTE, NOT SET HIGHER. A routine is a
+   convenience for work the user could do by hand, so it should not be a way to
+   spend FASTER than by hand. The daily ceiling is unchanged either way —
+   enforceDailyModelCallLimit counts dispatched steps like any other call — so
+   what this bounds is the burst, not the budget: without it, 20 runs a minute
+   of a 10-step routine is 200 calls a minute against a 250-a-day allowance,
+   which empties a user's day in about 75 seconds instead of 13 minutes.
+
+   The cost is real and worth stating: a 10-step routine consumes half a
+   minute's allowance, so two runs of it in one minute is the limit. That is the
+   same money a person could spend in that minute by clicking, which is the
+   point.
+
+   Counted per user per wall-clock minute, on ATTEMPT — an attempt is what can
+   cost money. Bounded the same way the fan-out map is, so a long-lived process
+   cannot grow it without limit. */
+function dispatchPerMinuteLimit() { return chainLimit("ROUTINE_STEPS_PER_MINUTE", 20, 1, 120); }
+
+var DISPATCH_RATE_TRACK_CAP = 5000;
+var dispatchRateCounts = new Map();
+
+function dispatchRateKey(userId, now) {
+  return String(userId) + "|" + Math.floor((now || Date.now()) / 60000);
+}
+
+function dispatchRateSoFar(userId, now) {
+  return dispatchRateCounts.get(dispatchRateKey(userId, now)) || 0;
+}
+
+function dispatchRateNote(userId, now) {
+  var key = dispatchRateKey(userId, now);
+  dispatchRateCounts.set(key, (dispatchRateCounts.get(key) || 0) + 1);
+  if (dispatchRateCounts.size > DISPATCH_RATE_TRACK_CAP) {
+    dispatchRateCounts.delete(dispatchRateCounts.keys().next().value);
+  }
+}
+
 /* Present means: defined, not null, not a blank string, not an empty array.
    A field can be satisfied by any of its declared aliases. */
 function chainBodyHas(body, field) {
@@ -27286,12 +27331,49 @@ async function dispatchToolCall(options) {
     return chainRefusal("chain_depth_reached",
       "A dispatch from depth " + callerDepth + " would run at depth " + nextDepth + "; CHAIN_MAX_DEPTH is " + maxDepth + ".");
   }
-  var maxFanout = chainMaxFanout();
-  var fanoutSoFar = chainFanoutSoFar({ id: chain.id, depth: callerDepth });
-  if (fanoutSoFar >= maxFanout) {
-    return chainRefusal("chain_fanout_reached",
-      "The step at depth " + callerDepth + " of this chain has already dispatched " + fanoutSoFar +
-      " tool(s); CHAIN_MAX_FANOUT is " + maxFanout + ".");
+  /* ── FAN-OUT DOES NOT APPLY TO A USER-AUTHORED SEQUENCE ─────────────────
+     CHAIN_MAX_FANOUT bounds how many tools ONE STEP may dispatch when it chose
+     them itself. A routine's steps share a chain id and a depth, so they land
+     in one fan-out bucket and look identical to that — but nothing chose them
+     except the person who typed them, reviewed them and saved them. Counting
+     them as fan-out capped routines at three for a reason that was never about
+     routines.
+
+     chain.sequence is set only by the routine runner. CHAIN_MAX_FANOUT itself
+     is untouched and still bounds every dispatch a model originates.
+
+     WHY A FLAG AND NOT A CHAIN ID PER STEP, which was the obvious alternative:
+     a fresh chain id per step would dodge the bucket, and would break two
+     things doing it. The ledger would lose the routine — model_calls.chain_id
+     is what answers "which chain spent this", and ten ids for one routine makes
+     its spend unqueryable as a unit, which is the one question the column was
+     added for. And CHAIN_MAX_CALLS would stop working: each step would arrive
+     as a brand-new chain with callsSoFar 0, so the total-call ceiling would
+     never be reached however long the routine. Incrementing the DEPTH per step
+     was the other alternative and is worse still — it would exhaust
+     CHAIN_MAX_DEPTH after two steps and would assert the steps are nested
+     inside one another, which is not what a routine is. */
+  if (chain.sequence !== true) {
+    var maxFanout = chainMaxFanout();
+    var fanoutSoFar = chainFanoutSoFar({ id: chain.id, depth: callerDepth });
+    if (fanoutSoFar >= maxFanout) {
+      return chainRefusal("chain_fanout_reached",
+        "The step at depth " + callerDepth + " of this chain has already dispatched " + fanoutSoFar +
+        " tool(s); CHAIN_MAX_FANOUT is " + maxFanout + ".");
+    }
+  }
+
+  /* ── AND THE RATE, WHICH APPLIES TO EVERY DISPATCH ──────────────────────
+     Checked here rather than at the route, because this is the path that
+     bypasses aiLimiter. Before anything is spent, like the three above. */
+  var perMinute = dispatchPerMinuteLimit();
+  var dispatchedThisMinute = dispatchRateSoFar(userId);
+  if (dispatchedThisMinute >= perMinute) {
+    return chainRefusal("dispatch_rate_reached",
+      "This account has dispatched " + dispatchedThisMinute + " step(s) in the last minute; " +
+      "ROUTINE_STEPS_PER_MINUTE is " + perMinute + ". Dispatched steps do not pass aiLimiter, so " +
+      "this is the bound that keeps a routine from spending faster than clicking would. The daily " +
+      "limit is unaffected; wait for the next minute.");
   }
 
   // 4. the target must be a real, dispatchable tool
@@ -27340,9 +27422,17 @@ async function dispatchToolCall(options) {
     return chainRefusal("handler_not_found", "No POST handler is mounted at " + route.path + ".");
   }
 
-  // Everything is checked. This attempt counts toward the step's fan-out now,
-  // before the handler runs, because from here it can cost money.
-  chainFanoutNote({ id: chain.id, depth: callerDepth });
+  /* Everything is checked. This attempt counts NOW, before the handler runs,
+     because from here it can cost money.
+
+     The rate counter moves for every dispatch including a sequence step — the
+     whole point of it is to bound routines, which are exempt from fan-out. The
+     fan-out counter moves only when fan-out is what applies, so a routine does
+     not fill a bucket nothing will ever read. */
+  dispatchRateNote(userId);
+  if (chain.sequence !== true) {
+    chainFanoutNote({ id: chain.id, depth: callerDepth });
+  }
 
   console.log("[chain] dispatch " + key + " for user " + userId + " — chain " + chain.id +
     ", depth " + nextDepth + ", call " + (callsSoFar + 1) + " of at most " + maxCalls + ".");
@@ -28832,31 +28922,51 @@ function recordSavedPromptUse(row) {
 
 var ROUTINE_NAME_MAX = 100;
 
-/* HOW MANY STEPS A ROUTINE MAY HOLD, READ LIVE AND NEVER HARDCODED.
+/* HOW MANY STEPS A ROUTINE MAY HOLD. ITS OWN LIMIT, NOT A BORROWED ONE.
 
-   chainMaxCalls() and chainMaxFanout() both read their environment variable at
-   call time (clamped: calls 1-50, fan-out 1-10), so this follows a limit changed
-   on the server without an edit here.
+   This used to be Math.min(chainMaxCalls(), chainMaxFanout()), which resolved
+   to 3. That was correct arithmetic about the wrong limit. CHAIN_MAX_FANOUT
+   exists to stop ONE STEP spraying tools it chose itself — the dispatcher's own
+   header says so: "a step cannot spray a dozen tools sequentially and pass a
+   limit meant to stop exactly that". The subject of that sentence is a model
+   improvising. A routine is a list a person typed, reviewed, saved and chose to
+   run again. Same shape in the dispatcher, entirely different risk, and it was
+   only ever fan-out that stopped it because routine steps happen to share one
+   (chain id, depth) bucket.
 
-   IT IS THE LOWER OF THE TWO, AND FAN-OUT IS USUALLY THE LOWER ONE. Every step
-   of a routine dispatches from the same chain id at the same depth, and
-   dispatchToolCall counts fan-out per (chain id, caller depth) — so the steps of
-   a routine are siblings in one fan-out bucket, not a ladder. With the default
-   CHAIN_MAX_FANOUT of 3 and CHAIN_MAX_CALLS of 10, a six-step routine would save
-   happily and then refuse its fourth step every single time it ran.
+   That accident is fixed in the same commit that this number is: routine
+   dispatches no longer count against the fan-out bucket at all (see
+   chain.sequence in dispatchToolCall), so nothing borrowed is holding this up
+   any more.
 
-   Capping at the lower limit is the whole point of reading them live: a routine
-   that cannot finish should be impossible to save, not a surprise at run time.
-
-   DO NOT "FIX" THIS BACK TO chainMaxCalls() ALONE. It looks like the wrong
-   limit because the cap is about how many calls a routine makes, and
-   CHAIN_MAX_CALLS is the call limit — but the steps are siblings, not a ladder,
-   so fan-out is what actually stops them, and it is the smaller number by
-   default. A routine capped at CHAIN_MAX_CALLS would save nine steps and refuse
-   the fourth one at run time, every time, with nothing in the save path to
-   explain why. */
+   READ THE SAME WAY THE CHAIN LIMITS ARE, through chainLimit: absent or blank
+   gives the default, a whole number is clamped into range, and anything else
+   logs an error and FALLS BACK TO THE DEFAULT. That is worth being explicit
+   about, because it is NOT the fail-closed shape modelCallDailyLimit uses — a
+   garbled MODEL_CALLS_DAILY_LIMIT_PER_USER refuses the call outright. The
+   difference is defensible here and only here: chainLimit can never widen to
+   "no limit" because it clamps, so its worst case is a bounded default rather
+   than an unbounded one, and refusing to save any routine because an unrelated
+   variable was mistyped would be a worse answer than capping at ten. */
 function routineMaxSteps() {
-  return Math.min(chainMaxCalls(), chainMaxFanout());
+  var configured = chainLimit("ROUTINE_MAX_STEPS", 10, 1, 50);
+
+  /* THE ONE WAY THIS CAN STILL LIE, said out loud rather than silently
+     reintroduced. CHAIN_MAX_CALLS still counts a routine's steps as one chain,
+     so a ROUTINE_MAX_STEPS above it would let a routine SAVE more steps than it
+     can RUN — the exact save-then-fail-forever trap the old Math.min existed to
+     prevent. Not clamped here, because the instruction is that this returns
+     ROUTINE_MAX_STEPS; reported instead, every time it is read, so a
+     misconfiguration announces itself rather than waiting for a user to hit it. */
+  var calls = chainMaxCalls();
+  if (configured > calls) {
+    console.error("[routines] ROUTINE_MAX_STEPS is " + configured + " but CHAIN_MAX_CALLS is " +
+      calls + ". A routine longer than " + calls + " steps will SAVE and then fail at step " +
+      (calls + 1) + " every time it runs. Raise CHAIN_MAX_CALLS to at least " + configured +
+      ", or lower ROUTINE_MAX_STEPS.");
+  }
+
+  return configured;
 }
 
 /* One step, checked with the dispatcher's own machinery rather than a copy of
@@ -28924,8 +29034,8 @@ function routineStepsProblem(steps) {
   if (steps.length > maxSteps) {
     return {
       error: "A routine may hold at most " + maxSteps + " steps; this one has " + steps.length + ". " +
-        "The limit is the lower of CHAIN_MAX_CALLS (" + chainMaxCalls() + ") and CHAIN_MAX_FANOUT (" +
-        chainMaxFanout() + "), because every step of a routine dispatches from one chain at one depth.",
+        "The limit is ROUTINE_MAX_STEPS (" + maxSteps + "), which is the routine's own ceiling — " +
+        "CHAIN_MAX_FANOUT does not apply to a list you typed yourself.",
       max_steps: maxSteps
     };
   }
@@ -29189,7 +29299,11 @@ app.post("/api/routines/:id/run", requireAuth, requireActiveSubscription, aiLimi
           agentType: agent,
           tool: tool,
           body: (step.inputs && typeof step.inputs === "object" && !Array.isArray(step.inputs)) ? step.inputs : {},
-          chain: { id: chainId, depth: 0, callsSoFar: i }
+          /* sequence: true — the steps of this routine are a list the user
+             typed, so CHAIN_MAX_FANOUT does not apply to them. It is the ONLY
+             place this flag is set; every other dispatch is fan-out-counted as
+             before. See dispatchToolCall. */
+          chain: { id: chainId, depth: 0, callsSoFar: i, sequence: true }
         });
 
         if (dispatched && dispatched.ok === true) {
@@ -41077,6 +41191,7 @@ app.listen(PORT, function () {
   if (agentChainingEnabled()) {
     console.log("[startup] agent chaining ENABLED (ENABLE_AGENT_CHAINING=\"true\") — dispatchToolCall may run tools; " +
       "CHAIN_MAX_DEPTH=" + chainMaxDepth() + ", CHAIN_MAX_FANOUT=" + chainMaxFanout() + ", CHAIN_MAX_CALLS=" + chainMaxCalls() +
+      ", ROUTINE_MAX_STEPS=" + routineMaxSteps() + ", ROUTINE_STEPS_PER_MINUTE=" + dispatchPerMinuteLimit() +
       ". Nothing dispatches yet in this build.");
   } else {
     console.log("[startup] agent chaining disabled (ENABLE_AGENT_CHAINING not exactly \"true\"); dispatchToolCall refuses every call.");
@@ -41281,5 +41396,12 @@ module.exports = {
   /* For scripts/checkMarketplaceUsdSold.js. The webhook branch cannot be
      driven through the HTTP route without forging a Stripe signature, so the
      check hands the real handler a real-shaped event instead. */
-  __handleStripeEvent: handleStripeEvent
+  __handleStripeEvent: handleStripeEvent,
+
+  /* For scripts/checkRoutineStepCap.js, which dispatches directly — without
+     sequence:true — to prove CHAIN_MAX_FANOUT still guards everything that is
+     not a user-authored routine. */
+  __dispatchToolCall: dispatchToolCall,
+  __routineMaxSteps: routineMaxSteps,
+  __dispatchPerMinuteLimit: dispatchPerMinuteLimit
 };
