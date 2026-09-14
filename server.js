@@ -3298,6 +3298,56 @@ async function recordRevenueEvent(event, fields) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   WHAT A LOST PAID ORDER HAS TO SAY FOR ITSELF.
+
+   Every failure in the marketplace_usd branch used to print the caught error
+   and nothing else. A real one looked like this:
+
+     Failed to record marketplace USD order: { code: '23503', details: 'Key
+     (listing_id)=(...) is not present in table "marketplace_listings".', ... }
+
+   The customer has been charged at that point. From that line a person can
+   learn which listing was involved and nothing else: not who paid, not how
+   much, not which Stripe session it was. All four of those — buyer, seller,
+   amount, session — are in scope on that line and none of them was printed.
+   Reconciling meant exporting from Stripe and diffing against the orders
+   table, if anyone thought to.
+
+   So every exit from that branch that leaves money unaccounted for goes
+   through here, and prints all six values. It is one line of output and it is
+   the difference between an order somebody can find and one that is gone.
+
+   THE SESSION ID IS THE KEY TO EVERYTHING ELSE. With it, the payment, the
+   card, the receipt and the refund button are all one lookup away in the
+   Stripe dashboard, so it is printed even when the rest is null. */
+/* 23503 is "foreign key violation" generally; the constraint name is what says
+   it was THIS one. Both are checked so that a different foreign key failing
+   cannot be mistaken for a deleted listing and quietly retried as null. */
+function isListingForeignKeyViolation(error) {
+  if (!error || error.code !== "23503") return false;
+  const text = String(error.message || "") + " " + String(error.details || "") + " " +
+    String(error.constraint || "");
+  return text.indexOf("listing_id") !== -1;
+}
+
+function marketplaceUsdFailure(headline, ctx, error) {
+  const c = ctx || {};
+  const err = error || {};
+  console.error(
+    "[marketplace-usd] " + headline + "\n" +
+    "    session_id : " + (c.sessionId || "(none)") + "\n" +
+    "    buyer_id   : " + (c.buyerId || "(none)") + "\n" +
+    "    seller_id  : " + (c.sellerId || "(none)") + "\n" +
+    "    amount_usd : " + (c.amountUsd === null || c.amountUsd === undefined ? "(none)" : c.amountUsd) +
+      " (cents)\n" +
+    "    listing_id : " + (c.listingId || "(none)") + "\n" +
+    "    error_code : " + (err.code || "(none)") + "\n" +
+    "    error      : " + ((err.message || err.details) ? ((err.message || "") + " " + (err.details || "")).trim() : String(error)) + "\n" +
+    "    THE CUSTOMER HAS BEEN CHARGED. Look the session up in Stripe to confirm the amount and to refund it if this cannot be recovered."
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    MARK A LISTING SOLD AFTER A USD PAYMENT — AND NEVER THROW.
 
    THE BFC PATH DOES THIS PROPERLY AND THIS CANNOT. bfc_buy_listing (migration
@@ -3395,6 +3445,20 @@ async function handleStripeEvent(event) {
     }
 
     if (meta.kind === "marketplace_usd") {
+      /* DECLARED OUTSIDE THE TRY ON PURPOSE. The catch below reports the
+         payment, so it has to be able to see this — a const inside the try is
+         invisible from the catch, and reaching for it there would throw a
+         ReferenceError on exactly the path whose job is to leave a record.
+         Seeded with what is known before anything can fail: the session id,
+         which is the key to the payment in Stripe, and the amount. */
+      let failureContext = {
+        sessionId: session.id,
+        buyerId: null,
+        sellerId: null,
+        amountUsd: session.amount_total,
+        listingId: null
+      };
+
       try {
         const { data: existingOrder, error: existingOrderError } = await supabase
           .from("marketplace_orders")
@@ -3414,33 +3478,112 @@ async function handleStripeEvent(event) {
         let listingTitle = null;
         let listingIsDigital = false;
         let listingDigitalFilePath = null;
+        let listingDigitalFileName = null;
         if (listingId) {
           const { data: listing } = await supabase
             .from("marketplace_listings")
-            .select("title, is_digital, digital_file_path")
+            .select("title, is_digital, digital_file_path, digital_file_name")
             .eq("id", listingId)
             .maybeSingle();
           listingTitle = listing ? listing.title : null;
           listingIsDigital = listing ? !!listing.is_digital : false;
           listingDigitalFilePath = listing ? listing.digital_file_path : null;
+          listingDigitalFileName = listing ? listing.digital_file_name : null;
         }
 
-        const { data: insertedOrder, error: insertError } = await supabase
-          .from("marketplace_orders")
-          .insert({
-            listing_id: listingId,
-            buyer_id: buyerId,
-            seller_id: sellerId,
-            amount_bfc: 0,
-            amount_usd: session.amount_total,
-            payment_method: "usd",
-            status: "completed",
-            listing_title: listingTitle,
-            is_digital: listingIsDigital,
-            stripe_session_id: session.id
-          })
-          .select("id")
-          .single();
+        /* Completed now the metadata has been read. Assigned rather than
+           redeclared so the catch sees the filled-in version. */
+        failureContext = {
+          sessionId: session.id,
+          buyerId: buyerId,
+          sellerId: sellerId,
+          amountUsd: session.amount_total,
+          listingId: listingId
+        };
+
+        /* THE ROW CARRIES WHAT WAS BOUGHT, not just a pointer to it.
+           listing_title and is_digital were already copies taken at purchase
+           time; digital_file_path and digital_file_name (migration 113) join
+           them so the order can serve its own download even if the listing is
+           gone by then. */
+        const orderRow = {
+          listing_id: listingId,
+          buyer_id: buyerId,
+          seller_id: sellerId,
+          amount_bfc: 0,
+          amount_usd: session.amount_total,
+          payment_method: "usd",
+          status: "completed",
+          listing_title: listingTitle,
+          is_digital: listingIsDigital,
+          digital_file_path: listingDigitalFilePath,
+          digital_file_name: listingDigitalFileName,
+          stripe_session_id: session.id
+        };
+
+        /* THE ROW THE NEXT FALLBACK BUILDS ON. Each fallback narrows this and
+           the one after it starts from the narrowed version — the first draft
+           of this code had fallback 2 rebuild from the original orderRow, so a
+           payment that needed BOTH fallbacks re-added the columns fallback 1
+           had just removed and lost the order anyway. They have to compose. */
+        let rowToInsert = orderRow;
+
+        let orderInsert = await supabase
+          .from("marketplace_orders").insert(rowToInsert).select("id").single();
+
+        /* FALLBACK 1 — MIGRATION 113 IS NOT APPLIED YET.
+           PostgREST rejects the whole insert when it names a column that does
+           not exist, so shipping this before the migration lands would lose
+           every USD order rather than merely the snapshot. The same shape the
+           model_calls ledger uses for funded_by, and run.fail for
+           ai_tasks.output: drop what the schema cannot take and keep the row. */
+        if (orderInsert.error && /digital_file_path|digital_file_name/i.test(orderInsert.error.message || "")) {
+          console.error("[marketplace-usd] marketplace_orders has no digital_file_path/digital_file_name " +
+            "column — migration 113_marketplace_orders_digital_snapshot.sql has not been applied. " +
+            "Recording the order WITHOUT the snapshot, so the payment is not lost. This order's " +
+            "download will depend on the listing continuing to exist.");
+          rowToInsert = Object.assign({}, rowToInsert);
+          delete rowToInsert.digital_file_path;
+          delete rowToInsert.digital_file_name;
+          orderInsert = await supabase
+            .from("marketplace_orders").insert(rowToInsert).select("id").single();
+        }
+
+        /* FALLBACK 2 — THE LISTING WAS DELETED BETWEEN CHECKOUT AND PAYMENT.
+           marketplace_orders.listing_id has a foreign key to
+           marketplace_listings, so an order naming a listing that no longer
+           exists is refused with 23503 — and the money is already taken. The
+           foreign key is right and the order still has to land, so it lands
+           WITHOUT the pointer and WITH everything the snapshot copied. Nothing
+           else about the row changes: the buyer, the amount, the session and
+           the file are all still there.
+
+           listing_id is nullable (migration 034), which is what makes this
+           possible rather than a schema change. */
+        if (orderInsert.error && isListingForeignKeyViolation(orderInsert.error)) {
+          marketplaceUsdFailure(
+            "LISTING DELETED BETWEEN CHECKOUT AND PAYMENT — recording the order with listing_id NULL. " +
+            "The payment is NOT lost and the buyer keeps their download; the order simply no longer " +
+            "points at a listing that has been removed.",
+            failureContext, orderInsert.error);
+
+          rowToInsert = Object.assign({}, rowToInsert, { listing_id: null });
+          orderInsert = await supabase
+            .from("marketplace_orders").insert(rowToInsert).select("id").single();
+
+          /* If THAT failed too, the second log is the only record that exists
+             of this payment anywhere in the platform. */
+          if (orderInsert.error) {
+            marketplaceUsdFailure(
+              "A PAID ORDER WAS NOT RECORDED. The retry with listing_id NULL also failed, so this " +
+              "payment exists in Stripe and NOWHERE in this database. It must be reconciled by hand " +
+              "from the session id below.",
+              failureContext, orderInsert.error);
+          }
+        }
+
+        const insertedOrder = orderInsert.data;
+        const insertError = orderInsert.error;
         if (insertError) throw insertError;
 
         /* THE ORDER IS WRITTEN FIRST AND THE STATUS SECOND, deliberately.
@@ -3493,7 +3636,10 @@ async function handleStripeEvent(event) {
             " lost the race to the unique index; the order was already recorded. Nothing to do.");
           return;
         }
-        console.error("Failed to record marketplace USD order:", error);
+        marketplaceUsdFailure(
+          "A PAID ORDER WAS NOT RECORDED. The marketplace_usd branch threw and the payment is in " +
+          "Stripe with nothing in this database to match it.",
+          failureContext, error);
       }
       // Deliberately no revenue_events row: marketplace USD runs on Stripe test mode, so recording it would pollute real MRR.
       return;
@@ -31476,9 +31622,16 @@ app.get("/api/purchases", requireAuth, async function (req, res, next) {
 
 app.get("/api/purchases/:orderId/download", requireAuth, async function (req, res, next) {
   try {
+    /* SELECT * RATHER THAN A COLUMN LIST, and not out of laziness: this route
+       has to keep working whether or not migration 113 has been applied.
+       PostgREST rejects the whole query when it names a column that does not
+       exist, so asking for digital_file_path by name would 500 this route on a
+       database where the snapshot columns are not there yet. With a star the
+       field is simply absent and the fallback below takes over. One row by
+       primary key, so the cost is nothing. */
     const { data: order, error: orderError } = await supabase
       .from("marketplace_orders")
-      .select("id, listing_id, buyer_id, is_digital")
+      .select("*")
       .eq("id", req.params.orderId)
       .eq("buyer_id", req.user.id)
       .maybeSingle();
@@ -31486,23 +31639,57 @@ app.get("/api/purchases/:orderId/download", requireAuth, async function (req, re
     if (!order) return res.status(404).json({ error: "Order not found" });
     if (order.is_digital !== true) return res.status(403).json({ error: "This purchase has no digital download" });
 
-    const { data: listing, error: listingError } = await supabase
-      .from("marketplace_listings")
-      .select("digital_file_path, digital_file_name")
-      .eq("id", order.listing_id)
-      .maybeSingle();
-    if (listingError) throw listingError;
-    if (!listing || !listing.digital_file_path) return res.status(404).json({ error: "Digital file not found" });
+    /* ── THE ORDER'S OWN SNAPSHOT FIRST, THE LISTING ONLY AS A FALLBACK ────
+       An order written from migration 113 onward carries the object key it
+       bought. Preferring it is what lets a purchase survive the listing being
+       deleted — the case that used to end in a 404 for someone who had paid in
+       full.
+
+       THE FALLBACK IS NOT DEAD CODE AND MUST NOT BE REMOVED. Every order
+       written before 113 has no snapshot, and the join through listing_id is
+       the only way those buyers can reach their file. It stays for as long as
+       any of them do. */
+    let filePath = order.digital_file_path || null;
+    let fileName = order.digital_file_name || null;
+    let servedFrom = "the order's own snapshot";
+
+    if (!filePath) {
+      if (!order.listing_id) {
+        /* No snapshot and no listing to join to. Only reachable for an order
+           written before 113 whose listing has since been deleted — precisely
+           the buyers this change protects from here on, and the ones it cannot
+           retroactively help. Said plainly rather than returned as a bare 404,
+           because this is a paid customer who cannot get what they bought. */
+        console.error("[digital-delivery] ORDER " + order.id + " HAS NEITHER A FILE SNAPSHOT NOR A " +
+          "LISTING. Buyer " + order.buyer_id + " paid for a digital good that cannot now be located: " +
+          "the order predates migration 113 and its listing has been deleted. The object may still be " +
+          "in the bf-digital-goods bucket under the seller's folder.");
+        return res.status(404).json({ error: "Digital file not found" });
+      }
+
+      const { data: listing, error: listingError } = await supabase
+        .from("marketplace_listings")
+        .select("digital_file_path, digital_file_name")
+        .eq("id", order.listing_id)
+        .maybeSingle();
+      if (listingError) throw listingError;
+      if (!listing || !listing.digital_file_path) return res.status(404).json({ error: "Digital file not found" });
+
+      filePath = listing.digital_file_path;
+      fileName = listing.digital_file_name;
+      servedFrom = "the listing, joined through listing_id (this order predates migration 113)";
+    }
 
     const { data: signedDigital, error: signDigitalError } = await supabase.storage
       .from("bf-digital-goods")
-      .createSignedUrl(listing.digital_file_path, 604800);
+      .createSignedUrl(filePath, 604800);
     if (signDigitalError || !signedDigital || !signedDigital.signedUrl) {
-      console.error("[digital-delivery] Failed to create signed URL:", signDigitalError && (signDigitalError.message || signDigitalError));
+      console.error("[digital-delivery] Failed to create signed URL for order " + order.id +
+        " (served from " + servedFrom + "): " + (signDigitalError && (signDigitalError.message || signDigitalError)));
       return res.status(500).json({ error: "Could not generate download link" });
     }
 
-    return res.json({ url: signedDigital.signedUrl, fileName: listing.digital_file_name || null });
+    return res.json({ url: signedDigital.signedUrl, fileName: fileName || null });
   } catch (error) { next(error); }
 });
 
