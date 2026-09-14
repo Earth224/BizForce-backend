@@ -170,6 +170,21 @@ function sessionEvent(sessionId, listingId, amountCents) {
   };
 }
 
+/* The handler reports what it did through the log and nothing else, so the
+   only way to assert which branch ran is to listen. Wraps rather than replaces,
+   so the output still appears in the run. */
+function captureConsole() {
+  const lines = [];
+  const realLog = console.log;
+  const realError = console.error;
+  console.log = function () { lines.push(Array.prototype.join.call(arguments, " ")); realLog.apply(console, arguments); };
+  console.error = function () { lines.push(Array.prototype.join.call(arguments, " ")); realError.apply(console, arguments); };
+  return {
+    lines: lines,
+    stop: function () { console.log = realLog; console.error = realError; }
+  };
+}
+
 async function listingStatus(id) {
   const r = await supabase.from("marketplace_listings").select("status").eq("id", id).maybeSingle();
   return r.data ? r.data.status : "(gone)";
@@ -287,6 +302,54 @@ async function ordersForSession(sessionId) {
       check("and it records the amount paid", orphanOrders[0].amount_usd === 250, String(orphanOrders[0].amount_usd));
     }
     console.log("    (the handler logged the listing it could not mark sold — see [marketplace-usd] above)");
+
+    /* ── 3b. two deliveries racing — the case the index exists for ─────── */
+    console.log("\n══ 3b. two deliveries of one session, racing ══");
+    console.log("    Scenario 2 above is a SEQUENTIAL redelivery, which the handler's own");
+    console.log("    read-first check catches before it ever reaches the insert. That check cannot");
+    console.log("    catch a CONCURRENT redelivery: both calls read \"no order yet\" before either");
+    console.log("    inserts. Stripe delivers at least once, so this is a real arrival pattern.");
+    console.log("    With migration 112 applied the loser hits the unique index and the handler");
+    console.log("    reports it as a no-op. Without the index, both would insert.");
+
+    let raceSaw23505 = false;
+    let raceAttempts = 0;
+    let raceOrders = -1;
+    let raceListingId = null;
+
+    /* The interleaving is the operating system's to decide, so this tries a few
+       times rather than asserting a race lands on the first go. Each attempt is
+       its own listing and its own session, and every row is tracked. */
+    for (raceAttempts = 1; raceAttempts <= 5 && !raceSaw23505; raceAttempts++) {
+      const raceListing = await makeListing({});
+      raceListingId = raceListing.id;
+      const raceSession = "cs_check_race_" + stamp + "_" + raceAttempts;
+
+      const cap = captureConsole();
+      await Promise.all([
+        server.__handleStripeEvent(sessionEvent(raceSession, raceListingId, 100)),
+        server.__handleStripeEvent(sessionEvent(raceSession, raceListingId, 100))
+      ]);
+      cap.stop();
+
+      raceSaw23505 = cap.lines.some(function (l) {
+        return l.indexOf("lost the race to the unique index") !== -1;
+      });
+      const rows = await ordersForSession(raceSession);
+      raceOrders = rows.length;
+
+      console.log("    attempt " + raceAttempts + ": orders=" + rows.length +
+        "  the index caught a duplicate: " + (raceSaw23505 ? "YES" : "no — the read won this time"));
+
+      /* Exactly one order, whichever mechanism stopped the second. That is the
+         assertion that matters; which of the two caught it is timing. */
+      check("attempt " + raceAttempts + ": exactly one order survived the race", rows.length === 1,
+        "orders: " + rows.length);
+    }
+
+    check("the handler's 23505 no-op path is reachable and was reached", raceSaw23505,
+      "not observed in " + (raceAttempts - 1) + " attempt(s) — the read-first check won every time, " +
+      "which is not a failure of the index but leaves this path unproven in this run");
 
     /* ── 4. nothing of the owner's moved ───────────────────────────────── */
     console.log("\n══ 4. nothing outside the subject's own rows changed ══");
