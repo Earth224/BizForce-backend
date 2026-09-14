@@ -39629,10 +39629,50 @@ async function runSelfReviewPass() {
   var generated  = 0;
   var skipped    = 0;
   var failed     = 0;
+  var skippedNotEntitled = 0;
   var firstFailure = null;
   var ceilingReached = false;
 
   var maxPerTick = selfReviewMaxPerTick();
+
+  /* ── THE ENTITLEMENT GATE ───────────────────────────────────────────────
+     CONSENT IS NOT ENTITLEMENT, AND THIS PASS USED TO READ ONLY THE FIRST.
+
+     agent_autonomy answers "may this account's agents act on their own". It
+     says nothing about whether the account is paying. POST /api/self-reviews/run
+     sits behind requireActiveSubscription, but this pass does not go through
+     it — it calls generateSelfReview directly — so an account that never
+     subscribed, or subscribed once and lapsed, kept getting a model call every
+     night on the platform's key for as long as its autonomy row stayed on.
+
+     Resolved through getUserPlan, so the answer here is the one the route gate
+     gives: an entitled subscription or the admin exemption is "active: true",
+     and nothing else is. The test is "=== true" deliberately — a malformed
+     result must read as "no", not as truthy.
+
+     Cached per user for the tick, not per review. Each user is considered for
+     every period type in SELF_REVIEW_PERIOD_TYPES, and asking the same question
+     once per period would be two lookups per user for one answer. The cache
+     holds a failure too: if the lookup threw, retrying it for the same user's
+     next period would be asking the same broken database the same question. */
+  var planByUser = {};
+
+  async function selfReviewUserPlan(userId) {
+    if (!Object.prototype.hasOwnProperty.call(planByUser, userId)) {
+      try {
+        /* One property read in production, where the override is null and this
+           is getUserPlan. It exists so scripts/checkSelfReviewEntitlement.js
+           can replace the answer with "everyone is entitled" and show its own
+           refusal assertions going red — a gate nobody has watched fail is an
+           assumption, not a gate. */
+        var planLookup = SELF_REVIEW_PLAN_LOOKUP.override || getUserPlan;
+        planByUser[userId] = { plan: await planLookup(userId), error: null };
+      } catch (planErr) {
+        planByUser[userId] = { plan: null, error: planErr };
+      }
+    }
+    return planByUser[userId];
+  }
 
   function noteFailure(userId, periodType, detail) {
     failed += 1;
@@ -39676,6 +39716,35 @@ async function runSelfReviewPass() {
 
   for (var i = 0; i < userIds.length; i++) {
     var userId = userIds[i];
+
+    /* BEFORE THE PERIOD LOOP, so the answer is fetched once per user rather
+       than once per review, and an unentitled user costs no self_reviews read
+       either. Nothing below this point can write a row or call a model for a
+       user who does not get past it.
+
+       FAIL CLOSED on an error. A plan that could not be read is not a plan that
+       entitles, and running on a guess would spend money for an account nobody
+       could confirm is paying. Counted as a failure as well as a skip, so the
+       day's job_runs row does not close clean over an entitlement read that
+       broke — same terms as the hourly schedule runner. */
+    var entitlement = await selfReviewUserPlan(userId);
+
+    if (entitlement.error || !entitlement.plan) {
+      skippedNotEntitled += 1;
+      noteFailure(userId, "entitlement", "entitlement could not be determined, so no review was run: " +
+        (entitlement.error
+          ? ((entitlement.error && entitlement.error.message) || String(entitlement.error))
+          : "getUserPlan returned no result"));
+      continue;
+    }
+
+    if (entitlement.plan.active !== true) {
+      skippedNotEntitled += 1;
+      console.log("[SelfReview] Skipped user " + userId + " — no active subscription (inactive_reason " +
+        JSON.stringify(entitlement.plan.inactive_reason || null) + "). Analytics autonomy is consent, " +
+        "not entitlement; no review was generated and no self_reviews row was written.");
+      continue;
+    }
 
     for (var p = 0; p < SELF_REVIEW_PERIOD_TYPES.length; p++) {
       var periodType = SELF_REVIEW_PERIOD_TYPES[p];
@@ -39768,17 +39837,22 @@ async function runSelfReviewPass() {
   }
 
   console.log("[SelfReview] Pass finished — " + generated + " generated, " + skipped +
-    " already complete, " + failed + " failed, across " + userIds.length + " user(s).");
+    " already complete, " + skippedNotEntitled + " skipped for no active subscription, " +
+    failed + " failed, across " + userIds.length + " user(s) opted in.");
 
   return {
     users: userIds.length,
     generated: generated,
     skipped: skipped,
+    skippedNotEntitled: skippedNotEntitled,
     failed: failed,
     firstFailure: firstFailure,
     ceilingReached: ceilingReached
   };
 }
+
+/* See selfReviewUserPlan. Null in every real run. */
+var SELF_REVIEW_PLAN_LOOKUP = { override: null };
 
 var selfReviewPassRunning = false;
 
@@ -40666,4 +40740,14 @@ app.listen(PORT, function () {
   // });
 });
 
-module.exports = { runSalesAutoConvert };
+module.exports = {
+  runSalesAutoConvert,
+
+  /* Exported for scripts/checkSelfReviewEntitlement.js. The nightly pass is not
+     a route and cannot be driven with a request, so the check drives the real
+     function rather than a copy of it — a re-implementation would prove only
+     that the copy is gated. */
+  __runSelfReviewPass: runSelfReviewPass,
+  __selfReviewPlanFor: function (userId) { return getUserPlan(userId); },
+  __setSelfReviewPlanLookup: function (fn) { SELF_REVIEW_PLAN_LOOKUP.override = fn || null; }
+};
