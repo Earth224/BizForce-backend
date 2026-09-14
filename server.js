@@ -3297,6 +3297,90 @@ async function recordRevenueEvent(event, fields) {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   MARK A LISTING SOLD AFTER A USD PAYMENT — AND NEVER THROW.
+
+   THE BFC PATH DOES THIS PROPERLY AND THIS CANNOT. bfc_buy_listing (migration
+   089) takes `select ... for update` on the listing, re-checks the status
+   INSIDE that lock, moves the money, flips the status and writes the order —
+   all in one plpgsql transaction. Two concurrent BFC buyers therefore
+   serialise: the second waits on the lock, sees 'sold', and is refused. Any
+   failure rolls the whole thing back, so a listing is never sold without an
+   order and an order never exists without a sale.
+
+   NONE OF THAT IS AVAILABLE HERE, and the reason is not laziness:
+
+     * The lock would have to be taken at CHECKOUT, in a different HTTP request
+       minutes earlier, and held across a page the customer may never finish.
+       No lock survives that.
+     * This runs over PostgREST, so the order insert and this update are two
+       separate round trips. They are not one transaction and cannot be made
+       one from here.
+     * ROLLING BACK IS FORBIDDEN, which is the real difference. By the time
+       this function runs the customer has ALREADY PAID. bfc_buy_listing can
+       abort because nothing has moved yet; this cannot, because Stripe has the
+       money. An "atomic" version of this branch would, on a failed status
+       update, discard a paid order — losing the buyer's record and their
+       download to protect a status flag. That is strictly the worse failure.
+
+   SO THIS IS BEST-EFFORT BY DESIGN, and loud when it misses. It returns a
+   result instead of throwing, and the caller carries on either way. A listing
+   that stays active after being sold is a bug that costs a possible second
+   sale; it is recoverable by hand, and the log below says exactly which
+   listing to fix. A lost paid order is not recoverable by hand at all. */
+async function markListingSoldAfterPayment(listingId, sessionId, orderId) {
+  if (!listingId) {
+    console.error("[marketplace-usd] PAID ORDER WITH NO LISTING ID — order " + orderId +
+      " (session " + sessionId + ") was recorded, but its metadata carried no listing_id, so no " +
+      "listing could be marked sold. Whatever was bought is still on sale.");
+    return { marked: false, reason: "no_listing_id" };
+  }
+
+  try {
+    /* Unconditional on status rather than guarded with .eq("status", "active").
+       The sale happened; that is a fact about the past and not conditional on
+       what the row says now. A seller who paused the listing between checkout
+       and payment still sold it, and re-marking an already-'sold' row costs
+       nothing. Selecting the id back is how a row that no longer exists is
+       told apart from one that was updated. */
+    const { data, error } = await supabase
+      .from("marketplace_listings")
+      .update({ status: "sold", updated_at: nowIso() })
+      .eq("id", listingId)
+      .select("id, status");
+
+    if (error) {
+      console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
+        " was PAID FOR (order " + orderId + ", session " + sessionId + ") and the status update " +
+        "failed: " + (error.message || error) + ". The order is recorded and the buyer is whole. " +
+        "THE LISTING IS STILL ON SALE and can be bought again until someone sets its status to " +
+        "'sold' by hand.");
+      return { marked: false, reason: "update_failed", error: error.message || String(error) };
+    }
+
+    if (!data || data.length === 0) {
+      console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
+        " was PAID FOR (order " + orderId + ", session " + sessionId + ") but no such row exists " +
+        "to update; it was deleted between checkout and payment. The order is recorded and the " +
+        "buyer is whole. Nothing is left on sale, but the order points at a listing that is gone.");
+      return { marked: false, reason: "listing_missing" };
+    }
+
+    console.log("[marketplace-usd] listing " + listingId + " marked sold (order " + orderId +
+      ", session " + sessionId + ").");
+    return { marked: true };
+  } catch (soldError) {
+    /* Belt and braces: this function's contract with its caller is that it does
+       not throw, and a paid order must not be lost to a surprise from the
+       client library. */
+    console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
+      " was PAID FOR (order " + orderId + ", session " + sessionId + ") and the status update " +
+      "threw: " + ((soldError && soldError.message) || soldError) + ". The order is recorded and " +
+      "the buyer is whole. THE LISTING IS STILL ON SALE.");
+    return { marked: false, reason: "threw", error: (soldError && soldError.message) || String(soldError) };
+  }
+}
+
 async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
@@ -3359,6 +3443,19 @@ async function handleStripeEvent(event) {
           .single();
         if (insertError) throw insertError;
 
+        /* THE ORDER IS WRITTEN FIRST AND THE STATUS SECOND, deliberately.
+           Inverted, a failure of the order insert after a successful status
+           flip would leave a listing marked sold with no record of who bought
+           it and no download — the buyer paid and has nothing. In this order
+           the worst case is a listing that stays on sale, which costs a
+           possible second sale and is fixable by hand.
+
+           And BEFORE delivery rather than after, because this is the step that
+           stops a second buyer. Delivery is already soft and independent; doing
+           the status flip first closes the window as early as it can be closed.
+           Neither step can prevent the other from running. */
+        await markListingSoldAfterPayment(listingId, session.id, insertedOrder.id);
+
         // ── Digital-good delivery (soft: never break order completion) ──
         try {
           if (listingIsDigital && typeof listingDigitalFilePath === "string" && listingDigitalFilePath.length > 0) {
@@ -3383,6 +3480,19 @@ async function handleStripeEvent(event) {
           console.error("[digital-delivery] " + (digitalError && digitalError.message ? digitalError.message : digitalError));
         }
       } catch (error) {
+        /* A UNIQUE VIOLATION HERE IS A NO-OP, NOT A FAILURE. Migration 112 puts
+           a unique index on stripe_session_id, and Stripe delivers at least
+           once — so a redelivery racing the read above now loses at the index
+           instead of inserting a second order. That is the index doing its job,
+           and logging it as "Failed to record" would teach whoever reads these
+           logs that a normal retry is an error. */
+        const duplicateText = String((error && error.message) || "") + " " +
+          String((error && error.details) || "") + " " + String((error && error.constraint) || "");
+        if (error && error.code === "23505" && duplicateText.indexOf("stripe_session_id") !== -1) {
+          console.log("[marketplace-usd] duplicate delivery of session " + session.id +
+            " lost the race to the unique index; the order was already recorded. Nothing to do.");
+          return;
+        }
         console.error("Failed to record marketplace USD order:", error);
       }
       // Deliberately no revenue_events row: marketplace USD runs on Stripe test mode, so recording it would pollute real MRR.
@@ -40979,5 +41089,10 @@ module.exports = {
 
   /* For scripts/checkKeyFunding.js, which has to observe which KEY a call was
      made with. That is decided inside this function and nowhere else. */
-  __callAnthropicText: callAnthropicText
+  __callAnthropicText: callAnthropicText,
+
+  /* For scripts/checkMarketplaceUsdSold.js. The webhook branch cannot be
+     driven through the HTTP route without forging a Stripe signature, so the
+     check hands the real handler a real-shaped event instead. */
+  __handleStripeEvent: handleStripeEvent
 };
