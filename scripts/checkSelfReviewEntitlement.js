@@ -171,7 +171,7 @@ async function recordNewRows(guard, userId, sinceIso) {
   }
 
   if (process.env.MUTATE === "ungate") {
-    server.__setSelfReviewPlanLookup(async function () {
+    server.__setPassPlanLookup(async function () {
       return { active: true, exempt: false, inactive_reason: null, access_reason: null };
     });
     console.log("\n!! MUTATION: the pass is told every account is entitled — the refusal checks must fail.");

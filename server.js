@@ -2923,6 +2923,45 @@ async function requireActiveSubscription(req, res, next) {
   }
 }
 
+/* ── Entitlement for the background passes ───────────────────────────────────
+   THE ROUTES HAVE requireActiveSubscription. THE PASSES CANNOT USE IT — they
+   have no request to run middleware against — so they ask getUserPlan the same
+   question directly, and this is the one place that does it.
+
+   Written once and shared because three passes needed the identical thing and
+   three copies of a billing check is three chances for one of them to drift.
+
+   CACHED PER TICK, NOT PER ITEM. A pass considers a user once for every period,
+   lead or listing it is working, and asking the same question each time would
+   be several lookups for one answer. The cache holds a FAILURE too: if the
+   lookup threw, asking again for the same user in the same tick is asking the
+   same broken database the same question.
+
+   FAILING CLOSED IS THE CALLER'S JOB, and every caller does it the same way:
+   an error or a missing plan is a skip AND a failure, and plan.active !== true
+   is a skip. The test is strict equality on purpose — a malformed result must
+   read as "no", not as truthy. */
+var PASS_PLAN_LOOKUP = { override: null };
+
+function createPassEntitlementCache() {
+  var planByUser = {};
+  return async function (userId) {
+    if (!Object.prototype.hasOwnProperty.call(planByUser, userId)) {
+      try {
+        /* One property read in production, where the override is null and this
+           is getUserPlan. It exists so the check scripts can replace the answer
+           with "everyone is entitled" and watch their own refusal assertions go
+           red — a gate nobody has seen fail is an assumption, not a gate. */
+        var planLookup = PASS_PLAN_LOOKUP.override || getUserPlan;
+        planByUser[userId] = { plan: await planLookup(userId), error: null };
+      } catch (planErr) {
+        planByUser[userId] = { plan: null, error: planErr };
+      }
+    }
+    return planByUser[userId];
+  };
+}
+
 /* ── usage_logs: the code and the table describe two different designs ───────
    THE TWO FUNCTIONS BELOW WERE WRITTEN AGAINST A TABLE THAT DOES NOT EXIST.
 
@@ -10717,7 +10756,11 @@ async function generateStoreProposalsForUser(userId) {
   };
 }
 
-app.post("/api/agents/store/generate-proposals", requireAuth, async function (req, res, next) {
+/* GATED. This route calls generateStoreProposalsForUser, which resolves the
+   caller's own Anthropic key and SILENTLY FALLS BACK to the platform key when
+   there is not one — so an account with no key of its own was spending the
+   platform's, with only requireAuth in the way. */
+app.post("/api/agents/store/generate-proposals", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const result = await generateStoreProposalsForUser(req.user.id);
 
@@ -13327,7 +13370,10 @@ app.get("/api/assignments/:id", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/assignments/:id/start", requireAuth, async function (req, res, next) {
+/* GATED. orchestrateAgentWorkflow calls the model on the platform key —
+   callAnthropicText with a null user id, so there is not even a BYOK path to
+   fall back from. requireAuth alone made that reachable by any account. */
+app.post("/api/assignments/:id/start", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     var userId = req.user.id;
     var assignmentId = String(req.params.id || "").trim();
@@ -37845,11 +37891,30 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
 async function runSalesAutoConvert() {
   var dryRun = process.env.SALES_AUTOLOOP_DRY_RUN !== "false";
 
+  /* Counted so a skip is a reported number rather than an absence. Returned
+     below and printed in the pass's own closing line. */
+  var usersSeen = 0;
+  var skippedNotCredentialOwner = 0;
+  var skippedNotEntitled = 0;
+  var processed = 0;
+  var failed = 0;
+  var firstFailure = null;
+
+  function notePassFailure(userId, detail) {
+    failed += 1;
+    if (!firstFailure) firstFailure = "user " + userId + ": " + detail;
+  }
+
+  var passEntitlement = createPassEntitlementCache();
+
   try {
     var profilesResult = await supabase.from("business_profiles").select("user_id");
     if (profilesResult.error) {
       console.error("[SalesAutoConvert] Failed to load business profiles:", profilesResult.error.message);
-      return;
+      return {
+        users: 0, skippedNotCredentialOwner: 0, skippedNotEntitled: 0, processed: 0,
+        failed: 1, firstFailure: "business_profiles read failed: " + profilesResult.error.message
+      };
     }
 
     var userIds = (profilesResult.data || [])
@@ -37857,6 +37922,8 @@ async function runSalesAutoConvert() {
       .filter(Boolean);
 
     console.log("[SalesAutoConvert] Starting pass — " + (dryRun ? "DRY RUN" : "LIVE") + " — " + userIds.length + " user(s) with a business profile.");
+
+    usersSeen = userIds.length;
 
     for (var u = 0; u < userIds.length; u++) {
       var userId = userIds[u];
@@ -37871,6 +37938,7 @@ async function runSalesAutoConvert() {
          of the system, not an error, and the remaining users — including the
          credential owner, who may sort after them — still get their pass. */
       if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+        skippedNotCredentialOwner += 1;
         console.warn("[SalesAutoConvert] SKIPPING user " + userId +
           " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
           " until per-user credentials exist. There is one Bluesky login and one" +
@@ -37879,6 +37947,45 @@ async function runSalesAutoConvert() {
           " theirs. No draft was generated and nothing was sent.");
         continue;
       }
+
+      /* ── ENTITLEMENT ────────────────────────────────────────────────────
+         AFTER the credential-owner skip, so a user this pass was never going
+         to act for costs no plan lookup, and BEFORE the profile read and every
+         model call below, so a lapsed account spends nothing at all.
+
+         FAIL CLOSED. A plan that could not be read is not a plan that
+         entitles; drafting on a guess would spend money for an account nobody
+         could confirm is paying. Counted as a failure as well as a skip, so a
+         broken entitlement read is visible in the pass summary rather than
+         looking like a quiet day.
+
+         WORTH BEING HONEST ABOUT WHAT THIS DOES AND DOES NOT BUY TODAY. The
+         only account that reaches this line is OUTREACH_CREDENTIAL_OWNER_ID,
+         which is an admin and therefore exempt — so this changes nothing about
+         what runs right now. It is here for the day the credential restriction
+         is lifted or the owner id changes, because that day this loop becomes
+         a per-user model-spend loop and the gate has to already be in it. What
+         bounds the spend today is the daily draft cap, not this. */
+      var salesEntitlement = await passEntitlement(userId);
+
+      if (salesEntitlement.error || !salesEntitlement.plan) {
+        skippedNotEntitled += 1;
+        notePassFailure(userId, "entitlement could not be determined, so nothing was drafted: " +
+          (salesEntitlement.error
+            ? ((salesEntitlement.error && salesEntitlement.error.message) || String(salesEntitlement.error))
+            : "getUserPlan returned no result"));
+        continue;
+      }
+
+      if (salesEntitlement.plan.active !== true) {
+        skippedNotEntitled += 1;
+        console.log("[SalesAutoConvert] SKIPPING user " + userId + " — no active subscription " +
+          "(inactive_reason " + JSON.stringify(salesEntitlement.plan.inactive_reason || null) + "). " +
+          "No lead was drafted, no model call was made and no ai_tasks row was written.");
+        continue;
+      }
+
+      processed += 1;
 
       var convertedCount = 0;
       var skippedCount = 0;
@@ -38120,9 +38227,28 @@ async function runSalesAutoConvert() {
       }
     }
 
-    console.log("[SalesAutoConvert] Pass complete.");
+    console.log("[SalesAutoConvert] Pass complete — " + usersSeen + " user(s) with a business profile, " +
+      processed + " processed, " + skippedNotCredentialOwner + " skipped as not the credential owner, " +
+      skippedNotEntitled + " skipped for no active subscription, " + failed + " failed.");
+
+    return {
+      users: usersSeen,
+      skippedNotCredentialOwner: skippedNotCredentialOwner,
+      skippedNotEntitled: skippedNotEntitled,
+      processed: processed,
+      failed: failed,
+      firstFailure: firstFailure
+    };
   } catch (err) {
     console.error("[SalesAutoConvert] runSalesAutoConvert error:", err.message || err);
+    return {
+      users: usersSeen,
+      skippedNotCredentialOwner: skippedNotCredentialOwner,
+      skippedNotEntitled: skippedNotEntitled,
+      processed: processed,
+      failed: failed + 1,
+      firstFailure: firstFailure || ((err && err.message) || String(err))
+    };
   }
 }
 
@@ -39331,6 +39457,10 @@ async function runStoreProposalPass() {
       return true;
     });
 
+  /* Consent is what the query above asked for. This asks the other half. */
+  var skippedNotEntitled = 0;
+  var passEntitlement = createPassEntitlementCache();
+
   totalUsers = userIds.length;
   console.log("[StoreProposals] Pass starting — " + totalUsers + " user(s) opted into store autonomy.");
 
@@ -39338,6 +39468,39 @@ async function runStoreProposalPass() {
     var userId = userIds[i];
 
     try {
+      /* ── ENTITLEMENT, BEFORE THE BYOK GATE ──────────────────────────────
+         Consent came from the agent_autonomy query; this is the billing half,
+         and it is asked first because an account that is not paying should not
+         be considered at all — not for its key, not for its pending queue, not
+         for anything below.
+
+         It is a narrower hole than the others by luck rather than design: the
+         BYOK gate below already stops this pass spending the PLATFORM key.
+         What it does not stop is an unentitled account getting the product's
+         autonomous work done for it, which is what this closes.
+
+         FAIL CLOSED, and counted as a failure as well as a skip, so a broken
+         entitlement read cannot close the pass looking clean. */
+      var storeEntitlement = await passEntitlement(userId);
+
+      if (storeEntitlement.error || !storeEntitlement.plan) {
+        skippedNotEntitled += 1;
+        noteUserFailure(userId, "entitlement could not be determined, so no proposals were generated: " +
+          (storeEntitlement.error
+            ? ((storeEntitlement.error && storeEntitlement.error.message) || String(storeEntitlement.error))
+            : "getUserPlan returned no result"));
+        continue;
+      }
+
+      if (storeEntitlement.plan.active !== true) {
+        skippedNotEntitled += 1;
+        console.log("[StoreProposals] user " + userId + ": skipped — no active subscription " +
+          "(inactive_reason " + JSON.stringify(storeEntitlement.plan.inactive_reason || null) + "). " +
+          "Store autonomy is consent, not entitlement; no model call was made and no " +
+          "agent_proposals row was written.");
+        continue;
+      }
+
       // BYOK gate, and the reason it is checked here rather than relied on
       // downstream: resolveAnthropicKey never throws and never returns null. On
       // any miss — no row, wrong provider, failed decrypt — it silently returns
@@ -39423,11 +39586,13 @@ async function runStoreProposalPass() {
   }
 
   console.log("[StoreProposals] Pass complete — " + totalUsers + " user(s) considered, " +
-    totalCreated + " proposal(s) created, " + failedUsers + " user(s) failed.");
+    totalCreated + " proposal(s) created, " + skippedNotEntitled +
+    " skipped for no active subscription, " + failedUsers + " user(s) failed.");
 
   return {
     users:        totalUsers,
     created:      totalCreated,
+    skippedNotEntitled: skippedNotEntitled,
     failed:       failedUsers,
     firstFailure: firstFailure
   };
@@ -39655,24 +39820,7 @@ async function runSelfReviewPass() {
      once per period would be two lookups per user for one answer. The cache
      holds a failure too: if the lookup threw, retrying it for the same user's
      next period would be asking the same broken database the same question. */
-  var planByUser = {};
-
-  async function selfReviewUserPlan(userId) {
-    if (!Object.prototype.hasOwnProperty.call(planByUser, userId)) {
-      try {
-        /* One property read in production, where the override is null and this
-           is getUserPlan. It exists so scripts/checkSelfReviewEntitlement.js
-           can replace the answer with "everyone is entitled" and show its own
-           refusal assertions going red — a gate nobody has watched fail is an
-           assumption, not a gate. */
-        var planLookup = SELF_REVIEW_PLAN_LOOKUP.override || getUserPlan;
-        planByUser[userId] = { plan: await planLookup(userId), error: null };
-      } catch (planErr) {
-        planByUser[userId] = { plan: null, error: planErr };
-      }
-    }
-    return planByUser[userId];
-  }
+  var selfReviewUserPlan = createPassEntitlementCache();
 
   function noteFailure(userId, periodType, detail) {
     failed += 1;
@@ -39850,9 +39998,6 @@ async function runSelfReviewPass() {
     ceilingReached: ceilingReached
   };
 }
-
-/* See selfReviewUserPlan. Null in every real run. */
-var SELF_REVIEW_PLAN_LOOKUP = { override: null };
 
 var selfReviewPassRunning = false;
 
@@ -40743,11 +40888,16 @@ app.listen(PORT, function () {
 module.exports = {
   runSalesAutoConvert,
 
-  /* Exported for scripts/checkSelfReviewEntitlement.js. The nightly pass is not
-     a route and cannot be driven with a request, so the check drives the real
-     function rather than a copy of it — a re-implementation would prove only
+  /* Exported for the entitlement check scripts. None of these passes is a route
+     and none can be driven with a request, so the checks drive the real
+     functions rather than copies of them — a re-implementation would prove only
      that the copy is gated. */
   __runSelfReviewPass: runSelfReviewPass,
+  __runSalesAutoConvert: runSalesAutoConvert,
+  __runStoreProposalPass: runStoreProposalPass,
   __selfReviewPlanFor: function (userId) { return getUserPlan(userId); },
-  __setSelfReviewPlanLookup: function (fn) { SELF_REVIEW_PLAN_LOOKUP.override = fn || null; }
+
+  /* Replaces the answer every background pass gets from getUserPlan, so a check
+     can show its refusal assertions failing. Null in every real run. */
+  __setPassPlanLookup: function (fn) { PASS_PLAN_LOOKUP.override = fn || null; }
 };
