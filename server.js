@@ -14205,7 +14205,14 @@ function buildOracleImageBlock(file) {
   };
 }
 
-app.post("/api/oracle", requireAuth, oracleUpload.array("files", 8), async function (req, res, next) {
+/* requireActiveSubscription BEFORE oracleUpload, which is not the usual
+   ordering and is deliberate: multer buffers the upload into memory as it runs,
+   so gating after it would let an unentitled caller push eight 20MB files into
+   the process before being told no. The gate is also what stops this route
+   spending the platform's Anthropic key for an account that is not paying —
+   there is no free tier. An admin (users.role = 'admin') passes it via
+   getUserPlan's exemption, so the owner keeps his own Oracle. */
+app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.array("files", 8), async function (req, res, next) {
   try {
     var message = safeText(req.body.message, 4000);
     if (!message) {
@@ -15670,7 +15677,10 @@ app.get("/api/unsubscribe", async function (req, res, next) {
 
 
 
-app.get("/api/oracle/invocation", requireAuth, async function (req, res, next) {
+/* GATED EVEN THOUGH IT IS A GET. The method is not what decides this: the
+   handler calls callAnthropicText, so an unentitled account polling this page
+   spends the platform's key exactly as a POST would. */
+app.get("/api/oracle/invocation", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     var invocationSyncResult = await supabase
       .from("oracle_sync")
@@ -18333,7 +18343,10 @@ app.post("/api/push/test", requireAuth, async function (req, res, next) {
   }
 });
 
-app.post("/api/oracle/chat", requireAuth, aiLimiter, async function (req, res, next) {
+/* The gate runs before the limiter, as on every other subscription-gated AI
+   route, so an unentitled caller is refused without consuming a slot in their
+   own rate-limit bucket. */
+app.post("/api/oracle/chat", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     var name    = String(req.body.birthName || "Seeker").trim().slice(0, 120);
     var date    = String(req.body.birthDate || "").trim().slice(0, 30);
@@ -27939,7 +27952,13 @@ app.get("/api/self-reviews", requireAuth, async function (req, res, next) {
    property of the helper's current behaviour, not a guarantee this endpoint
    makes, and an endpoint that can spend money should not be relying on a
    promise made somewhere else that it cannot enforce. */
-app.post("/api/self-reviews/run", requireAuth, aiLimiter, async function (req, res, next) {
+/* THE ROUTE IS GATED; THE NIGHTLY PASS IS NOT, AND THAT IS NOT AN OVERSIGHT
+   HERE. selfReviewTick calls generateSelfReview directly rather than through
+   this route, and it selects its users from agent_autonomy (consent), not from
+   billing — so this middleware cannot and does not change what the scheduler
+   generates. Whether that pass should also check entitlement is a real
+   question, and a separate one from closing this route. */
+app.post("/api/self-reviews/run", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
   try {
     /* Exact strings only. Not a truthy check, not a case-insensitive match, and
        not a default when absent: the column carries a CHECK constraint over
@@ -36389,7 +36408,10 @@ app.post("/api/content-library/:id/external-published", requireAuth, async funct
   }
 });
 
-app.post("/api/leads/draft-reply", requireAuth, async function (req, res, next) {
+/* Drafting a reply is a model call, so it is entitlement-gated like every
+   other one. The lead radar's own capture and scoring passes are unaffected:
+   they never call this route. */
+app.post("/api/leads/draft-reply", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     var postText        = String(req.body.post_text        || "").trim();
     var suggestedProduct = String(req.body.suggested_product || "").trim();
