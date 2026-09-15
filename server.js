@@ -115,15 +115,30 @@ app.get("/", (req, res) => {
 // Angeles year-round, under both PST (-8) and PDT (-7), so the verdict never
 // depends on when this is called or on which side of a DST change it lands.
 //
-// Only the two dates and the verdict are reported. No versions, no build flags,
-// no environment. This route is public.
+// Only the two dates, the instant they came from, and the verdict are reported.
+// No versions, no build flags, no environment. This route is public.
+//
+// THE INSTANT IS REPORTED BECAUSE ITS ABSENCE WAS READ AS A BUG. Two ISO dates
+// sitting next to "timezone_applied" look like a clock, and a clock stuck two
+// weeks in the past looks broken — which is exactly how it was reported, months
+// after it started being correct. The dates are this fixed instant formatted
+// twice; saying so in the response costs one field and answers the question
+// before anyone has to read this file to ask it.
+//
+// ONE CONSTANT, NOT TWO LITERALS THAT MUST AGREE. The formatter below and the
+// field beside it read the same string, so a changed probe instant cannot leave
+// the response describing the old one. Two literals that must agree is how they
+// stop agreeing.
+var ICU_PROBE_INSTANT = "2026-09-01T03:30:00Z";
+
 function icuHealth() {
   try {
-    var instant = new Date("2026-09-01T03:30:00Z");
+    var instant = new Date(ICU_PROBE_INSTANT);
     var losAngeles = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(instant);
     var utc = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(instant);
 
     return {
+      probe_instant: ICU_PROBE_INSTANT,
       los_angeles: losAngeles,
       utc: utc,
       timezone_applied: losAngeles !== utc
