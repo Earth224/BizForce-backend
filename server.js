@@ -1520,16 +1520,66 @@ function buildAssignmentStartingPlan(assignment) {
   ].join("\n");
 }
 
-var MEMORY_AGENT_TYPES = [
-  "seo",
-  "content",
-  "sales",
-  "analytics",
-  "operations",
-  "reputation",
-  "executive",
-  "oracle"
-];
+/* WHICH AGENTS MAY WRITE MEMORY — DERIVED, NOT A SECOND ROSTER.
+   ──────────────────────────────────────────────────────────────
+   This was a hand-typed list of 7 agents plus oracle. Those 7 were simply the
+   agents that existed when agent_memory was created in migration 002; the other
+   11 were added to AGENT_SYSTEM_PROMPTS later and nobody came back. The read has
+   always run for all 18 — so for eleven of them it was a query that could only
+   ever return zero rows, for every user, forever.
+
+   A SECOND HAND-MAINTAINED ROSTER IS WHAT CAUSED THAT, so there is no longer a
+   second one. This is the same derivation PUT /api/agent-autonomy and
+   ADMIN_EXEMPT_CONFIG.allowedAgents already use, and for the same reason: a
+   roster copied beside the real one drifts, and the drift is silent.
+
+   ORACLE IS APPENDED BECAUSE IT IS NOT A REGISTERED AGENT. It has no
+   AGENT_SYSTEM_PROMPTS entry — it is a separate feature with its own routes that
+   migration 026 deliberately gave a share of this table. Dropping it here would
+   quietly revoke that.
+
+   THE DATABASE STILL HAS THE FINAL SAY. agent_memory_agent_type_check is the
+   real gate; this constant only decides what is attempted. They agree from
+   migration 114 onward, and where they do not, the write fails with 23514 and
+   reportMemoryConstraintViolation below says so by name. */
+function memoryAgentTypes() {
+  return Object.keys(AGENT_SYSTEM_PROMPTS).concat("oracle");
+}
+
+/* Kept as a name because it reads as a set everywhere it is used, and because a
+   getter would be read on every task. Rebuilt at boot from the live object. */
+var MEMORY_AGENT_TYPES = memoryAgentTypes();
+
+/* THE WINDOW BETWEEN DEPLOYING THIS AND RUNNING MIGRATION 114.
+   ────────────────────────────────────────────────────────────
+   In that window the constant permits all 19 and the database still permits 8,
+   so a write for one of the other 11 fails with 23514 — and both call sites
+   used to log a one-line message and move on, which is exactly how a memory is
+   lost without anyone noticing.
+
+   THE ALTERNATIVE WAS TO READ THE DATABASE'S ACTUAL ALLOWED SET and only attempt
+   what it permits. That is not possible here: PostgREST does not expose a CHECK
+   constraint — agent_type comes back as a plain text column with no enum — and
+   this project's credentials have no SQL access to read pg_constraint. It was
+   tried before this was written, which is why this is a loud failure rather than
+   a narrowed attempt.
+
+   So the window is made LOUD instead of safe, and it names the one thing a
+   reader needs: which agent could not write, and which migration fixes it. */
+function reportMemoryConstraintViolation(where, agentType, userId, error) {
+  var text = String((error && error.message) || "") + " " +
+    String((error && error.details) || "") + " " + String((error && error.constraint) || "");
+  if (!error || (error.code !== "23514" && text.indexOf("agent_memory_agent_type_check") === -1)) {
+    return false;
+  }
+
+  console.error("[agent-memory] AGENT " + JSON.stringify(agentType) + " CANNOT WRITE MEMORY — the " +
+    "database still refuses it. agent_memory_agent_type_check has not been widened on this " +
+    "deployment, so supabase/migrations/114_agent_memory_all_agents.sql has not been applied. " +
+    "The memory for user " + userId + " at " + where + " WAS NOT SAVED and this run's work will " +
+    "not be visible to that agent's next run. Every other part of the task succeeded. Apply 114.");
+  return true;
+}
 
 var MEMORY_TYPES = [
   "goal",
@@ -1691,8 +1741,12 @@ async function orchestrateAgentWorkflow(options) {
         .single();
 
       if (memoryInsert.error) {
-        console.error("AGENT ORCHESTRATOR MEMORY ERROR:", JSON.stringify(memoryInsert.error, null, 2));
-        console.error("AGENT ORCHESTRATOR MEMORY PAYLOAD:", JSON.stringify(memoryPayload, null, 2));
+        /* A refused agent_type is a known, nameable condition with a known fix,
+           so it is reported as that rather than as an opaque payload dump. */
+        if (!reportMemoryConstraintViolation("orchestrateAgentWorkflow", agentType, userId, memoryInsert.error)) {
+          console.error("AGENT ORCHESTRATOR MEMORY ERROR:", JSON.stringify(memoryInsert.error, null, 2));
+          console.error("AGENT ORCHESTRATOR MEMORY PAYLOAD:", JSON.stringify(memoryPayload, null, 2));
+        }
       } else {
         orchestrationResult.memory_created = true;
         console.log("AGENT ORCHESTRATOR MEMORY SAVED", {
@@ -12586,7 +12640,9 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
               });
 
             if (agentMemoryInsert.error) {
-              console.error("[processAiTask] Failed to write agent_memory:", agentMemoryInsert.error.message);
+              if (!reportMemoryConstraintViolation("processAiTask", agentType, userId, agentMemoryInsert.error)) {
+                console.error("[processAiTask] Failed to write agent_memory:", agentMemoryInsert.error.message);
+              }
             }
           } catch (agentMemoryErr) {
             console.error("[processAiTask] agent_memory write error:", agentMemoryErr.message || agentMemoryErr);
@@ -13093,6 +13149,48 @@ var taskInstructions = {
    that value, not every caller. They are there to make the source traceable,
    not to count who is affected. */
 var loggedUnknownTaskType = {};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE TWO task_type NAMESPACES MUST NOT COLLIDE, AND NOTHING ELSE ENFORCES IT.
+
+   ai_tasks.task_type is written by two lanes that do not know about each other:
+
+     POST /api/ai/tasks   snake_case, from allowedTaskTypes — "executive_plan"
+     startToolRun         "agent/tool" with a slash — "executive/plan"
+
+   POST /api/assignments/:id/dispatch decides whether a row is an executive plan
+   by comparing task_type to the string "executive/plan" exactly. That check is
+   safe only because no value in allowedTaskTypes contains a slash, so the
+   /api/ai/tasks lane cannot mint a row that satisfies it. That invariant has
+   never been written down and nothing has ever checked it — adding one
+   slash-separated entry to the list above would breach it silently.
+
+   WHY THIS THROWS RATHER THAN LOGGING, which is where it differs from
+   checkRoutesForShadowing. That one reports and carries on because a shadowed
+   route is a bug that makes a feature unreachable — bad, but bounded, and the
+   server is still worth running. This is a constant that gates what may be
+   DISPATCHED, and a breach would let one lane forge the other lane's rows. It
+   can only be introduced by editing this file, it is caught the first time the
+   process starts, and the fix is to rename one string. Refusing to boot with a
+   clear message is cheaper than any of the ways this could be found later.
+
+   There is a second barrier today — dispatch also requires row.output to be an
+   object and the /api/ai/tasks lane never writes output — so this is defence in
+   depth rather than the only thing standing there. It is written now because
+   the day that lane starts writing output, this becomes the only thing. */
+(function assertTaskTypeNamespacesDisjoint() {
+  var collisions = allowedTaskTypes.filter(function (t) { return String(t).indexOf("/") !== -1; });
+  if (!collisions.length) return;
+
+  throw new Error(
+    "allowedTaskTypes contains " + collisions.length + " slash-separated value(s): " +
+    collisions.map(function (c) { return JSON.stringify(c); }).join(", ") + ". " +
+    "That namespace belongs to the agent-tool lane (startToolRun writes \"agent/tool\"), and " +
+    "POST /api/assignments/:id/dispatch tells an executive plan from anything else by comparing " +
+    "task_type to \"executive/plan\" exactly. A slash-separated value here would let " +
+    "POST /api/ai/tasks mint rows that impersonate a tool-lane row. Rename it to snake_case."
+  );
+})();
 
 function warnUnknownTaskType(taskType, agentType, userId) {
   var key = String(taskType || "");
@@ -41447,6 +41545,11 @@ module.exports = {
      sequence:true — to prove CHAIN_MAX_FANOUT still guards everything that is
      not a user-authored routine. */
   __dispatchToolCall: dispatchToolCall,
+
+  /* For scripts/checkAgentMemoryRoster.js, which exercises the reporter on a
+     real 23514 from the live database rather than a hand-made error object. */
+  __reportMemoryConstraintViolation: reportMemoryConstraintViolation,
+  __memoryAgentTypes: memoryAgentTypes,
   __routineMaxSteps: routineMaxSteps,
   __dispatchPerMinuteLimit: dispatchPerMinuteLimit
 };
