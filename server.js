@@ -47,6 +47,7 @@ const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
+const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
@@ -36080,8 +36081,12 @@ app.post("/api/sms/subscribers/bulk", requireAuth, async function (req, res, nex
 /* ── Public lead capture (landing pages) ─────────────────────────────────
    No requireAuth — this is a public, unauthenticated endpoint meant to be
    called directly from external landing pages. Owner is hardcoded since
-   there is no logged-in BizForce user context for a public visitor. */
-var CAPTURE_OWNER_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+   there is no logged-in BizForce user context for a public visitor.
+
+   An alias of lib/ownerAccount.js, not a second literal: this name says WHY
+   the value is used here (attribution of a public capture), the module says
+   what the value is. See that file for the other two aliases. */
+var CAPTURE_OWNER_ID = OWNER_ACCOUNT_ID;
 var CAPTURE_SOURCES = ["bluesky", "mastodon", "youtube", "direct", "other"];
 var CAPTURE_BRANDS = ["mrearthrose", "swordvitality", "blacksuncircle", "bizforce"];
 var WELCOME_CAMPAIGN_ID = "c735e5ea-3262-49a7-ab05-7c72971d0ff8";
@@ -36815,6 +36820,19 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
 
 app.get("/api/leads", requireAuth, async function (req, res, next) {
   try {
+    /* The same restriction POST /api/agents/sales/convert applies, for the
+       same reason, in the same position: first thing after the caller is
+       known, ahead of the read, so a refused request costs a string
+       comparison and reads zero rows. bsky_leads has no owner column, so
+       every row this query would return belongs to the credential owner —
+       see OUTREACH_CREDENTIAL_OWNER_ID. */
+    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[/api/leads] REFUSING user " + req.user.id +
+        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
+      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
+    }
+
     var { data, error } = await supabase
       .from("bsky_leads")
       .select("*")
@@ -37190,6 +37208,17 @@ async function annotateLeadsWithSalesPipeline(userId, leads) {
 app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) {
   try {
     var userId = req.user.id;
+
+    /* Same guard as GET /api/leads and POST /api/agents/sales/convert, same
+       position: before the bsky_leads read and before the pipeline
+       annotation, so a refused request reads nothing. */
+    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[sales/leads] REFUSING user " + userId +
+        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
+      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
+    }
+
     var minScore = Number(req.query.min_score);
     var buyerOnly = String(req.query.buyer || "").toLowerCase() === "true";
     var highIntentOnly = String(req.query.high_intent || "").toLowerCase() === "true";
@@ -37319,9 +37348,31 @@ function detectOutreachLinkFacets(text) {
    named separately because it means a third thing: that pair is who a capture
    is attributed to and whose API key pays for scoring. One value, three
    unrelated reasons, and they will not stop being the same value at the same
-   moment. When per-user credentials exist this constant and the guard that
-   uses it both go; the other two are unaffected. */
-const OUTREACH_CREDENTIAL_OWNER_ID = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
+   moment. An alias of lib/ownerAccount.js rather than a third literal. When
+   per-user credentials exist this alias and every guard that uses it go; the
+   other two are unaffected.
+
+   IT ALSO GATES READING. bsky_leads has no owner column, so every row in it
+   is the owner's — captured by the owner's keyword list, scored against the
+   owner's products, paid for with the owner's key. GET /api/leads,
+   GET /api/agents/sales/leads, POST /api/agents/sales/lead-status and
+   GET /api/agents/sales/pipeline therefore refuse every other account with
+   the same comparison, code "lead_radar_unavailable", before they read
+   anything. Until there is a column to scope on, "not the owner" and "has
+   no leads" are the same statement, and a page full of somebody else's
+   leads is not an acceptable way to say it. */
+const OUTREACH_CREDENTIAL_OWNER_ID = OWNER_ACCOUNT_ID;
+
+/* The refusal the four lead-reading routes send. One string, because a
+   customer will read it on two pages and they must agree. A statement of
+   what is, with no timeline attached: this product has shipped interfaces
+   that promised what nothing delivered, and a refusal that says "yet" is
+   that defect in a smaller box. */
+const LEAD_RADAR_UNAVAILABLE = {
+  error: "Lead Radar runs against a single connected social account and is not enabled for your account. " +
+         "Leads, scoring and public replies are only available on the account that owns those credentials.",
+  code: "lead_radar_unavailable"
+};
 
 /* ── Outreach send cap ──────────────────────────────────────────────────────
    Deliberately low, and env-overridable so it can be raised knowingly rather
@@ -39178,6 +39229,19 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
 app.post("/api/agents/sales/lead-status", requireAuth, async function (req, res, next) {
   try {
     var userId = req.user.id;
+
+    /* Same guard as the other lead routes, ahead of validation as well as
+       ahead of the write: this route upserts any post_uri the caller names
+       into their own pipeline and GET /api/agents/sales/pipeline then joins
+       it back to bsky_leads, which is a second door onto the owner's rows.
+       A refused request writes nothing and reads nothing. */
+    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[sales/lead-status] REFUSING user " + userId +
+        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". bsky_leads has no owner column, so every lead a pipeline row could point at is theirs. Nothing was written.");
+      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
+    }
+
     var leadPostUri = safeText(req.body.lead_post_uri, 500);
     var status = String(req.body.status || "").toLowerCase().trim();
 
@@ -39254,6 +39318,16 @@ app.post("/api/agents/sales/lead-status", requireAuth, async function (req, res,
 app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, next) {
   try {
     var userId = req.user.id;
+
+    /* Same guard as the other lead routes, ahead of both reads. The pipeline
+       rows are the caller's own, but the join below is onto bsky_leads, and
+       every row there is the credential owner's. */
+    if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[sales/pipeline] REFUSING user " + userId +
+        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". bsky_leads has no owner column, so every joined lead is theirs. No rows were read.");
+      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
+    }
 
     var pipelineResult = await supabase
       .from("sales_lead_pipeline")
