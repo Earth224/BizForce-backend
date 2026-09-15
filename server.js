@@ -1600,58 +1600,6 @@ function normalizeMemoryMetadata(value) {
   return value;
 }
 
-/* The agent types that may appear as source_agent or target_agent. Derived
-   from the roster, because the hand-written version was never a considered
-   subset — the history says so plainly:
-
-   - Typed on 2026-06-15 in e7a4fa7, in the same commit as migration 003 and its
-     matching CHECK constraint, and NEVER EDITED afterwards.
-   - Wrong in both directions on the day it was written. It listed `social`,
-     which was not an agent type until ten days later, and omitted `ads`, which
-     already was one. A deliberate subset does not name a type that does not
-     exist while dropping one that does; this was typed from memory.
-   - Then it drifted. 513fcb8 on 2026-06-25 added social, etsy, store, broker,
-     publicist and rd to AGENT_SYSTEM_PROMPTS in one commit. This list was not
-     updated with it, which is how eleven-of-seventeen happened. `social` was
-     covered only by the earlier mistake.
-
-   A PLAIN VALUE, not a getter, and the difference from
-   PLAN_CONFIG.allowedAgents is only about position. That one sits ABOVE
-   AGENT_SYSTEM_PROMPTS and had to defer its read or hit the temporal dead zone
-   at boot. This sits BELOW it — line 263 against 1344 — so the const is fully
-   initialised by the time this line runs and Object.keys can be called
-   directly. Deferring here would be ceremony imitating a fix for a problem
-   this position does not have.
-
-   Nothing mutates this array; every consumer reads it with indexOf. */
-var COLLABORATION_AGENT_TYPES = Object.keys(AGENT_SYSTEM_PROMPTS);
-
-var COLLABORATION_TYPES = [
-  "handoff",
-  "request",
-  "response",
-  "review",
-  "approval",
-  "insight",
-  "memory_share"
-];
-
-var COLLABORATION_STATUSES = [
-  "pending",
-  "in_progress",
-  "completed",
-  "failed",
-  "cancelled"
-];
-
-function normalizeCollaborationPayload(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  return value;
-}
-
 var AGENT_ORCHESTRATION_HANDOFFS = {
   seo: "content",
   content: "analytics",
@@ -1685,9 +1633,13 @@ async function orchestrateAgentWorkflow(options) {
   var assignmentId = assignment.id;
   var persistableAssignmentId = isValidUuid(String(assignmentId || "")) ? assignmentId : null;
   var timestamp = nowIso();
+  /* Two keys. There was a third, collaboration_created, until the
+     agent_collaborations mechanism was removed — see the note at the handoff
+     block below. No caller read it: POST /api/assignments/:id/start returned
+     this object as `orchestration` and dashboard.html stored that on the
+     assignment item without rendering any of it. */
   var orchestrationResult = {
     memory_created: false,
-    collaboration_created: false,
     sales_call_result: null
   };
   /* "starting_plan_produced", not "completed". What reaches this function from
@@ -1770,221 +1722,160 @@ async function orchestrateAgentWorkflow(options) {
 
   var targetAgent = AGENT_ORCHESTRATION_HANDOFFS[agentType];
 
-  /* BOTH ALLOWLIST BRANCHES BELOW ARE STRUCTURALLY UNREACHABLE TODAY, and they
-     are kept rather than deleted because what makes them unreachable is not a
-     check anywhere — it is a coincidence of contents that a one-line edit
-     elsewhere can end.
+  /* ── The agent_collaborations mechanism is gone from here ──────────────
+     This block used to write one agent_collaborations row per handoff: a
+     'completed' row after the executive→sales branch below, and a 'pending'
+     row for every other pair, carrying a note and a truncated preview of the
+     source's start template. Nothing ever consumed those rows — no worker
+     selected status='pending', no frontend called /api/collaborations — and
+     the 13 that were written between 2026-06-16 and 2026-07-06 hold no
+     instruction a consumer could act on.
 
-     The reason: every key and every value of AGENT_ORCHESTRATION_HANDOFFS is
-     already in COLLABORATION_AGENT_TYPES. Sources are seo, content, sales,
-     operations, reputation, analytics and executive; targets are content,
-     analytics, operations, executive and sales. Nothing validates that — the
-     two lists simply happen to nest. And an agent with no handoff rule at all
-     never gets this far: it exits at the no_handoff_rule branch above, which is
-     what actually happens to ads, etsy, store, broker, publicist and rd, so
-     they are skipped for having no rule rather than for failing an allowlist
-     they were never tested against.
+     Agent chaining superseded it on 2026-09-11 (1006bdc, af7f510):
+     dispatchToolCall and POST /api/assignments/dispatch pass work between
+     agents with a validated tool body and record the outcome in ai_tasks and
+     model_calls under a chain id. Anything that wants one agent to hand work
+     to another uses dispatchToolCall. The four /api/collaborations routes and
+     the constants that served them were removed with the inserts.
 
-     They go live the moment a handoff rule names an agent the allowlist does
-     not. Deriving COLLABORATION_AGENT_TYPES from AGENT_SYSTEM_PROMPTS is
-     precisely what now prevents that: any agent reachable enough to appear in
-     a handoff rule has a system prompt, so it is in the derived list by
-     construction. Delete these branches and that guarantee becomes load-bearing
-     and silent; leave them and a future divergence is a logged skip rather than
-     a constraint violation on insert. */
+     THE TABLE IS INTENTIONALLY RETAINED, with its 13 inert rows, and it stays
+     in BACKUP_TABLES. Stopping the writes is the whole benefit; dropping the
+     table is the only irreversible part and buys nothing.
+
+     What remains is the one handoff that did real work: when an executive
+     assignment starts, the Sales Agent runs a conversion pass on it and
+     records the result in ai_tasks and agent_memory. That never depended on
+     the row. Every other pair is logged and left there — the target's turn
+     is a chain dispatch, not a table row.
+
+     The allowlist branches that stood between the rule lookup and the
+     inserts (COLLABORATION_AGENT_TYPES on source and target) went with the
+     inserts: they existed to keep an insert inside a CHECK constraint that
+     migration 084 had already dropped, and with no insert there is nothing
+     for them to keep. */
   if (!targetAgent) {
     console.log("AGENT ORCHESTRATOR SKIPPED", {
       user_id: userId,
       assignment_id: assignmentId,
       reason: "no_handoff_rule"
     });
-  } else if (COLLABORATION_AGENT_TYPES.indexOf(agentType) === -1) {
-    console.log("AGENT ORCHESTRATOR SKIPPED", {
-      user_id: userId,
-      assignment_id: assignmentId,
-      reason: "unsupported_source_agent"
-    });
-  } else if (COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
-    console.log("AGENT ORCHESTRATOR SKIPPED", {
-      user_id: userId,
-      assignment_id: assignmentId,
-      reason: "missing_target_agent",
-      target_agent: targetAgent
-    });
-  } else {
-    if (targetAgent === "sales") {
+  } else if (targetAgent === "sales") {
+    try {
+      var salesProfileResult = await supabase
+        .from("business_profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+      var salesBusinessProfile = salesProfileResult.data || {};
+
+      var salesLiveStats = {};
       try {
-        var salesProfileResult = await supabase
-          .from("business_profiles")
-          .select("*")
-          .eq("user_id", userId)
-          .single();
-        var salesBusinessProfile = salesProfileResult.data || {};
+        salesLiveStats = await getLiveStats(userId);
+      } catch (salesStatsErr) {
+        console.error("AGENT ORCHESTRATOR SALES getLiveStats failed:", salesStatsErr.message || salesStatsErr);
+      }
 
-        var salesLiveStats = {};
-        try {
-          salesLiveStats = await getLiveStats(userId);
-        } catch (salesStatsErr) {
-          console.error("AGENT ORCHESTRATOR SALES getLiveStats failed:", salesStatsErr.message || salesStatsErr);
-        }
+      var salesMemoryResult = await supabase
+        .from("agent_memory")
+        .select("agent_type, memory_type, title, content, created_at")
+        .eq("user_id", userId)
+        .eq("agent_type", "sales")
+        .order("created_at", { ascending: false })
+        .limit(5);
 
-        var salesMemoryResult = await supabase
-          .from("agent_memory")
-          .select("agent_type, memory_type, title, content, created_at")
-          .eq("user_id", userId)
-          .eq("agent_type", "sales")
-          .order("created_at", { ascending: false })
-          .limit(5);
+      var salesMemoriesForBrain = (salesMemoryResult.error ? [] : (salesMemoryResult.data || [])).map(function (row) {
+        return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
+      });
 
-        var salesMemoriesForBrain = (salesMemoryResult.error ? [] : (salesMemoryResult.data || [])).map(function (row) {
-          return { agent_type: row.agent_type, title: row.title || row.memory_type, content: row.content };
-        });
+      var salesSharedPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, salesBusinessProfile, salesLiveStats, salesMemoriesForBrain);
+      var salesHandoffLanguageTag = await resolvePreferredLanguage(userId);
 
-        var salesSharedPrompt = buildAgentSystemPrompt(SALES_AGENT_BRAIN, salesBusinessProfile, salesLiveStats, salesMemoriesForBrain);
-        var salesHandoffLanguageTag = await resolvePreferredLanguage(userId);
+      var salesHandoffPrompt =
+        salesSharedPrompt +
+        "\n\nHANDOFF CONTEXT:\nThe " + agentType.toUpperCase() + " Agent just completed this assignment and handed it to you:\n" +
+        truncateOrchestratorPreview(resultText, 3000) +
+        "\n\nTASK INSTRUCTIONS:\nTranslate this handoff into concrete sales action: offers, scripts, funnel steps, or objection handling relevant to what was just completed.\n\nUSER REQUEST:\nAct on this handoff as the Sales Agent." +
 
-        var salesHandoffPrompt =
-          salesSharedPrompt +
-          "\n\nHANDOFF CONTEXT:\nThe " + agentType.toUpperCase() + " Agent just completed this assignment and handed it to you:\n" +
-          truncateOrchestratorPreview(resultText, 3000) +
-          "\n\nTASK INSTRUCTIONS:\nTranslate this handoff into concrete sales action: offers, scripts, funnel steps, or objection handling relevant to what was just completed.\n\nUSER REQUEST:\nAct on this handoff as the Sales Agent." +
+        /* surfaceSeesUserText is FALSE. Despite the "USER REQUEST" heading, that
+           line is a fixed string this file writes — the seeker never typed it.
+           Everything else is salesSharedPrompt (profile and memories) and
+           resultText, which is ANOTHER AGENT'S OUTPUT, not the seeker's words.
+           The chain began with something they wrote, but it is not in this
+           prompt, and mirroring cannot be asked of a prompt that carries
+           nothing to mirror. */
+        buildLanguageInstruction(salesHandoffLanguageTag, false);
 
-          /* surfaceSeesUserText is FALSE. Despite the "USER REQUEST" heading, that
-             line is a fixed string this file writes — the seeker never typed it.
-             Everything else is salesSharedPrompt (profile and memories) and
-             resultText, which is ANOTHER AGENT'S OUTPUT, not the seeker's words.
-             The chain began with something they wrote, but it is not in this
-             prompt, and mirroring cannot be asked of a prompt that carries
-             nothing to mirror. */
-          buildLanguageInstruction(salesHandoffLanguageTag, false);
+      var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700, userId, undefined, {
+        user_id: userId,
+        agent_type: "sales",
+        route: "orchestrateAgentWorkflow handoff " + agentType + " -> sales"
+      });
+      var salesOutput = salesGeneration.text;
+      orchestrationResult.sales_call_result = salesOutput;
 
-        var salesGeneration = await callAnthropicText(salesHandoffPrompt, 700, userId, undefined, {
+      var salesTaskInsert = await supabase
+        .from("ai_tasks")
+        .insert({
           user_id: userId,
           agent_type: "sales",
-          route: "orchestrateAgentWorkflow handoff " + agentType + " -> sales"
+          prompt: "Executive handoff: " + truncateOrchestratorPreview(resultText, 120),
+          result: salesOutput,
+          status: "completed"
+        })
+        .select("id")
+        .single();
+
+      if (salesTaskInsert.error) {
+        console.error("AGENT ORCHESTRATOR SALES ai_tasks ERROR:", salesTaskInsert.error.message);
+      }
+
+      var salesMemTimestamp = nowIso();
+      var salesMemContent = truncateOrchestratorPreview(salesOutput, 2000) || "Sales handoff completed with no captured output.";
+      var salesMemInsert = await supabase
+        .from("agent_memory")
+        .insert({
+          user_id: userId,
+          agent: "sales",
+          agent_type: "sales",
+          memory_key: "sales_handoff_" + (salesTaskInsert.data ? salesTaskInsert.data.id : Date.now()),
+          memory_value: salesMemContent,
+          memory_type: "insight",
+          title: "Sales handoff from " + agentType,
+          content: salesMemContent,
+          metadata: normalizeMemoryMetadata({ source: "executive_handoff", from_agent: agentType, assignment_id: assignmentId }),
+          created_at: salesMemTimestamp,
+          updated_at: salesMemTimestamp
         });
-        var salesOutput = salesGeneration.text;
-        orchestrationResult.sales_call_result = salesOutput;
 
-        var salesTaskInsert = await supabase
-          .from("ai_tasks")
-          .insert({
-            user_id: userId,
-            agent_type: "sales",
-            prompt: "Executive handoff: " + truncateOrchestratorPreview(resultText, 120),
-            result: salesOutput,
-            status: "completed"
-          })
-          .select("id")
-          .single();
-
-        if (salesTaskInsert.error) {
-          console.error("AGENT ORCHESTRATOR SALES ai_tasks ERROR:", salesTaskInsert.error.message);
-        }
-
-        var salesMemTimestamp = nowIso();
-        var salesMemContent = truncateOrchestratorPreview(salesOutput, 2000) || "Sales handoff completed with no captured output.";
-        var salesMemInsert = await supabase
-          .from("agent_memory")
-          .insert({
-            user_id: userId,
-            agent: "sales",
-            agent_type: "sales",
-            memory_key: "sales_handoff_" + (salesTaskInsert.data ? salesTaskInsert.data.id : Date.now()),
-            memory_value: salesMemContent,
-            memory_type: "insight",
-            title: "Sales handoff from " + agentType,
-            content: salesMemContent,
-            metadata: normalizeMemoryMetadata({ source: "executive_handoff", from_agent: agentType, assignment_id: assignmentId }),
-            created_at: salesMemTimestamp,
-            updated_at: salesMemTimestamp
-          });
-
-        if (salesMemInsert.error) {
-          console.error("AGENT ORCHESTRATOR SALES agent_memory ERROR:", salesMemInsert.error.message);
-        }
-
-        var salesCollaborationInsert = await supabase
-          .from("agent_collaborations")
-          .insert({
-            user_id: userId,
-            parent_assignment_id: persistableAssignmentId,
-            source_agent: agentType,
-            target_agent: targetAgent,
-            collaboration_type: "handoff",
-            payload: {
-              note: "Sales Agent ran a real conversion pass on this handoff.",
-              source_assignment_id: assignmentId,
-              source_result_preview: truncateOrchestratorPreview(resultText, 1000),
-              sales_result_preview: truncateOrchestratorPreview(salesOutput, 1000)
-            },
-            status: "completed",
-            created_at: timestamp,
-            updated_at: timestamp
-          })
-          .select("id")
-          .single();
-
-        if (salesCollaborationInsert.error) {
-          console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", salesCollaborationInsert.error);
-        } else {
-          orchestrationResult.collaboration_created = true;
-          console.log("AGENT ORCHESTRATOR SALES CALL COMPLETE", {
-            user_id: userId,
-            assignment_id: assignmentId,
-            collaboration_id: salesCollaborationInsert.data.id,
-            source_agent: agentType,
-            target_agent: targetAgent
-          });
-        }
-      } catch (salesCallError) {
-        console.error("AGENT ORCHESTRATOR SALES CALL ERROR:", salesCallError.message || salesCallError);
+      if (salesMemInsert.error) {
+        console.error("AGENT ORCHESTRATOR SALES agent_memory ERROR:", salesMemInsert.error.message);
       }
-    } else {
-      try {
-        var collaborationInsert = await supabase
-          .from("agent_collaborations")
-          .insert({
-            user_id: userId,
-            parent_assignment_id: persistableAssignmentId,
-            source_agent: agentType,
-            target_agent: targetAgent,
-            collaboration_type: "handoff",
-            payload: {
-              note: "Agent completed work and handed off next recommended context.",
-              source_assignment_id: assignmentId,
-              source_result_preview: truncateOrchestratorPreview(resultText, 1000)
-            },
-            status: "pending",
-            created_at: timestamp,
-            updated_at: timestamp
-          })
-          .select("id")
-          .single();
 
-        if (collaborationInsert.error) {
-          console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationInsert.error);
-        } else {
-          orchestrationResult.collaboration_created = true;
-          console.log("AGENT ORCHESTRATOR COLLABORATION CREATED", {
-            user_id: userId,
-            assignment_id: assignmentId,
-            collaboration_id: collaborationInsert.data.id,
-            source_agent: agentType,
-            target_agent: targetAgent
-          });
-        }
-      } catch (collaborationError) {
-        console.error("AGENT ORCHESTRATOR COLLABORATION ERROR:", collaborationError);
-      }
+      console.log("AGENT ORCHESTRATOR SALES CALL COMPLETE", {
+        user_id: userId,
+        assignment_id: assignmentId,
+        source_agent: agentType,
+        target_agent: targetAgent,
+        ai_task_id: salesTaskInsert.data ? salesTaskInsert.data.id : null
+      });
+    } catch (salesCallError) {
+      console.error("AGENT ORCHESTRATOR SALES CALL ERROR:", salesCallError.message || salesCallError);
     }
+  } else {
+    console.log("AGENT ORCHESTRATOR HANDOFF NOT RECORDED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      source_agent: agentType,
+      target_agent: targetAgent,
+      reason: "agent_collaborations mechanism removed; agent-to-agent work goes through dispatchToolCall"
+    });
   }
 
   console.log("AGENT ORCHESTRATOR COMPLETE", {
     user_id: userId,
     assignment_id: assignmentId,
     memory_created: orchestrationResult.memory_created,
-    collaboration_created: orchestrationResult.collaboration_created
+    sales_call_made: orchestrationResult.sales_call_result !== null
   });
 
   return orchestrationResult;
@@ -14273,264 +14164,6 @@ app.delete("/api/memory/:id", requireAuth, async function (req, res, next) {
     });
   } catch (error) {
     console.error("AGENT MEMORY DELETE ERROR:", error);
-    next(error);
-  }
-});
-
-app.post("/api/collaborations", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-    var sourceAgent = String(req.body.source_agent || "").toLowerCase().trim();
-    var targetAgent = String(req.body.target_agent || "").toLowerCase().trim();
-    var collaborationType = String(req.body.collaboration_type || "").toLowerCase().trim();
-    var status = String(req.body.status || "pending").toLowerCase().trim();
-    var parentAssignmentId = req.body.parent_assignment_id
-      ? String(req.body.parent_assignment_id).trim()
-      : null;
-
-    if (!sourceAgent || COLLABORATION_AGENT_TYPES.indexOf(sourceAgent) === -1) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid or missing source_agent"
-      });
-    }
-
-    if (!targetAgent || COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid or missing target_agent"
-      });
-    }
-
-    if (!collaborationType || COLLABORATION_TYPES.indexOf(collaborationType) === -1) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid or missing collaboration_type"
-      });
-    }
-
-    if (COLLABORATION_STATUSES.indexOf(status) === -1) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid status"
-      });
-    }
-
-    if (parentAssignmentId && !isValidUuid(parentAssignmentId)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid parent_assignment_id"
-      });
-    }
-
-    var timestamp = nowIso();
-    var insertResult = await supabase
-      .from("agent_collaborations")
-      .insert({
-        user_id: userId,
-        parent_assignment_id: parentAssignmentId,
-        source_agent: sourceAgent,
-        target_agent: targetAgent,
-        collaboration_type: collaborationType,
-        payload: normalizeCollaborationPayload(req.body.payload),
-        status: status,
-        created_at: timestamp,
-        updated_at: timestamp
-      })
-      .select("*")
-      .single();
-
-    if (insertResult.error) {
-      throw insertResult.error;
-    }
-
-    console.log("COLLABORATION CREATED", {
-      user_id: userId,
-      collaboration_id: insertResult.data.id,
-      source_agent: sourceAgent,
-      target_agent: targetAgent,
-      collaboration_type: collaborationType
-    });
-
-    return res.status(201).json({
-      ok: true,
-      collaboration: insertResult.data
-    });
-  } catch (error) {
-    console.error("COLLABORATION CREATE ERROR:", error);
-    next(error);
-  }
-});
-
-app.get("/api/collaborations", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-    var limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 100);
-    var query = supabase
-      .from("agent_collaborations")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(limit);
-
-    var sourceAgent = String(req.query.source_agent || "").toLowerCase().trim();
-    var targetAgent = String(req.query.target_agent || "").toLowerCase().trim();
-    var collaborationType = String(req.query.collaboration_type || "").toLowerCase().trim();
-    var status = String(req.query.status || "").toLowerCase().trim();
-
-    if (sourceAgent) {
-      if (COLLABORATION_AGENT_TYPES.indexOf(sourceAgent) === -1) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid source_agent filter"
-        });
-      }
-
-      query = query.eq("source_agent", sourceAgent);
-    }
-
-    if (targetAgent) {
-      if (COLLABORATION_AGENT_TYPES.indexOf(targetAgent) === -1) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid target_agent filter"
-        });
-      }
-
-      query = query.eq("target_agent", targetAgent);
-    }
-
-    if (collaborationType) {
-      if (COLLABORATION_TYPES.indexOf(collaborationType) === -1) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid collaboration_type filter"
-        });
-      }
-
-      query = query.eq("collaboration_type", collaborationType);
-    }
-
-    if (status) {
-      if (COLLABORATION_STATUSES.indexOf(status) === -1) {
-        return res.status(400).json({
-          ok: false,
-          error: "Invalid status filter"
-        });
-      }
-
-      query = query.eq("status", status);
-    }
-
-    var result = await query;
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    console.log("COLLABORATIONS FETCHED", {
-      user_id: userId,
-      count: result.data ? result.data.length : 0
-    });
-
-    return res.json({
-      ok: true,
-      collaborations: result.data || []
-    });
-  } catch (error) {
-    console.error("COLLABORATIONS LIST ERROR:", error);
-    next(error);
-  }
-});
-
-app.get("/api/collaborations/:id", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-    var collaborationId = String(req.params.id || "").trim();
-
-    if (!isValidUuid(collaborationId)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid collaboration id"
-      });
-    }
-
-    var result = await supabase
-      .from("agent_collaborations")
-      .select("*")
-      .eq("id", collaborationId)
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    if (!result.data) {
-      return res.status(404).json({
-        ok: false,
-        error: "Collaboration not found"
-      });
-    }
-
-    console.log("COLLABORATION DETAIL FETCHED", {
-      user_id: userId,
-      collaboration_id: collaborationId
-    });
-
-    return res.json({
-      ok: true,
-      collaboration: result.data
-    });
-  } catch (error) {
-    console.error("COLLABORATION DETAIL ERROR:", error);
-    next(error);
-  }
-});
-
-app.delete("/api/collaborations/:id", requireAuth, async function (req, res, next) {
-  try {
-    var userId = req.user.id;
-    var collaborationId = String(req.params.id || "").trim();
-
-    if (!isValidUuid(collaborationId)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid collaboration id"
-      });
-    }
-
-    var result = await supabase
-      .from("agent_collaborations")
-      .delete()
-      .eq("id", collaborationId)
-      .eq("user_id", userId)
-      .select("*")
-      .maybeSingle();
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    if (!result.data) {
-      return res.status(404).json({
-        ok: false,
-        error: "Collaboration not found"
-      });
-    }
-
-    console.log("COLLABORATION DELETED", {
-      user_id: userId,
-      collaboration_id: collaborationId
-    });
-
-    return res.json({
-      ok: true,
-      deleted: true,
-      collaboration: result.data
-    });
-  } catch (error) {
-    console.error("COLLABORATION DELETE ERROR:", error);
     next(error);
   }
 });
