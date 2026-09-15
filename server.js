@@ -12514,12 +12514,19 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
         }
 
         if (isExecutive && !executiveComplete) {
+          /* completed_at and error, matching what startToolRun's fail() writes.
+             completed_at is WHEN THE RUN ENDED, not when it succeeded — fail()
+             sets it on failures too, so a failed row is not left looking like it
+             is still going. The result keeps the partial output, as before. */
+          var executiveFailedAt = nowIso();
           await supabase
             .from("ai_tasks")
             .update({
               result: output,
               status: "failed",
-              updated_at: nowIso()
+              error: "The executive plan came back incomplete, so it was not accepted. The partial output is in result.",
+              completed_at: executiveFailedAt,
+              updated_at: executiveFailedAt
             })
             .eq("id", taskId)
             .eq("user_id", userId);
@@ -12527,12 +12534,21 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           return;
         }
 
+        /* completed_at IS SET FOR requires_approval TOO, and that is a decision
+           rather than an oversight. It records when the RUN finished, not when a
+           human agreed with it: the model has been called, the money is spent
+           and the output is written. fail() setting it on failures is what fixes
+           its meaning — if it meant "succeeded at", a failed row could not carry
+           one. Matching startToolRun's complete(), which sets it unconditionally
+           when the run is done. */
+        var taskFinishedAt = nowIso();
         var updateResult = await supabase
             .from("ai_tasks")
             .update({
                 result: output,
                 status: requiresApproval ? "requires_approval" : "completed",
-                updated_at: nowIso()
+                completed_at: taskFinishedAt,
+                updated_at: taskFinishedAt
             })
             .eq("id", taskId)
             .eq("user_id", userId);
@@ -12580,12 +12596,18 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
     } catch (error) {
         console.error("PROCESS AI TASK ERROR:", error);
 
+        /* The error message in its own column, not only folded into the result
+           sentence a person reads. Same pair fail() writes: error carries the
+           message, result carries "Task failed: " + the message. */
+        var taskFailedAt = nowIso();
         await supabase
             .from("ai_tasks")
             .update({
                 status: "failed",
+                error: error.message,
                 result: "Task failed: " + error.message,
-                updated_at: nowIso()
+                completed_at: taskFailedAt,
+                updated_at: taskFailedAt
             })
             .eq("id", taskId)
             .eq("user_id", userId);
@@ -13212,11 +13234,19 @@ if (memoryResult.error) {
   "- Keep outputs lawful, practical, and business-safe.\n" +
   "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
   "\n\nUSER REQUEST:\n" + userPrompt;
+    /* task_type IS RECORDED, HAVING BEEN VALIDATED AND USED. It was checked
+       against allowedTaskTypes above, coerced to "general" if unrecognised, and
+       used to pick the instruction this run was given — and then dropped, so
+       every row this route has ever written says "general" whatever was asked.
+       7,932 of them do. The column was there the whole time; only the insert
+       was not filling it. startToolRun has written it since dfcce4d; this is
+       the same field, written the same way, in the other lane. */
     var pendingInsert = await supabase
       .from("ai_tasks")
       .insert({
         user_id: userId,
         agent_type: agentType,
+        task_type: taskType,
         prompt: userPrompt,
         result: null,
         status: "processing"
