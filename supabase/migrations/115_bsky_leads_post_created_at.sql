@@ -1,0 +1,64 @@
+-- 115_bsky_leads_post_created_at.sql
+--
+-- DOCUMENT bsky_leads.post_created_at, WHICH EXISTS AND NEVER HAD DDL.
+--
+-- ── WHAT WAS FOUND ────────────────────────────────────────────────────────
+--
+-- The live table has 19 columns. Migration 068 transcribed 15 of them, and
+-- 073, 077 and 078 added score_attempts, outreach_safe and reply_invited. The
+-- nineteenth, post_created_at, is in no file: 068 did not have it to transcribe
+-- because it was added live afterwards, and the code that writes it shipped
+-- without a migration. From PostgREST's schema description of the live table:
+--
+--   column_name      | format                   | required | default
+--   post_created_at  | timestamp with time zone | no       | (none)
+--
+-- Nullable, no default. 5,880 of the 7,063 live rows hold NULL here — every
+-- lead captured before the column existed — and 1,183 hold the timestamp the
+-- source network reported for the post.
+--
+-- ── WHY IT IS MISSING ─────────────────────────────────────────────────────
+--
+-- 077's own header refers to the outreach query filtering on post_created_at
+-- as an established fact, so the column predates 077 and postdates 068. It
+-- was added by hand between the two, in the same way 068's header describes
+-- the whole table having been: built live, never written down.
+--
+-- ── WHAT A REBUILD DOES WITHOUT IT ────────────────────────────────────────
+--
+-- This is the single most consequential gap in the directory. All three
+-- capture modules write the column on every upsert:
+--
+--   leadRadar.js:216      post_created_at: post.record.createdAt || post.indexedAt
+--   mastodonRadar.js:83   post_created_at: status.created_at
+--   youtubeRadar.js:176   post_created_at: commentSnippet.publishedAt
+--
+-- PostgREST refuses an upsert naming an unknown column (PGRST204) and applies
+-- none of it. On a rebuilt database every radar tick fails on its first
+-- keyword, every five minutes, and Lead Radar captures nothing. The outreach
+-- loop then filters on the same column (server.js, .not("post_created_at",
+-- "is", null)) and fails its query too. The 7,063 rows a restore would carry
+-- in cannot be loaded either, because their post_created_at values have no
+-- column to land in.
+--
+-- ── WHY NULLABLE AND WHY NO DEFAULT, RECORDED NOT CHOSEN ──────────────────
+--
+-- Transcribed, not designed. NULL here means "captured before the column
+-- existed or the network reported no timestamp", and the outreach loop treats
+-- that as ineligible rather than as now(). A DEFAULT now() would turn every
+-- such row into a post apparently written at capture time — the exact
+-- confusion 068's created_at comment warns about, since capture time and
+-- authoring time are the two things this column exists to tell apart.
+--
+-- ── IDEMPOTENT ────────────────────────────────────────────────────────────
+--
+-- ADD COLUMN IF NOT EXISTS: a no-op against the live database, where the
+-- column already exists with exactly this definition, and correct in a rebuilt
+-- one. No data is written or deleted, nothing is dropped or altered, and no
+-- existing file is renumbered — 114 was the highest before this.
+
+ALTER TABLE public.bsky_leads
+  ADD COLUMN IF NOT EXISTS post_created_at timestamp with time zone;
+
+COMMENT ON COLUMN public.bsky_leads.post_created_at IS
+  'When the AUTHOR wrote the post, as reported by the source network (Bluesky record.createdAt falling back to indexedAt; Mastodon status.created_at; YouTube comment publishedAt falling back to updatedAt). Distinct from created_at, which is when this system captured it — a week-old post captured today has created_at today and post_created_at a week ago. Written by all three radar modules on every upsert. NULL for every row captured before the column existed (5,880 of 7,063 on 2026-09-15) and for any capture where the network reported no timestamp; the outreach loop excludes NULL rows outright rather than treating them as fresh, which is why there is deliberately no DEFAULT. Filtered against OUTREACH_MAX_POST_AGE_DAYS in server.js before any reply is drafted.';
