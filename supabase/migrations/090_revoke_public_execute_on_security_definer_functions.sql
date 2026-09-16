@@ -98,18 +98,67 @@
 --   in force. Dropping and recreating one resets it to the PUBLIC default
 --   silently. That is the specific way this fix gets undone, and it is why the
 --   rule above is written as "in the same migration" rather than "once".
+--
+-- AMENDED AFTER IT WAS APPLIED — 2026-09-15
+--   This file was committed on 2026-09-04 (7f09246) and ran against the live
+--   database as originally written: twelve bare statements, all revokes then
+--   all grants. It was amended on 2026-09-15 so that the four statements
+--   naming bfc_credit and bfc_debit are wrapped in a guard on
+--   to_regprocedure(...) is not null. Nothing else in the file changed. The
+--   guarded pairs now sit between the first revoke and the remaining ones;
+--   every statement names a different function, so relative order has no
+--   effect on the result.
+--
+--   WHY. The paragraph above records that bfc_credit and bfc_debit had no
+--   CREATE anywhere in the directory, so on a fresh database the two REVOKEs
+--   error and a rebuild halts here. Migration 121 now carries both bodies,
+--   transcribed from pg_proc — but 121 is numbered above this file and cannot
+--   create them before this file runs. The guard lets a fresh run pass this
+--   point with the two functions' grants unapplied. When 121 later creates
+--   them, PostgreSQL's default EXECUTE-to-PUBLIC grant applies to the new
+--   functions — the exact exposure this file exists to close — so on a fresh
+--   database THIS FILE MUST BE RUN A SECOND TIME AFTER 121. It is idempotent;
+--   the second run revokes what the first could not. The skipped branch says
+--   so in a NOTICE so the omission is visible in the migration output rather
+--   than silent.
+--
+--   THE EQUIVALENCE, WHICH IS THE ONLY REASON THIS EDIT IS PERMITTED. Against
+--   the database this file already ran on, both functions exist with exactly
+--   these signatures — this file resolved them successfully when it ran, and
+--   pg_proc on 2026-09-15 returned both. to_regprocedure returns their oids,
+--   the guard is true, and the four statements inside it execute unchanged:
+--   same text, same order, same effect. On a database where the guard is
+--   false, the original file would not have run at all — it would have
+--   errored on the first of those statements — so there is no database on
+--   which the original produced a result that this version does not. The
+--   other eight statements are untouched: their functions are created by 031,
+--   087 and 089, all of which run before this file on any ordering.
 -- ============================================================================
 
 revoke execute on function public.bfc_transfer(uuid, uuid, integer, text) from public, anon, authenticated;
-revoke execute on function public.bfc_credit(uuid, integer, text, text) from public, anon, authenticated;
-revoke execute on function public.bfc_debit(uuid, integer, text) from public, anon, authenticated;
+do $$
+begin
+  if to_regprocedure('public.bfc_credit(uuid, integer, text, text)') is not null then
+    revoke execute on function public.bfc_credit(uuid, integer, text, text) from public, anon, authenticated;
+    grant  execute on function public.bfc_credit(uuid, integer, text, text) to service_role;
+  else
+    raise notice '090: public.bfc_credit(uuid, integer, text, text) does not exist yet; its REVOKE/GRANT are skipped — run this file again after 121';
+  end if;
+end $$;
+do $$
+begin
+  if to_regprocedure('public.bfc_debit(uuid, integer, text)') is not null then
+    revoke execute on function public.bfc_debit(uuid, integer, text) from public, anon, authenticated;
+    grant  execute on function public.bfc_debit(uuid, integer, text) to service_role;
+  else
+    raise notice '090: public.bfc_debit(uuid, integer, text) does not exist yet; its REVOKE/GRANT are skipped — run this file again after 121';
+  end if;
+end $$;
 revoke execute on function public.bfc_donate(uuid, uuid, integer) from public, anon, authenticated;
 revoke execute on function public.bfc_buy_listing(uuid, uuid) from public, anon, authenticated;
 revoke execute on function public.convert_prospect_to_customer(uuid, uuid) from public, anon, authenticated;
 
 grant execute on function public.bfc_transfer(uuid, uuid, integer, text) to service_role;
-grant execute on function public.bfc_credit(uuid, integer, text, text) to service_role;
-grant execute on function public.bfc_debit(uuid, integer, text) to service_role;
 grant execute on function public.bfc_donate(uuid, uuid, integer) to service_role;
 grant execute on function public.bfc_buy_listing(uuid, uuid) to service_role;
 grant execute on function public.convert_prospect_to_customer(uuid, uuid) to service_role;
