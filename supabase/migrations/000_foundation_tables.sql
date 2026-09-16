@@ -1,66 +1,81 @@
 -- ============================================================================
--- 071_transcribe_foundation_tables.sql
+-- 000_foundation_tables.sql
 --
--- PURPOSE
---   Twenty tables predate the migration series and existed in exactly one
---   place: the production Supabase project. The series begins at
---   001_agent_assignments, which references `users` -- a table nothing in the
---   repo creates. A fresh clone therefore failed on its first migration and
---   the database could not be rebuilt from source at all.
+-- THE TWENTY FOUNDATION TABLES, NUMBERED SO THEY EXIST BEFORE ANYTHING NEEDS
+-- THEM.
 --
---   This file closes that gap. With it, `supabase/migrations` replays from
---   empty into a working schema.
+-- WHY THIS FILE EXISTS
+--   071_transcribe_foundation_tables.sql transcribed the twenty tables that
+--   predate the migration series — users, profiles, ai_agents, ai_tasks,
+--   subscriptions and fifteen more — from pg_catalog on the live project, and
+--   its header says that with it the directory "replays from empty into a
+--   working schema". That is true only if 071 runs FIRST. Numbered 071, it
+--   runs after ten files that already depend on its tables:
 --
--- HOW THIS WAS PRODUCED
---   Generated on 2026-07-31 from pg_catalog on the live project, using
---   pg_get_constraintdef, pg_get_indexdef, pg_get_expr and format_type --
---   the same serializers pg_dump calls internally. Nothing here was written
---   by hand. It is a transcription, not a design.
+--     040  UPDATE bf_profiles ... FROM profiles
+--     041  FOREIGN KEY ... REFERENCES public.users(id) x2;
+--          ALTER TABLE public.profile_videos / public.profile_music
+--     043, 048, 050, 054  REFERENCES users(id) inside CREATE TABLE
+--     052  CREATE UNIQUE INDEX ... ON public.ai_agents
+--     061, 064, 066, 069  ADD CONSTRAINT ... FOREIGN KEY ... REFERENCES users
 --
--- SCOPE
---   20 tables - 186 columns - 31 constraints - 16 non-constraint indexes
---   - RLS on all 20 - 16 policies - 0 triggers (there are none to carry).
+--   A fresh run in numeric order therefore halts at 040, with ERROR 42P01
+--   relation "profiles" does not exist, and never reaches 071. Found on
+--   2026-09-15 by walking 001-114 in order with a model of what each file
+--   leaves behind (the checker is described in the commit that adds this
+--   file).
 --
--- SAFETY
---   Every statement is guarded: CREATE TABLE IF NOT EXISTS, CREATE INDEX
---   IF NOT EXISTS, and DO blocks testing pg_constraint and pg_policy.
---   CREATE POLICY IF NOT EXISTS is not valid Postgres, hence the DO blocks.
---   Nothing is ever dropped -- dropping a UNIQUE constraint to make a file
---   re-runnable also drops its backing index and rebuilds it on a live table.
---   Running this against production is a no-op by design.
+--   Those ten files are not guarded and 071 is not renumbered. A guard on
+--   each would be ten edits to applied migrations, each needing its own
+--   equivalence argument, to work around one ordering fact; renumbering 071
+--   would rewrite the history of a file that has run. This file instead
+--   puts the same DDL at the front of the sequence, where 071's own header
+--   says it needs to be.
 --
--- TARGET
---   A Supabase project. The policies reference auth.uid(), which exists only
---   because Supabase provides it. Note that these policies never match at
---   runtime: this application signs its own JWTs against public.users and
---   connects with the service-role key, which bypasses RLS entirely. They are
---   transcribed because they are present, not because they are load-bearing.
+-- WHAT THIS FILE IS
+--   A FAITHFUL COPY, NOT A SUBSET. Every executable statement below is
+--   071's executable body — lines 40 through 408 of that file on 2026-09-15
+--   — reproduced without alteration: the search_path, both extensions, the
+--   twenty CREATE TABLEs, the thirty-one guarded constraints, the sixteen
+--   indexes, the twenty ENABLE ROW LEVEL SECURITY statements and the sixteen
+--   guarded policies. Two files that half-agree are worse to reason about
+--   than two that fully agree, so nothing was left behind in 071: after this
+--   file, 071 finds every object it would create already present and does
+--   nothing. scripts/checkFoundationFilesAgree.js asserts the two files
+--   define the same tables with the same columns, and the same statements,
+--   so they cannot drift apart unnoticed.
 --
--- AMENDED AFTER IT WAS APPLIED — 2026-09-15 — COMMENT ONLY
---   This note is the whole amendment. No executable statement in this file
---   was added, removed or altered; a comment-only edit produces byte-for-byte
---   the same statements the file ran with, so the equivalence test that
---   permits editing an applied migration is met trivially.
+--   The policies reference auth.uid(). They are carried here for the same
+--   reason 071 carried them — they exist on the live database — and with
+--   the same caveat 071 records: they only create on a Supabase project,
+--   where auth.uid() exists, and they never match at runtime because this
+--   application connects with the service-role key. On a plain PostgreSQL
+--   they would fail to create wherever they lived, so putting them here
+--   changes nothing about where a rebuild can run.
 --
---   WHAT CHANGED AROUND IT. The PURPOSE section above says that with this
---   file the directory replays from empty. It does — but only if this file
---   runs first, and numbered 071 it runs after ten files (040, 041, 043,
---   048, 050, 052, 054, 061, 064, 066, 069) that already reference users,
---   profiles, ai_agents, profile_videos or profile_music. A fresh run in
---   numeric order halted at 040. Every executable statement in this file —
---   lines 40 through 408 — is now duplicated verbatim in
---   000_foundation_tables.sql, which runs before 001 on any ordering.
+-- IDEMPOTENT, AND A NO-OP ON THE LIVE DATABASE
+--   Every CREATE in 071 was already guarded — create table if not exists,
+--   create index if not exists, DO blocks testing pg_constraint and
+--   pg_policy, create extension if not exists — so nothing had to be made
+--   idempotent for this copy; none differed. On the database this directory
+--   describes, every one of the twenty tables, thirty-one constraints,
+--   sixteen indexes and sixteen policies already exists, RLS is already
+--   enabled on all twenty, and both extensions are installed. Every
+--   statement below therefore finds its object present and does nothing.
+--   Running this file against the live database changes nothing, exactly
+--   as 071 does; that is the same equivalence 090 and 098 now state for
+--   their amendments, and it is what permits a new file to sit at the front
+--   of a sequence that has already run.
 --
---   THIS FILE IS THEREFORE A NO-OP ON A FRESH RUN as well as on the live
---   database: by the time it runs, 000 has created every table, constraint,
---   index and policy it would create, and every guard finds its object
---   present. It is kept, unrenumbered and unshortened, because it ran, and
---   because 000 is a copy of it rather than a replacement — the two must
---   stay identical, and scripts/checkFoundationFilesAgree.js asserts that
---   they do.
+-- WHERE CHANGES TO THESE TABLES GO
+--   Not here and not in 071. Both files are transcriptions of one moment;
+--   editing either makes them disagree with each other or with history. A
+--   change to any of the twenty tables is its own migration, numbered next.
 --
---   ANY FUTURE CHANGE TO THESE TWENTY TABLES GOES IN A NEW MIGRATION, not in
---   this file and not in 000. Editing either makes the pair disagree.
+-- KNOWN DEFECTS
+--   071's closing section lists seven defects in these tables that were
+--   transcribed as-is rather than corrected. They are transcribed as-is here
+--   too, for the same reason, and that list is not repeated: it lives in 071.
 -- ============================================================================
 
 set search_path = public;
@@ -432,49 +447,3 @@ do $$ begin if not exists (select 1 from pg_policy where polname = 'Users manage
 do $$ begin if not exists (select 1 from pg_policy where polname = 'Public read videos' and polrelid = 'public.profile_videos'::regclass) then create policy "Public read videos" on public.profile_videos for select to public using (true); end if; end $$;
 do $$ begin if not exists (select 1 from pg_policy where polname = 'Users manage own videos' and polrelid = 'public.profile_videos'::regclass) then create policy "Users manage own videos" on public.profile_videos for all to public using ((auth.uid() = user_id)); end if; end $$;
 
--- ============================================================================
--- KNOWN DEFECTS -- TRANSCRIBED AS-IS, DELIBERATELY NOT CORRECTED HERE
---
--- A transcription that "improves" its source creates the exact drift it
--- exists to prevent. Each of these is recorded in the master file as its own
--- ranked item and is fixed, if at all, in its own migration.
---
---   1. NO REFERENTIAL INTEGRITY ACROSS MOST OF THE FOUNDATION.
---      Only 7 foreign keys exist among all 20 tables, all -> users(id)
---      ON DELETE CASCADE. Absent on every high-traffic table:
---      messages.sender_id, messages.receiver_id, posts.user_id,
---      chat_messages.user_id, deals.user_id, usage_logs.user_id,
---      ai_tasks.user_id, ai_agents.user_id, tasks.business_id,
---      revenue_events.business_id, profile_portfolio.user_id,
---      profile_products.user_id, follows.follower_id, follows.following_id.
---      Deleting a user orphans rows in all of them silently.
---
---   2. DUPLICATE INDEXES ON ai_tasks (the largest table, 2,599 rows).
---      ai_tasks_status_idx and idx_ai_tasks_status are identical.
---      ai_tasks_user_id_idx and idx_ai_tasks_user_id are identical.
---      Two redundant B-trees maintained on every insert and update.
---
---   3. EIGHT POLICIES ON ai_tasks, SEVERAL FUNCTIONALLY IDENTICAL.
---      "Users can view their own tasks" / "Users can read their own tasks",
---      "Users can insert their own tasks" / "Users can create their own ai
---      tasks", and so on -- plus "Users manage own tasks" FOR ALL, which
---      subsumes all seven. Accreted, never reconciled.
---
---   4. FOUR PERMISSIVE using (true) READ POLICIES.
---      Public read music / portfolio / products / videos, granted TO public.
---      Inert today because there is no frontend Supabase client and the
---      server uses the service-role key. Introducing an anon-key client
---      activates all four without review.
---
---   5. profiles CARRIES TWO SEPARATE FOREIGN KEYS TO users(id):
---      profiles_id_fkey (id -> users.id) and profiles_user_id_fkey
---      (user_id -> users.id), plus a unique index on user_id. Two paths to
---      the same user, and registration historically populated neither
---      consistently.
---
---   6. businesses.created_at IS text, NOT timestamptz.
---      Zero rows, no writer in server.js.
---
---   7. profile_music and profile_videos HAVE FOREIGN KEYS; profile_portfolio
---      and profile_products DO NOT. Same family, inconsistent constraints.
--- ============================================================================
