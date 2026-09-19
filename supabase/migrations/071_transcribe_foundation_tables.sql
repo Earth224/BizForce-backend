@@ -63,14 +63,33 @@
 --   this file and not in 000. Editing either makes the pair disagree.
 -- ============================================================================
 
-set search_path = public;
+set search_path = public, extensions;
 
 -- pg_get_constraintdef emits unqualified references (REFERENCES users(id)).
--- The search_path above is what resolves them on replay.
-
--- usage_logs.id defaults to uuid_generate_v4(), which lives in uuid-ossp.
--- Every other table uses the built-in gen_random_uuid(). Without this
--- extension a fresh replay fails on usage_logs and nothing else.
+-- public on the path is what resolves those on replay.
+--
+-- extensions is on the path because of where uuid-ossp actually lands. This
+-- line read `set search_path = public` until a rebuild against an empty
+-- Supabase project halted on usage_logs below: its id defaults to
+-- uuid_generate_v4(), Supabase pre-installs uuid-ossp into the extensions
+-- schema, and pinning the path to public alone put that function out of
+-- reach. The create extension just below then found the extension already
+-- present and did nothing, so the failure surfaced hundreds of lines later
+-- with uuid-ossp installed the whole time. What stood here before claimed
+-- the search_path was what resolved these functions. It was what hid them,
+-- and only running the file against an empty database showed it: every
+-- statement here is guarded, so on the live database usage_logs already
+-- exists, its default expression is never resolved, and nothing fails.
+--
+-- public, extensions holds on both shapes. On Supabase it reaches the
+-- pre-installed uuid-ossp. On a plain Postgres there is no extensions
+-- schema, a name absent from the search_path is silently ignored, and
+-- create extension installs uuid-ossp into public -- first on the path,
+-- so the call resolves there instead.
+--
+-- Every other table defaults to gen_random_uuid(), a pg_catalog builtin
+-- that is always visible. usage_logs is the only table that depends on
+-- any of this.
 create extension if not exists "uuid-ossp";
 create extension if not exists pgcrypto;
 

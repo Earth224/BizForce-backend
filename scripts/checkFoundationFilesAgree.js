@@ -9,7 +9,7 @@
    time somebody edits one of them, and the drift is invisible until a rebuild
    — which is exactly when it costs the most.
 
-   WHAT THIS ASSERTS, in two layers:
+   WHAT THIS ASSERTS, in three layers:
 
      1. TABLES AND COLUMNS. Each file's CREATE TABLE statements are parsed
         into table -> [column name, type, NOT NULL, DEFAULT]. The two maps
@@ -23,13 +23,38 @@
         normalised) is compared as a multiset. If the two ever differ by one
         statement, this names it.
 
-   No database is touched. This reads two files and compares them.
+     3. THE SAME STATEMENTS, CHARACTER FOR CHARACTER. Layer 2 collapses
+        whitespace before comparing, so two files whose statements differ
+        only in spacing read as agreeing. Layer 3 compares the same
+        statements with their spacing intact, and prints and compares the
+        set search_path statement by itself.
 
-   MUTATION. MUTATE=drift-column removes one column line from 000's copy of
-   ai_tasks before parsing; MUTATE=drift-statement drops one policy DO block
-   from 000's copy. Each must turn the corresponding layer red, and the
-   other layer's result is printed so it can be seen which layer caught it.
-   Run one of them after any edit to this file.
+        WHY THAT LINE BY ITSELF. A rebuild against an empty database halted
+        on 000's first file: the search_path was pinned to public alone,
+        which put uuid-ossp's uuid_generate_v4 out of reach on Supabase,
+        where that extension lives in the extensions schema. Both files
+        carried the identical defect, so no comparison between them could
+        have found it -- only running it did. What a comparison can do is
+        keep the fix from landing in one file and not the other, and layer 2
+        already did that for any change that alters a statement's
+        characters. Layer 3 closes the narrower case where a re-space of
+        this line in one file alone would have read as agreement.
+
+   No database is touched. This reads two files and compares them. A defect
+   present in both files is out of scope here by construction; that is what
+   a rebuild against an empty database is for.
+
+   MUTATION. Four, each of which must turn a specific layer red:
+     MUTATE=drift-column       removes one column line from 000's copy of
+                               ai_tasks            -- layer 1 must fail.
+     MUTATE=drift-statement    drops one policy DO block from 000's copy
+                                                   -- layer 2 must fail.
+     MUTATE=drift-search-path  reverts 000's search_path to public alone
+                                                   -- layers 2 and 3 fail.
+     MUTATE=drift-whitespace   re-spaces 000's search_path statement
+                               -- layer 2 must stay GREEN, layer 3 must fail.
+   Every layer's result is printed under each mutation so it can be seen
+   which layer caught it. Run all four after any edit to this file.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -52,7 +77,7 @@ function strip(sql) {
 
 /* Splits on top-level semicolons, keeping DO $$ ... $$ blocks and string
    literals whole. */
-function statements(sql) {
+function statements(sql, raw) {
   const out = []; let i = 0, cur = "", dollar = null, str = false;
   while (i < sql.length) {
     const ch = sql[i];
@@ -65,7 +90,8 @@ function statements(sql) {
     cur += ch; i++;
   }
   if (cur.trim()) out.push(cur.trim());
-  return out.filter(Boolean).map(s => s.replace(/\s+/g, " ").trim());
+  const split = out.filter(Boolean);
+  return raw ? split : split.map(s => s.replace(/\s+/g, " ").trim());
 }
 
 function balanced(s, idx) {
@@ -122,8 +148,18 @@ if (MUTATE === "drift-column") {
   sql000 = sql000.slice(0, idx) + sql000.slice(end);
   if (sql000 === before) { console.error("MUTATION REFUSED: nothing removed."); process.exit(1); }
   console.log("\n!! MUTATION: the 'Public read videos' policy removed from 000's copy — layer 2 must fail.");
+} else if (MUTATE === "drift-search-path") {
+  const before = sql000;
+  sql000 = sql000.replace(/set search_path = public, extensions/i, "set search_path = public");
+  if (sql000 === before) { console.error("MUTATION REFUSED: could not find 000's search_path statement."); process.exit(1); }
+  console.log("\n!! MUTATION: 000's search_path reverted to public alone -- layers 2 and 3 must fail.");
+} else if (MUTATE === "drift-whitespace") {
+  const before = sql000;
+  sql000 = sql000.replace(/set search_path = public, extensions/i, "set  search_path = public,  extensions");
+  if (sql000 === before) { console.error("MUTATION REFUSED: could not find 000's search_path statement."); process.exit(1); }
+  console.log("\n!! MUTATION: 000's search_path re-spaced -- layer 2 must stay green, layer 3 must fail.");
 } else if (MUTATE) {
-  console.error("Unknown MUTATE value: " + MUTATE + " (use drift-column or drift-statement)");
+  console.error("Unknown MUTATE value: " + MUTATE + " (use drift-column, drift-statement, drift-search-path or drift-whitespace)");
   process.exit(1);
 }
 
@@ -168,6 +204,26 @@ check("statements are in the same order", JSON.stringify(s000) === JSON.stringif
 
 const kinds = arr => arr.reduce((m, s) => { const k = s.match(/^(create table|create unique index|create index|create extension|set search_path|alter table [a-z_.]+ enable row level security|do \$\$)/i); const key = k ? k[1].toLowerCase().replace(/alter table [a-z_.]+ /, "alter table … ") : "other"; m[key] = (m[key] || 0) + 1; return m; }, {});
 console.log("    by kind (071): " + JSON.stringify(kinds(s071)));
+
+/* ── layer 3: the same statements, character for character ──────────────── */
+console.log("\n══ 3. every statement, character for character ══");
+const r000 = statements(sql000, true), r071 = statements(sql071, true);
+const rc000 = count(r000), rc071 = count(r071);
+const rOnly000 = Object.keys(rc000).filter(s => (rc071[s] || 0) < rc000[s]);
+const rOnly071 = Object.keys(rc071).filter(s => (rc000[s] || 0) < rc071[s]);
+check("every statement in 000 appears character-identically in 071", rOnly000.length === 0,
+  rOnly000.map(s => JSON.stringify(s.slice(0, 90))).join(" || "));
+check("every statement in 071 appears character-identically in 000", rOnly071.length === 0,
+  rOnly071.map(s => JSON.stringify(s.slice(0, 90))).join(" || "));
+check("they are in the same order, character for character", JSON.stringify(r000) === JSON.stringify(r071));
+
+const sp000 = r000.filter(s => /^set\s+search_path/i.test(s));
+const sp071 = r071.filter(s => /^set\s+search_path/i.test(s));
+console.log("    000: " + JSON.stringify(sp000));
+console.log("    071: " + JSON.stringify(sp071));
+check("each file sets search_path exactly once", sp000.length === 1 && sp071.length === 1,
+  sp000.length + " in 000 vs " + sp071.length + " in 071");
+check("the two search_path statements are character-identical", JSON.stringify(sp000) === JSON.stringify(sp071));
 
 console.log("");
 if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }
