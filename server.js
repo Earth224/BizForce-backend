@@ -37007,6 +37007,20 @@ const LEAD_RADAR_UNAVAILABLE = {
   code: "lead_radar_unavailable"
 };
 
+/* The same statement of fact for the outreach send path, in the same shape and
+   for the same reason. This deployment holds one Bluesky login and one Mastodon
+   token, so a reply sent on behalf of anyone else would be posted from the
+   owner's accounts. It says what is true and promises nothing about later: the
+   refusal a caller reads should not commit the project to work nobody has
+   scheduled, and "until per-user credentials exist" did exactly that. Whether
+   those credentials are ever built is a product decision, and an error message
+   is not the place it gets made. */
+const OUTREACH_UNAVAILABLE = {
+  error: "Outreach runs against a single connected social account and is not enabled for your account. " +
+         "Drafting and sending replies are only available on the account that owns those credentials.",
+  code: "outreach_unavailable"
+};
+
 /* ── Outreach send cap ──────────────────────────────────────────────────────
    Deliberately low, and env-overridable so it can be raised knowingly rather
    than by editing code. The ceiling on how wrong a single day can go is the
@@ -38594,16 +38608,12 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
     if (userId !== OUTREACH_CREDENTIAL_OWNER_ID) {
       console.warn("[sales/convert] REFUSING user " + userId +
         " — outreach is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
-        " until per-user credentials exist. There is one Bluesky login and one" +
+        ". There is one Bluesky login and one" +
         " Mastodon token in this process, so sending for this user would post" +
         " from the owner's accounts while outreach_sends recorded the send as" +
         " theirs. No lead was read, no draft was generated and nothing was sent.");
 
-      return res.status(403).json({
-        error: "Outreach is limited to the credential owner until per-user credentials exist. " +
-               "This deployment has a single shared Bluesky and Mastodon account, so a reply " +
-               "sent for your account would be posted from someone else's."
-      });
+      return res.status(403).json(OUTREACH_UNAVAILABLE);
     }
 
     var leadPostUri = safeText(req.body.lead_post_uri, 500);
