@@ -37,5 +37,8 @@
     "svix": "^2.2.0",
     "twilio": "^6.0.2",
     "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "pg": "^8.23.0"
   }
 }

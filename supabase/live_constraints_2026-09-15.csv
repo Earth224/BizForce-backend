@@ -1,0 +1,226 @@
+table_name,conname,contype,definition
+admin_flags,admin_flags_flagged_by_fkey,f,FOREIGN KEY (flagged_by) REFERENCES users(id) ON DELETE SET NULL
+admin_flags,admin_flags_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+admin_flags,admin_flags_pkey,p,PRIMARY KEY (id)
+agent_assignments,agent_assignments_status_check,c,"CHECK (status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text, 'failed'::text]))"
+agent_assignments,agent_assignments_pkey,p,PRIMARY KEY (id)
+agent_assignments,agent_assignments_unique_assignment,u,"UNIQUE (user_id, executive_task_id, assignment_number, agent_type)"
+agent_autonomy,agent_autonomy_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+agent_autonomy,agent_autonomy_pkey,p,PRIMARY KEY (id)
+agent_autonomy,agent_autonomy_user_agent_key,u,"UNIQUE (user_id, agent_type)"
+agent_collaborations,agent_collaborations_collaboration_type_check,c,"CHECK (collaboration_type = ANY (ARRAY['handoff'::text, 'request'::text, 'response'::text, 'review'::text, 'approval'::text, 'insight'::text, 'memory_share'::text]))"
+agent_collaborations,agent_collaborations_status_check,c,"CHECK (status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text, 'failed'::text, 'cancelled'::text]))"
+agent_collaborations,agent_collaborations_pkey,p,PRIMARY KEY (id)
+agent_memory,agent_memory_agent_type_check,c,"CHECK (agent_type = ANY (ARRAY['seo'::text, 'sales'::text, 'content'::text, 'ads'::text, 'reputation'::text, 'analytics'::text, 'email'::text, 'community'::text, 'influencer'::text, 'operations'::text, 'executive'::text, 'social'::text, 'etsy'::text, 'store'::text, 'broker'::text, 'publicist'::text, 'rd'::text, 'vertical_marketing'::text, 'oracle'::text]))"
+agent_memory,agent_memory_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+agent_memory,agent_memory_pkey,p,PRIMARY KEY (id)
+agent_proposals,agent_proposals_status_check,c,"CHECK (status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text, 'executing'::text, 'executed'::text, 'failed'::text]))"
+agent_proposals,agent_proposals_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+agent_proposals,agent_proposals_pkey,p,PRIMARY KEY (id)
+agent_schedules,agent_schedules_cadence_known,c,"CHECK (cadence = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text]))"
+agent_schedules,agent_schedules_hour_in_day,c,CHECK (hour_utc >= 0 AND hour_utc <= 23)
+agent_schedules,agent_schedules_monthly_names_a_day,c,CHECK (cadence <> 'monthly'::text OR day_of_month IS NOT NULL AND day_of_month >= 1 AND day_of_month <= 31)
+agent_schedules,agent_schedules_prompt_not_blank,c,CHECK (length(btrim(prompt)) > 0)
+agent_schedules,agent_schedules_weekly_names_a_day,c,CHECK (cadence <> 'weekly'::text OR day_of_week IS NOT NULL AND day_of_week >= 0 AND day_of_week <= 6)
+agent_schedules,agent_schedules_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+agent_schedules,agent_schedules_pkey,p,PRIMARY KEY (id)
+ai_agents,ai_agents_pkey,p,PRIMARY KEY (id)
+ai_agents,ai_agents_user_id_type_key,u,"UNIQUE (user_id, type)"
+ai_reports,ai_reports_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+ai_reports,ai_reports_pkey,p,PRIMARY KEY (id)
+ai_tasks,ai_tasks_pkey,p,PRIMARY KEY (id)
+analytics_events,analytics_events_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+analytics_events,analytics_events_pkey,p,PRIMARY KEY (id)
+auth_sessions,auth_sessions_expiry_after_issue,c,CHECK (expires_at > issued_at)
+auth_sessions,auth_sessions_revoked_reason_agrees,c,CHECK (revoked_at IS NULL AND revoked_reason IS NULL OR revoked_at IS NOT NULL AND revoked_reason IS NOT NULL)
+auth_sessions,auth_sessions_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+auth_sessions,auth_sessions_pkey,p,PRIMARY KEY (id)
+automation_queue,automation_queue_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+automation_queue,automation_queue_pkey,p,PRIMARY KEY (id)
+bf_music_tracks,bf_music_tracks_pkey,p,PRIMARY KEY (id)
+bf_profiles,bf_profiles_font_check,c,"CHECK (font_style = ANY (ARRAY['modern'::text, 'classic'::text, 'technical'::text]))"
+bf_profiles,bf_profiles_pkey,p,PRIMARY KEY (id)
+bf_profiles,bf_profiles_user_id_key,u,UNIQUE (user_id)
+bf_videos,bf_videos_type_check,c,"CHECK (video_type = ANY (ARRAY['youtube'::text, 'vimeo'::text, 'upload'::text]))"
+bf_videos,bf_videos_pkey,p,PRIMARY KEY (id)
+birth_records,birth_records_birth_date_range_check,c,CHECK (birth_date >= '1700-01-01'::date AND birth_date <= '2200-12-31'::date)
+birth_records,birth_records_coordinate_range_check,c,CHECK ((latitude IS NULL OR latitude >= '-90'::integer::numeric AND latitude <= 90::numeric) AND (longitude IS NULL OR longitude >= '-180'::integer::numeric AND longitude <= 180::numeric))
+birth_records,birth_records_place_confidence_check,c,"CHECK (place_confidence = ANY (ARRAY['exact'::text, 'chosen'::text, 'unresolved'::text]))"
+birth_records,birth_records_place_resolution_check,c,CHECK (place_confidence = 'unresolved'::text AND latitude IS NULL AND longitude IS NULL AND timezone IS NULL OR place_confidence <> 'unresolved'::text AND latitude IS NOT NULL AND longitude IS NOT NULL AND timezone IS NOT NULL)
+birth_records,birth_records_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+birth_records,birth_records_pkey,p,PRIMARY KEY (id)
+bizbooks,bizbooks_status_check,c,"CHECK (status = ANY (ARRAY['ready'::text, 'processing'::text, 'failed'::text, 'draft'::text]))"
+bizbooks,bizbooks_pkey,p,PRIMARY KEY (id)
+bizdoc_documents,bizdoc_documents_status_check,c,"CHECK (status = ANY (ARRAY['draft'::text, 'sent'::text, 'signed'::text, 'voided'::text]))"
+bizdoc_documents,bizdoc_documents_pkey,p,PRIMARY KEY (id)
+bizdoc_signatures,bizdoc_signatures_document_id_fkey,f,FOREIGN KEY (document_id) REFERENCES bizdoc_documents(id) ON DELETE CASCADE
+bizdoc_signatures,bizdoc_signatures_pkey,p,PRIMARY KEY (id)
+bsky_leads,bsky_leads_pkey,p,PRIMARY KEY (id)
+bsky_leads,bsky_leads_post_uri_key,u,UNIQUE (post_uri)
+business_profiles,business_profiles_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+business_profiles,business_profiles_pkey,p,PRIMARY KEY (id)
+business_profiles,business_profiles_user_id_unique,u,UNIQUE (user_id)
+businesses,businesses_pkey,p,PRIMARY KEY (id)
+calendar_events,calendar_events_event_type_check,c,"CHECK (event_type = ANY (ARRAY['reminder'::text, 'anniversary'::text, 'birthday'::text, 'vacation'::text, 'work'::text, 'personal'::text, 'other'::text]))"
+calendar_events,calendar_events_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+calendar_events,calendar_events_pkey,p,PRIMARY KEY (id)
+campaign_donations,campaign_donations_amount_bfc_check,c,CHECK (amount_bfc > 0)
+campaign_donations,campaign_donations_campaign_id_fkey,f,FOREIGN KEY (campaign_id) REFERENCES crowdfunding_campaigns(id) ON DELETE SET NULL
+campaign_donations,campaign_donations_pkey,p,PRIMARY KEY (id)
+chat_messages,chat_messages_role_check,c,"CHECK (role = ANY (ARRAY['user'::text, 'assistant'::text]))"
+chat_messages,chat_messages_pkey,p,PRIMARY KEY (id)
+consent_events,consent_events_action_check,c,"CHECK (action = ANY (ARRAY['granted'::text, 'revoked'::text]))"
+consent_events,consent_events_channel_check,c,"CHECK (channel = ANY (ARRAY['email'::text, 'sms'::text]))"
+consent_events,consent_events_contact_id_fkey,f,FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+consent_events,consent_events_pkey,p,PRIMARY KEY (id)
+contacts,contacts_contactable_check,c,CHECK (email IS NOT NULL OR phone IS NOT NULL)
+contacts,contacts_email_shape_check,c,CHECK (email IS NULL OR email ~ '^[^@]+@[^@]+\.[^@]+$'::text)
+contacts,contacts_phone_format_check,c,CHECK (phone IS NULL OR phone ~ '^1[0-9]{10}$'::text)
+contacts,contacts_owner_id_fkey,f,FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
+contacts,contacts_pkey,p,PRIMARY KEY (id)
+content_library,content_library_status_check,c,"CHECK (status = ANY (ARRAY['draft'::text, 'published'::text, 'used'::text]))"
+content_library,content_library_type_check,c,"CHECK (type = ANY (ARRAY['blog'::text, 'sms'::text]))"
+content_library,content_library_pkey,p,PRIMARY KEY (id)
+cover_wraps,cover_wraps_pkey,p,PRIMARY KEY (id)
+crm_activities,crm_activities_customer_id_fkey,f,FOREIGN KEY (customer_id) REFERENCES crm_customers(id) ON DELETE CASCADE
+crm_activities,crm_activities_pkey,p,PRIMARY KEY (id)
+crm_customers,crm_customers_contact_id_fkey,f,FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+crm_customers,crm_customers_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+crm_customers,crm_customers_pkey,p,PRIMARY KEY (id)
+crowdfunding_campaigns,crowdfunding_campaigns_goal_bfc_check,c,CHECK (goal_bfc > 0)
+crowdfunding_campaigns,crowdfunding_campaigns_raised_bfc_check,c,CHECK (raised_bfc >= 0)
+crowdfunding_campaigns,crowdfunding_campaigns_status_check,c,"CHECK (status = ANY (ARRAY['active'::text, 'paused'::text, 'completed'::text, 'cancelled'::text]))"
+crowdfunding_campaigns,crowdfunding_campaigns_pkey,p,PRIMARY KEY (id)
+deals,deals_pkey,p,PRIMARY KEY (id)
+digital_cards,digital_cards_pkey,p,PRIMARY KEY (id)
+digital_cards,digital_cards_share_token_key,u,UNIQUE (share_token)
+email_sends,email_sends_status_check,c,"CHECK (status = ANY (ARRAY['queued'::text, 'sent'::text, 'failed'::text, 'bounced'::text, 'complained'::text]))"
+email_sends,email_sends_to_email_shape_check,c,CHECK (to_email ~ '^[^@]+@[^@]+\.[^@]+$'::text)
+email_sends,email_sends_contact_id_fkey,f,FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+email_sends,email_sends_pkey,p,PRIMARY KEY (id)
+favorites,favorites_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+favorites,favorites_pkey,p,PRIMARY KEY (id)
+favorites,favorites_user_business_uniq,u,"UNIQUE (user_id, business_id)"
+follows,follows_pkey,p,"PRIMARY KEY (follower_id, following_id)"
+icp_profiles,icp_profiles_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+icp_profiles,icp_profiles_pkey,p,PRIMARY KEY (id)
+inner_iq_results,inner_iq_results_taker_kind_check,c,"CHECK (taker_kind = ANY (ARRAY['self'::text, 'guest'::text]))"
+inner_iq_results,inner_iq_results_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+inner_iq_results,inner_iq_results_pkey,p,PRIMARY KEY (id)
+inventory_items,inventory_items_product_id_fkey,f,FOREIGN KEY (product_id) REFERENCES profile_products(id) ON DELETE SET NULL
+inventory_items,inventory_items_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+inventory_items,inventory_items_pkey,p,PRIMARY KEY (id)
+inventory_movements,inventory_movements_adjust_shape,c,"CHECK (direction = 'adjust'::text AND counted_quantity IS NOT NULL OR (direction = ANY (ARRAY['in'::text, 'out'::text])) AND counted_quantity IS NULL AND quantity > 0)"
+inventory_movements,inventory_movements_direction_check,c,"CHECK (direction = ANY (ARRAY['in'::text, 'out'::text, 'adjust'::text]))"
+inventory_movements,inventory_movements_quantity_nonneg,c,CHECK (quantity >= 0)
+inventory_movements,inventory_movements_item_id_fkey,f,FOREIGN KEY (item_id) REFERENCES inventory_items(id) ON DELETE RESTRICT
+inventory_movements,inventory_movements_pkey,p,PRIMARY KEY (id)
+job_runs,job_runs_pkey,p,PRIMARY KEY (job_name)table_name,conname,contype,definition
+lead_captures,lead_captures_contact_present,c,CHECK (email IS NOT NULL OR phone IS NOT NULL)
+lead_captures,lead_captures_phone_format_check,c,CHECK (phone IS NULL OR phone ~ '^1[0-9]{10}$'::text)
+lead_captures,lead_captures_pkey,p,PRIMARY KEY (id)
+marketplace_listings,marketplace_listings_price_check,c,CHECK (price_bfc >= 0)
+marketplace_listings,marketplace_listings_price_usd_check,c,CHECK (price_usd IS NULL OR price_usd >= 0)
+marketplace_listings,marketplace_listings_status_check,c,"CHECK (status = ANY (ARRAY['active'::text, 'paused'::text, 'sold'::text]))"
+marketplace_listings,marketplace_listings_pkey,p,PRIMARY KEY (id)
+marketplace_orders,marketplace_orders_amount_bfc_check,c,CHECK (amount_bfc >= 0)
+marketplace_orders,marketplace_orders_amount_usd_check,c,CHECK (amount_usd IS NULL OR amount_usd >= 0)
+marketplace_orders,marketplace_orders_payment_method_check,c,"CHECK (payment_method = ANY (ARRAY['bfc'::text, 'usd'::text]))"
+marketplace_orders,marketplace_orders_listing_id_fkey,f,FOREIGN KEY (listing_id) REFERENCES marketplace_listings(id) ON DELETE SET NULL
+marketplace_orders,marketplace_orders_pkey,p,PRIMARY KEY (id)
+messages,messages_pkey,p,PRIMARY KEY (id)
+model_calls,model_calls_depth_not_negative,c,CHECK (chain_depth >= 0)
+model_calls,model_calls_fallback_reason_check,c,"CHECK (fallback_reason IS NULL OR (fallback_reason = ANY (ARRAY['no_user'::text, 'no_key_stored'::text, 'lookup_failed'::text, 'decrypt_failed'::text])))"
+model_calls,model_calls_funded_by_check,c,"CHECK (funded_by IS NULL OR (funded_by = ANY (ARRAY['user'::text, 'platform'::text])))"
+model_calls,model_calls_tokens_not_negative,c,CHECK (input_tokens >= 0 AND output_tokens >= 0)
+model_calls,model_calls_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+model_calls,model_calls_pkey,p,PRIMARY KEY (id)
+moderation_logs,moderation_logs_admin_id_fkey,f,FOREIGN KEY (admin_id) REFERENCES users(id) ON DELETE SET NULL
+moderation_logs,moderation_logs_target_user_id_fkey,f,FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL
+moderation_logs,moderation_logs_pkey,p,PRIMARY KEY (id)
+notifications,notifications_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+notifications,notifications_pkey,p,PRIMARY KEY (id)
+oracle_messages,oracle_messages_role_check,c,"CHECK (role = ANY (ARRAY['user'::text, 'assistant'::text]))"
+oracle_messages,oracle_messages_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+oracle_messages,oracle_messages_pkey,p,PRIMARY KEY (id)
+oracle_sync,oracle_sync_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+oracle_sync,oracle_sync_pkey,p,PRIMARY KEY (user_id)
+outreach_sends,outreach_sends_pkey,p,PRIMARY KEY (id)
+posts,posts_pkey,p,PRIMARY KEY (id)
+profile_music,profile_music_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+profile_music,profile_music_pkey,p,PRIMARY KEY (id)
+profile_portfolio,profile_portfolio_pkey,p,PRIMARY KEY (id)
+profile_products,profile_products_pkey,p,PRIMARY KEY (id)
+profile_videos,profile_videos_video_type_check,c,"CHECK (video_type = ANY (ARRAY['youtube'::text, 'vimeo'::text, 'upload'::text]))"
+profile_videos,profile_videos_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+profile_videos,profile_videos_pkey,p,PRIMARY KEY (id)
+profiles,profiles_id_fkey,f,FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE
+profiles,profiles_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+profiles,profiles_pkey,p,PRIMARY KEY (id)
+prospects,prospects_converted_customer_id_fkey,f,FOREIGN KEY (converted_customer_id) REFERENCES crm_customers(id) ON DELETE SET NULL
+prospects,prospects_icp_profile_id_fkey,f,FOREIGN KEY (icp_profile_id) REFERENCES icp_profiles(id) ON DELETE SET NULL
+prospects,prospects_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+prospects,prospects_pkey,p,PRIMARY KEY (id)
+push_subscriptions,push_subscriptions_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+push_subscriptions,push_subscriptions_pkey,p,PRIMARY KEY (id)
+push_subscriptions,push_subscriptions_user_id_endpoint_key,u,"UNIQUE (user_id, endpoint)"
+reddit_leads,reddit_leads_pkey,p,PRIMARY KEY (id)
+reddit_leads,reddit_leads_reddit_id_key,u,UNIQUE (reddit_id)
+revenue_events,revenue_events_pkey,p,PRIMARY KEY (id)
+routines,routines_name_not_blank,c,CHECK (length(btrim(name)) > 0)
+routines,routines_run_count_not_negative,c,CHECK (run_count >= 0)
+routines,routines_steps_is_array,c,CHECK (jsonb_typeof(steps) = 'array'::text)
+routines,routines_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+routines,routines_pkey,p,PRIMARY KEY (id)
+sales_lead_pipeline,sales_lead_pipeline_status_check,c,"CHECK (status = ANY (ARRAY['new'::text, 'drafted'::text, 'contacted'::text, 'replied'::text, 'converted'::text]))"
+sales_lead_pipeline,sales_lead_pipeline_pkey,p,PRIMARY KEY (id)
+sales_lead_pipeline,sales_lead_pipeline_user_lead_key,u,"UNIQUE (user_id, lead_post_uri)"
+saved_prompts,saved_prompts_name_not_blank,c,CHECK (length(btrim(name)) > 0)
+saved_prompts,saved_prompts_prompt_not_blank,c,CHECK (length(btrim(prompt)) > 0)
+saved_prompts,saved_prompts_use_count_not_negative,c,CHECK (use_count >= 0)
+saved_prompts,saved_prompts_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+saved_prompts,saved_prompts_pkey,p,PRIMARY KEY (id)
+self_reviews,self_reviews_period_type_check,c,"CHECK (period_type = ANY (ARRAY['weekly'::text, 'monthly'::text]))"
+self_reviews,self_reviews_pkey,p,PRIMARY KEY (id)
+sms_campaign_enrollments,sms_campaign_enrollments_status_check,c,"CHECK (status = ANY (ARRAY['active'::text, 'completed'::text]))"
+sms_campaign_enrollments,sms_campaign_enrollments_campaign_id_fkey,f,FOREIGN KEY (campaign_id) REFERENCES sms_campaigns(id) ON DELETE CASCADE
+sms_campaign_enrollments,sms_campaign_enrollments_subscriber_id_fkey,f,FOREIGN KEY (subscriber_id) REFERENCES sms_subscribers(id) ON DELETE CASCADE
+sms_campaign_enrollments,sms_campaign_enrollments_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+sms_campaign_enrollments,sms_campaign_enrollments_pkey,p,PRIMARY KEY (id)
+sms_campaign_enrollments,sms_enrollments_campaign_subscriber_key,u,"UNIQUE (campaign_id, subscriber_id)"
+sms_campaign_messages,sms_campaign_messages_campaign_id_fkey,f,FOREIGN KEY (campaign_id) REFERENCES sms_campaigns(id) ON DELETE CASCADE
+sms_campaign_messages,sms_campaign_messages_pkey,p,PRIMARY KEY (id)
+sms_campaign_messages,sms_campaign_messages_campaign_step_key,u,"UNIQUE (campaign_id, step_order)"
+sms_campaigns,sms_campaigns_pkey,p,PRIMARY KEY (id)
+sms_send_log,sms_send_log_pkey,p,PRIMARY KEY (id)
+sms_subscribers,sms_subscribers_phone_format_check,c,CHECK (phone_number ~ '^1[0-9]{10}$'::text)
+sms_subscribers,sms_subscribers_pkey,p,PRIMARY KEY (id)
+sms_subscribers,sms_subscribers_user_phone_key,u,"UNIQUE (user_id, phone_number)"
+social_post_drafts,social_post_drafts_pkey,p,PRIMARY KEY (id)
+subscriptions,subscriptions_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+subscriptions,subscriptions_pkey,p,PRIMARY KEY (id)
+tasks,tasks_pkey,p,PRIMARY KEY (id)
+usage_logs,usage_logs_pkey,p,PRIMARY KEY (id)
+user_api_keys,user_api_keys_pkey,p,PRIMARY KEY (id)
+user_api_keys,user_api_keys_user_id_provider_key,u,"UNIQUE (user_id, provider)"
+user_certifications,user_certifications_score_check,c,CHECK (score >= 0 AND score <= 100)
+user_certifications,user_certifications_pkey,p,PRIMARY KEY (id)
+user_certifications,user_certifications_user_cert_unique,u,"UNIQUE (user_id, cert_id)"
+user_preferences,user_preferences_pkey,p,PRIMARY KEY (user_id)
+user_wallets,user_wallets_pkey,p,PRIMARY KEY (id)
+user_wallets,user_wallets_user_id_key,u,UNIQUE (user_id)
+users,users_pkey,p,PRIMARY KEY (id)
+users,users_email_key,u,UNIQUE (email)
+wallet_transactions,wallet_transactions_amount_check,c,CHECK (amount > 0)
+wallet_transactions,wallet_transactions_type_check,c,"CHECK (type = ANY (ARRAY['credit'::text, 'debit'::text, 'reward'::text]))"
+wallet_transactions,wallet_transactions_pkey,p,PRIMARY KEY (id)
+webauthn_challenges,webauthn_challenges_expiry_after_issue,c,CHECK (expires_at > created_at)
+webauthn_challenges,webauthn_challenges_purpose_known,c,"CHECK (purpose = ANY (ARRAY['register'::text, 'login'::text]))"
+webauthn_challenges,webauthn_challenges_register_has_user,c,CHECK (purpose <> 'register'::text OR user_id IS NOT NULL)
+webauthn_challenges,webauthn_challenges_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+webauthn_challenges,webauthn_challenges_pkey,p,PRIMARY KEY (id)
+webauthn_credentials,webauthn_credentials_sign_count_nonneg,c,CHECK (sign_count >= 0)
+webauthn_credentials,webauthn_credentials_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+webauthn_credentials,webauthn_credentials_pkey,p,PRIMARY KEY (id)
+websites,websites_user_id_fkey,f,FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+websites,websites_pkey,p,PRIMARY KEY (id)
