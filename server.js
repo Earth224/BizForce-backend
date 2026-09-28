@@ -4265,6 +4265,10 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const emailVerificationToken = crypto.randomBytes(32).toString("hex");
+    /* One hour, the same window POST /api/auth/password-reset gives its
+       token. The verify route refuses a token whose expiry is missing or past
+       (migration 122). */
+    const emailVerificationExpiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
 
     const { data: user, error: userError } = await supabase
       .from("users")
@@ -4274,6 +4278,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         role: "user",
         
         email_verification_token: emailVerificationToken,
+        email_verification_expires_at: emailVerificationExpiresAt,
         
         signup_ip: req.ip,
         created_at: nowIso(),
@@ -4404,6 +4409,64 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
     if (!registrationContactId) {
       console.error("[register] No contacts row for new user " + user.id +
         " — registration succeeded and is NOT being failed for this, but transactional email to this address will have nothing to attribute itself to until one exists.");
+    }
+
+    /* THE VERIFICATION EMAIL. The token above was minted and stored on every
+       registration and never sent, so POST /api/auth/verify-email could not
+       be reached. Sent the way POST /api/auth/password-reset sends its link:
+       the same FRONTEND_URL construction, sendEmail with skipConsentCheck
+       (this is mail about something the person just did, not a list), and the
+       result read and logged rather than acted on.
+
+       NEVER FAILS THE SIGNUP, on the same terms as the wallet grant and the
+       contact row above: by here the account exists, and a 500 now would tell
+       the caller registration failed when it did not. No contact means no
+       send, which is logged. sendEmail is documented never to throw; the catch
+       is there anyway, because the cost of being wrong about that here is a
+       lost signup rather than a lost email. */
+    if (registrationContactId) {
+      try {
+        const verifyUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+          "/verify-email?token=" + encodeURIComponent(emailVerificationToken);
+
+        const verifyHtml =
+          '<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;color:#1a1a2e">' +
+          '<h1 style="font-size:20px;margin:0 0 16px">Confirm your email for BizForce AI</h1>' +
+          '<p style="font-size:15px;line-height:1.6;margin:0 0 20px">A BizForce AI account was just created with this address. If that was you, use the link below to confirm it. It expires in one hour.</p>' +
+          '<p style="margin:0 0 24px"><a href="' + verifyUrl + '" style="display:inline-block;background:#00e5ff;color:#000;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Confirm email address</a></p>' +
+          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0 0 8px">If the button does not work, paste this into your browser:</p>' +
+          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;word-break:break-all;margin:0 0 24px">' + verifyUrl + '</p>' +
+          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0">If you did not create this account, you can ignore this email. Nothing is confirmed until someone uses the link above.</p>' +
+          '</div>';
+
+        const verifyText =
+          "Confirm your email for BizForce AI\n\n" +
+          "A BizForce AI account was just created with this address. If that was you, open the link below to confirm it. It expires in one hour.\n\n" +
+          verifyUrl + "\n\n" +
+          "If you did not create this account, you can ignore this email. Nothing is confirmed until someone uses the link above.";
+
+        const verifySend = await sendEmail({
+          contactId:        registrationContactId,
+          to:               email,
+          subject:          "Confirm your email for BizForce AI",
+          html:             verifyHtml,
+          text:             verifyText,
+          template:         "email_verification",
+          skipConsentCheck: true
+        });
+
+        if (verifySend && verifySend.sent) {
+          console.log("[register] Verification link sent for user " + user.id + ".");
+        } else {
+          console.error("[register] Verification mail NOT sent for user " + user.id + " — reason: " +
+            ((verifySend && verifySend.reason) || "unknown") +
+            ". The token is stored and the account was created; this person has no link to confirm their address with.");
+        }
+      } catch (verifySendErr) {
+        console.error("[register] Verification mail THREW for user " + user.id + " — " +
+          ((verifySendErr && verifySendErr.message) || String(verifySendErr)) +
+          ". Registration still succeeded; no link was sent.");
+      }
     }
 
     const registrationSession = await createSession(user, req);
@@ -5014,9 +5077,21 @@ app.post("/api/auth/verify-email", async function (req, res, next) {
       return res.status(400).json({ error: "Verification token is required" });
     }
 
+    /* THIS ROUTE NOW RECORDS WHAT IT CLAIMS. It used to clear the token and
+       answer success without writing anything that said the account was
+       verified: email_verified was stripped in April because no migration had
+       created it. Migration 122 added email_verified_at, which is what is set
+       here. verification_status is NOT touched: it is admin business
+       verification (POST /api/admin/verify/:userId), a different fact.
+
+       Invalid and expired are told apart, with a reason field the page reads
+       and a message it can show. Unlike the reset confirm route, which keeps
+       them vague so a stolen token reveals nothing, telling someone their link
+       expired here gives away nothing an attacker could use: verifying an
+       address grants no access. */
     const { data: user, error } = await supabase
       .from("users")
-      .select("id")
+      .select("id, email_verification_expires_at")
       .eq("email_verification_token", token)
       .maybeSingle();
 
@@ -5025,19 +5100,59 @@ app.post("/api/auth/verify-email", async function (req, res, next) {
     }
 
     if (!user) {
-      return res.status(400).json({ error: "Invalid verification token" });
+      return res.status(400).json({
+        error: "This verification link is not valid. It may already have been used.",
+        reason: "invalid"
+      });
     }
 
-    await supabase
+    /* A null expiry is refused as expired, as the reset confirm route refuses
+       one: every account created before migration 122 holds a token with no
+       expiry, and none of those tokens was ever sent. */
+    const expiresAtMs = user.email_verification_expires_at
+      ? Date.parse(user.email_verification_expires_at)
+      : NaN;
+
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      return res.status(400).json({
+        error: "This verification link has expired.",
+        reason: "expired"
+      });
+    }
+
+    /* The .eq on the token is a compare-and-set, as in the reset confirm
+       route: a concurrent request that got there first has already cleared
+       it, so this one matches no row. .select() makes that visible, since an
+       update matching nothing is not an error in PostgREST. */
+    const { data: verified, error: updateError } = await supabase
       .from("users")
       .update({
-        
-        email_verification_token: null,
-        updated_at: nowIso()
+        email_verified_at:             nowIso(),
+        email_verification_token:      null,
+        email_verification_expires_at: null,
+        updated_at:                    nowIso()
       })
-      .eq("id", user.id);
+      .eq("id", user.id)
+      .eq("email_verification_token", token)
+      .select("id")
+      .maybeSingle();
 
-    return res.json({ success: true });
+    if (updateError) {
+      console.error("[verify-email] Verification write FAILED for user " + user.id + ": " +
+        updateError.message + ". The account was NOT marked verified and the token was not cleared.");
+      throw updateError;
+    }
+
+    if (!verified) {
+      return res.status(400).json({
+        error: "This verification link is not valid. It may already have been used.",
+        reason: "invalid"
+      });
+    }
+
+    console.log("[verify-email] Email verified for user " + user.id + ".");
+
+    return res.json({ success: true, message: "Your email address is confirmed." });
   } catch (error) {
     next(error);
   }
