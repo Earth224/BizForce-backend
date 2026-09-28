@@ -30655,33 +30655,96 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
       return res.status(400).json({ error: "cert_id and category are required" });
     }
 
-    const { data, error } = await supabase
+    /* ONE CREDIT PER CERTIFICATION, NOT ONE PER PASS. This used to upsert the
+       record and then credit 100 BFC whenever the submission passed, so
+       re-passing a quiz already earned minted another 100 each time, into a
+       currency that transfer, donation and marketplace purchase can spend.
+
+       THE CREDIT FOLLOWS THE WRITE THAT MADE THE RECORD EARNED, and nothing
+       else. An upsert cannot say whether it inserted or updated, so it is two
+       writes, and each can only succeed once:
+         - the INSERT succeeds only for a certification this user has never
+           attempted (user_certifications_user_cert_unique, migration 004);
+         - otherwise the UPDATE is filtered on passed = false, so it only
+           matches a record that is not yet earned.
+       Both are atomic in the database. A check-then-write would not be: two
+       passing submissions arriving together would both read "not earned" and
+       both be paid.
+
+       AN EARNED RECORD IS NEVER WRITTEN AGAIN. Not by a repeat pass, and not
+       by a later fail either: letting a fail reset passed to false would make
+       pass, fail, pass pay twice. A repeat still answers success, because
+       re-passing a quiz is not an error. It says already_earned: true and
+       credited: false, so the frontend can tell no credit was issued. */
+    const attempt = {
+      user_id:   req.user.id,
+      cert_id:   certId,
+      category,
+      score,
+      passed,
+      earned_at: nowIso()
+    };
+
+    let data = null;
+    let becameEarned = false;
+    let alreadyEarned = false;
+
+    const inserted = await supabase
       .from("user_certifications")
-      .upsert(
-        {
-          user_id:   req.user.id,
-          cert_id:   certId,
-          category,
-          score,
-          passed,
-          earned_at: nowIso()
-        },
-        { onConflict: "user_id,cert_id" }
-      )
+      .insert(attempt)
       .select()
       .single();
 
-    if (error) throw error;
+    if (!inserted.error) {
+      data = inserted.data;
+      becameEarned = passed;
+    } else if (inserted.error.code === "23505") {
+      const updated = await supabase
+        .from("user_certifications")
+        .update({ category, score, passed, earned_at: attempt.earned_at })
+        .eq("user_id", req.user.id)
+        .eq("cert_id", certId)
+        .eq("passed", false)
+        .select()
+        .maybeSingle();
 
-    if (passed) {
+      if (updated.error) throw updated.error;
+
+      if (updated.data) {
+        data = updated.data;
+        becameEarned = passed;
+      } else {
+        const existing = await supabase
+          .from("user_certifications")
+          .select()
+          .eq("user_id", req.user.id)
+          .eq("cert_id", certId)
+          .single();
+
+        if (existing.error) throw existing.error;
+        data = existing.data;
+        alreadyEarned = true;
+      }
+    } else {
+      throw inserted.error;
+    }
+
+    let credited = false;
+    if (becameEarned) {
       try {
         await creditWallet(req.user.id, 100, "Certification earned: " + certId);
+        credited = true;
       } catch (walletErr) {
         console.error("Wallet credit skipped:", walletErr.message);
       }
     }
 
-    return res.status(201).json({ certification: data, success: true });
+    return res.status(alreadyEarned ? 200 : 201).json({
+      certification: data,
+      success: true,
+      already_earned: alreadyEarned,
+      credited: credited
+    });
   } catch (error) {
     next(error);
   }
