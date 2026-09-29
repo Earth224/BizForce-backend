@@ -31026,63 +31026,32 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
    or a renamed column all set .error and were ignored, and this function
    returned as though the money had moved. */
 async function creditWallet(userId, amount, description) {
-  const existingResult = await supabase
-    .from("user_wallets")
-    .select("balance")
-    .eq("user_id", userId)
-    .maybeSingle();
+  /* ONE STATEMENT, NOT A READ AND A WRITE. This used to SELECT the balance and
+     then UPDATE it to what it had read plus amount, so two credits landing
+     together both read the same balance and the second write replaced the
+     first: one credit was lost, and its transaction row was still written.
 
-  /* A failed read is not an absent wallet. Continuing here would treat "we
-     could not tell" as "there is none" and insert a second wallet row for
-     someone who already has one — the balance would be replaced by `amount`
-     rather than added to it, silently destroying whatever they held. */
-  if (existingResult.error) {
-    console.error("[creditWallet] CREDIT ABANDONED — could not read the wallet for user " +
-      userId + ": " + existingResult.error.message +
-      ". Nothing was written; whether a wallet exists is unknown, and guessing would risk " +
-      "overwriting an existing balance.");
-    throw existingResult.error;
-  }
-
-  const existing = existingResult.data;
-
-  if (!existing) {
-    const created = await supabase.from("user_wallets").insert({
-      user_id: userId, balance: amount, currency: "BFC", updated_at: nowIso()
-    });
-
-    if (created.error) {
-      console.error("[creditWallet] CREDIT FAILED — the user_wallets insert failed for user " +
-        userId + " (" + amount + " BFC, " + description + "): " + created.error.message +
-        ". No transaction row was written.");
-      throw created.error;
-    }
-  } else {
-    const updated = await supabase.from("user_wallets").update({
-      balance: existing.balance + amount, updated_at: nowIso()
-    }).eq("user_id", userId);
-
-    if (updated.error) {
-      console.error("[creditWallet] CREDIT FAILED — the user_wallets update failed for user " +
-        userId + " (" + amount + " BFC, " + description + "): " + updated.error.message +
-        ". The balance is unchanged and no transaction row was written.");
-      throw updated.error;
-    }
-  }
-
-  /* Only once the balance write succeeded, the same ordering the welcome bonus
-     uses: a reward transaction with no balance behind it is a record of money
-     that does not exist. Both throws above skip this. */
-  const recorded = await supabase.from("wallet_transactions").insert({
-    user_id: userId, type: "reward", amount, description, created_at: nowIso()
+     bfc_credit (migration 121, live in production, service_role only) does the
+     same job atomically: an INSERT ... ON CONFLICT (user_id) DO UPDATE SET
+     balance = user_wallets.balance + p_amount, which increments under the row
+     lock, creates the wallet at `amount` with currency 'BFC' if there is none,
+     and writes the (user_id, type, amount, description) ledger row in the same
+     transaction. So the old "balance credited, ledger row missing" state is no
+     longer possible either — both land or neither does. The one difference
+     from the hand-written version: wallet_transactions.created_at now comes
+     from the column's default now() rather than this process's clock. */
+  const { error } = await supabase.rpc("bfc_credit", {
+    p_user_id: userId,
+    p_amount: amount,
+    p_type: "reward",
+    p_description: description
   });
 
-  if (recorded.error) {
-    console.error("[creditWallet] CREDIT PARTIALLY RECORDED — the balance was credited for user " +
-      userId + " (" + amount + " BFC) but the wallet_transactions row failed: " +
-      recorded.error.message + ". The money is in the balance with nothing explaining where it " +
-      "came from; the caller is being told the credit failed even though the balance moved.");
-    throw recorded.error;
+  if (error) {
+    console.error("[creditWallet] CREDIT FAILED — bfc_credit refused for user " + userId +
+      " (" + amount + " BFC, " + description + "): " + error.message +
+      ". It runs as one transaction, so neither the balance nor a transaction row was written.");
+    throw error;
   }
 }
 

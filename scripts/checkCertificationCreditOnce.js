@@ -21,6 +21,18 @@
         one are both run on a fresh certification and must move the wallet the
         same way: HTTP 201, success true, +100, one "reward" transaction with the
         same description.
+     9. TWO CREDITS AT THE SAME MOMENT BOTH LAND. creditWallet used to read the
+        balance and write back what it read plus 100, so two credits that read
+        before either wrote left the wallet +100 with two transaction rows. It
+        now calls bfc_credit, one atomic upsert. Two creditWallet calls for two
+        different certifications must move the balance by 200 and write two
+        rows. The wallet READ is held behind a barrier until both calls have
+        made it — without that the race is left to network timing and the old
+        code would lose a credit only sometimes. The atomic version makes no
+        read, so the barrier never engages.
+    10. A SINGLE CREDIT IS UNCHANGED. creditWallet as it was at eaadbfe and as
+        it is now each credit once: the same +100, one row, same user, type,
+        amount and description, with a created_at.
 
    THE ROUTE RUNS AS ITSELF, OUT OF THE SOURCE. The handler, creditWallet,
    safeText and nowIso are lifted out of server.js and run in a vm against the
@@ -33,6 +45,8 @@
    MUTATE=old-handler runs the whole pre-fix route from 8b5afc7.
    Both must turn 2, 4c, 5b and 7 red. old-handler also turns 5a red, because
    its upsert lets a fail reset an earned record to passed = false.
+   MUTATE=read-then-write swaps in creditWallet from eaadbfe, the read-then-
+   write version, everywhere this script uses it. 9 must go red.
 
    Fixtures are written under the subject account and removed with a verified
    read-back. A wallet the subject already had is put back to its starting
@@ -65,7 +79,7 @@ const residue = createResidueGuard({
 });
 residue.install();
 
-const MUTATIONS = ["credit-every-pass", "old-handler"];
+const MUTATIONS = ["credit-every-pass", "old-handler", "read-then-write"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
@@ -99,9 +113,59 @@ function functionSource(src, name) {
   return src.slice(m.index, braceMatch(src, body));
 }
 
-/* The same helpers for both handlers, taken from the current file: this is a
-   check on the route, and creditWallet is deliberately unchanged. */
-const HELPERS = ["nowIso", "safeText", "creditWallet"].map(function (n) { return functionSource(SRC_NOW, n); }).join("\n\n");
+/* creditWallet before it became atomic. Used by 10 as the "before", and by
+   MUTATE=read-then-write in place of the current one everywhere. */
+const BEFORE_ATOMIC = "eaadbfe";
+const SRC_RTW = execSync("git show " + BEFORE_ATOMIC + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
+const CREDIT_SRC = MUTATE === "read-then-write" ? SRC_RTW : SRC_NOW;
+
+/* The same helpers for both handlers, taken from the current file (or, under
+   read-then-write, with the pre-atomic creditWallet). */
+const HELPERS = [functionSource(SRC_NOW, "nowIso"), functionSource(SRC_NOW, "safeText"), functionSource(CREDIT_SRC, "creditWallet")].join("\n\n");
+
+/* creditWallet on its own, against a given client. */
+function buildCreditWallet(src, client) {
+  const ctx = { supabase: client, console: { log: function () {}, warn: function () {}, error: function () {} } };
+  vm.createContext(ctx);
+  vm.runInContext(functionSource(SRC_NOW, "nowIso") + "\n\n" + functionSource(src, "creditWallet"), ctx);
+  if (typeof ctx.creditWallet !== "function") throw new Error("creditWallet was not captured");
+  return ctx.creditWallet;
+}
+
+/* THE BARRIER. A client whose user_wallets read does not return until `n`
+   such reads have been made (or 3s have passed, so a code path that reads
+   only once cannot hang the run). Everything else passes straight through to
+   the real client. This is what makes "both read before either writes"
+   certain rather than likely. */
+function barrierClient(n) {
+  let arrived = 0, release;
+  const gate = new Promise(function (r) { release = r; });
+  const stats = { reads: 0 };
+  return {
+    stats: stats,
+    rpc: function () { return supabase.rpc.apply(supabase, arguments); },
+    from: function (table) {
+      const q = supabase.from(table);
+      if (table !== "user_wallets") return q;
+      const select = q.select.bind(q);
+      q.select = function () {
+        const b = select.apply(null, arguments);
+        const maybeSingle = b.maybeSingle.bind(b);
+        b.maybeSingle = function () {
+          return maybeSingle().then(async function (res) {
+            stats.reads++;
+            arrived++;
+            if (arrived >= n) release(); else setTimeout(release, 3000);
+            await gate;
+            return res;
+          });
+        };
+        return b;
+      };
+      return q;
+    }
+  };
+}
 
 function buildHandler(which) {
   let route = which === "old" ? routeSource(SRC_OLD) : routeSource(SRC_NOW);
@@ -291,6 +355,52 @@ const cert = function (tag) { return "check-cert-" + tag + "-" + stamp; };
     check("8. a first-time pass moves the wallet exactly as it did before the fix",
       JSON.stringify(oldShape) === JSON.stringify(newShape), "they differ");
     check("8. and the pre-fix route really was the one that paid, so this compared something", oldShape.delta === 100, "delta " + oldShape.delta);
+
+    /* ── 9. two credits at the same moment ───────────────────────────────── */
+    console.log("\n══ 9. two credits landing at the same moment (creditWallet " + (MUTATE === "read-then-write" ? "from " + BEFORE_ATOMIC + ", read-then-write" : "as it stands") + ") ══");
+    const G1 = cert("g1"), G2 = cert("g2");
+    const racer = barrierClient(2);
+    const racingCredit = buildCreditWallet(CREDIT_SRC, racer);
+    const g0 = await balance();
+    const raced = await Promise.allSettled([
+      racingCredit(SUBJECT_USER_ID, 100, "Certification earned: " + G1),
+      racingCredit(SUBJECT_USER_ID, 100, "Certification earned: " + G2)
+    ]);
+    const g1 = await balance();
+    const txG = (await certTxns(G1)).concat(await certTxns(G2));
+    console.log("    both calls: " + raced.map(function (r) { return r.status; }).join(", ") +
+      " | wallet reads held at the barrier: " + racer.stats.reads + " | delta " + (g1 - g0) + " | transaction rows " + txG.length);
+    check("9. both calls completed without error", raced.every(function (r) { return r.status === "fulfilled"; }),
+      JSON.stringify(raced.map(function (r) { return r.status === "rejected" ? String(r.reason && r.reason.message) : "ok"; })));
+    check("9. the balance moved by the sum of both credits (+200)", g1 - g0 === 200, "delta " + (g1 - g0));
+    check("9. and two transaction rows exist", txG.length === 2, txG.length + " row(s)");
+
+    /* ── 10. a single credit, before and after ───────────────────────────── */
+    console.log("\n══ 10. a single credit, creditWallet at " + BEFORE_ATOMIC + " vs now ══");
+    const H1 = cert("h-old"), H2 = cert("h-new");
+    const oneCredit = async function (fn, certId) {
+      const before = await balance();
+      await fn(SUBJECT_USER_ID, 100, "Certification earned: " + certId);
+      const after = await balance();
+      const r = await supabase.from("wallet_transactions").select("id, user_id, type, amount, description, created_at")
+        .eq("user_id", SUBJECT_USER_ID).eq("description", "Certification earned: " + certId);
+      if (r.error) throw new Error("could not read the transactions: " + r.error.message);
+      (r.data || []).forEach(function (t) { residue.record("wallet_transactions", t.id); });
+      const t = (r.data || [])[0];
+      return {
+        delta: after - before, rows: (r.data || []).length,
+        row: t ? { user_is_subject: t.user_id === SUBJECT_USER_ID, type: t.type, amount: t.amount,
+                   description: t.description.replace(/-(h-old|h-new)-\d+$/, "-X"), has_created_at: !!t.created_at } : null
+      };
+    };
+    const beforeShape = await oneCredit(buildCreditWallet(SRC_RTW, supabase), H1);
+    const nowShape    = await oneCredit(buildCreditWallet(CREDIT_SRC, supabase), H2);
+    console.log("    " + BEFORE_ATOMIC + ": " + JSON.stringify(beforeShape));
+    console.log("    now:     " + JSON.stringify(nowShape));
+    check("10. a single credit moves the balance and writes the row exactly as before",
+      JSON.stringify(beforeShape) === JSON.stringify(nowShape), "they differ");
+    check("10. and that is +100 with one reward row", nowShape.delta === 100 && nowShape.rows === 1 && nowShape.row && nowShape.row.type === "reward" && nowShape.row.amount === 100,
+      JSON.stringify(nowShape));
   } finally {
     console.log("\n══ cleanup ══");
     if (STARTING_WALLET) {
