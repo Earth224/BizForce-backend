@@ -23,6 +23,14 @@
         one, and changes nothing.
      7. A token with a NULL expiry is rejected. That is every account created
         before migration 122.
+     8. Resend on an unverified account mints a NEW token and a fresh expiry,
+        attempts a send, and reports a failed send as an error.
+     9. The token from before a resend stops working; the new one verifies.
+    10. Resend on a verified account sends nothing and mints nothing.
+    11. Resend requires auth: requireAuth runs first and turns away a request
+        with no token.
+    12. The resend limiter allows three an hour per account, keyed by account
+        rather than IP.
 
    TWO HALVES, BECAUSE REGISTRATION WOULD SEND REAL MAIL.
    Registration (1-3) runs out of the source in a vm against a recording fake
@@ -34,6 +42,10 @@
    MUTATE=no-send         replaces the sendEmail call with a no-op. 2 must go red.
    MUTATE=old-verify      runs verify-email from 66e6c64. 4 must go red.
    MUTATE=no-expiry-check removes the expiry refusal. 6 and 7 must go red.
+   MUTATE=resend-when-verified lets resend mint and send for an account that
+   is already verified. 10 must go red.
+   MUTATE=no-send now applies to sendVerificationEmail, the one body both
+   routes send through.
    The mutations are applied to the extracted source, never to server.js.
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -63,7 +75,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "emailVerification", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["no-send", "old-verify", "no-expiry-check"];
+const MUTATIONS = ["no-send", "old-verify", "no-expiry-check", "resend-when-verified"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
@@ -99,29 +111,34 @@ function mutate(src, from, to) {
   return src.replace(from, to);
 }
 
+/* sendVerificationEmail is the one body both routes send through, so the
+   no-send mutation is applied to it rather than to either route. */
+let SEND_FN = functionSource(SRC_NOW, "sendVerificationEmail");
+if (MUTATE === "no-send") SEND_FN = mutate(SEND_FN, "await sendEmail({", "await (async function () { return null; })({");
+
 const HELPERS = ["nowIso", "safeText", "normalizeEmail", "normalizeUrl", "normalizeUsername", "publicUser"]
-  .map(function (n) { return functionSource(SRC_NOW, n); }).join("\n\n");
+  .map(function (n) { return functionSource(SRC_NOW, n); }).join("\n\n") + "\n\n" + SEND_FN;
 
 function capture(source, extra) {
-  let handler = null;
+  let handler = null, middleware = null;
   const logs = [];
   const ctx = Object.assign({
     console: { log: function (m) { logs.push(String(m)); }, warn: function (m) { logs.push(String(m)); }, error: function (m) { logs.push(String(m)); } },
     authLimiter: 0,
-    app: { post: function () { handler = arguments[arguments.length - 1]; } }
+    app: { post: function () { handler = arguments[arguments.length - 1]; middleware = Array.prototype.slice.call(arguments, 1, -1); } }
   }, extra);
   vm.createContext(ctx);
   vm.runInContext(HELPERS + "\n\n" + source, ctx);
   if (!handler) throw new Error("handler not captured");
-  return { handler: handler, logs: logs };
+  return { handler: handler, logs: logs, middleware: middleware, ctx: ctx };
 }
 
-async function call(handler, body) {
+async function call(handler, body, user) {
   const res = { statusCode: 200, body: undefined,
     status: function (c) { this.statusCode = c; return this; },
     json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
   let nextErr = null;
-  await handler({ body: body, ip: "127.0.0.1", headers: {} }, res, function (e) { nextErr = e || new Error("next() called"); });
+  await handler({ body: body, ip: "127.0.0.1", headers: {}, user: user }, res, function (e) { nextErr = e || new Error("next() called"); });
   return { status: res.statusCode, body: res.body, nextErr: nextErr };
 }
 
@@ -205,8 +222,7 @@ const newToken = function () { return "check_" + crypto.randomBytes(24).toString
   console.log("\n══ source under test: " + (MUTATE ? "MUTATED (" + MUTATE + ")" : "server.js as it stands") + " ══");
 
   /* ── 1-3 registration ─────────────────────────────────────────────────── */
-  let regSrc = routeSource(SRC_NOW, "/api/auth/register");
-  if (MUTATE === "no-send") regSrc = mutate(regSrc, "await sendEmail({", "await (async function () { return null; })({");
+  const regSrc = routeSource(SRC_NOW, "/api/auth/register");
 
   console.log("\n══ 1. registration stores a token and an expiry ══");
   const ok = buildRegister(regSrc, "sends");
@@ -302,6 +318,103 @@ const newToken = function () { return "check_" + crypto.randomBytes(24).toString
     console.log("    HTTP " + v5.status + " " + JSON.stringify(v5.body));
     check("7. is rejected as expired", v5.status === 400 && v5.body && v5.body.reason === "expired", JSON.stringify(v5.body));
     check("7. and changes nothing", snap(r5) === snap(beforeNull));
+
+    /* ── 8-12 resend-verification, on the same real row ──────────────────
+       sendEmail and findOrCreateUserContact are stubbed: no mail goes out and
+       no contacts row is written. The token writes and reads are real. */
+    let resendSrc = routeSource(SRC_NOW, "/api/auth/resend-verification");
+    if (MUTATE === "resend-when-verified") {
+      resendSrc = mutate(resendSrc, "if (account.email_verified_at) {", "if (false) {");
+      resendSrc = mutate(resendSrc, '.is("email_verified_at", null)', "");
+    }
+    const resendSends = [];
+    let resendBehaviour = "sends";
+    const R = capture(resendSrc, {
+      supabase: supabase, crypto: crypto, FRONTEND_URL: "https://bizforceai.net",
+      requireAuth: "REQUIRE_AUTH", verificationResendLimiter: "RESEND_LIMITER",
+      findOrCreateUserContact: async function () { return "contact-1"; },
+      sendEmail: async function (opts) { resendSends.push(opts); return resendBehaviour === "fails" ? { sent: false, reason: "provider_error" } : { sent: true, id: "send-2" }; }
+    });
+    const ME = { id: SUBJECT_USER_ID };
+
+    console.log("\n══ 8. resend on an unverified account ══");
+    const tOld = newToken();
+    const oldExpiry = new Date(Date.now() + 10 * 60000).toISOString();
+    await setSubject({ email_verification_token: tOld, email_verification_expires_at: oldExpiry, email_verified_at: null });
+    const sendStart = Date.now();
+    const s8 = await call(R.handler, {}, ME);
+    const r8 = await readSubject();
+    const rs = resendSends[0] || {};
+    const newLink = "https://bizforceai.net/verify-email?token=" + encodeURIComponent(r8.email_verification_token || "");
+    console.log("    HTTP " + s8.status + " " + JSON.stringify(s8.body) + " | sends " + resendSends.length);
+    check("8. answers success and says it sent", s8.status === 200 && s8.body && s8.body.sent === true && s8.body.already_verified === false, JSON.stringify(s8.body));
+    check("8. mints a NEW token", /^[0-9a-f]{64}$/.test(String(r8.email_verification_token)) && r8.email_verification_token !== tOld, String(r8.email_verification_token));
+    check("8. with a fresh expiry one hour out", Math.abs(Date.parse(r8.email_verification_expires_at) - (sendStart + 3600000)) < 60000, r8.email_verification_expires_at);
+    check("8. and attempts one send, with the new token in the link and the resend wording",
+      resendSends.length === 1 && String(rs.html).indexOf(newLink) !== -1 && String(rs.text).indexOf(newLink) !== -1 &&
+      rs.template === "email_verification" && /asked for a new link/.test(String(rs.text)),
+      resendSends.length + " sends");
+
+    resendBehaviour = "fails";
+    const s8f = await call(R.handler, {}, ME);
+    resendBehaviour = "sends";
+    console.log("    with the send failing: HTTP " + s8f.status + " " + JSON.stringify(s8f.body));
+    check("8. a failed send is reported as an error, unlike registration", s8f.status === 502 && s8f.body && !!s8f.body.error, s8f.status);
+
+    console.log("\n══ 9. the old token stops working ══");
+    const r9pre = await readSubject();
+    const v9old = await call(V, { token: tOld });
+    const r9 = await readSubject();
+    console.log("    old token: HTTP " + v9old.status + " " + JSON.stringify(v9old.body));
+    check("9. the token from before the resend is refused as invalid", v9old.status === 400 && v9old.body && v9old.body.reason === "invalid", JSON.stringify(v9old.body));
+    check("9. and changes nothing", snap(r9) === snap(r9pre));
+    const v9new = await call(V, { token: r9.email_verification_token });
+    console.log("    new token: HTTP " + v9new.status + " " + JSON.stringify(v9new.body));
+    check("9. while the newest token verifies", v9new.status === 200 && v9new.body && v9new.body.success === true, v9new.status);
+
+    console.log("\n══ 10. resend on a verified account ══");
+    const r10pre = await readSubject();
+    const sendsBefore = resendSends.length;
+    const s10 = await call(R.handler, {}, ME);
+    const r10 = await readSubject();
+    console.log("    verified_at " + r10pre.email_verified_at + " | HTTP " + s10.status + " " + JSON.stringify(s10.body));
+    check("10. the account is verified going in", !!r10pre.email_verified_at, String(r10pre.email_verified_at));
+    check("10. answers success, already verified, nothing sent", s10.status === 200 && s10.body && s10.body.already_verified === true && s10.body.sent === false, JSON.stringify(s10.body));
+    check("10. sends nothing", resendSends.length === sendsBefore, (resendSends.length - sendsBefore) + " sends");
+    check("10. mints nothing: the row is unchanged", snap(r10) === snap(r10pre),
+      JSON.stringify({ token: r10.email_verification_token ? "set" : null, expires: r10.email_verification_expires_at }));
+
+    console.log("\n══ 11. resend requires auth ══");
+    check("11. requireAuth is the first middleware on the route, before the limiter",
+      JSON.stringify(R.middleware) === JSON.stringify(["REQUIRE_AUTH", "RESEND_LIMITER"]), JSON.stringify(R.middleware));
+    const authCtx = { supabase: supabase, jwt: {}, process: { env: {} }, getUserById: null, noteLegacyToken: null, touchSession: null, console: { log: function () {}, error: function () {} } };
+    vm.createContext(authCtx);
+    vm.runInContext(functionSource(SRC_NOW, "requireAuth"), authCtx);
+    const authRes = { statusCode: 200, body: undefined, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = b; return this; } };
+    let reachedHandler = false;
+    await authCtx.requireAuth({ headers: {} }, authRes, function () { reachedHandler = true; });
+    console.log("    no Authorization header: HTTP " + authRes.statusCode + " " + JSON.stringify(authRes.body));
+    check("11. and requireAuth turns away a request with no token before the handler runs", authRes.statusCode === 401 && !reachedHandler,
+      authRes.statusCode + (reachedHandler ? " (handler reached)" : ""));
+
+    console.log("\n══ 12. the resend limiter, per account ══");
+    const limiterStmt = SRC_NOW.match(/const verificationResendLimiter = rateLimit\(\{[\s\S]*?\n\}\);/)[0];
+    const limCtx = { rateLimit: require(require.resolve("express-rate-limit", { paths: [REPO] })) };
+    vm.createContext(limCtx);
+    vm.runInContext(limiterStmt.replace("const verificationResendLimiter", "verificationResendLimiter"), limCtx);
+    async function hit(userId) {
+      return new Promise(function (resolve) {
+        const res = { statusCode: 200, headers: {}, setHeader: function (k, v) { this.headers[k] = v; }, status: function (c) { this.statusCode = c; return this; },
+          send: function () { resolve(this.statusCode); return this; }, json: function () { resolve(this.statusCode); return this; }, end: function () { resolve(this.statusCode); } };
+        limCtx.verificationResendLimiter({ user: { id: userId }, ip: "203.0.113.9", headers: {}, app: { get: function () { return false; } } }, res, function () { resolve(200); });
+      });
+    }
+    const codes = [];
+    for (let i = 0; i < 4; i++) codes.push(await hit("limit-user-a"));
+    const otherUser = await hit("limit-user-b");
+    console.log("    account A, four requests: " + codes.join(", ") + " | account B, first request (same IP): " + otherUser);
+    check("12. three per hour per account, the fourth refused with 429", JSON.stringify(codes) === JSON.stringify([200, 200, 200, 429]), codes.join(","));
+    check("12. keyed per account, not per IP: another account from the same IP is not blocked", otherUser === 200, otherUser);
   } finally {
     console.log("\n══ cleanup ══");
     const restored = await restoreSubject();

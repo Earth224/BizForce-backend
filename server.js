@@ -834,6 +834,22 @@ const aiLimiter = rateLimit({
   legacyHeaders: false
 });
 
+/* POST /api/auth/resend-verification mints a token and sends mail on demand,
+   always to the same inbox: the account's own. So it is limited PER ACCOUNT,
+   not per IP. authLimiter (25 per 15 minutes per IP, shared with login,
+   refresh and reset) would still let one account put about a hundred emails
+   an hour into one inbox, and a user resending would be spending the same
+   bucket their own sign-ins draw on. Mounted after requireAuth, which is what
+   puts req.user there to key on. */
+const verificationResendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  keyGenerator: function (req) { return "resend-verification:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many confirmation emails requested. Try again in an hour." }
+});
+
 app.use(apiLimiter);
 
 function constructStripeEventFromSecrets(rawBody, signature, secrets) {
@@ -4187,6 +4203,64 @@ async function findOrCreateUserContact(userId, email) {
   }
 }
 
+/* ── The email verification send ─────────────────────────────────────────────
+   One body for the one email, called by POST /api/auth/register and POST
+   /api/auth/resend-verification. Sent the way POST /api/auth/password-reset
+   sends its link: the same FRONTEND_URL construction, and sendEmail with
+   skipConsentCheck, because this is mail about something the person just did,
+   not a list.
+
+   `why` changes only the opening sentence: "registration" says an account was
+   just created, "resend" says a new link was asked for. Everything else, and
+   the one-hour expiry it states, is shared.
+
+   NEVER THROWS. sendEmail is documented never to throw; this catches anyway
+   and reports every failure in its result, { sent, reason }. The callers
+   disagree about what a failure means (registration carries on, a resend
+   reports it), so the decision stays with them. */
+async function sendVerificationEmail(contactId, email, token, why) {
+  try {
+    const verifyUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+      "/verify-email?token=" + encodeURIComponent(token);
+
+    const opening = why === "resend"
+      ? "You asked for a new link to confirm this address for your BizForce AI account. Any earlier link no longer works."
+      : "A BizForce AI account was just created with this address.";
+
+    const verifyHtml =
+      '<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;color:#1a1a2e">' +
+      '<h1 style="font-size:20px;margin:0 0 16px">Confirm your email for BizForce AI</h1>' +
+      '<p style="font-size:15px;line-height:1.6;margin:0 0 20px">' + opening + ' If that was you, use the link below to confirm it. It expires in one hour.</p>' +
+      '<p style="margin:0 0 24px"><a href="' + verifyUrl + '" style="display:inline-block;background:#00e5ff;color:#000;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Confirm email address</a></p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0 0 8px">If the button does not work, paste this into your browser:</p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;word-break:break-all;margin:0 0 24px">' + verifyUrl + '</p>' +
+      '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0">If you did not ask for this, you can ignore this email. Nothing is confirmed until someone uses the link above.</p>' +
+      '</div>';
+
+    const verifyText =
+      "Confirm your email for BizForce AI\n\n" +
+      opening + " If that was you, open the link below to confirm it. It expires in one hour.\n\n" +
+      verifyUrl + "\n\n" +
+      "If you did not ask for this, you can ignore this email. Nothing is confirmed until someone uses the link above.";
+
+    const result = await sendEmail({
+      contactId:        contactId,
+      to:               email,
+      subject:          "Confirm your email for BizForce AI",
+      html:             verifyHtml,
+      text:             verifyText,
+      template:         "email_verification",
+      skipConsentCheck: true
+    });
+
+    return result && result.sent
+      ? { sent: true }
+      : { sent: false, reason: (result && result.reason) || "unknown" };
+  } catch (sendErr) {
+    return { sent: false, reason: "threw: " + ((sendErr && sendErr.message) || String(sendErr)) };
+  }
+}
+
 app.post("/api/auth/register", authLimiter, async function (req, res, next) {
   try {
     const email = normalizeEmail(req.body.email);
@@ -4411,61 +4485,23 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         " — registration succeeded and is NOT being failed for this, but transactional email to this address will have nothing to attribute itself to until one exists.");
     }
 
-    /* THE VERIFICATION EMAIL. The token above was minted and stored on every
-       registration and never sent, so POST /api/auth/verify-email could not
-       be reached. Sent the way POST /api/auth/password-reset sends its link:
-       the same FRONTEND_URL construction, sendEmail with skipConsentCheck
-       (this is mail about something the person just did, not a list), and the
-       result read and logged rather than acted on.
+    /* THE VERIFICATION EMAIL, through sendVerificationEmail, which POST
+       /api/auth/resend-verification also calls.
 
        NEVER FAILS THE SIGNUP, on the same terms as the wallet grant and the
        contact row above: by here the account exists, and a 500 now would tell
        the caller registration failed when it did not. No contact means no
-       send, which is logged. sendEmail is documented never to throw; the catch
-       is there anyway, because the cost of being wrong about that here is a
-       lost signup rather than a lost email. */
+       send, which is logged. sendVerificationEmail never throws; it reports
+       failure in its result, which is read and logged here. */
     if (registrationContactId) {
-      try {
-        const verifyUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
-          "/verify-email?token=" + encodeURIComponent(emailVerificationToken);
+      const verifySend = await sendVerificationEmail(registrationContactId, email, emailVerificationToken, "registration");
 
-        const verifyHtml =
-          '<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;color:#1a1a2e">' +
-          '<h1 style="font-size:20px;margin:0 0 16px">Confirm your email for BizForce AI</h1>' +
-          '<p style="font-size:15px;line-height:1.6;margin:0 0 20px">A BizForce AI account was just created with this address. If that was you, use the link below to confirm it. It expires in one hour.</p>' +
-          '<p style="margin:0 0 24px"><a href="' + verifyUrl + '" style="display:inline-block;background:#00e5ff;color:#000;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:8px">Confirm email address</a></p>' +
-          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0 0 8px">If the button does not work, paste this into your browser:</p>' +
-          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;word-break:break-all;margin:0 0 24px">' + verifyUrl + '</p>' +
-          '<p style="font-size:13px;line-height:1.6;color:#6b6b80;margin:0">If you did not create this account, you can ignore this email. Nothing is confirmed until someone uses the link above.</p>' +
-          '</div>';
-
-        const verifyText =
-          "Confirm your email for BizForce AI\n\n" +
-          "A BizForce AI account was just created with this address. If that was you, open the link below to confirm it. It expires in one hour.\n\n" +
-          verifyUrl + "\n\n" +
-          "If you did not create this account, you can ignore this email. Nothing is confirmed until someone uses the link above.";
-
-        const verifySend = await sendEmail({
-          contactId:        registrationContactId,
-          to:               email,
-          subject:          "Confirm your email for BizForce AI",
-          html:             verifyHtml,
-          text:             verifyText,
-          template:         "email_verification",
-          skipConsentCheck: true
-        });
-
-        if (verifySend && verifySend.sent) {
-          console.log("[register] Verification link sent for user " + user.id + ".");
-        } else {
-          console.error("[register] Verification mail NOT sent for user " + user.id + " — reason: " +
-            ((verifySend && verifySend.reason) || "unknown") +
-            ". The token is stored and the account was created; this person has no link to confirm their address with.");
-        }
-      } catch (verifySendErr) {
-        console.error("[register] Verification mail THREW for user " + user.id + " — " +
-          ((verifySendErr && verifySendErr.message) || String(verifySendErr)) +
-          ". Registration still succeeded; no link was sent.");
+      if (verifySend.sent) {
+        console.log("[register] Verification link sent for user " + user.id + ".");
+      } else {
+        console.error("[register] Verification mail NOT sent for user " + user.id + " — reason: " +
+          verifySend.reason +
+          ". The token is stored and the account was created; this person has no link to confirm their address with.");
       }
     }
 
@@ -5153,6 +5189,108 @@ app.post("/api/auth/verify-email", async function (req, res, next) {
     console.log("[verify-email] Email verified for user " + user.id + ".");
 
     return res.json({ success: true, message: "Your email address is confirmed." });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ── Resend the verification link ───────────────────────────────────────────
+   A link lasts one hour and there was no way to get another. Every account
+   created before migration 122 also holds a token with no expiry, which
+   verify-email correctly refuses, so none of them could ever verify.
+
+   SIGNED IN, AND FOR THE CALLER'S OWN ADDRESS ONLY. The account comes from
+   the token, never from the body, so the route cannot be used to mail anyone
+   else or to learn whether an address has an account.
+
+   ALREADY VERIFIED means success with nothing sent and nothing minted, and the
+   response says so.
+
+   OTHERWISE a fresh token and expiry overwrite whatever is there, so any
+   earlier link stops working, and the registration email is sent through the
+   same sendVerificationEmail. Unlike registration, a failed send is an error
+   here: the person asked for this email and needs to know it did not go. The
+   new token is already stored by then; asking again mints another. */
+app.post("/api/auth/resend-verification", requireAuth, verificationResendLimiter, async function (req, res, next) {
+  try {
+    const { data: account, error: lookupError } = await supabase
+      .from("users")
+      .select("id, email, email_verified_at")
+      .eq("id", req.user.id)
+      .maybeSingle();
+
+    if (lookupError) {
+      throw lookupError;
+    }
+
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    const alreadyVerified = {
+      success: true,
+      already_verified: true,
+      sent: false,
+      message: "Your email address is already confirmed. No new link was sent."
+    };
+
+    if (account.email_verified_at) {
+      return res.json(alreadyVerified);
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+
+    /* Filtered on email_verified_at is null, so an account verified between
+       the read above and this write is not handed a fresh token. .select()
+       makes a no-match visible, since PostgREST does not treat it as an
+       error. */
+    const { data: minted, error: mintError } = await supabase
+      .from("users")
+      .update({
+        email_verification_token:      token,
+        email_verification_expires_at: expiresAt,
+        updated_at:                    nowIso()
+      })
+      .eq("id", account.id)
+      .is("email_verified_at", null)
+      .select("id")
+      .maybeSingle();
+
+    if (mintError) {
+      console.error("[resend-verification] FAILED TO STORE a new token for user " + account.id + ": " +
+        mintError.message + ". Nothing was sent.");
+      throw mintError;
+    }
+
+    if (!minted) {
+      return res.json(alreadyVerified);
+    }
+
+    const contactId = await findOrCreateUserContact(account.id, account.email);
+
+    if (!contactId) {
+      console.error("[resend-verification] No contacts row for user " + account.id +
+        " and one could not be created — sendEmail requires a contact to attribute to, so no link was sent.");
+      return res.status(502).json({ error: "The confirmation email could not be sent. Please try again in a few minutes." });
+    }
+
+    const result = await sendVerificationEmail(contactId, account.email, token, "resend");
+
+    if (!result.sent) {
+      console.error("[resend-verification] Verification mail NOT sent for user " + account.id + " — reason: " +
+        result.reason + ". A new token is stored; the person was told the send failed.");
+      return res.status(502).json({ error: "The confirmation email could not be sent. Please try again in a few minutes." });
+    }
+
+    console.log("[resend-verification] New verification link sent for user " + account.id + ".");
+
+    return res.json({
+      success: true,
+      already_verified: false,
+      sent: true,
+      message: "A new confirmation link has been sent to " + account.email + ". It expires in one hour."
+    });
   } catch (error) {
     next(error);
   }
