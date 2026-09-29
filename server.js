@@ -30761,27 +30761,57 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
   try {
     const userId = req.params.userId;
 
+    /* THE RECORD, AND ONLY ON users. verification_status is ADMIN BUSINESS
+       verification (migration 000, text default 'pending'); email
+       confirmation is email_verified_at, a separate column this route does not
+       touch. b4fbb11 stripped this write along with the profiles one below;
+       it was right about profiles, which has no such column, and wrong here.
+
+       NOTHING READS IT YET. No route, page or script in either repo reads
+       verification_status, so the value is recorded but nothing surfaces it.
+       A "verified" badge (on the profile, in search, in the admin list) is the
+       work that would make it mean something to anyone. */
     const { data, error } = await supabase
       .from("users")
       .update({
-        
+        verification_status: "verified",
         updated_at: nowIso()
       })
       .eq("id", userId)
       .select("id, email")
       .single();
 
+    /* Nothing was recorded, so nothing is announced: this returns before the
+       notification below. */
     if (error) {
-      throw error;
+      const notFound = error.code === "PGRST116";
+      console.error("[admin/verify] VERIFICATION NOT RECORDED for user " + userId + ": " +
+        (error.message || error) + ". The user was not notified.");
+      return res.status(notFound ? 404 : 500).json({
+        error: notFound
+          ? "User not found. Nothing was recorded and no notification was sent."
+          : "The verification could not be recorded. Nothing was changed and no notification was sent."
+      });
     }
 
-    await supabase
+    /* profiles.updated_at only. profiles has no verification_status column
+       (absent from every migration; 42703 against the live database), which is
+       why this write stays as it is. Its failure is logged and reported in the
+       response, but it is not a failed verification: the record above already
+       landed, so the verification stands and the user is still told. */
+    const profileResult = await supabase
       .from("profiles")
       .update({
-        
         updated_at: nowIso()
       })
       .eq("user_id", userId);
+
+    const profileUpdated = !profileResult.error;
+    if (!profileUpdated) {
+      console.error("[admin/verify] Verification recorded for user " + userId +
+        ", but the profiles.updated_at touch failed: " + (profileResult.error.message || profileResult.error) +
+        ". The verification stands; only the profile's timestamp is stale.");
+    }
 
     var verificationNotification = await supabase.from("notifications").insert({
       user_id: userId,
@@ -30795,7 +30825,7 @@ app.post("/api/admin/verify/:userId", requireAuth, requireAdmin, async function 
       console.warn("[notifications] insert failed for POST /api/admin/verify/:userId — the route still succeeded, the user simply was not notified:", verificationNotification.error.message || verificationNotification.error);
     }
 
-    return res.json({ user: data });
+    return res.json({ user: data, profile_updated: profileUpdated });
   } catch (error) {
     next(error);
   }
