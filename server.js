@@ -6917,17 +6917,27 @@ app.get("/api/search/businesses", requireAuth, async function (req, res, next) {
       .eq("profile_visibility", "public")
       .limit(limit);
 
+    /* q IS QUOTED, NOT INTERPOLATED. safeText only trims and truncates, so
+       every character reached this .or(...) — and a comma, parenthesis or dot
+       in q is PostgREST filter syntax. Measured against the live table: q =
+       "zzqq,id.not.is.null,business_name.ilike.zz" added its own OR conditions
+       and returned every public profile for a term that matches none; a stray
+       comma or ")" failed the request with PGRST100. It could not reach a
+       non-public profile (the .eq above is ANDed outside the OR group), another
+       column (the select is fixed) or another table (nothing is embedded) — so
+       it widened within public profiles and nothing more. Closed regardless.
+
+       A double-quoted PostgREST value is taken literally, commas and
+       parentheses included; inside it only " and \ need escaping. The %
+       wildcards stay outside q's own text, so q is matched as a substring, as
+       before — an ordinary search returns exactly what it did. */
     if (q) {
+      const pattern = '"' + ("%" + q + "%").replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
       query = query.or(
-        "business_name.ilike.%" +
-          q +
-          "%,username.ilike.%" +
-          q +
-          "%,bio.ilike.%" +
-          q +
-          "%,industry.ilike.%" +
-          q +
-          "%"
+        "business_name.ilike." + pattern +
+        ",username.ilike." + pattern +
+        ",bio.ilike." + pattern +
+        ",industry.ilike." + pattern
       );
     }
 
@@ -35784,8 +35794,30 @@ async function smsConsentFromLedger(phone) {
   return latest ? latest.action : null;
 }
 
+/* DIRECT SMS IS SHUT UNTIL IT IS SAFE TO OPEN. This route sent any message,
+   up to 1600 characters, to any number, through the company's Twilio number,
+   for any signed-in account: requireAuth was its only gate — no subscription,
+   no route limiter, no verified email — and the consent check below refuses
+   only numbers ALREADY recorded as opted out. An unknown number logged "NO
+   CONSENT RECORD" and was sent to anyway. It wrote nothing to the database, so
+   a send left no trace here; Twilio's message log is the only record. No page
+   calls it.
+
+   Reopening needs, at least: requireActiveSubscription and a per-account
+   limiter; consent REQUIRED rather than merely not-revoked, i.e. a granted
+   sms_subscribers row or consent event for the destination; and a row in
+   sms_send_log for every send, so what went out is visible in our own data.
+   The code behind the gate is kept for that. The drip engine,
+   POST /api/sms/inbound and the other /api/sms routes are separate and
+   unaffected. scripts/checkOpenSurfaceClosed.js holds this shut. */
+const SMS_DIRECT_SEND_ENABLED = false;
+
 app.post("/api/sms/send", requireAuth, async function (req, res, next) {
   try {
+    if (!SMS_DIRECT_SEND_ENABLED) {
+      return res.status(503).json({ error: "Direct SMS sending is unavailable." });
+    }
+
     var accountSid  = (process.env.TWILIO_ACCOUNT_SID   || "").trim();
     var authToken   = (process.env.TWILIO_AUTH_TOKEN     || "").trim();
     var fromNumber  = (process.env.TWILIO_PHONE_NUMBER   || "").trim();
