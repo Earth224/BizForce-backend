@@ -72,7 +72,7 @@ function check(label, ok, detail) {
    Change these lists when the response changes on purpose, in the same
    commit as the change. */
 const TOP_KEYS = ["access", "profile", "subscription", "user"];
-const USER_KEYS = ["banned_at", "created_at", "email", "id", "role", "subscription_active", "subscription_plan", "subscription_status"];
+const USER_KEYS = ["banned_at", "created_at", "email", "email_verified_at", "id", "role", "subscription_active", "subscription_plan", "subscription_status"];
 const ACCESS_KEYS = ["access_reason", "active", "exempt", "inactive_reason"];
 
 /* ── the route, out of the source ─────────────────────────────────────────── */

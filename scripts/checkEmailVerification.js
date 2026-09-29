@@ -31,6 +31,9 @@
         with no token.
     12. The resend limiter allows three an hour per account, keyed by account
         rather than IP.
+    13. publicUser carries email_verified_at: null for an unverified account,
+        the stored timestamp for a verified one, read with the exact columns
+        getUserById and requireAuth select.
 
    TWO HALVES, BECAUSE REGISTRATION WOULD SEND REAL MAIL.
    Registration (1-3) runs out of the source in a vm against a recording fake
@@ -44,6 +47,8 @@
    MUTATE=no-expiry-check removes the expiry refusal. 6 and 7 must go red.
    MUTATE=resend-when-verified lets resend mint and send for an account that
    is already verified. 10 must go red.
+   MUTATE=no-verified-field removes email_verified_at from publicUser. 13 must
+   go red.
    MUTATE=no-send now applies to sendVerificationEmail, the one body both
    routes send through.
    The mutations are applied to the extracted source, never to server.js.
@@ -75,7 +80,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "emailVerification", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["no-send", "old-verify", "no-expiry-check", "resend-when-verified"];
+const MUTATIONS = ["no-send", "old-verify", "no-expiry-check", "resend-when-verified", "no-verified-field"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
@@ -415,6 +420,37 @@ const newToken = function () { return "check_" + crypto.randomBytes(24).toString
     console.log("    account A, four requests: " + codes.join(", ") + " | account B, first request (same IP): " + otherUser);
     check("12. three per hour per account, the fourth refused with 429", JSON.stringify(codes) === JSON.stringify([200, 200, 200, 429]), codes.join(","));
     check("12. keyed per account, not per IP: another account from the same IP is not blocked", otherUser === 200, otherUser);
+
+    /* ── 13. publicUser exposes email_verified_at ────────────────────────
+       The subject's real row, read with the exact column lists getUserById
+       and requireAuth select (parsed from their own source), then through the
+       real publicUser. If either query dropped the column, a verified account
+       would read null here. */
+    console.log("\n══ 13. publicUser carries email_verified_at ══");
+    let PUBLIC_USER = functionSource(SRC_NOW, "publicUser");
+    if (MUTATE === "no-verified-field") PUBLIC_USER = mutate(PUBLIC_USER, "email_verified_at: user.email_verified_at || null", "");
+    const puCtx = {};
+    vm.createContext(puCtx);
+    vm.runInContext(PUBLIC_USER, puCtx);
+    const byIdCols = /\.select\("([^"]*)"\)/.exec(functionSource(SRC_NOW, "getUserById"))[1];
+    const authCols = /\.select\("[^"]*\busers\(([^)]*)\)[^"]*"\)/.exec(functionSource(SRC_NOW, "requireAuth"))[1];
+    console.log("    getUserById selects: " + byIdCols + "\n    requireAuth selects users(" + authCols + ")");
+    const readAs = async function (cols) { const r = await supabase.from("users").select(cols).eq("id", SUBJECT_USER_ID).single(); if (r.error) throw new Error(r.error.message); return r.data; };
+
+    await setSubject({ email_verified_at: null });
+    for (const [label, cols] of [["getUserById", byIdCols], ["requireAuth", authCols]]) {
+      const pu = puCtx.publicUser(await readAs(cols));
+      check("13. unverified, read as " + label + ": email_verified_at is present and null",
+        Object.prototype.hasOwnProperty.call(pu, "email_verified_at") && pu.email_verified_at === null, JSON.stringify(pu));
+    }
+    const stampAt = new Date().toISOString();
+    await setSubject({ email_verified_at: stampAt });
+    for (const [label, cols] of [["getUserById", byIdCols], ["requireAuth", authCols]]) {
+      const pu = puCtx.publicUser(await readAs(cols));
+      check("13. verified, read as " + label + ": email_verified_at is the stored timestamp",
+        typeof pu.email_verified_at === "string" && Date.parse(pu.email_verified_at) === Date.parse(stampAt),
+        JSON.stringify(pu.email_verified_at) + " vs " + stampAt);
+    }
   } finally {
     console.log("\n══ cleanup ══");
     const restored = await restoreSubject();

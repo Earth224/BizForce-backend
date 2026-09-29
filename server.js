@@ -2351,7 +2351,12 @@ function publicUser(user) {
     
     
     banned_at: user.banned_at || null,
-    created_at: user.created_at
+    created_at: user.created_at,
+    /* When the address was confirmed, or null. Every query that feeds this
+       function selects the column (getUserById, requireAuth's session embed,
+       register, login, refresh and WebAuthn login finish), so null means
+       unconfirmed, never "not read". */
+    email_verified_at: user.email_verified_at || null
   };
 }
 
@@ -2402,7 +2407,7 @@ function subscriptionPeriodIso(subscription) {
 async function getUserById(userId) {
   const { data, error } = await supabase
     .from("users")
-    .select("id, email, role, banned_at, created_at")
+    .select("id, email, role, banned_at, created_at, email_verified_at")
     .eq("id", userId)
     .maybeSingle();
 
@@ -2799,7 +2804,7 @@ async function requireAuth(req, res, next) {
          it. An authenticated request costs exactly what it cost yesterday. */
       const sessionResult = await supabase
         .from("auth_sessions")
-        .select("id, revoked_at, expires_at, last_used_at, users(id, email, role, banned_at, created_at)")
+        .select("id, revoked_at, expires_at, last_used_at, users(id, email, role, banned_at, created_at, email_verified_at)")
         .eq("id", decoded.sid)
         .maybeSingle();
 
@@ -4358,7 +4363,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         created_at: nowIso(),
         updated_at: nowIso()
       })
-      .select("id, email, role, banned_at, created_at")
+      .select("id, email, role, banned_at, created_at, email_verified_at")
       .single();
 
     if (userError) {
@@ -4531,7 +4536,7 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
 
     const { data: user, error } = await supabase
       .from("users")
-      .select("id, email, role, password_hash, banned_at, created_at")
+      .select("id, email, role, password_hash, banned_at, created_at, email_verified_at")
       .eq("email", email)
       .maybeSingle();
 
@@ -4655,7 +4660,7 @@ app.post("/api/auth/refresh", authLimiter, async function (req, res, next) {
        path and the guarantee that one token names one session. */
     const lookup = await supabase
       .from("auth_sessions")
-      .select("id, user_id, revoked_at, expires_at, users(id, email, role, banned_at, created_at)")
+      .select("id, user_id, revoked_at, expires_at, users(id, email, role, banned_at, created_at, email_verified_at)")
       .eq("refresh_token_hash", hashRefreshToken(presented))
       .maybeSingle();
 
@@ -5725,7 +5730,7 @@ app.post("/api/webauthn/login/finish", authLimiter, async function (req, res, ne
 
     var userRow = await supabase
       .from("users")
-      .select("id, email, role, banned_at, created_at")
+      .select("id, email, role, banned_at, created_at, email_verified_at")
       .eq("id", stored.user_id)
       .maybeSingle();
 
