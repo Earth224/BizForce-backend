@@ -20,9 +20,10 @@
        scripts/checkDormantRoutesDeleted.js proves it answers 404. There is
        nothing left here to harden.
      - POST /api/follow and GET /api/feed were never checked here: both were
-       broken against the live schema (follows has no created_at; posts has
-       no foreign key to profiles and lacks media_url, post_type, updated_at),
-       and both are among the twenty-one deleted.
+       broken against the schema of the time (follows had no created_at; posts
+       had no foreign key to profiles and lacked media_url, post_type,
+       updated_at). Both routes were deleted in af4d434, and the follows and
+       posts tables were dropped by migration 123.
 
    MUTATE=sms-open  runs sms/send as it was at 8092a1c. 1 must go red.
    The mutation is applied to extracted source, never to server.js.

@@ -3,7 +3,9 @@
    gone, everything else still registers, and nothing refers to what was
    removed with them.
 
-   WHAT WAS REMOVED (routes only — the tables stay until their own migration):
+   WHAT WAS REMOVED (routes only, in af4d434 — the six tables behind them,
+   follows, favorites, posts, deals, websites and analytics_events, were then
+   dropped by migration 123):
      social graph / directory  GET /api/search/businesses, POST and DELETE
                                /api/follow/:userId, GET /api/followers,
                                GET /api/following, POST and DELETE
