@@ -35222,6 +35222,25 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
 
 /* ── Social Post Drafts ── */
 
+/* SOCIAL IS CLOSED UNTIL ACCOUNTS HAVE OWNERS. Every Zernio call below is
+   made with the app's one API key, and nothing ties a connected account to
+   the user who connected it:
+     - fetchZernioAccounts lists the whole workspace (GET /v1/accounts, no
+       profile filter), so GET /api/social/accounts handed every tenant's
+       accounts to any signed-in user;
+     - getZernioAccountId took no user and returned the first account on the
+       platform, so a publish went to whoever connected first;
+     - no table records which user connected which account, and the connect
+       route cannot record it: it only returns an OAuth URL, with no callback
+       and no account id coming back.
+   Zero rows had ever published when this was closed. While this is false,
+   listing returns nothing, publishing saves the draft unpublished, and connect
+   answers 503 — none of them call Zernio. The code behind each gate is kept for
+   when ownership can be recorded; that needs Zernio API facts we do not have
+   yet (a profile-filtered listing, or a connect callback that returns the
+   account). scripts/checkSocialFailClosed.js holds all three shut. */
+const SOCIAL_ACCOUNTS_SCOPED = false;
+
 /* Fetches all connected Zernio accounts; returns raw array (empty on any error). */
 async function fetchZernioAccounts(logPrefix) {
   var apiKey = (process.env.ZERNIO_API_KEY || "").trim();
@@ -35260,6 +35279,42 @@ app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
     var apiKey   = (process.env.ZERNIO_API_KEY || "").trim();
 
     console.log("[social/publish] Approve — user:", req.user.id, "platform:", platform);
+
+    /* SAVED, NOT PUBLISHED (see SOCIAL_ACCOUNTS_SCOPED). The draft is kept
+       rather than refused, so the approved text is not lost, and the row says
+       what happened: status "not_published", no zernio_post_id, and no
+       scheduled_for, because nothing will ever pick it up and send it. Neither
+       getZernioAccountId nor Zernio is reached. */
+    if (!SOCIAL_ACCOUNTS_SCOPED) {
+      const { data: saved, error: saveError } = await supabase
+        .from("social_post_drafts")
+        .insert({
+          user_id:        req.user.id,
+          platform:       platform,
+          content:        content,
+          status:         "not_published",
+          scheduled_for:  null,
+          zernio_post_id: null,
+          created_at:     nowIso(),
+          updated_at:     nowIso()
+        })
+        .select("*").single();
+
+      if (saveError) {
+        console.error("[social-drafts POST] Supabase error:", {
+          code: saveError.code, message: saveError.message,
+          details: saveError.details, hint: saveError.hint
+        });
+        return res.status(500).json({ error: "Save failed" });
+      }
+
+      console.log("[social/publish] Publishing disabled — draft " + saved.id + " saved as not_published for user " + req.user.id);
+      return res.status(201).json({
+        draft: saved,
+        published: false,
+        message: "Saved as a draft. It was not published: publishing to social accounts is turned off until each connected account is tied to the person who connected it."
+      });
+    }
 
     if (!apiKey) {
       return res.status(503).json({ error: "Publishing unavailable — ZERNIO_API_KEY not configured" });
@@ -35378,6 +35433,16 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
 /* ── List connected social accounts ── */
 app.get("/api/social/accounts", requireAuth, async function (req, res, next) {
   try {
+    /* EMPTY, NOT EVERYONE'S (see SOCIAL_ACCOUNTS_SCOPED). fetchZernioAccounts
+       calls the workspace-wide GET /v1/accounts with no profile filter, and
+       nothing records which user connected what, so there is no list this
+       route can return that belongs only to the caller. listing_status tells
+       the page why the list is empty, so it can say so rather than showing
+       "no accounts connected". */
+    if (!SOCIAL_ACCOUNTS_SCOPED) {
+      return res.json({ accounts: [], listing_status: "unavailable_pending_per_user_scoping" });
+    }
+
     var raw = await fetchZernioAccounts("social/accounts");
     var reverseMap = {};
     Object.keys(ZERNIO_PLATFORM_MAP).forEach(function (k) {
@@ -35411,6 +35476,13 @@ app.post("/api/social/connect/:platform", requireAuth, async function (req, res,
     var rawPlatform    = safeText(req.params.platform, 40) || "";
     var zernioPlatform = ZERNIO_PLATFORM_MAP[rawPlatform] || rawPlatform;
     var apiKey         = (process.env.ZERNIO_API_KEY || "").trim();
+
+    /* A GATE, NOT A DELETION (see SOCIAL_ACCOUNTS_SCOPED). A connect URL now
+       leads to an account nobody can list or publish to, and which — once the
+       gates open — would be visible to every tenant. */
+    if (!SOCIAL_ACCOUNTS_SCOPED) {
+      return res.status(503).json({ error: "Social account connections are temporarily unavailable." });
+    }
 
     if (!apiKey) {
       return res.status(503).json({ error: "Social connect unavailable — ZERNIO_API_KEY not configured" });
