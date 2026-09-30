@@ -99,7 +99,7 @@ const residue = createResidueGuard({
   supabase: supabase,
   name: "keyFunding",
   subject: SUBJECT_USER_ID,
-  tables: ["ai_tasks", "model_calls"]
+  tables: ["ai_tasks", "model_calls", "user_api_keys"]   /* user_api_keys: the BYOK fixture, so a crash cannot leave a stored key on the subject */
 });
 residue.install();
 
@@ -137,8 +137,9 @@ async function storeFakeKey(userId) {
     ciphertext: sealed.ciphertext,
     iv: sealed.iv,
     auth_tag: sealed.authTag
-  });
+  }).select("id").single();
   if (ins.error) throw new Error("could not store the fixture key: " + ins.error.message);
+  residue.record("user_api_keys", ins.data.id);
 }
 
 async function removeFakeKey(userId) {

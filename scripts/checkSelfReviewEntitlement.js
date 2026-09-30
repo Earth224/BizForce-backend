@@ -105,6 +105,11 @@ const supabase = createClient(
 );
 
 const SPEND_TABLES = ["ai_tasks", "model_calls", "self_reviews"];
+/* The guards also own the agent_autonomy rows this script CREATES. unenrol()
+   removes them by hand; recorded here so a crash cannot leave either account
+   enrolled — the seed account is entitled, so a stranded enrolment would have
+   production's nightly pass reviewing it, on the platform key, every night. */
+const GUARD_TABLES = SPEND_TABLES.concat(["agent_autonomy"]);
 
 /* The subject account's guard, built before anything else so a previous
    crashed run is swept before this one writes. */
@@ -112,7 +117,7 @@ const residue = createResidueGuard({
   supabase: supabase,
   name: "selfReviewEntitlement",
   subject: SUBJECT_USER_ID,
-  tables: SPEND_TABLES
+  tables: GUARD_TABLES
 });
 residue.install();
 
@@ -142,8 +147,9 @@ async function enrol(userId) {
   }
 
   const ins = await supabase.from("agent_autonomy")
-    .insert({ user_id: userId, agent_type: SELF_REVIEW_AGENT_TYPE, enabled: true });
+    .insert({ user_id: userId, agent_type: SELF_REVIEW_AGENT_TYPE, enabled: true }).select("id").single();
   if (ins.error) throw new Error("could not enrol " + userId + ": " + ins.error.message);
+  (userId === SUBJECT_USER_ID ? residue : payingResidue).record("agent_autonomy", ins.data.id);
   enrolled.push({ userId: userId, restore: null, existed: false });
 }
 
@@ -220,7 +226,7 @@ async function recordNewRows(guard, userId, sinceIso) {
     supabase: supabase,
     name: "selfReviewEntitlement-entitled",
     subject: paying.id,
-    tables: SPEND_TABLES
+    tables: GUARD_TABLES
   });
   payingResidue.install();
   await payingResidue.sweepPrevious(paying.id);

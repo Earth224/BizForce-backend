@@ -156,7 +156,10 @@ const residue = createResidueGuard({
   supabase: supabase,
   name: "remainingSpendPaths",
   subject: SUBJECT_USER_ID,
-  tables: SPEND_TABLES
+  /* agent_autonomy: the store enrolment this script creates for the subject.
+     Removed by hand at the end; recorded here so a crash cannot leave the
+     subject enrolled in a nightly pass. */
+  tables: SPEND_TABLES.concat(["agent_autonomy"])
 });
 residue.install();
 
@@ -378,8 +381,9 @@ async function recordNewRows(userId, sinceIso) {
     .select("enabled").eq("user_id", unentitled.id).eq("agent_type", "store").maybeSingle();
   if (!existingStore.data) {
     const ins = await supabase.from("agent_autonomy")
-      .insert({ user_id: unentitled.id, agent_type: "store", enabled: true });
+      .insert({ user_id: unentitled.id, agent_type: "store", enabled: true }).select("id").single();
     if (ins.error) throw new Error("could not enrol the subject in store autonomy: " + ins.error.message);
+    residue.record("agent_autonomy", ins.data.id);
     enrolledStore = true;
   }
 

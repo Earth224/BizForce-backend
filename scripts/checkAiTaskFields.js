@@ -88,8 +88,20 @@ const residue = createResidueGuard({
   supabase: supabase,
   name: "aiTaskFields",
   subject: SUBJECT_USER_ID,
-  tables: ["ai_tasks", "model_calls"]
+  /* agent_memory because processAiTask writes one for every completed task of
+     a memory agent. It was missing, and each run left that row behind. */
+  tables: ["ai_tasks", "model_calls", "agent_memory"]
 });
+
+/* Every agent_memory row under the subject since `since`, handed to the guard.
+   Called after each submission and again before cleanup, because the memory is
+   written when the task completes, which can be after the route has answered. */
+async function recordMemories(since) {
+  const mem = await supabase.from("agent_memory").select("id")
+    .eq("user_id", SUBJECT_USER_ID).gte("created_at", since);
+  (mem.data || []).forEach(function (x) { residue.record("agent_memory", x.id); });
+}
+const RUN_STARTED = new Date(Date.now() - 2000).toISOString();
 residue.install();
 
 const MUTATING = process.env.MUTATE === "old-insert";
@@ -153,6 +165,7 @@ async function submit(taskType, prompt) {
   const calls = await supabase.from("model_calls").select("id")
     .eq("user_id", SUBJECT_USER_ID).gte("created_at", before);
   (calls.data || []).forEach(function (x) { residue.record("model_calls", x.id); });
+  await recordMemories(before);
   return r;
 }
 
@@ -282,6 +295,7 @@ async function submit(taskType, prompt) {
     String(stillGeneral.count) + " — expected at least the 7,932 that predate this change");
 
   console.log("\n══ cleanup ══");
+  await recordMemories(RUN_STARTED);
   const cleanupResult = await residue.cleanup("end of run");
   if (cleanupResult.leftovers.length) failures++;
 
