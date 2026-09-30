@@ -32,6 +32,23 @@
    with chain_fanout_reached. If it is not, the exemption was written too wide
    and fan-out has been disabled for everyone.
 
+   THE ACTOR IS THE SEED ACCOUNT, AND THAT IS ASSERTED. This script writes
+   routines, ai_tasks and model_calls under its actor and its guard deletes that
+   account's rows, so which account it is matters more here than anywhere. It
+   used to be the first non-admin account with an active subscription out of an
+   unordered read — on the day a real customer subscribed, possibly them. It is
+   now resolveEntitledAccount's answer (the seed, by email, or a refusal), and
+   before anything is written the actor's id is checked against the seed's id
+   read directly. A change that brings the search back turns that red and stops
+   the run.
+
+   MUTATE=search restores the old search exactly, over the live rows plus one
+   simulated subscriber placed first — an unordered read may return any row
+   first, and today the seed is the only entitled account, so without it the
+   old search would land on the seed by luck and prove nothing. The simulated
+   row exists only in memory. The pin assertion must go red, and the run stops
+   there, before the guard is built or a row is written.
+
    ENABLE_AGENT_CHAINING is set to "true" for this process only — dispatch
    refuses outright otherwise, and the thing under test is what happens after
    that gate. Fixtures live under the subject account and are removed with a
@@ -40,7 +57,7 @@
 
 require("dotenv").config();
 
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
+const { createResidueGuard, resolveSubjectAccount, resolveEntitledAccount, ENTITLED_CHECK_EMAIL } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();
 
 /* Before server.js loads: the dispatcher's own gate, and a rate ceiling low
@@ -118,7 +135,13 @@ const supabase = createClient(
 let ACTOR_USER_ID = null;
 let residue = null;
 
+const MUTATIONS = ["fanout-counts", "search"];
+if (process.env.MUTATE && MUTATIONS.indexOf(process.env.MUTATE) === -1) {
+  console.error("Unknown MUTATE=" + process.env.MUTATE + ". Known: " + MUTATIONS.join(", "));
+  process.exit(2);
+}
 const MUTATING = process.env.MUTATE === "fanout-counts";
+const SEARCHING = process.env.MUTATE === "search";
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -169,19 +192,42 @@ async function ledgerCountSince(sinceIso) {
 async function noteRoutine(id) { if (id) residue.record("routines", id); }
 
 (async function main() {
-  const usersResult = await supabase.from("users").select("id, email, role");
-  if (usersResult.error) throw usersResult.error;
-  const subsResult = await supabase.from("subscriptions").select("user_id, status");
-  if (subsResult.error) throw subsResult.error;
-  const activeSubs = (subsResult.data || [])
-    .filter(function (r) { return ["active", "trialing"].indexOf(r.status) !== -1; })
-    .map(function (r) { return r.user_id; });
-  const actor = (usersResult.data || []).filter(function (u) {
-    return activeSubs.indexOf(u.id) !== -1 && String(u.role).toLowerCase() !== "admin";
-  })[0];
-  if (!actor) {
-    console.error("No non-admin account with an active subscription to run a routine as. " +
-      "Every dispatch would be refused not_entitled and nothing here would be tested.");
+  let actor;
+  if (SEARCHING) {
+    /* The search this replaced, verbatim, over the live rows with one
+       simulated subscriber first. In memory only; never written. */
+    console.log("\n!! MUTATION: the old first-match search is back, and a subscriber other than the seed comes first.");
+    const usersResult = await supabase.from("users").select("id, email, role");
+    if (usersResult.error) throw usersResult.error;
+    const subsResult = await supabase.from("subscriptions").select("user_id, status");
+    if (subsResult.error) throw subsResult.error;
+    const simulated = { id: require("crypto").randomUUID(), email: "simulated-subscriber@example.invalid", role: "user" };
+    usersResult.data = [simulated].concat(usersResult.data || []);
+    subsResult.data = [{ user_id: simulated.id, status: "active" }].concat(subsResult.data || []);
+    const activeSubs = (subsResult.data || [])
+      .filter(function (r) { return ["active", "trialing"].indexOf(r.status) !== -1; })
+      .map(function (r) { return r.user_id; });
+    actor = (usersResult.data || []).filter(function (u) {
+      return activeSubs.indexOf(u.id) !== -1 && String(u.role).toLowerCase() !== "admin";
+    })[0];
+  } else {
+    /* The seed account, by email. Refuses and exits — no search — if it is not. */
+    actor = await resolveEntitledAccount(supabase);
+  }
+
+  /* THE PIN. Before the guard is built and before any row is written: the
+     account this run will write under is the seed account, by id, read
+     directly rather than through the helper that chose it. */
+  console.log("\n══ the pin ══");
+  const seedRead = await supabase.from("users").select("id").eq("email", ENTITLED_CHECK_EMAIL);
+  if (seedRead.error) throw seedRead.error;
+  const seedId = seedRead.data && seedRead.data.length === 1 ? String(seedRead.data[0].id).toLowerCase() : null;
+  const actorId = actor ? String(actor.id).toLowerCase() : null;
+  check("the account this run writes under IS the seed account (" + ENTITLED_CHECK_EMAIL + ")",
+    !!seedId && actorId === seedId, "actor " + actorId + ", seed " + seedId);
+  if (!seedId || actorId !== seedId) {
+    console.log("\nSTOPPED before writing anything: the actor is not the seed account.");
+    console.log("CHECKS FAILED: " + failures);
     process.exit(1);
   }
 

@@ -33,11 +33,26 @@
    entitled — which is exactly how the pass behaved before this commit — and the
    refusal assertions must go red. A suite nobody has watched fail is a claim
    about itself rather than about the code.
+
+   THE PASS IS KEPT TO THIS SCRIPT'S TWO ACCOUNTS. runSelfReviewPass takes every
+   account with analytics autonomy on, and the owner has it on; the owner is
+   admin-exempt, so the pass used to generate for them too, with the stub's
+   text. It never did only because production had always written that period's
+   review first — but run between a period's end and production's 07:00 pass,
+   this check would have written the owner's monthly review itself, and
+   production would then have skipped the period as done. The plan lookup the
+   pass asks before any write now refuses every account but the subject and the
+   seed account (checkRunResidue.js, passScope), under MUTATE as well, and the
+   owner's self_reviews and model_calls counts are asserted unchanged.
+
+   The entitled account is the seed account, found by email
+   (resolveEntitledAccount) — never the first entitled account a read returns.
    ══════════════════════════════════════════════════════════════════════════ */
 
 require("dotenv").config();
 
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
+const { createResidueGuard, resolveSubjectAccount, resolveEntitledAccount, passScope, refuseEveryPlan,
+  OWNER_ACCOUNT_ID } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();
 
 const path = require("path");
@@ -79,6 +94,9 @@ require.cache[EXPRESS_PATH].exports = expressWrapper;
 
 process.env.PORT = process.env.CHECK_PORT || "0";
 const server = require(path.join(REPO, "server.js"));
+/* Before anything else can run: until the two accounts are known, every
+   account is out of scope for every pass. */
+server.__setPassPlanLookup(refuseEveryPlan);
 
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(
@@ -170,32 +188,29 @@ async function recordNewRows(guard, userId, sinceIso) {
     process.exit(1);
   }
 
-  if (process.env.MUTATE === "ungate") {
-    server.__setPassPlanLookup(async function () {
-      return { active: true, exempt: false, inactive_reason: null, access_reason: null };
-    });
+  const UNGATED = process.env.MUTATE === "ungate";
+  if (UNGATED) {
     console.log("\n!! MUTATION: the pass is told every account is entitled — the refusal checks must fail.");
   }
 
   console.log("\n══ subjects ══");
   const usersResult = await supabase.from("users").select("id, email, role");
   if (usersResult.error) throw usersResult.error;
-  const subsResult = await supabase.from("subscriptions").select("user_id, status");
-  if (subsResult.error) throw subsResult.error;
-
-  const activeSubs = (subsResult.data || [])
-    .filter(function (r) { return ["active", "trialing"].indexOf(r.status) !== -1; })
-    .map(function (r) { return r.user_id; });
 
   const unentitled = (usersResult.data || []).filter(function (u) { return u.id === SUBJECT_USER_ID; })[0];
-  const paying = (usersResult.data || []).filter(function (u) {
-    return activeSubs.indexOf(u.id) !== -1 && String(u.role).toLowerCase() !== "admin";
-  })[0];
+  /* The seed account, by email. Refuses and exits — no search — if it is not. */
+  const paying = await resolveEntitledAccount(supabase);
   const admin = (usersResult.data || []).filter(function (u) { return String(u.role).toLowerCase() === "admin"; })[0];
 
   if (!unentitled) { console.error("subject " + SUBJECT_USER_ID + " is not in users"); process.exit(1); }
-  if (!paying) { console.error("no non-admin account with an active subscription"); process.exit(1); }
   if (!admin) { console.error("no account with role admin"); process.exit(1); }
+
+  /* The pass may reach these two and nobody else. Under MUTATE=ungate the two
+     are told they are entitled; everyone else is still refused. */
+  const scope = passScope([unentitled.id, paying.id], UNGATED
+    ? async function () { return { active: true, exempt: false, inactive_reason: null, access_reason: null }; }
+    : function (userId) { return server.__selfReviewPlanFor(userId); });
+  server.__setPassPlanLookup(scope.lookup);
 
   console.log("  unentitled : " + unentitled.id + "  (" + unentitled.email + ")");
   console.log("  paying     : " + paying.id + "  (" + paying.email + ")");
@@ -210,16 +225,12 @@ async function recordNewRows(guard, userId, sinceIso) {
   payingResidue.install();
   await payingResidue.sweepPrevious(paying.id);
 
-  /* THE ADMIN IS NOT ENROLLED BY THIS SCRIPT. It is a live account with
-     thousands of real rows in it, and signing it up for a nightly pass to see
-     what happens would be doing real work on somebody's account to satisfy a
-     test.
-
-     It is, however, already enrolled in analytics autonomy of its own accord,
-     so the pass below really does process it — which makes the admin path a
-     live observation rather than a simulation. Both halves are asserted: the
-     answer getUserPlan gives for it, and the fact that the pass did not count
-     it among the accounts it refused. */
+  /* THE ADMIN IS NOT ENROLLED BY THIS SCRIPT, AND THE PASS DOES NOT REACH IT.
+     It is a live account with thousands of real rows in it. It is enrolled in
+     analytics autonomy of its own accord, so the unscoped pass processed it —
+     and, being exempt, generated for it with the stub's text. The scope above
+     turns it away before any write. Its exemption is still asserted here, from
+     the plan lookup the pass would have used; that is a read. */
   console.log("\n══ the entitlement answer each account gets ══");
   const planUnentitled = await server.__selfReviewPlanFor(unentitled.id);
   const planPaying = await server.__selfReviewPlanFor(paying.id);
@@ -233,6 +244,7 @@ async function recordNewRows(guard, userId, sinceIso) {
     planAdmin && ("active=" + planAdmin.active + " exempt=" + planAdmin.exempt));
 
   const before = { unentitled: await countsFor(unentitled.id), paying: await countsFor(paying.id) };
+  const ownerBefore = await countsFor(OWNER_ACCOUNT_ID);
   console.log("\n══ row counts BEFORE ══");
   Object.keys(before).forEach(function (k) {
     console.log("  " + k.padEnd(11) + "  " + SPEND_TABLES.map(function (t) {
@@ -261,12 +273,17 @@ async function recordNewRows(guard, userId, sinceIso) {
   check("at least one account was skipped for no active subscription",
     summary.skippedNotEntitled >= 1, "skippedNotEntitled=" + summary.skippedNotEntitled);
 
-  /* THE ADMIN IS ENROLLED AND WAS PROCESSED, so if the exemption were not
-     honoured here it would show up as a second refusal. Exactly one account in
-     this pass is unentitled — the subject — so exactly one refusal is the
-     assertion that the admin (and the paying account) got through. */
-  check("no entitled account was refused — the admin passed the gate",
-    summary.skippedNotEntitled === 1, "skippedNotEntitled=" + summary.skippedNotEntitled +
+  /* Every account the pass saw beyond these two was turned away by the scope,
+     and of the two, exactly one was refused by the gate: the unentitled
+     subject. The paying account got through. */
+  console.log("  turned away by the scope: " + scope.refused.size + " account(s)" +
+    (scope.refused.has(OWNER_ACCOUNT_ID) ? ", the owner among them" : ""));
+  check("every account beyond this script's two was refused by the scope, before any write",
+    summary.users - 2 === scope.refused.size && !scope.refused.has(unentitled.id) && !scope.refused.has(paying.id),
+    "users=" + summary.users + " refused by scope=" + scope.refused.size);
+  check("of this script's two, only the unentitled subject was refused by the gate",
+    summary.skippedNotEntitled - scope.refused.size === 1,
+    "skippedNotEntitled=" + summary.skippedNotEntitled + " minus " + scope.refused.size + " refused by scope" +
     " (expected exactly 1: only the unentitled subject)");
 
   const after = { unentitled: await countsFor(unentitled.id), paying: await countsFor(paying.id) };
@@ -294,6 +311,16 @@ async function recordNewRows(guard, userId, sinceIso) {
   check("and it was billed, so the gate did not suppress real work",
     after.paying.model_calls > before.paying.model_calls,
     before.paying.model_calls + " → " + after.paying.model_calls);
+
+  /* The tripwire. If a change widens the pass past the scope, the owner's
+     review is what it displaces; this is where that would show. */
+  const ownerAfter = await countsFor(OWNER_ACCOUNT_ID);
+  console.log("\n══ the owner's account ══");
+  console.log("  " + SPEND_TABLES.map(function (t) { return t + ": " + ownerBefore[t] + " → " + ownerAfter[t]; }).join("   "));
+  check("the owner's self_reviews count is unchanged", ownerAfter.self_reviews === ownerBefore.self_reviews,
+    ownerBefore.self_reviews + " → " + ownerAfter.self_reviews);
+  check("the owner's model_calls count is unchanged", ownerAfter.model_calls === ownerBefore.model_calls,
+    ownerBefore.model_calls + " → " + ownerAfter.model_calls);
 
   console.log("\n══ cleanup ══");
   await unenrol();

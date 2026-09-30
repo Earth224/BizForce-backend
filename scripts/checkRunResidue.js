@@ -560,12 +560,165 @@ function createResidueGuard(options) {
   };
 }
 
+/* ═══════════════════════════════════════
+   THE ENTITLED CHECK ACCOUNT, BY NAME.
+
+   Four scripts need an account that holds a real, active subscription:
+   checkEntitlementGate, checkRoutineStepCap, checkSelfReviewEntitlement and
+   checkRemainingSpendPaths. They used to take "the first non-admin user with an
+   active or trialing subscription" out of an unordered read — the same guess
+   the header above calls the bug, one table over. Two of them write under the
+   account they get and their guards delete its rows, and the only account they
+   refused was the owner's. The day a real customer subscribed, the first match
+   could have been that customer.
+
+   The account now comes from supabase/seeds/check_entitled_account.sql and is
+   found by its email. It is accepted only if it is still exactly what that
+   seed made: not an admin (an admin passes by exemption, not by paying), a
+   locked password_hash that no password can match, and one hand-placed
+   subscription that Stripe has never touched. Anything else STOPS the run,
+   naming what was wrong. There is no fallback to searching: a fallback is the
+   defect this replaces. */
+const ENTITLED_CHECK_EMAIL = "check-entitled@bizforceai.invalid";
+
+/* Pure, so each refusal can be shown without touching the database. Returns
+   the list of things wrong with the rows; empty means the account is the seed. */
+function entitledAccountProblems(users, subscriptions) {
+  const problems = [];
+  if (!users || users.length === 0) {
+    return ["no users row has the email " + ENTITLED_CHECK_EMAIL + ". The account comes from " +
+      "supabase/seeds/check_entitled_account.sql; apply it (by hand, in the SQL editor) and run again."];
+  }
+  if (users.length > 1) {
+    return [users.length + " users rows have the email " + ENTITLED_CHECK_EMAIL + " (" +
+      users.map(function (u) { return u.id; }).join(", ") + "); users_email_key should make that impossible."];
+  }
+  const u = users[0];
+  if (String(u.email || "") !== ENTITLED_CHECK_EMAIL) {
+    problems.push("the row found has the email " + JSON.stringify(u.email) + ", not " + ENTITLED_CHECK_EMAIL + ".");
+  }
+  if (String(u.role || "").toLowerCase() === "admin") {
+    problems.push("its role is admin. An admin passes every gate by exemption, so the checks would no " +
+      "longer be testing a paying account.");
+  }
+  const hash = String(u.password_hash || "");
+  if (hash.indexOf("!locked:") !== 0) {
+    problems.push("its password_hash does not start with '!locked:'. It is no longer the seed's locked " +
+      "value, so someone may be able to sign in as it.");
+  }
+  if (hash.length === 60) {
+    problems.push("its password_hash is 60 characters, the one length bcrypt will compare, so a " +
+      "password might match it.");
+  }
+  if (String(u.id).toLowerCase() === OWNER_ACCOUNT_ID) {
+    problems.push("it is the owner's account (" + OWNER_ACCOUNT_ID + ").");
+  }
+  const subjectEnv = (process.env[SUBJECT_ENV] || "").trim().toLowerCase();
+  if (subjectEnv && String(u.id).toLowerCase() === subjectEnv) {
+    problems.push("it is the same account as " + SUBJECT_ENV + ", which must be the UNentitled one.");
+  }
+  const subs = subscriptions || [];
+  if (subs.length !== 1) {
+    problems.push("it holds " + subs.length + " subscriptions row(s); the seed made exactly one.");
+    return problems;
+  }
+  const s = subs[0];
+  if (s.status !== "active") {
+    problems.push("its subscription's status is " + JSON.stringify(s.status) + ", not \"active\".");
+  }
+  if (s.plan !== "all_access") {
+    problems.push("its subscription's plan is " + JSON.stringify(s.plan) + ", not \"all_access\".");
+  }
+  if (s.stripe_subscription_id != null) {
+    problems.push("its subscription carries stripe_subscription_id " + JSON.stringify(s.stripe_subscription_id) +
+      ". Stripe manages it now; it may be a real subscription.");
+  }
+  if (s.stripe_customer_id != null) {
+    problems.push("its subscription carries stripe_customer_id " + JSON.stringify(s.stripe_customer_id) +
+      ". It is linked to a Stripe customer; it may be a real subscription.");
+  }
+  return problems;
+}
+
+/* Reads the two tables and either returns { id, email, role } or ends the
+   process having written nothing. Call it before building any guard or
+   writing any row. */
+async function resolveEntitledAccount(supabase) {
+  const users = await supabase.from("users")
+    .select("id, email, role, password_hash").eq("email", ENTITLED_CHECK_EMAIL);
+  if (users.error) {
+    refuse(["REFUSING TO RUN: could not read the entitled check account: " + users.error.message,
+      "Nothing has been written or deleted."]);
+  }
+  let subs = { data: [] };
+  if ((users.data || []).length === 1) {
+    subs = await supabase.from("subscriptions")
+      .select("status, plan, stripe_subscription_id, stripe_customer_id").eq("user_id", users.data[0].id);
+    if (subs.error) {
+      refuse(["REFUSING TO RUN: could not read the entitled check account's subscription: " + subs.error.message,
+        "Nothing has been written or deleted."]);
+    }
+  }
+  const problems = entitledAccountProblems(users.data, subs.data);
+  if (problems.length) {
+    refuse(["REFUSING TO RUN: the entitled check account is not the seed account."]
+      .concat(problems.map(function (p) { return "  - " + p; }))
+      .concat(["", "There is no fallback to searching for another entitled account.",
+        "Nothing has been written or deleted."]));
+  }
+  const u = users.data[0];
+  return { id: String(u.id).toLowerCase(), email: u.email, role: u.role };
+}
+
+/* ═══════════════════════════════════════
+   THE BACKGROUND PASSES, KEPT TO THE CHECK'S OWN ACCOUNTS.
+
+   runSelfReviewPass and runStoreProposalPass choose their accounts from
+   agent_autonomy — every account that opted in, the owner included — and a
+   check that drives them for real drives them over everybody. The owner is
+   admin-exempt, so the entitlement gate lets them through, and from there the
+   pass writes under them with whatever the check has stubbed in: a stubbed
+   self-review in the window before production's own run would have taken the
+   place of the real one for that period, permanently.
+
+   Both passes ask one thing about every account before anything that can
+   write or spend: the plan lookup, which server.js exports as
+   __setPassPlanLookup precisely so a check can answer it. This answers
+   "refused" for every account not named in `allowed`, so the pass skips them
+   there — before a key is read, a model is called or a row is written — and
+   records who it turned away so the check can count them. Nothing in
+   server.js changes. */
+const OUT_OF_SCOPE_PLAN = { plan: null, config: null, subscription: null, active: false, expired: false,
+  inactive_reason: "outside_check_scope", exempt: false, access_reason: null };
+
+function passScope(allowed, inScopeLookup) {
+  const allow = new Set(allowed.map(function (id) { return String(id).toLowerCase(); }));
+  const refused = new Set();
+  return {
+    refused: refused,
+    lookup: async function (userId) {
+      const id = String(userId || "").toLowerCase();
+      if (!allow.has(id)) { refused.add(id); return Object.assign({}, OUT_OF_SCOPE_PLAN); }
+      return inScopeLookup(userId);
+    }
+  };
+}
+
+/* Installed the moment server.js is loaded, before any account is known: until
+   a check has named its accounts, every account is out of scope. */
+function refuseEveryPlan() { return Promise.resolve(Object.assign({}, OUT_OF_SCOPE_PLAN)); }
+
 module.exports = {
   createResidueGuard: createResidueGuard,
   journalPath: journalPath,
   resolveSubjectAccount: resolveSubjectAccount,
+  resolveEntitledAccount: resolveEntitledAccount,
+  passScope: passScope,
+  refuseEveryPlan: refuseEveryPlan,
+  entitledAccountProblems: entitledAccountProblems,
   assertNotOwner: assertNotOwner,
   isSubjectRow: isSubjectRow,
   OWNER_ACCOUNT_ID: OWNER_ACCOUNT_ID,
+  ENTITLED_CHECK_EMAIL: ENTITLED_CHECK_EMAIL,
   SUBJECT_ENV: SUBJECT_ENV
 };

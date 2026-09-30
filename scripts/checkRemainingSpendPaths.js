@@ -22,6 +22,26 @@
    case would prove the gate by generating real outreach drafts on the owner's
    live account, which is not a trade worth making for a green tick.
 
+   THE LEAD READ IS INTERCEPTED, AND DRY RUN IS FORCED. The intent floor above
+   is a threshold, not a wall: a lead scoring exactly 100 still passes it, and
+   bsky_leads is filled continuously by LeadRadar. And DRY RUN is not "writes
+   nothing" — convertSingleLead still calls the model and writes ai_tasks and
+   sales_lead_pipeline rows under the owner in a dry run; only the send and the
+   remaining writes are held back. Nor was DRY RUN this script's choice: it came
+   from SALES_AUTOLOOP_DRY_RUN being unset, and set to "false" the pass would
+   have POSTED the stub's text as a reply from the owner's accounts. So every
+   Supabase client server.js creates in this process answers the bsky_leads
+   read with no rows — the pass still runs every gate, reaches the read (which
+   is asserted), and has nothing to draft — and SALES_AUTOLOOP_DRY_RUN is set to
+   "true" here, before each sales run, whatever the environment says.
+
+   THE STORE PASS IS KEPT TO THE SUBJECT. runStoreProposalPass takes every
+   account with store autonomy on, and the owner has it on. It skipped them only
+   because they hold no stored Anthropic key; store one and this check would
+   have written agent_proposals under them. The plan lookup the pass asks before
+   the key read now refuses every account but the subject
+   (checkRunResidue.js, passScope), under MUTATE as well.
+
    THE OWNER'S ACCOUNT IS READ, NEVER CLEANED. scripts/checkRunResidue.js
    refuses to build a guard whose subject is the owner — deliberately, since
    that guard deletes by time window. So the owner's rows are counted before and
@@ -35,11 +55,23 @@
 
 require("dotenv").config();
 
-const { createResidueGuard, resolveSubjectAccount, OWNER_ACCOUNT_ID } = require("./checkRunResidue");
+const { createResidueGuard, resolveSubjectAccount, resolveEntitledAccount, passScope, refuseEveryPlan,
+  OWNER_ACCOUNT_ID } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();
 
 /* Before server.js reads it. See the header. */
 process.env.OUTREACH_MIN_INTENT = "100";
+
+/* Forced, not inherited. Re-checked before every sales run below. */
+const SALES_DRY_RUN_FROM_ENV = process.env.SALES_AUTOLOOP_DRY_RUN;
+process.env.SALES_AUTOLOOP_DRY_RUN = "true";
+function forceSalesDryRun() {
+  process.env.SALES_AUTOLOOP_DRY_RUN = "true";
+  if (process.env.SALES_AUTOLOOP_DRY_RUN !== "true") {
+    console.error("REFUSING TO RUN the sales pass: SALES_AUTOLOOP_DRY_RUN could not be forced to \"true\". Nothing was run.");
+    process.exit(1);
+  }
+}
 
 const path = require("path");
 const REPO = path.join(__dirname, "..");
@@ -67,6 +99,34 @@ function FakeAnthropic(options) {
 Object.keys(RealAnthropic).forEach(function (k) { FakeAnthropic[k] = RealAnthropic[k]; });
 require.cache[SDK_PATH].exports = FakeAnthropic;
 
+/* The lead read, answered with nothing. See the header. Every client made
+   after this point — server.js's included — gets it. */
+const SUPABASE_JS_PATH = require.resolve("@supabase/supabase-js", { paths: [REPO] });
+const realSupabaseJs = require(SUPABASE_JS_PATH);
+let leadReads = 0;
+function noRows() {
+  const q = new Proxy(function () {}, {
+    get: function (target, key) {
+      if (key === "then") {
+        return function (resolve, reject) { return Promise.resolve({ data: [], error: null, count: 0 }).then(resolve, reject); };
+      }
+      return function () { return q; };
+    }
+  });
+  return q;
+}
+require.cache[SUPABASE_JS_PATH].exports = Object.assign({}, realSupabaseJs, {
+  createClient: function () {
+    const client = realSupabaseJs.createClient.apply(this, arguments);
+    const realFrom = client.from.bind(client);
+    client.from = function (table) {
+      if (table === "bsky_leads") { leadReads++; return noRows(); }
+      return realFrom(table);
+    };
+    return client;
+  }
+});
+
 const EXPRESS_PATH = require.resolve("express", { paths: [REPO] });
 const realExpress = require(EXPRESS_PATH);
 let app = null;
@@ -80,6 +140,8 @@ require.cache[EXPRESS_PATH].exports = expressWrapper;
 
 process.env.PORT = process.env.CHECK_PORT || "0";
 const server = require(path.join(REPO, "server.js"));
+/* Until an account is named, every pass refuses every account. */
+server.__setPassPlanLookup(refuseEveryPlan);
 
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(
@@ -188,18 +250,13 @@ async function recordNewRows(userId, sinceIso) {
   console.log("\n══ subjects ══");
   const usersResult = await supabase.from("users").select("id, email, role");
   if (usersResult.error) throw usersResult.error;
-  const subsResult = await supabase.from("subscriptions").select("user_id, status");
-  if (subsResult.error) throw subsResult.error;
-  const activeSubs = (subsResult.data || [])
-    .filter(function (r) { return ["active", "trialing"].indexOf(r.status) !== -1; })
-    .map(function (r) { return r.user_id; });
 
   const unentitled = (usersResult.data || []).filter(function (u) { return u.id === SUBJECT_USER_ID; })[0];
-  const paying = (usersResult.data || []).filter(function (u) {
-    return activeSubs.indexOf(u.id) !== -1 && String(u.role).toLowerCase() !== "admin";
-  })[0];
+  /* The seed account, by email. Refuses and exits — no search — if it is not. */
+  const paying = await resolveEntitledAccount(supabase);
   const admin = (usersResult.data || []).filter(function (u) { return String(u.role).toLowerCase() === "admin"; })[0];
-  if (!unentitled || !paying || !admin) { console.error("could not find all three subject accounts"); process.exit(1); }
+  if (!unentitled || !admin) { console.error("could not find the subject account and the admin account"); process.exit(1); }
+  console.log("  SALES_AUTOLOOP_DRY_RUN from the environment: " + JSON.stringify(SALES_DRY_RUN_FROM_ENV) + " — forced to \"true\" here");
 
   console.log("  unentitled : " + unentitled.id + "  (" + unentitled.email + ")");
   console.log("  paying     : " + paying.id + "  (" + paying.email + ")");
@@ -258,8 +315,11 @@ async function recordNewRows(userId, sinceIso) {
   const salesBefore = await countsFor(admin.id);
   let sinceIso = new Date(Date.now() - 2000).toISOString();
 
-  /* (a) entitled — the real answer, admin exemption and all. */
+  /* (a) entitled — the real answer, admin exemption and all. The lead read
+     comes back empty, so getting through the gate drafts nothing. */
   server.__setPassPlanLookup(null);
+  forceSalesDryRun();
+  const leadReadsBefore = leadReads;
   const salesEntitled = await server.__runSalesAutoConvert();
   console.log("    entitled run: " + JSON.stringify(salesEntitled));
   check("the admin is processed rather than skipped",
@@ -268,6 +328,8 @@ async function recordNewRows(userId, sinceIso) {
   check("the summary reports a skippedNotEntitled count at all",
     Object.prototype.hasOwnProperty.call(salesEntitled, "skippedNotEntitled"),
     Object.keys(salesEntitled).join(", "));
+  check("it reached its lead read, and the read was intercepted — no lead could be drafted",
+    leadReads > leadReadsBefore, "intercepted bsky_leads reads: " + (leadReads - leadReadsBefore));
 
   /* (b) not entitled. Under MUTATE the gate is gone, so this must fail. */
   server.__setPassPlanLookup(async function () {
@@ -275,6 +337,7 @@ async function recordNewRows(userId, sinceIso) {
       ? { active: true, exempt: false, inactive_reason: null, access_reason: null }
       : { active: false, exempt: false, inactive_reason: "no_subscription", access_reason: null };
   });
+  forceSalesDryRun();
   const salesRefused = await server.__runSalesAutoConvert();
   console.log("    unentitled run: " + JSON.stringify(salesRefused));
   check("an unentitled account is skipped", salesRefused.skippedNotEntitled === 1,
@@ -284,13 +347,14 @@ async function recordNewRows(userId, sinceIso) {
 
   /* (c) the plan cannot be read — fail closed, and counted as a failure. */
   server.__setPassPlanLookup(async function () { throw new Error("simulated entitlement read failure"); });
+  forceSalesDryRun();
   const salesBroken = await server.__runSalesAutoConvert();
   console.log("    unreadable-plan run: " + JSON.stringify(salesBroken));
   check("an unreadable plan fails closed — skipped", salesBroken.skippedNotEntitled === 1,
     "skippedNotEntitled=" + salesBroken.skippedNotEntitled);
   check("an unreadable plan counts as a failure, so the pass cannot close clean",
     salesBroken.failed >= 1, "failed=" + salesBroken.failed);
-  server.__setPassPlanLookup(null);
+  server.__setPassPlanLookup(refuseEveryPlan);
 
   const salesAfter = await countsFor(admin.id);
   console.log("\n    owner rows across all three sales runs:");
@@ -320,23 +384,31 @@ async function recordNewRows(userId, sinceIso) {
   }
 
   try {
-    if (MUTATING) {
-      server.__setPassPlanLookup(async function () {
-        return { active: true, exempt: false, inactive_reason: null, access_reason: null };
-      });
-    }
+    /* The subject only. The owner, enrolled of their own accord, is turned
+       away before their key is read. Under MUTATE the subject is told it is
+       entitled; everyone else is still refused. */
+    const storeScope = passScope([unentitled.id], MUTATING
+      ? async function () { return { active: true, exempt: false, inactive_reason: null, access_reason: null }; }
+      : function (userId) { return server.__selfReviewPlanFor(userId); });
+    server.__setPassPlanLookup(storeScope.lookup);
     const storeSummary = await server.__runStoreProposalPass();
     console.log("    summary: " + JSON.stringify(storeSummary));
-    server.__setPassPlanLookup(null);
+    server.__setPassPlanLookup(refuseEveryPlan);
+    console.log("    turned away by the scope: " + storeScope.refused.size + " account(s)" +
+      (storeScope.refused.has(OWNER_ACCOUNT_ID) ? ", the owner among them" : ""));
 
     check("the summary reports a skippedNotEntitled count",
       Object.prototype.hasOwnProperty.call(storeSummary, "skippedNotEntitled"),
       Object.keys(storeSummary).join(", "));
     check("the unentitled account is skipped for entitlement",
       storeSummary.skippedNotEntitled >= 1, "skippedNotEntitled=" + storeSummary.skippedNotEntitled);
-    check("the admin is not among the skipped — exactly one account was refused",
-      storeSummary.skippedNotEntitled === 1,
-      "skippedNotEntitled=" + storeSummary.skippedNotEntitled + " (expected exactly 1)");
+    check("every account beyond the subject was refused by the scope, before its key was read",
+      storeSummary.users - 1 === storeScope.refused.size && !storeScope.refused.has(unentitled.id),
+      "users=" + storeSummary.users + " refused by scope=" + storeScope.refused.size);
+    check("the subject is the one account the gate itself refused",
+      storeSummary.skippedNotEntitled - storeScope.refused.size === 1,
+      "skippedNotEntitled=" + storeSummary.skippedNotEntitled + " minus " + storeScope.refused.size +
+      " refused by scope (expected exactly 1)");
 
     await recordNewRows(unentitled.id, sinceIso);
     const storeAfter = { unentitled: await countsFor(unentitled.id), admin: await countsFor(admin.id) };

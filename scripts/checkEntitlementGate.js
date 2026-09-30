@@ -36,7 +36,7 @@ require("dotenv").config();
 /* Nothing here should write a row. The guard is installed anyway: if some
    layer ever does, it is cleaned up on every way out rather than left in a
    real account. See scripts/checkRunResidue.js. */
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
+const { createResidueGuard, resolveSubjectAccount, resolveEntitledAccount } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();
 
 const path = require("path");
@@ -206,27 +206,22 @@ async function countsFor(userId) {
 
   console.log("\n══ subjects ══");
 
-  /* Discovered, not hardcoded: a check that names ids inline goes quietly
-     wrong the day somebody's subscription changes. */
+  /* Named, not discovered. The paying account used to be the first non-admin
+     account with an active subscription out of an unordered read — which, the
+     day a real customer subscribed, could have been them. It is the seed
+     account (supabase/seeds/check_entitled_account.sql), found by email; if it
+     is not exactly what the seed made, resolveEntitledAccount stops the run
+     rather than looking for another. The admin is only read from here. */
   const usersResult = await supabase.from("users").select("id, email, role");
   if (usersResult.error) throw usersResult.error;
-  const subsResult = await supabase.from("subscriptions").select("user_id, plan, status");
-  if (subsResult.error) throw subsResult.error;
-
-  const activeSubUserIds = (subsResult.data || [])
-    .filter(function (r) { return ["active", "trialing"].indexOf(r.status) !== -1; })
-    .map(function (r) { return r.user_id; });
 
   const unentitled = (usersResult.data || []).filter(function (u) { return u.id === SUBJECT_USER_ID; })[0];
-  const paying = (usersResult.data || []).filter(function (u) {
-    return activeSubUserIds.indexOf(u.id) !== -1 && String(u.role).toLowerCase() !== "admin";
-  })[0];
+  const paying = await resolveEntitledAccount(supabase);
   const admin = (usersResult.data || []).filter(function (u) {
     return String(u.role).toLowerCase() === "admin";
   })[0];
 
   if (!unentitled) { console.error("The subject account " + SUBJECT_USER_ID + " is not in users."); process.exit(1); }
-  if (!paying) { console.error("No non-admin account with an active subscription to test the entitled path with."); process.exit(1); }
   if (!admin) { console.error("No account with role 'admin' to test the exemption with."); process.exit(1); }
 
   console.log("  unentitled : " + unentitled.id + "  (" + unentitled.email + ", role " + unentitled.role + ")");
