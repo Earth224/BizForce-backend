@@ -9,7 +9,9 @@ const assert = require("assert");
 const { execSync } = require("child_process");
 
 const REPO = "C:/Users/ALGORITHM/BizForce-backend";
-const after = fs.readFileSync(REPO + "/server.js", "utf8");
+// LF whatever the checkout: a core.autocrlf=true working copy is CRLF, and the
+// boundaries and anchors below are written with \n.
+const after = fs.readFileSync(REPO + "/server.js", "utf8").replace(/\r\n/g, "\n");
 const before = execSync("git show HEAD:server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
 
 /* ── extraction (same machinery as tool-run-all.test.js) ────────────────── */

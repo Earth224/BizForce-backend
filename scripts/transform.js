@@ -132,6 +132,9 @@ function transformRoute(text, path) {
 const group = process.argv.slice(2);
 assert(group.length, "pass route paths");
 let src = fs.readFileSync(FILE, "utf8");
+// Work in LF (the anchors below are written with \n); write back in the file's own endings.
+const CRLF = src.indexOf("\r\n") !== -1;
+src = src.replace(/\r\n/g, "\n");
 // process in reverse file order so earlier indices stay valid
 const ordered = group.map(p => ({ p, b: routeBounds(src, p) })).sort((a, b) => b.b.start - a.b.start);
 const report = [];
@@ -140,5 +143,5 @@ for (const { p, b } of ordered) {
   src = src.slice(0, b.start) + text + src.slice(b.end);
   report.push(p + ": startToolRun inserted, " + count502 + " x 502 guarded, success wrapped, catch guarded");
 }
-fs.writeFileSync(FILE, src);
+fs.writeFileSync(FILE, CRLF ? src.replace(/\n/g, "\r\n") : src);
 report.forEach(r => console.log(r));

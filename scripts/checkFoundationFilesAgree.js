@@ -129,7 +129,7 @@ function tables(sql) {
   return out;
 }
 
-function load(file) { return strip(fs.readFileSync(file, "utf8")); }
+function load(file) { return strip(fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n")); }   // LF, so the mutations' \n anchors match a CRLF checkout
 
 let sql000 = load(FILE_000);
 const sql071 = load(FILE_071);

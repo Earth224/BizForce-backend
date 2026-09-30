@@ -8,7 +8,9 @@ const assert = require("assert");
 const { execSync } = require("child_process");
 
 const FE = "C:/Users/ALGORITHM/BizForce-fronyend";
-const after = fs.readFileSync(FE + "/scripts/agent-profile.js", "utf8");
+// LF whatever the checkout: a core.autocrlf=true working copy is CRLF, and the
+// boundaries and anchors below are written with \n.
+const after = fs.readFileSync(FE + "/scripts/agent-profile.js", "utf8").replace(/\r\n/g, "\n");
 const before = execSync("git show HEAD:scripts/agent-profile.js", { cwd: FE, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
 
 function braceBlock(src, start) {

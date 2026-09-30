@@ -1,7 +1,10 @@
 "use strict";
 const fs=require("fs");const vm=require("vm");const assert=require("assert");const {execSync}=require("child_process");
 const REPO="C:/Users/ALGORITHM/BizForce-backend";
-const after=fs.readFileSync(REPO+"/server.js","utf8");
+// A Windows checkout (core.autocrlf=true) has CRLF; the committed blob, and so
+// `before`, is LF. Reading `after` as LF keeps the two comparable and lets
+// callers match multi-line source text either way.
+const after=fs.readFileSync(REPO+"/server.js","utf8").replace(/\r\n/g,"\n");
 const before=execSync("git show HEAD:server.js",{cwd:REPO,maxBuffer:64*1024*1024}).toString("utf8");
 /* ── extraction ─────────────────────────────────────────────────────────── */
 function braceMatch(src, openIdx) {
@@ -34,15 +37,14 @@ function definitionOfRaw(src, name) {
   while ((m = re.exec(src)) && insideSpan(src, m.index)) { /* a local at column 0, not a definition */ }
   if (m) {
     const eq = m.index + m[0].length;
-    // statement ends at the first ";\n" followed by a column-0 char or blank line
-    let from = eq;
-    for (;;) {
-      const semi = src.indexOf(";\n", from);
-      if (semi === -1) return null;
-      const nextCh = src[semi + 2];
-      if (nextCh === undefined || nextCh === "\n" || /[^\s]/.test(nextCh)) return src.slice(m.index, semi + 1);
-      from = semi + 1;
+    // statement ends at the first ";" + line break (LF or CRLF) followed by a column-0 char or blank line
+    const brk = /;\r?\n/g; brk.lastIndex = eq;
+    let b;
+    while ((b = brk.exec(src))) {
+      const nextCh = src[b.index + b[0].length];
+      if (nextCh === undefined || nextCh === "\n" || nextCh === "\r" || /[^\s]/.test(nextCh)) return src.slice(m.index, b.index + 1);
     }
+    return null;
   }
   return null;
 }
@@ -51,7 +53,7 @@ function routeCode(src, path) {
   const start = src.indexOf(sig);
   assert(start > 0, "route not found " + path);
   const end = braceMatch(src, src.indexOf("{", start));
-  assert.strictEqual(src.slice(end, end + 3), ");\n");
+  assert(/^\);\r?\n/.test(src.slice(end, end + 4)), "route did not end where expected " + path);
   return src.slice(start, end + 2);
 }
 const STUBS = new Set(["supabase", "nowIso", "console", "process", "require", "module", "callAnthropicText",

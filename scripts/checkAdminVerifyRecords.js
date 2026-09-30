@@ -74,7 +74,9 @@ function check(label, ok, detail) {
 
 /* ── the route, lifted out of the source ─────────────────────────────────── */
 const STRIPPED = "d407816";
-const SRC_NOW = fs.readFileSync(path.join(REPO, "server.js"), "utf8");
+// LF whatever the checkout: a core.autocrlf=true working copy is CRLF, and the
+// boundaries and anchors below are written with \n.
+const SRC_NOW = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
 const SRC_OLD = execSync("git show " + STRIPPED + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
 
 function routeSource(src) {
