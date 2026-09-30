@@ -36251,6 +36251,36 @@ app.post("/api/content-library/:id/external-published", requireAuth, async funct
       });
     }
 
+    // The URL must be on the post's own site. It is not a note: the next
+    // article generate-post writes for this property lists it as a link target
+    // and tells the model to copy the href exactly, so a URL on some other host
+    // would go into published work as an off-site or broken link.
+    //
+    // Compared in the form site values are stored in — canonicalSiteHost's bare
+    // lowercase hostname with a leading www. removed — so www.example.com
+    // matches example.com: the system already treats them as one property, and
+    // every site value is produced by stripping it. Any other subdomain is
+    // refused. blog.example.com or shop.example.com is often a separate property
+    // or a third-party host, generate-post would give it a site of its own, and
+    // a wrong accept costs a bad link where a wrong refusal costs a retry.
+    // Clearing is not checked: null has no host.
+    if (!clearing) {
+      var expectedSite = String(existing.site).trim().toLowerCase().replace(/^www\./, "");
+      var gotHost = canonicalSiteHost(externalUrl);
+      if (gotHost !== expectedSite) {
+        var gotLabel;
+        try { gotLabel = new URL(externalUrl).hostname.toLowerCase(); } catch (parseError) { gotLabel = null; }
+        return res.status(422).json({
+          error: gotLabel
+            ? "external_url is on " + gotLabel + ", but this post was written for " + expectedSite +
+              ". Send the URL where it went live on " + expectedSite + " (www." + expectedSite + " is accepted; other subdomains are not)."
+            : "external_url could not be read as a URL with a host. Send the URL where it went live on " + expectedSite + ".",
+          expected_site: expectedSite,
+          got_host: gotLabel
+        });
+      }
+    }
+
     // Both columns always move together — a URL with no timestamp, or a
     // timestamp with no URL, is a row no reader knows how to interpret.
     // external_published_at is derived here rather than accepted from the
