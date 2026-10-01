@@ -397,8 +397,8 @@ async function startLeadRadar() {
   setInterval(radarTick, 300000);
 }
 
-/* The four values the scoring prompt tells the model to choose from, and the
-   only four this file will persist. Written out literally rather than derived
+/* The values the scoring prompt tells the model to choose from, and the only
+   ones this file will persist. Written out literally rather than derived
    from the prompt string, so that editing one without the other is a visible
    mismatch between two adjacent lists instead of a silent widening of what
    counts as a product.
@@ -406,7 +406,8 @@ async function startLeadRadar() {
    Order and spelling match the prompt's closing line exactly. "none" is a
    member: it is the value the prompt asks for on teachers and sellers, and the
    value anything unrecognised is stored as. */
-const SCORER_ALLOWED_PRODUCTS = ["War Horse", "Tongkat Ali", "Quantum Jumping book", "none"];
+const SCORER_ALLOWED_PRODUCTS = ["War Horse", "War Horse Black", "Tongkat Ali", "Sword Vitality XXL Xtreme",
+  "War Horse Xtreme", "War Horse Midnight", "Quantum Jumping book", "none"];
 
 /* The only two answers the suitability screen may give. Just the exact string
    "SAFE" clears a lead for outreach; this list exists so an off-contract answer
@@ -599,10 +600,23 @@ async function scoreNewLeads() {
         var lang    = lead.lang || "unknown";
 
         var prompt =
-          "You are a buyer-intent classifier for three products:\n" +
-          "- War Horse: a natural male vitality and energy supplement\n" +
-          "- Tongkat Ali: a natural herbal supplement for male energy and libido\n" +
+          /* The six Mr. Earth Rose products as MrEarthRose.com lists them, and
+             the book. A name alone gives the model nothing to choose on — "War
+             Horse Xtreme" and "War Horse Midnight" differ in what they ARE, not
+             in what they are called — so each line says what form the product
+             takes, in the site's own words. Nothing here is a claim the site
+             does not make. The three topicals are labelled For External Use
+             Only, and say so, so a topical is never matched to a post about
+             something taken by mouth, or the other way round. */
+          "You are a buyer-intent classifier for seven products:\n" +
+          "- War Horse: a natural male vitality and energy supplement, sold as a liquid herbal shot\n" +
+          "- War Horse Black: an extra-strength 2 oz liquid herbal shot in the War Horse line\n" +
+          "- Tongkat Ali: a natural herbal supplement for male energy and libido, sold by the bottle as Tongkat Ali Supreme\n" +
+          "- Sword Vitality XXL Xtreme: a topical blend of botanical oils, the flagship Mr. Earth Rose formula; for external use only\n" +
+          "- War Horse Xtreme: a 5 oz topical cream of botanicals and amino acids, the newest and most advanced War Horse topical; for external use only\n" +
+          "- War Horse Midnight: a 2 fl oz intimate vitality oil for men, for external use only, built around control and pacing: slowing down, pausing, and choosing when the moment ends\n" +
           "- Quantum Jumping book: an esoteric self-help / manifestation book\n\n" +
+          "Choose the product by what the post is about. The liquid shots and Tongkat Ali are taken by mouth; Sword Vitality XXL Xtreme, War Horse Xtreme and War Horse Midnight are topicals applied to the body and are never taken by mouth. Never suggest a topical for a post about something to drink, swallow or take, and never suggest a shot or Tongkat Ali for a post about something to apply. Suggest War Horse Midnight only for a post about control or pacing. If nothing in the post points to a topical, choose among War Horse, War Horse Black and Tongkat Ali.\n\n" +
           "BEFORE ANY OF THE THREE JUDGEMENTS BELOW — LANGUAGE.\n" +
           "The Language line gives the language code the post was captured with. If it is anything other than English, translate the post into English internally BEFORE you answer any of the three questions below, and apply all three judgements to the translated meaning rather than to the words you happen to recognise in the original.\n" +
           "A post you have only partly read is not a post that has been cleared. A non-English post is NEVER given the benefit of the doubt on safety: if translating still leaves you unsure what is being described, that is UNSAFE, not SAFE. Every refusal rule below applies to the MEANING of the post, never to its English wording.\n\n" +
@@ -617,7 +631,7 @@ async function scoreNewLeads() {
           "Only assign a product tag to genuine seekers. For teachers/sellers set product to 'none'.\n\n" +
 
           "SECOND, SEPARATE JUDGEMENT — SUITABILITY.\n" +
-          "Decide whether this person is a SAFE recipient of an unsolicited PUBLIC reply from a stranger that mentions a supplement or a book.\n\n" +
+          "Decide whether this person is a SAFE recipient of an unsolicited PUBLIC reply from a stranger that mentions a supplement, a topical product or a book.\n\n" +
           "This is NOT the same question as intent, and it is not a stricter version of it. Someone can want help badly and still be a person nobody should approach this way. Judge it on its own evidence, and never let a high score pull this answer toward SAFE.\n\n" +
           "Answer UNSAFE whenever ANY of the following is true, no matter how high the score:\n" +
           "- The post mentions prescription medication, psychiatric medication, hormone therapy, birth control, or any named medical condition or diagnosis.\n" +
@@ -643,7 +657,7 @@ async function scoreNewLeads() {
           "Source: " + source + ", " + discovery + "\n" +
           "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
-          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | Tongkat Ali | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
+          "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | War Horse Black | Tongkat Ali | Sword Vitality XXL Xtreme | War Horse Xtreme | War Horse Midnight | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
 
         var response = await createScoringMessage({
           model:      "claude-sonnet-4-6",
@@ -733,7 +747,7 @@ async function scoreNewLeads() {
           console.warn("[LeadRadar] lead " + lead.id + ": score " + JSON.stringify(rawScore) + " coerced to " + score);
         }
         if (product !== (result ? result.product : undefined)) {
-          console.warn("[LeadRadar] lead " + lead.id + ": product " + JSON.stringify(result ? result.product : undefined) + " is not one of the four allowed values, stored as none");
+          console.warn("[LeadRadar] lead " + lead.id + ": product " + JSON.stringify(result ? result.product : undefined) + " is not one of the allowed values, stored as none");
         }
         // Separate from the value itself: an off-contract answer and a genuine
         // "UNSAFE" both store false, and only this line tells them apart. If

@@ -36838,10 +36838,14 @@ async function canSendOutreach(userId, lead) {
 const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
 
 /* Which offer a lead gets drafted against, keyed on the scorer's
-   suggested_product. Two products share one instruction because they share one
-   compliance regime — both are supplements sold from MrEarthRose.com, and the
-   structure-function language, the disease-claim ban and the prescription-drug
-   comparison ban all apply identically to each. The book is a different offer
+   suggested_product. The six Mr. Earth Rose products share one instruction
+   because they share one compliance regime — all are sold from
+   MrEarthRose.com, and the structure-function language, the disease-claim ban
+   and the prescription-drug comparison ban apply identically to each. Three of
+   them are topicals, labelled For External Use Only; the instruction says
+   nothing about form, so OUTREACH_PRODUCT_FACTS below tells the drafter what
+   each product is, and a topical is never written up as something to take.
+   The book is a different offer
    under different rules entirely, so it gets its own instruction rather than a
    conditional clause inside the supplement one.
 
@@ -36850,7 +36854,22 @@ const OUTREACH_SENDABLE_SOURCES = ["bluesky", "mastodon"];
    nothing to draft. The values are the scorer's exact strings; leadRadar.js
    already refuses to store anything off-list, so an exact match here cannot be
    defeated by a near-miss upstream. */
-const OUTREACH_SUPPLEMENT_PRODUCTS = ["War Horse", "Tongkat Ali"];
+const OUTREACH_SUPPLEMENT_PRODUCTS = ["War Horse", "War Horse Black", "Tongkat Ali", "Sword Vitality XXL Xtreme",
+  "War Horse Xtreme", "War Horse Midnight"];
+
+/* What each product IS, in MrEarthRose.com's own words, handed to the drafter
+   with the lead. The name alone does not say whether a product is swallowed or
+   applied, and the label on three of them says For External Use Only. Keyed on
+   the same exact strings as the list above; nothing here is a claim the site
+   does not make. */
+const OUTREACH_PRODUCT_FACTS = {
+  "War Horse":                 "a liquid herbal shot, taken by mouth",
+  "War Horse Black":           "an extra-strength 2 oz liquid herbal shot, taken by mouth",
+  "Tongkat Ali":               "Tongkat Ali Supreme, a vitality formula sold by the bottle, taken by mouth",
+  "Sword Vitality XXL Xtreme": "a topical blend of botanical oils, the flagship Mr. Earth Rose formula. For External Use Only: never describe it as taken, drunk or swallowed",
+  "War Horse Xtreme":          "a 5 oz topical cream of botanicals and amino acids. For External Use Only: never describe it as taken, drunk or swallowed",
+  "War Horse Midnight":        "a 2 fl oz intimate vitality oil for men, positioned around control and pacing. For External Use Only: never describe it as taken, drunk or swallowed"
+};
 const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
 
 /* How old a POST may be and still be worth replying to, in days. Measured on
@@ -37337,7 +37356,10 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "Matched keyword: " + (lead.matched_keyword || "") + "\n" +
     "Intent score: " + (lead.intent_score != null ? lead.intent_score : "unscored") + "\n" +
     "Intent reason: " + (lead.intent_reason || "") + "\n" +
-    "Suggested product interest: " + (lead.suggested_product || "none");
+    "Suggested product interest: " + (lead.suggested_product || "none") +
+    (OUTREACH_PRODUCT_FACTS[lead.suggested_product]
+      ? "\nWhat the product is (from MrEarthRose.com): " + OUTREACH_PRODUCT_FACTS[lead.suggested_product]
+      : "");
 
   /* Two instructions, chosen by offer, rather than one instruction carrying a
      conditional. The supplement text below is unchanged to the character.
