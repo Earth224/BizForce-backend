@@ -41,7 +41,7 @@ const {
 // while looking correct.
 const { Webhook: SvixWebhook } = require("svix");
 const { DateTime } = require("luxon");
-const { buildAgentSystemPrompt } = require("./config/brain");
+const { buildAgentSystemPrompt, useBillingPlans } = require("./config/brain");
 const { RichText } = require("@atproto/api");
 const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
@@ -316,6 +316,11 @@ const PLAN_CONFIG = {
     support: "dedicated"
   }
 };
+/* The agents are told the price and the roster from this object, not from a
+   copy of their own (config/brain.js). Handed over here, where it is declared;
+   allowedAgents is a getter, so the roster is read at prompt time, long after
+   AGENT_SYSTEM_PROMPTS exists. */
+useBillingPlans(PLAN_CONFIG);
 
 const STRIPE_PRICE_TO_PLAN = {};
 if (process.env.STRIPE_STARTER_PRICE_ID) {
@@ -11873,10 +11878,27 @@ async function finalizeExecutiveTaskOutput(userPrompt, initialOutput, initialSto
   };
 }
 
+/* HOW LONG A TYPED TASK MAY RUN, IN OUTPUT TOKENS, BY AGENT. The sixteen
+   specialists were all capped at 1,200 — about 900 words — while every one of
+   their pages offers long-form work: an SOP, a five-email sequence, a press
+   release with boilerplate, a term sheet, a crisis playbook, a 90-day plan, a
+   competitive report on five rivals. 4,096 (about 3,000 words) covers each of
+   those; executive and content keep 8,192 for full plans and articles. The
+   ceiling costs nothing unless the model would have kept writing — output is
+   billed by what is written, not by the cap. "general", the fallback for an
+   unrecognised agent, keeps 1,200. */
+const TASK_OUTPUT_TOKEN_CEILINGS = {
+  executive: 8192, content: 8192,
+  seo: 4096, sales: 4096, ads: 4096, reputation: 4096, analytics: 4096, email: 4096,
+  community: 4096, influencer: 4096, operations: 4096, social: 4096, etsy: 4096,
+  store: 4096, broker: 4096, publicist: 4096, rd: 4096, vertical_marketing: 4096
+};
+const TASK_OUTPUT_TOKEN_DEFAULT = 1200;
+
 async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
     try {
         var isExecutive = agentType === "executive";
-        var maxTokens = (isExecutive || agentType === "content") ? 8192 : 1200;
+        var maxTokens = TASK_OUTPUT_TOKEN_CEILINGS[agentType] || TASK_OUTPUT_TOKEN_DEFAULT;
 
         /* THE WIDEST SITE IN THE FILE — every specialist agent reaches the model
            through here, so this one append covers all of them.
@@ -11904,6 +11926,18 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
         });
         var output = generation.text;
         var executiveComplete = true;
+        /* A RUN THAT STOPPED EARLY SAYS SO. Anything but "end_turn" means the
+           model did not finish — most often "max_tokens", the ceiling above — and
+           without this the cut-off output reads as a short answer. Recorded in
+           ai_tasks.error beside a completed status: the work is kept and shown,
+           and the row says it is incomplete. Executive tasks are left out: their
+           completeness is judged below, and an incomplete plan is already failed
+           with its own error. */
+        var stoppedEarly = !isExecutive && generation.stopReason && generation.stopReason !== "end_turn"
+          ? "Incomplete: the model stopped early (stop_reason \"" + generation.stopReason + "\")" +
+            (generation.stopReason === "max_tokens" ? " at this agent's " + maxTokens + "-token output limit" : "") +
+            ". The result is the partial output."
+          : null;
 
         if (isExecutive) {
           var executiveResult = await finalizeExecutiveTaskOutput(
@@ -11963,6 +11997,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .update({
                 result: output,
                 status: requiresApproval ? "requires_approval" : "completed",
+                error: stoppedEarly,
                 completed_at: taskFinishedAt,
                 updated_at: taskFinishedAt
             })

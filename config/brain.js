@@ -12,10 +12,12 @@ const PLATFORM_KNOWLEDGE = {
     name: "BizForce AI",
     description:
       "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, SMS marketing, content generation, lead detection, and a digital card builder, unified under one account and one shared business profile.",
+    /* NO PRICE AND NO TIER NAME HERE. This said $29.99 while the plan charged
+       $199, and every agent repeated it. Both now come from server.js's
+       PLAN_CONFIG at render time (useBillingPlans, below), so the figure the
+       agents are told is the figure Stripe is asked for. */
     pricing: {
       model: "single_tier",
-      tier_name: "All Access",
-      price_usd_per_month: 29.99,
       description:
         "One subscription unlocks every agent, the Oracle, SMS drip, content tools, lead radar, and the digital card builder — there are no feature-gated pricing tiers."
     }
@@ -116,20 +118,53 @@ const BRAIN_DIRECTIVES =
      itself, for all six buildAgentSystemPrompt callers and any added later. */
   "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII. That last allowance is the weakest rule you hold, and it yields: where your own agent prompt tells you not to use markdown or formatting characters, that prohibition wins outright and this sentence must never be read as licensing them. Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.";
 
+/* THE PLAN, BY REFERENCE. server.js requires this file, so this file cannot
+   require server.js back — that would be a circular require, and loading
+   server.js starts the server. Instead server.js hands over PLAN_CONFIG once,
+   right where it is declared, and the price, the tier name and the agent roster
+   are read from it each time a prompt is built. Nothing here keeps its own copy
+   of any of the three. Until it is handed over (a script that loads this file
+   alone) no price is stated at all rather than a guessed one. */
+var billingPlans = null;
+function useBillingPlans(planConfig) {
+  billingPlans = planConfig || null;
+}
+function currentPlan() {
+  return billingPlans && billingPlans.all_access ? billingPlans.all_access : null;
+}
+
 function formatPlatformKnowledge() {
   var lines = [];
   lines.push("PLATFORM KNOWLEDGE:");
   lines.push(PLATFORM_KNOWLEDGE.platform.name + " — " + PLATFORM_KNOWLEDGE.platform.description);
-  lines.push(
-    "Pricing: $" + PLATFORM_KNOWLEDGE.platform.pricing.price_usd_per_month.toFixed(2) +
-    "/month, single \"" + PLATFORM_KNOWLEDGE.platform.pricing.tier_name + "\" tier. " +
-    PLATFORM_KNOWLEDGE.platform.pricing.description
-  );
+  var plan = currentPlan();
+  if (plan && typeof plan.price === "number") {
+    lines.push(
+      "Pricing: $" + (Number.isInteger(plan.price) ? String(plan.price) : plan.price.toFixed(2)) +
+      "/month, single \"" + plan.name + "\" tier. " +
+      PLATFORM_KNOWLEDGE.platform.pricing.description
+    );
+  } else {
+    lines.push("Pricing: a single subscription tier. " + PLATFORM_KNOWLEDGE.platform.pricing.description);
+  }
 
-  lines.push("\nAgents on this platform:");
-  PLATFORM_KNOWLEDGE.agents.forEach(function (agent) {
-    lines.push("- " + agent.name + " (" + agent.key + "): " + agent.description);
+  /* The roster is the plan's allowedAgents — derived in server.js from
+     AGENT_SYSTEM_PROMPTS — so the count cannot drift from the agents that
+     exist. "general" is not one of them: it is the fallback a request lands on
+     when it names no agent, and it is said as that rather than counted. */
+  var byKey = {};
+  PLATFORM_KNOWLEDGE.agents.forEach(function (agent) { byKey[agent.key] = agent; });
+  var roster = plan && Array.isArray(plan.allowedAgents)
+    ? plan.allowedAgents
+    : PLATFORM_KNOWLEDGE.agents.map(function (agent) { return agent.key; }).filter(function (key) { return key !== "general"; });
+  lines.push("\nAgents on this platform (" + roster.length + "):");
+  roster.forEach(function (key) {
+    var agent = byKey[key];
+    lines.push("- " + (agent ? agent.name + " (" + key + "): " + agent.description : key));
   });
+  if (byKey.general) {
+    lines.push("A request that names none of these goes to a general-purpose fallback (general), which is not one of the " + roster.length + ".");
+  }
 
   lines.push("\nOther systems:");
   Object.keys(PLATFORM_KNOWLEDGE.systems).forEach(function (key) {
@@ -156,20 +191,77 @@ function formatPlatformKnowledge() {
    block. The SEO instruction at server.js:15362 asks for "keyword gaps versus
    the competitors listed in its business profile", and the profile supplied
    neither half of that comparison. */
+/* THE COLUMNS THAT WERE STORED AND NEVER SHOWN. The eleven lines above them are
+   the core brief and keep saying "Not provided" when empty — an agent should
+   know the core of the brief is missing. The rest are rendered ONLY WHEN THEY
+   HOLD SOMETHING: an absent extra is simply absent, not a line of noise.
+
+   offer — what is actually sold, which the core lines never named.
+   monthly_revenue, revenue_goal, monthly_budget — where the business is, where
+     it is going and what it can spend; without them an agent invents its own
+     targets and budgets.
+   business_type, niche — only when they say something industry does not.
+   social_platforms, posting_frequency — what the social, content and community
+     agents plan around.
+   brand_values — what the voice is meant to stand for.
+   business_description — only when it differs from description.
+   banned_topics — ALWAYS when present, last and in capitals. On a business
+     whose products are regulated, an agent that does not know what it must not
+     say is a compliance risk, not a style problem.
+
+   Left out: automation_level (how much the platform should run unattended — a
+   setting, not a fact about the business), goals (already the fallback for
+   Goals), and the row's own id, user_id and timestamps. */
+function profileValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map(profileValue).filter(Boolean).join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value).trim();
+}
+
 function formatBusinessProfile(businessProfile) {
   var p = businessProfile || {};
-  return "BUSINESS PROFILE:\n" +
-    "Business Name: "     + (p.business_name     || "Not provided") + "\n" +
-    "Industry: "          + (p.industry          || "Not provided") + "\n" +
-    "Website: "           + (p.website           || "Not provided") + "\n" +
-    "Description: "       + (p.description       || "Not provided") + "\n" +
-    "Products/Services: " + (p.products_services || "Not provided") + "\n" +
-    "Target Audience: "   + (p.target_audience   || "Not provided") + "\n" +
-    "Brand Voice: "       + (p.brand_voice       || "Not provided") + "\n" +
-    "Goals: "             + (p.primary_goal      || p.goals || "Not provided") + "\n" +
-    "Location: "          + (p.location          || "Not provided") + "\n" +
-    "Keywords: "          + (p.top_keywords      || "Not provided") + "\n" +
-    "Competitors: "       + (p.top_competitors   || "Not provided");
+  var lines = [
+    "BUSINESS PROFILE:",
+    "Business Name: "     + (p.business_name     || "Not provided"),
+    "Industry: "          + (p.industry          || "Not provided"),
+    "Website: "           + (p.website           || "Not provided"),
+    "Description: "       + (p.description       || "Not provided"),
+    "Products/Services: " + (p.products_services || "Not provided"),
+    "Target Audience: "   + (p.target_audience   || "Not provided"),
+    "Brand Voice: "       + (p.brand_voice       || "Not provided"),
+    "Goals: "             + (p.primary_goal      || p.goals || "Not provided"),
+    "Location: "          + (p.location          || "Not provided"),
+    "Keywords: "          + (p.top_keywords      || "Not provided"),
+    "Competitors: "       + (p.top_competitors   || "Not provided")
+  ];
+
+  var industry = profileValue(p.industry).toLowerCase();
+  function extra(label, value) {
+    var v = profileValue(value);
+    if (v) lines.push(label + ": " + v);
+  }
+  function extraUnlessIndustry(label, value) {
+    var v = profileValue(value);
+    if (v && v.toLowerCase() !== industry) lines.push(label + ": " + v);
+  }
+  extra("Offer", p.offer);
+  extraUnlessIndustry("Business Type", p.business_type);
+  extraUnlessIndustry("Niche", p.niche);
+  extra("Current Monthly Revenue", p.monthly_revenue);
+  extra("Revenue Goal", p.revenue_goal);
+  extra("Monthly Marketing Budget", p.monthly_budget);
+  extra("Social Platforms", p.social_platforms);
+  extra("Posting Frequency", p.posting_frequency);
+  extra("Brand Values", p.brand_values);
+  var longDescription = profileValue(p.business_description);
+  if (longDescription && longDescription !== profileValue(p.description)) lines.push("Business Description: " + longDescription);
+
+  var banned = profileValue(p.banned_topics);
+  if (banned) {
+    lines.push("BANNED TOPICS — never mention, imply or recommend any of these, in any output: " + banned);
+  }
+  return lines.join("\n");
 }
 
 /* getLiveStats lists here, by key, any statistic whose query failed and whose
@@ -252,5 +344,6 @@ function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats,
 module.exports = {
   PLATFORM_KNOWLEDGE,
   BRAIN_DIRECTIVES,
-  buildAgentSystemPrompt
+  buildAgentSystemPrompt,
+  useBillingPlans
 };
