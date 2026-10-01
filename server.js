@@ -36872,6 +36872,100 @@ const OUTREACH_PRODUCT_FACTS = {
 };
 const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
 
+/* WHERE A LEAD IS SENT. The drafter used to write "MrEarthRose.com" from
+   memory — the instruction allowed it and the business profile and past drafts
+   repeated it — and five drafts on 2026-07-08 pointed at MrEarthRose.com/libido,
+   a path the model made up that answers 404. Since detectOutreachLinkFacets
+   (2026-08-19) every URL in a reply goes out as a working link, so an invented
+   path would now be posted as a clickable 404.
+
+   All six products point at the homepage, by decision. It is the only page that
+   carries every product with its description and a Buy button. Not /products:
+   its store module renders an empty list. Not mrearthrose.net/warhorse: a
+   JavaScript-rendered page titled "Retail Website" that has neither Tongkat Ali
+   nor Sword Vitality on it. And never a Stripe checkout link — a stranger's
+   first contact is not a payment page, the same rule the book instruction sets.
+
+   A map keyed by product name, all six on one value today, so a product can be
+   given its own page later by changing its one entry; every caller already
+   asks for OUTREACH_PRODUCT_DESTINATIONS[product] and needs no change. */
+const OUTREACH_HOME_URL = "https://mrearthrose.com/";
+const OUTREACH_PRODUCT_DESTINATIONS = {
+  "War Horse":                 OUTREACH_HOME_URL,
+  "War Horse Black":           OUTREACH_HOME_URL,
+  "Tongkat Ali":               OUTREACH_HOME_URL,
+  "Sword Vitality XXL Xtreme": OUTREACH_HOME_URL,
+  "War Horse Xtreme":          OUTREACH_HOME_URL,
+  "War Horse Midnight":        OUTREACH_HOME_URL
+};
+/* The book's own site, which its instruction already names as the only link. */
+const OUTREACH_BOOK_DESTINATION = "https://blacksuncircle.com/";
+
+/* The domains a reply may only link to at the supplied destination. A URL on any
+   of them that is not exactly that destination is a page the model chose, not
+   one it was given. */
+const OUTREACH_OWN_DOMAINS = ["mrearthrose.com", "mrearthrose.net", "swordvitality.com", "blacksuncircle.com"];
+
+/* Why a drafted reply may not go out, or null if it may. Run on the clean
+   message right after drafting, before anything else: a non-null answer holds
+   the draft exactly as an empty one is held — cleanMessage becomes null, which
+   the send block already refuses — so no sender is changed or reached.
+
+   It finds URLs the way the sender will: RichText's own detector, which is what
+   turns a URL into a clickable link (bare domains included — "MrEarthRose.com"
+   is linked as https://MrEarthRose.com). Anything on our domains or on Stripe
+   written in a way the detector misses is caught by a plain-text scan as well,
+   so nothing is waved through for being unlinkable today.
+
+   Refused: any Stripe URL at all, and any URL on OUTREACH_OWN_DOMAINS whose host
+   and path are not the destination's (www. ignored, an empty path read as "/",
+   and a query or fragment counting as a different URL). A bare domain that
+   resolves to the destination is the destination. */
+function outreachDraftRejection(message, destination) {
+  var text = String(message || "");
+  var found = [];
+  try {
+    var rt = new RichText({ text: text });
+    rt.detectFacetsWithoutResolution();
+    (rt.facets || []).forEach(function (facet) {
+      (facet.features || []).forEach(function (feature) {
+        if (feature && feature.$type === "app.bsky.richtext.facet#link" && feature.uri) found.push(feature.uri);
+      });
+    });
+  } catch (detectErr) {
+    // The scan below still runs; a detector failure cannot clear a draft.
+  }
+  var scan = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:mrearthrose\.com|mrearthrose\.net|swordvitality\.com|blacksuncircle\.com|stripe\.com)(?:\/[^\s"'<>)\]]*)?/gi;
+  (text.match(scan) || []).forEach(function (m) { found.push(m); });
+
+  function normal(u) {
+    var withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : "https://" + u;
+    try {
+      var p = new URL(withScheme.replace(/[.,;:!?]+$/, ""));
+      return {
+        host: p.hostname.toLowerCase().replace(/^www\./, ""),
+        key: p.hostname.toLowerCase().replace(/^www\./, "") + (p.pathname || "/") + p.search + p.hash
+      };
+    } catch (parseErr) {
+      return null;
+    }
+  }
+  var dest = destination ? normal(destination) : null;
+
+  for (var i = 0; i < found.length; i++) {
+    var u = normal(found[i]);
+    if (!u) continue;
+    if (u.host === "stripe.com" || /\.stripe\.com$/.test(u.host)) {
+      return "it links a Stripe page (" + found[i] + "); outreach never links a checkout, cart, payment or order URL";
+    }
+    var ours = OUTREACH_OWN_DOMAINS.some(function (d) { return u.host === d || u.host.slice(-(d.length + 1)) === "." + d; });
+    if (ours && (!dest || u.key !== dest.key)) {
+      return "it links " + found[i] + ", which is not the destination it was given (" + (destination || "none") + ")";
+    }
+  }
+  return null;
+}
+
 /* How old a POST may be and still be worth replying to, in days. Measured on
    post_created_at (when the author wrote it), never on created_at (when the
    radar captured it) — a lead captured this morning can easily be a post from
@@ -37359,10 +37453,15 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "Suggested product interest: " + (lead.suggested_product || "none") +
     (OUTREACH_PRODUCT_FACTS[lead.suggested_product]
       ? "\nWhat the product is (from MrEarthRose.com): " + OUTREACH_PRODUCT_FACTS[lead.suggested_product]
+      : "") +
+    (OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product]
+      ? "\nThe one link you may give them: " + OUTREACH_PRODUCT_DESTINATIONS[lead.suggested_product]
       : "");
 
   /* Two instructions, chosen by offer, rather than one instruction carrying a
-     conditional. The supplement text below is unchanged to the character.
+     conditional. The supplement text below names the one URL the reply may carry
+     (OUTREACH_PRODUCT_DESTINATIONS) in place of the domain it used to let the
+     model recall, and forbids checkout links as the book text already does.
 
      They are not variations on a theme. The supplement copy is governed by
      structure-function rules, a disease-claim ban and a prescription-drug
@@ -37377,10 +37476,11 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
      The one line both share and neither can lose is the character budget: 280,
      under both truncateToBlueskyLimit's 300 and truncateToMastodonLimit's 500,
      so no draft is ever cut mid-sentence by the sender. */
+  var supplementDestination = OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct] || OUTREACH_HOME_URL;
   var supplementInstruction =
     "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
     "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
-    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. May mention MrEarthRose.com naturally at most once. " +
+    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person expressed, matching their exact pain point or stated interest; sound like a real person, not a marketer, no hashtags or hype. Must use structure-function language only, such as \"supports healthy libido,\" \"supports energy and male vitality,\" or \"traditionally used for.\" NEVER make disease claims — never say it cures, treats, prevents, restores, fixes, or diagnoses anything (no curing ED, no curing low libido, no fixing anything). Never say \"no side effects,\" \"guaranteed,\" or \"solutions that work.\" Never compare it to a named prescription drug (Viagra, Cialis, or similar). If referencing a testimonial or personal result, frame it explicitly as one person's experience, not proof or a guarantee. Keep a soft, honest, low-pressure tone. Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — no pictographs, no ornaments, no novelty characters, plain ASCII text only. You may link to " + supplementDestination + " at most once, written exactly as it is given here, with nothing added to it. It is the only URL this reply may contain: never another page, path or site, and never a URL from memory. Never link a checkout, cart, payment or order URL of any kind, and never a direct-purchase link. " +
     "internal_analysis: the strategy notes, intent score reasoning, offer framing (which product/offer fits and why), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
     "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
 
@@ -37572,6 +37672,20 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     analysis = null;
   }
 
+  /* A draft that links anywhere but the destination it was given is held, not
+     sent. Held the way an unparseable draft is: cleanMessage becomes null, and
+     the send block below already refuses a null message — no sender is touched.
+     The reason is recorded on the ai_tasks row (error) and at the top of the
+     pipeline's last_draft, and the draft is kept out of agent_memory, which the
+     next prompt is told to build on. */
+  var draftRejection = cleanMessage
+    ? outreachDraftRejection(cleanMessage, offerKind === "book" ? OUTREACH_BOOK_DESTINATION : OUTREACH_PRODUCT_DESTINATIONS[suggestedProduct])
+    : null;
+  if (draftRejection) {
+    console.warn("[Draft] REJECTED for " + handle + ": " + draftRejection + ". Held as draft-only; it will not be sent.");
+    cleanMessage = null;
+  }
+
   // Attempt the real send (if applicable) BEFORE recording any status
   // below, so the recorded status reflects what actually happened instead
   // of assuming success the moment a draft is generated. Dry runs never
@@ -37678,7 +37792,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       agent_type: "sales",
       prompt: (dryRun ? "[DRY RUN] " : "") + "Sales convert: " + handle,
       result: output,
-      status: conversionStatus
+      status: conversionStatus,
+      error: draftRejection ? "draft rejected, not sent: " + draftRejection : null
     })
     .select("*")
     .single();
@@ -37710,7 +37825,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
      is not in the columns that read selects, so it could not have filtered them
      out. Not writing them is the fix that does not depend on every future
      reader remembering to exclude them. */
-  if (!dryRun) {
+  if (!dryRun && !draftRejection) {
     try {
       var memTimestamp = nowIso();
       var memContent = truncateOrchestratorPreview(output, 2000) || "Lead conversion drafted with no captured output.";
@@ -37753,7 +37868,7 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
       var pipelineTimestamp = nowIso();
       var richDraft = cleanMessage
         ? cleanMessage + "\n\n---\nInternal notes:\n" + (analysis || "(none)")
-        : output;
+        : (draftRejection ? "DRAFT REJECTED, NOT SENT: " + draftRejection + "\n\n" + output : output);
       var draftPreview = truncateOrchestratorPreview(richDraft, 4000);
 
       if (!existingPipeline.data || existingPipeline.data.status === "new") {
@@ -37813,7 +37928,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   return {
     conversion:  output,
     sent:        didSend,
-    send_reason: didSend ? null : ((sendResult && sendResult.reason) || null),
+    send_reason: didSend ? null : (draftRejection ? "draft_rejected" : ((sendResult && sendResult.reason) || null)),
+    draft_rejection: draftRejection,
 
     // Only ever set alongside send_reason "rate_limited", and null whenever
     // the response carried no wait. Rides back so the auto-loop can say how

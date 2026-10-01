@@ -159,12 +159,17 @@ function objectLiteral(src, name) {
 
   console.log("\n══ 5. what the drafter is told about each product ══");
   const facts = objectLiteral(SERVER, "OUTREACH_PRODUCT_FACTS");
+  /* The lead block also gives each product's destination (checkOutreachDestination.js
+     asserts what it says); it has to resolve for the block to build at all. */
+  const destinations = vm.runInNewContext(
+    /const OUTREACH_HOME_URL = [^\n]*/.exec(SERVER)[0] + "\n" +
+    /const OUTREACH_PRODUCT_DESTINATIONS = \{[\s\S]*?\n\};/.exec(SERVER)[0] + "\nOUTREACH_PRODUCT_DESTINATIONS");
   const ctxMatch = /var leadBlock =\n([\s\S]*?: ""\);)/.exec(SERVER);
   if (!ctxMatch) throw new Error("the drafter's lead context was not found in convertSingleLead");
   const ctxExpr = ctxMatch[1].replace(/;\s*$/, "");
   PRODUCTS.forEach(function (p) {
     const text = vm.runInNewContext(ctxExpr, {
-      OUTREACH_PRODUCT_FACTS: facts, handle: "@fixture",
+      OUTREACH_PRODUCT_FACTS: facts, OUTREACH_PRODUCT_DESTINATIONS: destinations, handle: "@fixture",
       lead: { post_text: "fixture", matched_keyword: "k", intent_score: 70, intent_reason: "r", suggested_product: p }
     });
     const line = text.split("\n").filter(function (l) { return l.indexOf("What the product is") === 0; })[0] || "";
