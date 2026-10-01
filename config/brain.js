@@ -11,7 +11,7 @@ const PLATFORM_KNOWLEDGE = {
   platform: {
     name: "BizForce AI",
     description:
-      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, SMS marketing, content generation, lead detection, and a digital card builder, unified under one account and one shared business profile.",
+      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS, publishing to social accounts and Lead Radar are currently unavailable to customer accounts; see Other systems.",
     /* NO PRICE AND NO TIER NAME HERE. This said $29.99 while the plan charged
        $199, and every agent repeated it. Both now come from server.js's
        PLAN_CONFIG at render time (useBillingPlans, below), so the figure the
@@ -19,7 +19,7 @@ const PLATFORM_KNOWLEDGE = {
     pricing: {
       model: "single_tier",
       description:
-        "One subscription unlocks every agent, the Oracle, SMS drip, content tools, lead radar, and the digital card builder — there are no feature-gated pricing tiers."
+        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending, social publishing and Lead Radar are unavailable on every customer account, whatever the plan."
     }
   },
 
@@ -54,12 +54,17 @@ const PLATFORM_KNOWLEDGE = {
     sms_drip: {
       name: "SMS Marketing / Drip System",
       description:
-        "Opted-in SMS subscriber list (sms_subscribers) with consent tracking, and broadcast campaigns (sms_campaigns) segmentable by filter. Subscriber counts, opt-in counts, and campaign counts feed the live Analytics dashboard."
+        "An SMS subscriber list (sms_subscribers) with consent tracking, and drip campaigns (sms_campaigns) of timed message steps that subscribers are enrolled in by hand, a chosen list at a time — there is no filter or segment. Subscriber counts, opt-in counts and campaign counts feed the live Analytics dashboard. SENDING IS CURRENTLY UNAVAILABLE: the drip engine runs as a rehearsal that records what it would send and sends nothing, and direct sending is switched off. Never tell a user their messages have gone out."
     },
     lead_radar: {
       name: "Lead Radar",
       description:
-        "A background job that scans Bluesky every 5 minutes for buying-intent posts, scores them against the user's business profile (industry, competitors), and separates genuine buyers from competitor mentions by matched keyword and suggested product (stored in bsky_leads)."
+        "A background job that every 5 minutes collects public Bluesky posts matching buying-intent phrases (stored in bsky_leads). Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled. When scoring is switched on, each collected post is rated 0-100 for buyer intent by a classifier that separates people asking for help from teachers, coaches and sellers, tagged with one product from a fixed list, and screened for whether a public reply would be safe and invited. It does not read the user's business profile. UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account."
+    },
+    social_publishing: {
+      name: "Social Publishing",
+      description:
+        "Agents write social posts and calendars, but connecting a social account and publishing to it are currently unavailable. An approved draft is saved and marked not published; nothing is posted. Never tell a user a post has gone out or is queued to go out."
     },
     digital_card_builder: {
       name: "Digital Card Builder",
@@ -74,7 +79,7 @@ const PLATFORM_KNOWLEDGE = {
     ai_tasks:
       "Every agent task run: agent_type, prompt, result, status. Doubles as the platform's activity log and each agent's own short-term memory (last few runs by agent_type).",
     agent_memory:
-      "Longer-lived per-agent insight memory (goal / task / campaign / insight / metric / conversation / report), written after an assignment completes.",
+      "Longer-lived per-agent insight memory (goal / task / campaign / insight / metric / conversation / report), written when a task completes for an agent that keeps memory, when an assignment starts, on each Oracle exchange, by the SEO and sales tools, and by the user from the memory page. The five newest per agent are read into that agent's next typed task.",
     live_stats:
       "Aggregate usage counts — tasks run/completed, content items, SMS subscribers/opt-ins, campaigns — currently surfaced via GET /api/analytics/summary."
   }

@@ -26,12 +26,25 @@
      5. STOP REASON. processAiTask, given a reply that stopped at max_tokens,
         writes ai_tasks.error saying so, naming the ceiling; given end_turn,
         writes null.
+     6-10. THE OTHER SYSTEMS. Each corrected sentence about Lead Radar, SMS,
+        social publishing, the subscription and agent_memory is asserted
+        twice: once against the code it describes (leadRadar.js, server.js)
+        and once against what the agents are told. Social publishing is gated,
+        so it must be named as unavailable, not left out.
+     NOT ASSERTED, because no source file holds it: the deployed values of
+     ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
+     ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
+     Railway has set); and the Oracle and card-builder sentences, which were
+     true and were not changed.
 
    MUTATE=price    states a typed $29.99 again                 → 1 goes red
    MUTATE=roster   lists every PLATFORM_KNOWLEDGE agent again  → 2 goes red
    MUTATE=banned   drops the banned_topics line                → 3 goes red
    MUTATE=ceiling  puts operations back to 1,200               → 4 goes red
    MUTATE=stop     stops writing the stop reason               → 5 goes red
+   MUTATE=radar    restores "scores against the profile"       → 6 goes red
+   MUTATE=sms      restores "broadcasts segmentable by filter" → 7 goes red
+   MUTATE=social   leaves social publishing out                → 8 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -44,7 +57,7 @@ const SUBJECT_USER_ID = resolveSubjectAccount();
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
-const { definitionOf } = require("./_shared");
+const { definitionOf, braceMatch } = require("./_shared");
 const REPO = path.join(__dirname, "..");
 
 const { createClient } = require("@supabase/supabase-js");
@@ -57,7 +70,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop"];
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -75,6 +88,17 @@ const SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r
 function def(name) {
   const d = definitionOf(SERVER, name);
   if (!d) { console.error("EXTRACTION FAILED: " + name + " not found in server.js"); process.exit(3); }
+  return d;
+}
+function routeBody(signature) {
+  const at = SERVER.indexOf(signature);
+  if (at === -1) { console.error("EXTRACTION FAILED: " + signature + " not found in server.js"); process.exit(3); }
+  return SERVER.slice(at, braceMatch(SERVER, SERVER.indexOf("{", SERVER.indexOf("function", at))));
+}
+const RADAR = fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8").replace(/\r\n/g, "\n");
+function radarDef(name) {
+  const d = definitionOf(RADAR, name);
+  if (!d) { console.error("EXTRACTION FAILED: " + name + " not found in leadRadar.js"); process.exit(3); }
   return d;
 }
 
@@ -95,6 +119,20 @@ if (MUTATE === "roster") {
 if (MUTATE === "banned") {
   BRAIN = mutate(BRAIN, `  if (banned) {`, `  if (false) {`, "banned");
   console.log("\n!! MUTATION: banned_topics is no longer rendered — 3 must fail.");
+}
+if (MUTATE === "radar") {
+  BRAIN = mutate(BRAIN, /"A background job that every 5 minutes collects public Bluesky posts[^"]*"/.exec(BRAIN)[0],
+    `"A background job that scans Bluesky every 5 minutes for buying-intent posts, scores them against the user's business profile (industry, competitors), and separates genuine buyers from competitor mentions by matched keyword and suggested product (stored in bsky_leads)."`, "radar");
+  console.log("\n!! MUTATION: Lead Radar is described as scoring against the business profile again — 6 must fail.");
+}
+if (MUTATE === "sms") {
+  BRAIN = mutate(BRAIN, /"An SMS subscriber list \(sms_subscribers\)[^"]*"/.exec(BRAIN)[0],
+    `"Opted-in SMS subscriber list (sms_subscribers) with consent tracking, and broadcast campaigns (sms_campaigns) segmentable by filter. Subscriber counts, opt-in counts, and campaign counts feed the live Analytics dashboard."`, "sms");
+  console.log("\n!! MUTATION: SMS is described as sending, segmentable broadcasts again — 7 must fail.");
+}
+if (MUTATE === "social") {
+  BRAIN = mutate(BRAIN, /    social_publishing: \{[\s\S]*?\n    \},\n/.exec(BRAIN)[0], "", "social");
+  console.log("\n!! MUTATION: social publishing is left out instead of said to be unavailable — 8 must fail.");
 }
 function loadBrain() {
   const mod = { exports: {} };
@@ -205,6 +243,88 @@ function runTask(agentType, stopReason) {
     JSON.stringify(cut.update));
   const whole = await runTask("email", "end_turn");
   check("5. a reply that finished records no error", !!whole.update && whole.update.error === null, JSON.stringify(whole.update && whole.update.error));
+
+  /* Sections 6-10 pair each corrected sentence with the code it describes:
+     one assertion reads the code, the other reads what the agents are told.
+     A change to either side turns its own assertion red. */
+  const systemLine = name => lines.find(l => l.startsWith("- " + name + ":")) || "";
+
+  console.log("\n══ 6. Lead Radar ══");
+  const radar = systemLine("Lead Radar");
+  const tick = radarDef("radarTick"), scorer = radarDef("scoreNewLeads"), start = radarDef("startLeadRadar");
+  const scorerPromptStart = scorer.indexOf("var prompt =");
+  const scorerPrompt = scorer.slice(scorerPromptStart, scorer.indexOf("\";\n", scorerPromptStart) + 2);
+  console.log("    " + radar.slice(0, 110) + "…");
+  check("6. code: the tick runs every 300,000 ms and Bluesky capture is not behind a switch",
+    /setInterval\(radarTick, 300000\)/.test(start) && tick.indexOf("runLeadRadarOnce(") !== -1 && tick.indexOf("runLeadRadarOnce(") < tick.indexOf("process.env.ENABLE_"));
+  check("6. code: Mastodon and YouTube capture run only when their switch is exactly \"true\"",
+    tick.indexOf('process.env.ENABLE_MASTODON_RADAR === "true"') !== -1 && tick.indexOf('process.env.ENABLE_YOUTUBE_RADAR === "true"') !== -1);
+  check("6. code: Reddit is never started (every startRedditRadar call is commented out)",
+    SERVER.split("\n").filter(l => l.indexOf("startRedditRadar(") !== -1).every(l => l.trim().startsWith("//")));
+  check("6. told: Bluesky every 5 minutes, Mastodon and YouTube off by default, Reddit disabled",
+    /every 5 minutes collects public Bluesky posts/.test(radar) && /Mastodon and YouTube collection exist behind switches that are off by default/.test(radar) && /Reddit is disabled/.test(radar), radar.slice(0, 80));
+  const PROFILE_FIELDS = ["business_profiles", "industry", "competitor", "target_audience", "products_services", "business_name", "profile"];
+  check("6. code: neither scoreNewLeads nor its prompt reads a business-profile field",
+    scorerPromptStart !== -1 && PROFILE_FIELDS.every(f => scorer.indexOf(f) === -1), PROFILE_FIELDS.filter(f => scorer.indexOf(f) !== -1).join(","));
+  check("6. told: it does not read the business profile, and nothing says it scores against industry or competitors",
+    /It does not read the user's business profile\./.test(radar) && !/business profile \(|competitor/i.test(radar), radar.slice(0, 80));
+  check("6. code: scoring runs only when ENABLE_LEAD_SCORING is exactly \"true\"",
+    /if \(process\.env\.ENABLE_LEAD_SCORING === "true"\) \{[^}]*scoreNewLeads\(/.test(tick));
+  check("6. code: the scorer separates seekers from teachers and sellers, scores 0-100, and screens safety and invitation",
+    ["teaching, coaching, promoting, or selling", "<integer 0-100>", "SAFE | UNSAFE", "INVITED | NOT_INVITED"].every(s => scorerPrompt.indexOf(s) !== -1));
+  check("6. told: scoring is switched, 0-100, seekers vs teachers, coaches and sellers, a fixed product list, safety and invitation",
+    /When scoring is switched on/.test(radar) && /rated 0-100/.test(radar) && /teachers, coaches and sellers/.test(radar) && /fixed list/.test(radar) && /safe and invited/.test(radar));
+  const radarRefusals = (SERVER.match(/res\.status\(403\)\.json\(LEAD_RADAR_UNAVAILABLE\)/g) || []).length;
+  check("6. code: the lead routes refuse other accounts with LEAD_RADAR_UNAVAILABLE (" + radarRefusals + " routes)",
+    /const LEAD_RADAR_UNAVAILABLE = \{/.test(SERVER) && radarRefusals >= 4, radarRefusals);
+  check("6. told: unavailable to customer accounts", /UNAVAILABLE TO CUSTOMER ACCOUNTS/.test(radar));
+
+  console.log("\n══ 7. SMS ══");
+  const sms = systemLine("SMS Marketing / Drip System");
+  const enroll = routeBody('app.post("/api/sms/campaigns/:id/enroll"');
+  console.log("    " + sms.slice(0, 110) + "…");
+  const smsSendsNothing = /^const SMS_DIRECT_SEND_ENABLED = false;$/m.test(SERVER) && def("runDripEngine").indexOf("var DRY_RUN = true;") !== -1;
+  check("7. code: direct sending is off and the drip engine is a hard-coded dry run", smsSendsNothing);
+  check("7. told: sending is unavailable, and never that messages went out",
+    /SENDING IS CURRENTLY UNAVAILABLE/.test(sms) && /Never tell a user their messages have gone out/.test(sms));
+  check("7. code: enrolment takes an explicit subscriber_ids list, with no filter or segment",
+    enroll.indexOf("req.body.subscriber_ids") !== -1 && !/filter|segment/i.test(enroll));
+  check("7. told: drip campaigns enrolled by hand, no filter or segment, nothing called a broadcast",
+    /enrolled in by hand/.test(sms) && /there is no filter or segment/.test(sms) && !/segmentable|broadcast/i.test(sms), sms.slice(0, 80));
+  const liveStats = def("getLiveStats");
+  check("7. code: GET /api/analytics/summary returns getLiveStats, which counts subscribers and campaigns",
+    routeBody('app.get("/api/analytics/summary"').indexOf("getLiveStats(") !== -1 && liveStats.indexOf('"sms_subscribers"') !== -1 && liveStats.indexOf('"sms_campaigns"') !== -1);
+  check("7. told: the counts feed the live Analytics dashboard", /feed the live Analytics dashboard/.test(sms));
+
+  console.log("\n══ 8. social publishing — gated, so said to be unavailable, not left out ══");
+  const social = systemLine("Social Publishing");
+  console.log("    " + (social.slice(0, 110) || "(no Social Publishing line)"));
+  const socialGated = /^const SOCIAL_ACCOUNTS_SCOPED = false;$/m.test(SERVER) && /status:\s+"not_published"/.test(SERVER);
+  check("8. code: SOCIAL_ACCOUNTS_SCOPED is false and a publish is saved as not_published", socialGated);
+  check("8. told: the feature is named, said to be unavailable, and drafts said to be saved unpublished",
+    /currently unavailable/.test(social) && /marked not published; nothing is posted/.test(social), social.slice(0, 60) || "missing");
+
+  console.log("\n══ 9. what the subscription unlocks ══");
+  const pricing = lines.find(l => l.startsWith("Pricing:")) || "";
+  const platform = lines.find(l => l.startsWith("BizForce AI — ")) || "";
+  const unlocks = pricing.slice(pricing.indexOf("unlocks"), pricing.indexOf("—"));
+  check("9. told: the unlock list names nothing that is gated off", !/lead radar|sms drip|publish/i.test(unlocks), unlocks);
+  check("9. told: the pricing line says SMS sending, social publishing and Lead Radar are unavailable, as the code has them",
+    smsSendsNothing && socialGated && radarRefusals >= 4 && /SMS sending, social publishing and Lead Radar are unavailable on every customer account/.test(pricing), pricing.slice(-120));
+  check("9. told: the platform line claims no SMS marketing or lead detection, and names what is unavailable",
+    !/SMS marketing|lead detection/.test(platform) && /Sending SMS, publishing to social accounts and Lead Radar are currently unavailable/.test(platform), platform.slice(0, 80));
+
+  console.log("\n══ 10. data_model (documentation: never rendered into a prompt) ══");
+  const memDoc = brain.PLATFORM_KNOWLEDGE.data_model.agent_memory;
+  check("10. data_model is not rendered into the agents' prompt", prompt.indexOf("Longer-lived per-agent") === -1);
+  const memInserts = ["orchestrateAgentWorkflow", "processAiTask", "convertSingleLead"].map(def)
+    .concat(['app.post("/api/oracle"', 'app.post("/api/memory"', 'app.post("/api/agents/seo/optimize"', 'app.post("/api/agents/sales/lead-status"'].map(routeBody));
+  check("10. code: agent_memory is inserted by the task, assignment, Oracle, memory-page, SEO and sales paths it names",
+    memInserts.every(b => /\.from\("agent_memory"\)\s*\.insert\(/.test(b)), memInserts.map(b => /\.from\("agent_memory"\)\s*\.insert\(/.test(b)).join(","));
+  check("10. code: a typed task reads its agent's five newest memories",
+    /\.from\("agent_memory"\)[\s\S]{0,300}\.eq\("agent_type", agentType\)[\s\S]{0,100}\.limit\(5\)/.test(def("handleAiTaskRequest")));
+  check("10. documented: the same writers, and five newest read into the next typed task",
+    /when a task completes/.test(memDoc) && /when an assignment starts/.test(memDoc) && /on each Oracle exchange/.test(memDoc) && /by the SEO and sales tools/.test(memDoc) && /from the memory page/.test(memDoc) && /five newest per agent are read into that agent's next typed task/.test(memDoc), memDoc);
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");
