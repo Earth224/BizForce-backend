@@ -11895,6 +11895,123 @@ const TASK_OUTPUT_TOKEN_CEILINGS = {
 };
 const TASK_OUTPUT_TOKEN_DEFAULT = 1200;
 
+/* INVENTED CUSTOMER WORDS ARE TAKEN OUT BEFORE A RESULT IS STORED.
+
+   WHAT WAS FOUND. Agents wrote fabricated testimonials into publish-ready copy
+   ("One customer told us: 'I've been reordering War Horse for three years'",
+   "Men tell us they notice the difference by the third shot"). A made-up
+   endorsement misleads a customer, and in the United States it is an FTC
+   matter. NO_INVENTION_RULE forbids it in prose; this is the part a model
+   cannot skim.
+
+   WHY REDACT AND FLAG, NOT REJECT. Detection is a heuristic over free text and
+   has false positives (below). Rejecting would throw away a whole plan for one
+   sentence, and a false positive would destroy a good answer. Flagging alone
+   would leave the invented words in copy someone can paste. So each detected
+   passage is replaced in place with a marked empty slot, and a notice at the
+   top of the result says how many were removed and why. The removed words are
+   not stored anywhere — not in ai_tasks.result, not in agent_memory — so they
+   cannot reach the user or a later prompt.
+
+   WHAT IT CATCHES. (1) A quoted passage ("..." or curly quotes) of 12-400
+   characters, in the first person singular, not a question, and attributed —
+   an attribution word (said, says, told us, wrote, testimonial, review, quote)
+   within 80 characters either side, or a signature such as "- Mike T." on the
+   same line straight after it. Measured on the 24 stored outputs of four runs,
+   it removed 4 passages, all invented customer words or attributed claims, and
+   nothing else. (2) A sentence attributing words to customers
+   ("men tell us", "customers told us", "one customer said"), unless the same
+   sentence negates it ("never", "don't", "do not", "avoid").
+
+   WHAT IT LETS THROUGH ON PURPOSE. A quotation that appears in the user's own
+   request or in the BUSINESS PROFILE block of the prompt — the user supplied
+   it. A question in quotes (an objection a customer might raise). A quote with
+   no first person or no attribution.
+
+   WHAT IT MISSES. Testimonials with no quotes and no attribution verb ("This
+   changed my mornings. J.R."), third-person claims with other verbs ("buyers
+   keep coming back", "Men who take War Horse consistently report..."),
+   unattributed lines in post copy ("Six weeks in."), single-quoted
+   testimonials with no attribution word nearby, and any non-English phrasing.
+
+   WHAT IT WRONGLY TAKES OUT. A first-person quote from a named public figure
+   followed by a dash and a name ("I think, therefore I am" - Descartes), a
+   founder's own first-person line near the word "says", and a hypothetical
+   customer objection written as a statement near the word "said". Each is
+   replaced by the marked slot and counted in the notice, so the user can see
+   that something was removed and put it back. */
+var TESTIMONIAL_SLOT = "[TESTIMONIAL NEEDED: a passage written as a customer's words was removed here. Use a real customer's words, with their permission.]";
+
+/* Lower case, straight quotes, single spaces, and no punctuation at either end:
+   an agent quoting the user's line adds its own comma or full stop inside the
+   quote marks, and that must not make the user's own words look invented. */
+function normalizedQuoteText(text) {
+  return String(text || "").toLowerCase()
+    .replace(/[“”‘’]/g, function (c) { return c === "‘" || c === "’" ? "'" : "\""; })
+    .replace(/\s+/g, " ").trim()
+    .replace(/^[.,;:!?'"\s]+|[.,;:!?'"\s]+$/g, "");
+}
+
+function screenFabricatedTestimonials(text, suppliedText) {
+  var source = String(text || "");
+  var supplied = normalizedQuoteText(suppliedText);
+  var FIRST_PERSON = /\bI\b|\bI'(?:m|ve|d|ll)\b|\b[Mm]y\b|\b[Mm]e\b|\b[Mm]ine\b/;
+  /* Words that ATTRIBUTE a quote, not words that merely sit near one: "men" and
+     "buyer" are on every line of this business's copy, and as cues they took
+     out a journey stage ("why I am ordering again") and a customer objection. */
+  var CUSTOMER_CUE = /\b(?:testimonials?|reviews?|quotes?|quoted|said|says|told (?:us|me)|tells (?:us|me)|wrote)\b/i;
+  /* On the same line: a markdown bullet on the next line ("- Build a...") is
+     not a signature. */
+  var SIGNATURE = /^[ \t"”]*[—–-]{1,2}[ \t]*[A-Z][a-z]+/;
+  var NEGATED = /\b(?:never|don't|do not|avoid)\b/i;
+  var spans = [];
+  /* The marked slot contains the word "TESTIMONIAL"; it is the instruction
+     working, and must not make the line beside it look attributed. Masked
+     with spaces of the same length, so every index still lines up. */
+  var masked = source.replace(/\[TESTIMONIAL NEEDED[^\]]*\]/gi, function (slot) { return new Array(slot.length + 1).join(" "); });
+
+  var quoteRe = /"([^"\n]{12,400})"|“([^”\n]{12,400})”/g;
+  var m;
+  while ((m = quoteRe.exec(source)) !== null) {
+    var inner = m[1] !== undefined ? m[1] : m[2];
+    if (/\?\s*$/.test(inner)) continue;
+    if (!FIRST_PERSON.test(inner)) continue;
+    var before = masked.slice(Math.max(0, m.index - 80), m.index);
+    var after = masked.slice(m.index + m[0].length, m.index + m[0].length + 80);
+    if (!(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;
+    if (supplied && supplied.indexOf(normalizedQuoteText(inner)) !== -1) continue;
+    spans.push([m.index, m.index + m[0].length]);
+  }
+
+  var claimRe = /[^.!?\n]*\b(?:(?:(?:our|many|most|some|real|other)\s+)?(?:customers|clients|buyers|men|guys|users|reviewers)\s+(?:tell us|told us|keep telling us|tell me|told me|swear by)|(?:one|a)\s+(?:customer|client|buyer|man|reviewer)\s+(?:told us|tells us|told me|said|says|wrote))\b[^.!?\n]*[.!?]?/gi;
+  while ((m = claimRe.exec(source)) !== null) {
+    if (NEGATED.test(m[0])) continue;
+    var lead = m[0].length - m[0].replace(/^\s+/, "").length;
+    spans.push([m.index + lead, m.index + m[0].length]);
+  }
+
+  if (!spans.length) return { text: source, removed: 0 };
+
+  spans.sort(function (a, b) { return a[0] - b[0]; });
+  var merged = [];
+  spans.forEach(function (span) {
+    var last = merged[merged.length - 1];
+    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+    else merged.push([span[0], span[1]]);
+  });
+
+  var out = source;
+  for (var i = merged.length - 1; i >= 0; i--) {
+    out = out.slice(0, merged[i][0]) + TESTIMONIAL_SLOT + out.slice(merged[i][1]);
+  }
+  var n = merged.length;
+  var notice = "NOTE FROM BIZFORCE: " + n + " passage" + (n === 1 ? "" : "s") +
+    " written as a customer's words or a claim about what customers say " + (n === 1 ? "was" : "were") +
+    " removed before this was saved, because no customer supplied " + (n === 1 ? "it" : "them") +
+    ". Each place is marked [TESTIMONIAL NEEDED]. Real customer words, used with their permission, belong there.";
+  return { text: notice + "\n\n" + out, removed: n, notice: notice };
+}
+
 async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
     try {
         var isExecutive = agentType === "executive";
@@ -11963,6 +12080,16 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           executiveComplete = executiveResult.complete;
         }
 
+        /* Before anything is stored — the failed executive row, the completed
+           row and the agent_memory row all write this `output`. A quotation the
+           user supplied, in their request or their business profile, is left. */
+        var profileStart = String(finalPrompt || "").indexOf("BUSINESS PROFILE:");
+        var profileEnd = String(finalPrompt || "").indexOf("\n\nLIVE PLATFORM STATS", profileStart);
+        var suppliedByUser = String(userPrompt || "") + "\n" +
+          (profileStart === -1 ? "" : String(finalPrompt).slice(profileStart, profileEnd === -1 ? undefined : profileEnd));
+        var testimonialScreen = screenFabricatedTestimonials(output, suppliedByUser);
+        output = testimonialScreen.text;
+
         if (isExecutive && !executiveComplete) {
           /* completed_at and error, matching what startToolRun's fail() writes.
              completed_at is WHEN THE RUN ENDED, not when it succeeded — fail()
@@ -11997,7 +12124,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .update({
                 result: output,
                 status: requiresApproval ? "requires_approval" : "completed",
-                error: stoppedEarly,
+                error: [stoppedEarly, testimonialScreen.removed ? testimonialScreen.notice : null].filter(Boolean).join(" ") || null,
                 completed_at: taskFinishedAt,
                 updated_at: taskFinishedAt
             })

@@ -49,15 +49,25 @@
         user's own site, lists, channels and sales are not measured; every
         zero is still shown, each with what it counts; and the trailing
         NO_INVENTION_RULE says the same of the stats it names as a source.
-     15. PEOPLE AND PRODUCT FACTS. The rule forbids any customer quotation or
-        testimonial, even as an example or labelled sample, and gives the
-        marked empty slot to use instead; forbids stating what customers do or
-        how many there are; forbids product and company facts the profile does
-        not hold; and makes BANNED TOPICS bind words put in a customer's mouth.
+        Section 11 also holds the rule at 1,600 characters or fewer, with every
+        clause giving a sentence, a slot or an example, or naming a specific
+        error — the only kind measured to land — and no ESTIMATE or "assuming".
+     15. PEOPLE AND PRODUCT FACTS. The rule forbids words presented as a
+        customer's, even as an example or labelled sample, and what customers
+        do or how many there are, and gives the marked slot instead; forbids
+        product and company facts the profile does not hold; and makes BANNED
+        TOPICS bind words put in a customer's mouth.
      16. REASONING STAYS OUT OF THE REPLY. The model call has no private
         reasoning channel (no thinking parameter), so the directive no longer
         says "internally": it says the thinking is not part of the reply, the
         reply begins with the answer, and no section narrates the reasoning.
+     17. INVENTED CUSTOMER WORDS, IN CODE. processAiTask screens the output
+        before the first result write and the memory write. Run with an agent
+        reply holding the two clean-2 fabrications, neither appears in any
+        stored row — result, error or agent_memory — and the result opens with
+        the notice and carries the marked slots. A quotation the user supplied,
+        in the request or the profile, is kept; a question, a negated
+        instruction, the placeholder and an unattributed line are left alone.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -76,11 +86,16 @@
    MUTATE=tally    restores the fetch-and-tally byAgent        → 12 goes red
    MUTATE=owner    restores "unavailable to customer accounts" → 13 goes red
    MUTATE=zero     restores "this user's real, current usage"  → 14 goes red
-   MUTATE=testimonial  drops the no-testimonial clause         → 15 goes red
-   MUTATE=customers    drops the what-customers-do clause      → 15 goes red
+   MUTATE=dontknow     drops the "I don't have that figure" clause → 11 goes red
+   MUTATE=memory       drops the memory-is-not-fact clause     → 11 goes red
+   MUTATE=offers       drops the only-the-profile's-offers clause → 11 goes red
+   MUTATE=zerobase     drops the stats-scope and zero clause   → 14 goes red
+   MUTATE=testimonial  drops the customer-words clause         → 15 goes red
    MUTATE=product      drops the product-facts clause          → 15 goes red
    MUTATE=reach        drops "BANNED TOPICS bind every word"   → 15 goes red
    MUTATE=reasoning    restores "reason step-by-step and internally" → 16 goes red
+   MUTATE=screen       screens the output but stores the original → 17 goes red
+   MUTATE=cue          takes out any first-person quote, attributed or not → 17 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -106,7 +121,8 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero", "testimonial", "customers", "product", "reach", "reasoning"];
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
+  "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -126,6 +142,14 @@ if (MUTATE === "tally") {
   SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
     `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
   console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
+}
+if (MUTATE === "screen") {
+  SERVER = mutate(SERVER, "        output = testimonialScreen.text;\n", "", "screen");
+  console.log("\n!! MUTATION: processAiTask screens the output but stores the original — 17 must fail.");
+}
+if (MUTATE === "cue") {
+  SERVER = mutate(SERVER, "    if (!(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;\n", "", "cue");
+  console.log("\n!! MUTATION: any first-person quote is taken out, attributed or not — 17 must fail.");
 }
 function def(name) {
   const d = definitionOf(SERVER, name);
@@ -191,21 +215,25 @@ if (MUTATE === "zero") {
     `  return "LIVE PLATFORM STATS (this user's real, current usage — use it, don't ignore it):\\n" + lines.join("\\n");`, "zero");
   console.log("\n!! MUTATION: the stats block calls itself \"this user's real, current usage\" again — 14 must fail.");
 }
-if (MUTATE === "testimonial") {
-  BRAIN = mutate(BRAIN, /\n  "- Never write a customer quotation[^\n]*\n/.exec(BRAIN)[0], "\n", "testimonial");
-  console.log("\n!! MUTATION: the clause beginning \"Never write a customer quotation\" is gone — 15 must fail.");
-}
-if (MUTATE === "customers") {
-  BRAIN = mutate(BRAIN, /\n  "- Never state what customers do[^\n]*\n/.exec(BRAIN)[0], "\n", "customers");
-  console.log("\n!! MUTATION: the clause beginning \"Never state what customers do\" is gone — 15 must fail.");
-}
-if (MUTATE === "product") {
-  BRAIN = mutate(BRAIN, /\n  "- Never state a product or company fact[^\n]*\n/.exec(BRAIN)[0], "\n", "product");
-  console.log("\n!! MUTATION: the clause beginning \"Never state a product or company fact\" is gone — 15 must fail.");
-}
-if (MUTATE === "reach") {
-  BRAIN = mutate(BRAIN, /\n  "- BANNED TOPICS in the business profile bind[^\n]*\n/.exec(BRAIN)[0], "\n", "reach");
-  console.log("\n!! MUTATION: the clause beginning \"BANNED TOPICS in the business profile bind\" is gone — 15 must fail.");
+/* Each drops one clause of NO_INVENTION_RULE. The last clause ends the string
+   with ";" rather than " +", so it is dropped with the "+" of the line before. */
+const RULE_CLAUSE_MUTATIONS = {
+  dontknow:    ["If a figure is not in the BUSINESS PROFILE", "11"],
+  memory:      ["A figure found only in ACCUMULATED MEMORY", "11"],
+  offers:      ["Only the offers in the business profile exist", "11"],
+  zerobase:    ["LIVE PLATFORM STATS counts only activity inside BizForce", "14"],
+  testimonial: ["Do not write words presented as a customer's", "15"],
+  product:     ["Do not state a product or company fact", "15"],
+  reach:       ["BANNED TOPICS bind every word", "15"]
+};
+if (RULE_CLAUSE_MUTATIONS[MUTATE]) {
+  const prefix = RULE_CLAUSE_MUTATIONS[MUTATE][0];
+  const line = new RegExp("\\n  \"- " + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[^\\n]*").exec(BRAIN);
+  if (!line) { console.error("MUTATION REFUSED (" + MUTATE + "): clause not found."); process.exit(3); }
+  BRAIN = /;$/.test(line[0])
+    ? mutate(BRAIN, " +" + line[0], ";", MUTATE).replace(/\\n";$/m, "\";")
+    : mutate(BRAIN, line[0], "", MUTATE);
+  console.log("\n!! MUTATION: the clause beginning \"" + prefix + "\" is gone — " + RULE_CLAUSE_MUTATIONS[MUTATE][1] + " must fail.");
 }
 if (MUTATE === "reasoning") {
   BRAIN = mutate(BRAIN, "Before answering, think it through: break the request into its component parts, weigh the realistic options for each, check your own logic for gaps or contradictions, and converge on the strongest concrete answer. That thinking is not part of the reply. Begin with the answer itself, and never write a section that narrates your reasoning, your reading of the request or these instructions.",
@@ -232,16 +260,17 @@ if (MUTATE === "ceiling") {
   console.log("\n!! MUTATION: operations is capped at 1,200 again — 4 must fail.");
 }
 if (MUTATE === "stop") {
-  taskSrc = mutate(taskSrc, "                error: stoppedEarly,\n", "", "stop");
+  taskSrc = mutate(taskSrc, "error: [stoppedEarly, testimonialScreen.removed", "error: [testimonialScreen.removed", "stop");
   console.log("\n!! MUTATION: the stop reason is no longer written — 5 must fail.");
 }
-function runTask(agentType, stopReason) {
-  const calls = [], updates = [];
+function runTask(agentType, stopReason, opts) {
+  opts = opts || {};
+  const calls = [], updates = [], inserts = [];
   function fake(table) {
     const st = { op: "select", payload: null, one: null };
     const b = {
       select() { return b; }, eq() { return b; }, order() { return b; }, limit() { return b; }, in() { return b; },
-      insert(p) { st.op = "insert"; st.payload = p; return b; },
+      insert(p) { st.op = "insert"; st.payload = p; inserts.push({ table: table, payload: p }); return b; },
       update(p) { st.op = "update"; st.payload = p; if (table === "ai_tasks") updates.push(p); return b; },
       maybeSingle() { st.one = "maybe"; return b; }, single() { st.one = "single"; return b; },
       then(res, rej) { return Promise.resolve({ data: st.one ? (st.op === "insert" ? { id: "fake" } : null) : [], error: null }).then(res, rej); }
@@ -253,17 +282,20 @@ function runTask(agentType, stopReason) {
     resolvePreferredLanguage: async function () { return null; },
     buildLanguageInstruction: function () { return ""; },
     executiveLanguageBlock: function () { return ""; },
-    callAnthropicText: async function (prompt, maxTokens) { calls.push(maxTokens); return { text: "partial output", stopReason: stopReason }; },
+    callAnthropicText: async function (prompt, maxTokens) { calls.push(maxTokens); return { text: opts.text || "partial output", stopReason: stopReason }; },
     finalizeExecutiveTaskOutput: async function (u, output) { return { output: output, complete: true }; },
     reportMemoryConstraintViolation: function () {},
-    /* No memory row is wanted here; an empty roster skips the write. */
-    MEMORY_AGENT_TYPES: []
+    /* No memory row is wanted unless asked for; an empty roster skips the write. */
+    MEMORY_AGENT_TYPES: opts.memory ? [agentType] : []
   };
   vm.createContext(ctx);
   vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("nowIso"),
-    def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"), taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
-  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", "PROMPT", false, "user prompt").then(function () {
-    return { maxTokens: calls[0], update: updates[updates.length - 1], ceilings: vm.runInContext("TASK_OUTPUT_TOKEN_CEILINGS", ctx) };
+    def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
+    def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"),
+    taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
+  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt").then(function () {
+    return { maxTokens: calls[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
+      ceilings: vm.runInContext("TASK_OUTPUT_TOKEN_CEILINGS", ctx), slot: vm.runInContext("TESTIMONIAL_SLOT", ctx) };
   });
 }
 
@@ -404,26 +436,33 @@ function runTask(agentType, stopReason) {
   check("10. documented: the same writers, and five newest read into the next typed task",
     /when a task completes/.test(memDoc) && /when an assignment starts/.test(memDoc) && /on each Oracle exchange/.test(memDoc) && /by the SEO and sales tools/.test(memDoc) && /from the memory page/.test(memDoc) && /five newest per agent are read into that agent's next typed task/.test(memDoc), memDoc);
 
-  console.log("\n══ 11. no invented numbers or offers — present, and last ══");
+  console.log("\n══ 11. no invented numbers or offers — present, short, and last ══");
   const rule = brain.NO_INVENTION_RULE || "";
   const withMemory = brain.buildAgentSystemPrompt("AGENT PROMPT", { business_name: "Fixture Co" }, { tasksRun: 3 },
     [{ agent_type: "sales", title: "Earlier plan", content: "Estimated impact: 3-5 percent conversion." }]);
   console.log("    " + rule.slice(0, 100) + "…  (" + rule.length + " chars)");
-  check("11. the rule covers statistics, with memory named as not a source of fact",
-    /conversion rate/.test(rule) && /reorder or repeat rate/.test(rule) && /traffic figure/.test(rule) && /revenue projection/.test(rule) &&
-    /time to a result/.test(rule) && /any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS/.test(rule) &&
-    /found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact/.test(rule));
-  check("11. the rule covers offers: only the profile's exist",
-    /Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy\. Only the offers in the business profile exist\./.test(rule));
-  check("11. the rule requires shown arithmetic, the assumption written beside any number resting on one, and \"I don't have that figure\"",
-    /show the arithmetic/.test(rule) && /write the assumption into the same sentence \("assuming \.\.\."\)/.test(rule) &&
-    /name the real figure it starts from/.test(rule) && /an unknown rate is not 0%/.test(rule) && /"I don't have that figure"/.test(rule));
+  check("11. a missing figure gets the sentence \"I don't have that figure\", not a supplied one",
+    /- If a figure is not in the BUSINESS PROFILE or LIVE PLATFORM STATS, do not supply one: say "I don't have that figure" and where the owner can find it\./.test(rule));
+  check("11. a figure found only in memory is not repeated as a fact",
+    /- A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: do not repeat it as a fact\./.test(rule));
+  check("11. only the profile's offers exist; any other is recommended once as the owner's decision",
+    /- Only the offers in the business profile exist\. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy or a plan; if one might help, recommend it once as the owner's decision\./.test(rule));
+  check("11. derived numbers show their arithmetic, by example",
+    /- Show the arithmetic for a derived number: \$55 \/ 6 = \$9\.17 a shot\./.test(rule));
   check("11. the rule is the last block of the assembled prompt, after memory, and appears once",
     !!rule && withMemory.endsWith(rule) && withMemory.indexOf(rule) > withMemory.indexOf("ACCUMULATED MEMORY") &&
     withMemory.split(rule).length === 2, withMemory.slice(-80));
-  check("11. it says it governs the instructions that follow it, forecasts included",
-    /governs everything above it and every instruction after it, including any task instruction that asks for forecasts/.test(rule));
+  check("11. it says it governs the instructions after it, forecasts included",
+    /This rule governs every instruction above and after it, including any that asks for forecasts, KPIs, expected outcomes or projected revenue\./.test(rule));
   check("11. it is not also inside BRAIN_DIRECTIVES (one copy, one position)", brain.BRAIN_DIRECTIVES.indexOf("NO INVENTED NUMBERS") === -1);
+  /* Measured over four runs, only clauses that give a sentence to say or name
+     a specific error were followed; the rule was cut to those. These two keep
+     it that way: it stays short, and the abstract clauses do not come back. */
+  check("11. the rule stays short (" + rule.length + " characters, at most 1,600)", rule.length > 0 && rule.length <= 1600, rule.length);
+  const clauses = rule.split("\n").filter(l => l.indexOf("- ") === 0);
+  check("11. every clause gives a sentence, a slot or an example, or names a specific error (" + clauses.length + " clauses)",
+    clauses.length >= 8 && clauses.every(c => /"[^"]+"|\[TESTIMONIAL NEEDED|\$55 \/ 6|\b(?:do not|never|is not|not 0%)\b/i.test(c)) &&
+    !/ESTIMATE|assuming/.test(rule), JSON.stringify(clauses.filter(c => !/"[^"]+"|\[TESTIMONIAL NEEDED|\$55 \/ 6|\b(?:do not|never|is not|not 0%)\b/i.test(c))));
 
   console.log("\n══ 12. tasks per agent — counted, not a capped tally ══");
   /* A fake ai_tasks holding the owner's real shape: 7,951 rows, 7,900 of them
@@ -519,20 +558,16 @@ function runTask(agentType, stopReason) {
     statsLines.some(l => /^- socialDrafts: 0 \(.*not posts on the user's own social channels\)$/.test(l)) &&
     statsLines.some(l => /^- contentItems: 0 \(.*not content the user has published elsewhere\)$/.test(l)));
   check("14. the trailing rule, which names the stats as a source, says the same of them",
-    /LIVE PLATFORM STATS counts only activity inside BizForce: none of its figures is a measurement of the user's business, and a zero there is never a baseline or a projection input\./.test(rule) &&
+    /- LIVE PLATFORM STATS counts only activity inside BizForce, not the business\. A zero there is never a baseline or a projection input, and an unknown rate is not 0%\./.test(rule) &&
     zeroPrompt.indexOf(statsBlock) < zeroPrompt.indexOf(rule));
 
   console.log("\n══ 15. no invented people or product facts ══");
-  check("15. no customer quotation or testimonial, not as an example, placeholder or sample; the marked empty slot instead",
-    /- Never write a customer quotation, testimonial, review or anything presented as a real person's words, anywhere: not as an example, not as a placeholder, not labelled as a sample\./.test(rule) &&
-    /put \[TESTIMONIAL NEEDED: what to ask a real customer for\] in its place and leave it empty\./.test(rule));
-  check("15. nothing about what customers do, say or notice, or how many there are",
-    /- Never state what customers do, say, notice or feel, how long they have bought, or how many there are\./.test(rule));
-  check("15. no product or company fact the profile does not hold: strength, process, timing, duration, origin, ingredient, age of the business",
-    /- Never state a product or company fact that is not in the business profile: strength or concentration, process, timing, duration, origin, ingredient, stock, or the age or history of the business\./.test(rule) &&
-    /where copy needs a fact the profile lacks, say what the owner must supply\./.test(rule));
-  check("15. BANNED TOPICS bind words put in a customer's mouth, examples and drafts",
-    /- BANNED TOPICS in the business profile bind every word you write, including words put in a customer's mouth, an example and a draft\./.test(rule));
+  check("15. no words presented as a customer's, not even as an example or sample, nothing about what customers do; the marked slot instead",
+    /- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are\. Where copy needs a testimonial, write \[TESTIMONIAL NEEDED: what to ask a real customer for\]\./.test(rule));
+  check("15. no product or company fact the profile does not hold; say what the owner must supply",
+    /- Do not state a product or company fact the profile does not hold, such as strength, process, timing, ingredient, origin or the age of the business\. Use the profile's words, and say what the owner must supply\./.test(rule));
+  check("15. BANNED TOPICS bind every word: not in a customer's mouth, an example or a draft",
+    /- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft\./.test(rule));
   check("15. the heading names people and product facts, and the rule is still the last block",
     /^NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS\./.test(rule) && withMemory.endsWith(rule));
 
@@ -545,6 +580,38 @@ function runTask(agentType, stopReason) {
     /Before answering, think it through:/.test(reasoningDirective) && /That thinking is not part of the reply\. Begin with the answer itself/.test(reasoningDirective));
   check("16. told: never a section narrating the reasoning; the word \"internally\" is gone",
     /never write a section that narrates your reasoning, your reading of the request or these instructions\./.test(reasoningDirective) && !/internally/.test(reasoningDirective));
+
+  console.log("\n══ 17. invented customer words are taken out in code, before anything is stored ══");
+  const taskBody = def("processAiTask");
+  const screenAt = taskBody.indexOf("output = testimonialScreen.text;");
+  check("17. code: processAiTask replaces output with the screened text before the first result write and the memory write",
+    screenAt !== -1 && taskBody.indexOf("screenFabricatedTestimonials(output") !== -1 &&
+    screenAt < taskBody.indexOf("result: output") && screenAt < taskBody.indexOf("from(\"agent_memory\")"),
+    JSON.stringify([screenAt, taskBody.indexOf("result: output"), taskBody.indexOf("from(\"agent_memory\")")]));
+  /* The two fabrications found in clean-2, written the way an agent writes them. */
+  const FABRICATED = "Lead with proof. \"I have reordered War Horse every month for three years,\" one customer told us. " +
+    "Men tell us they notice the difference by the third shot. Then show the six-pack at $55.";
+  const screened = await runTask("social", "end_turn", { text: FABRICATED, memory: true });
+  const everything = JSON.stringify(screened.updates) + JSON.stringify(screened.inserts);
+  console.log("    stored: " + (screened.update && screened.update.result || "").slice(0, 120) + "…");
+  check("17. neither fabrication is stored anywhere: not in the result, not in the error, not in agent_memory",
+    !/three years|third shot|men tell us/i.test(everything) && screened.inserts.some(i => i.table === "agent_memory"), everything.slice(0, 200));
+  check("17. the result says what happened, at the top, and marks each place",
+    !!screened.update && /^NOTE FROM BIZFORCE: 2 passages written as a customer's words/.test(screened.update.result) &&
+    screened.update.result.split(screened.slot).length === 3 && /Then show the six-pack at \$55\./.test(screened.update.result) &&
+    screened.update.status === "completed", screened.update && screened.update.result.slice(0, 120));
+  check("17. the same notice is recorded in ai_tasks.error", !!screened.update && /^NOTE FROM BIZFORCE: 2 passages/.test(screened.update.error || ""), screened.update && screened.update.error);
+  const SUPPLIED = "Use my customer Dave's words: \"I have reordered War Horse every month for three years\"";
+  const kept = await runTask("social", "end_turn", { text: "Open with Dave's line: \"I have reordered War Horse every month for three years,\" he told us.", userPrompt: SUPPLIED });
+  check("17. a quotation the user supplied in their request is kept, with no notice",
+    !!kept.update && /three years/.test(kept.update.result) && !/NOTE FROM BIZFORCE/.test(kept.update.result) && kept.update.error === null, kept.update && kept.update.result);
+  const PROFILE_PROMPT = "BUSINESS PROFILE:\nBrand Values: \"I make what I would give my own father\" says the founder.\n\nLIVE PLATFORM STATS:\n- tasksRun: 0";
+  const fromProfile = await runTask("social", "end_turn", { text: "Close with the founder's line: \"I make what I would give my own father\" says the founder.", finalPrompt: PROFILE_PROMPT });
+  check("17. a quotation from the business profile is kept",
+    !!fromProfile.update && /my own father/.test(fromProfile.update.result) && !/NOTE FROM BIZFORCE/.test(fromProfile.update.result), fromProfile.update && fromProfile.update.result);
+  const plain = await runTask("social", "end_turn", { text: "Ask a buyer: \"What made you reorder?\" Then lead with the six-pack. Never write lines like customers tell us they love it. Put [TESTIMONIAL NEEDED: ask a repeat buyer why they reorder] under the price. Write \"I'm proud of this formula\" on the label." });
+  check("17. a question, a negated instruction, the placeholder and an unattributed first-person line are left alone",
+    !!plain.update && !/NOTE FROM BIZFORCE/.test(plain.update.result) && plain.update.error === null, plain.update && plain.update.result.slice(0, 160));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

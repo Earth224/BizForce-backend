@@ -153,18 +153,31 @@ const BRAIN_DIRECTIVES =
    forbade promising a timeframe, and "by the third shot" got past it by being
    attributed to customers instead of promised by the brand; the last clause
    closes that route for every banned topic without making a business-specific
-   ban platform-wide. */
+   ban platform-wide.
+
+   CUT TO WHAT LANDS. Measured over four runs, the clauses agents followed
+   either give a sentence to say ("I don't have that figure", used 0, 1, 3,
+   then 4 times) or name a specific error ("an unknown rate is not 0%" took
+   zero-based projections from 1 to 0; "Only the offers in the business
+   profile exist" took invented offers from 10 to 1). The abstract ones were
+   never used once: "label it ESTIMATE", then "write the assumption into the
+   same sentence". At 2,713 characters the rule had become longer than the
+   profile it governs, so it was cut to the clauses of the first two kinds.
+   Its self-justifying preamble went, since position does that work; the
+   assumption clause went; the two customer clauses became one. Invented
+   testimonials are also screened in code after generation
+   (screenFabricatedTestimonials in server.js), because they are the one
+   failure with legal exposure and prose can be skimmed. */
 const NO_INVENTION_RULE =
-  "NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS. This rule is placed last because it governs everything above it and every instruction after it, including any task instruction that asks for forecasts, KPIs, expected outcomes, estimated impact or projected revenue: satisfy those under this rule, never around it.\n" +
-  "- Never state a conversion rate, open or click rate, reorder or repeat rate, traffic figure, cost per click or per acquisition, revenue projection, time to a result, or any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS above. LIVE PLATFORM STATS counts only activity inside BizForce: none of its figures is a measurement of the user's business, and a zero there is never a baseline or a projection input. A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact, and must not be repeated as one.\n" +
-  "- Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy. Only the offers in the business profile exist. Never write any other offer into copy, a script, a sequence or a plan as though it exists. If a new offer might help, say so once as a recommendation for the owner to decide, and call it that.\n" +
-  "- Never write a customer quotation, testimonial, review or anything presented as a real person's words, anywhere: not as an example, not as a placeholder, not labelled as a sample. Where copy would be stronger with one, put [TESTIMONIAL NEEDED: what to ask a real customer for] in its place and leave it empty.\n" +
-  "- Never state what customers do, say, notice or feel, how long they have bought, or how many there are.\n" +
-  "- Never state a product or company fact that is not in the business profile: strength or concentration, process, timing, duration, origin, ingredient, stock, or the age or history of the business. Describe the products in the profile's own words, and where copy needs a fact the profile lacks, say what the owner must supply.\n" +
-  "- BANNED TOPICS in the business profile bind every word you write, including words put in a customer's mouth, an example and a draft.\n" +
-  "- Where a number is derived by arithmetic from a real figure, show the arithmetic (for example: $55 / 6 = $9.17 a shot).\n" +
-  "- Where a number rests on an assumption, write the assumption into the same sentence (\"assuming ...\"), give the number as a range, and name the real figure it starts from. An assumption is never a figure you do not have: an unknown rate is not 0%, and a missing figure is not a starting point. A number whose assumption cannot be named is not given.\n" +
-  "- Where a figure is needed and is not in front of you, say \"I don't have that figure\" and where the owner can find it, rather than supplying one.";
+  "NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS. This rule governs every instruction above and after it, including any that asks for forecasts, KPIs, expected outcomes or projected revenue.\n" +
+  "- If a figure is not in the BUSINESS PROFILE or LIVE PLATFORM STATS, do not supply one: say \"I don't have that figure\" and where the owner can find it.\n" +
+  "- LIVE PLATFORM STATS counts only activity inside BizForce, not the business. A zero there is never a baseline or a projection input, and an unknown rate is not 0%.\n" +
+  "- A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: do not repeat it as a fact.\n" +
+  "- Only the offers in the business profile exist. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy or a plan; if one might help, recommend it once as the owner's decision.\n" +
+  "- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are. Where copy needs a testimonial, write [TESTIMONIAL NEEDED: what to ask a real customer for].\n" +
+  "- Do not state a product or company fact the profile does not hold, such as strength, process, timing, ingredient, origin or the age of the business. Use the profile's words, and say what the owner must supply.\n" +
+  "- Show the arithmetic for a derived number: $55 / 6 = $9.17 a shot.\n" +
+  "- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft.";
 
 /* THE PLAN, BY REFERENCE. server.js requires this file, so this file cannot
    require server.js back — that would be a circular require, and loading
