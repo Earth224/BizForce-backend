@@ -42,6 +42,13 @@
         owner and "not available" to anyone else, with the constant the lead
         routes refuse on; the knowledge text points at that line and covers
         available, not available and absent.
+     14. WHAT A ZERO MEANS. A zero-stats account — every figure getLiveStats
+        produces, at 0 — renders a stats block that says the counts cover only
+        BizForce on this account, that a zero means nothing recorded here,
+        never "none", never a baseline or projection input, and that the
+        user's own site, lists, channels and sales are not measured; every
+        zero is still shown, each with what it counts; and the trailing
+        NO_INVENTION_RULE says the same of the stats it names as a source.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -59,6 +66,7 @@
    MUTATE=invent   puts the rule with the directives, not last → 11 goes red
    MUTATE=tally    restores the fetch-and-tally byAgent        → 12 goes red
    MUTATE=owner    restores "unavailable to customer accounts" → 13 goes red
+   MUTATE=zero     restores "this user's real, current usage"  → 14 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -84,7 +92,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner"];
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -163,6 +171,11 @@ if (MUTATE === "owner") {
   BRAIN = mutate(BRAIN, /IT WORKS ON ONE ACCOUNT ONLY:[^"]*"/.exec(BRAIN)[0],
     `UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account."`, "owner");
   console.log("\n!! MUTATION: Lead Radar is \"unavailable to customer accounts\" again, with nothing to tell the owner apart — 13 must fail.");
+}
+if (MUTATE === "zero") {
+  BRAIN = mutate(BRAIN, `  return LIVE_STATS_HEADER + "\\n" + lines.join("\\n");`,
+    `  return "LIVE PLATFORM STATS (this user's real, current usage — use it, don't ignore it):\\n" + lines.join("\\n");`, "zero");
+  console.log("\n!! MUTATION: the stats block calls itself \"this user's real, current usage\" again — 14 must fail.");
 }
 function loadBrain() {
   const mod = { exports: {} };
@@ -367,8 +380,9 @@ function runTask(agentType, stopReason) {
     /found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact/.test(rule));
   check("11. the rule covers offers: only the profile's exist",
     /Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy\. Only the offers in the business profile exist\./.test(rule));
-  check("11. the rule requires shown arithmetic, labelled estimates with their basis, and \"I don't have that figure\"",
-    /show the arithmetic/.test(rule) && /label it ESTIMATE/.test(rule) && /say what it rests on/.test(rule) && /"I don't have that figure"/.test(rule));
+  check("11. the rule requires shown arithmetic, the assumption written beside any number resting on one, and \"I don't have that figure\"",
+    /show the arithmetic/.test(rule) && /write the assumption into the same sentence \("assuming \.\.\."\)/.test(rule) &&
+    /name the real figure it starts from/.test(rule) && /an unknown rate is not 0%/.test(rule) && /"I don't have that figure"/.test(rule));
   check("11. the rule is the last block of the assembled prompt, after memory, and appears once",
     !!rule && withMemory.endsWith(rule) && withMemory.indexOf(rule) > withMemory.indexOf("ACCUMULATED MEMORY") &&
     withMemory.split(rule).length === 2, withMemory.slice(-80));
@@ -438,6 +452,40 @@ function runTask(agentType, stopReason) {
     /If it says not available, it is unavailable to them\./.test(radarLine) &&
     /If there is no leadRadar line, you do not know which account this is: do not tell the user either way\./.test(radarLine) &&
     !/CUSTOMER ACCOUNTS/i.test(radarLine), radarLine.slice(-200));
+
+  console.log("\n══ 14. what a zero in the stats means ══");
+  /* customerStats is the real getLiveStats run for an account with no rows at
+     all — a new account, every count at zero. */
+  const zeroPrompt = brain.buildAgentSystemPrompt("X", {}, customerStats, []);
+  /* The block, not the Lead Radar sentence that names it: the last heading
+     before the memory block. */
+  const memoryAt = zeroPrompt.indexOf("\n\nACCUMULATED MEMORY");
+  const statsBlock = zeroPrompt.slice(zeroPrompt.lastIndexOf("\n\nLIVE PLATFORM STATS", memoryAt), memoryAt).trim();
+  const statsLines = statsBlock.split("\n");
+  console.log("    " + statsLines[0]);
+  const countKeys = Object.keys(customerStats).filter(k => k !== "_unreadable" && typeof customerStats[k] === "number");
+  check("14. the account really is all zeros (" + countKeys.length + " counts)", countKeys.length >= 9 && countKeys.every(k => customerStats[k] === 0), JSON.stringify(customerStats));
+  check("14. told: the counts cover only what is done inside BizForce, on this account",
+    /^LIVE PLATFORM STATS \(activity inside BizForce on this account, and nothing else\):$/.test(statsLines[0]) &&
+    /These figures count only what has been done inside BizForce on this account\./.test(statsBlock), statsLines[0]);
+  check("14. told: a zero means nothing recorded here, not that the business has none",
+    /A zero means nothing has been recorded here yet, not that the user's business has none\./.test(statsBlock));
+  check("14. told: never imply none from a zero, never a baseline, starting point or projection input",
+    /Never state or imply that the user has none of something because a count here is zero, and never use a zero from this block as a baseline, a starting point or an input to a projection\./.test(statsBlock));
+  check("14. told: the user's own website, lists, channels and sales exist outside and are not measured here",
+    /The user's own website, customers, email and SMS lists, social channels, sales and history exist outside this platform and are not measured here\./.test(statsBlock));
+  check("14. the old self-description is gone", statsBlock.indexOf("this user's real, current usage") === -1);
+  check("14. every zero is still shown, each with what it counts",
+    countKeys.every(k => statsLines.some(l => l.indexOf("- " + k + ": 0 (") === 0)),
+    countKeys.filter(k => !statsLines.some(l => l.indexOf("- " + k + ": 0 (") === 0)).join(","));
+  check("14. the zeros most easily misread say what they do not count",
+    statsLines.some(l => /^- blogItems: 0 \(.*not articles on the user's own website\)$/.test(l)) &&
+    statsLines.some(l => /^- subscribers: 0 \(.*not the user's customer, email or SMS list elsewhere\)$/.test(l)) &&
+    statsLines.some(l => /^- socialDrafts: 0 \(.*not posts on the user's own social channels\)$/.test(l)) &&
+    statsLines.some(l => /^- contentItems: 0 \(.*not content the user has published elsewhere\)$/.test(l)));
+  check("14. the trailing rule, which names the stats as a source, says the same of them",
+    /LIVE PLATFORM STATS counts only activity inside BizForce: none of its figures is a measurement of the user's business, and a zero there is never a baseline or a projection input\./.test(rule) &&
+    zeroPrompt.indexOf(statsBlock) < zeroPrompt.indexOf(rule));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

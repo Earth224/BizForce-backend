@@ -145,10 +145,10 @@ const BRAIN_DIRECTIVES =
    forecast is still given, as a labelled estimate with its basis. */
 const NO_INVENTION_RULE =
   "NO INVENTED NUMBERS OR OFFERS. This rule is placed last because it governs everything above it and every instruction after it, including any task instruction that asks for forecasts, KPIs, expected outcomes, estimated impact or projected revenue: satisfy those under this rule, never around it.\n" +
-  "- Never state a conversion rate, open or click rate, reorder or repeat rate, traffic figure, cost per click or per acquisition, revenue projection, time to a result, or any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS above. A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact, and must not be repeated as one.\n" +
+  "- Never state a conversion rate, open or click rate, reorder or repeat rate, traffic figure, cost per click or per acquisition, revenue projection, time to a result, or any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS above. LIVE PLATFORM STATS counts only activity inside BizForce: none of its figures is a measurement of the user's business, and a zero there is never a baseline or a projection input. A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact, and must not be repeated as one.\n" +
   "- Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy. Only the offers in the business profile exist. Never write any other offer into copy, a script, a sequence or a plan as though it exists. If a new offer might help, say so once as a recommendation for the owner to decide, and call it that.\n" +
   "- Where a number is derived by arithmetic from a real figure, show the arithmetic (for example: $55 / 6 = $9.17 a shot).\n" +
-  "- Where an estimate is genuinely needed, label it ESTIMATE, give it as a range, and say what it rests on: the real figure it starts from and the assumption it adds. An estimate that cannot name its basis is not given.\n" +
+  "- Where a number rests on an assumption, write the assumption into the same sentence (\"assuming ...\"), give the number as a range, and name the real figure it starts from. An assumption is never a figure you do not have: an unknown rate is not 0%, and a missing figure is not a starting point. A number whose assumption cannot be named is not given.\n" +
   "- Where a figure is needed and is not in front of you, say \"I don't have that figure\" and where the owner can find it, rather than supplying one.";
 
 /* THE PLAN, BY REFERENCE. server.js requires this file, so this file cannot
@@ -302,8 +302,8 @@ function formatBusinessProfile(businessProfile) {
    block, not a statistic in it, so it is never rendered as one. */
 var UNREADABLE_KEY = "_unreadable";
 
-/* The whole point of the marker: "0" is a fact about the business, "unavailable"
-   is a fact about this request. Phrased as something the prompt lacks rather
+/* The whole point of the marker: "0" is a fact about this account's activity
+   inside BizForce, "unavailable" is a fact about this request. Phrased as something the prompt lacks rather
    than as a failure, so the model treats it as a gap to work around or ask
    about — not as a malfunction it should stop and explain to the user. The
    "not zero" is the load-bearing half: without it a model reading "unavailable"
@@ -311,6 +311,43 @@ var UNREADABLE_KEY = "_unreadable";
 function unreadableLine(key) {
   return "- " + key + ": unavailable (unknown for this request — not zero)";
 }
+
+/* WHAT THE STATS BLOCK IS — SAID IN THE BLOCK, BECAUSE IT WAS SAID WRONG THERE.
+
+   WHAT WAS FOUND. The header read "this user's real, current usage — use it,
+   don't ignore it", and nothing said what the counts cover. Run on a new
+   account with every count at zero, four of six agents read the zeros as facts
+   about the business: "You have 0 blog items" to a $40k-a-month business with a
+   live site, "zero published content", and Operations turned an absent repeat
+   rate into "0%", then a baseline, then a $6,600-7,800 projection.
+
+   Every figure getLiveStats produces counts rows created inside BizForce on
+   this account. A zero is true about the platform and is still shown; what
+   changes is what the agent is told it means. The header carries that, and
+   each known figure says on its own line what it counts and, where a zero is
+   most easily misread, what it does not. A key this map does not know is
+   rendered bare, under the same header.
+
+   NO_INVENTION_RULE, which comes last, names LIVE PLATFORM STATS as a source
+   figures may come from. It repeats in one sentence that these counts are not
+   measurements of the business, because a trailing rule that licensed what
+   this header forbids would win. */
+var LIVE_STATS_HEADER =
+  "LIVE PLATFORM STATS (activity inside BizForce on this account, and nothing else):\n" +
+  "These figures count only what has been done inside BizForce on this account. The user's own website, customers, email and SMS lists, social channels, sales and history exist outside this platform and are not measured here. A zero means nothing has been recorded here yet, not that the user's business has none. Never state or imply that the user has none of something because a count here is zero, and never use a zero from this block as a baseline, a starting point or an input to a projection. Use these figures for what they are: a record of work done on this platform.";
+
+var LIVE_STATS_SCOPE = {
+  tasksRun: "agent tasks run on BizForce by this account",
+  tasksCompleted: "of those tasks, completed",
+  contentItems: "items saved in this account's BizForce Content Library, not content the user has published elsewhere",
+  blogItems: "blog articles saved in the Content Library here, not articles on the user's own website",
+  smsItems: "SMS messages saved in the Content Library here",
+  subscribers: "SMS subscribers entered into BizForce, not the user's customer, email or SMS list elsewhere",
+  optedIn: "of those subscribers, opted in",
+  campaigns: "SMS campaigns created in BizForce",
+  socialDrafts: "social post drafts made in BizForce, not posts on the user's own social channels",
+  byAgent: "tasks run here, per agent"
+};
 
 function formatLiveStats(liveStats) {
   if (!liveStats || typeof liveStats !== "object" || Object.keys(liveStats).length === 0) {
@@ -339,7 +376,7 @@ function formatLiveStats(liveStats) {
       }
 
       if (value && typeof value === "object") value = JSON.stringify(value);
-      return "- " + key + ": " + value;
+      return "- " + key + ": " + value + (LIVE_STATS_SCOPE[key] ? " (" + LIVE_STATS_SCOPE[key] + ")" : "");
     });
 
   /* An object carrying the marker and nothing else is not a stats block. */
@@ -347,7 +384,7 @@ function formatLiveStats(liveStats) {
     return "LIVE PLATFORM STATS:\nNo live stats available for this request.";
   }
 
-  return "LIVE PLATFORM STATS (this user's real, current usage — use it, don't ignore it):\n" + lines.join("\n");
+  return LIVE_STATS_HEADER + "\n" + lines.join("\n");
 }
 
 function formatMemories(memories) {
