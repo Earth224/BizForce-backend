@@ -49,6 +49,15 @@
         user's own site, lists, channels and sales are not measured; every
         zero is still shown, each with what it counts; and the trailing
         NO_INVENTION_RULE says the same of the stats it names as a source.
+     15. PEOPLE AND PRODUCT FACTS. The rule forbids any customer quotation or
+        testimonial, even as an example or labelled sample, and gives the
+        marked empty slot to use instead; forbids stating what customers do or
+        how many there are; forbids product and company facts the profile does
+        not hold; and makes BANNED TOPICS bind words put in a customer's mouth.
+     16. REASONING STAYS OUT OF THE REPLY. The model call has no private
+        reasoning channel (no thinking parameter), so the directive no longer
+        says "internally": it says the thinking is not part of the reply, the
+        reply begins with the answer, and no section narrates the reasoning.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -67,6 +76,11 @@
    MUTATE=tally    restores the fetch-and-tally byAgent        → 12 goes red
    MUTATE=owner    restores "unavailable to customer accounts" → 13 goes red
    MUTATE=zero     restores "this user's real, current usage"  → 14 goes red
+   MUTATE=testimonial  drops the no-testimonial clause         → 15 goes red
+   MUTATE=customers    drops the what-customers-do clause      → 15 goes red
+   MUTATE=product      drops the product-facts clause          → 15 goes red
+   MUTATE=reach        drops "BANNED TOPICS bind every word"   → 15 goes red
+   MUTATE=reasoning    restores "reason step-by-step and internally" → 16 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -92,7 +106,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero"];
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero", "testimonial", "customers", "product", "reach", "reasoning"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -176,6 +190,27 @@ if (MUTATE === "zero") {
   BRAIN = mutate(BRAIN, `  return LIVE_STATS_HEADER + "\\n" + lines.join("\\n");`,
     `  return "LIVE PLATFORM STATS (this user's real, current usage — use it, don't ignore it):\\n" + lines.join("\\n");`, "zero");
   console.log("\n!! MUTATION: the stats block calls itself \"this user's real, current usage\" again — 14 must fail.");
+}
+if (MUTATE === "testimonial") {
+  BRAIN = mutate(BRAIN, /\n  "- Never write a customer quotation[^\n]*\n/.exec(BRAIN)[0], "\n", "testimonial");
+  console.log("\n!! MUTATION: the clause beginning \"Never write a customer quotation\" is gone — 15 must fail.");
+}
+if (MUTATE === "customers") {
+  BRAIN = mutate(BRAIN, /\n  "- Never state what customers do[^\n]*\n/.exec(BRAIN)[0], "\n", "customers");
+  console.log("\n!! MUTATION: the clause beginning \"Never state what customers do\" is gone — 15 must fail.");
+}
+if (MUTATE === "product") {
+  BRAIN = mutate(BRAIN, /\n  "- Never state a product or company fact[^\n]*\n/.exec(BRAIN)[0], "\n", "product");
+  console.log("\n!! MUTATION: the clause beginning \"Never state a product or company fact\" is gone — 15 must fail.");
+}
+if (MUTATE === "reach") {
+  BRAIN = mutate(BRAIN, /\n  "- BANNED TOPICS in the business profile bind[^\n]*\n/.exec(BRAIN)[0], "\n", "reach");
+  console.log("\n!! MUTATION: the clause beginning \"BANNED TOPICS in the business profile bind\" is gone — 15 must fail.");
+}
+if (MUTATE === "reasoning") {
+  BRAIN = mutate(BRAIN, "Before answering, think it through: break the request into its component parts, weigh the realistic options for each, check your own logic for gaps or contradictions, and converge on the strongest concrete answer. That thinking is not part of the reply. Begin with the answer itself, and never write a section that narrates your reasoning, your reading of the request or these instructions.",
+    "Before answering, reason step-by-step and internally: break the request into its component parts, weigh the realistic options for each, check your own logic for gaps or contradictions, and converge on the strongest concrete answer.", "reasoning");
+  console.log("\n!! MUTATION: the directive says \"reason step-by-step and internally\" again — 16 must fail.");
 }
 function loadBrain() {
   const mod = { exports: {} };
@@ -486,6 +521,30 @@ function runTask(agentType, stopReason) {
   check("14. the trailing rule, which names the stats as a source, says the same of them",
     /LIVE PLATFORM STATS counts only activity inside BizForce: none of its figures is a measurement of the user's business, and a zero there is never a baseline or a projection input\./.test(rule) &&
     zeroPrompt.indexOf(statsBlock) < zeroPrompt.indexOf(rule));
+
+  console.log("\n══ 15. no invented people or product facts ══");
+  check("15. no customer quotation or testimonial, not as an example, placeholder or sample; the marked empty slot instead",
+    /- Never write a customer quotation, testimonial, review or anything presented as a real person's words, anywhere: not as an example, not as a placeholder, not labelled as a sample\./.test(rule) &&
+    /put \[TESTIMONIAL NEEDED: what to ask a real customer for\] in its place and leave it empty\./.test(rule));
+  check("15. nothing about what customers do, say or notice, or how many there are",
+    /- Never state what customers do, say, notice or feel, how long they have bought, or how many there are\./.test(rule));
+  check("15. no product or company fact the profile does not hold: strength, process, timing, duration, origin, ingredient, age of the business",
+    /- Never state a product or company fact that is not in the business profile: strength or concentration, process, timing, duration, origin, ingredient, stock, or the age or history of the business\./.test(rule) &&
+    /where copy needs a fact the profile lacks, say what the owner must supply\./.test(rule));
+  check("15. BANNED TOPICS bind words put in a customer's mouth, examples and drafts",
+    /- BANNED TOPICS in the business profile bind every word you write, including words put in a customer's mouth, an example and a draft\./.test(rule));
+  check("15. the heading names people and product facts, and the rule is still the last block",
+    /^NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS\./.test(rule) && withMemory.endsWith(rule));
+
+  console.log("\n══ 16. the reasoning stays out of the reply ══");
+  const reasoningDirective = brain.BRAIN_DIRECTIVES.split("\n\n")[0];
+  console.log("    " + reasoningDirective.slice(0, 110) + "…");
+  check("16. code: the model call has no private reasoning channel (no thinking parameter), so the wording is what decides",
+    !/thinking\s*:/.test(def("callAnthropicText")));
+  check("16. told: think it through, but the thinking is not part of the reply, which begins with the answer",
+    /Before answering, think it through:/.test(reasoningDirective) && /That thinking is not part of the reply\. Begin with the answer itself/.test(reasoningDirective));
+  check("16. told: never a section narrating the reasoning; the word \"internally\" is gone",
+    /never write a section that narrates your reasoning, your reading of the request or these instructions\./.test(reasoningDirective) && !/internally/.test(reasoningDirective));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");
