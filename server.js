@@ -12019,6 +12019,86 @@ function screenFabricatedTestimonials(text, suppliedText) {
   return { text: notice + "\n\n" + out, removed: n, notice: notice, removals: removals };
 }
 
+/* CLAIMS ABOUT HOW THE USER'S PRODUCTS SELL ARE FLAGGED, NOT REMOVED.
+
+   WHAT WAS FOUND. Every reply in clean-run-4 opened by calling the products the
+   user asked about "your highest-volume", "highest-velocity" products, or the
+   ones that "drive volume" — six of six agents, from a profile with no sales
+   figures by product. The model restates the request ("sell more War Horse")
+   as a fact about sales. Forbidding it in NO_INVENTION_RULE made it more
+   common, not less.
+
+   WHY FLAG AND NOT REMOVE. Unlike an invented testimonial, a sales superlative
+   may be true: the owner may well sell War Horse most. The agent cannot know,
+   and the owner can. The sentence also carries real content (prices, sizes).
+   So the sentence is kept, an [UNVERIFIED] mark goes straight after it, and a
+   notice at the top of the result says what the marks mean. Each flagged
+   sentence is recorded in testimonial_screen_removals with pattern
+   'sales_superlative' (migration 125).
+
+   WHAT IT CATCHES. A sentence with a sales superlative — highest-volume,
+   highest-velocity, best-selling, top-selling, most popular, fastest-moving,
+   core/main/top revenue driver, drives volume, moves fastest, sells most,
+   converts faster than, volume driver/leader — that is anchored to this
+   business: it says "your", or names something the business profile names (a
+   product, the business). Measured on the 36 stored outputs of six runs: 15
+   flags, all claims about which products sell, none a false catch. Those
+   rules were tuned on the same 36, so the true rate will be lower.
+
+   WHAT PASSES ON PURPOSE. A question or a find-out instruction ("Which one
+   moves fastest?", "Identify your highest-velocity bundle"); a negated
+   sentence; a phrase the profile itself uses ("the flagship topical oil
+   blend", "the most advanced in the line" are not in the list either); a
+   sentence about competitors or channels with no anchor ("This will convert
+   faster than any cold outreach").
+
+   WHAT IT MISSES. A superlative about a product the sentence refers to only
+   by pronoun ("These lead your sales" is caught by "your"; "They outsell the
+   oils" is not); "flagship" applied to the wrong product (the profile calls
+   Sword Vitality the flagship; run-1 social called War Horse one); and any
+   phrasing outside the list ("the shot men reach for first"). */
+var SALES_SUPERLATIVE_MARK = "[UNVERIFIED: your business profile holds no sales figures by product]";
+
+function screenSalesSuperlatives(text, profileText) {
+  var source = String(text || "");
+  var profile = String(profileText || "");
+  var profileLower = profile.toLowerCase();
+  var SUPERLATIVE = /\b(?:highest[- ](?:volume|velocity|selling|converting|margin|revenue)|best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)|most popular|fastest[- ](?:moving|selling)|(?:core|main|primary|biggest|top) revenue (?:drivers?|generators?|earners?|products?)|drives? (?:the most )?volume|moves? (?:the )?fastest|sells? (?:the )?most|converts? (?:faster|better) than|volume (?:drivers?|leaders?))\b/i;
+  var ASKING = /\?\s*$|^[\s\-*\d.)]*(?:identify|find out|figure out|determine|measure|track|check|ask|test|pull|confirm)\b/i;
+  var NEGATED = /\b(?:never|don't|do not|avoid)\b/i;
+  /* The names this business uses: capitalised multi-word runs on one line,
+     with each line's "Label:" removed first so field names are not names. */
+  var names = (profile.replace(/^[^:\n]{1,40}:/gm, "").match(/\b[A-Z][A-Za-z']+(?:[ \t]+[A-Z][A-Za-z']+)+\b/g) || [])
+    .filter(function (name, i, all) { return all.indexOf(name) === i && !/^[A-Z' ]+$/.test(name); });
+
+  var flags = [];
+  var marks = [];
+  var sentenceRe = /[^.!?\n]+[.!?]*/g;
+  var m;
+  while ((m = sentenceRe.exec(source)) !== null) {
+    var sentence = m[0];
+    var hit = sentence.match(SUPERLATIVE);
+    if (!hit) continue;
+    if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;
+    if (profileLower.indexOf(hit[0].toLowerCase()) !== -1) continue;
+    var anchored = /\byour\b/i.test(sentence) || names.some(function (name) { return sentence.indexOf(name) !== -1; });
+    if (!anchored) continue;
+    flags.push({ pattern: "sales_superlative", passage: sentence.trim() });
+    marks.push(m.index + sentence.length);
+  }
+  if (!flags.length) return { text: source, flagged: 0, flags: [] };
+
+  var out = source;
+  for (var i = marks.length - 1; i >= 0; i--) {
+    out = out.slice(0, marks[i]) + " " + SALES_SUPERLATIVE_MARK + out.slice(marks[i]);
+  }
+  var n = flags.length;
+  var notice = "NOTE FROM BIZFORCE: " + n + " statement" + (n === 1 ? "" : "s") + " about how your products sell " +
+    (n === 1 ? "is" : "are") + " marked [UNVERIFIED]. Your business profile holds no sales figures by product, so " +
+    (n === 1 ? "it is" : "they are") + " the agent's assumption, not your data. Check " + (n === 1 ? "it" : "them") + " against your own sales before using " + (n === 1 ? "it" : "them") + ".";
+  return { text: notice + "\n\n" + out, flagged: n, notice: notice, flags: flags };
+}
+
 /* WHAT THE SCREEN TOOK OUT, KEPT WHERE ONLY A PERSON REVIEWING IT LOOKS.
    One row per removed passage in testimonial_screen_removals (migration 124):
    the task, the account, the agent, the pattern that matched and the passage.
@@ -12028,18 +12108,25 @@ function screenFabricatedTestimonials(text, suppliedText) {
    applied, a database blip) is logged and costs the review, never the task. */
 async function recordTestimonialRemovals(taskId, userId, agentType, removals) {
   if (!removals || !removals.length) return;
-  try {
-    var recorded = await supabase
-      .from("testimonial_screen_removals")
-      .insert(removals.map(function (removal) {
-        return { task_id: taskId, user_id: userId, agent_type: agentType, pattern: removal.pattern, passage: removal.passage };
-      }));
-    if (recorded.error) {
-      console.error("[testimonial-screen] could not record " + removals.length + " removal(s) for task " + taskId + ": " +
-        (recorded.error.message || recorded.error) + ". The task was stored; only the review record is missing.");
+  /* One insert per pattern, so a pattern the table's check constraint does not
+     yet allow (before migration 125, 'sales_superlative') loses only its own
+     rows, never the testimonial removals recorded beside it. */
+  var patterns = removals.map(function (r) { return r.pattern; }).filter(function (p, i, all) { return all.indexOf(p) === i; });
+  for (var i = 0; i < patterns.length; i++) {
+    var group = removals.filter(function (r) { return r.pattern === patterns[i]; });
+    try {
+      var recorded = await supabase
+        .from("testimonial_screen_removals")
+        .insert(group.map(function (removal) {
+          return { task_id: taskId, user_id: userId, agent_type: agentType, pattern: removal.pattern, passage: removal.passage };
+        }));
+      if (recorded.error) {
+        console.error("[testimonial-screen] could not record " + group.length + " " + patterns[i] + " row(s) for task " + taskId + ": " +
+          (recorded.error.message || recorded.error) + ". The task was stored; only the review record is missing.");
+      }
+    } catch (recordErr) {
+      console.error("[testimonial-screen] recording " + patterns[i] + " for task " + taskId + " threw: " + ((recordErr && recordErr.message) || recordErr));
     }
-  } catch (recordErr) {
-    console.error("[testimonial-screen] recording removals for task " + taskId + " threw: " + ((recordErr && recordErr.message) || recordErr));
   }
 }
 
@@ -12116,10 +12203,14 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
            user supplied, in their request or their business profile, is left. */
         var profileStart = String(finalPrompt || "").indexOf("BUSINESS PROFILE:");
         var profileEnd = String(finalPrompt || "").indexOf("\n\nLIVE PLATFORM STATS", profileStart);
-        var suppliedByUser = String(userPrompt || "") + "\n" +
-          (profileStart === -1 ? "" : String(finalPrompt).slice(profileStart, profileEnd === -1 ? undefined : profileEnd));
+        var profileSection = profileStart === -1 ? "" : String(finalPrompt).slice(profileStart, profileEnd === -1 ? undefined : profileEnd);
+        var suppliedByUser = String(userPrompt || "") + "\n" + profileSection;
         var testimonialScreen = screenFabricatedTestimonials(output, suppliedByUser);
         output = testimonialScreen.text;
+        /* Then claims about how the products sell: kept, marked, noted. */
+        var superlativeScreen = screenSalesSuperlatives(output, profileSection);
+        output = superlativeScreen.text;
+        var screenFindings = testimonialScreen.removals.concat(superlativeScreen.flags);
 
         if (isExecutive && !executiveComplete) {
           /* completed_at and error, matching what startToolRun's fail() writes.
@@ -12139,7 +12230,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .eq("id", taskId)
             .eq("user_id", userId);
 
-          await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);
+          await recordTestimonialRemovals(taskId, userId, agentType, screenFindings);
           return;
         }
 
@@ -12156,7 +12247,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .update({
                 result: output,
                 status: requiresApproval ? "requires_approval" : "completed",
-                error: [stoppedEarly, testimonialScreen.removed ? testimonialScreen.notice : null].filter(Boolean).join(" ") || null,
+                error: [stoppedEarly, testimonialScreen.removed ? testimonialScreen.notice : null, superlativeScreen.flagged ? superlativeScreen.notice : null].filter(Boolean).join(" ") || null,
                 completed_at: taskFinishedAt,
                 updated_at: taskFinishedAt
             })
@@ -12167,7 +12258,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             throw updateResult.error;
         }
 
-        await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);
+        await recordTestimonialRemovals(taskId, userId, agentType, screenFindings);
 
         // Write a concise agent_memory row for this completed task, so the
         // next call for this user_id + agent_type has something to build on.

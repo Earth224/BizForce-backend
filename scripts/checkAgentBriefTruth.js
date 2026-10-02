@@ -123,7 +123,7 @@ residue.install();
 
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
-  "inference", "audit", "reader"];
+  "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -144,8 +144,25 @@ if (MUTATE === "tally") {
     `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
   console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
 }
+if (MUTATE === "superlative") {
+  SERVER = mutate(SERVER, "        output = superlativeScreen.text;\n", "", "superlative");
+  console.log("\n!! MUTATION: the superlative screen runs but its marks are not stored — 19 must fail.");
+}
+if (MUTATE === "anchor") {
+  SERVER = mutate(SERVER, "    if (!anchored) continue;\n", "", "anchor");
+  console.log("\n!! MUTATION: a superlative about anything is flagged, anchored to this business or not — 19 must fail.");
+}
+if (MUTATE === "asking") {
+  SERVER = mutate(SERVER, "    if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;\n", "    if (NEGATED.test(sentence)) continue;\n", "asking");
+  console.log("\n!! MUTATION: a question or a find-out instruction is flagged as a claim — 19 must fail.");
+}
+if (MUTATE === "grouped") {
+  SERVER = mutate(SERVER, "  for (var i = 0; i < patterns.length; i++) {\n    var group = removals.filter(function (r) { return r.pattern === patterns[i]; });\n",
+    "  for (var i = 0; i < 1; i++) {\n    var group = removals;\n", "grouped");
+  console.log("\n!! MUTATION: all findings go in one insert, so a refused pattern takes the others with it — 19 must fail.");
+}
 if (MUTATE === "audit") {
-  SERVER = mutate(SERVER, "            throw updateResult.error;\n        }\n\n        await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);\n",
+  SERVER = mutate(SERVER, "            throw updateResult.error;\n        }\n\n        await recordTestimonialRemovals(taskId, userId, agentType, screenFindings);\n",
     "            throw updateResult.error;\n        }\n", "audit");
   console.log("\n!! MUTATION: a completed task no longer records what the screen removed — 18 must fail.");
 }
@@ -233,13 +250,17 @@ const RULE_CLAUSE_MUTATIONS = {
   offers:      ["Only the offers in the business profile exist", "11"],
   zerobase:    ["LIVE PLATFORM STATS counts only activity inside BizForce", "14"],
   testimonial: ["Do not write words presented as a customer's", "15"],
-  product:     ["Do not state a product or company fact", "15"],
+  product:     ["Describe the products asked about", "15"],
   reach:       ["BANNED TOPICS bind every word", "15"]
 };
-if (MUTATE === "inference") {
-  BRAIN = mutate(BRAIN, " The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give; say what the owner must supply.",
-    " Say what the owner must supply.", "inference");
-  console.log("\n!! MUTATION: the named inferences are gone, the category is left — 15 must fail.");
+if (MUTATE === "opener") {
+  BRAIN = mutate(BRAIN, "- Describe the products asked about as the profile does: what they are and what they cost, not how they sell. State no other fact it does not hold:",
+    "- Do not state a product or company fact the profile does not hold:", "opener");
+  console.log("\n!! MUTATION: the opener is gone, only the ban is left — 15 must fail.");
+}
+if (MUTATE === "sequence") {
+  BRAIN = mutate(BRAIN, "into copy, a script, a sequence or a plan;", "into copy or a plan;", "sequence");
+  console.log("\n!! MUTATION: scripts and sequences are dropped from the offers clause again — 11 must fail.");
 }
 if (RULE_CLAUSE_MUTATIONS[MUTATE]) {
   const prefix = RULE_CLAUSE_MUTATIONS[MUTATE][0];
@@ -285,13 +306,21 @@ function runTask(agentType, stopReason, opts) {
     const st = { op: "select", payload: null, one: null };
     const b = {
       select() { return b; }, eq() { return b; }, order() { return b; }, limit() { return b; }, in() { return b; },
-      insert(p) { st.op = "insert"; st.payload = p; inserts.push({ table: table, payload: p }); return b; },
+      insert(p) { st.op = "insert"; st.payload = p; st.rec = { table: table, payload: p, ok: true }; inserts.push(st.rec); return b; },
       update(p) { st.op = "update"; st.payload = p; if (table === "ai_tasks") updates.push(p); return b; },
       maybeSingle() { st.one = "maybe"; return b; }, single() { st.one = "single"; return b; },
       then(res, rej) {
         /* opts.failAudit: the removal record cannot be written (migration 124 not applied). */
         if (opts.failAudit && table === "testimonial_screen_removals") {
+          if (st.rec) st.rec.ok = false;
           return Promise.resolve({ data: null, error: { message: "relation \"testimonial_screen_removals\" does not exist" } }).then(res, rej);
+        }
+        /* opts.rejectPattern: the check constraint does not allow that pattern yet
+           (before migration 125), so any insert carrying it is refused whole. */
+        if (opts.rejectPattern && table === "testimonial_screen_removals" && Array.isArray(st.payload) &&
+            st.payload.some(row => row.pattern === opts.rejectPattern)) {
+          if (st.rec) st.rec.ok = false;
+          return Promise.resolve({ data: null, error: { message: "violates check constraint \"testimonial_screen_removals_pattern_known\"" } }).then(res, rej);
         }
         return Promise.resolve({ data: st.one ? (st.op === "insert" ? { id: "fake" } : null) : [], error: null }).then(res, rej);
       }
@@ -313,6 +342,7 @@ function runTask(agentType, stopReason, opts) {
   vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("nowIso"),
     def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
     def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
+    def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
   return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt").then(function () {
     return { maxTokens: calls[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
@@ -466,8 +496,10 @@ function runTask(agentType, stopReason, opts) {
     /- If a figure is not in the BUSINESS PROFILE or LIVE PLATFORM STATS, do not supply one: say "I don't have that figure" and where the owner can find it\./.test(rule));
   check("11. a figure found only in memory is not repeated as a fact",
     /- A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: do not repeat it as a fact\./.test(rule));
-  check("11. only the profile's offers exist; any other is recommended once as the owner's decision",
-    /- Only the offers in the business profile exist\. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy or a plan; if one might help, recommend it once as the owner's decision\./.test(rule));
+  /* Clean-4: with "script" and "sequence" cut, five invented offers came back,
+     two of them inside email sequences. */
+  check("11. only the profile's offers exist, in copy, a script, a sequence or a plan; any other is recommended once as the owner's decision",
+    /- Only the offers in the business profile exist\. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy, a script, a sequence or a plan; if one might help, recommend it once as the owner's decision\./.test(rule));
   check("11. derived numbers show their arithmetic, by example",
     /- Show the arithmetic for a derived number: \$55 \/ 6 = \$9\.17 a shot\./.test(rule));
   check("11. the rule is the last block of the assembled prompt, after memory, and appears once",
@@ -481,9 +513,13 @@ function runTask(agentType, stopReason, opts) {
      it that way: it stays short, and the abstract clauses do not come back. */
   check("11. the rule stays short (" + rule.length + " characters, at most 1,600)", rule.length > 0 && rule.length <= 1600, rule.length);
   const clauses = rule.split("\n").filter(l => l.indexOf("- ") === 0);
-  check("11. every clause gives a sentence, a slot or an example, or names a specific error (" + clauses.length + " clauses)",
-    clauses.length >= 8 && clauses.every(c => /"[^"]+"|\[TESTIMONIAL NEEDED|\$55 \/ 6|\b(?:do not|never|is not|not 0%)\b/i.test(c)) &&
-    !/ESTIMATE|assuming/.test(rule), JSON.stringify(clauses.filter(c => !/"[^"]+"|\[TESTIMONIAL NEEDED|\$55 \/ 6|\b(?:do not|never|is not|not 0%)\b/i.test(c))));
+  /* Concrete means: a sentence to say, a slot, a worked example, a specific
+     error named, or (the opener, since clean-4) the content to say instead —
+     "as the profile does: what they are and what they cost". */
+  const CONCRETE = /"[^"]+"|\[TESTIMONIAL NEEDED|\$55 \/ 6|\b(?:do not|never|is not|not 0%)\b|as the profile does: what they are/i;
+  check("11. every clause gives a sentence, a slot, an example or the content to say instead, or names a specific error (" + clauses.length + " clauses)",
+    clauses.length >= 8 && clauses.every(c => CONCRETE.test(c)) &&
+    !/ESTIMATE|assuming/.test(rule), JSON.stringify(clauses.filter(c => !CONCRETE.test(c))));
 
   console.log("\n══ 12. tasks per agent — counted, not a capped tally ══");
   /* A fake ai_tasks holding the owner's real shape: 7,951 rows, 7,900 of them
@@ -585,14 +621,17 @@ function runTask(agentType, stopReason, opts) {
   console.log("\n══ 15. no invented people or product facts ══");
   check("15. no words presented as a customer's, not even as an example or sample, nothing about what customers do; the marked slot instead",
     /- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are\. Where copy needs a testimonial, write \[TESTIMONIAL NEEDED: what to ask a real customer for\]\./.test(rule));
-  check("15. no product or company fact the profile does not hold; say what the owner must supply",
-    /- Do not state a product or company fact the profile does not hold\./.test(rule) && /say what the owner must supply\./.test(rule));
-  /* The inferences clean-3 made, named one by one: the request naming a product
-     ("your highest-volume products", four agents), what is new ("Black
-     Launch"), packaging and checkout ("discreet packaging"), and a price or
-     format the profile does not give. */
-  check("15. the inferences are named: the request naming a product is no evidence; best-seller, new or launching, packaging, shipping, checkout, price, size, format",
-    /The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give;/.test(rule));
+  /* An opener in place of the ban: forbidding "which product sells most" took
+     the claim from four agents to six, every one in the reply's first
+     sentence. The model restates the request; it is now told what to say. */
+  check("15. the opener: describe the products asked about as the profile does, what they are and cost, not how they sell",
+    /- Describe the products asked about as the profile does: what they are and what they cost, not how they sell\./.test(rule));
+  /* The parts of the old clause that worked in clean-4 stay named: packaging,
+     shipping and checkout, launches, format — plus a margin, which clean-4
+     invented ("your margin is probably 60-70%"). */
+  check("15. no other fact the profile does not hold: new or launching, packaging, shipping, checkout, margin, price, size, strength, format, ingredient, process, company age",
+    /State no other fact it does not hold: what is new or launching, how anything is packaged, shipped or paid for, a margin, or a price, size, strength, format, ingredient, process or company age; say what the owner must supply\./.test(rule) &&
+    !/sells most or best/.test(rule));
   check("15. BANNED TOPICS bind every word: not in a customer's mouth, an example or a draft",
     /- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft\./.test(rule));
   check("15. the heading names people and product facts, and the rule is still the last block",
@@ -654,7 +693,7 @@ function runTask(agentType, stopReason, opts) {
   check("18. if the record cannot be written, the task is still stored, screened, and completed",
     !!auditDown.update && auditDown.update.status === "completed" && /^NOTE FROM BIZFORCE: 2 passages/.test(auditDown.update.result) &&
     !/three years|third shot/.test(auditDown.update.result), auditDown.update && auditDown.update.status);
-  const recordCalls = (taskBody.match(/await recordTestimonialRemovals\(taskId, userId, agentType, testimonialScreen\.removals\);/g) || []).length;
+  const recordCalls = (taskBody.match(/await recordTestimonialRemovals\(taskId, userId, agentType, screenFindings\);/g) || []).length;
   check("18. code: the record is written on both paths that store a screened result, after the task row (" + recordCalls + " calls)",
     recordCalls === 2 && taskBody.indexOf("await recordTestimonialRemovals") > taskBody.indexOf("result: output"));
   /* Nothing reads it: the only reference in product code is the one insert. */
@@ -686,6 +725,66 @@ function runTask(agentType, stopReason, opts) {
     /revoke all on public\.testimonial_screen_removals from anon, authenticated;/.test(migrationSql) &&
     /task_id\s+uuid\s+not null references public\.ai_tasks\(id\) on delete cascade/.test(migrationSql) &&
     /user_id\s+uuid\s+not null references public\.users\(id\) on delete cascade/.test(migrationSql));
+
+  console.log("\n══ 19. claims about how the products sell are flagged, not removed ══");
+  const SUPER_PROFILE = { business_name: "Mr Earth Rose",
+    products_services: "War Horse — liquid herbal shot, $10 / $55 (6) / $185 (24). War Horse Black — 2 oz extra-strength shot, three sizes. Sword Vitality XXL Xtreme — the flagship topical oil blend, external use only. War Horse Xtreme — 5 oz topical, the most advanced in the line." };
+  const superPrompt = brain.buildAgentSystemPrompt("X", SUPER_PROFILE, {}, []);
+  const superProfileBlock = superPrompt.slice(superPrompt.indexOf("BUSINESS PROFILE:"), superPrompt.indexOf("\n\nLIVE PLATFORM STATS"));
+  const superCtx = {};
+  vm.runInNewContext([def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives")].join("\n\n") + "\nthis.screen = screenSalesSuperlatives;", superCtx);
+  check("19. code: processAiTask flags superlatives after the testimonial screen, from the profile block, before the result write, and records them",
+    taskBody.indexOf("screenSalesSuperlatives(output, profileSection)") > taskBody.indexOf("screenFabricatedTestimonials(output") &&
+    taskBody.indexOf("output = superlativeScreen.text;") !== -1 && taskBody.indexOf("output = superlativeScreen.text;") < taskBody.indexOf("result: output") &&
+    /var screenFindings = testimonialScreen\.removals\.concat\(superlativeScreen\.flags\);/.test(taskBody));
+  /* The six openers of clean-4, verbatim. */
+  const CLEAN4_OPENERS = [
+    "War Horse and War Horse Black are your entry and upgrade products — they drive volume and customer acquisition.",
+    "War Horse and War Horse Black are your highest-velocity products at $10-$55 and positioned as entry points into the line.",
+    "War Horse and War Horse Black are your liquid herbal shots — the entry point to your line and the highest-volume products by format.",
+    "War Horse and War Horse Black are your highest-velocity SKUs — the shots that move fastest for direct-to-consumer botanical vitality.",
+    "War Horse and War Horse Black are your highest-volume liquid herbal shots — $10 individual, $55 for six, $185 for 24.",
+    "War Horse and War Horse Black are your highest-volume entry points — liquid shots that convert faster than topicals and build repeat purchase velocity."
+  ];
+  const openerHits = CLEAN4_OPENERS.map(s => superCtx.screen(s, superProfileBlock).flagged);
+  check("19. all six clean-4 openers are flagged", openerHits.every(n => n === 1), JSON.stringify(openerHits));
+  const MUST_PASS = [
+    "Sword Vitality XXL Xtreme is the flagship topical oil blend.",
+    "War Horse Xtreme is the most advanced in the line.",
+    "War Horse is $10 a shot, $55 for six and $185 for 24.",
+    "War Horse Black is the extra-strength shot.",
+    "Which product sells most?",
+    "Identify your highest-velocity bundle or offer.",
+    "Never call War Horse your best-seller.",
+    "This will convert faster than any cold outreach."
+  ];
+  const passHits = MUST_PASS.filter(s => superCtx.screen(s, superProfileBlock).flagged);
+  check("19. passes: what the profile says, a question, a find-out instruction, a negated sentence, an unanchored one", passHits.length === 0, JSON.stringify(passHits));
+  const SUPER_TEXT = "War Horse and War Horse Black are your highest-volume liquid herbal shots — $10 individual, $55 for six, $185 for 24. Lead with the six-pack.";
+  const sup = await runTask("social", "end_turn", { text: SUPER_TEXT, finalPrompt: superPrompt, memory: true });
+  const supResult = sup.update ? sup.update.result : "";
+  console.log("    stored: " + supResult.slice(0, 110) + "…");
+  check("19. the sentence is kept, marked [UNVERIFIED] where it stands, and the result opens with the notice",
+    /^NOTE FROM BIZFORCE: 1 statement about how your products sell is marked \[UNVERIFIED\]/.test(supResult) &&
+    supResult.indexOf("$185 for 24. [UNVERIFIED: your business profile holds no sales figures by product] Lead with the six-pack.") !== -1 &&
+    sup.update.status === "completed", supResult.slice(0, 160));
+  check("19. the notice is in ai_tasks.error, and memory holds the marked text, never the unmarked claim",
+    /NOTE FROM BIZFORCE: 1 statement about how your products sell/.test(sup.update.error || "") &&
+    sup.inserts.filter(i => i.table === "agent_memory").every(i => /\[UNVERIFIED/.test(JSON.stringify(i.payload))), sup.update.error);
+  const supRows = sup.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => i.payload).flat();
+  check("19. the flagged sentence is recorded with pattern sales_superlative",
+    supRows.length === 1 && supRows[0].pattern === "sales_superlative" && /highest-volume liquid herbal shots/.test(supRows[0].passage), JSON.stringify(supRows));
+  /* Before migration 125 the table refuses 'sales_superlative'. The testimonial
+     removals beside it must still be recorded. */
+  const mixed = await runTask("social", "end_turn", { text: FABRICATED + " " + SUPER_TEXT, finalPrompt: superPrompt, rejectPattern: "sales_superlative" });
+  const kept125 = mixed.inserts.filter(i => i.table === "testimonial_screen_removals" && i.ok).map(i => i.payload).flat();
+  check("19. if sales_superlative is refused (migration 125 not applied), the testimonial removals are still recorded and the task is stored",
+    !!mixed.update && mixed.update.status === "completed" && kept125.length === 2 && kept125.every(r => r.pattern !== "sales_superlative"),
+    JSON.stringify(mixed.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => [i.ok, i.payload.map(r => r.pattern)])));
+  const MIGRATION_125 = fs.readFileSync(path.join(REPO, "supabase", "migrations", "125_screen_removals_sales_superlative.sql"), "utf8")
+    .split("\n").filter(l => !/^\s*--/.test(l)).join("\n");
+  check("19. migration 125 allows the new pattern and keeps the three old ones",
+    /check \(pattern in \('quoted_first_person', 'attributed_claim', 'both', 'sales_superlative'\)\)/.test(MIGRATION_125) && !/create policy/i.test(MIGRATION_125));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

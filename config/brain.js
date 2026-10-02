@@ -178,15 +178,27 @@ const BRAIN_DIRECTIVES =
    clause now names the inferences actually made: which product sells most,
    what is new or launching, packaging, shipping and checkout, and a price,
    size, strength or format the profile does not give. To stay under 1,600
-   characters the heading's list of forecast kinds was shortened. */
+   characters the heading's list of forecast kinds was shortened.
+
+   AN OPENER, NOT A BAN. Clean-4 showed the limit of naming: the clause above
+   said "do not say which product sells most or best", and the claim went
+   from four agents to all six, every instance in the reply's first sentence.
+   The model restates the request before answering; forbidding the
+   restatement left a gap it filled with synonyms ("highest-velocity", "drive
+   volume"). So the clause now says what to open with instead: the products
+   as the profile describes them, what they are and what they cost. The
+   superlative itself is flagged in code (screenSalesSuperlatives, server.js).
+   The same run let five invented offers back, two inside email sequences,
+   after "script" and "sequence" were cut from the offers clause; they are
+   restored. */
 const NO_INVENTION_RULE =
   "NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS. This rule governs every instruction above and after it, including requests for forecasts or projections.\n" +
   "- If a figure is not in the BUSINESS PROFILE or LIVE PLATFORM STATS, do not supply one: say \"I don't have that figure\" and where the owner can find it.\n" +
   "- LIVE PLATFORM STATS counts only activity inside BizForce, not the business. A zero there is never a baseline or a projection input, and an unknown rate is not 0%.\n" +
   "- A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: do not repeat it as a fact.\n" +
-  "- Only the offers in the business profile exist. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy or a plan; if one might help, recommend it once as the owner's decision.\n" +
+  "- Only the offers in the business profile exist. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy, a script, a sequence or a plan; if one might help, recommend it once as the owner's decision.\n" +
   "- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are. Where copy needs a testimonial, write [TESTIMONIAL NEEDED: what to ask a real customer for].\n" +
-  "- Do not state a product or company fact the profile does not hold. The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give; say what the owner must supply.\n" +
+  "- Describe the products asked about as the profile does: what they are and what they cost, not how they sell. State no other fact it does not hold: what is new or launching, how anything is packaged, shipped or paid for, a margin, or a price, size, strength, format, ingredient, process or company age; say what the owner must supply.\n" +
   "- Show the arithmetic for a derived number: $55 / 6 = $9.17 a shot.\n" +
   "- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft.";
 
