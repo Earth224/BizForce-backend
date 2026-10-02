@@ -167,15 +167,26 @@ const BRAIN_DIRECTIVES =
    assumption clause went; the two customer clauses became one. Invented
    testimonials are also screened in code after generation
    (screenFabricatedTestimonials in server.js), because they are the one
-   failure with legal exposure and prose can be skimmed. */
+   failure with legal exposure and prose can be skimmed.
+
+   NAME THE INFERENCE, NOT THE CATEGORY. Across five runs the rule stopped
+   what it named concretely (offers, zeros, narrated reasoning: each to 0) and
+   missed what it named as a category. "A product or company fact the profile
+   does not hold" let through nine invented business facts in clean-3, four of
+   them the same one: "War Horse and War Horse Black are your highest-volume
+   products", inferred from the user's own request naming them. The product
+   clause now names the inferences actually made: which product sells most,
+   what is new or launching, packaging, shipping and checkout, and a price,
+   size, strength or format the profile does not give. To stay under 1,600
+   characters the heading's list of forecast kinds was shortened. */
 const NO_INVENTION_RULE =
-  "NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS. This rule governs every instruction above and after it, including any that asks for forecasts, KPIs, expected outcomes or projected revenue.\n" +
+  "NO INVENTED NUMBERS, OFFERS, PEOPLE OR PRODUCT FACTS. This rule governs every instruction above and after it, including requests for forecasts or projections.\n" +
   "- If a figure is not in the BUSINESS PROFILE or LIVE PLATFORM STATS, do not supply one: say \"I don't have that figure\" and where the owner can find it.\n" +
   "- LIVE PLATFORM STATS counts only activity inside BizForce, not the business. A zero there is never a baseline or a projection input, and an unknown rate is not 0%.\n" +
   "- A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: do not repeat it as a fact.\n" +
   "- Only the offers in the business profile exist. Do not write a discount, guarantee, bundle, subscription, shipping term or return policy into copy or a plan; if one might help, recommend it once as the owner's decision.\n" +
   "- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are. Where copy needs a testimonial, write [TESTIMONIAL NEEDED: what to ask a real customer for].\n" +
-  "- Do not state a product or company fact the profile does not hold, such as strength, process, timing, ingredient, origin or the age of the business. Use the profile's words, and say what the owner must supply.\n" +
+  "- Do not state a product or company fact the profile does not hold. The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give; say what the owner must supply.\n" +
   "- Show the arithmetic for a derived number: $55 / 6 = $9.17 a shot.\n" +
   "- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft.";
 

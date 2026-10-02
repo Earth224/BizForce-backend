@@ -122,7 +122,8 @@ const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth"
 residue.install();
 
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
-  "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue"];
+  "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
+  "inference", "audit", "reader"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -142,6 +143,15 @@ if (MUTATE === "tally") {
   SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
     `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
   console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
+}
+if (MUTATE === "audit") {
+  SERVER = mutate(SERVER, "            throw updateResult.error;\n        }\n\n        await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);\n",
+    "            throw updateResult.error;\n        }\n", "audit");
+  console.log("\n!! MUTATION: a completed task no longer records what the screen removed — 18 must fail.");
+}
+if (MUTATE === "reader") {
+  SERVER = mutate(SERVER, "async function recordTestimonialRemovals(", "async function readRemovalsForPrompt(userId) {\n  return supabase.from(\"testimonial_screen_removals\").select(\"passage\").eq(\"user_id\", userId);\n}\nasync function recordTestimonialRemovals(", "reader");
+  console.log("\n!! MUTATION: something now reads the removal record — 18 must fail.");
 }
 if (MUTATE === "screen") {
   SERVER = mutate(SERVER, "        output = testimonialScreen.text;\n", "", "screen");
@@ -226,6 +236,11 @@ const RULE_CLAUSE_MUTATIONS = {
   product:     ["Do not state a product or company fact", "15"],
   reach:       ["BANNED TOPICS bind every word", "15"]
 };
+if (MUTATE === "inference") {
+  BRAIN = mutate(BRAIN, " The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give; say what the owner must supply.",
+    " Say what the owner must supply.", "inference");
+  console.log("\n!! MUTATION: the named inferences are gone, the category is left — 15 must fail.");
+}
 if (RULE_CLAUSE_MUTATIONS[MUTATE]) {
   const prefix = RULE_CLAUSE_MUTATIONS[MUTATE][0];
   const line = new RegExp("\\n  \"- " + prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[^\\n]*").exec(BRAIN);
@@ -273,7 +288,13 @@ function runTask(agentType, stopReason, opts) {
       insert(p) { st.op = "insert"; st.payload = p; inserts.push({ table: table, payload: p }); return b; },
       update(p) { st.op = "update"; st.payload = p; if (table === "ai_tasks") updates.push(p); return b; },
       maybeSingle() { st.one = "maybe"; return b; }, single() { st.one = "single"; return b; },
-      then(res, rej) { return Promise.resolve({ data: st.one ? (st.op === "insert" ? { id: "fake" } : null) : [], error: null }).then(res, rej); }
+      then(res, rej) {
+        /* opts.failAudit: the removal record cannot be written (migration 124 not applied). */
+        if (opts.failAudit && table === "testimonial_screen_removals") {
+          return Promise.resolve({ data: null, error: { message: "relation \"testimonial_screen_removals\" does not exist" } }).then(res, rej);
+        }
+        return Promise.resolve({ data: st.one ? (st.op === "insert" ? { id: "fake" } : null) : [], error: null }).then(res, rej);
+      }
     };
     return b;
   }
@@ -291,7 +312,7 @@ function runTask(agentType, stopReason, opts) {
   vm.createContext(ctx);
   vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("nowIso"),
     def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
-    def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"),
+    def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
   return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt").then(function () {
     return { maxTokens: calls[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
@@ -453,7 +474,7 @@ function runTask(agentType, stopReason, opts) {
     !!rule && withMemory.endsWith(rule) && withMemory.indexOf(rule) > withMemory.indexOf("ACCUMULATED MEMORY") &&
     withMemory.split(rule).length === 2, withMemory.slice(-80));
   check("11. it says it governs the instructions after it, forecasts included",
-    /This rule governs every instruction above and after it, including any that asks for forecasts, KPIs, expected outcomes or projected revenue\./.test(rule));
+    /This rule governs every instruction above and after it, including requests for forecasts or projections\./.test(rule));
   check("11. it is not also inside BRAIN_DIRECTIVES (one copy, one position)", brain.BRAIN_DIRECTIVES.indexOf("NO INVENTED NUMBERS") === -1);
   /* Measured over four runs, only clauses that give a sentence to say or name
      a specific error were followed; the rule was cut to those. These two keep
@@ -565,7 +586,13 @@ function runTask(agentType, stopReason, opts) {
   check("15. no words presented as a customer's, not even as an example or sample, nothing about what customers do; the marked slot instead",
     /- Do not write words presented as a customer's, not even as an example or a labelled sample, and do not say what customers do, notice or how many there are\. Where copy needs a testimonial, write \[TESTIMONIAL NEEDED: what to ask a real customer for\]\./.test(rule));
   check("15. no product or company fact the profile does not hold; say what the owner must supply",
-    /- Do not state a product or company fact the profile does not hold, such as strength, process, timing, ingredient, origin or the age of the business\. Use the profile's words, and say what the owner must supply\./.test(rule));
+    /- Do not state a product or company fact the profile does not hold\./.test(rule) && /say what the owner must supply\./.test(rule));
+  /* The inferences clean-3 made, named one by one: the request naming a product
+     ("your highest-volume products", four agents), what is new ("Black
+     Launch"), packaging and checkout ("discreet packaging"), and a price or
+     format the profile does not give. */
+  check("15. the inferences are named: the request naming a product is no evidence; best-seller, new or launching, packaging, shipping, checkout, price, size, format",
+    /The user naming a product says nothing about it: do not say which product sells most or best, what is new or launching, how anything is packaged, shipped or paid for, or a price, size, strength, format, ingredient, process or company age it does not give;/.test(rule));
   check("15. BANNED TOPICS bind every word: not in a customer's mouth, an example or a draft",
     /- BANNED TOPICS bind every word you write: do not put one in a customer's mouth, an example or a draft\./.test(rule));
   check("15. the heading names people and product facts, and the rule is still the last block",
@@ -592,7 +619,9 @@ function runTask(agentType, stopReason, opts) {
   const FABRICATED = "Lead with proof. \"I have reordered War Horse every month for three years,\" one customer told us. " +
     "Men tell us they notice the difference by the third shot. Then show the six-pack at $55.";
   const screened = await runTask("social", "end_turn", { text: FABRICATED, memory: true });
-  const everything = JSON.stringify(screened.updates) + JSON.stringify(screened.inserts);
+  /* Everything a user or a later prompt can read: the task row and memory. The
+     removal record (section 18) is the one place the passage is kept, by design. */
+  const everything = JSON.stringify(screened.updates) + JSON.stringify(screened.inserts.filter(i => i.table !== "testimonial_screen_removals"));
   console.log("    stored: " + (screened.update && screened.update.result || "").slice(0, 120) + "…");
   check("17. neither fabrication is stored anywhere: not in the result, not in the error, not in agent_memory",
     !/three years|third shot|men tell us/i.test(everything) && screened.inserts.some(i => i.table === "agent_memory"), everything.slice(0, 200));
@@ -612,6 +641,51 @@ function runTask(agentType, stopReason, opts) {
   const plain = await runTask("social", "end_turn", { text: "Ask a buyer: \"What made you reorder?\" Then lead with the six-pack. Never write lines like customers tell us they love it. Put [TESTIMONIAL NEEDED: ask a repeat buyer why they reorder] under the price. Write \"I'm proud of this formula\" on the label." });
   check("17. a question, a negated instruction, the placeholder and an unattributed first-person line are left alone",
     !!plain.update && !/NOTE FROM BIZFORCE/.test(plain.update.result) && plain.update.error === null, plain.update && plain.update.result.slice(0, 160));
+
+  console.log("\n══ 18. what the screen removes is recorded, and nothing in the product reads it ══");
+  const records = screened.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => i.payload).flat();
+  console.log("    recorded: " + JSON.stringify(records.map(r => [r.pattern, r.passage.slice(0, 50)])));
+  check("18. each removal is recorded with its task, account, agent, pattern and the passage itself",
+    records.length === 2 && records.every(r => r.task_id === "task-1" && r.user_id === SUBJECT_USER_ID && r.agent_type === "social") &&
+    records.some(r => /three years/.test(r.passage) && /one customer told us/.test(r.passage) && r.pattern === "both") &&
+    records.some(r => /third shot/.test(r.passage) && r.pattern === "attributed_claim"), JSON.stringify(records));
+  check("18. nothing is recorded when nothing is removed", plain.inserts.filter(i => i.table === "testimonial_screen_removals").length === 0);
+  const auditDown = await runTask("social", "end_turn", { text: FABRICATED, failAudit: true });
+  check("18. if the record cannot be written, the task is still stored, screened, and completed",
+    !!auditDown.update && auditDown.update.status === "completed" && /^NOTE FROM BIZFORCE: 2 passages/.test(auditDown.update.result) &&
+    !/three years|third shot/.test(auditDown.update.result), auditDown.update && auditDown.update.status);
+  const recordCalls = (taskBody.match(/await recordTestimonialRemovals\(taskId, userId, agentType, testimonialScreen\.removals\);/g) || []).length;
+  check("18. code: the record is written on both paths that store a screened result, after the task row (" + recordCalls + " calls)",
+    recordCalls === 2 && taskBody.indexOf("await recordTestimonialRemovals") > taskBody.indexOf("result: output"));
+  /* Nothing reads it: the only reference in product code is the one insert. */
+  const PRODUCT_SOURCES = [SERVER, fs.readFileSync(path.join(REPO, "leadRadar.js"), "utf8")]
+    .concat(fs.readdirSync(path.join(REPO, "lib")).filter(f => f.endsWith(".js")).map(f => fs.readFileSync(path.join(REPO, "lib", f), "utf8")))
+    .concat(fs.readdirSync(path.join(REPO, "config")).filter(f => f.endsWith(".js")).map(f => fs.readFileSync(path.join(REPO, "config", f), "utf8")));
+  const fromUses = PRODUCT_SOURCES.map(s => s.match(/\.from\("testimonial_screen_removals"\)\s*\.\w+\(/g) || []).flat();
+  check("18. code: the table's only use in server.js, lib, config and leadRadar.js is one insert",
+    fromUses.length === 1 && /\.insert\($/.test(fromUses[0]), JSON.stringify(fromUses));
+  check("18. code: no prompt builder can reach it — brain.js never names it", BRAIN.indexOf("testimonial_screen_removals") === -1);
+  const FRONTEND_DIR = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
+  if (fs.existsSync(FRONTEND_DIR)) {
+    const pages = [];
+    (function walk(dir) { fs.readdirSync(dir, { withFileTypes: true }).forEach(e => {
+      if (e.name === "node_modules" || e.name.startsWith(".")) return;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p); else if (/\.(html|js)$/.test(e.name)) pages.push(p);
+    }); })(FRONTEND_DIR);
+    const naming = pages.filter(p => fs.readFileSync(p, "utf8").indexOf("testimonial_screen_removals") !== -1);
+    check("18. no frontend page names it (" + pages.length + " files)", naming.length === 0, naming.join(","));
+  } else {
+    console.log("    (frontend checkout not found at " + FRONTEND_DIR + "; the page check is skipped)");
+  }
+  const MIGRATION = fs.readFileSync(path.join(REPO, "supabase", "migrations", "124_testimonial_screen_removals.sql"), "utf8");
+  const migrationSql = MIGRATION.split("\n").filter(l => !/^\s*--/.test(l)).join("\n");
+  check("18. migration 124: RLS on, no policy, anon and authenticated revoked, gone with the task or the account",
+    /alter table public\.testimonial_screen_removals enable row level security;/.test(migrationSql) &&
+    !/create policy/i.test(migrationSql) &&
+    /revoke all on public\.testimonial_screen_removals from anon, authenticated;/.test(migrationSql) &&
+    /task_id\s+uuid\s+not null references public\.ai_tasks\(id\) on delete cascade/.test(migrationSql) &&
+    /user_id\s+uuid\s+not null references public\.users\(id\) on delete cascade/.test(migrationSql));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

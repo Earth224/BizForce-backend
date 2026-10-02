@@ -11980,25 +11980,32 @@ function screenFabricatedTestimonials(text, suppliedText) {
     var after = masked.slice(m.index + m[0].length, m.index + m[0].length + 80);
     if (!(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;
     if (supplied && supplied.indexOf(normalizedQuoteText(inner)) !== -1) continue;
-    spans.push([m.index, m.index + m[0].length]);
+    spans.push([m.index, m.index + m[0].length, "quoted_first_person"]);
   }
 
   var claimRe = /[^.!?\n]*\b(?:(?:(?:our|many|most|some|real|other)\s+)?(?:customers|clients|buyers|men|guys|users|reviewers)\s+(?:tell us|told us|keep telling us|tell me|told me|swear by)|(?:one|a)\s+(?:customer|client|buyer|man|reviewer)\s+(?:told us|tells us|told me|said|says|wrote))\b[^.!?\n]*[.!?]?/gi;
   while ((m = claimRe.exec(source)) !== null) {
     if (NEGATED.test(m[0])) continue;
     var lead = m[0].length - m[0].replace(/^\s+/, "").length;
-    spans.push([m.index + lead, m.index + m[0].length]);
+    spans.push([m.index + lead, m.index + m[0].length, "attributed_claim"]);
   }
 
-  if (!spans.length) return { text: source, removed: 0 };
+  if (!spans.length) return { text: source, removed: 0, removals: [] };
 
+  /* Overlapping spans become one removal; its pattern is "both" when a quoted
+     passage and an attributed claim overlapped. */
   spans.sort(function (a, b) { return a[0] - b[0]; });
   var merged = [];
   spans.forEach(function (span) {
     var last = merged[merged.length - 1];
-    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
-    else merged.push([span[0], span[1]]);
+    if (last && span[0] <= last[1]) {
+      last[1] = Math.max(last[1], span[1]);
+      if (last[2] !== span[2]) last[2] = "both";
+    } else {
+      merged.push([span[0], span[1], span[2]]);
+    }
   });
+  var removals = merged.map(function (span) { return { pattern: span[2], passage: source.slice(span[0], span[1]) }; });
 
   var out = source;
   for (var i = merged.length - 1; i >= 0; i--) {
@@ -12009,7 +12016,31 @@ function screenFabricatedTestimonials(text, suppliedText) {
     " written as a customer's words or a claim about what customers say " + (n === 1 ? "was" : "were") +
     " removed before this was saved, because no customer supplied " + (n === 1 ? "it" : "them") +
     ". Each place is marked [TESTIMONIAL NEEDED]. Real customer words, used with their permission, belong there.";
-  return { text: notice + "\n\n" + out, removed: n, notice: notice };
+  return { text: notice + "\n\n" + out, removed: n, notice: notice, removals: removals };
+}
+
+/* WHAT THE SCREEN TOOK OUT, KEPT WHERE ONLY A PERSON REVIEWING IT LOOKS.
+   One row per removed passage in testimonial_screen_removals (migration 124):
+   the task, the account, the agent, the pattern that matched and the passage.
+   Nothing in the product reads that table — no route, page, prompt builder or
+   job — and RLS with no policies keeps the anon key and user tokens out of it.
+   Written after the task row, so a failure here (the migration not yet
+   applied, a database blip) is logged and costs the review, never the task. */
+async function recordTestimonialRemovals(taskId, userId, agentType, removals) {
+  if (!removals || !removals.length) return;
+  try {
+    var recorded = await supabase
+      .from("testimonial_screen_removals")
+      .insert(removals.map(function (removal) {
+        return { task_id: taskId, user_id: userId, agent_type: agentType, pattern: removal.pattern, passage: removal.passage };
+      }));
+    if (recorded.error) {
+      console.error("[testimonial-screen] could not record " + removals.length + " removal(s) for task " + taskId + ": " +
+        (recorded.error.message || recorded.error) + ". The task was stored; only the review record is missing.");
+    }
+  } catch (recordErr) {
+    console.error("[testimonial-screen] recording removals for task " + taskId + " threw: " + ((recordErr && recordErr.message) || recordErr));
+  }
 }
 
 async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
@@ -12108,6 +12139,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .eq("id", taskId)
             .eq("user_id", userId);
 
+          await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);
           return;
         }
 
@@ -12134,6 +12166,8 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
         if (updateResult.error) {
             throw updateResult.error;
         }
+
+        await recordTestimonialRemovals(taskId, userId, agentType, testimonialScreen.removals);
 
         // Write a concise agent_memory row for this completed task, so the
         // next call for this user_id + agent_type has something to build on.
