@@ -123,7 +123,8 @@ residue.install();
 
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
-  "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped"];
+  "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
+  "widen", "flagship", "economics", "econanchor"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -149,12 +150,28 @@ if (MUTATE === "superlative") {
   console.log("\n!! MUTATION: the superlative screen runs but its marks are not stored — 19 must fail.");
 }
 if (MUTATE === "anchor") {
-  SERVER = mutate(SERVER, "    if (!anchored) continue;\n", "", "anchor");
+  SERVER = mutate(SERVER, "    if (!anchored) continue;\n    flags.push({ pattern: \"sales_superlative\"", "    flags.push({ pattern: \"sales_superlative\"", "anchor");
   console.log("\n!! MUTATION: a superlative about anything is flagged, anchored to this business or not — 19 must fail.");
 }
 if (MUTATE === "asking") {
-  SERVER = mutate(SERVER, "    if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;\n", "    if (NEGATED.test(sentence)) continue;\n", "asking");
+  SERVER = mutate(SERVER, "    if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;\n    if (hit && profileLower", "    if (NEGATED.test(sentence)) continue;\n    if (hit && profileLower", "asking");
   console.log("\n!! MUTATION: a question or a find-out instruction is flagged as a claim — 19 must fail.");
+}
+if (MUTATE === "widen") {
+  SERVER = mutate(SERVER, "|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))", ")", "widen");
+  console.log("\n!! MUTATION: the superlative list is back to its clean-5 width — 19 must fail.");
+}
+if (MUTATE === "flagship") {
+  SERVER = mutate(SERVER, "    var misusedFlagship = !hit && FLAGSHIP.test(sentence) &&", "    var misusedFlagship = false &&", "flagship");
+  console.log("\n!! MUTATION: \"flagship\" said of the wrong product is no longer flagged — 19 must fail.");
+}
+if (MUTATE === "economics") {
+  SERVER = mutate(SERVER, "        output = economicsScreen.text;\n", "", "economics");
+  console.log("\n!! MUTATION: the economics screen runs but its marks are not stored — 20 must fail.");
+}
+if (MUTATE === "econanchor") {
+  SERVER = mutate(SERVER, "    if (!anchored) continue;\n    flags.push({ pattern: \"unsupported_economics\"", "    flags.push({ pattern: \"unsupported_economics\"", "econanchor");
+  console.log("\n!! MUTATION: any margin sentence is flagged, about this business or not — 20 must fail.");
 }
 if (MUTATE === "grouped") {
   SERVER = mutate(SERVER, "  for (var i = 0; i < patterns.length; i++) {\n    var group = removals.filter(function (r) { return r.pattern === patterns[i]; });\n",
@@ -342,7 +359,7 @@ function runTask(agentType, stopReason, opts) {
   vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("nowIso"),
     def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
     def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
-    def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"),
+    def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"), def("UNSUPPORTED_ECONOMICS_MARK"), def("screenUnsupportedEconomics"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
   return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt").then(function () {
     return { maxTokens: calls[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
@@ -736,7 +753,7 @@ function runTask(agentType, stopReason, opts) {
   check("19. code: processAiTask flags superlatives after the testimonial screen, from the profile block, before the result write, and records them",
     taskBody.indexOf("screenSalesSuperlatives(output, profileSection)") > taskBody.indexOf("screenFabricatedTestimonials(output") &&
     taskBody.indexOf("output = superlativeScreen.text;") !== -1 && taskBody.indexOf("output = superlativeScreen.text;") < taskBody.indexOf("result: output") &&
-    /var screenFindings = testimonialScreen\.removals\.concat\(superlativeScreen\.flags\);/.test(taskBody));
+    /var screenFindings = testimonialScreen\.removals\.concat\(superlativeScreen\.flags, economicsScreen\.flags\);/.test(taskBody));
   /* The six openers of clean-4, verbatim. */
   const CLEAN4_OPENERS = [
     "War Horse and War Horse Black are your entry and upgrade products — they drive volume and customer acquisition.",
@@ -758,6 +775,19 @@ function runTask(agentType, stopReason, opts) {
     "Never call War Horse your best-seller.",
     "This will convert faster than any cold outreach."
   ];
+  /* Widened after clean-5: its missed opener, and "flagship" given to a product
+     the profile does not call flagship (run-1, clean-1). Clean-5's id-2 sentence
+     ("highest revenue per customer… strongest unit economics") is not a sales
+     superlative and must not be flagged here; section 20 flags it. */
+  const WIDENED = [
+    "War Horse and War Horse Black are your two strongest revenue plays in the liquid shot category.",
+    "You're asking for specific revenue growth action on your two flagship liquid herbal shots — War Horse and War Horse Black.",
+    "Your two core liquid products are your entry point and your flagship."
+  ];
+  const widenedHits = WIDENED.map(s => superCtx.screen(s, superProfileBlock).flagged);
+  check("19. widened: clean-5's missed opener and both misuses of \"flagship\" are flagged", widenedHits.every(n => n === 1), JSON.stringify(widenedHits));
+  check("19. clean-5 id 2 is not a sales superlative and is not flagged here",
+    superCtx.screen("The 24-pack is your leverage point — it has the highest revenue per customer and the strongest unit economics.", superProfileBlock).flagged === 0);
   const passHits = MUST_PASS.filter(s => superCtx.screen(s, superProfileBlock).flagged);
   check("19. passes: what the profile says, a question, a find-out instruction, a negated sentence, an unanchored one", passHits.length === 0, JSON.stringify(passHits));
   const SUPER_TEXT = "War Horse and War Horse Black are your highest-volume liquid herbal shots — $10 individual, $55 for six, $185 for 24. Lead with the six-pack.";
@@ -785,6 +815,52 @@ function runTask(agentType, stopReason, opts) {
     .split("\n").filter(l => !/^\s*--/.test(l)).join("\n");
   check("19. migration 125 allows the new pattern and keeps the three old ones",
     /check \(pattern in \('quoted_first_person', 'attributed_claim', 'both', 'sales_superlative'\)\)/.test(MIGRATION_125) && !/create policy/i.test(MIGRATION_125));
+
+  console.log("\n══ 20. claims about margins and costs are flagged, not removed ══");
+  const econCtx = {};
+  vm.runInNewContext([def("UNSUPPORTED_ECONOMICS_MARK"), def("screenUnsupportedEconomics")].join("\n\n") + "\nthis.screen = screenUnsupportedEconomics;", econCtx);
+  check("20. code: processAiTask flags margin and cost claims after the superlatives, before the result write, and records them",
+    taskBody.indexOf("screenUnsupportedEconomics(output, profileSection)") > taskBody.indexOf("screenSalesSuperlatives(output, profileSection)") &&
+    taskBody.indexOf("output = economicsScreen.text;") !== -1 && taskBody.indexOf("output = economicsScreen.text;") < taskBody.indexOf("result: output") &&
+    /economicsScreen\.flagged \? economicsScreen\.notice : null/.test(taskBody));
+  /* The four real claims from clean-4 and clean-5, verbatim. */
+  const ECON_REAL = [
+    "Your margin allows it.",
+    "Your $200 monthly budget is tight, but War Horse and Black are high-margin shots ($10 COGS estimate is low for a cold-pressed botanical formula; your margin is probably 60-70%).",
+    "The six-pack at $55 is your margin driver.",
+    "The 24-pack is your leverage point — it has the highest revenue per customer and the strongest unit economics."
+  ];
+  const econHits = ECON_REAL.map(s => econCtx.screen(s, superProfileBlock).flagged);
+  check("20. the four margin and cost claims from clean-4 and clean-5 are flagged", econHits.every(n => n >= 1), JSON.stringify(econHits));
+  const ECON_PASS = [
+    "The highest-margin sale is a repeat order from an existing customer.",
+    "The highest-margin revenue is a customer who buys again.",
+    "Cost of goods sold (COGS) per unit for War Horse and War Horse Black",
+    "Knowing this will tell you whether your problem is acquisition, retention, or unit economics.",
+    "What is your margin on the six-pack?",
+    "Never guess your margin."
+  ];
+  const econPassHits = ECON_PASS.filter(s => econCtx.screen(s, superProfileBlock).flagged);
+  check("20. passes: a general principle, a request for the figure, a mention, a question, a negated sentence", econPassHits.length === 0, JSON.stringify(econPassHits));
+  const ECON_TEXT = "Lead with the six-pack. The six-pack at $55 is your margin driver.";
+  const ec = await runTask("social", "end_turn", { text: ECON_TEXT, finalPrompt: superPrompt, memory: true });
+  const ecResult = ec.update ? ec.update.result : "";
+  check("20. the sentence is kept and marked [UNVERIFIED], the result opens with the notice, and the notice is in ai_tasks.error",
+    /^NOTE FROM BIZFORCE: 1 statement about your margins or costs is marked \[UNVERIFIED\]/.test(ecResult) &&
+    ecResult.indexOf("your margin driver. [UNVERIFIED: your business profile holds no costs or margins]") !== -1 &&
+    /NOTE FROM BIZFORCE: 1 statement about your margins or costs/.test(ec.update.error || "") && ec.update.status === "completed", ecResult.slice(0, 160));
+  const ecRows = ec.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => i.payload).flat();
+  check("20. the flagged sentence is recorded with pattern unsupported_economics",
+    ecRows.length === 1 && ecRows[0].pattern === "unsupported_economics" && /margin driver/.test(ecRows[0].passage), JSON.stringify(ecRows));
+  const before126 = await runTask("social", "end_turn", { text: SUPER_TEXT + " " + ECON_TEXT, finalPrompt: superPrompt, rejectPattern: "unsupported_economics" });
+  const kept126 = before126.inserts.filter(i => i.table === "testimonial_screen_removals" && i.ok).map(i => i.payload).flat();
+  check("20. if unsupported_economics is refused (migration 126 not applied), the superlative flag is still recorded and the task is stored",
+    !!before126.update && before126.update.status === "completed" && kept126.length === 1 && kept126[0].pattern === "sales_superlative",
+    JSON.stringify(before126.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => [i.ok, i.payload.map(r => r.pattern)])));
+  const MIGRATION_126 = fs.readFileSync(path.join(REPO, "supabase", "migrations", "126_screen_removals_unsupported_economics.sql"), "utf8")
+    .split("\n").filter(l => !/^\s*--/.test(l)).join("\n");
+  check("20. migration 126 allows unsupported_economics and keeps the four earlier patterns",
+    /check \(pattern in \('quoted_first_person', 'attributed_claim', 'both', 'sales_superlative', 'unsupported_economics'\)\)/.test(MIGRATION_126) && !/create policy/i.test(MIGRATION_126));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

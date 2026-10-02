@@ -12054,16 +12054,35 @@ function screenFabricatedTestimonials(text, suppliedText) {
 
    WHAT IT MISSES. A superlative about a product the sentence refers to only
    by pronoun ("These lead your sales" is caught by "your"; "They outsell the
-   oils" is not); "flagship" applied to the wrong product (the profile calls
-   Sword Vitality the flagship; run-1 social called War Horse one); and any
-   phrasing outside the list ("the shot men reach for first"). */
+   oils" is not, and is left: anchoring on "they" or "these" would catch every
+   sentence about prospects and channels), and any phrasing still outside the
+   widened list. "Flagship" said of a product the profile does not call flagship
+   is now caught (the profile gives it to Sword Vitality; run-1 and clean-1
+   gave it to War Horse). */
 var SALES_SUPERLATIVE_MARK = "[UNVERIFIED: your business profile holds no sales figures by product]";
 
 function screenSalesSuperlatives(text, profileText) {
   var source = String(text || "");
   var profile = String(profileText || "");
   var profileLower = profile.toLowerCase();
-  var SUPERLATIVE = /\b(?:highest[- ](?:volume|velocity|selling|converting|margin|revenue)|best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)|most popular|fastest[- ](?:moving|selling)|(?:core|main|primary|biggest|top) revenue (?:drivers?|generators?|earners?|products?)|drives? (?:the most )?volume|moves? (?:the )?fastest|sells? (?:the )?most|converts? (?:faster|better) than|volume (?:drivers?|leaders?))\b/i;
+  /* Widened after clean-5 missed "your two strongest revenue plays": strongest
+     revenue / sellers / performers, revenue plays, outsells, reach for first,
+     go-to product, most ordered. "highest revenue" now counts only when it
+     names a product ("highest-revenue products"): clean-5's "the highest revenue
+     per customer" is a claim about a price tier and its economics, and is
+     screened by screenUnsupportedEconomics instead. "highest margin" moved
+     there too. Measured on the 42 stored outputs of seven runs: 21 flags, all
+     claims about how the user's products sell — and those rules were tuned on
+     the same 42, so the true rate will be lower. */
+  var SUPERLATIVE = /\b(?:highest[- ](?:volume|velocity|selling|converting)|highest[- ]revenue (?:products?|items?|skus?|lines?|shots?)|best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)|most popular|fastest[- ](?:moving|selling)|(?:core|main|primary|biggest|top) revenue (?:drivers?|generators?|earners?|products?)|drives? (?:the most )?volume|moves? (?:the )?fastest|sells? (?:the )?most|converts? (?:faster|better) than|volume (?:drivers?|leaders?)|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))\b/i;
+  /* "Flagship" is a claim about which product leads. It passes only when the
+     sentence names a product the profile itself calls flagship. */
+  var FLAGSHIP = /\bflagship\b/i;
+  var flagshipOwners = [];
+  profile.split(/(?<=[.!?])\s+|\n+/).forEach(function (line) {
+    if (!FLAGSHIP.test(line)) return;
+    (line.replace(/^[^:\n]{1,40}:/, "").match(/\b[A-Z][A-Za-z']+(?:[ \t]+[A-Z][A-Za-z']+)+\b/g) || []).forEach(function (name) { flagshipOwners.push(name); });
+  });
   var ASKING = /\?\s*$|^[\s\-*\d.)]*(?:identify|find out|figure out|determine|measure|track|check|ask|test|pull|confirm)\b/i;
   var NEGATED = /\b(?:never|don't|do not|avoid)\b/i;
   /* The names this business uses: capitalised multi-word runs on one line,
@@ -12078,9 +12097,11 @@ function screenSalesSuperlatives(text, profileText) {
   while ((m = sentenceRe.exec(source)) !== null) {
     var sentence = m[0];
     var hit = sentence.match(SUPERLATIVE);
-    if (!hit) continue;
+    var misusedFlagship = !hit && FLAGSHIP.test(sentence) &&
+      !flagshipOwners.some(function (owner) { return sentence.indexOf(owner) !== -1; });
+    if (!hit && !misusedFlagship) continue;
     if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;
-    if (profileLower.indexOf(hit[0].toLowerCase()) !== -1) continue;
+    if (hit && profileLower.indexOf(hit[0].toLowerCase()) !== -1) continue;
     var anchored = /\byour\b/i.test(sentence) || names.some(function (name) { return sentence.indexOf(name) !== -1; });
     if (!anchored) continue;
     flags.push({ pattern: "sales_superlative", passage: sentence.trim() });
@@ -12096,6 +12117,74 @@ function screenSalesSuperlatives(text, profileText) {
   var notice = "NOTE FROM BIZFORCE: " + n + " statement" + (n === 1 ? "" : "s") + " about how your products sell " +
     (n === 1 ? "is" : "are") + " marked [UNVERIFIED]. Your business profile holds no sales figures by product, so " +
     (n === 1 ? "it is" : "they are") + " the agent's assumption, not your data. Check " + (n === 1 ? "it" : "them") + " against your own sales before using " + (n === 1 ? "it" : "them") + ".";
+  return { text: notice + "\n\n" + out, flagged: n, notice: notice, flags: flags };
+}
+
+/* CLAIMS ABOUT MARGINS AND COSTS ARE FLAGGED, NOT REMOVED.
+
+   WHAT WAS FOUND. The profile holds no costs, and agents asserted them anyway:
+   "Your margin allows it." and "your margin is probably 60-70%" (clean-4), "The
+   six-pack at $55 is your margin driver." and "the strongest unit economics"
+   (clean-5). The last was flagged by the superlative screen as a sales claim,
+   which it is not; this screen is where it belongs.
+
+   SAME TREATMENT AS THE SUPERLATIVES. The claim may be true and the owner can
+   check it, so the sentence is kept, marked [UNVERIFIED] where it stands, and
+   noted at the top, and it is recorded with pattern 'unsupported_economics'
+   (migration 126).
+
+   WHAT IT CATCHES. A sentence asserting a margin or cost fact — high-margin,
+   "your margin is/allows", "margin driver", "margin is probably", "COGS
+   estimate", "strongest/best unit economics" — anchored to this business by
+   "your" or a name in the profile. Measured on the 42 stored outputs: 4 flags,
+   all real. Tuned on the same 42.
+
+   WHAT PASSES. A general principle with no anchor ("The highest-margin sale is
+   a repeat order from an existing customer."), a question or a request for the
+   figure ("Cost of goods sold (COGS) per unit for War Horse" in a list of
+   things to supply), a negated sentence, and a mention of the topic that
+   asserts nothing ("whether your problem is acquisition, retention, or unit
+   economics").
+
+   WHAT IT MISSES. Cost claims phrased outside the list ("it costs you little
+   to make"), and margin claims about a product named only by pronoun. */
+var UNSUPPORTED_ECONOMICS_MARK = "[UNVERIFIED: your business profile holds no costs or margins]";
+
+function screenUnsupportedEconomics(text, profileText) {
+  var source = String(text || "");
+  var profile = String(profileText || "");
+  var profileLower = profile.toLowerCase();
+  var ECONOMICS = /\b(?:high|low|thin|healthy|strong|solid|best|highest|strongest)[- ](?:margins?|unit economics)\b|\bmargin (?:drivers?|leaders?)\b|\byour margins? (?:is|are|allows?|can|will|supports?)\b|\bmargins? (?:is|are) (?:probably|likely|around|about|roughly)\b|\bCOGS (?:estimate|is|are)\b|\b(?:strongest|best|healthiest) unit economics\b/i;
+  var ASKING = /\?\s*$|^[\s\-*\d.)]*(?:identify|find out|figure out|determine|measure|track|check|ask|test|pull|confirm|supply|define)\b/i;
+  var NEGATED = /\b(?:never|don't|do not|avoid)\b/i;
+  var names = (profile.replace(/^[^:\n]{1,40}:/gm, "").match(/\b[A-Z][A-Za-z']+(?:[ \t]+[A-Z][A-Za-z']+)+\b/g) || [])
+    .filter(function (name, i, all) { return all.indexOf(name) === i && !/^[A-Z' ]+$/.test(name); });
+
+  var flags = [];
+  var marks = [];
+  var sentenceRe = /[^.!?\n]+[.!?]*/g;
+  var m;
+  while ((m = sentenceRe.exec(source)) !== null) {
+    var sentence = m[0];
+    var hit = sentence.match(ECONOMICS);
+    if (!hit) continue;
+    if (ASKING.test(sentence.trim()) || NEGATED.test(sentence)) continue;
+    if (profileLower.indexOf(hit[0].toLowerCase()) !== -1) continue;
+    var anchored = /\byour\b/i.test(sentence) || names.some(function (name) { return sentence.indexOf(name) !== -1; });
+    if (!anchored) continue;
+    flags.push({ pattern: "unsupported_economics", passage: sentence.trim() });
+    marks.push(m.index + sentence.length);
+  }
+  if (!flags.length) return { text: source, flagged: 0, flags: [] };
+
+  var out = source;
+  for (var i = marks.length - 1; i >= 0; i--) {
+    out = out.slice(0, marks[i]) + " " + UNSUPPORTED_ECONOMICS_MARK + out.slice(marks[i]);
+  }
+  var n = flags.length;
+  var notice = "NOTE FROM BIZFORCE: " + n + " statement" + (n === 1 ? "" : "s") + " about your margins or costs " +
+    (n === 1 ? "is" : "are") + " marked [UNVERIFIED]. Your business profile holds no costs or margins, so " +
+    (n === 1 ? "it is" : "they are") + " the agent's assumption, not your data. Check " + (n === 1 ? "it" : "them") + " against your own figures before using " + (n === 1 ? "it" : "them") + ".";
   return { text: notice + "\n\n" + out, flagged: n, notice: notice, flags: flags };
 }
 
@@ -12210,7 +12299,10 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
         /* Then claims about how the products sell: kept, marked, noted. */
         var superlativeScreen = screenSalesSuperlatives(output, profileSection);
         output = superlativeScreen.text;
-        var screenFindings = testimonialScreen.removals.concat(superlativeScreen.flags);
+        /* And claims about margins and costs, which the profile never holds. */
+        var economicsScreen = screenUnsupportedEconomics(output, profileSection);
+        output = economicsScreen.text;
+        var screenFindings = testimonialScreen.removals.concat(superlativeScreen.flags, economicsScreen.flags);
 
         if (isExecutive && !executiveComplete) {
           /* completed_at and error, matching what startToolRun's fail() writes.
@@ -12247,7 +12339,7 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
             .update({
                 result: output,
                 status: requiresApproval ? "requires_approval" : "completed",
-                error: [stoppedEarly, testimonialScreen.removed ? testimonialScreen.notice : null, superlativeScreen.flagged ? superlativeScreen.notice : null].filter(Boolean).join(" ") || null,
+                error: [stoppedEarly, testimonialScreen.removed ? testimonialScreen.notice : null, superlativeScreen.flagged ? superlativeScreen.notice : null, economicsScreen.flagged ? economicsScreen.notice : null].filter(Boolean).join(" ") || null,
                 completed_at: taskFinishedAt,
                 updated_at: taskFinishedAt
             })
