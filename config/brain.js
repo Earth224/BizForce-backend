@@ -11,7 +11,7 @@ const PLATFORM_KNOWLEDGE = {
   platform: {
     name: "BizForce AI",
     description:
-      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS, publishing to social accounts and Lead Radar are currently unavailable to customer accounts; see Other systems.",
+      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",
     /* NO PRICE AND NO TIER NAME HERE. This said $29.99 while the plan charged
        $199, and every agent repeated it. Both now come from server.js's
        PLAN_CONFIG at render time (useBillingPlans, below), so the figure the
@@ -19,7 +19,7 @@ const PLATFORM_KNOWLEDGE = {
     pricing: {
       model: "single_tier",
       description:
-        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending, social publishing and Lead Radar are unavailable on every customer account, whatever the plan."
+        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on the one account that holds the platform's connected social credentials."
     }
   },
 
@@ -59,7 +59,7 @@ const PLATFORM_KNOWLEDGE = {
     lead_radar: {
       name: "Lead Radar",
       description:
-        "A background job that every 5 minutes collects public Bluesky posts matching buying-intent phrases (stored in bsky_leads). Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled. When scoring is switched on, each collected post is rated 0-100 for buyer intent by a classifier that separates people asking for help from teachers, coaches and sellers, tagged with one product from a fixed list, and screened for whether a public reply would be safe and invited. It does not read the user's business profile. UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account."
+        "A background job that every 5 minutes collects public Bluesky posts matching buying-intent phrases (stored in bsky_leads). Mastodon and YouTube collection exist behind switches that are off by default; Reddit is disabled. When scoring is switched on, each collected post is rated 0-100 for buyer intent by a classifier that separates people asking for help from teachers, coaches and sellers, tagged with one product from a fixed list, and screened for whether a public reply would be safe and invited. It does not read the user's business profile. IT WORKS ON ONE ACCOUNT ONLY: the platform holds one connected social account, and Lead Radar's leads, scores and replies belong to the account that holds those credentials and are refused to every other. The leadRadar line in LIVE PLATFORM STATS says which this user is. If it says available, this user holds the credentials and Lead Radar is theirs to use. If it says not available, it is unavailable to them. If there is no leadRadar line, you do not know which account this is: do not tell the user either way."
     },
     social_publishing: {
       name: "Social Publishing",
@@ -122,6 +122,34 @@ const BRAIN_DIRECTIVES =
      outright. That fix protects one route. This one removes the contradiction
      itself, for all six buildAgentSystemPrompt callers and any added later. */
   "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII. That last allowance is the weakest rule you hold, and it yields: where your own agent prompt tells you not to use markdown or formatting characters, that prohibition wins outright and this sentence must never be read as licensing them. Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.";
+
+/* NO INVENTED NUMBERS OR OFFERS — LAST IN EVERY PROMPT, NOT IN BRAIN_DIRECTIVES.
+
+   WHAT WAS FOUND. Six agents given one vague request under a true profile each
+   produced a usable plan, and between them invented conversion rates, reorder
+   rates, traffic figures, revenue projections, a "60-Day Confidence Guarantee",
+   referral discounts, a subscription price and free shipping — several of them
+   written into customer-facing copy as though they existed. Nothing told them
+   not to: the directives say reason well and use the context given, and nothing
+   says do not supply what the context lacks.
+
+   WHY LAST AND NOT IN BRAIN_DIRECTIVES. Precedence in a long prompt follows
+   position, and two things come after BRAIN_DIRECTIVES that pull the other way.
+   The agent prompts and task instructions ask outright for forecasts, KPIs,
+   "expected outcome" and "projected revenue". And ACCUMULATED MEMORY now holds
+   earlier agent output, invented figures included, under a heading that says
+   "build on this". A rule placed before either loses to it. So this is the
+   final block buildAgentSystemPrompt emits, after memory, and it names the
+   instructions that follow it (a typed task's TASK INSTRUCTIONS, a tool route's
+   own) and says how to satisfy them rather than pretending they are absent: a
+   forecast is still given, as a labelled estimate with its basis. */
+const NO_INVENTION_RULE =
+  "NO INVENTED NUMBERS OR OFFERS. This rule is placed last because it governs everything above it and every instruction after it, including any task instruction that asks for forecasts, KPIs, expected outcomes, estimated impact or projected revenue: satisfy those under this rule, never around it.\n" +
+  "- Never state a conversion rate, open or click rate, reorder or repeat rate, traffic figure, cost per click or per acquisition, revenue projection, time to a result, or any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS above. A figure found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact, and must not be repeated as one.\n" +
+  "- Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy. Only the offers in the business profile exist. Never write any other offer into copy, a script, a sequence or a plan as though it exists. If a new offer might help, say so once as a recommendation for the owner to decide, and call it that.\n" +
+  "- Where a number is derived by arithmetic from a real figure, show the arithmetic (for example: $55 / 6 = $9.17 a shot).\n" +
+  "- Where an estimate is genuinely needed, label it ESTIMATE, give it as a range, and say what it rests on: the real figure it starts from and the assumption it adds. An estimate that cannot name its basis is not given.\n" +
+  "- Where a figure is needed and is not in front of you, say \"I don't have that figure\" and where the owner can find it, rather than supplying one.";
 
 /* THE PLAN, BY REFERENCE. server.js requires this file, so this file cannot
    require server.js back — that would be a circular require, and loading
@@ -342,13 +370,15 @@ function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats,
     String(agentSpecificPrompt || "").trim(),
     formatBusinessProfile(businessProfile),
     formatLiveStats(liveStats),
-    formatMemories(memories)
+    formatMemories(memories),
+    NO_INVENTION_RULE
   ].join("\n\n");
 }
 
 module.exports = {
   PLATFORM_KNOWLEDGE,
   BRAIN_DIRECTIVES,
+  NO_INVENTION_RULE,
   buildAgentSystemPrompt,
   useBillingPlans
 };

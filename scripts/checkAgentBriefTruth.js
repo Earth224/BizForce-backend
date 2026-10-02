@@ -31,6 +31,17 @@
         twice: once against the code it describes (leadRadar.js, server.js)
         and once against what the agents are told. Social publishing is gated,
         so it must be named as unavailable, not left out.
+     11. NO INVENTION. NO_INVENTION_RULE covers statistics, offers, arithmetic,
+        estimates and "I don't have that figure", and is the LAST block of the
+        assembled prompt — after memory, which carries earlier invented
+        figures — appearing once and not also inside BRAIN_DIRECTIVES.
+     12. TASKS PER AGENT. getLiveStats, run against a fake table of 7,951 rows
+        that returns at most 1,000 to a non-count select, reports sales as
+        7,900, every agent exactly, and a breakdown summing to tasksRun.
+     13. LEAD RADAR BY ACCOUNT. getLiveStats says "available" to the credential
+        owner and "not available" to anyone else, with the constant the lead
+        routes refuse on; the knowledge text points at that line and covers
+        available, not available and absent.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -45,6 +56,9 @@
    MUTATE=radar    restores "scores against the profile"       → 6 goes red
    MUTATE=sms      restores "broadcasts segmentable by filter" → 7 goes red
    MUTATE=social   leaves social publishing out                → 8 goes red
+   MUTATE=invent   puts the rule with the directives, not last → 11 goes red
+   MUTATE=tally    restores the fetch-and-tally byAgent        → 12 goes red
+   MUTATE=owner    restores "unavailable to customer accounts" → 13 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -70,7 +84,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social"];
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -84,7 +98,13 @@ function mutate(src, from, to, what) {
   return src.replace(from, () => to);
 }
 
-const SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+if (MUTATE === "tally") {
+  SERVER = mutate(SERVER, `    countTasksByAgent(userId)\n  ]);`, `    supabase.from("ai_tasks").select("agent_type").eq("user_id", userId)\n  ]);`, "tally");
+  SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
+    `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
+  console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
+}
 function def(name) {
   const d = definitionOf(SERVER, name);
   if (!d) { console.error("EXTRACTION FAILED: " + name + " not found in server.js"); process.exit(3); }
@@ -133,6 +153,16 @@ if (MUTATE === "sms") {
 if (MUTATE === "social") {
   BRAIN = mutate(BRAIN, /    social_publishing: \{[\s\S]*?\n    \},\n/.exec(BRAIN)[0], "", "social");
   console.log("\n!! MUTATION: social publishing is left out instead of said to be unavailable — 8 must fail.");
+}
+if (MUTATE === "invent") {
+  BRAIN = mutate(BRAIN, `    BRAIN_DIRECTIVES,\n    String(agentSpecificPrompt || "").trim(),`, `    BRAIN_DIRECTIVES,\n    NO_INVENTION_RULE,\n    String(agentSpecificPrompt || "").trim(),`, "invent");
+  BRAIN = mutate(BRAIN, `    formatMemories(memories),\n    NO_INVENTION_RULE\n  ].join`, `    formatMemories(memories)\n  ].join`, "invent");
+  console.log("\n!! MUTATION: the no-invention rule sits with the directives, ahead of the agent prompt and memory — 11 must fail.");
+}
+if (MUTATE === "owner") {
+  BRAIN = mutate(BRAIN, /IT WORKS ON ONE ACCOUNT ONLY:[^"]*"/.exec(BRAIN)[0],
+    `UNAVAILABLE TO CUSTOMER ACCOUNTS: it runs against the platform's own connected social account, and its leads, scores and replies are shown to no other account."`, "owner");
+  console.log("\n!! MUTATION: Lead Radar is \"unavailable to customer accounts\" again, with nothing to tell the owner apart — 13 must fail.");
 }
 function loadBrain() {
   const mod = { exports: {} };
@@ -277,7 +307,6 @@ function runTask(agentType, stopReason) {
   const radarRefusals = (SERVER.match(/res\.status\(403\)\.json\(LEAD_RADAR_UNAVAILABLE\)/g) || []).length;
   check("6. code: the lead routes refuse other accounts with LEAD_RADAR_UNAVAILABLE (" + radarRefusals + " routes)",
     /const LEAD_RADAR_UNAVAILABLE = \{/.test(SERVER) && radarRefusals >= 4, radarRefusals);
-  check("6. told: unavailable to customer accounts", /UNAVAILABLE TO CUSTOMER ACCOUNTS/.test(radar));
 
   console.log("\n══ 7. SMS ══");
   const sms = systemLine("SMS Marketing / Drip System");
@@ -309,10 +338,11 @@ function runTask(agentType, stopReason) {
   const platform = lines.find(l => l.startsWith("BizForce AI — ")) || "";
   const unlocks = pricing.slice(pricing.indexOf("unlocks"), pricing.indexOf("—"));
   check("9. told: the unlock list names nothing that is gated off", !/lead radar|sms drip|publish/i.test(unlocks), unlocks);
-  check("9. told: the pricing line says SMS sending, social publishing and Lead Radar are unavailable, as the code has them",
-    smsSendsNothing && socialGated && radarRefusals >= 4 && /SMS sending, social publishing and Lead Radar are unavailable on every customer account/.test(pricing), pricing.slice(-120));
+  check("9. told: the pricing line says SMS sending and social publishing are unavailable, and Lead Radar works on one account, as the code has them",
+    smsSendsNothing && socialGated && radarRefusals >= 4 &&
+    /SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on the one account that holds the platform's connected social credentials\./.test(pricing), pricing.slice(-160));
   check("9. told: the platform line claims no SMS marketing or lead detection, and names what is unavailable",
-    !/SMS marketing|lead detection/.test(platform) && /Sending SMS, publishing to social accounts and Lead Radar are currently unavailable/.test(platform), platform.slice(0, 80));
+    !/SMS marketing|lead detection/.test(platform) && /Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only/.test(platform), platform.slice(0, 80));
 
   console.log("\n══ 10. data_model (documentation: never rendered into a prompt) ══");
   const memDoc = brain.PLATFORM_KNOWLEDGE.data_model.agent_memory;
@@ -325,6 +355,89 @@ function runTask(agentType, stopReason) {
     /\.from\("agent_memory"\)[\s\S]{0,300}\.eq\("agent_type", agentType\)[\s\S]{0,100}\.limit\(5\)/.test(def("handleAiTaskRequest")));
   check("10. documented: the same writers, and five newest read into the next typed task",
     /when a task completes/.test(memDoc) && /when an assignment starts/.test(memDoc) && /on each Oracle exchange/.test(memDoc) && /by the SEO and sales tools/.test(memDoc) && /from the memory page/.test(memDoc) && /five newest per agent are read into that agent's next typed task/.test(memDoc), memDoc);
+
+  console.log("\n══ 11. no invented numbers or offers — present, and last ══");
+  const rule = brain.NO_INVENTION_RULE || "";
+  const withMemory = brain.buildAgentSystemPrompt("AGENT PROMPT", { business_name: "Fixture Co" }, { tasksRun: 3 },
+    [{ agent_type: "sales", title: "Earlier plan", content: "Estimated impact: 3-5 percent conversion." }]);
+  console.log("    " + rule.slice(0, 100) + "…  (" + rule.length + " chars)");
+  check("11. the rule covers statistics, with memory named as not a source of fact",
+    /conversion rate/.test(rule) && /reorder or repeat rate/.test(rule) && /traffic figure/.test(rule) && /revenue projection/.test(rule) &&
+    /time to a result/.test(rule) && /any other statistic that is not in the BUSINESS PROFILE or LIVE PLATFORM STATS/.test(rule) &&
+    /found only in ACCUMULATED MEMORY came from an earlier agent's output: it is not a fact/.test(rule));
+  check("11. the rule covers offers: only the profile's exist",
+    /Never invent an offer, discount, guarantee, bundle, subscription, shipping term or return policy\. Only the offers in the business profile exist\./.test(rule));
+  check("11. the rule requires shown arithmetic, labelled estimates with their basis, and \"I don't have that figure\"",
+    /show the arithmetic/.test(rule) && /label it ESTIMATE/.test(rule) && /say what it rests on/.test(rule) && /"I don't have that figure"/.test(rule));
+  check("11. the rule is the last block of the assembled prompt, after memory, and appears once",
+    !!rule && withMemory.endsWith(rule) && withMemory.indexOf(rule) > withMemory.indexOf("ACCUMULATED MEMORY") &&
+    withMemory.split(rule).length === 2, withMemory.slice(-80));
+  check("11. it says it governs the instructions that follow it, forecasts included",
+    /governs everything above it and every instruction after it, including any task instruction that asks for forecasts/.test(rule));
+  check("11. it is not also inside BRAIN_DIRECTIVES (one copy, one position)", brain.BRAIN_DIRECTIVES.indexOf("NO INVENTED NUMBERS") === -1);
+
+  console.log("\n══ 12. tasks per agent — counted, not a capped tally ══");
+  /* A fake ai_tasks holding the owner's real shape: 7,951 rows, 7,900 of them
+     sales, plus a type no longer on the roster and a null. A select that is not
+     a head-count returns at most 1,000 rows, as PostgREST does. */
+  const FAKE_ROWS = [];
+  const SHAPE = { sales: 7900, content: 21, executive: 13, social: 7, seo: 3, general: 2, email: 2, rd: 2, operations: 1, legacy_type: 3, "": 1 };
+  Object.keys(SHAPE).forEach(t => { for (let i = 0; i < SHAPE[t]; i++) FAKE_ROWS.push({ user_id: require("../lib/ownerAccount").OWNER_ACCOUNT_ID, agent_type: t === "" ? null : t }); });
+  const fakeCalls = [];
+  function statsDb() {
+    return {
+      from(table) {
+        const st = { filters: [], head: false, cols: "" };
+        const b = {
+          select(cols, opts) { st.cols = cols; st.head = !!(opts && opts.head); return b; },
+          eq(col, val) { st.filters.push(r => r[col] === val); return b; },
+          is(col, val) { st.filters.push(r => r[col] === val); return b; },
+          then(res, rej) {
+            fakeCalls.push({ table: table, head: st.head, cols: st.cols });
+            const rows = table === "ai_tasks" ? FAKE_ROWS.filter(r => st.filters.every(f => f(r))) : [];
+            const out = st.head ? { count: rows.length, error: null } : { data: rows.slice(0, 1000), error: null };
+            return Promise.resolve(out).then(res, rej);
+          }
+        };
+        return b;
+      }
+    };
+  }
+  const statsCtx = { supabase: statsDb(), console: { error() {}, log() {}, warn() {} }, OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID };
+  vm.createContext(statsCtx);
+  const helper = definitionOf(SERVER, "countTasksByAgent");
+  vm.runInContext([def("AGENT_SYSTEM_PROMPTS"), def("OUTREACH_CREDENTIAL_OWNER_ID"), def("getLiveStats"), helper || ""]
+    .map(s => s.replace(/^const /, "var ")).join("\n\n") + "\nthis.run = getLiveStats;", statsCtx);
+  const ownerStats = await statsCtx.run(statsCtx.OWNER_ACCOUNT_ID);
+  const expectedByAgent = { seo: 3, sales: 7900, content: 21, email: 2, operations: 1, executive: 13, social: 7, rd: 2, general: 3, other: 3 };
+  console.log("    byAgent " + JSON.stringify(ownerStats.byAgent));
+  check("12. code: getLiveStats fetches no agent_type rows to tally",
+    !/\.select\("agent_type"\)/.test(def("getLiveStats")) && !fakeCalls.some(c => c.table === "ai_tasks" && !c.head),
+    JSON.stringify(fakeCalls.filter(c => !c.head)));
+  check("12. sales is counted past the 1,000-row cap (7,900, not a slice)", ownerStats.byAgent.sales === 7900, ownerStats.byAgent.sales);
+  check("12. every agent is exact; a null type counts as general; an unlisted type is reported as other",
+    JSON.stringify(Object.keys(expectedByAgent).sort().map(k => [k, ownerStats.byAgent[k]])) === JSON.stringify(Object.keys(expectedByAgent).sort().map(k => [k, expectedByAgent[k]])) &&
+    Object.keys(ownerStats.byAgent).length === Object.keys(expectedByAgent).length, JSON.stringify(ownerStats.byAgent));
+  check("12. the breakdown sums to tasksRun (" + ownerStats.tasksRun + ")",
+    Object.values(ownerStats.byAgent).reduce((a, b) => a + b, 0) === ownerStats.tasksRun, Object.values(ownerStats.byAgent).reduce((a, b) => a + b, 0));
+
+  console.log("\n══ 13. Lead Radar — the owner told apart from a customer ══");
+  const customerStats = await statsCtx.run(SUBJECT_USER_ID);
+  const radarLine = systemLine("Lead Radar");
+  console.log("    owner: " + ownerStats.leadRadar + " | other account: " + customerStats.leadRadar);
+  check("13. code: getLiveStats decides with the same constant the lead routes refuse on",
+    /userId === OUTREACH_CREDENTIAL_OWNER_ID/.test(def("getLiveStats")) && /req\.user\.id !== OUTREACH_CREDENTIAL_OWNER_ID/.test(SERVER));
+  check("13. code: the credential owner is told available, any other account not available",
+    /^available on this account/.test(ownerStats.leadRadar || "") && customerStats.leadRadar === "not available on this account",
+    JSON.stringify([ownerStats.leadRadar, customerStats.leadRadar]));
+  const ownerPrompt = brain.buildAgentSystemPrompt("X", {}, { leadRadar: ownerStats.leadRadar }, []);
+  check("13. the leadRadar line reaches the prompt", ownerPrompt.indexOf("- leadRadar: available on this account") !== -1);
+  check("13. told: one account only, the leadRadar line names which, all three cases covered, no blanket \"customer accounts\"",
+    /IT WORKS ON ONE ACCOUNT ONLY/.test(radarLine) && /The leadRadar line in LIVE PLATFORM STATS says which this user is\./.test(radarLine) &&
+    /If it says available, this user holds the credentials and Lead Radar is theirs to use\./.test(radarLine) &&
+    /If it says not available, it is unavailable to them\./.test(radarLine) &&
+    /If there is no leadRadar line, you do not know which account this is: do not tell the user either way\./.test(radarLine) &&
+    !/CUSTOMER ACCOUNTS/i.test(radarLine), radarLine.slice(-200));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

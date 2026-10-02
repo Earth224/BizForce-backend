@@ -12280,7 +12280,7 @@ async function getLiveStats(userId) {
     supabase.from("sms_subscribers").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("consent_status", "opted_in"),
     supabase.from("sms_campaigns").select("*", { count: "exact", head: true }).eq("user_id", userId),
     supabase.from("social_post_drafts").select("*", { count: "exact", head: true }).eq("user_id", userId),
-    supabase.from("ai_tasks").select("agent_type").eq("user_id", userId)
+    countTasksByAgent(userId)
   ]);
 
   var tasksRunResult       = results[0];
@@ -12367,11 +12367,8 @@ async function getLiveStats(userId) {
       (agentRowsResult.error.message || agentRowsResult.error) +
       ". Reporting {} to existing readers and marking it unreadable for the prompt.");
     unreadable.push("byAgent");
-  } else if (Array.isArray(agentRowsResult.data)) {
-    agentRowsResult.data.forEach(function (row) {
-      var t = row.agent_type || "general";
-      byAgent[t] = (byAgent[t] || 0) + 1;
-    });
+  } else {
+    byAgent = agentRowsResult.byAgent;
   }
 
   return {
@@ -12385,8 +12382,60 @@ async function getLiveStats(userId) {
     campaigns: softCountNullable(campaignsResult, "campaigns"),
     socialDrafts: softCount(socialDraftsResult, "socialDrafts"),
     byAgent: byAgent,
+    /* Whether this account holds the platform's connected social credentials —
+       the one account the lead routes serve. Stated here so an agent can tell
+       the owner of Lead Radar from a customer refused it; PLATFORM_KNOWLEDGE
+       points at this line by name. The same comparison the routes make. */
+    leadRadar: userId === OUTREACH_CREDENTIAL_OWNER_ID
+      ? "available on this account (it holds the platform's connected social credentials)"
+      : "not available on this account",
     _unreadable: unreadable
   };
+}
+
+/* TASKS PER AGENT, COUNTED — NOT FETCHED AND TALLIED.
+
+   WHAT WAS FOUND. This used to be select("agent_type") with no limit, tallied
+   in JavaScript. PostgREST returns at most 1,000 rows to a select, so for any
+   account past 1,000 tasks the tally covered an arbitrary first thousand and
+   said nothing about the rest. The owner's breakdown read sales 970 against a
+   real 7,899, and every agent was told that figure as "this user's real,
+   current usage". No error, no warning: a capped read looks exactly like a
+   complete one.
+
+   NOW one exact head-count per agent, which no row cap touches. The agents
+   counted are the roster (AGENT_SYSTEM_PROMPTS) and "general"; a null
+   agent_type counts as general, as the tally always did. Anything else — a
+   type no longer in the roster — is not dropped: the remainder against the
+   exact total is reported as "other", so the parts always sum to the whole.
+   Only non-zero entries are returned, the shape the analytics dashboard and
+   the prompt already read. Any count failing fails the whole breakdown, which
+   getLiveStats marks unreadable rather than reporting a partial one as true. */
+async function countTasksByAgent(userId) {
+  var agentTypes = Object.keys(AGENT_SYSTEM_PROMPTS).concat("general");
+  var queries = agentTypes.map(function (agentType) {
+    return supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("agent_type", agentType);
+  });
+  queries.push(supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).is("agent_type", null));
+  queries.push(supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId));
+  var counts = await Promise.all(queries);
+
+  var failed = counts.filter(function (result) { return result.error || typeof result.count !== "number"; })[0];
+  if (failed) {
+    return { error: failed.error || new Error("count was " + JSON.stringify(failed.count)) };
+  }
+
+  var byAgent = {};
+  var counted = 0;
+  agentTypes.forEach(function (agentType, index) {
+    var n = counts[index].count;
+    if (agentType === "general") n += counts[agentTypes.length].count;
+    if (n > 0) byAgent[agentType] = n;
+    counted += n;
+  });
+  var other = counts[agentTypes.length + 1].count - counted;
+  if (other > 0) byAgent.other = other;
+  return { byAgent: byAgent };
 }
 
 /* The task types POST /api/ai/tasks accepts, and the instruction each puts in
