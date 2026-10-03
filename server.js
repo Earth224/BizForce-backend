@@ -11327,6 +11327,7 @@ async function enforceDailyModelCallLimit(userId, route) {
       ". FAILING OPEN: this call proceeds UNCOUNTED against the daily limit of " + limit +
       ". A ledger query that stuttered must not take the product offline for every user at " +
       "once; the cap guards against a sustained runaway, not against one call.");
+    await enforceMonthlyModelSpendLimit(userId, route);
     return { allowed: true, counted: false, limit: limit, used: null };
   }
 
@@ -11338,6 +11339,7 @@ async function enforceDailyModelCallLimit(userId, route) {
       "). FAILING OPEN: this call proceeds UNCOUNTED against the daily limit of " + limit +
       ". A ledger query that stuttered must not take the product offline for every user at " +
       "once; the cap guards against a sustained runaway, not against one call.");
+    await enforceMonthlyModelSpendLimit(userId, route);
     return { allowed: true, counted: false, limit: limit, used: null };
   }
 
@@ -11352,7 +11354,187 @@ async function enforceDailyModelCallLimit(userId, route) {
     throw dailyModelCallLimitError(limit, used, route);
   }
 
+  await enforceMonthlyModelSpendLimit(userId, route);
+
   return { allowed: true, counted: true, limit: limit, used: used };
+}
+
+/* ── THE MONTHLY SPEND CEILING ─────────────────────────────────────────────────
+
+   THE CALL CAP NO LONGER BOUNDS COST. 250 calls a day was sized when every path
+   ran on Haiku. Agent tasks now run on Sonnet 5.5, where a content or executive
+   task that fills its 12,288-token ceiling costs about $0.135 — fifteen times a
+   measured Haiku task ($0.0091) — and 250 of those a day is about $1,000 a month
+   against $199 paid. So what an account can SPEND is bounded too, in dollars,
+   from the spend ledger, before every model call, in the same place and the
+   same way as the call cap. The call cap stays: it stops a fast runaway (a
+   fan-out chain) on the day it starts, and it does not depend on a price table.
+
+   A MONTH IS THE CALENDAR MONTH, UTC — created_on >= the first of the month.
+   Not the subscription period: on 2026-10-03 one subscriptions row of fourteen
+   had a current_period_end, and Stripe access is lost, so a period read from
+   there would be absent for nearly everyone. Not a rolling 30 days: a user can
+   be told exactly when a calendar month resets, and created_on is already the
+   UTC date the daily cap keys on.
+
+   WHAT COUNTS: rows the platform paid for. funded_by = 'user' is the account's
+   own key (BYOK) and costs the platform nothing; NULL predates migration 109 and
+   is counted, because an unknown funder is not evidence the user paid.
+
+   COST IS input_tokens × input price + output_tokens × output price, and
+   NOTHING ELSE. thinking_tokens is NOT added: thinking is billed as output and
+   usage.output_tokens already includes it (clean-7b's sales task: 3,253 output,
+   of which 1,252 thinking). The query does not even select it.
+
+   A MODEL NOT IN THE PRICE TABLE IS PRICED AT THE HIGHEST RATE IN IT, never
+   skipped, and logged every time. A total that silently drops a row reads as
+   complete and is low; one that over-prices an unknown row is high, loud, and
+   fixed by adding the model below. Refusing the call outright would take a
+   path offline because a price list is a line short.
+
+   NO ACCOUNT IS EXEMPT — not the owner, not a harness account, for the reason
+   the call cap gives above: this is about what something costs, and the bill
+   does not ask who authorised it. The owner's ~7,900 tasks were mostly July –
+   August bursts of up to 1,453 a day: the runaway shape both limits exist to
+   stop. In the ledger the owner has spent $0.22 (September) and $0.30 (October
+   to the 3rd); ten clean-run accounts $0.05 – $0.29 each. If the owner needs
+   more, the variable raises it for everyone, visibly.
+
+   READ FAILURES FAIL OPEN, A BAD CEILING FAILS CLOSED — the same split as the
+   call cap, for the same reasons. Rows are read in pages past PostgREST's
+   1,000-row cap and the total is checked against an exact count, because a
+   silently truncated read is how getLiveStats reported 970 for 7,899. */
+var MODEL_PRICES_USD_PER_MILLION = {
+  "claude-haiku-4-5-20251001": { input: 1, output: 5 },
+  "claude-sonnet-5":           { input: 2, output: 10 },
+  "claude-sonnet-5-5":         { input: 2, output: 10 },
+  "claude-sonnet-4-6":         { input: 3, output: 15 }
+};
+var MODEL_PRICES_SOURCE = "Anthropic first-party list prices per million tokens, from the claude-api reference table cached 2026-09-25, read 2026-10-03";
+var MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD = 60;
+
+function modelSpendMonthlyLimit() {
+  var raw = process.env.MODEL_SPEND_MONTHLY_LIMIT_USD_PER_USER;
+  if (raw == null || String(raw).trim() === "") return MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD;
+  var parsed = Number(String(raw).trim());
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/* What one ledger row cost, and whether its model had a price. */
+function modelCallCostUsd(row) {
+  var price = MODEL_PRICES_USD_PER_MILLION[row.model];
+  var priced = !!price;
+  if (!priced) {
+    price = { input: 0, output: 0 };
+    Object.keys(MODEL_PRICES_USD_PER_MILLION).forEach(function (m) {
+      price.input = Math.max(price.input, MODEL_PRICES_USD_PER_MILLION[m].input);
+      price.output = Math.max(price.output, MODEL_PRICES_USD_PER_MILLION[m].output);
+    });
+  }
+  var usd = (Number(row.input_tokens) || 0) * price.input / 1e6 + (Number(row.output_tokens) || 0) * price.output / 1e6;
+  return { usd: usd, priced: priced };
+}
+
+/* The first of this UTC month as created_on holds it, and when the next begins. */
+function modelSpendMonth(now) {
+  var base = (now instanceof Date ? now : new Date());
+  var start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1));
+  var next = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 1));
+  var msLeft = next.getTime() - base.getTime();
+  var days = Math.floor(msLeft / 86400000);
+  var hours = Math.floor((msLeft % 86400000) / 3600000);
+  return { since: start.toISOString().slice(0, 10), resets_at: next.toISOString(), in_text: days + "d " + hours + "h" };
+}
+
+/* Month-to-date platform spend for one account, every row, priced. */
+async function modelSpendThisMonth(userId, now) {
+  var month = modelSpendMonth(now);
+  var rows = [];
+  var total = null;
+  for (var from = 0; ; from += 1000) {
+    var page = await supabase
+      .from("model_calls")
+      .select("id, model, input_tokens, output_tokens, funded_by", { count: "exact" })
+      .eq("user_id", userId)
+      .gte("created_on", month.since)
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (page.error) return { error: page.error.message || JSON.stringify(page.error) };
+    if (total === null) total = page.count;
+    rows = rows.concat(page.data || []);
+    if (!page.data || page.data.length < 1000) break;
+  }
+  if (typeof total !== "number" || rows.length !== total) {
+    return { error: "read " + rows.length + " ledger rows but the exact count is " + JSON.stringify(total) };
+  }
+  var usd = 0;
+  var unpriced = {};
+  rows.forEach(function (row) {
+    if (row.funded_by === "user") return;
+    var cost = modelCallCostUsd(row);
+    usd += cost.usd;
+    if (!cost.priced) unpriced[row.model] = (unpriced[row.model] || 0) + 1;
+  });
+  Object.keys(unpriced).forEach(function (m) {
+    console.error("[spend] UNPRICED MODEL " + JSON.stringify(m) + " — " + unpriced[m] + " ledger row(s) for user " + userId +
+      " this month have no price in MODEL_PRICES_USD_PER_MILLION. Priced at the HIGHEST rate in the table, not skipped. Add it.");
+  });
+  return { usd: usd, rows: rows.length, unpriced: unpriced, month: month };
+}
+
+function monthlyModelSpendLimitError(limit, spent, route, month) {
+  var error = new Error(
+    "Monthly model spend limit reached. This account's model calls have cost $" + spent.toFixed(2) +
+    " this calendar month, against a limit of $" + limit.toFixed(2) + " per account per month " +
+    "(MODEL_SPEND_MONTHLY_LIMIT_USD_PER_USER), priced at list rates. No model call was made for this " +
+    "request. The allowance resets at " + month.resets_at + " (the first of the month, UTC), in " +
+    month.in_text + "."
+  );
+  error.status = 429;
+  error.code = "MONTHLY_MODEL_SPEND_LIMIT";
+  error.limit_usd = limit;
+  error.spent_usd = Number(spent.toFixed(6));
+  error.resets_at = month.resets_at;
+  error.route = route || null;
+  return error;
+}
+
+async function enforceMonthlyModelSpendLimit(userId, route, now) {
+  var limit = modelSpendMonthlyLimit();
+  if (limit === null) {
+    var raw = process.env.MODEL_SPEND_MONTHLY_LIMIT_USD_PER_USER;
+    console.error("[spend] REFUSING MODEL CALL — MODEL_SPEND_MONTHLY_LIMIT_USD_PER_USER is set to " +
+      JSON.stringify(String(raw)) + ", which is not a positive number. Failing closed. Route " +
+      JSON.stringify(route || null) + ", user " + (userId || "null") + ".");
+    var bad = new Error("Model calls are refused because the monthly spend limit is misconfigured. " +
+      "MODEL_SPEND_MONTHLY_LIMIT_USD_PER_USER is set to " + JSON.stringify(String(raw)) + ", which is not a " +
+      "positive number of dollars. Unset it to use the default of $" + MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD +
+      ", or set it to a positive number.");
+    bad.status = 503;
+    bad.code = "MONTHLY_MODEL_SPEND_LIMIT_MISCONFIGURED";
+    throw bad;
+  }
+  if (!userId) return { allowed: true, counted: false, limit_usd: limit, spent_usd: null };
+
+  var spend;
+  try {
+    spend = await modelSpendThisMonth(userId, now);
+  } catch (threw) {
+    spend = { error: (threw && threw.message) || String(threw) };
+  }
+  if (spend.error) {
+    console.error("[spend] SPEND UNAVAILABLE — month-to-date spend for user " + userId + " could not be read (" +
+      spend.error + "). FAILING OPEN: this call proceeds UNCOUNTED against the monthly limit of $" + limit +
+      ". A ledger read that stuttered must not take the product offline for every user at once.");
+    return { allowed: true, counted: false, limit_usd: limit, spent_usd: null };
+  }
+  if (spend.usd >= limit) {
+    console.warn("[spend] MONTHLY LIMIT REACHED — user " + userId + " has spent $" + spend.usd.toFixed(4) +
+      " since " + spend.month.since + ", limit $" + limit + ". Refusing route " + JSON.stringify(route || null) +
+      " BEFORE the model call.");
+    throw monthlyModelSpendLimitError(limit, spend.usd, route, spend.month);
+  }
+  return { allowed: true, counted: true, limit_usd: limit, spent_usd: spend.usd };
 }
 
 /* ── model_calls, the spend ledger (migration 103) ────────────────────────────
