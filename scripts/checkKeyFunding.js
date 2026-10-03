@@ -152,6 +152,22 @@ async function removeFakeKey(userId) {
   if (back.count !== 0) failures++;
 }
 
+/* The ledger rows for the subject and one route, read before a call so the
+   read-back after it can take only the rows that call wrote. No clock is
+   compared: a row is new because its id was not there before. */
+async function ledgerIds(route) {
+  const res = await supabase.from("model_calls").select("id").eq("user_id", SUBJECT_USER_ID).eq("route", route);
+  if (res.error) throw new Error("could not read the ledger before the call: " + res.error.message);
+  return res.data.map(function (r) { return r.id; });
+}
+
+async function ledgerRowsSince(route, preexisting) {
+  const res = await supabase.from("model_calls").select("*").eq("user_id", SUBJECT_USER_ID).eq("route", route)
+    .order("created_at", { ascending: true }).order("id", { ascending: true });
+  if (res.error) return res;
+  return { data: res.data.filter(function (r) { return preexisting.indexOf(r.id) === -1; }), error: null };
+}
+
 /* ── the static half: which sites pass a user ───────────────────────────── */
 function auditCallSites() {
   const fs = require("fs");
@@ -225,7 +241,12 @@ function auditCallSites() {
     /* ── a real call, end to end ───────────────────────────────────────── */
     console.log("\n══ a real call through callAnthropicText ══");
     keysUsed = [];
-    const sinceIso = new Date(Date.now() - 2000).toISOString();
+    /* Each read-back takes the rows for this subject and this call's route that
+       did not exist before the call. It used to take every row for the subject
+       with created_at at or after a time read from this machine's clock: rows
+       are stamped by the database's clock, and the first call's row then
+       satisfied the second call's assertions in 2 of 3 runs. */
+    const preexisting1 = await ledgerIds("checkKeyFunding");
 
     /* MUTATION: the pre-commit behaviour — the billing argument is null again. */
     const billingUser = MUTATING ? null : SUBJECT_USER_ID;
@@ -241,8 +262,7 @@ function auditCallSites() {
       keysUsed.length === 1 && keysUsed[0] === FAKE_BYOK_KEY,
       "keys used: " + keysUsed.map(function (k) { return k === PLATFORM_KEY ? "PLATFORM" : (k === FAKE_BYOK_KEY ? "USER" : String(k)); }).join(", "));
 
-    const rows = await supabase.from("model_calls").select("*")
-      .eq("user_id", SUBJECT_USER_ID).gte("created_at", sinceIso);
+    const rows = await ledgerRowsSince("checkKeyFunding", preexisting1);
     (rows.data || []).forEach(function (r) { residue.record("model_calls", r.id); });
     check("a ledger row was written", (rows.data || []).length === 1, "rows: " + (rows.data || []).length);
 
@@ -260,7 +280,7 @@ function auditCallSites() {
     console.log("\n══ the same call, for a user with no stored key ══");
     await removeFakeKey(SUBJECT_USER_ID);
     keysUsed = [];
-    const since2 = new Date(Date.now() - 1000).toISOString();
+    const preexisting2 = await ledgerIds("checkKeyFunding (no stored key)");
 
     await server.__callAnthropicText("Say ok.", 16, SUBJECT_USER_ID, undefined, {
       user_id: SUBJECT_USER_ID,
@@ -271,8 +291,7 @@ function auditCallSites() {
     check("the client fell back to the platform key",
       keysUsed.length === 1 && keysUsed[0] === PLATFORM_KEY, "keys used: " + keysUsed.length);
 
-    const rows2 = await supabase.from("model_calls").select("*")
-      .eq("user_id", SUBJECT_USER_ID).gte("created_at", since2);
+    const rows2 = await ledgerRowsSince("checkKeyFunding (no stored key)", preexisting2);
     (rows2.data || []).forEach(function (r) { residue.record("model_calls", r.id); });
 
     if (MIGRATION_APPLIED && rows2.data && rows2.data.length) {
