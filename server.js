@@ -12362,9 +12362,10 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           ? executiveLanguageBlock(taskLanguageTag, true)
           : buildLanguageInstruction(taskLanguageTag, true);
 
-        /* taskModel and taskThinking are undefined — callAnthropicText's Haiku
-           default, no thinking field — unless a harness account chose them
-           (selectTaskModel, above handleAiTaskRequest). */
+        /* taskModel and taskThinking come from selectTaskModel (above
+           handleAiTaskRequest): Sonnet 5.5 with between_tools unless a harness
+           account chose otherwise. The executive repair pass below passes no
+           model and stays on callAnthropicText's Haiku default. */
         var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, userId, taskModel, {
           user_id: userId,
           agent_type: agentType,
@@ -13160,7 +13161,21 @@ function warnUnknownTaskType(taskType, agentType, userId) {
    there. A pairing the model would refuse is refused HERE, with a 400 naming
    what the model accepts, before a task row is written or a token is spent —
    rather than reaching the API, failing, and leaving a failed task behind.
-   Sending thinking without a model is a pairing with Haiku, and refused. */
+   Sending thinking without a model is a pairing with the default model.
+
+   THE DEFAULT IS SONNET 5.5 WITH THINKING OFF. Across clean-6 and clean-7, one
+   run per arm on the same prompt, both Haiku arms opened with 4 flagged sales
+   superlatives and wrote invented customer words (2, then 1); all three Sonnet
+   arms flagged 0 and wrote none. Thinking off (between_tools) matched thinking
+   on at 3.4x Haiku's cost per task ($0.0306 against $0.0091) rather than 5.3x.
+   The screens and NO_INVENTION_RULE stay: they are the backstop if a later
+   model behaves differently. The default lives HERE and nowhere else —
+   callAnthropicText's own default stays Haiku, so the tool routes, the Oracle,
+   chat, insights, the passes and every other caller are unchanged. Every
+   account that sends neither field gets it, harness accounts included; a
+   harness comparison names Haiku explicitly. */
+var TASK_DEFAULT_MODEL = "claude-sonnet-5-5";
+var TASK_DEFAULT_THINKING = "between_tools";
 var TASK_MODEL_HARNESS_DOMAIN = "@bizforceai.invalid";
 var TASK_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-5-5"];
 var TASK_THINKING_BY_MODEL = {
@@ -13171,7 +13186,7 @@ var TASK_THINKING_BY_MODEL = {
 
 function selectTaskModel(user, requested, requestedThinking) {
   var absent = function (v) { return v === undefined || v === null || v === ""; };
-  if (absent(requested) && absent(requestedThinking)) return { model: undefined, thinking: undefined };
+  if (absent(requested) && absent(requestedThinking)) return { model: TASK_DEFAULT_MODEL, thinking: TASK_DEFAULT_THINKING };
   var email = String((user && user.email) || "").toLowerCase();
   if (email.slice(-TASK_MODEL_HARNESS_DOMAIN.length) !== TASK_MODEL_HARNESS_DOMAIN) {
     return { error: "The model and thinking fields are not available on this account. Agent tasks run on the platform's model.", code: "model_not_selectable" };
@@ -13180,13 +13195,13 @@ function selectTaskModel(user, requested, requestedThinking) {
     return { error: "Unknown model. Allowed: " + TASK_MODEL_ALLOWLIST.join(", ") + ".", code: "model_not_allowed" };
   }
   if (absent(requestedThinking)) return { model: requested, thinking: undefined };
-  var model = absent(requested) ? TASK_MODEL_ALLOWLIST[0] : requested;
+  var model = absent(requested) ? TASK_DEFAULT_MODEL : requested;
   var accepted = TASK_THINKING_BY_MODEL[model] || [];
   if (accepted.indexOf(requestedThinking) === -1) {
     return { error: model + " does not accept thinking \"" + String(requestedThinking) + "\". " +
       (accepted.length ? "It accepts: " + accepted.join(", ") + "." : "It takes no thinking setting."), code: "thinking_not_allowed" };
   }
-  return { model: requested, thinking: requestedThinking };
+  return { model: model, thinking: requestedThinking };
 }
 
 async function handleAiTaskRequest(req, res, next) {

@@ -151,7 +151,7 @@ const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
   "widen", "flagship", "sellingpoint", "inslot", "economics", "econanchor",
-  "harnessgate", "allowlist", "modelpass",
+  "harnessgate", "allowlist", "modelpass", "taskdefault",
   "thinkinggate", "thinkingpass", "thinkingsend", "haikuceiling", "sonnetceiling", "thinkingnull", "thinkingretry"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
@@ -172,6 +172,11 @@ if (MUTATE === "tally") {
   SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
     `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
   console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
+}
+if (MUTATE === "taskdefault") {
+  SERVER = mutate(SERVER, "  if (absent(requested) && absent(requestedThinking)) return { model: TASK_DEFAULT_MODEL, thinking: TASK_DEFAULT_THINKING };",
+    "  if (absent(requested) && absent(requestedThinking)) return { model: undefined, thinking: undefined };", "taskdefault");
+  console.log("\n!! MUTATION: an account that sends nothing runs on Haiku again — 21 and 22 must fail.");
 }
 if (MUTATE === "harnessgate") {
   SERVER = mutate(SERVER, "  if (email.slice(-TASK_MODEL_HARNESS_DOMAIN.length) !== TASK_MODEL_HARNESS_DOMAIN) {", "  if (false) {", "harnessgate");
@@ -997,10 +1002,11 @@ function runTask(agentType, stopReason, opts) {
 
   console.log("\n══ 21. only a harness account may pick its model and thinking, from fixed lists ══");
   const modelCtx = {};
-  vm.runInNewContext([def("TASK_MODEL_HARNESS_DOMAIN"), def("TASK_MODEL_ALLOWLIST"), def("TASK_THINKING_BY_MODEL"), def("selectTaskModel")].join("\n\n") +
+  vm.runInNewContext([def("TASK_DEFAULT_MODEL"), def("TASK_DEFAULT_THINKING"), def("TASK_MODEL_HARNESS_DOMAIN"), def("TASK_MODEL_ALLOWLIST"),
+    def("TASK_THINKING_BY_MODEL"), def("selectTaskModel")].join("\n\n") +
     "\nthis.pick = selectTaskModel; this.allow = TASK_MODEL_ALLOWLIST;", modelCtx);
   const pick = modelCtx.pick;
-  check("21. the allowlist is exactly the Haiku default, claude-sonnet-5 and claude-sonnet-5-5",
+  check("21. the allowlist is exactly Haiku 4.5, claude-sonnet-5 and claude-sonnet-5-5",
     JSON.stringify(Array.from(modelCtx.allow)) === JSON.stringify(["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-5-5"]), JSON.stringify(modelCtx.allow));
   const NON_HARNESS = [
     { email: "owner@example.com" },
@@ -1015,10 +1021,17 @@ function runTask(agentType, stopReason, opts) {
   const nonHarnessThinking = NON_HARNESS.map(u => pick(u, undefined, "adaptive")).concat(NON_HARNESS.map(u => pick(u, "claude-sonnet-5-5", "between_tools")));
   check("21. a non-harness account that sends thinking, alone or with a model, is refused the same way (model_not_selectable)",
     nonHarnessThinking.every(r => r.error && r.code === "model_not_selectable" && r.model === undefined && r.thinking === undefined), JSON.stringify(nonHarnessThinking));
-  check("21. a non-harness account that sends neither field is unaffected",
-    pick({ email: "owner@example.com" }, undefined).model === undefined && !pick({ email: "owner@example.com" }, undefined).error &&
-    !pick({ email: "owner@example.com" }, "").error && !pick({ email: "owner@example.com" }, undefined, "").error &&
-    pick({ email: "owner@example.com" }, undefined, null).thinking === undefined);
+  /* The default: every account that sends neither field — a customer, a
+     scheduled run whose req.user carries only an id, a harness account. */
+  const NEITHER = [[{ email: "owner@example.com" }, undefined, undefined], [{ email: "owner@example.com" }, "", ""], [{ email: "owner@example.com" }, undefined, null],
+    [{ id: "scheduled-run-user" }, undefined, undefined], [null, undefined, undefined], [{ email: "clean-run-8@bizforceai.invalid" }, undefined, undefined]]
+    .map(([u, m, t]) => pick(u, m, t));
+  check("21. an account that sends neither field gets the default, Sonnet 5.5 with between_tools — customers, scheduled runs and harness accounts alike",
+    NEITHER.every(r => !r.error && r.model === "claude-sonnet-5-5" && r.thinking === "between_tools"), JSON.stringify(NEITHER));
+  check("21. code: the default is named in selectTaskModel and nowhere else, and callAnthropicText's own default stays Haiku",
+    SERVER.split("TASK_DEFAULT_MODEL").length - 1 === def("selectTaskModel").split("TASK_DEFAULT_MODEL").length - 1 + 1 &&
+    SERVER.split("TASK_DEFAULT_THINKING").length - 1 === def("selectTaskModel").split("TASK_DEFAULT_THINKING").length - 1 + 1 &&
+    /model = "claude-haiku-4-5-20251001", ledger = \{\}, thinking = undefined\)/.test(def("callAnthropicText")));
   const H = { email: "clean-run-7@bizforceai.invalid" };
   const accepted = [["claude-sonnet-5", "adaptive"], ["claude-sonnet-5", "disabled"], ["claude-sonnet-5-5", "adaptive"], ["claude-sonnet-5-5", "between_tools"]]
     .map(([m, t]) => pick(H, m, t));
@@ -1026,10 +1039,16 @@ function runTask(agentType, stopReason, opts) {
     accepted.every((r, i) => !r.error && r.model === ["claude-sonnet-5", "claude-sonnet-5", "claude-sonnet-5-5", "claude-sonnet-5-5"][i] &&
       r.thinking === ["adaptive", "disabled", "adaptive", "between_tools"][i]), JSON.stringify(accepted));
   const refused = [["claude-sonnet-5-5", "disabled"], ["claude-sonnet-5", "between_tools"], ["claude-haiku-4-5-20251001", "adaptive"],
-    ["claude-haiku-4-5-20251001", "disabled"], [undefined, "adaptive"], ["claude-sonnet-5-5", "enabled"], ["claude-sonnet-5-5", "ADAPTIVE"]].map(([m, t]) => pick(H, m, t));
-  check("21. a pairing the model would refuse is refused here (thinking_not_allowed), naming what it accepts — Sonnet 5.5 with \"disabled\", Haiku with any, thinking without a model",
+    ["claude-haiku-4-5-20251001", "disabled"], [undefined, "disabled"], ["claude-sonnet-5-5", "enabled"], ["claude-sonnet-5-5", "ADAPTIVE"]].map(([m, t]) => pick(H, m, t));
+  check("21. a pairing the model would refuse is refused here (thinking_not_allowed), naming what it accepts — Sonnet 5.5 with \"disabled\", Haiku with any, \"disabled\" with no model (the default refuses it)",
     refused.every(r => r.code === "thinking_not_allowed" && r.model === undefined && r.thinking === undefined) &&
-    /accepts: adaptive, between_tools/.test(refused[0].error) && /takes no thinking setting/.test(refused[2].error), JSON.stringify(refused));
+    /accepts: adaptive, between_tools/.test(refused[0].error) && /takes no thinking setting/.test(refused[2].error) &&
+    /^claude-sonnet-5-5 does not accept/.test(refused[4].error), JSON.stringify(refused));
+  const thinkingOnly = pick(H, undefined, "adaptive");
+  const haikuByName = pick(H, "claude-haiku-4-5-20251001");
+  check("21. a harness account can still run the Haiku arm by naming it (no thinking), and thinking alone pairs with the default model",
+    !haikuByName.error && haikuByName.model === "claude-haiku-4-5-20251001" && haikuByName.thinking === undefined &&
+    !thinkingOnly.error && thinkingOnly.model === "claude-sonnet-5-5" && thinkingOnly.thinking === "adaptive", JSON.stringify([haikuByName, thinkingOnly]));
   const harnessSonnet = pick({ email: "Clean-Run-6@BizForceAI.invalid" }, "claude-sonnet-5");
   const harnessHaiku = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-haiku-4-5-20251001");
   const harnessOther = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-opus-5-5");
@@ -1044,7 +1063,7 @@ function runTask(agentType, stopReason, opts) {
     /processAiTask\([^)]*userPrompt, modelChoice\.model, modelChoice\.thinking\)/.test(handler));
   const sonnetRun = await runTask("social", "end_turn", { taskModel: "claude-sonnet-5" });
   const defaultRun = await runTask("social", "end_turn", {});
-  check("21. processAiTask passes the chosen model to callAnthropicText, and the default (Haiku) when none was chosen",
+  check("21. processAiTask passes the model it is handed to callAnthropicText, and nothing (callAnthropicText's Haiku) only if handed none",
     sonnetRun.model === "claude-sonnet-5" && defaultRun.model === undefined, JSON.stringify([sonnetRun.model, defaultRun.model]));
   const offRun = await runTask("social", "end_turn", { taskModel: "claude-sonnet-5-5", taskThinking: "between_tools" });
   check("21. processAiTask passes the chosen thinking to callAnthropicText, and none when none was chosen",
@@ -1079,6 +1098,14 @@ function runTask(agentType, stopReason, opts) {
   const sonnetOffTask = await runTask("seo", "end_turn", { taskModel: "claude-sonnet-5-5", taskThinking: "between_tools" });
   check("22. processAiTask hands the model the ceiling for its model and thinking (seo: 10,240 thinking, 6,144 off)",
     sonnetTask.maxTokens === 10240 && sonnetOffTask.maxTokens === 6144, JSON.stringify([sonnetTask.maxTokens, sonnetOffTask.maxTokens]));
+  /* The default, end to end: what selectTaskModel gives an account that sends
+     nothing, handed to processAiTask as handleAiTaskRequest hands it. */
+  const byDefault = pick({ email: "owner@example.com" }, undefined, undefined);
+  const defaultSeo = await runTask("seo", "end_turn", { taskModel: byDefault.model, taskThinking: byDefault.thinking });
+  const defaultContent = await runTask("content", "end_turn", { taskModel: byDefault.model, taskThinking: byDefault.thinking });
+  check("22. a default task gets the thinking-off ceiling, not the thinking one (seo 6,144 not 10,240; content 12,288 not 16,384), and sends between_tools",
+    defaultSeo.maxTokens === 6144 && defaultContent.maxTokens === 12288 && defaultSeo.model === "claude-sonnet-5-5" && defaultSeo.thinking === "between_tools",
+    JSON.stringify([defaultSeo.maxTokens, defaultContent.maxTokens, defaultSeo.model, defaultSeo.thinking]));
   check("22. code: the comment says max_tokens is a limit, not a charge, so nobody optimises it down",
     SERVER.indexOf("max_tokens IS A LIMIT, NOT A CHARGE.") !== -1);
 
