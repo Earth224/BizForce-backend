@@ -68,6 +68,12 @@
         the notice and carries the marked slots. A quotation the user supplied,
         in the request or the profile, is kept; a question, a negated
         instruction, the placeholder and an unattributed line are left alone.
+     21. MODEL CHOICE, HARNESS ONLY. A non-harness account that sends `model`
+        is refused (look-alike addresses included) and one that sends none is
+        unaffected; a harness account gets either of exactly two models and is
+        refused anything else; the route checks before writing a task row;
+        processAiTask hands the choice to callAnthropicText; and the ledger
+        records the model that answered.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -96,6 +102,9 @@
    MUTATE=reasoning    restores "reason step-by-step and internally" → 16 goes red
    MUTATE=screen       screens the output but stores the original → 17 goes red
    MUTATE=cue          takes out any first-person quote, attributed or not → 17 goes red
+   MUTATE=harnessgate  any account may pick its model           → 21 goes red
+   MUTATE=allowlist    a harness account may name any model     → 21 goes red
+   MUTATE=modelpass    processAiTask drops the chosen model     → 21 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -124,7 +133,8 @@ residue.install();
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
-  "widen", "flagship", "economics", "econanchor"];
+  "widen", "flagship", "economics", "econanchor",
+  "harnessgate", "allowlist", "modelpass"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -144,6 +154,18 @@ if (MUTATE === "tally") {
   SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
     `  } else if (Array.isArray(agentRowsResult.data)) {\n    agentRowsResult.data.forEach(function (row) {\n      var t = row.agent_type || "general";\n      byAgent[t] = (byAgent[t] || 0) + 1;\n    });\n  }`, "tally");
   console.log("\n!! MUTATION: byAgent is a fetch-and-tally again — 12 must fail.");
+}
+if (MUTATE === "harnessgate") {
+  SERVER = mutate(SERVER, "  if (email.slice(-TASK_MODEL_HARNESS_DOMAIN.length) !== TASK_MODEL_HARNESS_DOMAIN) {", "  if (false) {", "harnessgate");
+  console.log("\n!! MUTATION: any account may pick its model — 21 must fail.");
+}
+if (MUTATE === "allowlist") {
+  SERVER = mutate(SERVER, "  if (TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {", "  if (false) {", "allowlist");
+  console.log("\n!! MUTATION: a harness account may name any model — 21 must fail.");
+}
+if (MUTATE === "modelpass") {
+  SERVER = mutate(SERVER, "maxTokens, userId, taskModel, {", "maxTokens, userId, undefined, {", "modelpass");
+  console.log("\n!! MUTATION: processAiTask drops the chosen model and runs Haiku — 21 must fail.");
 }
 if (MUTATE === "superlative") {
   SERVER = mutate(SERVER, "        output = superlativeScreen.text;\n", "", "superlative");
@@ -318,7 +340,7 @@ if (MUTATE === "stop") {
 }
 function runTask(agentType, stopReason, opts) {
   opts = opts || {};
-  const calls = [], updates = [], inserts = [];
+  const calls = [], updates = [], inserts = [], models = [];
   function fake(table) {
     const st = { op: "select", payload: null, one: null };
     const b = {
@@ -349,7 +371,7 @@ function runTask(agentType, stopReason, opts) {
     resolvePreferredLanguage: async function () { return null; },
     buildLanguageInstruction: function () { return ""; },
     executiveLanguageBlock: function () { return ""; },
-    callAnthropicText: async function (prompt, maxTokens) { calls.push(maxTokens); return { text: opts.text || "partial output", stopReason: stopReason }; },
+    callAnthropicText: async function (prompt, maxTokens, uid, model) { calls.push(maxTokens); models.push(model); return { text: opts.text || "partial output", stopReason: stopReason }; },
     finalizeExecutiveTaskOutput: async function (u, output) { return { output: output, complete: true }; },
     reportMemoryConstraintViolation: function () {},
     /* No memory row is wanted unless asked for; an empty roster skips the write. */
@@ -361,8 +383,8 @@ function runTask(agentType, stopReason, opts) {
     def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
     def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"), def("UNSUPPORTED_ECONOMICS_MARK"), def("screenUnsupportedEconomics"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
-  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt").then(function () {
-    return { maxTokens: calls[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
+  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt", opts.taskModel).then(function () {
+    return { maxTokens: calls[0], model: models[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
       ceilings: vm.runInContext("TASK_OUTPUT_TOKEN_CEILINGS", ctx), slot: vm.runInContext("TESTIMONIAL_SLOT", ctx) };
   });
 }
@@ -861,6 +883,45 @@ function runTask(agentType, stopReason, opts) {
     .split("\n").filter(l => !/^\s*--/.test(l)).join("\n");
   check("20. migration 126 allows unsupported_economics and keeps the four earlier patterns",
     /check \(pattern in \('quoted_first_person', 'attributed_claim', 'both', 'sales_superlative', 'unsupported_economics'\)\)/.test(MIGRATION_126) && !/create policy/i.test(MIGRATION_126));
+
+  console.log("\n══ 21. only a harness account may pick its model, from a two-item allowlist ══");
+  const modelCtx = {};
+  vm.runInNewContext([def("TASK_MODEL_HARNESS_DOMAIN"), def("TASK_MODEL_ALLOWLIST"), def("selectTaskModel")].join("\n\n") +
+    "\nthis.pick = selectTaskModel; this.allow = TASK_MODEL_ALLOWLIST;", modelCtx);
+  const pick = modelCtx.pick;
+  check("21. the allowlist is exactly the Haiku default and claude-sonnet-5",
+    JSON.stringify(Array.from(modelCtx.allow)) === JSON.stringify(["claude-haiku-4-5-20251001", "claude-sonnet-5"]), JSON.stringify(modelCtx.allow));
+  const NON_HARNESS = [
+    { email: "owner@example.com" },
+    { email: "x@bizforceai.invalid.example.com" },
+    { email: "bizforceai.invalid@example.com" },
+    { email: "" },
+    null
+  ];
+  const nonHarnessResults = NON_HARNESS.map(u => pick(u, "claude-sonnet-5"));
+  check("21. a non-harness account that asks for a model is refused (model_not_selectable), including look-alike addresses",
+    nonHarnessResults.every(r => r.error && r.code === "model_not_selectable" && r.model === undefined), JSON.stringify(nonHarnessResults));
+  check("21. a non-harness account that sends no model is unaffected",
+    pick({ email: "owner@example.com" }, undefined).model === undefined && !pick({ email: "owner@example.com" }, undefined).error &&
+    !pick({ email: "owner@example.com" }, "").error);
+  const harnessSonnet = pick({ email: "Clean-Run-6@BizForceAI.invalid" }, "claude-sonnet-5");
+  const harnessHaiku = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-haiku-4-5-20251001");
+  const harnessOther = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-opus-5-5");
+  check("21. a harness account gets either allowlisted model (address case ignored), and anything else is refused (model_not_allowed)",
+    harnessSonnet.model === "claude-sonnet-5" && harnessHaiku.model === "claude-haiku-4-5-20251001" &&
+    harnessOther.code === "model_not_allowed" && harnessOther.model === undefined, JSON.stringify([harnessSonnet, harnessHaiku, harnessOther]));
+  const handler = def("handleAiTaskRequest");
+  check("21. code: the task route checks the field before it writes a task row, from the database-loaded req.user, and hands the choice to processAiTask",
+    handler.indexOf("selectTaskModel(req.user, req.body.model)") !== -1 &&
+    handler.indexOf("selectTaskModel(req.user, req.body.model)") < handler.indexOf(".from(\"ai_tasks\")") &&
+    /return res\.status\(400\)\.json\(\{ error: modelChoice\.error, code: modelChoice\.code \}\)/.test(handler) &&
+    /processAiTask\([^)]*userPrompt, modelChoice\.model\)/.test(handler));
+  const sonnetRun = await runTask("social", "end_turn", { taskModel: "claude-sonnet-5" });
+  const defaultRun = await runTask("social", "end_turn", {});
+  check("21. processAiTask passes the chosen model to callAnthropicText, and the default (Haiku) when none was chosen",
+    sonnetRun.model === "claude-sonnet-5" && defaultRun.model === undefined, JSON.stringify([sonnetRun.model, defaultRun.model]));
+  check("21. code: the ledger records the model that answered, so a Sonnet task is Sonnet in model_calls",
+    /model:\s+response\.model \|\| model,/.test(def("callAnthropicText")) && /model = "claude-haiku-4-5-20251001"/.test(def("callAnthropicText")));
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

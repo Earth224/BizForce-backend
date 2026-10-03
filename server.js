@@ -12219,7 +12219,7 @@ async function recordTestimonialRemovals(taskId, userId, agentType, removals) {
   }
 }
 
-async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt) {
+async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, taskModel) {
     try {
         var isExecutive = agentType === "executive";
         var maxTokens = TASK_OUTPUT_TOKEN_CEILINGS[agentType] || TASK_OUTPUT_TOKEN_DEFAULT;
@@ -12243,7 +12243,9 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           ? executiveLanguageBlock(taskLanguageTag, true)
           : buildLanguageInstruction(taskLanguageTag, true);
 
-        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, userId, undefined, {
+        /* taskModel is undefined — callAnthropicText's Haiku default — unless a
+           harness account chose one (selectTaskModel, above handleAiTaskRequest). */
+        var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, userId, taskModel, {
           user_id: userId,
           agent_type: agentType,
           route: "processAiTask"
@@ -12998,6 +13000,49 @@ function warnUnknownTaskType(taskType, agentType, userId) {
     "allowedTaskTypes with a taskInstructions entry, or stop the frontend offering it.");
 }
 
+/* A HARNESS ACCOUNT MAY PICK ITS MODEL; NOTHING ELSE MAY.
+
+   WHY. Every agent task has run on Haiku — callAnthropicText's default, which
+   processAiTask never overrides — while the master file's model-tier rule
+   called for Sonnet on judgment-heavy work. The only justification that rule
+   ever gave was a chart product removed in August. Whether Sonnet's output is
+   worth its 3x list price is unmeasured, and measuring it needs the same prompt
+   on both models from accounts with no memory: the clean-account harness.
+
+   WHO. Only an account whose email ends @bizforceai.invalid — the harness and
+   check accounts, which no person can sign in to. The email is read from the
+   database by requireAuth (the session's users row, or getUserById), never
+   from the token, so it cannot be claimed.
+
+   A NON-HARNESS ACCOUNT THAT SENDS `model` IS REFUSED, NOT IGNORED. Ignoring it
+   would be quieter, and no page sends the field today. But a comparison script
+   run by mistake under the wrong account would then record a "Sonnet" result
+   that was Haiku, and nothing in the 202 would say so. A refusal names what
+   happened; an absent field is not affected at all.
+
+   WHICH. Two values, exact strings. The default is listed so a harness run can
+   state Haiku explicitly rather than by omission. "claude-sonnet-5" is the
+   string the Oracle and SEO generate-post already send; whether the API
+   accepts it has not been verified from this codebase (the ledger holds no
+   Sonnet row). If it is wrong the API refuses the call, callAnthropicText
+   throws, and processAiTask records the task as failed with the error — loud,
+   unlike the Oracle, which falls back to Haiku. The model that actually
+   answered is what model_calls records (response.model). */
+var TASK_MODEL_HARNESS_DOMAIN = "@bizforceai.invalid";
+var TASK_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-5"];
+
+function selectTaskModel(user, requested) {
+  if (requested === undefined || requested === null || requested === "") return { model: undefined };
+  var email = String((user && user.email) || "").toLowerCase();
+  if (email.slice(-TASK_MODEL_HARNESS_DOMAIN.length) !== TASK_MODEL_HARNESS_DOMAIN) {
+    return { error: "The model field is not available on this account. Agent tasks run on the platform's model.", code: "model_not_selectable" };
+  }
+  if (TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {
+    return { error: "Unknown model. Allowed: " + TASK_MODEL_ALLOWLIST.join(", ") + ".", code: "model_not_allowed" };
+  }
+  return { model: requested };
+}
+
 async function handleAiTaskRequest(req, res, next) {
   try {
     var userId = req.user.id;
@@ -13007,6 +13052,11 @@ async function handleAiTaskRequest(req, res, next) {
 
     if (!userPrompt) {
       return res.status(400).json({ error: "Missing prompt" });
+    }
+
+    var modelChoice = selectTaskModel(req.user, req.body.model);
+    if (modelChoice.error) {
+      return res.status(400).json({ error: modelChoice.error, code: modelChoice.code });
     }
 
    // Derived from AGENT_SYSTEM_PROMPTS rather than listed again here. This was
@@ -13148,7 +13198,7 @@ if (memoryResult.error) {
 
     var taskRecord = pendingInsert.data;
 setImmediate(function () {
-  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt).catch(function (error) {
+  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, modelChoice.model).catch(function (error) {
     console.error("Async AI task failed:", error);
   });
 });
