@@ -12032,6 +12032,7 @@ function taskOutputTokenCeiling(agentType, model, thinking) {
    replaced by the marked slot and counted in the notice, so the user can see
    that something was removed and put it back. */
 var TESTIMONIAL_SLOT = "[TESTIMONIAL NEEDED: a passage written as a customer's words was removed here. Use a real customer's words, with their permission.]";
+var TESTIMONIAL_SAMPLE_CUT = "(a sample written as a customer's words was removed here)";
 
 /* Lower case, straight quotes, single spaces, and no punctuation at either end:
    an agent quoting the user's line adds its own comma or full stop inside the
@@ -12060,16 +12061,32 @@ function screenFabricatedTestimonials(text, suppliedText) {
      working, and must not make the line beside it look attributed. Masked
      with spaces of the same length, so every index still lines up. */
   var masked = source.replace(/\[TESTIMONIAL NEEDED[^\]]*\]/gi, function (slot) { return new Array(slot.length + 1).join(" "); });
+  /* A first-person quote written INSIDE a slot is a sample testimonial, the
+     thing the rule forbids "even as an example". Clean-7a's sales agent wrote
+     [TESTIMONIAL NEEDED: ask a War Horse repeat customer for a short statement
+     about consistency, not results — something like "I've been taking this
+     daily for six months. It's part of the routine now."]. The cues missed it:
+     the slot's "TESTIMONIAL" is masked, and was more than 80 characters before
+     the quote anyway, so unmasking would not have caught it and would bring
+     back a false positive (a slot beside the user's own "I'm proud of this
+     formula"). So the slot itself is the attribution. */
+  var slots = [];
+  var slotRe = /\[TESTIMONIAL NEEDED[^\]]*\]/gi;
+  var m;
+  while ((m = slotRe.exec(source)) !== null) slots.push([m.index, m.index + m[0].length]);
+  function insideSlot(start, end) {
+    return slots.some(function (slot) { return start > slot[0] && end < slot[1]; });
+  }
 
   var quoteRe = /"([^"\n]{12,400})"|“([^”\n]{12,400})”/g;
-  var m;
   while ((m = quoteRe.exec(source)) !== null) {
     var inner = m[1] !== undefined ? m[1] : m[2];
     if (/\?\s*$/.test(inner)) continue;
     if (!FIRST_PERSON.test(inner)) continue;
     var before = masked.slice(Math.max(0, m.index - 80), m.index);
     var after = masked.slice(m.index + m[0].length, m.index + m[0].length + 80);
-    if (!(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;
+    if (!insideSlot(m.index, m.index + m[0].length) &&
+        !(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;
     if (supplied && supplied.indexOf(normalizedQuoteText(inner)) !== -1) continue;
     spans.push([m.index, m.index + m[0].length, "quoted_first_person"]);
   }
@@ -12098,9 +12115,13 @@ function screenFabricatedTestimonials(text, suppliedText) {
   });
   var removals = merged.map(function (span) { return { pattern: span[2], passage: source.slice(span[0], span[1]) }; });
 
+  /* A sample inside the agent's own slot is cut out of it and the slot kept:
+     its instruction (what to ask a real customer for) is the useful part, and
+     a second slot inside the first would nest brackets. The place is still
+     marked [TESTIMONIAL NEEDED], as the notice says. */
   var out = source;
   for (var i = merged.length - 1; i >= 0; i--) {
-    out = out.slice(0, merged[i][0]) + TESTIMONIAL_SLOT + out.slice(merged[i][1]);
+    out = out.slice(0, merged[i][0]) + (insideSlot(merged[i][0], merged[i][1]) ? TESTIMONIAL_SAMPLE_CUT : TESTIMONIAL_SLOT) + out.slice(merged[i][1]);
   }
   var n = merged.length;
   var notice = "NOTE FROM BIZFORCE: " + n + " passage" + (n === 1 ? "" : "s") +

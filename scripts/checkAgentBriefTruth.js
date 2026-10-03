@@ -150,7 +150,7 @@ residue.install();
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
-  "widen", "flagship", "sellingpoint", "economics", "econanchor",
+  "widen", "flagship", "sellingpoint", "inslot", "economics", "econanchor",
   "harnessgate", "allowlist", "modelpass",
   "thinkinggate", "thinkingpass", "thinkingsend", "haikuceiling", "sonnetceiling", "thinkingnull", "thinkingretry"];
 const MUTATE = process.env.MUTATE || "";
@@ -228,6 +228,10 @@ if (MUTATE === "asking") {
 if (MUTATE === "widen") {
   SERVER = mutate(SERVER, "|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))", ")", "widen");
   console.log("\n!! MUTATION: the superlative list is back to its clean-5 width — 19 must fail.");
+}
+if (MUTATE === "inslot") {
+  SERVER = mutate(SERVER, "    if (!insideSlot(m.index, m.index + m[0].length) &&\n        !(CUSTOMER_CUE", "    if (!(CUSTOMER_CUE", "inslot");
+  console.log("\n!! MUTATION: a sample testimonial inside the slot needs a cue again — 17 must fail.");
 }
 if (MUTATE === "sellingpoint") {
   SERVER = mutate(SERVER, "best[- ]?sell(?:er|ers|ing(?![- ]points?\\b))|top[- ]?sell(?:er|ers|ing(?![- ]points?\\b))", "best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)", "sellingpoint");
@@ -431,7 +435,7 @@ function runTask(agentType, stopReason, opts) {
   vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("TASK_OUTPUT_TOKENIZER_FACTOR"), def("TASK_OUTPUT_THINKING_ALLOWANCE"),
     def("TASK_THINKING_OFF"), def("taskOutputTokenCeiling"), def("nowIso"),
     def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
-    def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
+    def("TESTIMONIAL_SLOT"), def("TESTIMONIAL_SAMPLE_CUT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
     def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"), def("UNSUPPORTED_ECONOMICS_MARK"), def("screenUnsupportedEconomics"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
   return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt", opts.taskModel, opts.taskThinking).then(function () {
@@ -793,6 +797,18 @@ function runTask(agentType, stopReason, opts) {
   const plain = await runTask("social", "end_turn", { text: "Ask a buyer: \"What made you reorder?\" Then lead with the six-pack. Never write lines like customers tell us they love it. Put [TESTIMONIAL NEEDED: ask a repeat buyer why they reorder] under the price. Write \"I'm proud of this formula\" on the label." });
   check("17. a question, a negated instruction, the placeholder and an unattributed first-person line are left alone",
     !!plain.update && !/NOTE FROM BIZFORCE/.test(plain.update.result) && plain.update.error === null, plain.update && plain.update.result.slice(0, 160));
+  /* Clean-7a's sales slot, verbatim: a sample testimonial written inside the
+     agent's own slot, with no cue within 80 characters of it. */
+  const IN_SLOT = "4. Social proof: [TESTIMONIAL NEEDED: ask a War Horse repeat customer for a short statement about consistency, not results — something like \"I've been taking this daily for six months. It's part of the routine now.\"]\n\nThen show the six-pack at $55.";
+  const inSlot = await runTask("social", "end_turn", { text: IN_SLOT });
+  const inSlotResult = inSlot.update ? inSlot.update.result : "";
+  console.log("    stored: " + inSlotResult.slice(inSlotResult.indexOf("4. Social"), inSlotResult.indexOf("4. Social") + 190) + "…");
+  check("17. a sample testimonial inside the agent's slot is cut out, the slot and its instruction kept, no slot nested in it",
+    /^NOTE FROM BIZFORCE: 1 passage written as a customer's words/.test(inSlotResult) && !/six months|routine now/.test(inSlotResult) &&
+    inSlotResult.indexOf("[TESTIMONIAL NEEDED: ask a War Horse repeat customer for a short statement about consistency, not results — something like (a sample written as a customer's words was removed here)]") !== -1 &&
+    inSlotResult.split("[TESTIMONIAL NEEDED").length === 3 && /Then show the six-pack at \$55\.$/.test(inSlotResult), inSlotResult.slice(0, 400));
+  const inSlotRows = inSlot.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => i.payload).flat();
+  check("17. the sample is recorded as quoted_first_person", inSlotRows.length === 1 && inSlotRows[0].pattern === "quoted_first_person" && /six months/.test(inSlotRows[0].passage), JSON.stringify(inSlotRows));
 
   console.log("\n══ 18. what the screen removes is recorded, and nothing in the product reads it ══");
   const records = screened.inserts.filter(i => i.table === "testimonial_screen_removals").map(i => i.payload).flat();
