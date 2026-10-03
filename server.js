@@ -12164,8 +12164,15 @@ function screenSalesSuperlatives(text, profileText) {
      screened by screenUnsupportedEconomics instead. "highest margin" moved
      there too. Measured on the 42 stored outputs of seven runs: 21 flags, all
      claims about how the user's products sell — and those rules were tuned on
-     the same 42, so the true rate will be lower. */
-  var SUPERLATIVE = /\b(?:highest[- ](?:volume|velocity|selling|converting)|highest[- ]revenue (?:products?|items?|skus?|lines?|shots?)|best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)|most popular|fastest[- ](?:moving|selling)|(?:core|main|primary|biggest|top) revenue (?:drivers?|generators?|earners?|products?)|drives? (?:the most )?volume|moves? (?:the )?fastest|sells? (?:the )?most|converts? (?:faster|better) than|volume (?:drivers?|leaders?)|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))\b/i;
+     the same 42, so the true rate will be lower.
+     "Selling point" is a figure of speech, not a sales claim: clean-7b's "The
+     pack math is your best selling point." was flagged by best[- ]?selling in an
+     otherwise accurate plan. Every "selling" here now passes when "point" or
+     "points" follows; "best seller", "best-selling" and "best sellers" still
+     count. On the 60 stored outputs of the ten clean runs: 26 flags, all
+     claims about how the user's products sell, and that one sentence no longer
+     flagged — the fix was made against the same outputs it is measured on. */
+  var SUPERLATIVE = /\b(?:highest[- ](?:volume|velocity|selling(?![- ]points?\b)|converting)|highest[- ]revenue (?:products?|items?|skus?|lines?|shots?)|best[- ]?sell(?:er|ers|ing(?![- ]points?\b))|top[- ]?sell(?:er|ers|ing(?![- ]points?\b))|most popular|fastest[- ](?:moving|selling(?![- ]points?\b))|(?:core|main|primary|biggest|top) revenue (?:drivers?|generators?|earners?|products?)|drives? (?:the most )?volume|moves? (?:the )?fastest|sells? (?:the )?most|converts? (?:faster|better) than|volume (?:drivers?|leaders?)|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))\b/i;
   /* "Flagship" is a claim about which product leads. It passes only when the
      sentence names a product the profile itself calls flagship. */
   var FLAGSHIP = /\bflagship\b/i;

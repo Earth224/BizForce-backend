@@ -150,7 +150,7 @@ residue.install();
 const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
-  "widen", "flagship", "economics", "econanchor",
+  "widen", "flagship", "sellingpoint", "economics", "econanchor",
   "harnessgate", "allowlist", "modelpass",
   "thinkinggate", "thinkingpass", "thinkingsend", "haikuceiling", "sonnetceiling", "thinkingnull", "thinkingretry"];
 const MUTATE = process.env.MUTATE || "";
@@ -228,6 +228,10 @@ if (MUTATE === "asking") {
 if (MUTATE === "widen") {
   SERVER = mutate(SERVER, "|strongest (?:revenue|sellers?|performers?|products?)|revenue plays?|outsells?|reach(?:es)? for first|go-to (?:product|shot|seller)|most[- ](?:ordered|requested|purchased))", ")", "widen");
   console.log("\n!! MUTATION: the superlative list is back to its clean-5 width — 19 must fail.");
+}
+if (MUTATE === "sellingpoint") {
+  SERVER = mutate(SERVER, "best[- ]?sell(?:er|ers|ing(?![- ]points?\\b))|top[- ]?sell(?:er|ers|ing(?![- ]points?\\b))", "best[- ]?sell(?:er|ers|ing)|top[- ]?sell(?:er|ers|ing)", "sellingpoint");
+  console.log("\n!! MUTATION: \"best selling point\" is a sales claim again — 19 must fail.");
 }
 if (MUTATE === "flagship") {
   SERVER = mutate(SERVER, "    var misusedFlagship = !hit && FLAGSHIP.test(sentence) &&", "    var misusedFlagship = false &&", "flagship");
@@ -882,6 +886,27 @@ function runTask(agentType, stopReason, opts) {
     superCtx.screen("The 24-pack is your leverage point — it has the highest revenue per customer and the strongest unit economics.", superProfileBlock).flagged === 0);
   const passHits = MUST_PASS.filter(s => superCtx.screen(s, superProfileBlock).flagged);
   check("19. passes: what the profile says, a question, a find-out instruction, a negated sentence, an unanchored one", passHits.length === 0, JSON.stringify(passHits));
+  /* Clean-7b's sentence, verbatim: "selling point" is a figure of speech. The
+     same hole was in every "selling" of the list. */
+  const SELLING_POINT = [
+    "The pack math is your best selling point.",
+    "The six-pack price is your best-selling point.",
+    "Shipping speed is your top selling point.",
+    "Your guarantee is your top-selling point for War Horse.",
+    "Your strength claim is the highest-selling point of War Horse Black.",
+    "Your price is the fastest-selling point of War Horse."
+  ];
+  const pointHits = SELLING_POINT.filter(s => superCtx.screen(s, superProfileBlock).flagged);
+  check("19. \"selling point\" passes after best, top, highest and fastest", pointHits.length === 0, JSON.stringify(pointHits));
+  const SELLER = [
+    "War Horse is your best seller.",
+    "War Horse is your best-selling shot.",
+    "War Horse and War Horse Black are your best sellers.",
+    "War Horse is your top-selling product.",
+    "War Horse Black is your fastest-selling shot."
+  ];
+  const sellerHits = SELLER.map(s => superCtx.screen(s, superProfileBlock).flagged);
+  check("19. \"best seller\", \"best-selling\", \"best sellers\", top- and fastest-selling are still flagged", sellerHits.every(n => n === 1), JSON.stringify(sellerHits));
   const SUPER_TEXT = "War Horse and War Horse Black are your highest-volume liquid herbal shots — $10 individual, $55 for six, $185 for 24. Lead with the six-pack.";
   const sup = await runTask("social", "end_turn", { text: SUPER_TEXT, finalPrompt: superPrompt, memory: true });
   const supResult = sup.update ? sup.update.result : "";
