@@ -147,13 +147,25 @@ function callRoute(routePath, userId, body) {
   });
 }
 
-async function latestTaskRow(userId, taskType, since) {
+/* The ids of this user's rows of one task type, read before a run, so the
+   read-back after it takes only the row that run wrote. Runs here share a task
+   type, and the read-back used to take the latest row since a time read from
+   this machine's clock: a run that wrote no row was read as the run before it. */
+async function taskIds(userId, taskType) {
+  const { data, error } = await supabase.from("ai_tasks").select("id").eq("user_id", userId).eq("task_type", taskType);
+  if (error) throw error;
+  return data.map(function (r) { return r.id; });
+}
+
+async function newTaskRow(userId, taskType, before) {
   const { data, error } = await supabase
     .from("ai_tasks").select("id, status, error, output, task_type, created_at")
-    .eq("user_id", userId).eq("task_type", taskType).gte("created_at", since)
-    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    .eq("user_id", userId).eq("task_type", taskType)
+    .order("created_at", { ascending: false }).order("id", { ascending: false });
   if (error) throw error;
-  return data;
+  const fresh = data.filter(function (r) { return before.indexOf(r.id) === -1; });
+  fresh.forEach(function (r) { residue.record("ai_tasks", r.id); });
+  return fresh[0] || null;
 }
 
 /* Prose with none of the labels any of these parsers looks for. */
@@ -222,17 +234,16 @@ const ROUTES = [
   const tasksBefore = await supabase.from("ai_tasks").select("id", { count: "exact", head: true }).eq("user_id", userId);
   console.log("user " + userId + "   before — model_calls: " + ledgerBefore.count + ", ai_tasks: " + tasksBefore.count + "\n");
 
-  const since = new Date(Date.now() - 60000).toISOString();
-
   for (const r of ROUTES) {
     console.log("── " + r.key + "   " + r.shape + " ──");
 
     /* first fails, retry succeeds */
     replyQueue = [JUNK_1, GOOD[r.key]];
     callLog = [];
+    const okRowBefore = await taskIds(userId, r.key);
     const okRun = await callRoute(r.path, userId, BODIES[r.key]);
     const okLedger = await noteLedgerRows(userId);
-    const okRow = await latestTaskRow(userId, r.key, since);
+    const okRow = await newTaskRow(userId, r.key, okRowBefore);
     if (okRow) residue.record("ai_tasks", okRow.id);
     console.log("  retry-succeeds: HTTP " + okRun.status + "   model calls " + callLog.length +
       "   ledger rows " + okLedger.length + "   row " + (okRow && okRow.id));
@@ -261,9 +272,10 @@ const ROUTES = [
     /* both fail */
     replyQueue = [JUNK_1, JUNK_2];
     callLog = [];
+    const badRowBefore = await taskIds(userId, r.key);
     const badRun = await callRoute(r.path, userId, BODIES[r.key]);
     const badLedger = await noteLedgerRows(userId);
-    const badRow = await latestTaskRow(userId, r.key, since);
+    const badRow = await newTaskRow(userId, r.key, badRowBefore);
     if (badRow) residue.record("ai_tasks", badRow.id);
     console.log("  both-fail:      HTTP " + badRun.status + "   model calls " + callLog.length +
       "   ledger rows " + badLedger.length + "   row " + (badRow && badRow.id));

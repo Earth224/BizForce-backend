@@ -189,18 +189,25 @@ function callRoute(routePath, userId, body) {
   });
 }
 
-async function latestTaskRow(userId, taskType, since) {
-  const { data, error } = await supabase
-    .from("ai_tasks")
-    .select("id, status, error, result, output, task_type, created_at")
-    .eq("user_id", userId)
-    .eq("task_type", taskType)
-    .gte("created_at", since)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+/* The ids of this user's rows of one task type, read before a run, so the
+   read-back after it takes only the row that run wrote. Runs here share a task
+   type, and the read-back used to take the latest row since a time read from
+   this machine's clock: a run that wrote no row was read as the run before it. */
+async function taskIds(userId, taskType) {
+  const { data, error } = await supabase.from("ai_tasks").select("id").eq("user_id", userId).eq("task_type", taskType);
   if (error) throw error;
-  return data;
+  return data.map(function (r) { return r.id; });
+}
+
+async function newTaskRow(userId, taskType, before) {
+  const { data, error } = await supabase
+    .from("ai_tasks").select("id, status, error, result, output, task_type, created_at")
+    .eq("user_id", userId).eq("task_type", taskType)
+    .order("created_at", { ascending: false }).order("id", { ascending: false });
+  if (error) throw error;
+  const fresh = data.filter(function (r) { return before.indexOf(r.id) === -1; });
+  fresh.forEach(function (r) { residue.record("ai_tasks", r.id); });
+  return fresh[0] || null;
 }
 
 /* Model text that parses: the labelled block format social/calendar asks for. */
@@ -236,8 +243,6 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   await residue.sweepPrevious(userId);
   console.log("using user " + userId + " for the check rows (all deleted at the end)\n");
 
-  const since = new Date(Date.now() - 60000).toISOString();
-
   /* Read before anything runs, so nothing already in the ledger is ever a
      candidate for deletion by this script. */
   const { data: highest } = await supabase
@@ -254,13 +259,14 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   /* ── 1. a successful run ────────────────────────────────────────────────── */
   console.log("1) social/calendar SUCCEEDS");
   nextModelText = PARSEABLE_CALENDAR;
+  const okRowBefore = await taskIds(userId, "social/calendar");
   const ok = await callRoute("/api/agents/social/calendar", userId, {
     goal: "check run — fill the spring workshop",
     cadence: "twice a week",
     platforms: ["linkedin", "instagram"],
     weeks: 2
   });
-  const okRow = await latestTaskRow(userId, "social/calendar", since);
+  const okRow = await newTaskRow(userId, "social/calendar", okRowBefore);
   noteTaskRow(okRow); await noteLedgerRows(userId);
   console.log("   HTTP " + ok.status + "   row " + (okRow && okRow.id));
   check("the route answered 200", ok.status === 200, ok.status + " " + JSON.stringify(ok.body && ok.body.error));
@@ -276,11 +282,12 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   /* ── 2. a forced parse failure ──────────────────────────────────────────── */
   console.log("\n2) social/calendar CANNOT PARSE the reply");
   nextModelText = UNPARSEABLE;
+  const badRowBefore = await taskIds(userId, "social/calendar");
   const bad = await callRoute("/api/agents/social/calendar", userId, {
     goal: "check run — forced parse failure",
     cadence: "twice a week"
   });
-  const badRow = await latestTaskRow(userId, "social/calendar", since);
+  const badRow = await newTaskRow(userId, "social/calendar", badRowBefore);
   noteTaskRow(badRow); await noteLedgerRows(userId);
   console.log("   HTTP " + bad.status + "   row " + (badRow && badRow.id));
   check("the route answered 502", bad.status === 502, bad.status);
@@ -316,11 +323,12 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   /* ── 3. truncation ──────────────────────────────────────────────────────── */
   console.log("\n3) a reply longer than 4000 characters");
   nextModelText = LONG_UNPARSEABLE;
+  const longRowBefore = await taskIds(userId, "social/calendar");
   const longRun = await callRoute("/api/agents/social/calendar", userId, {
     goal: "check run — truncation",
     cadence: "twice a week"
   });
-  const longRow = await latestTaskRow(userId, "social/calendar", since);
+  const longRow = await newTaskRow(userId, "social/calendar", longRowBefore);
   noteTaskRow(longRow); await noteLedgerRows(userId);
   console.log("   HTTP " + longRun.status + "   stored " +
     (longRow && longRow.output && String(longRow.output.raw_output).length) + " of " +
@@ -339,10 +347,11 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
   /* ── 4. a route whose failure branch was not changed ─────────────────────── */
   console.log("\n4) etsy/pricing-strategy — a route with NO parse-failure branch, unchanged");
   nextModelText = "PRICE: 48\nRATIONALE: A check run.";
+  const controlRowBefore = await taskIds(userId, "etsy/pricing-strategy");
   const control = await callRoute("/api/agents/etsy/pricing-strategy", userId, {
     listing_title: "check run — control route"
   });
-  const controlRow = await latestTaskRow(userId, "etsy/pricing-strategy", since);
+  const controlRow = await newTaskRow(userId, "etsy/pricing-strategy", controlRowBefore);
   noteTaskRow(controlRow); await noteLedgerRows(userId);
   console.log("   HTTP " + control.status + "   row " + (controlRow && controlRow.id) +
     "   status " + (controlRow && controlRow.status));
@@ -366,11 +375,12 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
      has been. */
   console.log("\n5) a failure that is NOT a parse failure — run.fail(error) with no details");
   modelShouldThrow = true;
+  const thrownRowBefore = await taskIds(userId, "social/calendar");
   const thrown = await callRoute("/api/agents/social/calendar", userId, {
     goal: "check run — model transport failure",
     cadence: "twice a week"
   });
-  const thrownRow = await latestTaskRow(userId, "social/calendar", since);
+  const thrownRow = await newTaskRow(userId, "social/calendar", thrownRowBefore);
   noteTaskRow(thrownRow); await noteLedgerRows(userId);
   console.log("   HTTP " + thrown.status + "   row " + (thrownRow && thrownRow.id) +
     "   output " + (thrownRow && JSON.stringify(thrownRow.output)));
@@ -388,11 +398,12 @@ const LONG_UNPARSEABLE = UNPARSEABLE + " " + "x".repeat(5000);
      fires with an empty string in hand. */
   console.log("\n6) an EMPTY model reply — the flag, with a length of 0");
   nextModelText = "";
+  const emptyRowBefore = await taskIds(userId, "social/calendar");
   const empty = await callRoute("/api/agents/social/calendar", userId, {
     goal: "check run — empty reply",
     cadence: "twice a week"
   });
-  const emptyRow = await latestTaskRow(userId, "social/calendar", since);
+  const emptyRow = await newTaskRow(userId, "social/calendar", emptyRowBefore);
   noteTaskRow(emptyRow); await noteLedgerRows(userId);
   console.log("   HTTP " + empty.status + "   output " + (emptyRow && JSON.stringify(emptyRow.output)));
   check("still a 502", empty.status === 502, empty.status);

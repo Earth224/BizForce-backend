@@ -173,14 +173,25 @@ function callRoute(routePath, userId, body) {
   });
 }
 
-async function latestTaskRow(userId, since) {
-  const { data, error } = await supabase
-    .from("ai_tasks")
-    .select("id, status, error, result, output, created_at")
-    .eq("user_id", userId).eq("task_type", "social/calendar").gte("created_at", since)
-    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+/* The ids of this user's rows of one task type, read before a run, so the
+   read-back after it takes only the row that run wrote. Runs here share a task
+   type, and the read-back used to take the latest row since a time read from
+   this machine's clock: a run that wrote no row was read as the run before it. */
+async function taskIds(userId, taskType) {
+  const { data, error } = await supabase.from("ai_tasks").select("id").eq("user_id", userId).eq("task_type", taskType);
   if (error) throw error;
-  return data;
+  return data.map(function (r) { return r.id; });
+}
+
+async function newTaskRow(userId, taskType, before) {
+  const { data, error } = await supabase
+    .from("ai_tasks").select("id, status, error, result, output, created_at")
+    .eq("user_id", userId).eq("task_type", taskType)
+    .order("created_at", { ascending: false }).order("id", { ascending: false });
+  if (error) throw error;
+  const fresh = data.filter(function (r) { return before.indexOf(r.id) === -1; });
+  fresh.forEach(function (r) { residue.record("ai_tasks", r.id); });
+  return fresh[0] || null;
 }
 
 /* A reply the parser accepts, and one it cannot read at all. */
@@ -226,14 +237,13 @@ function reset(queue, throwAt) {
   console.log("before this run — model_calls for that user: " + ledgerBefore.count +
     ", ai_tasks: " + tasksBefore.count + " (ledger high-water id " + ledgerMark + ")\n");
 
-  const since = new Date(Date.now() - 60000).toISOString();
-
   /* ── A. the first attempt parses ─────────────────────────────────────────── */
   console.log("A) first attempt parses — no retry expected");
   reset([PARSEABLE]);
+  const aRowBefore = await taskIds(userId, "social/calendar");
   const a = await callRoute("/api/agents/social/calendar", userId, BODY);
   const aLedger = await noteLedgerRows(userId);
-  const aRow = await latestTaskRow(userId, since);
+  const aRow = await newTaskRow(userId, "social/calendar", aRowBefore);
   noteTaskRow(aRow);
   console.log("   HTTP " + a.status + "   model calls: " + callLog.length +
     "   ledger rows: " + aLedger.length + "   row " + (aRow && aRow.id));
@@ -250,9 +260,10 @@ function reset(queue, throwAt) {
   /* ── B. first fails, the retry works ─────────────────────────────────────── */
   console.log("\nB) first attempt parses to zero, retry succeeds");
   reset([UNPARSEABLE_1, PARSEABLE]);
+  const bRowBefore = await taskIds(userId, "social/calendar");
   const b = await callRoute("/api/agents/social/calendar", userId, BODY);
   const bLedger = await noteLedgerRows(userId);
-  const bRow = await latestTaskRow(userId, since);
+  const bRow = await newTaskRow(userId, "social/calendar", bRowBefore);
   noteTaskRow(bRow);
   console.log("   HTTP " + b.status + "   model calls: " + callLog.length + "   ledger rows: " + bLedger.length);
   console.log("   ledger: " + JSON.stringify(bLedger.map(function (r) { return { id: r.id, route: r.route, in: r.input_tokens, out: r.output_tokens }; })));
@@ -296,9 +307,10 @@ function reset(queue, throwAt) {
   /* ── C. both attempts fail ───────────────────────────────────────────────── */
   console.log("\nC) both attempts parse to zero");
   reset([UNPARSEABLE_1, UNPARSEABLE_2]);
+  const cRowBefore = await taskIds(userId, "social/calendar");
   const c = await callRoute("/api/agents/social/calendar", userId, BODY);
   const cLedger = await noteLedgerRows(userId);
-  const cRow = await latestTaskRow(userId, since);
+  const cRow = await newTaskRow(userId, "social/calendar", cRowBefore);
   noteTaskRow(cRow);
   console.log("   HTTP " + c.status + "   model calls: " + callLog.length + "   ledger rows: " + cLedger.length);
   console.log("   row " + (cRow && cRow.id) + ": " + JSON.stringify({
@@ -332,9 +344,10 @@ function reset(queue, throwAt) {
   /* ── D. a transport error: no retry ──────────────────────────────────────── */
   console.log("\nD) the model call throws — no retry, behaviour unchanged");
   reset([PARSEABLE, PARSEABLE], 1);
+  const dRowBefore = await taskIds(userId, "social/calendar");
   const d = await callRoute("/api/agents/social/calendar", userId, BODY);
   const dLedger = await noteLedgerRows(userId);
-  const dRow = await latestTaskRow(userId, since);
+  const dRow = await newTaskRow(userId, "social/calendar", dRowBefore);
   noteTaskRow(dRow);
   console.log("   HTTP " + d.status + "   model calls attempted: " + callLog.length + "   ledger rows: " + dLedger.length);
   console.log("   row " + (dRow && dRow.id) + ": " + JSON.stringify({ status: dRow && dRow.status, output: dRow && dRow.output }));
