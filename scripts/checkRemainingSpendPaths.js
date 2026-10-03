@@ -233,6 +233,33 @@ async function countsFor(userId) {
   return out;
 }
 
+/* The newest row of each table under an account, by values the database wrote:
+   the ledger's id, and created_at elsewhere (uuids have no order). A row past
+   the mark at the end of the run is new, whatever this machine's clock says,
+   and is seen even if a delete in the same minutes leaves the count unchanged. */
+async function newestMark(userId) {
+  const out = {};
+  for (const t of SPEND_TABLES) {
+    const col = t === "model_calls" ? "id" : "created_at";
+    const r = await supabase.from(t).select(col).eq("user_id", userId).order(col, { ascending: false }).limit(1).maybeSingle();
+    if (r.error) throw new Error("could not read the newest " + t + " row: " + r.error.message);
+    out[t] = { col: col, value: r.data ? r.data[col] : null };
+  }
+  return out;
+}
+
+async function rowsPastMark(userId, mark) {
+  const out = {};
+  for (const t of SPEND_TABLES) {
+    let q = supabase.from(t).select("id", { count: "exact", head: true }).eq("user_id", userId);
+    if (mark[t].value !== null) q = q.gt(mark[t].col, mark[t].value);
+    const r = await q;
+    if (r.error) throw new Error("could not count new " + t + " rows: " + r.error.message);
+    out[t] = r.count;
+  }
+  return out;
+}
+
 function deltaLine(label, before, after) {
   return "  " + label.padEnd(11) + SPEND_TABLES.map(function (t) {
     const d = (typeof after[t] === "number" && typeof before[t] === "number") ? after[t] - before[t] : "?";
@@ -267,6 +294,7 @@ async function recordNewRows(userId, sinceIso) {
   if (MUTATING) console.log("\n!! MUTATION: the gate is removed from both routes and both passes must stop refusing.");
 
   const ownerBefore = await countsFor(admin.id);
+  const ownerMark = await newestMark(admin.id);
   console.log("\n══ owner row counts BEFORE (read-only account for this check) ══");
   console.log("  " + SPEND_TABLES.map(function (t) { return t + ": " + ownerBefore[t]; }).join("   "));
 
@@ -435,15 +463,26 @@ async function recordNewRows(userId, sinceIso) {
   console.log("\n══ the owner's account, across the whole run ══");
   const ownerAfter = await countsFor(admin.id);
   console.log(deltaLine("admin", ownerBefore, ownerAfter));
+  const ownerNew = await rowsPastMark(admin.id, ownerMark);
+  let ownerMoved = false;
   for (const t of SPEND_TABLES) {
     const same = ownerAfter[t] === ownerBefore[t];
     check("the owner's " + t + " is untouched", same, ownerBefore[t] + " → " + ownerAfter[t]);
-    if (!same) {
-      /* NOT CLEANED UP. checkRunResidue refuses to build a guard over the owner
-         on purpose, so anything here is reported for a human to remove. */
-      const rows = await supabase.from(t).select("id").eq("user_id", admin.id).gte("created_at", sinceIso);
-      console.error("    REMOVE BY HAND — " + t + ": " + (rows.data || []).map(function (r) { return r.id; }).join(", "));
-    }
+    check("no " + t + " row appeared under the owner during the run", ownerNew[t] === 0, ownerNew[t] + " new");
+    if (!same || ownerNew[t] !== 0) ownerMoved = true;
+  }
+  /* NO IDS, AND NOTHING TO DELETE. This used to print "REMOVE BY HAND" with the
+     owner's ids since the store pass began, read from this machine's clock. The
+     check writes nothing under the owner, so a row there is either the code
+     under test or the owner's own activity, and nothing on the row says which:
+     every id it could name might have been real data. It now says how many
+     appeared and that it cannot tell. */
+  if (ownerMoved) {
+    console.error("    THE OWNER'S ACCOUNT CHANGED DURING THIS RUN: " + SPEND_TABLES.map(function (t) {
+      return t + " " + ownerNew[t] + " new, count " + ownerBefore[t] + " → " + ownerAfter[t];
+    }).join("; ") + ".");
+    console.error("    This check cannot tell rows the passes wrote from the owner's own activity in the same minutes.");
+    console.error("    Delete nothing on its word. Re-run it while the owner's account is idle; a write that recurs is the pass's.");
   }
 
   console.log("\n══ cleanup ══");
