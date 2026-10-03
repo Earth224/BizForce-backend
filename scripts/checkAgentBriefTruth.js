@@ -68,12 +68,22 @@
         the notice and carries the marked slots. A quotation the user supplied,
         in the request or the profile, is kept; a question, a negated
         instruction, the placeholder and an unattributed line are left alone.
-     21. MODEL CHOICE, HARNESS ONLY. A non-harness account that sends `model`
-        is refused (look-alike addresses included) and one that sends none is
-        unaffected; a harness account gets either of exactly two models and is
-        refused anything else; the route checks before writing a task row;
-        processAiTask hands the choice to callAnthropicText; and the ledger
-        records the model that answered.
+     21. MODEL AND THINKING CHOICE, HARNESS ONLY. A non-harness account that
+        sends `model` or `thinking` is refused (look-alike addresses included)
+        and one that sends neither is unaffected; a harness account gets one of
+        exactly three models and is refused anything else; a thinking value is
+        accepted only where that model's API accepts it (Sonnet 5.5 refuses
+        "disabled", Haiku takes none); the route checks before writing a task
+        row; processAiTask hands both choices to callAnthropicText, which sends
+        thinking only when given; and the ledger records the model that
+        answered.
+     22. CEILINGS BY MODEL. Haiku — named or by default — gets the table
+        unchanged for every agent; a Sonnet gets 1.5x for the tokenizer, plus
+        4,096 for thinking unless thinking is off.
+     23. THINKING TOKENS. readThinkingTokens gives the reported number, 0 when
+        the API said 0, and null (never 0) when it said nothing; the ledger
+        names the column only for a number; a database without migration 127
+        still gets the row, without the column; and the migration exists.
      NOT ASSERTED, because no source file holds it: the deployed values of
      ENABLE_MASTODON_RADAR, ENABLE_YOUTUBE_RADAR, ENABLE_LEAD_SCORING and
      ENABLE_DRIP_SCHEDULER ("off by default" is what the code says, not what
@@ -105,6 +115,13 @@
    MUTATE=harnessgate  any account may pick its model           → 21 goes red
    MUTATE=allowlist    a harness account may name any model     → 21 goes red
    MUTATE=modelpass    processAiTask drops the chosen model     → 21 goes red
+   MUTATE=thinkinggate any thinking value with any model        → 21 goes red
+   MUTATE=thinkingpass processAiTask drops the thinking choice  → 21 goes red
+   MUTATE=thinkingsend callAnthropicText never sends thinking   → 21 goes red
+   MUTATE=haikuceiling Haiku gets the Sonnet scaling            → 4 and 22 go red
+   MUTATE=sonnetceiling no room for thinking on a Sonnet        → 22 goes red
+   MUTATE=thinkingnull a missing thinking count is written as 0 → 23 goes red
+   MUTATE=thinkingretry no retry when migration 127 is missing  → 23 goes red
    Each mutation is applied to extracted source, never to a file, and refuses
    to run if its anchor is not found.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -134,7 +151,8 @@ const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
   "widen", "flagship", "economics", "econanchor",
-  "harnessgate", "allowlist", "modelpass"];
+  "harnessgate", "allowlist", "modelpass",
+  "thinkinggate", "thinkingpass", "thinkingsend", "haikuceiling", "sonnetceiling", "thinkingnull", "thinkingretry"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -160,12 +178,40 @@ if (MUTATE === "harnessgate") {
   console.log("\n!! MUTATION: any account may pick its model — 21 must fail.");
 }
 if (MUTATE === "allowlist") {
-  SERVER = mutate(SERVER, "  if (TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {", "  if (false) {", "allowlist");
+  SERVER = mutate(SERVER, "  if (!absent(requested) && TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {", "  if (false) {", "allowlist");
   console.log("\n!! MUTATION: a harness account may name any model — 21 must fail.");
 }
 if (MUTATE === "modelpass") {
   SERVER = mutate(SERVER, "maxTokens, userId, taskModel, {", "maxTokens, userId, undefined, {", "modelpass");
   console.log("\n!! MUTATION: processAiTask drops the chosen model and runs Haiku — 21 must fail.");
+}
+if (MUTATE === "thinkinggate") {
+  SERVER = mutate(SERVER, "  if (accepted.indexOf(requestedThinking) === -1) {", "  if (false) {", "thinkinggate");
+  console.log("\n!! MUTATION: any thinking value goes with any model — 21 must fail.");
+}
+if (MUTATE === "thinkingpass") {
+  SERVER = mutate(SERVER, "        }, taskThinking);", "        }, undefined);", "thinkingpass");
+  console.log("\n!! MUTATION: processAiTask drops the thinking choice — 21 must fail.");
+}
+if (MUTATE === "thinkingsend") {
+  SERVER = mutate(SERVER, "      if (thinking) request.thinking = { type: thinking };\n", "", "thinkingsend");
+  console.log("\n!! MUTATION: callAnthropicText never sends a thinking setting — 21 must fail.");
+}
+if (MUTATE === "haikuceiling") {
+  SERVER = mutate(SERVER, "  if (!model || model === \"claude-haiku-4-5-20251001\") return base;\n", "", "haikuceiling");
+  console.log("\n!! MUTATION: Haiku gets the Sonnet scaling — 4 and 22 must fail.");
+}
+if (MUTATE === "sonnetceiling") {
+  SERVER = mutate(SERVER, "? text : text + TASK_OUTPUT_THINKING_ALLOWANCE;", "? text : text;", "sonnetceiling");
+  console.log("\n!! MUTATION: a thinking Sonnet gets no room for its thinking — 22 must fail.");
+}
+if (MUTATE === "thinkingnull") {
+  SERVER = mutate(SERVER, "  if (!details || typeof details !== \"object\") return null;", "  if (!details || typeof details !== \"object\") return 0;", "thinkingnull");
+  console.log("\n!! MUTATION: an unreported thinking count is written as 0 — 23 must fail.");
+}
+if (MUTATE === "thinkingretry") {
+  SERVER = mutate(SERVER, "if (insertResult.error && row.thinking_tokens !== undefined && /thinking_tokens/i", "if (false && insertResult.error && /thinking_tokens/i", "thinkingretry");
+  console.log("\n!! MUTATION: no retry when migration 127 is missing — 23 must fail.");
 }
 if (MUTATE === "superlative") {
   SERVER = mutate(SERVER, "        output = superlativeScreen.text;\n", "", "superlative");
@@ -340,7 +386,7 @@ if (MUTATE === "stop") {
 }
 function runTask(agentType, stopReason, opts) {
   opts = opts || {};
-  const calls = [], updates = [], inserts = [], models = [];
+  const calls = [], updates = [], inserts = [], models = [], thinkings = [];
   function fake(table) {
     const st = { op: "select", payload: null, one: null };
     const b = {
@@ -371,20 +417,21 @@ function runTask(agentType, stopReason, opts) {
     resolvePreferredLanguage: async function () { return null; },
     buildLanguageInstruction: function () { return ""; },
     executiveLanguageBlock: function () { return ""; },
-    callAnthropicText: async function (prompt, maxTokens, uid, model) { calls.push(maxTokens); models.push(model); return { text: opts.text || "partial output", stopReason: stopReason }; },
+    callAnthropicText: async function (prompt, maxTokens, uid, model, ledger, thinking) { calls.push(maxTokens); models.push(model); thinkings.push(thinking); return { text: opts.text || "partial output", stopReason: stopReason }; },
     finalizeExecutiveTaskOutput: async function (u, output) { return { output: output, complete: true }; },
     reportMemoryConstraintViolation: function () {},
     /* No memory row is wanted unless asked for; an empty roster skips the write. */
     MEMORY_AGENT_TYPES: opts.memory ? [agentType] : []
   };
   vm.createContext(ctx);
-  vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("nowIso"),
+  vm.runInContext([ceilingSrc, def("TASK_OUTPUT_TOKEN_DEFAULT"), def("TASK_OUTPUT_TOKENIZER_FACTOR"), def("TASK_OUTPUT_THINKING_ALLOWANCE"),
+    def("TASK_THINKING_OFF"), def("taskOutputTokenCeiling"), def("nowIso"),
     def("truncateOrchestratorPreview"), def("normalizeMemoryMetadata"),
     def("TESTIMONIAL_SLOT"), def("normalizedQuoteText"), def("screenFabricatedTestimonials"), def("recordTestimonialRemovals"),
     def("SALES_SUPERLATIVE_MARK"), def("screenSalesSuperlatives"), def("UNSUPPORTED_ECONOMICS_MARK"), def("screenUnsupportedEconomics"),
     taskSrc, "this.run = processAiTask;"].join("\n\n"), ctx);
-  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt", opts.taskModel).then(function () {
-    return { maxTokens: calls[0], model: models[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
+  return ctx.run("task-1", SUBJECT_USER_ID, agentType, "general", opts.finalPrompt || "PROMPT", false, opts.userPrompt || "user prompt", opts.taskModel, opts.taskThinking).then(function () {
+    return { maxTokens: calls[0], model: models[0], thinking: thinkings[0], update: updates[updates.length - 1], updates: updates, inserts: inserts,
       ceilings: vm.runInContext("TASK_OUTPUT_TOKEN_CEILINGS", ctx), slot: vm.runInContext("TESTIMONIAL_SLOT", ctx) };
   });
 }
@@ -434,6 +481,9 @@ function runTask(agentType, stopReason, opts) {
   check("4. processAiTask hands the model operations' ceiling (" + expected.operations + ")", probe.maxTokens === expected.operations, probe.maxTokens);
   const general = await runTask("general", "end_turn");
   check("4. the general fallback keeps 1,200", general.maxTokens === 1200, general.maxTokens);
+  const haikuNamed = await runTask("operations", "end_turn", { taskModel: "claude-haiku-4-5-20251001" });
+  check("4. Haiku named explicitly gets the same ceiling as the default (" + expected.operations + ")",
+    haikuNamed.maxTokens === expected.operations, haikuNamed.maxTokens);
 
   console.log("\n══ 5. the stop reason ══");
   const cut = await runTask("email", "max_tokens");
@@ -679,8 +729,28 @@ function runTask(agentType, stopReason, opts) {
   console.log("\n══ 16. the reasoning stays out of the reply ══");
   const reasoningDirective = brain.BRAIN_DIRECTIVES.split("\n\n")[0];
   console.log("    " + reasoningDirective.slice(0, 110) + "…");
-  check("16. code: the model call has no private reasoning channel (no thinking parameter), so the wording is what decides",
-    !/thinking\s*:/.test(def("callAnthropicText")));
+  /* Until the three-arm comparison this read "no thinking parameter" outright.
+     callAnthropicText now has one, for a harness account's choice only, so the
+     claim that still has to hold is narrower and exact: no request carries a
+     thinking field unless a caller passes one, and the ONLY call site passing
+     a sixth argument is processAiTask's, with the gated taskThinking. Every
+     call on a customer's behalf still has no private reasoning channel on
+     Haiku, so the wording is what decides there. */
+  const sixArgSites = [];
+  for (let at = SERVER.indexOf("callAnthropicText("); at !== -1; at = SERVER.indexOf("callAnthropicText(", at + 1)) {
+    if (SERVER.slice(Math.max(0, at - 15), at) === "async function ") continue;
+    let depth = 0, args = 1, i = at + "callAnthropicText".length;
+    for (; i < SERVER.length; i++) {
+      const ch = SERVER[i];
+      if (ch === "(" || ch === "{" || ch === "[") depth++;
+      else if (ch === ")" || ch === "}" || ch === "]") { depth--; if (depth === 0) break; }
+      else if (ch === "," && depth === 1) args++;
+    }
+    if (args >= 6) sixArgSites.push(SERVER.slice(at, i + 1).replace(/\s+/g, " ").slice(-40));
+  }
+  check("16. code: no model call sends a thinking field unless one is passed, and only processAiTask passes one (the harness choice), so for customers the wording is what decides",
+    /ledger = \{\}, thinking = undefined\)/.test(def("callAnthropicText")) && sixArgSites.length === 1 && /\}, taskThinking\)$/.test(sixArgSites[0]),
+    JSON.stringify(sixArgSites));
   check("16. told: think it through, but the thinking is not part of the reply, which begins with the answer",
     /Before answering, think it through:/.test(reasoningDirective) && /That thinking is not part of the reply\. Begin with the answer itself/.test(reasoningDirective));
   check("16. told: never a section narrating the reasoning; the word \"internally\" is gone",
@@ -884,13 +954,13 @@ function runTask(agentType, stopReason, opts) {
   check("20. migration 126 allows unsupported_economics and keeps the four earlier patterns",
     /check \(pattern in \('quoted_first_person', 'attributed_claim', 'both', 'sales_superlative', 'unsupported_economics'\)\)/.test(MIGRATION_126) && !/create policy/i.test(MIGRATION_126));
 
-  console.log("\n══ 21. only a harness account may pick its model, from a two-item allowlist ══");
+  console.log("\n══ 21. only a harness account may pick its model and thinking, from fixed lists ══");
   const modelCtx = {};
-  vm.runInNewContext([def("TASK_MODEL_HARNESS_DOMAIN"), def("TASK_MODEL_ALLOWLIST"), def("selectTaskModel")].join("\n\n") +
+  vm.runInNewContext([def("TASK_MODEL_HARNESS_DOMAIN"), def("TASK_MODEL_ALLOWLIST"), def("TASK_THINKING_BY_MODEL"), def("selectTaskModel")].join("\n\n") +
     "\nthis.pick = selectTaskModel; this.allow = TASK_MODEL_ALLOWLIST;", modelCtx);
   const pick = modelCtx.pick;
-  check("21. the allowlist is exactly the Haiku default and claude-sonnet-5",
-    JSON.stringify(Array.from(modelCtx.allow)) === JSON.stringify(["claude-haiku-4-5-20251001", "claude-sonnet-5"]), JSON.stringify(modelCtx.allow));
+  check("21. the allowlist is exactly the Haiku default, claude-sonnet-5 and claude-sonnet-5-5",
+    JSON.stringify(Array.from(modelCtx.allow)) === JSON.stringify(["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-5-5"]), JSON.stringify(modelCtx.allow));
   const NON_HARNESS = [
     { email: "owner@example.com" },
     { email: "x@bizforceai.invalid.example.com" },
@@ -901,9 +971,24 @@ function runTask(agentType, stopReason, opts) {
   const nonHarnessResults = NON_HARNESS.map(u => pick(u, "claude-sonnet-5"));
   check("21. a non-harness account that asks for a model is refused (model_not_selectable), including look-alike addresses",
     nonHarnessResults.every(r => r.error && r.code === "model_not_selectable" && r.model === undefined), JSON.stringify(nonHarnessResults));
-  check("21. a non-harness account that sends no model is unaffected",
+  const nonHarnessThinking = NON_HARNESS.map(u => pick(u, undefined, "adaptive")).concat(NON_HARNESS.map(u => pick(u, "claude-sonnet-5-5", "between_tools")));
+  check("21. a non-harness account that sends thinking, alone or with a model, is refused the same way (model_not_selectable)",
+    nonHarnessThinking.every(r => r.error && r.code === "model_not_selectable" && r.model === undefined && r.thinking === undefined), JSON.stringify(nonHarnessThinking));
+  check("21. a non-harness account that sends neither field is unaffected",
     pick({ email: "owner@example.com" }, undefined).model === undefined && !pick({ email: "owner@example.com" }, undefined).error &&
-    !pick({ email: "owner@example.com" }, "").error);
+    !pick({ email: "owner@example.com" }, "").error && !pick({ email: "owner@example.com" }, undefined, "").error &&
+    pick({ email: "owner@example.com" }, undefined, null).thinking === undefined);
+  const H = { email: "clean-run-7@bizforceai.invalid" };
+  const accepted = [["claude-sonnet-5", "adaptive"], ["claude-sonnet-5", "disabled"], ["claude-sonnet-5-5", "adaptive"], ["claude-sonnet-5-5", "between_tools"]]
+    .map(([m, t]) => pick(H, m, t));
+  check("21. a harness account gets each thinking value its model accepts: Sonnet 5 adaptive/disabled, Sonnet 5.5 adaptive/between_tools",
+    accepted.every((r, i) => !r.error && r.model === ["claude-sonnet-5", "claude-sonnet-5", "claude-sonnet-5-5", "claude-sonnet-5-5"][i] &&
+      r.thinking === ["adaptive", "disabled", "adaptive", "between_tools"][i]), JSON.stringify(accepted));
+  const refused = [["claude-sonnet-5-5", "disabled"], ["claude-sonnet-5", "between_tools"], ["claude-haiku-4-5-20251001", "adaptive"],
+    ["claude-haiku-4-5-20251001", "disabled"], [undefined, "adaptive"], ["claude-sonnet-5-5", "enabled"], ["claude-sonnet-5-5", "ADAPTIVE"]].map(([m, t]) => pick(H, m, t));
+  check("21. a pairing the model would refuse is refused here (thinking_not_allowed), naming what it accepts — Sonnet 5.5 with \"disabled\", Haiku with any, thinking without a model",
+    refused.every(r => r.code === "thinking_not_allowed" && r.model === undefined && r.thinking === undefined) &&
+    /accepts: adaptive, between_tools/.test(refused[0].error) && /takes no thinking setting/.test(refused[2].error), JSON.stringify(refused));
   const harnessSonnet = pick({ email: "Clean-Run-6@BizForceAI.invalid" }, "claude-sonnet-5");
   const harnessHaiku = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-haiku-4-5-20251001");
   const harnessOther = pick({ email: "clean-run-6@bizforceai.invalid" }, "claude-opus-5-5");
@@ -911,17 +996,100 @@ function runTask(agentType, stopReason, opts) {
     harnessSonnet.model === "claude-sonnet-5" && harnessHaiku.model === "claude-haiku-4-5-20251001" &&
     harnessOther.code === "model_not_allowed" && harnessOther.model === undefined, JSON.stringify([harnessSonnet, harnessHaiku, harnessOther]));
   const handler = def("handleAiTaskRequest");
-  check("21. code: the task route checks the field before it writes a task row, from the database-loaded req.user, and hands the choice to processAiTask",
-    handler.indexOf("selectTaskModel(req.user, req.body.model)") !== -1 &&
-    handler.indexOf("selectTaskModel(req.user, req.body.model)") < handler.indexOf(".from(\"ai_tasks\")") &&
+  check("21. code: the task route checks both fields before it writes a task row, from the database-loaded req.user, and hands both choices to processAiTask",
+    handler.indexOf("selectTaskModel(req.user, req.body.model, req.body.thinking)") !== -1 &&
+    handler.indexOf("selectTaskModel(req.user, req.body.model, req.body.thinking)") < handler.indexOf(".from(\"ai_tasks\")") &&
     /return res\.status\(400\)\.json\(\{ error: modelChoice\.error, code: modelChoice\.code \}\)/.test(handler) &&
-    /processAiTask\([^)]*userPrompt, modelChoice\.model\)/.test(handler));
+    /processAiTask\([^)]*userPrompt, modelChoice\.model, modelChoice\.thinking\)/.test(handler));
   const sonnetRun = await runTask("social", "end_turn", { taskModel: "claude-sonnet-5" });
   const defaultRun = await runTask("social", "end_turn", {});
   check("21. processAiTask passes the chosen model to callAnthropicText, and the default (Haiku) when none was chosen",
     sonnetRun.model === "claude-sonnet-5" && defaultRun.model === undefined, JSON.stringify([sonnetRun.model, defaultRun.model]));
+  const offRun = await runTask("social", "end_turn", { taskModel: "claude-sonnet-5-5", taskThinking: "between_tools" });
+  check("21. processAiTask passes the chosen thinking to callAnthropicText, and none when none was chosen",
+    offRun.model === "claude-sonnet-5-5" && offRun.thinking === "between_tools" && defaultRun.thinking === undefined && sonnetRun.thinking === undefined,
+    JSON.stringify([offRun.thinking, defaultRun.thinking, sonnetRun.thinking]));
+  const callSrc = def("callAnthropicText");
+  check("21. code: callAnthropicText sends thinking: {type} only when given, defaulting to none, so every other caller's request is unchanged",
+    /ledger = \{\}, thinking = undefined\)/.test(callSrc) && /if \(thinking\) request\.thinking = \{ type: thinking \};/.test(callSrc) &&
+    /anthropicClient\.messages\.create\(request\)/.test(callSrc));
   check("21. code: the ledger records the model that answered, so a Sonnet task is Sonnet in model_calls",
     /model:\s+response\.model \|\| model,/.test(def("callAnthropicText")) && /model = "claude-haiku-4-5-20251001"/.test(def("callAnthropicText")));
+
+  console.log("\n══ 22. the output ceiling depends on the model ══");
+  const ceilCtx = {};
+  vm.runInNewContext([def("TASK_OUTPUT_TOKEN_CEILINGS"), def("TASK_OUTPUT_TOKEN_DEFAULT"), def("TASK_OUTPUT_TOKENIZER_FACTOR"),
+    def("TASK_OUTPUT_THINKING_ALLOWANCE"), def("TASK_THINKING_OFF"), def("taskOutputTokenCeiling")].join("\n\n") +
+    "\nthis.ceil = taskOutputTokenCeiling;", ceilCtx);
+  const ceil = ceilCtx.ceil;
+  const AGENTS_AND_FALLBACK = ROSTER.concat(["general"]);
+  const haikuBase = a => (a === "general" ? 1200 : expected[a]);
+  check("22. Haiku — by default, by name, and with any thinking argument — gets the measured table unchanged, every agent and the fallback",
+    AGENTS_AND_FALLBACK.every(a => ceil(a, undefined) === haikuBase(a) && ceil(a, "claude-haiku-4-5-20251001") === haikuBase(a) &&
+      ceil(a, "claude-haiku-4-5-20251001", "disabled") === haikuBase(a)),
+    JSON.stringify(AGENTS_AND_FALLBACK.filter(a => ceil(a, "claude-haiku-4-5-20251001") !== haikuBase(a))));
+  const sonnetOn = { seo: ceil("seo", "claude-sonnet-5-5"), content: ceil("content", "claude-sonnet-5"), general: ceil("general", "claude-sonnet-5-5", "adaptive") };
+  check("22. a thinking Sonnet gets 1.5x for the tokenizer plus 4,096 for thinking: 10,240 / 16,384 / 5,896",
+    sonnetOn.seo === 10240 && sonnetOn.content === 16384 && sonnetOn.general === 5896, JSON.stringify(sonnetOn));
+  const sonnetOff = { seo: ceil("seo", "claude-sonnet-5-5", "between_tools"), content: ceil("content", "claude-sonnet-5", "disabled"), general: ceil("general", "claude-sonnet-5", "disabled") };
+  check("22. a Sonnet with thinking off gets the tokenizer factor only: 6,144 / 12,288 / 1,800",
+    sonnetOff.seo === 6144 && sonnetOff.content === 12288 && sonnetOff.general === 1800, JSON.stringify(sonnetOff));
+  const sonnetTask = await runTask("seo", "end_turn", { taskModel: "claude-sonnet-5-5" });
+  const sonnetOffTask = await runTask("seo", "end_turn", { taskModel: "claude-sonnet-5-5", taskThinking: "between_tools" });
+  check("22. processAiTask hands the model the ceiling for its model and thinking (seo: 10,240 thinking, 6,144 off)",
+    sonnetTask.maxTokens === 10240 && sonnetOffTask.maxTokens === 6144, JSON.stringify([sonnetTask.maxTokens, sonnetOffTask.maxTokens]));
+  check("22. code: the comment says max_tokens is a limit, not a charge, so nobody optimises it down",
+    SERVER.indexOf("max_tokens IS A LIMIT, NOT A CHARGE.") !== -1);
+
+  console.log("\n══ 23. thinking tokens are recorded, null when unreported ══");
+  const ledgerRows = [];
+  function ledgerSupabase(failColumn) {
+    return { from(table) { return { insert(row) {
+      const copy = JSON.parse(JSON.stringify(row));
+      if (failColumn && Object.prototype.hasOwnProperty.call(row, failColumn)) {
+        return Promise.resolve({ data: null, error: { message: "Could not find the '" + failColumn + "' column of 'model_calls' in the schema cache" } });
+      }
+      ledgerRows.push({ table: table, row: copy });
+      return Promise.resolve({ data: null, error: null });
+    } }; } };
+  }
+  function ledgerFns(sb) {
+    const c = { supabase: sb, console: { log() {}, warn() {}, error() {} } };
+    vm.runInNewContext([def("readUsageTokens"), def("readThinkingTokens"), def("recordModelCall")].join("\n\n") +
+      "\nthis.read = readThinkingTokens; this.record = recordModelCall;", c);
+    return c;
+  }
+  const lf = ledgerFns(ledgerSupabase(null));
+  const readCases = {
+    sonnet: lf.read({ output_tokens: 3275, output_tokens_details: { thinking_tokens: 893 } }),
+    saidZero: lf.read({ output_tokens: 1200, output_tokens_details: { thinking_tokens: 0 } }),
+    noDetails: lf.read({ output_tokens: 1200 }),
+    nullDetails: lf.read({ output_tokens: 1200, output_tokens_details: null }),
+    noField: lf.read({ output_tokens: 1200, output_tokens_details: {} }),
+    noUsage: lf.read(undefined),
+    tooLarge: lf.read({ output_tokens: 100, output_tokens_details: { thinking_tokens: 500 } })
+  };
+  check("23. readThinkingTokens: the reported number; 0 only when the API said 0; null when the field, the details or the usage is missing, or the value exceeds output",
+    readCases.sonnet === 893 && readCases.saidZero === 0 && readCases.noDetails === null && readCases.nullDetails === null &&
+    readCases.noField === null && readCases.noUsage === null && readCases.tooLarge === null, JSON.stringify(readCases));
+  ledgerRows.length = 0;
+  await lf.record({ userId: "u", route: "processAiTask", model: "claude-sonnet-5-5", usage: { input_tokens: 5446, output_tokens: 3275, output_tokens_details: { thinking_tokens: 893 } } });
+  await lf.record({ userId: "u", route: "processAiTask", model: "claude-haiku-4-5-20251001", usage: { input_tokens: 3664, output_tokens: 1310 } });
+  check("23. the ledger names thinking_tokens for a call that reported it, and leaves it out (NULL default) for one that did not",
+    ledgerRows.length === 2 && ledgerRows[0].row.thinking_tokens === 893 && ledgerRows[0].row.output_tokens === 3275 &&
+    !Object.prototype.hasOwnProperty.call(ledgerRows[1].row, "thinking_tokens"), JSON.stringify(ledgerRows));
+  ledgerRows.length = 0;
+  const noColumn = ledgerFns(ledgerSupabase("thinking_tokens"));
+  const landed = await noColumn.record({ userId: "u", route: "processAiTask", model: "claude-sonnet-5-5", fundedBy: "platform",
+    usage: { input_tokens: 5446, output_tokens: 3275, output_tokens_details: { thinking_tokens: 893 } } });
+  check("23. before migration 127 is applied, a Sonnet call's row still lands — without thinking_tokens, with its tokens and funding",
+    landed === true && ledgerRows.length === 1 && !Object.prototype.hasOwnProperty.call(ledgerRows[0].row, "thinking_tokens") &&
+    ledgerRows[0].row.output_tokens === 3275 && ledgerRows[0].row.funded_by === "platform", JSON.stringify([landed, ledgerRows]));
+  const migPath = path.join(REPO, "supabase", "migrations", "127_model_calls_thinking_tokens.sql");
+  const mig = fs.existsSync(migPath) ? fs.readFileSync(migPath, "utf8") : "";
+  check("23. migration 127 adds a nullable integer thinking_tokens to model_calls, bounded by output_tokens",
+    /add column if not exists thinking_tokens integer;/.test(mig) && !/thinking_tokens integer not null/i.test(mig) &&
+    /thinking_tokens is null or \(thinking_tokens >= 0 and thinking_tokens <= output_tokens\)/.test(mig), migPath);
 
   console.log("\n══ cleanup ══");
   const done = await residue.cleanup("end of run");

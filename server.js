@@ -11408,6 +11408,28 @@ function readUsageTokens(usage, field) {
   return { value: raw, measured: true };
 }
 
+/* THINKING TOKENS, OR NULL. usage.output_tokens_details.thinking_tokens says
+   how many of the billed output tokens were reasoning — on Sonnet, invisible
+   reasoning the text filter drops. A model that does not think (Haiku as
+   called here) may return no details at all.
+
+   NULL, NOT ZERO, when the field is missing or unreadable. Zero is a
+   measurement — "this call reported that it thought for no tokens" — and a
+   thinking model can report it. Absent means nobody measured. Writing 0 for
+   absent would make every Haiku row claim a measurement it never made, and
+   "two different facts sharing one shape" is what this ledger exists to
+   prevent. So a number lands only when the API gave one; otherwise the column
+   is left to its NULL default. A value larger than output_tokens cannot be a
+   share of it and is treated as unreadable. Never throws. */
+function readThinkingTokens(usage) {
+  var details = usage && typeof usage === "object" ? usage.output_tokens_details : null;
+  if (!details || typeof details !== "object") return null;
+  var raw = details.thinking_tokens;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return null;
+  if (typeof usage.output_tokens === "number" && raw > usage.output_tokens) return null;
+  return raw;
+}
+
 async function recordModelCall(details) {
   var d = details || {};
   var route = d.route || null;
@@ -11455,24 +11477,48 @@ async function recordModelCall(details) {
       }
     }
 
+    var row = {
+      user_id: userId,
+      agent_type: agentType,
+      route: route,
+      model: modelName,
+      input_tokens: input.value,
+      output_tokens: output.value,
+      chain_id: d.chainId || null,
+      chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0,
+      /* WHICH KEY PAID. Migration 109. Passed in rather than re-derived here,
+         because the only moment this is knowable for certain is the moment
+         the key was resolved — asking user_api_keys again now would answer a
+         question about the present, not about the call that was just made. */
+      funded_by: d.fundedBy || null,
+      fallback_reason: d.fallbackReason || null
+    };
+    /* Migration 127. Named only when the API reported a number (see
+       readThinkingTokens); otherwise the column keeps its NULL default. That
+       also keeps every call that reports none — Haiku, as called here — off
+       the column entirely, so before 127 is applied those inserts are exactly
+       what they were. */
+    var thinkingTokens = readThinkingTokens(d.usage);
+    if (thinkingTokens !== null) row.thinking_tokens = thinkingTokens;
+
     let insertResult = await supabase
       .from("model_calls")
-      .insert({
-        user_id: userId,
-        agent_type: agentType,
-        route: route,
-        model: modelName,
-        input_tokens: input.value,
-        output_tokens: output.value,
-        chain_id: d.chainId || null,
-        chain_depth: (Number.isInteger(d.chainDepth) && d.chainDepth >= 0) ? d.chainDepth : 0,
-        /* WHICH KEY PAID. Migration 109. Passed in rather than re-derived here,
-           because the only moment this is knowable for certain is the moment
-           the key was resolved — asking user_api_keys again now would answer a
-           question about the present, not about the call that was just made. */
-        funded_by: d.fundedBy || null,
-        fallback_reason: d.fallbackReason || null
-      });
+      .insert(row);
+
+    /* The same rule as the funding columns below, for migration 127: PostgREST
+       refuses the whole insert over one unknown column, so one retry without
+       it. The spend lands; only the thinking split is lost, and the log says
+       which migration restores it. */
+    if (insertResult.error && row.thinking_tokens !== undefined && /thinking_tokens/i.test(insertResult.error.message || "")) {
+      console.error("[ledger] model_calls has no thinking_tokens column — migration " +
+        "127_model_calls_thinking_tokens.sql has not been applied to this database. Re-inserting " +
+        "the row WITHOUT it so the spend is still recorded. This call reported " + row.thinking_tokens +
+        " thinking tokens of its " + output.value + " output tokens; that split is NOT being captured.");
+      delete row.thinking_tokens;
+      insertResult = await supabase
+        .from("model_calls")
+        .insert(row);
+    }
 
     /* THE LEDGER MUST SURVIVE AN UNAPPLIED MIGRATION.
        funded_by and fallback_reason arrive in migration 109. This code can
@@ -11541,7 +11587,12 @@ async function recordModelCall(details) {
    Outside any dispatch the store is undefined and nothing changes. */
 var agentChainScope = new AsyncLocalStorage();
 
-async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001", ledger = {}) {
+async function callAnthropicText(promptText, maxTokens, userId = null, model = "claude-haiku-4-5-20251001", ledger = {}, thinking = undefined) {
+  /* `thinking`, a SIXTH parameter, is sent as thinking: {type: thinking} only
+     when given. Every existing caller passes five arguments or fewer, so each
+     request it makes is byte-for-byte what it was: no thinking field, the
+     model's own default. Only processAiTask passes it, and only for a harness
+     account's choice, validated per model by selectTaskModel. */
   /* `ledger` is a FIFTH parameter carrying the spend attribution — user_id,
      agent_type, route, chain_id, chain_depth — rather than reusing `userId`
      above for it, and that separation is load-bearing.
@@ -11630,7 +11681,7 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
 
   for (var attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      var response = await anthropicClient.messages.create({
+      var request = {
         model: model,
         max_tokens: maxTokens,
         messages: [
@@ -11644,7 +11695,9 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
             ]
           }
         ]
-      });
+      };
+      if (thinking) request.thinking = { type: thinking };
+      var response = await anthropicClient.messages.create(request);
 
       var text = (response.content || [])
         .filter(function (block) { return block.type === "text"; })
@@ -11894,6 +11947,44 @@ const TASK_OUTPUT_TOKEN_CEILINGS = {
   store: 4096, broker: 4096, publicist: 4096, rd: 4096, vertical_marketing: 4096
 };
 const TASK_OUTPUT_TOKEN_DEFAULT = 1200;
+
+/* THE CEILING DEPENDS ON THE MODEL. The table above is Haiku's, unchanged:
+   every measured run used it, and Haiku spends its whole ceiling on text.
+
+   On a Sonnet the same number buys far less answer, for two reasons.
+   (1) TOKENIZER. The current tokenizer (since Claude Opus 4.7) counts the same
+       text as about 1.48x the tokens — measured on the identical prompt, every
+       agent, clean-6a against clean-6b. Text capacity is kept by scaling 1.5x.
+   (2) THINKING. Both Sonnets think by default, and thinking counts against
+       max_tokens: the cap is a combined budget. On the SAME seo prompt thinking
+       took ~82% of the output once (clean-6b: cut off at 4,096 with 17% of it
+       usable text, mid-sentence) and 27% the next time (893 of 3,275, measured
+       by output_tokens_details). Across clean-6b's six tasks it ran 1% to 82%.
+       A ratio cannot size this; a ceiling that does not cover the worst case
+       cuts answers off at random. The largest seen is ~3,400, so 4,096 is added
+       for thinking on top of the scaled text capacity.
+   With thinking off ("disabled" on Sonnet 5, "between_tools" on Sonnet 5.5 —
+   text only, for a call with no tools) only the tokenizer factor applies.
+
+     Haiku table   Sonnet, thinking off   Sonnet, thinking on (default)
+     1,200         1,800                  5,896
+     4,096         6,144                  10,240
+     8,192         12,288                 16,384
+
+   max_tokens IS A LIMIT, NOT A CHARGE. Output is billed by what the model
+   writes, never by the cap. A lower number saves nothing on an answer that
+   fits and destroys the one that does not. Do not "optimise" these down; size
+   them from a measured worst case, which is what they are. */
+const TASK_OUTPUT_TOKENIZER_FACTOR = 1.5;
+const TASK_OUTPUT_THINKING_ALLOWANCE = 4096;
+const TASK_THINKING_OFF = ["disabled", "between_tools"];
+
+function taskOutputTokenCeiling(agentType, model, thinking) {
+  var base = TASK_OUTPUT_TOKEN_CEILINGS[agentType] || TASK_OUTPUT_TOKEN_DEFAULT;
+  if (!model || model === "claude-haiku-4-5-20251001") return base;
+  var text = Math.ceil(base * TASK_OUTPUT_TOKENIZER_FACTOR);
+  return TASK_THINKING_OFF.indexOf(thinking) !== -1 ? text : text + TASK_OUTPUT_THINKING_ALLOWANCE;
+}
 
 /* INVENTED CUSTOMER WORDS ARE TAKEN OUT BEFORE A RESULT IS STORED.
 
@@ -12219,10 +12310,10 @@ async function recordTestimonialRemovals(taskId, userId, agentType, removals) {
   }
 }
 
-async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, taskModel) {
+async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, taskModel, taskThinking) {
     try {
         var isExecutive = agentType === "executive";
-        var maxTokens = TASK_OUTPUT_TOKEN_CEILINGS[agentType] || TASK_OUTPUT_TOKEN_DEFAULT;
+        var maxTokens = taskOutputTokenCeiling(agentType, taskModel, taskThinking);
 
         /* THE WIDEST SITE IN THE FILE — every specialist agent reaches the model
            through here, so this one append covers all of them.
@@ -12243,13 +12334,14 @@ async function processAiTask(taskId, userId, agentType, taskType, finalPrompt, r
           ? executiveLanguageBlock(taskLanguageTag, true)
           : buildLanguageInstruction(taskLanguageTag, true);
 
-        /* taskModel is undefined — callAnthropicText's Haiku default — unless a
-           harness account chose one (selectTaskModel, above handleAiTaskRequest). */
+        /* taskModel and taskThinking are undefined — callAnthropicText's Haiku
+           default, no thinking field — unless a harness account chose them
+           (selectTaskModel, above handleAiTaskRequest). */
         var generation = await callAnthropicText(finalPrompt + taskLanguageBlock, maxTokens, userId, taskModel, {
           user_id: userId,
           agent_type: agentType,
           route: "processAiTask"
-        });
+        }, taskThinking);
         var output = generation.text;
         var executiveComplete = true;
         /* A RUN THAT STOPPED EARLY SAYS SO. Anything but "end_turn" means the
@@ -13020,27 +13112,53 @@ function warnUnknownTaskType(taskType, agentType, userId) {
    that was Haiku, and nothing in the 202 would say so. A refusal names what
    happened; an absent field is not affected at all.
 
-   WHICH. Two values, exact strings. The default is listed so a harness run can
-   state Haiku explicitly rather than by omission. "claude-sonnet-5" is the
-   string the Oracle and SEO generate-post already send; whether the API
-   accepts it has not been verified from this codebase (the ledger holds no
-   Sonnet row). If it is wrong the API refuses the call, callAnthropicText
-   throws, and processAiTask records the task as failed with the error — loud,
-   unlike the Oracle, which falls back to Haiku. The model that actually
-   answered is what model_calls records (response.model). */
-var TASK_MODEL_HARNESS_DOMAIN = "@bizforceai.invalid";
-var TASK_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-5"];
+   WHICH. Exact strings. The default is listed so a harness run can state Haiku
+   explicitly rather than by omission. "claude-sonnet-5" was confirmed by
+   clean-6b: the API accepted it and echoed it back. It is Legacy (retirement
+   not before 2027-06-30), so a comparison belongs on "claude-sonnet-5-5", the
+   ID on Anthropic's Claude Sonnet 5.5 overview page. A wrong string would make
+   the API refuse the call, callAnthropicText throw, and processAiTask record
+   the task as failed with the error — loud, unlike the Oracle, which falls
+   back to Haiku. The model that actually answered is what model_calls records
+   (response.model).
 
-function selectTaskModel(user, requested) {
-  if (requested === undefined || requested === null || requested === "") return { model: undefined };
+   THINKING, THE SECOND FIELD, UNDER THE SAME GATE. Both Sonnets think by
+   default (adaptive) and Haiku does not, so "Sonnet" alone is two arms, not
+   one. `thinking` names the setting sent as thinking: {type: <value>}. Each
+   model accepts only what the API accepts for it — Sonnet 5 refuses
+   "between_tools", Sonnet 5.5 refuses "disabled", and its "between_tools"
+   gives text-only output on a call with no tools, which an agent task is.
+   Haiku takes none: it runs without thinking already, and "adaptive" is a 400
+   there. A pairing the model would refuse is refused HERE, with a 400 naming
+   what the model accepts, before a task row is written or a token is spent —
+   rather than reaching the API, failing, and leaving a failed task behind.
+   Sending thinking without a model is a pairing with Haiku, and refused. */
+var TASK_MODEL_HARNESS_DOMAIN = "@bizforceai.invalid";
+var TASK_MODEL_ALLOWLIST = ["claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-sonnet-5-5"];
+var TASK_THINKING_BY_MODEL = {
+  "claude-haiku-4-5-20251001": [],
+  "claude-sonnet-5": ["adaptive", "disabled"],
+  "claude-sonnet-5-5": ["adaptive", "between_tools"]
+};
+
+function selectTaskModel(user, requested, requestedThinking) {
+  var absent = function (v) { return v === undefined || v === null || v === ""; };
+  if (absent(requested) && absent(requestedThinking)) return { model: undefined, thinking: undefined };
   var email = String((user && user.email) || "").toLowerCase();
   if (email.slice(-TASK_MODEL_HARNESS_DOMAIN.length) !== TASK_MODEL_HARNESS_DOMAIN) {
-    return { error: "The model field is not available on this account. Agent tasks run on the platform's model.", code: "model_not_selectable" };
+    return { error: "The model and thinking fields are not available on this account. Agent tasks run on the platform's model.", code: "model_not_selectable" };
   }
-  if (TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {
+  if (!absent(requested) && TASK_MODEL_ALLOWLIST.indexOf(requested) === -1) {
     return { error: "Unknown model. Allowed: " + TASK_MODEL_ALLOWLIST.join(", ") + ".", code: "model_not_allowed" };
   }
-  return { model: requested };
+  if (absent(requestedThinking)) return { model: requested, thinking: undefined };
+  var model = absent(requested) ? TASK_MODEL_ALLOWLIST[0] : requested;
+  var accepted = TASK_THINKING_BY_MODEL[model] || [];
+  if (accepted.indexOf(requestedThinking) === -1) {
+    return { error: model + " does not accept thinking \"" + String(requestedThinking) + "\". " +
+      (accepted.length ? "It accepts: " + accepted.join(", ") + "." : "It takes no thinking setting."), code: "thinking_not_allowed" };
+  }
+  return { model: requested, thinking: requestedThinking };
 }
 
 async function handleAiTaskRequest(req, res, next) {
@@ -13054,7 +13172,7 @@ async function handleAiTaskRequest(req, res, next) {
       return res.status(400).json({ error: "Missing prompt" });
     }
 
-    var modelChoice = selectTaskModel(req.user, req.body.model);
+    var modelChoice = selectTaskModel(req.user, req.body.model, req.body.thinking);
     if (modelChoice.error) {
       return res.status(400).json({ error: modelChoice.error, code: modelChoice.code });
     }
@@ -13198,7 +13316,7 @@ if (memoryResult.error) {
 
     var taskRecord = pendingInsert.data;
 setImmediate(function () {
-  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, modelChoice.model).catch(function (error) {
+  processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, modelChoice.model, modelChoice.thinking).catch(function (error) {
     console.error("Async AI task failed:", error);
   });
 });
