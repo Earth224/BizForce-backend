@@ -72,7 +72,13 @@ const ROUTE_RE = /^app\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/gm;
 function routeList(src) { const out = []; let m; while ((m = ROUTE_RE.exec(src))) out.push(m[1] + " " + m[2]); ROUTE_RE.lastIndex = 0; return out; }
 const OLD_SRC = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
 const deletedKeys = new Set(DELETED.map(function (d) { return d[0] + " " + d[1]; }));
-const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k); });
+/* Routes added since, each on purpose. The total stays exact: a route that is
+   in neither list is still an extra. */
+const ADDED = [
+  ["post", "/api/engine-visits"]   // records an arrival from a Lead Radar reply (migration 128)
+];
+const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k); })
+  .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }));
 
 /* ── boot the real server, capturing the app ────────────────────────────── */
 const EXPRESS_PATH = require.resolve("express", { paths: [REPO] });

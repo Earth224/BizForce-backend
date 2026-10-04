@@ -36390,6 +36390,46 @@ async function findOrCreateContactByPhone(ownerId, phone, email, name, source, b
   throw contactInsert.error;
 }
 
+/* ── An arrival from the engine ───────────────────────────────────────────────
+   The landing page calls this when it was reached through a reply link carrying
+   ?ref=lr-<10 hex> (withOutreachTracking). It records that the engine sent
+   someone — the ref, the path landed on, and when — into engine_visits
+   (migration 128) and nothing else: no IP, user agent, referrer, cookie or
+   account, because none is needed to answer the question and each would make
+   an anonymous arrival identifiable. A visit is not a capture: /api/capture
+   records a person who chose to give contact details, with consent; this
+   records only that a link was followed.
+
+   Public, like /api/capture, and behind the global rate limiter. The body is
+   validated to the exact shapes the table's constraints accept, so a request
+   that is not a ref and a path is refused here rather than at the database.
+   204 on a write. 503, naming the migration, while 128 is not applied. */
+var ENGINE_VISIT_REF = /^lr-[0-9a-f]{10}$/;
+var ENGINE_VISIT_PATH = /^\/[A-Za-z0-9\/._-]{0,199}$/;
+
+app.post("/api/engine-visits", async function (req, res) {
+  try {
+    var ref = typeof req.body.ref === "string" ? req.body.ref : "";
+    var landingPath = typeof req.body.path === "string" ? req.body.path : "";
+    if (!ENGINE_VISIT_REF.test(ref)) return res.status(400).json({ error: "ref must be lr- followed by 10 lowercase hex characters" });
+    if (!ENGINE_VISIT_PATH.test(landingPath)) return res.status(400).json({ error: "path must be a site path with no query or fragment, at most 200 characters" });
+
+    var write = await supabase.from("engine_visits").insert({ ref: ref, landing_path: landingPath });
+    if (write.error) {
+      if (write.error.code === "42P01" || write.error.code === "PGRST205") {
+        console.error("[engine-visits] NOT RECORDED — engine_visits does not exist; apply supabase/migrations/128_engine_visits.sql.");
+        return res.status(503).json({ error: "Arrivals are not recorded yet: migration 128 is not applied." });
+      }
+      console.error("[engine-visits] NOT RECORDED — " + (write.error.message || JSON.stringify(write.error)));
+      return res.status(500).json({ error: "The arrival could not be recorded." });
+    }
+    return res.status(204).end();
+  } catch (err) {
+    console.error("[engine-visits] error:", (err && err.message) || err);
+    return res.status(500).json({ error: "The arrival could not be recorded." });
+  }
+});
+
 app.post("/api/capture", async function (req, res) {
   try {
     var email = safeText(req.body.email, 255);
@@ -37800,6 +37840,56 @@ function outreachDraftRejection(message, destination) {
   return null;
 }
 
+/* ── Knowing that the engine sent someone ─────────────────────────────────────
+   A reply could link bizforceai.net, but nothing recorded that anyone arrived,
+   so whether the engine drives traffic to the platform — the master file's
+   north star — could not be measured at all. The CODE, never the model, adds
+   one parameter to the BizForce destination after the draft has passed
+   outreachDraftRejection:
+
+     https://bizforceai.net/?ref=lr-<10 hex>
+
+   "lr" says Lead Radar sent it. The ten hex characters are the first forty bits
+   of SHA-256 over the lead's post_uri: the same lead always gives the same
+   token, so a visit can be joined back to outreach_sends.lead_post_uri by
+   recomputing it, and nothing in the token is personal — no handle, no DID, no
+   name — and none of it can be read back out of the hash. The reply is posted
+   publicly under that person's post, so anyone can see the token; it says
+   nothing they could not already see, which is that this reply was sent there.
+   One short parameter rather than three utm_ ones, because the reply has 300
+   characters and the parameter spends them.
+
+   The order is the safeguard. Rejection runs first, on what the model wrote,
+   and refuses any query string — so the model still cannot write a parameter
+   of its own, and this function only ever edits a URL that is exactly the
+   destination. Only hosts in OUTREACH_TRACKED_HOSTS are touched: a supplement
+   or book reply is never changed. And if the tracked reply would no longer fit
+   in 300 characters it is left untracked, because truncateToBlueskyLimit would
+   otherwise cut the link itself. */
+const OUTREACH_TRACKED_HOSTS = ["bizforceai.net"];
+
+function outreachRefToken(lead) {
+  return "lr-" + crypto.createHash("sha256").update("leadradar:" + String((lead && lead.post_uri) || "")).digest("hex").slice(0, 10);
+}
+
+function withOutreachTracking(message, destination, lead) {
+  var text = String(message || "");
+  var dest;
+  try { dest = new URL(destination); } catch (e) { return text; }
+  var host = dest.hostname.toLowerCase().replace(/^www\./, "");
+  if (OUTREACH_TRACKED_HOSTS.indexOf(host) === -1 || dest.search || dest.hash) return text;
+  var tracked = dest.origin + dest.pathname + "?ref=" + outreachRefToken(lead);
+  var hostPattern = host.replace(/[.]/g, "\\.");
+  var mention = new RegExp("(?<![\\w.@/-])(?:https?:\\/\\/)?(?:www\\.)?" + hostPattern + "\\/?(?=$|[\\s.,;:!?)\\]\"'])", "gi");
+  var out = text.replace(mention, function () { return tracked; });
+  if (out === text) return text;
+  if (Array.from(out).length > 300) {
+    console.warn("[Draft] Tracking left off a reply to " + String((lead && lead.post_uri) || "") + ": with the parameter it would exceed 300 characters, and truncation would cut the link.");
+    return text;
+  }
+  return out;
+}
+
 /* How old a POST may be and still be worth replying to, in days. Measured on
    post_created_at (when the author wrote it), never on created_at (when the
    radar captured it) — a lead captured this morning can easily be a post from
@@ -38543,6 +38633,13 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   if (draftRejection) {
     console.warn("[Draft] REJECTED for " + handle + ": " + draftRejection + ". Held as draft-only; it will not be sent.");
     cleanMessage = null;
+  }
+
+  /* After the rejection, never before: what the model wrote has been checked,
+     and only now does the code add the arrival parameter, to a BizForce
+     destination only (withOutreachTracking). */
+  if (cleanMessage && offerKind === "bizforce") {
+    cleanMessage = withOutreachTracking(cleanMessage, OUTREACH_BIZFORCE_DESTINATION, lead);
   }
 
   // Attempt the real send (if applicable) BEFORE recording any status

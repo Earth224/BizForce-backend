@@ -129,8 +129,9 @@ function storedProduct(src, lead, modelProduct) {
 const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",
   "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION",
   "OUTREACH_OWN_DOMAINS", "outreachDraftRejection", "nowIso", "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji",
-  "truncateOrchestratorPreview", "normalizeMemoryMetadata", "detectOutreachLinkFacets", "convertSingleLead"];
-const NEW_NAMES = ["OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_BIZFORCE_DESTINATION"];
+  "truncateOrchestratorPreview", "normalizeMemoryMetadata", "detectOutreachLinkFacets",
+  "OUTREACH_TRACKED_HOSTS", "outreachRefToken", "withOutreachTracking", "convertSingleLead"];
+const NEW_NAMES = ["OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_TRACKED_HOSTS", "outreachRefToken", "withOutreachTracking"];
 function fakeDb() {
   function q() {
     const st = { one: null, insert: false };
@@ -146,7 +147,7 @@ function fakeDb() {
 async function draftRun(src, product, modelMessage) {
   const prompts = [], sends = [];
   const ctx = {
-    supabase: fakeDb(), RichText: RichText, URL: URL, console: { log() {}, warn() {}, error() {} }, process: { env: {} },
+    supabase: fakeDb(), RichText: RichText, URL: URL, crypto: require("crypto"), console: { log() {}, warn() {}, error() {} }, process: { env: {} },
     canSendOutreach: async () => ({ allowed: true }),
     callAnthropicText: async p => { prompts.push(p); return { text: JSON.stringify({ outreach_message: modelMessage, internal_analysis: "fixture" }), stopReason: "end_turn" }; },
     sendBlueskyReply: async (lead, text) => { sends.push(text); return { sent: true, uri: "at://fake/post" }; },
@@ -212,7 +213,7 @@ async function draftRun(src, product, modelMessage) {
   check("3. now it is drafted against the BizForce instruction, with https://bizforceai.net/ as the one link",
     !!biz.prompt && /THE OFFER FOR THIS LEAD IS BIZFORCEAI/.test(biz.prompt) && /The one link you may give them: https:\/\/bizforceai\.net\//.test(biz.prompt) &&
     !/From MrEarthRose\.com|from MrEarthRose\.com/.test(biz.prompt) && !/structure-function/.test(biz.prompt));
-  check("3. and a draft carrying that link is sent once, unchanged", biz.sent && biz.sends.length === 1 && /https:\/\/bizforceai\.net\//.test(biz.sends[0]), biz.reason);
+  check("3. and a draft carrying that link is sent once (with the arrival parameter, checkEngineArrival.js)", biz.sent && biz.sends.length === 1 && /https:\/\/bizforceai\.net\//.test(biz.sends[0]), biz.reason);
 
   console.log("\n══ 4. links ══");
   const held = [];
