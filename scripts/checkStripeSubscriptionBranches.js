@@ -1,11 +1,57 @@
 "use strict";
-/* Loads the REAL handleStripeEvent out of server.js (brace-matched) and runs it
-   in a vm context with a fake Supabase client. No network, no database. */
+/* ══════════════════════════════════════════════════════════════════════════
+   checkStripeSubscriptionBranches.js — what a Stripe subscription event does
+   to the one subscriptions row a user has.
+
+   WHY THIS IS A CHECK. The Stripe webhook is live in production
+   (STRIPE_WEBHOOK_SECRET and STRIPE_SECRET_KEY are set on Railway, read
+   2026-10-04), and these branches decide who is entitled and who is canceled.
+   The marketplace checks call handleStripeEvent for the payment branch only;
+   nothing covered customer.subscription.*. This was
+   scripts/stripe-branches.test.js, which already proved the right things, but
+   nothing ran it.
+
+   WHAT THIS PROVES. The REAL handleStripeEvent, extracted from server.js by
+   brace-matching and run in a vm context:
+     created/updated  a-c, e: written when the row is empty, the same
+                      subscription, a creation, or an entitling status
+                      d: an update about an OLDER subscription carrying a
+                      non-entitling status ("canceled") writes NOTHING — the
+                      guard that stops a stale cancel overwriting the row of a
+                      customer who has since bought again and is paying
+                      f: a failed lookup throws, zero writes
+     deleted          g-h: failed lookups throw, zero writes
+                      i-a..i-f: cancel by subscription id, fall back to the
+                      customer row, refuse a row holding a different id, and
+                      the subscriptions → profiles write order
+
+   ⚠️ THE DATABASE IS FAKE. Supabase is a stub that answers the select / upsert
+   / update shapes the function uses today, and the expected writes are typed
+   out here. A renamed column, a changed table, a different onConflict target
+   or a constraint the real subscriptions table would reject would NOT be
+   caught; this proves the branch decisions, not that the real database
+   accepts them. No network, no database, no BIZFORCE_CHECK_USER_ID needed.
+
+   MUTATE=stale-cancel  removes the older-subscription guard
+                        (`!sameOrEmpty && !isCreated && !statusEntitles`) from
+                        the extracted handler, in memory. d must go red: the
+                        stale "canceled" is written over the current row.
+                        Nothing is written to server.js.
+   ══════════════════════════════════════════════════════════════════════════ */
 const fs = require("fs");
 const vm = require("vm");
+const path = require("path");
 const assert = require("assert");
 
-const src = fs.readFileSync("C:/Users/ALGORITHM/BizForce-backend/server.js", "utf8");
+const MUTATIONS = ["stale-cancel"];
+const MUTATE = process.env.MUTATE || "";
+if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
+  console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
+  process.exit(2);
+}
+
+const REPO = path.join(__dirname, "..");
+const src = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
 const start = src.indexOf("async function handleStripeEvent(event) {");
 assert(start > 0, "handleStripeEvent not found");
 let depth = 0, i = src.indexOf("{", start), end = -1;
@@ -14,7 +60,15 @@ for (; i < src.length; i++) {
   if (c === "{") depth++;
   else if (c === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
 }
-const fnSrc = src.slice(start, end);
+let fnSrc = src.slice(start, end);
+
+if (MUTATE === "stale-cancel") {
+  const GUARD = "      if (!sameOrEmpty && !isCreated && !statusEntitles) {\n";
+  const hits = fnSrc.split(GUARD).length - 1;
+  if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one older-subscription guard, found " + hits); process.exit(1); }
+  fnSrc = fnSrc.replace(GUARD, "      if (false) {\n");
+  console.log("\n!! MUTATION: the older-subscription guard is gone — a stale \"canceled\" update must now overwrite the current row.");
+}
 
 /* plan:
    lookups: { "<col>": { data, error } }   keyed by the first .eq column of a select
@@ -95,8 +149,8 @@ async function run(name, event, plan, check) {
   try { await fn(event); } catch (e) { threw = e; }
   try {
     check({ writes: JSON.parse(JSON.stringify(fake.writes)), selects: JSON.parse(JSON.stringify(fake.selects)), logs, threw });
-    console.log("PASS " + name);
-  } catch (e) { failures++; console.log("FAIL " + name + ": " + e.message); }
+    console.log("    pass  " + name);
+  } catch (e) { failures++; console.log("    FAIL  " + name + "  [" + e.message + "]"); }
 }
 
 function expectedUpsert(status, userId) {
@@ -118,7 +172,7 @@ function expectedProfile(status, userId) {
 (async () => {
   const UPD = "customer.subscription.updated", CRE = "customer.subscription.created";
 
-  console.log("== created/updated branch ==");
+  console.log("\n══ created/updated branch (fake database) ══");
 
   await run("a) updated, stored id equals event id: written as today",
     subEvent(UPD, "past_due"),
@@ -187,7 +241,7 @@ function expectedProfile(status, userId) {
       assert.deepStrictEqual(writes, []);
     });
 
-  console.log("== deleted branch: lookup errors ==");
+  console.log("\n══ deleted branch: lookup errors ══");
 
   await run("g) deleted, lookup by stripe_subscription_id errors: throws, zero writes",
     DELETED,
@@ -211,7 +265,7 @@ function expectedProfile(status, userId) {
       assert.strictEqual(selects.length, 2);
     });
 
-  console.log("== i) deleted branch: the six cases from 74e9f77 ==");
+  console.log("\n══ i) deleted branch: the six cases from 74e9f77 ══");
   const CANCEL_SUB = { status: "canceled", cancel_at_period_end: true, updated_at: "T0" };
   const CANCEL_PROF = { subscription_status: "canceled", updated_at: "T0" };
 
@@ -267,6 +321,12 @@ function expectedProfile(status, userId) {
       assert(/sub_EVT/.test(logs[0][1]) && /cus_1/.test(logs[0][1]), logs[0][1]);
     });
 
-  console.log("extracted handleStripeEvent length: " + fnSrc.length + " chars; failures: " + failures);
-  process.exitCode = failures ? 1 : 0;
-})();
+  console.log("\n    extracted handleStripeEvent: " + fnSrc.length + " chars");
+  console.log("");
+  if (failures) { console.log("CHECKS FAILED: " + failures + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : "")); process.exit(1); }
+  console.log("ALL CHECKS PASSED" + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
+  process.exit(0);
+})().catch(function (err) {
+  console.error("\nThe check threw: " + ((err && err.stack) || err));
+  process.exit(1);
+});

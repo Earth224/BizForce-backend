@@ -1,12 +1,47 @@
 "use strict";
-/* Extracts the REAL runAgentSchedulePass and its due-ness helpers from
-   server.js (brace-matched) and runs them in a vm context with stubs for
-   getUserPlan, runScheduledAgentTask and Supabase. No network, no database. */
+/* ══════════════════════════════════════════════════════════════════════════
+   checkSchedulePass.js — a scheduled agent run does not outlive the
+   subscription that paid for it.
+
+   WHY THIS IS A CHECK. ENABLE_AGENT_SCHEDULES is "true" in production (read
+   from Railway, 2026-10-04), so runAgentSchedulePass runs there every hour.
+   Nothing else covers it. This was scripts/schedule-runner.test.js, which
+   already proved the right things, but nothing ran it.
+
+   WHAT THIS PROVES. The REAL runAgentSchedulePass and its due-ness helpers,
+   extracted from server.js by brace-matching and run in a vm context:
+     a. due, autonomy on, entitled: runs once, last_run_on written
+     b. not entitled: not run, not stamped, one log naming why
+     c. getUserPlan throws or returns null: FAILS CLOSED, not run
+     d. the admin exemption runs
+     e. an unentitled schedule does not use up the per-tick ceiling
+     f. one plan lookup per user per pass, including when it throws
+     g. autonomy off: not run, and the plan is never looked up
+
+   ⚠️ THE DATABASE IS FAKE. Supabase, getUserPlan and runScheduledAgentTask
+   are stubs shaped like the calls the function makes today. A renamed column,
+   a changed table or a different query shape in agent_schedules or
+   agent_autonomy would NOT be caught here; this proves the pass's decisions,
+   not its reads. No network, no database, no BIZFORCE_CHECK_USER_ID needed.
+
+   MUTATE=gate   removes the `entitlement.plan.active !== true` refusal from the
+                 extracted pass, in memory. b and e must go red: an unentitled
+                 account's schedule runs. Nothing is written to server.js.
+   ══════════════════════════════════════════════════════════════════════════ */
 const fs = require("fs");
 const vm = require("vm");
+const path = require("path");
 const assert = require("assert");
 
-const src = fs.readFileSync("C:/Users/ALGORITHM/BizForce-backend/server.js", "utf8");
+const MUTATIONS = ["gate"];
+const MUTATE = process.env.MUTATE || "";
+if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
+  console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
+  process.exit(2);
+}
+
+const REPO = path.join(__dirname, "..");
+const src = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
 
 function extract(signature) {
   const start = src.indexOf(signature);
@@ -20,13 +55,21 @@ function extract(signature) {
   return src.slice(start, end);
 }
 
-const code = [
+let code = [
   "function agentScheduleUtcDay(now) {",
   "function agentScheduleDaysInUtcMonth(now) {",
   "function agentScheduleEffectiveMonthDay(dayOfMonth, now) {",
   "function agentScheduleIsDue(row, now) {",
   "async function runAgentSchedulePass(now, maxPerTick) {"
 ].map(extract).join("\n\n");
+
+if (MUTATE === "gate") {
+  const GATE = "    if (entitlement.plan.active !== true) {\n";
+  const hits = code.split(GATE).length - 1;
+  if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one gate in the extracted pass, found " + hits); process.exit(1); }
+  code = code.replace(GATE, "    if (false) {\n");
+  console.log("\n!! MUTATION: the entitlement gate is gone from runAgentSchedulePass — an unentitled schedule must now run.");
+}
 
 const NOW = new Date("2026-09-11T09:00:00.000Z");   // hour 9, a Friday
 function sched(id, userId, agent) {
@@ -77,11 +120,12 @@ const ADMIN    = { plan: "admin_exempt", active: true, inactive_reason: null, ex
 
 let failures = 0;
 async function t(name, fn) {
-  try { await fn(); console.log("PASS " + name); }
-  catch (e) { failures++; console.log("FAIL " + name + ": " + e.message); }
+  try { await fn(); console.log("    pass  " + name); }
+  catch (e) { failures++; console.log("    FAIL  " + name + "  [" + e.message + "]"); }
 }
 
 (async () => {
+  console.log("\n══ runAgentSchedulePass, extracted from server.js (fake database) ══");
   await t("a) due, autonomy on, entitled: runs once, last_run_on written", async () => {
     const r = await runTick({ schedules: [sched("s1", "uA")], autonomy: [{ user_id: "uA", agent_type: "seo" }], plans: { uA: ENTITLED } });
     assert.deepStrictEqual(r.runs, ["s1"]);
@@ -169,6 +213,12 @@ async function t(name, fn) {
     assert.strictEqual(r.summary.skippedNoAutonomy, 1);
   });
 
-  console.log("extracted " + code.length + " chars; failures: " + failures);
-  process.exitCode = failures ? 1 : 0;
-})();
+  console.log("\n    extracted " + code.length + " chars");
+  console.log("");
+  if (failures) { console.log("CHECKS FAILED: " + failures + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : "")); process.exit(1); }
+  console.log("ALL CHECKS PASSED" + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
+  process.exit(0);
+})().catch(function (err) {
+  console.error("\nThe check threw: " + ((err && err.stack) || err));
+  process.exit(1);
+});
