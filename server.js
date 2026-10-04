@@ -37711,21 +37711,34 @@ const OUTREACH_BOOK_PRODUCT = "Quantum Jumping book";
    given its own page later by changing its one entry; every caller already
    asks for OUTREACH_PRODUCT_DESTINATIONS[product] and needs no change. */
 const OUTREACH_HOME_URL = "https://mrearthrose.com/";
+
+/* BIZFORCE'S OWN OFFER. Lead Radar's BizForce phrases (leadRadar.js
+   BIZFORCE_KEYWORDS) find business owners whose ads, processor or reach was cut
+   off, and its BizForce scorer stores suggested_product "BizForceAI" for them —
+   a value no supplement-pipeline lead can carry. Before this, bizforceai.net was
+   not a destination any reply could link, so nothing the engine did could send
+   a single visitor to the platform the master file's north star says should
+   drive traffic to itself. The homepage, because it is the front door a
+   stranger can read. */
+const OUTREACH_BIZFORCE_PRODUCT = "BizForceAI";
+
 const OUTREACH_PRODUCT_DESTINATIONS = {
   "War Horse":                 OUTREACH_HOME_URL,
   "War Horse Black":           OUTREACH_HOME_URL,
   "Tongkat Ali":               OUTREACH_HOME_URL,
   "Sword Vitality XXL Xtreme": OUTREACH_HOME_URL,
   "War Horse Xtreme":          OUTREACH_HOME_URL,
-  "War Horse Midnight":        OUTREACH_HOME_URL
+  "War Horse Midnight":        OUTREACH_HOME_URL,
+  "BizForceAI":                "https://bizforceai.net/"
 };
+const OUTREACH_BIZFORCE_DESTINATION = OUTREACH_PRODUCT_DESTINATIONS[OUTREACH_BIZFORCE_PRODUCT];
 /* The book's own site, which its instruction already names as the only link. */
 const OUTREACH_BOOK_DESTINATION = "https://blacksuncircle.com/";
 
 /* The domains a reply may only link to at the supplied destination. A URL on any
    of them that is not exactly that destination is a page the model chose, not
    one it was given. */
-const OUTREACH_OWN_DOMAINS = ["mrearthrose.com", "mrearthrose.net", "swordvitality.com", "blacksuncircle.com"];
+const OUTREACH_OWN_DOMAINS = ["mrearthrose.com", "mrearthrose.net", "swordvitality.com", "blacksuncircle.com", "bizforceai.net"];
 
 /* Why a drafted reply may not go out, or null if it may. Run on the clean
    message right after drafting, before anything else: a non-null answer holds
@@ -37756,7 +37769,7 @@ function outreachDraftRejection(message, destination) {
   } catch (detectErr) {
     // The scan below still runs; a detector failure cannot clear a draft.
   }
-  var scan = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:mrearthrose\.com|mrearthrose\.net|swordvitality\.com|blacksuncircle\.com|stripe\.com)(?:\/[^\s"'<>)\]]*)?/gi;
+  var scan = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*(?:mrearthrose\.com|mrearthrose\.net|swordvitality\.com|blacksuncircle\.com|bizforceai\.net|stripe\.com)(?:\/[^\s"'<>)\]]*)?/gi;
   (text.match(scan) || []).forEach(function (m) { found.push(m); });
 
   function normal(u) {
@@ -38220,7 +38233,8 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
   var suggestedProduct = lead.suggested_product;
   var offerKind =
     suggestedProduct === OUTREACH_BOOK_PRODUCT ? "book" :
-    (OUTREACH_SUPPLEMENT_PRODUCTS.indexOf(suggestedProduct) !== -1 ? "supplement" : null);
+    (OUTREACH_SUPPLEMENT_PRODUCTS.indexOf(suggestedProduct) !== -1 ? "supplement" :
+    (suggestedProduct === OUTREACH_BIZFORCE_PRODUCT ? "bizforce" : null));
 
   if (!offerKind) {
     console.log("[sales/convert] Skipped " + handle + " before drafting — suggested_product " + JSON.stringify(suggestedProduct == null ? null : suggestedProduct) + " has no offer to write about. No model call billed, no attempt counted.");
@@ -38319,7 +38333,31 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
     "internal_analysis: the strategy notes, intent score reasoning, offer framing (why the book fits this person and what they actually asked for), the call-to-action, and a next-step/email-nurture recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
     "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
 
-  var taskInstruction = offerKind === "book" ? bookInstruction : supplementInstruction;
+  /* BizForceAI, for a business owner the BizForce phrases found. The business
+     profile in the shared prompt describes the owner's supplement business, so
+     this instruction names the offer and says the profile is not it, the way
+     the book's does. The profile's BANNED TOPICS stay in force: they forbid
+     medical claims, drug comparisons and promised results, none of which a
+     reply about a business platform has any reason to make, and keeping them
+     costs nothing. What governs this reply's claims is the fact list below —
+     only what §1 of the master file says the platform is and what is built —
+     and the list of things it must never say: that it will restore an account,
+     that it processes payments, any customer count, result or partnership. */
+  var bizforceInstruction =
+    "Write a lead-conversion package for the captured lead above. Return STRICT JSON and nothing else — no markdown, no preamble, no code fences, no ``` blocks, no text before or after the JSON object. Return exactly this shape: " +
+    "{\"outreach_message\": \"...\", \"internal_analysis\": \"...\"}\n" +
+    "THE OFFER FOR THIS LEAD IS BIZFORCEAI, a software platform for businesses — not a supplement and not a book. This person runs a business that an ad network, social platform or payment processor has restricted. The business profile above describes a different business (the owner's own products); it is not the offer, and none of its products may be mentioned. Its banned topics still apply.\n" +
+    "FACTS YOU MAY STATE, and nothing beyond them: BizForceAI is a platform for legitimate businesses that ad networks and payment processors refuse or throttle. It is built around owned channels instead of paid ads: SEO content with compliance checks, email with consent records, storefronts, and AI agents. It costs $199 a month.\n" +
+    "NEVER SAY OR IMPLY: that it will get an ad account, a social account or a payment processor reinstated; that it processes payments or replaces a payment processor; any number of customers, any testimonial, result, revenue figure or timeframe; that it is approved by, partnered with or exempt from Meta, Google, TikTok, Stripe or any platform; any legal or compliance advice about their product; anything accusing the platform that restricted them.\n" +
+    "Be plain that you are connected to it — write \"we built\" or \"I built\", never as a neutral user recommending something.\n" +
+    "outreach_message: the complete, ready-to-post PUBLIC reply — plain text only, no markdown headers, no labels, no notes. This is exactly what gets posted publicly as a reply. Warm, human, peer-to-peer, speaking directly to what this specific person said; sound like another business owner, not a marketer, no hashtags or hype. " +
+    "ANSWER THEM FIRST. The reply must respond to what they actually asked or said with something genuinely useful — such as that owned channels like search content and an email list cannot be switched off by an ad network — BEFORE BizForceAI is mentioned at all. Mention it at most once, at the end, and only if it fits. A reply that helps and never names it is better than one that forces it in. " +
+    "You may link to " + OUTREACH_BIZFORCE_DESTINATION + " at most once, written exactly as it is given here, with nothing added to it. It is the only URL this reply may contain: never another page, path or site, and never a URL from memory. Never link a checkout, cart, payment, pricing or signup URL of any kind. " +
+    "Must be under 280 characters so it fits a single Bluesky post. No hashtag spam. No emoji and no decorative unicode symbols of any kind — plain ASCII text only. " +
+    "internal_analysis: the strategy notes, intent score reasoning, why BizForceAI fits this person and what they actually asked for, the call-to-action, and a next-step recommendation — everything that is NOT the public message. This is for the operator's eyes only and is never posted. " +
+    "Return ONLY valid JSON — no ``` fences, no explanation before or after the JSON object.";
+
+  var taskInstruction = offerKind === "book" ? bookInstruction : (offerKind === "bizforce" ? bizforceInstruction : supplementInstruction);
 
   var finalPrompt =
     sharedSystemPrompt +

@@ -83,7 +83,7 @@ if (MUTATE === "no-rejection") {
   console.log("\n!! MUTATION: convertSingleLead runs with the rejection removed — every assertion in 3 must fail.");
 }
 const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",
-  "OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BOOK_DESTINATION", "OUTREACH_OWN_DOMAINS", "outreachDraftRejection",
+  "OUTREACH_HOME_URL", "OUTREACH_BIZFORCE_PRODUCT", "OUTREACH_PRODUCT_DESTINATIONS", "OUTREACH_BIZFORCE_DESTINATION", "OUTREACH_BOOK_DESTINATION", "OUTREACH_OWN_DOMAINS", "outreachDraftRejection",
   "nowIso", "DRAFT_ATTEMPT_CEILING", "OUTREACH_EMOJI_PATTERN", "stripOutreachEmoji", "truncateOrchestratorPreview", "normalizeMemoryMetadata",
   "detectOutreachLinkFacets"].map(def).join("\n\n");
 
@@ -138,8 +138,10 @@ const draft = msg => JSON.stringify({ outreach_message: msg, internal_analysis: 
   const drafted = vm.runInNewContext(def("OUTREACH_SUPPLEMENT_PRODUCTS") + "\nOUTREACH_SUPPLEMENT_PRODUCTS");
   console.log("    " + JSON.stringify(map));
   PRODUCTS.forEach(function (p) { check("1. " + p + " → " + HOME, map[p] === HOME, map[p]); });
-  check("1. the map's keys are exactly the drafted products", JSON.stringify(Object.keys(map).sort()) === JSON.stringify(drafted.slice().sort()),
-    JSON.stringify(Object.keys(map)) + " vs " + JSON.stringify(drafted));
+  /* The supplement products, and BizForceAI, which the BizForce pipeline
+     drafts (checkBizforceOutreach.js covers it). */
+  check("1. the map's keys are exactly the drafted products", JSON.stringify(Object.keys(map).sort()) === JSON.stringify(drafted.concat(["BizForceAI"]).sort()),
+    JSON.stringify(Object.keys(map)) + " vs " + JSON.stringify(drafted.concat(["BizForceAI"])));
 
   console.log("\n══ 2. what the model is given, per product ══");
   for (const p of PRODUCTS) {

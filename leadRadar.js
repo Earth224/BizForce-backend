@@ -122,6 +122,44 @@ const KEYWORDS = [
   "does quantum jumping actually work"
 ];
 
+/* BIZFORCE'S OWN BUYERS — a second, separate pipeline.
+
+   Every phrase above finds a buyer for the owner's supplements or his book.
+   None finds a buyer for BizForceAI itself: a business owner whose ads,
+   payment processor or reach was cut off — the customer §1 of the master file
+   says the platform exists for. These do.
+
+   SEPARATE BY THE PHRASE THAT FOUND THE POST. Every captured row already
+   records matched_keyword, so a row found by one of these phrases is a
+   BizForce lead (isBizforceLead below) and is scored by its own prompt for one
+   product, BizForceAI, and drafted by its own instruction. A row found by any
+   phrase above is untouched: same prompt, same products, same draft. This
+   matters because the two pipelines want opposite people — the supplement
+   scorer scores sellers LOW, as competition, and the BizForce scorer scores the
+   owner of a business HIGH, because that is the buyer.
+
+   A post both lists would find is captured once (ON CONFLICT DO NOTHING), by
+   whichever phrase reached it first, and the supplement phrases run first on
+   every tick, so such a post stays in the supplement pipeline. A post one of
+   these phrases finds can never be offered a supplement: its scorer does not
+   know any.
+
+   Searched on Bluesky only, after the 25 above, so their order and timing are
+   unchanged. Seven more searches a tick: 32 every five minutes. */
+const BIZFORCE_KEYWORDS = [
+  "ad account disabled",
+  "meta rejected my ad",
+  "stripe froze my account",
+  "shadowbanned my business",
+  "can't advertise supplements",
+  "payment processor dropped me",
+  "my account got flagged selling"
+];
+
+function isBizforceLead(lead) {
+  return !!lead && (lead.source || "bluesky") === "bluesky" && BIZFORCE_KEYWORDS.indexOf(lead.matched_keyword) !== -1;
+}
+
 const agent = new BskyAgent({ service: "https://bsky.social" });
 var agentLoggedIn = false;
 
@@ -168,8 +206,9 @@ async function withBsky(fn) {
 
 async function runLeadRadarOnce() {
   try {
-    for (var i = 0; i < KEYWORDS.length; i++) {
-      var keyword = KEYWORDS[i];
+    var capturePhrases = KEYWORDS.concat(BIZFORCE_KEYWORDS);
+    for (var i = 0; i < capturePhrases.length; i++) {
+      var keyword = capturePhrases[i];
       try {
         /* Ask the platform for recent posts instead of discarding stale ones
            after the fact. searchPosts takes `since` as an inclusive datetime,
@@ -415,6 +454,54 @@ const SCORER_ALLOWED_PRODUCTS = ["War Horse", "War Horse Black", "Tongkat Ali", 
    violation it is, instead of passing silently as a refusal. */
 const SCORER_SAFETY_VALUES = ["SAFE", "UNSAFE"];
 
+/* The BizForce pipeline's product list, on the same terms as the one above:
+   the values its prompt names, and the only ones stored for a BizForce lead.
+   Kept apart from SCORER_ALLOWED_PRODUCTS so a supplement lead can never be
+   stored as BizForceAI, nor a BizForce lead as a supplement. */
+const BIZFORCE_SCORER_PRODUCTS = ["BizForceAI", "none"];
+
+/* The BizForce scorer's prompt. The same three judgements as the supplement
+   prompt, and the same LANGUAGE rule, but the opposite reading of who is a
+   buyer: here the owner of a business is the person to find, and a marketer
+   selling ad-ban "fixes" is the competition. What BizForceAI is comes from §1
+   of the master file, in its words: the operating system for businesses the ad
+   networks won't serve, $199 a month. */
+function bizforceScoringPrompt(lang, source, discovery, lead) {
+  return "You are a buyer-intent classifier for one product:\n" +
+    "- BizForceAI: the operating system for businesses the ad networks won't serve — a $199/month platform for legitimate businesses in industries that ad networks and payment processors refuse or throttle (natural supplements, CBD and hemp, adult wellness, esoteric and spiritual products, firearms accessories and similar). It runs on owned channels instead of paid ads: SEO content with compliance checks, email with consent records, storefronts, and AI agents.\n\n" +
+    "BEFORE ANY OF THE THREE JUDGEMENTS BELOW — LANGUAGE.\n" +
+    "The Language line gives the language code the post was captured with. If it is anything other than English, translate the post into English internally BEFORE you answer any of the three questions below, and apply all three judgements to the translated meaning rather than to the words you happen to recognise in the original.\n" +
+    "A post you have only partly read is not a post that has been cleared. A non-English post is NEVER given the benefit of the doubt on safety: if translating still leaves you unsure what is being described, that is UNSAFE, not SAFE.\n\n" +
+
+    "Your job is to find the OWNERS OF BUSINESSES that have lost a way to reach or charge customers.\n\n" +
+    "Score HIGH (60-100) ONLY when the post shows a real person running their own business saying that an ad network, a social platform or a payment processor has rejected, disabled, frozen, dropped, restricted or hidden their business or its ads — and that it is costing them customers or sales.\n" +
+    "Score LOW (0-24) when the author is a marketer, agency, consultant or coach selling a fix for ad bans or account recovery, a journalist or commentator, a consumer complaining about a platform, or anyone whose post is not about their own business. Sellers of ad-ban services are competition, not buyers. Score LOW as well when the business itself appears to sell something illegal, counterfeit or deceptive.\n" +
+    "Score MIDDLE (25-59) for ambiguous posts where it is unclear whether the author runs the business.\n\n" +
+    "Only assign the product to genuine business owners. Otherwise set product to 'none'.\n\n" +
+
+    "SECOND, SEPARATE JUDGEMENT — SUITABILITY.\n" +
+    "Decide whether this person is a SAFE recipient of an unsolicited PUBLIC reply from a stranger that mentions a software platform for their business.\n\n" +
+    "Answer UNSAFE whenever ANY of the following is true, no matter how high the score:\n" +
+    "- The post expresses distress, crisis, hopelessness, or self-harm, or the loss is described as personal ruin rather than a business problem.\n" +
+    "- The person mentions a lawsuit, a fraud allegation, a regulator, or an investigation involving them.\n" +
+    "- The business appears to sell something illegal, counterfeit or deceptive.\n" +
+    "- The post is about a minor, or the author appears to be a minor.\n" +
+    "- A stranger replying with a product link would reasonably read as intrusive or as taking advantage of their situation.\n\n" +
+    "Answer SAFE ONLY when the person is openly asking for alternatives, tools or ideas for their business in a way that invites replies from strangers. If you are unsure, answer UNSAFE.\n\n" +
+
+    "THIRD, SEPARATE JUDGEMENT — INVITATION.\n" +
+    "Decide whether the post INVITES a reply from a stranger. Having the problem is not the same as asking for help with it.\n" +
+    "Answer INVITED only when the post asks a question of the room, requests recommendations or alternatives, or otherwise opens the floor to answers from people the author does not know.\n" +
+    "Examples of INVITED: \"what are people using instead of Meta ads?\", \"anyone know a processor that takes supplement brands?\", \"how do you get customers when you can't advertise?\".\n" +
+    "Answer NOT_INVITED when the post is narration, a complaint, a statement of what happened, or anything else where no answer was solicited — EVEN IF the person clearly has the problem. Venting about a ban is not a question. A rhetorical question is not an invitation. If you are unsure, answer NOT_INVITED.\n\n" +
+
+    "Language: " + lang + "\n" +
+    "Source: " + source + ", " + discovery + "\n" +
+    "Post: " + JSON.stringify(lead.post_text || "") + "\n\n" +
+    "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
+    "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<BizForceAI | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
+}
+
 /* The two answers the invitation screen may give, on the same terms as the
    suitability list above: only the exact string "INVITED" clears a lead, and
    this list exists so an off-contract answer can be told apart from a
@@ -659,6 +746,12 @@ async function scoreNewLeads() {
           "Respond with ONLY a valid JSON object, no markdown, no code fences, no explanation:\n" +
           "{\"score\": <integer 0-100>, \"reason\": \"<one short sentence>\", \"product\": \"<War Horse | War Horse Black | Tongkat Ali | Sword Vitality XXL Xtreme | War Horse Xtreme | War Horse Midnight | Quantum Jumping book | none>\", \"safety\": \"<SAFE | UNSAFE>\", \"invitation\": \"<INVITED | NOT_INVITED>\"}";
 
+        /* A lead the BizForce phrases found is scored by the BizForce prompt
+           instead. The supplement prompt above is still built, unchanged, and
+           simply not sent. */
+        var bizforceLead = isBizforceLead(lead);
+        if (bizforceLead) prompt = bizforceScoringPrompt(lang, source, discovery, lead);
+
         var response = await createScoringMessage({
           model:      "claude-sonnet-4-6",
           max_tokens: 300,
@@ -706,7 +799,8 @@ async function scoreNewLeads() {
         // evidence of intent — it is evidence the model went off-contract, and
         // guessing which product it meant is how an off-list string becomes a
         // public reply about the wrong product.
-        var product = SCORER_ALLOWED_PRODUCTS.indexOf(result ? result.product : undefined) !== -1
+        var allowedProducts = bizforceLead ? BIZFORCE_SCORER_PRODUCTS : SCORER_ALLOWED_PRODUCTS;
+        var product = allowedProducts.indexOf(result ? result.product : undefined) !== -1
           ? result.product
           : "none";
 
@@ -848,4 +942,4 @@ async function scoreNewLeads() {
   }
 }
 
-module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, ensureBskyLogin };
+module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS };
