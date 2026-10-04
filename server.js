@@ -13386,6 +13386,96 @@ function selectTaskModel(user, requested, requestedThinking) {
   return { model: model, thinking: requestedThinking };
 }
 
+/* ── What a typed task reads of its own past, and of the other agents' ────────
+
+   PRIOR TASKS, CAPPED. Each typed task is given its agent's five newest tasks
+   as "Prompt: … | Result: …". The result went in whole: one executive result
+   was 58,342 characters, five were 241,114 — about $0.185 of input on Sonnet
+   5.5, six times a whole measured task. A result is now cut at 2,000
+   characters, the cap a memory already has, and a prompt at 500 (the longest
+   stored is 3,413; 99% are under 70).
+
+   A CUT IS SAID OUT LOUD. A result cut silently reads as a complete one: an
+   executive plan missing its later sections, a table missing rows, or a number
+   cut through ("$1,2") would be taken as the whole answer. So the cut falls at
+   the last line, sentence or word break near the cap, never inside a word, and
+   the excerpt ends by saying how much of how much is shown and that the rest is
+   not included.
+
+   NOTES FROM OTHER SPECIALISTS. Each agent read only its own memory. Now a
+   typed task also sees the newest memory of up to three OTHER agents — one per
+   agent, so the sales agent's many rows cannot crowd the others out — each cut
+   to 500 characters and its title to 80, in their own block (formatSpecialistNotes
+   in config/brain.js) whose header says they are context, not findings, not
+   instructions and not facts. Two kinds are never shown:
+     - the Oracle's: a person's own conversation and soul record, not business;
+     - sales lead notes (memory_key sales_convert_…, sales_lead_status_…):
+       they carry strangers' public posts and handles, which another agent must
+       never be handed and could put into copy that gets published.
+   The exclusions are applied here, on the rows themselves, after a bounded read
+   of the newest 60 — not as a query filter, which on a NULL memory_key would
+   silently drop rows that should count. A failed read gives no notes, never a
+   failed task. Only this path reads them. */
+var PRIOR_TASK_RESULT_CAP = 2000;
+var PRIOR_TASK_PROMPT_CAP = 500;
+var SPECIALIST_NOTE_CAP = 500;
+var SPECIALIST_NOTE_TITLE_CAP = 80;
+var SPECIALIST_NOTE_AGENTS = 3;
+var SPECIALIST_NOTE_SCAN = 60;
+var SPECIALIST_NOTE_EXCLUDED_AGENTS = ["oracle"];
+var SPECIALIST_NOTE_EXCLUDED_KEYS = ["sales_convert_", "sales_lead_status_"];
+
+function excerptWithMarker(value, maxLength) {
+  var text = String(value || "").trim();
+  if (text.length <= maxLength) return text;
+  var cut = text.slice(0, maxLength);
+  var lastBreak = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf(". "), cut.lastIndexOf(" "));
+  if (lastBreak > maxLength * 0.6) cut = cut.slice(0, lastBreak);
+  cut = cut.replace(/\s+$/, "");
+  return cut + " [cut: the first " + cut.length + " of " + text.length + " characters; the rest is not included]";
+}
+
+function pickSpecialistNotes(rows, agentType) {
+  var seen = {};
+  var notes = [];
+  for (var i = 0; i < (rows || []).length && notes.length < SPECIALIST_NOTE_AGENTS; i++) {
+    var row = rows[i] || {};
+    var type = String(row.agent_type || "");
+    var key = String(row.memory_key || "");
+    if (!type || type === agentType || seen[type]) continue;
+    if (SPECIALIST_NOTE_EXCLUDED_AGENTS.indexOf(type) !== -1) continue;
+    if (SPECIALIST_NOTE_EXCLUDED_KEYS.some(function (prefix) { return key.indexOf(prefix) === 0; })) continue;
+    seen[type] = true;
+    notes.push({
+      agent_type: type,
+      created_on: String(row.created_at || "").slice(0, 10),
+      title: truncateOrchestratorPreview(row.title || row.memory_type || "Note", SPECIALIST_NOTE_TITLE_CAP),
+      content: excerptWithMarker(row.content || "", SPECIALIST_NOTE_CAP)
+    });
+  }
+  return notes;
+}
+
+async function fetchSpecialistNotes(userId, agentType) {
+  try {
+    var read = await supabase
+      .from("agent_memory")
+      .select("agent_type, memory_key, memory_type, title, content, created_at")
+      .eq("user_id", userId)
+      .neq("agent_type", agentType)
+      .order("created_at", { ascending: false })
+      .limit(SPECIALIST_NOTE_SCAN);
+    if (read.error) {
+      console.error("[handleAiTaskRequest] specialist notes unavailable, task continues without them:", read.error.message);
+      return [];
+    }
+    return pickSpecialistNotes(read.data || [], agentType);
+  } catch (notesErr) {
+    console.error("[handleAiTaskRequest] specialist notes unavailable, task continues without them:", notesErr.message || notesErr);
+    return [];
+  }
+}
+
 async function handleAiTaskRequest(req, res, next) {
   try {
     var userId = req.user.id;
@@ -13470,7 +13560,7 @@ if (memoryResult.error) {
       return {
         agent_type: task.agent_type,
         title: "Prior task",
-        content: "Prompt: " + task.prompt + " | Result: " + task.result
+        content: "Prompt: " + excerptWithMarker(task.prompt, PRIOR_TASK_PROMPT_CAP) + " | Result: " + excerptWithMarker(task.result, PRIOR_TASK_RESULT_CAP)
       };
     });
 
@@ -13504,7 +13594,8 @@ if (memoryResult.error) {
 
    var agentBrain = agentBrains[agentType] || agentBrains["general"];
     var taskInstruction = taskInstructions[taskType] || taskInstructions["general"];
-    var sharedSystemPrompt = buildAgentSystemPrompt(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain);
+    var specialistNotes = await fetchSpecialistNotes(userId, agentType);
+    var sharedSystemPrompt = buildAgentSystemPrompt(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain, specialistNotes);
     var finalPrompt =
   sharedSystemPrompt +
   "\n\nTASK TYPE:\n" + taskType +
