@@ -79,7 +79,7 @@ const SITES = [
   { file: "index.html", what: "agent section pill",     re: new RegExp('<span class="pill">' + N + " Agents</span>") },
   { file: "index.html", what: "pricing feature list",   re: new RegExp("<li>All " + N + " AI Business Agents \\(SEO, Sales, Content") },
   { file: "index.html", what: "pricing note",           re: new RegExp("^\\s*All " + N + " agents\\. Every platform tool\\.", "m") },
-  { file: "app.html",   what: "subscription line",      re: new RegExp("One subscription unlocks all " + N + " AI business agents and all platform tools") },
+  { file: "app.html",   what: "subscription line",      re: new RegExp("One subscription covers all " + N + " AI business agents\\. Lead Radar isn") },
   { file: "app.html",   what: "fine print",             re: new RegExp("PR, and R&amp;D — " + N + " specialists in all") },
   { file: "billing.html", what: "plan feature list",    re: new RegExp("<li>All " + N + " AI Business Agents \\(SEO, Sales, Content") },
   { file: "dashboard.html", what: "topbar pill fallback", re: new RegExp('<span class="topbar-agents-num">' + N + "</span>") },
