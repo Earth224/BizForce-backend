@@ -22,7 +22,7 @@
         and senders stubbed: for every supplement product and the book, the
         prompt the model receives and the reply sent are identical to
         BASELINE. A BizForce lead, which BASELINE skipped, is drafted against
-        the BizForce instruction and may link https://bizforceai.net/ only.
+        the BizForce instruction and may link its destination only.
      4. Links: a BizForce draft linking mrearthrose.com, another bizforceai.net
         path, a query string or Stripe is held; and a supplement draft linking
         bizforceai.net is now held too — the one tightening, and the
@@ -209,20 +209,21 @@ async function draftRun(src, product, modelMessage) {
   check("3. for all six supplement products and the book, the model's prompt and the reply sent are identical to " + BASELINE, same === SUPP_PRODUCTS.length + 1, same + " of " + (SUPP_PRODUCTS.length + 1));
   const before = await draftRun(SERVER0, "BizForceAI", "x");
   check("3. at " + BASELINE + " a BizForceAI lead was skipped: no offer", !before.prompt && before.reason === "unsupported_product", before.reason);
-  const biz = await draftRun(SERVER, "BizForceAI", "Owned channels can't be switched off by an ad network. We built BizForceAI for that: https://bizforceai.net/");
-  check("3. now it is drafted against the BizForce instruction, with https://bizforceai.net/ as the one link",
-    !!biz.prompt && /THE OFFER FOR THIS LEAD IS BIZFORCEAI/.test(biz.prompt) && /The one link you may give them: https:\/\/bizforceai\.net\//.test(biz.prompt) &&
+  const DEST = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS"]) + "\nthis.v = OUTREACH_PRODUCT_DESTINATIONS.BizForceAI;", c); return c.v; })();
+  const biz = await draftRun(SERVER, "BizForceAI", "Owned channels can't be switched off by an ad network. We built BizForceAI for that: " + DEST);
+  check("3. now it is drafted against the BizForce instruction, with " + DEST + " as the one link",
+    !!biz.prompt && /THE OFFER FOR THIS LEAD IS BIZFORCEAI/.test(biz.prompt) && biz.prompt.indexOf("The one link you may give them: " + DEST + "\n") !== -1 &&
     !/From MrEarthRose\.com|from MrEarthRose\.com/.test(biz.prompt) && !/structure-function/.test(biz.prompt));
   check("3. and a draft carrying that link is sent once (with the arrival parameter, checkEngineArrival.js)", biz.sent && biz.sends.length === 1 && /https:\/\/bizforceai\.net\//.test(biz.sends[0]), biz.reason);
 
   console.log("\n══ 4. links ══");
   const held = [];
-  for (const m of ["We built a platform for this: https://mrearthrose.com/", "See https://bizforceai.net/pricing", "https://bizforceai.net/?utm_source=bluesky",
+  for (const m of ["We built a platform for this: https://mrearthrose.com/", "See https://bizforceai.net/pricing", "Our homepage: https://bizforceai.net/", DEST + "?utm_source=bluesky",
     "Sign up at https://buy.stripe.com/abc"]) {
     const r = await draftRun(SERVER, "BizForceAI", m);
     held.push(!r.sent && r.sends.length === 0 && r.reason === "draft_rejected");
   }
-  check("4. a BizForce draft linking mrearthrose.com, another bizforceai.net path, a query string or Stripe is held", held.every(Boolean), JSON.stringify(held));
+  check("4. a BizForce draft linking mrearthrose.com, another bizforceai.net path (/pricing, the homepage), a query string or Stripe is held", held.every(Boolean), JSON.stringify(held));
   const cross = await draftRun(SERVER, "War Horse", "Worth a look: https://bizforceai.net/");
   const cross0 = await draftRun(SERVER0, "War Horse", "Worth a look: https://bizforceai.net/");
   check("4. a supplement draft linking bizforceai.net is now held (it was sent at " + BASELINE + ") — the one tightening",

@@ -36,6 +36,7 @@
      MUTATE=lengthguard  the 300-character guard is gone               → 6
      MUTATE=visitfields  the route also stores IP and user agent       → 7
      MUTATE=visitref     the route accepts any ref                     → 7
+     MUTATE=pathless     tracking matches the host only, not the destination's path → 3, 4
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -58,7 +59,7 @@ residue.install();
 /* The commit before the arrival parameter existed. Pinned, not HEAD. */
 const BASELINE = "ed0636f";
 
-const MUTATIONS = ["order", "everydomain", "personal", "lengthguard", "visitfields", "visitref"];
+const MUTATIONS = ["order", "everydomain", "personal", "lengthguard", "visitfields", "visitref", "pathless"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -90,6 +91,8 @@ if (MUTATE === "lengthguard") SERVER = mutate(SERVER, "  if (Array.from(out).len
 if (MUTATE === "visitfields") SERVER = mutate(SERVER, ".insert({ ref: ref, landing_path: landingPath })",
   ".insert({ ref: ref, landing_path: landingPath, ip: req.ip, user_agent: req.headers[\"user-agent\"], referrer: req.headers.referer })", "visitfields");
 if (MUTATE === "visitref") SERVER = mutate(SERVER, "    if (!ENGINE_VISIT_REF.test(ref)) return", "    if (!ref) return", "visitref");
+if (MUTATE === "pathless") SERVER = mutate(SERVER, "  var pathPattern = dest.pathname === \"/\" ? \"\\\\/?\" : dest.pathname",
+  "  var pathPattern = \"\\\\/?\"; var unusedPath = dest.pathname", "pathless");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 const SHARED = require.resolve("./_shared");
@@ -177,23 +180,34 @@ async function post(h, body) {
   const csl = defs(SERVER, ["convertSingleLead"]);
   const iReject = csl.indexOf("  var draftRejection = cleanMessage\n"), iTrack = csl.indexOf("withOutreachTracking(cleanMessage"), iSend = csl.indexOf("sendBlueskyReply(lead, cleanMessage)");
   check("2. in convertSingleLead: the rejection, then the tracking, then the send", iReject > 0 && iTrack > iReject && iSend > iTrack, JSON.stringify([iReject, iTrack, iSend]));
+  /* The destination as server.js holds it, so these follow it if it moves. */
+  const DEST = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["OUTREACH_HOME_URL", "OUTREACH_PRODUCT_DESTINATIONS"]) + "\nthis.v = OUTREACH_PRODUCT_DESTINATIONS.BizForceAI;", c); return c.v; })();
+  const DEST_BARE = DEST.replace(/^https:\/\//, "");
+  console.log("    destination: " + DEST);
   const own = [];
-  for (const m of ["We built this for that: https://bizforceai.net/?ref=lr-0123456789", "We built this: https://bizforceai.net/?utm_source=bluesky", "bizforceai.net/#start"]) {
+  for (const m of ["We built this for that: " + DEST + "?ref=lr-0123456789", "We built this: " + DEST + "?utm_source=bluesky", DEST_BARE + "#start"]) {
     const r = await draftRun(SERVER, "BizForceAI", m);
     own.push(!r.sent && r.sends.length === 0 && r.reason === "draft_rejected");
   }
   check("2. a parameter or fragment the model wrote itself is still held, never sent", own.every(Boolean), JSON.stringify(own));
+  const other = [];
+  for (const m of ["Our homepage: https://bizforceai.net/", "bizforceai.net", "See https://bizforceai.net/pricing", "https://bizforceai.net/Suppressed.html",
+    "https://bizforceai.net/suppressed.html/extra", "https://bizforceai.net/suppressed"]) {
+    const r = await draftRun(SERVER, "BizForceAI", m);
+    other.push(!r.sent && r.reason === "draft_rejected");
+  }
+  check("2. a draft linking any other bizforceai.net path — the homepage, the bare domain, /pricing, another case, a longer or shorter path — is held", other.every(Boolean), JSON.stringify(other));
 
   console.log("\n══ 3. the code adds the parameter ══");
-  const tracked = "https://bizforceai.net/?ref=" + token;
-  const forms = ["https://bizforceai.net/", "bizforceai.net", "BizForceAI.net/", "https://www.bizforceai.net"];
+  const tracked = DEST + "?ref=" + token;
+  const forms = [DEST, DEST_BARE, DEST_BARE.replace("bizforceai.net", "BizForceAI.net"), DEST.replace("https://", "https://www.")];
   const got = [];
   for (const f of forms) {
     const r = await draftRun(SERVER, "BizForceAI", "Owned channels can't be switched off by an ad network. We built BizForceAI for that: " + f);
-    got.push(r.sent && r.sends.length === 1 && r.sends[0].split(tracked).length === 2 && !/bizforceai\.net(?!\/\?ref=)/i.test(r.sends[0].split(tracked).join("")) ? "ok" : (r.sends[0] || r.reason));
+    got.push(r.sent && r.sends.length === 1 && r.sends[0].split(tracked).length === 2 && !/bizforceai\.net/i.test(r.sends[0].split(tracked).join("")) ? "ok" : (r.sends[0] || r.reason));
   }
   check("3. every form the model may write — " + forms.join(", ") + " — goes out as " + tracked, got.every(g => g === "ok"), JSON.stringify(got));
-  const sample = await draftRun(SERVER, "BizForceAI", "We built BizForceAI for exactly this: https://bizforceai.net/");
+  const sample = await draftRun(SERVER, "BizForceAI", "We built BizForceAI for exactly this: " + DEST);
   console.log("    sent: " + (sample.sends[0] || "(nothing)"));
 
   console.log("\n══ 4. the final URL is a link, parameter included ══");
@@ -220,13 +234,16 @@ async function post(h, body) {
   /* The link stands as its own word, as the model writes it: a domain glued to
      the word before it is not a mention, and would make this test vacuous. */
   let long = pad;
-  while (Array.from(long + "x https://bizforceai.net/").length <= 290) long += "x";
-  long += " https://bizforceai.net/";
-  const trackedLong = long.replace("https://bizforceai.net/", tracked);
+  while (Array.from(long + "x " + DEST).length <= 290) long += "x";
+  long += " " + DEST;
+  const trackedLong = long.replace(DEST, tracked);
   check("6. (the fixture is real: tracked, this draft would exceed 300 characters, and its link is a mention)",
-    Array.from(trackedLong).length > 300 && Array.from(long).length <= 300 && / https:\/\/bizforceai\.net\/$/.test(long));
+    Array.from(trackedLong).length > 300 && Array.from(long).length <= 300 && long.slice(-(DEST.length + 1)) === " " + DEST);
   const lr = await draftRun(SERVER, "BizForceAI", long);
-  console.log("    a " + Array.from(long).length + "-character draft; with the parameter it would be " + Array.from(long.replace("https://bizforceai.net/", tracked)).length);
+  console.log("    a " + Array.from(long).length + "-character draft; with the parameter it would be " + Array.from(trackedLong).length);
+  /* What the parameter costs a reply, against the 300 a Bluesky post allows. */
+  console.log("    characters: destination " + DEST.length + ", tracked " + tracked.length + " (the parameter adds " + (tracked.length - DEST.length) +
+    "); the drafter writes to 280, so a full-length draft carrying the link reaches " + (280 + tracked.length - DEST.length) + " of 300");
   check("6. it is sent without the parameter, its link whole, rather than truncated through the link",
     lr.sent && lr.sends.length === 1 && lr.sends[0] === long && !/\?ref=/.test(lr.sends[0]), lr.sends[0] ? Array.from(lr.sends[0]).length + " chars" : lr.reason);
 
@@ -237,6 +254,15 @@ async function post(h, body) {
   check("7. a valid arrival is 204 and writes exactly { ref, landing_path } to engine_visits — no IP, user agent, referrer, or anything else sent",
     r1.status === 204 && ok.inserts.length === 1 && ok.inserts[0].table === "engine_visits" &&
     JSON.stringify(Object.keys(ok.inserts[0].payload).sort()) === JSON.stringify(["landing_path", "ref"]) && ok.inserts[0].payload.ref === token, JSON.stringify(ok.inserts));
+  const page = routeHandler(SERVER);
+  const pagePath = new URL(DEST).pathname;
+  const r2 = await post(page, { ref: token, path: pagePath });
+  const routeRe = (function () { const c = {}; vm.runInNewContext(defs(SERVER, ["ENGINE_VISIT_PATH"]) + "\nthis.v = ENGINE_VISIT_PATH;", c); return c.v; })();
+  const MIG128 = fs.readFileSync(path.join(REPO, "supabase", "migrations", "128_engine_visits.sql"), "utf8");
+  const dbRe = new RegExp((/landing_path ~ '([^']+)'/.exec(MIG128) || [])[1]);
+  console.log("    landing page path " + JSON.stringify(pagePath) + " against the route's " + routeRe + " and the table's " + dbRe);
+  check("7. the landing page's own path " + pagePath + " is accepted by the route's regex and by the table's constraint, and written as sent",
+    routeRe.test(pagePath) && dbRe.test(pagePath) && r2.status === 204 && page.inserts.length === 1 && page.inserts[0].payload.landing_path === pagePath, JSON.stringify(page.inserts));
   const bad = routeHandler(SERVER);
   const refused = [];
   for (const b of [{ ref: "LR-0123456789", path: "/" }, { ref: "lr-012345678", path: "/" }, { ref: "x", path: "/" }, { path: "/" },

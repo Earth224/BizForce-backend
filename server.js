@@ -37758,8 +37758,10 @@ const OUTREACH_HOME_URL = "https://mrearthrose.com/";
    a value no supplement-pipeline lead can carry. Before this, bizforceai.net was
    not a destination any reply could link, so nothing the engine did could send
    a single visitor to the platform the master file's north star says should
-   drive traffic to itself. The homepage, because it is the front door a
-   stranger can read. */
+   drive traffic to itself. /suppressed.html, the page written for exactly this
+   person — someone an ad network, platform or payment processor cut off —
+   rather than the homepage, which speaks to a busy generalist. It records the
+   arrival (POST /api/engine-visits) from the ?ref= the code adds. */
 const OUTREACH_BIZFORCE_PRODUCT = "BizForceAI";
 
 const OUTREACH_PRODUCT_DESTINATIONS = {
@@ -37769,7 +37771,7 @@ const OUTREACH_PRODUCT_DESTINATIONS = {
   "Sword Vitality XXL Xtreme": OUTREACH_HOME_URL,
   "War Horse Xtreme":          OUTREACH_HOME_URL,
   "War Horse Midnight":        OUTREACH_HOME_URL,
-  "BizForceAI":                "https://bizforceai.net/"
+  "BizForceAI":                "https://bizforceai.net/suppressed.html"
 };
 const OUTREACH_BIZFORCE_DESTINATION = OUTREACH_PRODUCT_DESTINATIONS[OUTREACH_BIZFORCE_PRODUCT];
 /* The book's own site, which its instruction already names as the only link. */
@@ -37880,7 +37882,11 @@ function withOutreachTracking(message, destination, lead) {
   if (OUTREACH_TRACKED_HOSTS.indexOf(host) === -1 || dest.search || dest.hash) return text;
   var tracked = dest.origin + dest.pathname + "?ref=" + outreachRefToken(lead);
   var hostPattern = host.replace(/[.]/g, "\\.");
-  var mention = new RegExp("(?<![\\w.@/-])(?:https?:\\/\\/)?(?:www\\.)?" + hostPattern + "\\/?(?=$|[\\s.,;:!?)\\]\"'])", "gi");
+  /* The destination's own path: a homepage may be written with or without its
+     slash, any other page only as itself. Rejection has already held a draft
+     whose URL is not exactly the destination, so this matches what survived. */
+  var pathPattern = dest.pathname === "/" ? "\\/?" : dest.pathname.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+  var mention = new RegExp("(?<![\\w.@/-])(?:https?:\\/\\/)?(?:www\\.)?" + hostPattern + pathPattern + "(?=$|[\\s.,;:!?)\\]\"'])", "gi");
   var out = text.replace(mention, function () { return tracked; });
   if (out === text) return text;
   if (Array.from(out).length > 300) {
