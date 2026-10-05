@@ -33,6 +33,15 @@
     10. A SINGLE CREDIT IS UNCHANGED. creditWallet as it was at eaadbfe and as
         it is now each credit once: the same +100, one row, same user, type,
         amount and description, with a created_at.
+    11. WITHOUT A SUBSCRIPTION, THE CERTIFICATE BUT NOT THE BFC. Since
+        "Publishing needs a subscription; preparing does not", the credit is
+        paid only to an entitled account. With getUserPlan answering
+        unentitled, and with it throwing, a first pass is recorded and earned,
+        moves no BFC, writes no transaction, and says credited: false,
+        credit_withheld: "subscription_required", with a message and
+        billing_url. Sections 1 – 10 run with getUserPlan answering entitled,
+        because the subject account is not, and the rule they test is who is
+        paid ONCE, not who may be paid.
 
    THE ROUTE RUNS AS ITSELF, OUT OF THE SOURCE. The handler, creditWallet,
    safeText and nowIso are lifted out of server.js and run in a vm against the
@@ -47,6 +56,8 @@
    its upsert lets a fail reset an earned record to passed = false.
    MUTATE=read-then-write swaps in creditWallet from eaadbfe, the read-then-
    write version, everywhere this script uses it. 9 must go red.
+   MUTATE=credit-unentitled pays the credit whatever the plan says. 11 must go
+   red.
 
    Fixtures are written under the subject account and removed with a verified
    read-back. A wallet the subject already had is put back to its starting
@@ -79,7 +90,7 @@ const residue = createResidueGuard({
 });
 residue.install();
 
-const MUTATIONS = ["credit-every-pass", "old-handler", "read-then-write"];
+const MUTATIONS = ["credit-every-pass", "old-handler", "read-then-write", "credit-unentitled"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
@@ -167,9 +178,26 @@ function barrierClient(n) {
   };
 }
 
-function buildHandler(which) {
+/* WHO IS ENTITLED TO THE CREDIT. Since "Publishing needs a subscription;
+   preparing does not", the certificate is free and the 100 BFC is paid only to
+   an entitled account. The subject account is unentitled, so sections 1 – 10,
+   which test the pays-ONCE rule, run the handler with getUserPlan answering
+   entitled; section 11 runs it answering unentitled, and throwing. The rule
+   under test in 1 – 10 is unchanged; only who may be paid is. */
+const PLAN_ANSWERS = {
+  entitled:   async function () { return { active: true, plan: "all_access", inactive_reason: null }; },
+  unentitled: async function () { return { active: false, plan: null, inactive_reason: "no_subscription" }; },
+  throws:     async function () { throw new Error("check: plan lookup down"); }
+};
+
+function buildHandler(which, plan) {
   let route = which === "old" ? routeSource(SRC_OLD) : routeSource(SRC_NOW);
 
+  if (which === "new" && MUTATE === "credit-unentitled") {
+    const gate = "if (creditPlan && creditPlan.active === true) {";
+    if (route.split(gate).length !== 2) throw new Error("mutation target not found exactly once: " + gate);
+    route = route.replace(gate, "if (true) {");
+  }
   if (which === "new" && MUTATE === "credit-every-pass") {
     const guard = "if (becameEarned) {";
     if (route.split(guard).length !== 2) throw new Error("mutation target not found exactly once: " + guard);
@@ -182,6 +210,8 @@ function buildHandler(which) {
     supabase: supabase,
     console: { log: function () {}, warn: function () {}, error: function () {} },
     requireAuth: 0,
+    getUserPlan: PLAN_ANSWERS[plan || "entitled"],
+    BILLING_URL: "/billing.html",
     app: { post: function () { handler = arguments[arguments.length - 1]; } }
   };
   vm.createContext(ctx);
@@ -401,6 +431,22 @@ const cert = function (tag) { return "check-cert-" + tag + "-" + stamp; };
       JSON.stringify(beforeShape) === JSON.stringify(nowShape), "they differ");
     check("10. and that is +100 with one reward row", nowShape.delta === 100 && nowShape.rows === 1 && nowShape.row && nowShape.row.type === "reward" && nowShape.row.amount === 100,
       JSON.stringify(nowShape));
+
+    /* ── 11. an unentitled account earns the certificate, not the BFC ───── */
+    console.log("\n══ 11. without a subscription: the certificate is kept, the credit is withheld ══");
+    for (const which of ["unentitled", "throws"]) {
+      const U = cert("unentitled-" + which);
+      const u0 = await balance();
+      const r = await submit(buildHandler("new", which), U, true, 90);
+      const u1 = await balance();
+      const tx = await certTxns(U);
+      console.log("    plan " + which + ": HTTP " + r.status + " " + JSON.stringify(Object.assign({}, r.body, { certification: "…" })));
+      check("11. (" + which + ") the certification is recorded and earned", r.status === 201 && r.row && r.row.passed === true, JSON.stringify(r.row));
+      check("11. (" + which + ") no BFC moves and no transaction is written", u1 - u0 === 0 && tx.length === 0, "delta " + (u1 - u0) + ", " + tx.length + " row(s)");
+      check("11. (" + which + ") the response says credited: false, credit_withheld, and why",
+        r.body && r.body.credited === false && r.body.credit_withheld === "subscription_required" &&
+        /saved/.test(r.body.message || "") && r.body.billing_url === "/billing.html", JSON.stringify(r.body));
+    }
   } finally {
     console.log("\n══ cleanup ══");
     if (STARTING_WALLET) {

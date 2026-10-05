@@ -2879,6 +2879,109 @@ async function requireAdmin(req, res, next) {
   next();
 }
 
+/* ── What a 402 says ─────────────────────────────────────────────────────────
+   PUBLISHING NEEDS A SUBSCRIPTION; PREPARING DOES NOT. An account without one
+   can fill in its profile, seller page and cards, draft, organise and look
+   around; what it cannot do is put something in front of strangers or move
+   value to another account. So a refusal has to say three things: what was
+   blocked, what was KEPT — a person hitting this mid-task needs to know their
+   work is not lost — and where to go. `error` and `upgrade_required` are
+   unchanged for every client that already reads them; `message` and
+   `billing_url` are added.
+
+   Keyed by "<method> <route path>" for the middleware, and by the in-handler
+   keys below for the three routes that gate part of what they do. A key with
+   no entry gets the default, which is true for every route behind the
+   middleware: the middleware runs before the handler, so nothing ran. */
+const BILLING_URL = "/billing.html";
+const SUBSCRIPTION_REFUSAL_MESSAGES = {
+  "post /api/marketplace/listings":
+    "Publishing a listing needs an active subscription. Nothing was published and nothing was charged. Subscribe on Billing, then publish it again.",
+  "put /api/marketplace/listings/:id":
+    "Editing a public listing needs an active subscription. The listing is unchanged. You can still pause it or delete it without one.",
+  "post /api/cards/share-token":
+    "Sharing a card publicly needs an active subscription. Your card is saved and you can keep editing it. Subscribe on Billing to get a share link.",
+  "post /api/crowdfunding/campaigns":
+    "Starting a campaign needs an active subscription. Nothing was created. Subscribe on Billing, then start it again.",
+  "put /api/crowdfunding/campaigns/:id":
+    "Editing a campaign needs an active subscription. The campaign is unchanged.",
+  "post /api/wallet/transfer":
+    "Sending BFC to another account needs an active subscription. Your balance is unchanged.",
+  "approve publish_blog_post":
+    "Publishing a blog post needs an active subscription. The proposal is still pending. Approve it again after you subscribe.",
+  "approve publish_listing":
+    "Publishing a listing needs an active subscription. The proposal is still pending. Approve it again after you subscribe.",
+  "approve update_listing":
+    "Changing a public listing needs an active subscription. The proposal is still pending. Approve it again after you subscribe."
+};
+const SUBSCRIPTION_REFUSAL_DEFAULT =
+  "This needs an active subscription. Nothing was run and nothing was charged. Subscribe on Billing to continue.";
+
+function subscriptionRequiredBody(planState, key) {
+  return {
+    error: "Active subscription required",
+    upgrade_required: true,
+    // Which refusal it was, so a UI can tell "never subscribed" from "your row
+    // went stale" instead of showing one message for both.
+    reason: planState ? planState.inactive_reason : null,
+    message: SUBSCRIPTION_REFUSAL_MESSAGES[key] || SUBSCRIPTION_REFUSAL_DEFAULT,
+    billing_url: BILLING_URL
+  };
+}
+
+/* The same refusal from inside a handler, for the routes that gate only PART
+   of what they do (approve by action type, a listing edit that is not a pause).
+   Returns true when it has answered 402, so the caller returns. A plan lookup
+   that throws refuses, the same way requireActiveSubscription's does by
+   passing the error on: an entitlement nobody could read does not entitle. */
+async function refuseUnlessSubscribed(req, res, key) {
+  let planState;
+  try {
+    planState = await getUserPlan(req.user.id, req.user);
+  } catch (planErr) {
+    console.error("[entitlement] refuseUnlessSubscribed could not read the plan for " + req.user.id + " (" + key + "): " +
+      ((planErr && planErr.message) || planErr) + " — refusing.");
+    res.status(402).json(subscriptionRequiredBody({ inactive_reason: "entitlement_unknown" }, key));
+    return true;
+  }
+  if (planState && planState.active === true) return false;
+  res.status(402).json(subscriptionRequiredBody(planState, key));
+  return true;
+}
+
+/* ── Whose page a stranger may see ──────────────────────────────────────────
+   SERVE-SIDE, ON THE OWNER'S PLAN. Profile, seller page and card writes stay
+   open so a new account can build its page before paying; the public GET that
+   serves the page asks whether its OWNER is entitled — not the caller, who is
+   usually nobody. Not entitled reads exactly like not published: the route
+   answers as it does for a page that does not exist, so a stranger learns
+   nothing about anyone's billing. A lapsed subscriber's page goes dark and
+   comes back when they resubscribe; nothing is deleted.
+
+   COST: one getUserPlan per distinct owner per request — a users read and a
+   subscriptions read. The browse routes look up each distinct owner on the
+   page once. An admin owner logs the exemption on every view, as getUserPlan
+   always has. A lookup that throws hides the page (fail closed). */
+async function ownerPagePublic(userId) {
+  if (!userId) return false;
+  try {
+    const planState = await getUserPlan(userId);
+    return !!planState && planState.active === true;
+  } catch (planErr) {
+    console.error("[public-page] owner plan lookup failed for " + userId + ": " +
+      ((planErr && planErr.message) || planErr) + " — page hidden.");
+    return false;
+  }
+}
+
+async function publicOwnersAmong(userIds) {
+  const visible = new Set();
+  const unique = [...new Set((userIds || []).filter(Boolean))];
+  const answers = await Promise.all(unique.map(function (id) { return ownerPagePublic(id); }));
+  unique.forEach(function (id, i) { if (answers[i]) visible.add(id); });
+  return visible;
+}
+
 async function requireActiveSubscription(req, res, next) {
   try {
     /* req.user is passed so the role is read from the row requireAuth already
@@ -2886,13 +2989,8 @@ async function requireActiveSubscription(req, res, next) {
     const planState = await getUserPlan(req.user.id, req.user);
 
     if (!planState.active) {
-      return res.status(402).json({
-        error: "Active subscription required",
-        upgrade_required: true,
-        // Which refusal it was, so a UI can tell "never subscribed" from "your row
-        // went stale" instead of showing one message for both.
-        reason: planState.inactive_reason
-      });
+      const key = String(req.method || "").toLowerCase() + " " + ((req.route && req.route.path) || "");
+      return res.status(402).json(subscriptionRequiredBody(planState, key));
     }
 
     req.subscription = planState.subscription;
@@ -3642,6 +3740,21 @@ async function handleStripeEvent(event) {
       if (profileError) {
         throw profileError;
       }
+
+      /* The welcome bonus, now that the subscription row says active. Once per
+         account: grantWelcomeBonusOnce reads the ledger first, so a redelivery
+         of this event, a second checkout, or a resubscription grants nothing.
+         Logged, never thrown — see grantWelcomeBonusOnce. */
+      try {
+        const bonus = await grantWelcomeBonusOnce(userId);
+        console.log("[welcome-bonus] user " + userId + " — " +
+          (bonus.granted ? "granted " + bonus.amount + " BFC" : "not granted (" + bonus.reason + ")") +
+          ", event " + event.id + ".");
+      } catch (bonusErr) {
+        console.error("[welcome-bonus] NOT GRANTED for user " + userId + " — " +
+          ((bonusErr && bonusErr.message) || String(bonusErr)) + ", event " + event.id +
+          ". The subscription landed; the bonus can be granted by hand.");
+      }
     }
 
     // Recorded here rather than at the end of the branch. The two email checks
@@ -4344,8 +4457,17 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       console.warn("[notifications] insert failed for POST /api/auth/register — the route still succeeded, the user simply was not notified:", welcomeNotification.error.message || welcomeNotification.error);
     }
 
-    /* The welcome bonus. Two writes, neither of which may fail a signup, and
-       both of whose failures were previously invisible.
+    /* THE WALLET, AT ZERO. The 1,000 BFC welcome bonus used to be granted
+       here, to every signup, before anyone could have paid — free BFC that a
+       free account could spend on BFC-priced listings or donate. It is now
+       granted once, on the first subscription activation
+       (grantWelcomeBonusOnce, from checkout.session.completed). Registration
+       still creates the wallet so a new account has a balance to look at; it
+       writes no transaction, because nothing was credited.
+
+       The history below is kept because the failure handling still applies to
+       the one write that remains. It used to be two writes, neither of which
+       may fail a signup, and both of whose failures were previously invisible.
 
        supabase-js RESOLVES WITH AN ERROR, IT DOES NOT THROW. Both inserts were
        awaited and their results discarded, so the try/catch around them caught
@@ -4356,36 +4478,18 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
        that was supposed to say. */
     try {
       var walletInsert = await supabase.from("user_wallets").insert({
-        user_id: user.id, balance: 1000, currency: "BFC", updated_at: nowIso()
+        user_id: user.id, balance: 0, currency: "BFC", updated_at: nowIso()
       });
 
       if (walletInsert.error) {
-        /* Non-fatal, deliberately. A missing welcome bonus is a grant that can
-           be made again later; a signup that 500s after users, profiles and
-           notifications are already written is not recoverable — the account
-           exists, the caller was told it failed, and retrying answers "Email
-           already registered". The bonus is never worth that trade. */
-        console.error("[register] WELCOME BONUS NOT GRANTED — the user_wallets insert failed for user " +
+        /* Non-fatal, deliberately. A missing wallet is recreated at zero by
+           GET /api/wallet, and by bfc_credit when the welcome bonus lands; a
+           signup that 500s after users, profiles and notifications are already
+           written is not recoverable — the account exists, the caller was told
+           it failed, and retrying answers "Email already registered". */
+        console.error("[register] WALLET NOT CREATED — the user_wallets insert failed for user " +
           user.id + ": " + walletInsert.error.message +
-          ". Registration still succeeded and the account is usable; this person simply has no " +
-          "wallet and no 1000 BFC. The reward transaction below was NOT attempted.");
-      } else {
-        /* Only after the wallet exists. A reward transaction with no wallet
-           behind it is a record of money that does not exist: GET /api/wallet
-           would report a balance of 0 while listing a 1000 BFC credit, and any
-           later sum over wallet_transactions would disagree with every balance
-           column. Skipping the second write leaves nothing rather than
-           something false. */
-        var txInsert = await supabase.from("wallet_transactions").insert({
-          user_id: user.id, type: "reward", amount: 1000, description: "Welcome bonus", created_at: nowIso()
-        });
-
-        if (txInsert.error) {
-          console.error("[register] WELCOME BONUS PARTIALLY RECORDED — the user_wallets row was " +
-            "written for user " + user.id + " with a balance of 1000 BFC, but the matching " +
-            "wallet_transactions row failed: " + txInsert.error.message +
-            ". The balance exists with no transaction explaining where it came from.");
-        }
+          ". Registration still succeeded and the account is usable; the wallet is created later.");
       }
     } catch (walletErr) {
       /* Reaching here now means something threw rather than resolving — a
@@ -4394,7 +4498,7 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
          a plain object) has no .message, and reading one turns a handled
          failure into an unhandled TypeError inside this handler, which would
          500 the signup this block exists to protect. */
-      console.error("[register] WELCOME BONUS THREW for user " + user.id + " — " +
+      console.error("[register] WALLET INSERT THREW for user " + user.id + " — " +
         ((walletErr && walletErr.message) || String(walletErr)) +
         ". Registration still succeeded.");
     }
@@ -6665,6 +6769,8 @@ app.get("/api/profile/:username", async function (req, res, next) {
     if (!profile) {
       return res.status(404).json({ error: "Profile not found" });
     }
+    // Served only while its owner is entitled; otherwise it reads as not found.
+    if (!(await ownerPagePublic(profile.user_id))) return res.status(404).json({ error: "Profile not found" });
 
     return res.json({ profile });
   } catch (error) {
@@ -10025,8 +10131,32 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
   }
 });
 
+/* The action types whose execution puts something in front of strangers. A
+   calendar event is the account's own record and stays free. */
+const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing"];
+
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
+    /* GATED BY WHAT IT WOULD DO, BEFORE ANYTHING CHANGES. Read first and claim
+       second, so a refusal leaves the proposal exactly as it was — pending,
+       approvable again after subscribing. action_type is never updated on an
+       existing proposal, so the type read here is the type the claim below
+       acts on. */
+    const { data: pending, error: pendingError } = await supabase
+      .from("agent_proposals")
+      .select("action_type")
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .eq("status", "pending")
+      .maybeSingle();
+    if (pendingError) {
+      throw pendingError;
+    }
+    if (pending && SUBSCRIPTION_GATED_PROPOSAL_ACTIONS.indexOf(pending.action_type) !== -1 &&
+        await refuseUnlessSubscribed(req, res, "approve " + pending.action_type)) {
+      return;
+    }
+
     // Claim the proposal first: pending -> executing in a single conditional
     // update, so two concurrent approvals cannot both execute it.
     const { data: claimed, error: claimError } = await supabase
@@ -31077,22 +31207,45 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
       throw inserted.error;
     }
 
+    /* THE CERTIFICATE IS FREE; THE BFC IS FOR SUBSCRIBERS. Earning and keeping
+       a certification needs no subscription. The 100 BFC credit is value that
+       can be spent on other accounts' listings, so it is paid only when the
+       account is entitled at the moment the certification is earned. Earned
+       once, credited at most once: a certification earned without a
+       subscription does not pay later. */
     let credited = false;
+    let creditWithheld = null;
     if (becameEarned) {
+      let creditPlan = null;
       try {
-        await creditWallet(req.user.id, 100, "Certification earned: " + certId);
-        credited = true;
-      } catch (walletErr) {
-        console.error("Wallet credit skipped:", walletErr.message);
+        creditPlan = await getUserPlan(req.user.id, req.user);
+      } catch (planErr) {
+        console.error("Wallet credit withheld — plan lookup failed for " + req.user.id + ": " + ((planErr && planErr.message) || planErr));
+      }
+      if (creditPlan && creditPlan.active === true) {
+        try {
+          await creditWallet(req.user.id, 100, "Certification earned: " + certId);
+          credited = true;
+        } catch (walletErr) {
+          console.error("Wallet credit skipped:", walletErr.message);
+        }
+      } else {
+        creditWithheld = "subscription_required";
       }
     }
 
-    return res.status(alreadyEarned ? 200 : 201).json({
+    const certBody = {
       certification: data,
       success: true,
       already_earned: alreadyEarned,
       credited: credited
-    });
+    };
+    if (creditWithheld) {
+      certBody.credit_withheld = creditWithheld;
+      certBody.message = "Certification earned and saved. The 100 BFC reward is paid only to subscribers, and this certification will not pay it later.";
+      certBody.billing_url = BILLING_URL;
+    }
+    return res.status(alreadyEarned ? 200 : 201).json(certBody);
   } catch (error) {
     next(error);
   }
@@ -31143,6 +31296,62 @@ async function creditWallet(userId, amount, description) {
       ". It runs as one transaction, so neither the balance nor a transaction row was written.");
     throw error;
   }
+}
+
+/* ── The welcome bonus: once per account, on the first subscription ─────────
+   It used to be granted at registration, to every signup. It is now granted
+   when a subscription first activates (checkout.session.completed), and never
+   again — not on a webhook redelivery, not on a second checkout, not when a
+   lapsed subscriber resubscribes.
+
+   ONCE PER ACCOUNT, BY THE LEDGER. The test is whether the account already has
+   a reward row described "Welcome bonus" — the description registration has
+   always written — so every account that got the bonus at signup is already
+   counted and gets nothing more. The same description is written here, so old
+   and new grants are one population.
+
+   TWO LAYERS AGAINST A DOUBLE GRANT.
+     1. The read below: a redelivered or repeated activation finds the row and
+        returns without writing.
+     2. Migration 129, a unique partial index on wallet_transactions (user_id)
+        where type = 'reward' and description = 'Welcome bonus'. bfc_credit
+        writes the balance and the ledger row in one transaction, so a second
+        concurrent grant fails on the index and its balance increment rolls
+        back with it. Until 129 is applied, two deliveries landing in the same
+        instant could both pass the read; the read is what holds in the
+        meantime, and that window is stated, not hidden.
+   A 23505 from the index is "already granted", not a failure.
+
+   NEVER FAILS THE WEBHOOK. The caller logs and continues: a billing webhook
+   that returned 500 over a bonus would make Stripe retry an activation whose
+   entitlement already landed. */
+const WELCOME_BONUS_BFC = 1000;
+const WELCOME_BONUS_DESCRIPTION = "Welcome bonus";
+
+async function grantWelcomeBonusOnce(userId) {
+  if (!userId) return { granted: false, reason: "no_user" };
+
+  const prior = await supabase
+    .from("wallet_transactions")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("type", "reward")
+    .eq("description", WELCOME_BONUS_DESCRIPTION)
+    .limit(1);
+  if (prior.error) {
+    throw new Error("could not read whether user " + userId + " already has the welcome bonus: " + prior.error.message);
+  }
+  if (prior.data && prior.data.length) {
+    return { granted: false, reason: "already_granted" };
+  }
+
+  try {
+    await creditWallet(userId, WELCOME_BONUS_BFC, WELCOME_BONUS_DESCRIPTION);
+  } catch (creditErr) {
+    if (creditErr && creditErr.code === "23505") return { granted: false, reason: "already_granted" };
+    throw creditErr;
+  }
+  return { granted: true, amount: WELCOME_BONUS_BFC };
 }
 
 app.get("/api/wallet", requireAuth, async function (req, res, next) {
@@ -31258,7 +31467,7 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
-app.post("/api/wallet/transfer", requireAuth, async function (req, res, next) {
+app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const recipientId = req.body.recipientId;
     const amount = req.body.amount;
@@ -31640,7 +31849,7 @@ app.get("/api/marketplace/my-listings", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
-app.post("/api/marketplace/listings", requireAuth, async function (req, res, next) {
+app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const title       = safeText(req.body.title, 150);
     const description = safeText(req.body.description, 2000);
@@ -31788,6 +31997,17 @@ app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async functi
 
 app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
   try {
+    /* A PAUSE IS ALWAYS ALLOWED; ANY OTHER EDIT NEEDS A SUBSCRIPTION. A seller
+       who lapses must still be able to take a listing out of public view —
+       pausing, like deleting, only removes what strangers see. Changing its
+       price, text, media, category or tags, or setting it active or sold, is
+       editing a public listing. Only the fields this route reads count: a body
+       of exactly { status: "paused" } is a pause. */
+    const LISTING_EDIT_FIELDS = ["title", "description", "price_bfc", "price_usd", "category", "tags", "media"];
+    const pauseOnly = req.body.status === "paused" &&
+      LISTING_EDIT_FIELDS.every(function (f) { return req.body[f] === undefined; });
+    if (!pauseOnly && await refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")) return;
+
     const updates = { updated_at: nowIso() };
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
     if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
@@ -31990,7 +32210,7 @@ app.get("/api/crowdfunding/my-campaigns", requireAuth, async function (req, res,
   } catch (error) { next(error); }
 });
 
-app.post("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
+app.post("/api/crowdfunding/campaigns", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const title       = safeText(req.body.title, 150);
     const description = safeText(req.body.description, 2000);
@@ -32016,7 +32236,7 @@ app.post("/api/crowdfunding/campaigns", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
-app.put("/api/crowdfunding/campaigns/:id", requireAuth, async function (req, res, next) {
+app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
@@ -34500,7 +34720,7 @@ app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next
 });
 
 // Returns (and lazily generates) a share token for the user's card
-app.post("/api/cards/share-token", requireAuth, async function (req, res, next) {
+app.post("/api/cards/share-token", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const cardId = req.body.card_id;
     if (!cardId) return res.status(400).json({ error: "card_id required" });
@@ -34529,13 +34749,17 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("digital_cards")
-      .select("full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, still_image_url, audio_url, holographic_style, media_layout")
+      .select("user_id, full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, still_image_url, audio_url, holographic_style, media_layout")
       .eq("share_token", req.params.token)
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: "Card not found" });
+    // Served only while its owner is entitled. user_id is read for that and
+    // never returned.
+    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
+    const { user_id: cardOwnerId, ...card } = data;
 
-    return res.json({ card: data });
+    return res.json({ card: card });
   } catch (error) { next(error); }
 });
 
@@ -34595,6 +34819,8 @@ app.get("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
 app.get("/api/bfp/profile/:userId", async function (req, res, next) {
   try {
     const userId = safeText(req.params.userId, 60);
+    // Served only while its owner is entitled; otherwise it reads as no profile.
+    if (!(await ownerPagePublic(userId))) return res.json({ profile: null });
     const { data, error } = await supabase
       .from("bf_profiles").select("*").eq("user_id", userId).maybeSingle();
     if (error) throw error;
@@ -34656,6 +34882,7 @@ app.get("/api/bfp/pproducts", requireAuth, async function (req, res, next) {
 
 app.get("/api/bfp/pproducts/public/:userId", async function (req, res, next) {
   try {
+    if (!(await ownerPagePublic(req.params.userId))) return res.json({ products: [] });
     const { data, error } = await supabase.from("profile_products")
       .select("*").eq("user_id", req.params.userId).order("created_at", { ascending: false });
     if (error) throw error;
@@ -34734,13 +34961,17 @@ app.delete("/api/bfp/pproducts/:id", requireAuth, async function (req, res, next
 // bf_profiles row still comes back, just with seller: null.
 app.get("/api/bfp/services/browse", async function (req, res, next) {
   try {
-    const { data: services, error: servicesError } = await supabase
+    let { data: services, error: servicesError } = await supabase
       .from("profile_products")
       .select("id, user_id, name, description, price, currency, image_url, buy_link, category, created_at")
       .eq("listing_kind", "service")
       .eq("status", "active")
       .order("created_at", { ascending: false });
     if (servicesError) throw servicesError;
+
+    // Only entitled owners' services are listed: one plan lookup per distinct owner.
+    const publicServiceOwners = await publicOwnersAmong((services || []).map(function (s) { return s.user_id; }));
+    services = (services || []).filter(function (s) { return publicServiceOwners.has(s.user_id); });
 
     const userIds = [...new Set((services || []).map(function (s) { return s.user_id; }))];
     var sellerById = {};
@@ -34776,6 +35007,7 @@ app.get("/api/bfp/pportfolio", requireAuth, async function (req, res, next) {
 
 app.get("/api/bfp/pportfolio/public/:userId", async function (req, res, next) {
   try {
+    if (!(await ownerPagePublic(req.params.userId))) return res.json({ items: [] });
     const { data, error } = await supabase.from("profile_portfolio")
       .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at", { ascending: false });
     if (error) throw error;
@@ -34837,12 +35069,16 @@ app.delete("/api/bfp/pportfolio/:id", requireAuth, async function (req, res, nex
 // surfaced with a null seller.
 app.get("/api/bfp/artists/browse", async function (req, res, next) {
   try {
-    const { data: works, error: worksError } = await supabase
+    let { data: works, error: worksError } = await supabase
       .from("profile_portfolio")
       .select("id, user_id, title, description, image_url, url, category, sort_order")
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
     if (worksError) throw worksError;
+
+    // Only entitled owners' work is listed: one plan lookup per distinct owner.
+    const publicArtistOwners = await publicOwnersAmong((works || []).map(function (w) { return w.user_id; }));
+    works = (works || []).filter(function (w) { return publicArtistOwners.has(w.user_id); });
 
     const userIds = [...new Set((works || []).map(function (w) { return w.user_id; }))];
     if (!userIds.length) return res.json({ artists: [] });
@@ -34905,6 +35141,8 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       .maybeSingle();
     if (sellerError) throw sellerError;
     if (!seller) return res.status(404).json({ error: "seller not found" });
+    // Served only while its owner is entitled; otherwise it reads as not found.
+    if (!(await ownerPagePublic(seller.user_id))) return res.status(404).json({ error: "seller not found" });
 
     const userId = seller.user_id;
 
@@ -35091,6 +35329,7 @@ app.get("/api/bfp/music", requireAuth, async function (req, res, next) {
 
 app.get("/api/bfp/music/public/:userId", async function (req, res, next) {
   try {
+    if (!(await ownerPagePublic(req.params.userId))) return res.json({ tracks: [] });
     const { data, error } = await supabase.from("bf_music_tracks")
       .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
     if (error) throw error;
@@ -35159,6 +35398,7 @@ app.get("/api/bfp/videos", requireAuth, async function (req, res, next) {
 
 app.get("/api/bfp/videos/public/:userId", async function (req, res, next) {
   try {
+    if (!(await ownerPagePublic(req.params.userId))) return res.json({ videos: [] });
     const { data, error } = await supabase.from("bf_videos")
       .select("*").eq("user_id", req.params.userId).order("sort_order").order("created_at");
     if (error) throw error;
@@ -42051,5 +42291,12 @@ module.exports = {
   __reportMemoryConstraintViolation: reportMemoryConstraintViolation,
   __memoryAgentTypes: memoryAgentTypes,
   __routineMaxSteps: routineMaxSteps,
-  __dispatchPerMinuteLimit: dispatchPerMinuteLimit
+  __dispatchPerMinuteLimit: dispatchPerMinuteLimit,
+
+  /* For scripts/checkWelcomeBonus.js, which grants the bonus to the seed
+     account twice and reads the ledger, and for
+     scripts/checkUnsubscribedSurface.js, which asks whose pages are public. */
+  __grantWelcomeBonusOnce: grantWelcomeBonusOnce,
+  __ownerPagePublic: ownerPagePublic,
+  __subscriptionRequiredBody: subscriptionRequiredBody
 };
