@@ -9595,6 +9595,24 @@ const PROPOSAL_EXECUTORS = {
     const moneyUrl = safeText(payload.money_url, 500);
     const externalPost = Boolean(moneyUrl);
 
+    // An own-page post's money page, re-checked against the allowlist as it
+    // stands NOW: a proposal can sit pending while the list changes, and the
+    // rules a post has to satisfy are the ones in force when it publishes. Both
+    // keys at once is refused here as the generator refuses it — a stored
+    // payload that has both was not written by the generator.
+    const moneyPath = payload.money_path === undefined || payload.money_path === null || payload.money_path === ""
+      ? null
+      : String(payload.money_path);
+    if (moneyPath !== null) {
+      if (externalPost) {
+        throw new Error("publish_blog_post: this proposal names both money_url and money_path. Nothing was published, because a post cannot be both an external draft and a page here");
+      }
+      if (!Object.prototype.hasOwnProperty.call(SEO_OWN_MONEY_PAGES, moneyPath)) {
+        throw new Error("publish_blog_post: money_path " + JSON.stringify(moneyPath) + " is not a page a post may name as its money page (allowed: " +
+          Object.keys(SEO_OWN_MONEY_PAGES).join(", ") + "). Nothing was published");
+      }
+    }
+
     // Sanitize first, so the 300-character floor measures surviving content
     // and the row that reaches the database is already clean.
     const body = sanitizeBlogHtml(String(payload.body === undefined || payload.body === null ? "" : payload.body), authorHandle, listingSlugs, externalPost).trim();
@@ -9688,6 +9706,30 @@ const PROPOSAL_EXECUTORS = {
       );
     }
 
+    // The same last check for an own-page post, then the arrival parameter.
+    // The check runs on the sanitized body BEFORE the parameter is added, so it
+    // asks the same question the generator asked; the rewrite then touches only
+    // the link just proven present, and writes it as the canonical path, so a
+    // case or trailing-slash variant the check tolerated is not stored broken.
+    // internal_links records the body's hrefs, so it gets the same rewrite.
+    let storedBody = body;
+    if (moneyPath !== null) {
+      if (!bodyLinksToMoneyUrl(body, moneyPath)) {
+        throw new Error(
+          "publish_blog_post: the money page " + moneyPath +
+          " is not the href of any link in the sanitized post body. Nothing was published, because a post without its money link has no purpose"
+        );
+      }
+      const arrivalToken = blogRefToken(proposal.user_id, slug);
+      storedBody = withBlogArrivalTracking(body, moneyPath, arrivalToken);
+      if (Array.isArray(internalLinks)) {
+        const wantedLink = moneyPath.toLowerCase();
+        internalLinks = internalLinks.map(function (href) {
+          return String(href).trim().toLowerCase().replace(/\/+$/, "") === wantedLink ? moneyPath + "?ref=" + arrivalToken : href;
+        });
+      }
+    }
+
     // An external post must never be served from this platform's own blog. The
     // same article on two domains is a duplicate, and search engines resolving
     // that duplication would most likely favour this platform — more pages,
@@ -9705,7 +9747,7 @@ const PROPOSAL_EXECUTORS = {
         type:             "blog",
         title:            title,
         slug:             slug,
-        body:             body,
+        body:             storedBody,
         meta_description: metaDescription,
         keyword:          keyword,
         source_url:       sourceUrl,
@@ -10675,6 +10717,61 @@ function parseSeoPostResponse(rawText) {
   };
 }
 
+/* ── An internal post whose money page is a page on this platform ──────────────
+   money_path names one of these. Without it an internal post's money link is
+   one of the seller's /listing/ pages, and that is still true for every request
+   that does not send it. With it the post still publishes here, at
+   /blog/<handle>/<slug>, but sends its reader to the named page instead — which
+   is how an article carries someone to /suppressed.html.
+
+   An allowlist, not a shape rule. Any root-relative path would pass the blog
+   sanitizer, so "is it a path" says nothing about whether it is a page anyone
+   wrote for this purpose. A path not listed here is refused with 422, never
+   dropped: a post silently written without the money page the caller asked for
+   is a post with no purpose.
+
+   Each value is what the model is told the page is. It is the page's own copy,
+   read from suppressed.html at the frontend's 088fa78, including what the page
+   says the platform will not do, so the article cannot promise more than the
+   page it links to. If the page changes, this text changes with it. */
+const SEO_OWN_MONEY_PAGES = {
+  "/suppressed.html":
+    "BizForce AI's page for businesses an ad network, a platform or a payment processor has refused or cut off — " +
+    "an ad account disabled, a payment processor that dropped them, reach that went quiet. It offers one plan, All Access " +
+    "at $199/month: search articles the business approves before anything publishes, a blog and a storefront under the " +
+    "business's own handle on bizforceai.net, email sequences drafted to send from whatever email service the business " +
+    "already uses, and eighteen AI agents that work from one profile of the business. It says plainly what it will NOT do: " +
+    "it does not get an ad account, social account or payment processor back; it does not process payments or replace a " +
+    "payment processor; and it does not promise traffic, rankings or sales."
+};
+
+/* The arrival token for a published post's money link: "bl" says a blog post
+   sent the reader, then the first forty bits of SHA-256 over the author's id
+   and the post's slug. Slugs are unique per author, not across authors, so the
+   author is part of what is hashed — (user_id, slug) is the per-author unique
+   key on content_library, and recomputing this over those two columns joins a
+   visit back to exactly one post. Nothing personal is in it, and the post it
+   sits in is public anyway. Same length and alphabet as the Lead Radar token
+   (outreachRefToken), so engine_visits holds both under one rule. */
+function blogRefToken(userId, slug) {
+  return "bl-" + crypto.createHash("sha256").update("blog:" + String(userId || "") + ":" + String(slug || "")).digest("hex").slice(0, 10);
+}
+
+/* Rewrites every link in an already-sanitized body whose href is the money
+   page — matched the way bodyLinksToMoneyUrl matches, ignoring case and a
+   trailing slash — to the page's canonical path plus ?ref=. Runs after the
+   sanitizer and after the money-link check, so it edits only markup that is
+   about to be stored and a link already proven present. sanitizeBlogHtml
+   writes every surviving href as href="...", which is the only shape matched. */
+function withBlogArrivalTracking(html, moneyPath, token) {
+  const wanted = String(moneyPath || "").toLowerCase().replace(/\/+$/, "");
+  const tracked = moneyPath + "?ref=" + token;
+  return String(html == null ? "" : html).replace(/(<a\b[^>]*\bhref=")([^"]*)(")/gi, function (whole, open, href, close) {
+    const h = String(href).replace(/&amp;/gi, "&").trim().toLowerCase().replace(/\/+$/, "");
+    return h === wanted ? open + tracked + close : whole;
+  });
+}
+
 // aiLimiter, on the same terms as the other six routes that reach Anthropic.
 // This one had only the global apiLimiter (300 per 15 minutes) and is the most
 // expensive call in the file by an order of magnitude: callAnthropicText below
@@ -10708,6 +10805,34 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     }
 
     const externalMode = Boolean(moneyUrl);
+
+    // Own-page mode: the post is internal, and its money page is a page on this
+    // platform named from SEO_OWN_MONEY_PAGES rather than one of the seller's
+    // listings. Absent, null or "" is no money_path at all, the same as safeText
+    // reads "" for every other field here. Anything else must be a string naming
+    // a listed page exactly, or the request is refused — never written without it.
+    let moneyPath = null;
+    const rawMoneyPath = req.body.money_path;
+    if (rawMoneyPath !== undefined && rawMoneyPath !== null && rawMoneyPath !== "") {
+      if (typeof rawMoneyPath !== "string" || !Object.prototype.hasOwnProperty.call(SEO_OWN_MONEY_PAGES, rawMoneyPath.trim())) {
+        return res.status(422).json({
+          error: "money_path " + String(JSON.stringify(rawMoneyPath)).slice(0, 120) + " is not a page this agent may name as the money page. " +
+            "Allowed: " + Object.keys(SEO_OWN_MONEY_PAGES).join(", ") + ". No post was created."
+        });
+      }
+      moneyPath = rawMoneyPath.trim();
+    }
+    // The two cannot both be true of one post. money_url writes for another
+    // property: the post is stored here as a draft and never served. money_path
+    // writes a post that IS served here and links a page here. Choosing either
+    // one silently would write a different post from the one asked for.
+    if (moneyPath && externalMode) {
+      return res.status(422).json({
+        error: "Send money_url or money_path, not both. money_url writes a post for another property, stored here as a draft and " +
+          "never served; money_path writes a post published on this platform that links " + moneyPath + ". No post was created."
+      });
+    }
+    const ownPageMode = Boolean(moneyPath);
 
     // The property this post belongs to, derived once and used for both the
     // stored proposal and the link-target query below. money_url already passed
@@ -10915,7 +11040,13 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       ? "\n\nThe money page this post must send traffic to (an external page, not a marketplace listing):\n" +
         "- url=" + moneyUrl +
         (moneyAnchor ? "\n- suggested anchor text=" + JSON.stringify(moneyAnchor) : "")
-      : "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines;
+      : (ownPageMode
+        ? "\n\nThe money page this post must send traffic to (a page on this platform, not a marketplace listing):\n" +
+          "- href=" + moneyPath +
+          (moneyAnchor ? "\n- suggested anchor text=" + JSON.stringify(moneyAnchor) : "") +
+          "\n- what the page is: " + SEO_OWN_MONEY_PAGES[moneyPath] +
+          "\nSay nothing about that page, or about what it offers, beyond what is written here."
+        : "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines);
 
     // Who the post is for. Emitted only when the caller said — an empty
     // heading would read to the model as a brand with nothing to say about it.
@@ -10962,7 +11093,9 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         ? "\n\nThe seller asked for a post on this topic: " + topic
         : (externalMode
             ? "\n\nNo topic was given — choose one yourself, working back from what the money page above sells."
-            : "\n\nNo topic was given — choose one yourself from the catalog above.")) +
+            : (ownPageMode
+                ? "\n\nNo topic was given — choose one yourself, working back from the question a reader of the money page above would have typed into a search engine."
+                : "\n\nNo topic was given — choose one yourself from the catalog above."))) +
       audienceSection +
       complianceSection +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
@@ -10978,9 +11111,11 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         : "- Do not link to any other blog post — none are available as link targets.\n") +
       (externalMode
         ? "- Link to the money page above EXACTLY ONCE, copying its URL character for character.\n"
-        : (existingListings.length
-            ? "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n"
-            : "- Do not link to any money page — none is available.\n")) +
+        : (ownPageMode
+            ? "- Link to the money page above EXACTLY ONCE, with href=\"" + moneyPath + "\" copied character for character. Do not link to any marketplace listing.\n"
+            : (existingListings.length
+                ? "- Link to EXACTLY ONE of the seller's listings as the money page, copying its href exactly as it is written above.\n"
+                : "- Do not link to any money page — none is available.\n"))) +
       "\nHREF FORMAT — follow this exactly, it is not negotiable:\n" +
       (externalMode
         ? "- EVERY link to a marketplace listing must be root-relative. It MUST begin with a forward slash.\n"
@@ -10995,7 +11130,9 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       (externalMode
         ? "- The money link is a complete absolute URL beginning with https. Copy it exactly as it is given above — " +
           "do not shorten it, do not drop the domain, and do not convert it into a path.\n"
-        : "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n") +
+        : (ownPageMode
+            ? "- The money link is the root-relative path " + moneyPath + ", exactly as written — no domain, no query string, nothing added.\n"
+            : "- A link to a money page is written as /listing/ then that listing's path segment, exactly as the catalog above spells it out.\n")) +
       "- Every internal link target available to you is listed above with its complete href already written out. " +
       (externalMode
         ? "Copy that string verbatim. Do not rebuild it and do not shorten it.\n"
@@ -11126,6 +11263,19 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " as a link anywhere in the post. No post was created." });
       }
     }
+    // The same check for an own-page post, on the same sanitized copy, with the
+    // flags the executor will use: internal, this handle, these listing slugs.
+    if (ownPageMode) {
+      const publishedBody = sanitizeBlogHtml(
+        body,
+        authorHandle,
+        existingListings.map(function (l) { return l && l.slug; }),
+        false
+      );
+      if (!bodyLinksToMoneyUrl(publishedBody, moneyPath)) {
+        return res.status(422).json({ error: "The SEO Agent did not include the money page " + moneyPath + " as a link anywhere in the post. No post was created." });
+      }
+    }
 
     // The control, as opposed to the instruction. Title, meta description and
     // body are scanned together — a claim in the search snippet is published
@@ -11220,6 +11370,12 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     if (externalMode) {
       proposalPayload.money_url = moneyUrl;
       proposalPayload.site = externalSite;
+    }
+    // On the same terms: present only for an own-page post, so the executor can
+    // re-check the link and add the arrival parameter, and every other proposal
+    // is byte-identical to before.
+    if (ownPageMode) {
+      proposalPayload.money_path = moneyPath;
     }
 
     // Recorded so the executor can re-run the same check against the same
@@ -36723,7 +36879,8 @@ async function findOrCreateContactByPhone(ownerId, phone, email, name, source, b
 
 /* ── An arrival from the engine ───────────────────────────────────────────────
    The landing page calls this when it was reached through a reply link carrying
-   ?ref=lr-<10 hex> (withOutreachTracking). It records that the engine sent
+   ?ref=lr-<10 hex> (withOutreachTracking), or through a published blog post's
+   money link carrying ?ref=bl-<10 hex> (blogRefToken). It records that the engine sent
    someone — the ref, the path landed on, and when — into engine_visits
    (migration 128) and nothing else: no IP, user agent, referrer, cookie or
    account, because none is needed to answer the question and each would make
@@ -36735,14 +36892,19 @@ async function findOrCreateContactByPhone(ownerId, phone, email, name, source, b
    validated to the exact shapes the table's constraints accept, so a request
    that is not a ref and a path is refused here rather than at the database.
    204 on a write. 503, naming the migration, while 128 is not applied. */
-var ENGINE_VISIT_REF = /^lr-[0-9a-f]{10}$/;
+/* Two shapes, one per source, both ten hex characters of SHA-256: lr- joins
+   to outreach_sends by post_uri (outreachRefToken), bl- to content_library by
+   (user_id, slug) (blogRefToken). Migration 130 widens the table's constraint
+   to the same pair; until it is applied a bl- arrival is refused by the
+   database and answered 503 below, and an lr- arrival is unaffected. */
+var ENGINE_VISIT_REF = /^(?:lr|bl)-[0-9a-f]{10}$/;
 var ENGINE_VISIT_PATH = /^\/[A-Za-z0-9\/._-]{0,199}$/;
 
 app.post("/api/engine-visits", async function (req, res) {
   try {
     var ref = typeof req.body.ref === "string" ? req.body.ref : "";
     var landingPath = typeof req.body.path === "string" ? req.body.path : "";
-    if (!ENGINE_VISIT_REF.test(ref)) return res.status(400).json({ error: "ref must be lr- followed by 10 lowercase hex characters" });
+    if (!ENGINE_VISIT_REF.test(ref)) return res.status(400).json({ error: "ref must be lr- or bl- followed by 10 lowercase hex characters" });
     if (!ENGINE_VISIT_PATH.test(landingPath)) return res.status(400).json({ error: "path must be a site path with no query or fragment, at most 200 characters" });
 
     var write = await supabase.from("engine_visits").insert({ ref: ref, landing_path: landingPath });
@@ -36750,6 +36912,13 @@ app.post("/api/engine-visits", async function (req, res) {
       if (write.error.code === "42P01" || write.error.code === "PGRST205") {
         console.error("[engine-visits] NOT RECORDED — engine_visits does not exist; apply supabase/migrations/128_engine_visits.sql.");
         return res.status(503).json({ error: "Arrivals are not recorded yet: migration 128 is not applied." });
+      }
+      // 23514 is a CHECK violation. The route has already accepted the ref's
+      // shape, so the table's constraint is the one that is behind: 128 without
+      // 130 accepts lr- only.
+      if (write.error.code === "23514") {
+        console.error("[engine-visits] NOT RECORDED — engine_visits refused ref " + ref + " under its check constraint; apply supabase/migrations/130_engine_visits_blog_ref.sql.");
+        return res.status(503).json({ error: "Arrivals with this ref are not recorded yet: migration 130 is not applied." });
       }
       console.error("[engine-visits] NOT RECORDED — " + (write.error.message || JSON.stringify(write.error)));
       return res.status(500).json({ error: "The arrival could not be recorded." });
