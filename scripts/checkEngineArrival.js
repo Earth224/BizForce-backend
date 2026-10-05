@@ -275,7 +275,7 @@ async function post(h, body) {
   const r3 = await post(missing, { ref: token, path: "/" });
   check("7. while the table does not exist the route answers 503 and names migration 128", r3.status === 503 && /migration 128/.test((r3.payload || {}).error || ""), JSON.stringify(r3));
 
-  console.log("\n══ 8. migration 128, written and not applied ══");
+  console.log("\n══ 8. migration 128: the table it defines, and whether the live database has it ══");
   const MIG = fs.readFileSync(path.join(REPO, "supabase", "migrations", "128_engine_visits.sql"), "utf8").replace(/\r\n/g, "\n");
   const cols = (/create table if not exists public\.engine_visits \(([\s\S]*?)\n\);/.exec(MIG) || [])[1] || "";
   const names = cols.split("\n").map(l => (l.trim().match(/^([a-z_]+)\s/) || [])[1]).filter(Boolean);
