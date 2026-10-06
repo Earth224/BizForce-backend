@@ -10816,6 +10816,20 @@ const SEO_NO_INVENTED_FACTS =
   "None of this asks for general advice. Write practical advice specific to the business described above, naming its category " +
   "when the brief names one.";
 
+/* THE CATEGORY UNDER A COMPLIANCE PROFILE. The block above asks the writer to
+   name the business's category, and it comes after the MANDATORY CONTENT RULES,
+   so for a brand whose category sits next to a condition the later instruction
+   pulls toward naming the condition. The rail catches a condition named in its
+   own words and misses one paraphrased or hinted at (4 of 17 in the probe), so
+   the prompt has to stop it, not the scanner. Emitted only when a profile is
+   active, directly after the block above, so it is the last word on the
+   category and says outright that the content rules win. A separate constant,
+   not a clause of the block, so every prompt without a profile is unchanged. */
+const SEO_CATEGORY_AS_PRODUCT_TYPE =
+  "\n\nNAMING THE CATEGORY UNDER THE MANDATORY CONTENT RULES. Where you name this business's category, name it as a product type " +
+  "— a dietary supplement, a botanical product, a topical cosmetic — never by a condition it addresses, not even paraphrased, " +
+  "hinted at or softened. The MANDATORY CONTENT RULES above win over anything in NO INVENTED FACTS.";
+
 /* The arrival token for a published post's money link: "bl" says a blog post
    sent the reader, then the first forty bits of SHA-256 over the author's id
    and the post's slug. Slugs are unique per author, not across authors, so the
@@ -11201,6 +11215,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       audienceSection +
       complianceSection +
       SEO_NO_INVENTED_FACTS +
+      (complianceProfile ? SEO_CATEGORY_AS_PRODUCT_TYPE : "") +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +

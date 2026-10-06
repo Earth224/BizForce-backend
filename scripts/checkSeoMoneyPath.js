@@ -72,6 +72,15 @@
    it lets the writer say ad platforms publish policies restricting some
    products in that category but never what a policy says; and the rate claim
    and "largely automated" are both still named as forbidden.
+
+   ADDED WITH "Name the product, not the condition":
+    14. With a compliance profile active — auto on a vitality host, or named
+        explicitly in external, listing or own-page mode — the prompt carries a
+        line telling the writer to name the category as a product type, never
+        by a condition, once, after both the compliance section and the
+        no-invented-facts block, ahead of the writing brief, and it is that
+        commit's prompt plus exactly this line. Without a profile, the own-page,
+        external and listing prompts are byte-identical to that commit's.
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
@@ -102,6 +111,10 @@
      MUTATE=statepolicy  the writer is not forbidden to say what a policy says → 10
      MUTATE=internals    the internals clause is gone                     → 10
      MUTATE=ratesback    the statistics clause is gone                    → 10
+     MUTATE=productalways the product-type line is in every prompt        → 14
+     MUTATE=productnever the product-type line is in no prompt            → 14
+     MUTATE=productfirst it sits before the compliance section            → 14
+     MUTATE=conditionok  it no longer forbids naming the condition        → 14
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -130,7 +143,7 @@ const BASELINE = "6f94afe";
 
 const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
   "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor",
-  "generaladvice", "statepolicy", "internals", "ratesback"];
+  "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -218,6 +231,13 @@ if (MUTATE === "internals") SERVER = mutate(SERVER,
 if (MUTATE === "ratesback") SERVER = mutate(SERVER,
   "  \"- No statistics, percentages, rates or counts, and no claim about how often or how many: not \\\"at a much higher rate than average\\\", \" +\n" +
   "  \"\\\"most owners\\\", \\\"the majority\\\", \\\"often within days\\\".\\n\" +\n", "", "ratesback");
+const PRODUCT_LINE = "      (complianceProfile ? SEO_CATEGORY_AS_PRODUCT_TYPE : \"\") +\n";
+if (MUTATE === "productalways") SERVER = mutate(SERVER, PRODUCT_LINE, "      SEO_CATEGORY_AS_PRODUCT_TYPE +\n", "productalways");
+if (MUTATE === "productnever") SERVER = mutate(SERVER, PRODUCT_LINE, "", "productnever");
+if (MUTATE === "productfirst") SERVER = mutate(SERVER, "      complianceSection +\n      SEO_NO_INVENTED_FACTS +\n" + PRODUCT_LINE,
+  PRODUCT_LINE + "      complianceSection +\n      SEO_NO_INVENTED_FACTS +\n", "productfirst");
+if (MUTATE === "conditionok") SERVER = mutate(SERVER,
+  " never by a condition it addresses, not even paraphrased, \" +\n  \"hinted at or softened.", "", "conditionok");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -267,7 +287,15 @@ function liftValue(src, name) {
   return c.v;
 }
 const FACTS = liftValue(SERVER, "SEO_NO_INVENTED_FACTS");
-function unFacts(p) { return p == null ? p : p.split(FACTS).join(""); }
+/* The product-type line rides directly after the block whenever a compliance
+   profile is active, and BASELINE had neither, so both come out together.
+   Section 14 holds the line to its own terms. */
+const PRODUCT_TYPE = liftValue(SERVER, "SEO_CATEGORY_AS_PRODUCT_TYPE");
+function unFacts(p) { return p == null ? p : p.split(PRODUCT_TYPE).join("").split(FACTS).join(""); }
+/* The commit before the product-type line existed, for section 14's "nothing
+   else changed". Pinned, not HEAD. */
+const PREV = "d5b077c";
+const SERVER_PREV = execSync("git show " + PREV + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 
 /* ── a database that records what it is asked to write ── */
 const HANDLE = "check-handle";
@@ -625,6 +653,40 @@ async function visit(h, body) {
     (anchored.prompt || "").indexOf("- suggested anchor text=\"what BizForce AI does for suppressed businesses\"") !== -1, anchored.status);
   check("13. the listing and external prompts say none of it",
     [ext10, listing9].every(r => !/itself a platform|freedom from platforms|can suspend sending|never the href itself/.test(r.prompt || "")));
+
+  console.log("\n══ 14. under a compliance profile, the category is a product type ══");
+  console.log("    line:" + PRODUCT_TYPE.replace(/\n/g, "\n      "));
+  check("14. the line names the category as a product type, never by a condition even paraphrased, and says the content rules win",
+    /name it as a product type/.test(PRODUCT_TYPE) && /never by a condition it addresses, not even paraphrased, hinted at or softened/.test(PRODUCT_TYPE) &&
+    /MANDATORY CONTENT RULES above win over anything in NO INVENTED FACTS/.test(PRODUCT_TYPE));
+  const WITH = [
+    ["external, auto (swordvitality.com)", { money_url: "https://swordvitality.com/store/x.html" }, article(["https://swordvitality.com/store/x.html"]), null],
+    ["external, auto (mrearthrose.com)", { money_url: "https://mrearthrose.com/x.html", site_context: "Botanical supplements for men." }, article(["https://mrearthrose.com/x.html"]), null],
+    ["external, explicit", { money_url: "https://example.com/product", compliance_profile: "supplement_vitality" }, article(["https://example.com/product"]), null],
+    ["listing, explicit", { topic: "wool care", compliance_profile: "supplement_vitality" }, article(["/listing/wool-hat"]), null],
+    ["own page, explicit", { money_path: OWN, compliance_profile: "supplement_vitality" }, article([OWN]), null]
+  ];
+  for (const [label, body, text, opts] of WITH) {
+    const a = await generate(SERVER, body, text, opts), b = await generate(SERVER_PREV, body, text, opts);
+    const p = a.prompt || "", at = p.indexOf(PRODUCT_TYPE);
+    const placed = p.split(PRODUCT_TYPE).length === 2 && at > p.indexOf("MANDATORY CONTENT RULES") && p.indexOf("MANDATORY CONTENT RULES") !== -1 &&
+      at === p.indexOf(FACTS) + FACTS.length && at < p.indexOf("Write ONE complete blog post");
+    const factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
+    const exact = b.prompt != null && p === b.prompt.slice(0, factsEnd) + PRODUCT_TYPE + b.prompt.slice(factsEnd);
+    check("14. with a profile · " + label + " — the line is there once, after the compliance section and the facts block, ahead of the brief, and nothing else changed against " + PREV,
+      placed && exact, "placed=" + placed + " exact=" + exact);
+  }
+  const WITHOUT = [
+    ["own page", { money_path: OWN, topic: "customers after an ad ban" }, article([OWN]), null],
+    ["own page, site_context", { money_path: OWN, site_context: "Supplement and CBD sellers." }, article([OWN]), null],
+    ["external, example.com", { money_url: "https://example.com/product", site_context: "A shop." }, article(["https://example.com/product"]), null],
+    ["listing", { topic: "wool care" }, article(["/listing/wool-hat"]), null]
+  ];
+  for (const [label, body, text, opts] of WITHOUT) {
+    const a = await generate(SERVER, body, text, opts), b = await generate(SERVER_PREV, body, text, opts);
+    check("14. without a profile · " + label + " — no product-type line, and the prompt is byte-identical to " + PREV,
+      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
+  }
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");
