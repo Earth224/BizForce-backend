@@ -65,6 +65,13 @@
         writer to say the platform is paid and what it costs; and, without
         money_anchor, not to use the href as the link's text. With money_anchor
         it is the suggested text instead. No other mode's prompt says any of it.
+
+   ADDED WHEN THE BLOCK WAS NARROWED ("Let the article name the category
+   without inventing the policy"), section 10 also holds: the block asks for
+   advice specific to the business, naming its category, not general advice;
+   it lets the writer say ad platforms publish policies restricting some
+   products in that category but never what a policy says; and the rate claim
+   and "largely automated" are both still named as forbidden.
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
@@ -91,6 +98,10 @@
      MUTATE=emailsend    it no longer says the email service can suspend sending → 13
      MUTATE=hideprice    the writer is only told "do not hide" that it is paid → 13
      MUTATE=pathanchor   the writer is not told to keep the href out of the anchor → 13
+     MUTATE=generaladvice the block asks for general advice again         → 10
+     MUTATE=statepolicy  the writer is not forbidden to say what a policy says → 10
+     MUTATE=internals    the internals clause is gone                     → 10
+     MUTATE=ratesback    the statistics clause is gone                    → 10
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -118,7 +129,8 @@ residue.install();
 const BASELINE = "6f94afe";
 
 const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
-  "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor"];
+  "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor",
+  "generaladvice", "statepolicy", "internals", "ratesback"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -193,6 +205,19 @@ if (MUTATE === "hideprice") SERVER = mutate(SERVER, "\"and say in that mention t
 if (MUTATE === "pathanchor") SERVER = mutate(SERVER,
   "            : \"\\nThe link's text is words a reader understands, naming BizForce AI or what the page is for — never the href itself.\")",
   "            : \"\")", "pathanchor");
+if (MUTATE === "generaladvice") SERVER = mutate(SERVER,
+  "  \"None of this asks for general advice. Write practical advice specific to the business described above, naming its category \" +\n  \"when the brief names one.\";",
+  "  \"Practical, general advice needs none of these. Write that.\";", "generaladvice");
+if (MUTATE === "statepolicy") SERVER = mutate(SERVER,
+  " Never say what \" +\n  \"any policy says, allows, forbids or requires: tell the reader to read the current policy for their own product.\\n\" +",
+  "\\n\" +", "statepolicy");
+if (MUTATE === "internals") SERVER = mutate(SERVER,
+  "  \"- Nothing about how a named company's review systems work inside — not \\\"largely automated\\\", not how fast or how consistently \" +\n" +
+  "  \"they act — and nothing about why it acted. Describe what the reader can see (an account disabled, an appeal form) and what \" +\n" +
+  "  \"they can do about it.\\n\" +\n", "", "internals");
+if (MUTATE === "ratesback") SERVER = mutate(SERVER,
+  "  \"- No statistics, percentages, rates or counts, and no claim about how often or how many: not \\\"at a much higher rate than average\\\", \" +\n" +
+  "  \"\\\"most owners\\\", \\\"the majority\\\", \\\"often within days\\\".\\n\" +\n", "", "ratesback");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -552,6 +577,16 @@ async function visit(h, body) {
   });
   check("10. the block is in the own-page, listing and external prompts, once, ahead of the writing brief", placed.every(x => x === "ok"), JSON.stringify(placed));
   check("10. it names the two claims the first article invented", /much higher rate than average/.test(FACTS) && /often within days/.test(FACTS) && /most owners/.test(FACTS));
+  check("10. the first article's rate claim and \"largely automated\" are both still named as forbidden, and so is why a company acted",
+    /No statistics, percentages, rates or counts[^\n]*not "at a much higher rate than average"/.test(FACTS) &&
+    /Nothing about how a named company's review systems work inside — not "largely automated"[^\n]*nothing about why it acted/.test(FACTS));
+  check("10. it lets the writer name the category and say ad platforms publish policies restricting some products in it",
+    /You may name the reader's category and say that ad platforms publish policies restricting some products in it\./.test(FACTS));
+  check("10. it never lets the writer say what a policy says, and sends the reader to the current policy instead",
+    /Never say what any policy says, allows, forbids or requires: tell the reader to read the current policy for their own product\./.test(FACTS));
+  check("10. it asks for advice specific to the business, naming its category, and not for general advice",
+    /Write practical advice specific to the business described above, naming its category when the brief names one\./.test(FACTS) &&
+    !/Practical, general advice/.test(FACTS));
   check("10. it is not NO_INVENTION_RULE: none of that rule's sources or its printed-refusal sentence appear in the prompt",
     Object.keys(modes10).every(k => !/LIVE PLATFORM STATS|ACCUMULATED MEMORY|I don't have that figure/.test(modes10[k].prompt || "")));
 

@@ -10791,16 +10791,30 @@ const SEO_OWN_PAGE_AUTHOR_ID = OWNER_ACCOUNT_ID;
    typical timeframes, how another company's systems work — and says what to
    write instead. Every mode gets it: an invented statistic in a supplement
    article is worse, not better. Emitted as one block so a check can remove it
-   and compare the rest of the prompt byte for byte. */
+   and compare the rest of the prompt byte for byte.
+
+   NARROWED after the second article, which obeyed this too well: it never
+   named supplements or CBD, though the brief did. "Practical, general advice"
+   asked for exactly that, and "policies" in the internals clause left no way
+   to say why these sellers in particular lose ad accounts. Now the writer is
+   asked for the business's own category, and may say ad platforms publish
+   policies restricting some products in it — but never what a policy says,
+   because a plausible, out-of-date policy summary is an invented fact in
+   another shape. The statistics clause is untouched, and the internals clause
+   now names the first article's "largely automated" beside its rate claim. */
 const SEO_NO_INVENTED_FACTS =
   "\n\nNO INVENTED FACTS. You have no sources, so write nothing only a source could support:\n" +
   "- No statistics, percentages, rates or counts, and no claim about how often or how many: not \"at a much higher rate than average\", " +
   "\"most owners\", \"the majority\", \"often within days\".\n" +
   "- No typical timeframe or outcome stated as what usually happens. Say what the reader can do; where timing matters, say it varies.\n" +
-  "- Nothing about how a named company's review systems or policies work inside, or why it acted. Describe what the reader can see " +
-  "(an account disabled, an appeal form) and what they can do about it.\n" +
+  "- Nothing about how a named company's review systems work inside — not \"largely automated\", not how fast or how consistently " +
+  "they act — and nothing about why it acted. Describe what the reader can see (an account disabled, an appeal form) and what " +
+  "they can do about it.\n" +
+  "- You may name the reader's category and say that ad platforms publish policies restricting some products in it. Never say what " +
+  "any policy says, allows, forbids or requires: tell the reader to read the current policy for their own product.\n" +
   "- No quotations, testimonials, case studies, named studies or named experts.\n" +
-  "Practical, general advice needs none of these. Write that.";
+  "None of this asks for general advice. Write practical advice specific to the business described above, naming its category " +
+  "when the brief names one.";
 
 /* The arrival token for a published post's money link: "bl" says a blog post
    sent the reader, then the first forty bits of SHA-256 over the author's id
