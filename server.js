@@ -9611,6 +9611,9 @@ const PROPOSAL_EXECUTORS = {
         throw new Error("publish_blog_post: money_path " + JSON.stringify(moneyPath) + " is not a page a post may name as its money page (allowed: " +
           Object.keys(SEO_OWN_MONEY_PAGES).join(", ") + "). Nothing was published");
       }
+      if (proposal.user_id !== SEO_OWN_PAGE_AUTHOR_ID) {
+        throw new Error("publish_blog_post: money_path is available only to the platform's own account, and this proposal belongs to another. Nothing was published");
+      }
     }
 
     // Sanitize first, so the 300-character floor measures surviving content
@@ -10745,6 +10748,45 @@ const SEO_OWN_MONEY_PAGES = {
     "payment processor; and it does not promise traffic, rankings or sales."
 };
 
+/* WHO MAY NAME ONE. Every page in SEO_OWN_MONEY_PAGES is BizForce AI's own, and
+   an article linking one says so in the first person ("we built"). That is true
+   only on the platform's own account, so money_path is refused for any other —
+   a customer's blog post would otherwise tell its readers the customer built
+   BizForce AI. An alias of lib/ownerAccount.js rather than another literal,
+   named for this job, as CAPTURE_OWNER_ID and OUTREACH_CREDENTIAL_OWNER_ID are. */
+const SEO_OWN_PAGE_AUTHOR_ID = OWNER_ACCOUNT_ID;
+
+/* NO INVENTED FACTS, for an article. The writer has no sources, and the first
+   own-page article showed what fills the gap: "Meta flags these categories at a
+   much higher rate than average", "most owners see recovery often within days".
+   Plausible, unsourced, and published under the platform's name.
+
+   NOT NO_INVENTION_RULE (config/brain.js), deliberately. That rule is built for
+   agent tasks that run with a BUSINESS PROFILE, LIVE PLATFORM STATS and
+   ACCUMULATED MEMORY in the prompt, and this prompt has none of the three, so
+   half its clauses point at sources that are not there. It would not catch the
+   two claims above — neither is a figure, and both are about other businesses,
+   not the profile's. And it would forbid what an article must do: its "do not
+   say what customers do" clause rules out "your customers are already
+   searching for this", its offers clause reads on any suggestion that a reader
+   run a referral program or pay a partner a commission, and its "say I don't
+   have that figure" instruction would print that sentence in a published post.
+
+   So this names the inferences the article actually made — rates, majorities,
+   typical timeframes, how another company's systems work — and says what to
+   write instead. Every mode gets it: an invented statistic in a supplement
+   article is worse, not better. Emitted as one block so a check can remove it
+   and compare the rest of the prompt byte for byte. */
+const SEO_NO_INVENTED_FACTS =
+  "\n\nNO INVENTED FACTS. You have no sources, so write nothing only a source could support:\n" +
+  "- No statistics, percentages, rates or counts, and no claim about how often or how many: not \"at a much higher rate than average\", " +
+  "\"most owners\", \"the majority\", \"often within days\".\n" +
+  "- No typical timeframe or outcome stated as what usually happens. Say what the reader can do; where timing matters, say it varies.\n" +
+  "- Nothing about how a named company's review systems or policies work inside, or why it acted. Describe what the reader can see " +
+  "(an account disabled, an appeal form) and what they can do about it.\n" +
+  "- No quotations, testimonials, case studies, named studies or named experts.\n" +
+  "Practical, general advice needs none of these. Write that.";
+
 /* The arrival token for a published post's money link: "bl" says a blog post
    sent the reader, then the first forty bits of SHA-256 over the author's id
    and the post's slug. Slugs are unique per author, not across authors, so the
@@ -10833,6 +10875,12 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       });
     }
     const ownPageMode = Boolean(moneyPath);
+    if (ownPageMode && req.user.id !== SEO_OWN_PAGE_AUTHOR_ID) {
+      return res.status(403).json({
+        error: "money_path is available only to the platform's own account: every page it names is BizForce AI's own, and an article " +
+          "linking one says \"we built\" it. No post was created."
+      });
+    }
 
     // The property this post belongs to, derived once and used for both the
     // stored proposal and the link-target query below. money_url already passed
@@ -10957,8 +11005,22 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     } else {
       publishedQuery = publishedQuery
         .eq("status", "published")
-        .is("site", null)
-        .order("published_at", { ascending: false });
+        .is("site", null);
+      // An own-page post links only the author's posts that link the same
+      // page, found by the link the executor stores in every one of them:
+      // href="<money_path>?ref=bl-...". The author's other posts are about
+      // other things, and offered as targets the model writes a paragraph to
+      // justify linking them. Filtered in the query, not after it, so the limit
+      // below counts posts that qualify. None yet is a normal answer: the first
+      // own-page post is told there is nothing to link. moneyPath is an
+      // allowlist key, never caller text, and none holds % or _. If one ever
+      // held _, LIKE would read it as any one character — a slightly wider
+      // match, never a narrower one. (A backslash escape does not reach the
+      // database intact through this client, so none is attempted.)
+      if (ownPageMode) {
+        publishedQuery = publishedQuery.ilike("body", "%" + moneyPath + "?ref=bl-%");
+      }
+      publishedQuery = publishedQuery.order("published_at", { ascending: false });
     }
 
     const { data: published, error: publishedError } = await publishedQuery.limit(20);
@@ -11045,7 +11107,10 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
           "- href=" + moneyPath +
           (moneyAnchor ? "\n- suggested anchor text=" + JSON.stringify(moneyAnchor) : "") +
           "\n- what the page is: " + SEO_OWN_MONEY_PAGES[moneyPath] +
-          "\nSay nothing about that page, or about what it offers, beyond what is written here."
+          "\nSay nothing about that page, or about what it offers, beyond what is written here." +
+          "\nThis blog and that page are BizForce AI's own, and so is this article. Be plain that you are connected to it: " +
+          "name it as BizForce AI and write \"we built\", never as a neutral \"resource\", \"tool\" or \"service\" someone else made, " +
+          "and do not hide that it is a paid platform. Mention it once, near the end, after the article has answered the question on its own."
         : "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines);
 
     // Who the post is for. Emitted only when the caller said — an empty
@@ -11080,15 +11145,19 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         }).join("\n")
       : (externalMode
           ? "(no other posts on this property are available to link to)"
-          : (authorHandle
-              ? "(no posts published yet — this is the first)"
-              : "(none available as link targets — do not link to any blog post)"));
+          : (ownPageMode && authorHandle
+              ? "(none yet — this is the first post that links this page)"
+              : (authorHandle
+                  ? "(no posts published yet — this is the first)"
+                  : "(none available as link targets — do not link to any blog post)")));
 
     const seoPostLanguageTag = await resolvePreferredLanguage(req.user.id);
 
     const promptText = AGENT_SYSTEM_PROMPTS.seo +
       moneySection +
-      "\n\nThis seller's already-published posts (available as internal links):\n" + postLines +
+      (ownPageMode
+        ? "\n\nThis author's published posts that also link the money page above (the only posts available as internal links):\n"
+        : "\n\nThis seller's already-published posts (available as internal links):\n") + postLines +
       (topic
         ? "\n\nThe seller asked for a post on this topic: " + topic
         : (externalMode
@@ -11098,6 +11167,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
                 : "\n\nNo topic was given — choose one yourself from the catalog above."))) +
       audienceSection +
       complianceSection +
+      SEO_NO_INVENTED_FACTS +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +

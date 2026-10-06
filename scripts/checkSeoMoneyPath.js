@@ -43,6 +43,20 @@
         every lr- and bl- token above and the malformed set, and finds 128's
         check by what it checks rather than by name.
 
+   ADDED AFTER THE FIRST REAL ARTICLE ("Three things the first article got
+   wrong"). Section 6 now holds every prompt to BASELINE with the one block
+   below taken out, and the route is driven as the platform's own account:
+     9. An own-page post is offered only the author's posts that already link
+        the same page; the first one is offered none, told so, and still filed.
+        A listing-mode post is still offered every post.
+    10. Every mode's prompt carries the no-invented-facts block once, ahead of
+        the writing brief; it names the claims the first article invented and
+        borrows nothing from NO_INVENTION_RULE.
+    11. Only an own-page prompt tells the writer to name BizForce AI, write
+        "we built" and not hide that it is paid.
+    12. money_path from any other account is 403 at generation and throws at
+        publish; without money_path that account is unaffected.
+
    MUTATIONS — each must turn the named section red:
      MUTATE=allowlist    any root-relative path is accepted               → 1
      MUTATE=silent       an off-allowlist path is dropped, not refused     → 1
@@ -56,6 +70,12 @@
      MUTATE=lronly       the route accepts lr- only                        → 7
      MUTATE=blonly       the route accepts bl- only                        → 7
      MUTATE=migration    migration 130 still pins lr- only                 → 8
+     MUTATE=alltargets   an own-page post is offered every published post  → 9
+     MUTATE=firstpost    the first own-page post is told "no posts yet"    → 9
+     MUTATE=nofacts      the no-invented-facts block is not in the prompt  → 10
+     MUTATE=nodisclose   an own-page post is not told to say "we built"    → 11
+     MUTATE=discloseall  an external post is told to say "we built"        → 11
+     MUTATE=anyauthor    any account may send money_path                   → 12
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -67,6 +87,11 @@ const { execSync } = require("child_process");
 const REPO = path.join(__dirname, "..");
 const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();
+/* money_path is the platform's own account's alone, so the lifted route and
+   executor are driven as that account. Only their stub database ever sees the
+   id — nothing here reads or writes a real row under it. The check subject
+   stays the residue guard's, and is the "any other account" of section 12. */
+const { OWNER_ACCOUNT_ID: AUTHOR } = require("../lib/ownerAccount");
 const { createClient } = require("@supabase/supabase-js");
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY);
 /* Nothing here writes; the guard is built so a future edit that adds a write
@@ -77,7 +102,8 @@ residue.install();
 /* The commit before money_path existed. Pinned, not HEAD. */
 const BASELINE = "6f94afe";
 
-const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration"];
+const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
+  "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -120,6 +146,21 @@ if (MUTATE === "leak") SERVER = mutate(SERVER,
 if (MUTATE === "lronly") SERVER = mutate(SERVER, "var ENGINE_VISIT_REF = /^(?:lr|bl)-[0-9a-f]{10}$/;", "var ENGINE_VISIT_REF = /^lr-[0-9a-f]{10}$/;", "lronly");
 if (MUTATE === "blonly") SERVER = mutate(SERVER, "var ENGINE_VISIT_REF = /^(?:lr|bl)-[0-9a-f]{10}$/;", "var ENGINE_VISIT_REF = /^bl-[0-9a-f]{10}$/;", "blonly");
 if (MUTATE === "migration") MIG130 = mutate(MIG130, "check (ref ~ '^(lr|bl)-[0-9a-f]{10}$')", "check (ref ~ '^lr-[0-9a-f]{10}$')", "migration");
+if (MUTATE === "alltargets") SERVER = mutate(SERVER, "      if (ownPageMode) {\n        publishedQuery = publishedQuery.ilike(", "      if (false) {\n        publishedQuery = publishedQuery.ilike(", "alltargets");
+if (MUTATE === "firstpost") SERVER = mutate(SERVER, "          : (ownPageMode && authorHandle\n", "          : (false\n", "firstpost");
+if (MUTATE === "nofacts") SERVER = mutate(SERVER, "      complianceSection +\n      SEO_NO_INVENTED_FACTS +\n", "      complianceSection +\n", "nofacts");
+if (MUTATE === "nodisclose") {
+  /* Cut the disclosure sentences out of the own-page money section. */
+  const from = " +\n          \"\\nThis blog and that page are BizForce AI's own";
+  const to = "after the article has answered the question on its own.\"";
+  const a = SERVER.indexOf(from), b = SERVER.indexOf(to, a);
+  if (a < 0 || b < 0 || SERVER.split(from).length !== 2) { console.error("MUTATION REFUSED (nodisclose): anchor not found exactly once."); process.exit(3); }
+  SERVER = SERVER.slice(0, a) + SERVER.slice(b + to.length);
+}
+if (MUTATE === "discloseall") SERVER = mutate(SERVER, "        \"- url=\" + moneyUrl +\n",
+  "        \"- url=\" + moneyUrl + \"\\nBe plain that you are connected to it: write \\\"we built\\\".\" +\n", "discloseall");
+if (MUTATE === "anyauthor") SERVER = mutate(SERVER, "    if (ownPageMode && req.user.id !== SEO_OWN_PAGE_AUTHOR_ID) {", "    if (false) {", "anyauthor");
+if (MUTATE === "anyauthor") SERVER = mutate(SERVER, "      if (proposal.user_id !== SEO_OWN_PAGE_AUTHOR_ID) {", "      if (false) {", "anyauthor");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -160,22 +201,46 @@ function closureUncached(s, src, root) {
   return [...have.values()].sort((a, b) => src.indexOf(a) - src.indexOf(b)).join("\n\n") + "\n\n" + root;
 }
 
+/* The no-invented-facts block as server.js holds it. Every mode's prompt now
+   carries it, so "nothing else changed" is: take it out, and what is left is
+   byte-identical to BASELINE's prompt. */
+function liftValue(src, name) {
+  const c = {};
+  vm.runInNewContext(shared().definitionOf(src, name) + "\nthis.v = " + name + ";", c);
+  return c.v;
+}
+const FACTS = liftValue(SERVER, "SEO_NO_INVENTED_FACTS");
+function unFacts(p) { return p == null ? p : p.split(FACTS).join(""); }
+
 /* ── a database that records what it is asked to write ── */
 const HANDLE = "check-handle";
 const LISTINGS = [{ id: "11111111-2222-3333-4444-555555555555", title: "Wool Hat", slug: "wool-hat", category: "apparel", description: "A hand-knitted wool hat." }];
-const POSTS = [{ id: "post-older", title: "An older post", slug: "older-post", keyword: "older question", external_url: null }];
+/* Two published posts: one about something else, one that already links the
+   own page the way the executor stores it. */
+const POSTS = [
+  { id: "post-older", title: "An older post", slug: "older-post", keyword: "older question", external_url: null, body: '<p>About wool. <a href="/listing/wool-hat">a hat</a></p>' },
+  { id: "post-bf", title: "Where customers come from without ads", slug: "customers-without-ads", keyword: "customers without ads", external_url: null,
+    body: '<p>Owned channels. <a href="/suppressed.html?ref=bl-0123456789">BizForce AI</a></p>' }
+];
+/* LIKE, as Postgres reads it: % any run, _ any one character, case ignored. */
+function likeToRegExp(pattern) {
+  return new RegExp("^" + pattern.split("").map(c => c === "%" ? "[\\s\\S]*" : c === "_" ? "[\\s\\S]" : c.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&")).join("") + "$", "i");
+}
 function fakeDb(opts) {
   const writes = [];
   const listings = opts && opts.noListings ? [] : LISTINGS;
+  const posts = opts && opts.posts ? opts.posts : POSTS;
   function q(table) {
-    const st = { table: table, insert: null };
+    const st = { table: table, insert: null, likes: [] };
     const b = {};
-    ["select", "eq", "neq", "gte", "lte", "gt", "in", "is", "not", "order", "limit", "ilike"].forEach(k => { b[k] = () => b; });
+    ["select", "eq", "neq", "gte", "lte", "gt", "in", "is", "not", "order", "limit"].forEach(k => { b[k] = () => b; });
+    b.ilike = (col, pattern) => { st.likes.push([col, likeToRegExp(pattern)]); return b; };
     b.insert = (p) => { st.insert = p; writes.push({ table: table, payload: JSON.parse(JSON.stringify(p)) }); return b; };
     b.maybeSingle = () => Promise.resolve({ data: table === "bf_profiles" ? { username: HANDLE } : null, error: null });
     b.single = () => Promise.resolve(st.insert ? { data: Object.assign({ id: "row-1" }, st.insert), error: null } : { data: null, error: null });
     b.then = (res, rej) => Promise.resolve({
-      data: table === "marketplace_listings" ? listings : (table === "content_library" ? POSTS : []), error: null
+      data: table === "marketplace_listings" ? listings
+        : (table === "content_library" ? posts.filter(p => st.likes.every(([col, re]) => re.test(String(p[col] || "")))) : []), error: null
     }).then(res, rej);
     return b;
   }
@@ -191,6 +256,9 @@ function baseCtx(db, modelText) {
     resolvePreferredLanguage: async () => null,
     buildLanguageInstruction: () => "",
     AGENT_SYSTEM_PROMPTS: { seo: "SEO SYSTEM" },
+    /* server.js destructures it from lib/ownerAccount.js, which the lifter
+       cannot follow; this is the same module's value. */
+    OWNER_ACCOUNT_ID: AUTHOR,
     callAnthropicText: async (prompt) => { prompts.push(prompt); return { text: modelText, stopReason: "end_turn" }; }
   };
   return { ctx: ctx, prompts: prompts };
@@ -211,7 +279,7 @@ async function generate(src, body, modelText, opts) {
   const r = liftRoute(src, db, modelText);
   const res = { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(p) { this.body = JSON.parse(JSON.stringify(p)); return this; } };
   let nextErr = null;
-  await r.handler({ user: { id: SUBJECT_USER_ID }, body: body }, res, (e) => { nextErr = e || new Error("next"); });
+  await r.handler({ user: { id: (opts && opts.userId) || AUTHOR }, body: body }, res, (e) => { nextErr = e || new Error("next"); });
   return { status: res.statusCode, body: res.body, prompt: r.prompts[0] || null, calls: r.prompts.length, writes: db.writes, nextErr: nextErr && String(nextErr.message || nextErr) };
 }
 
@@ -231,7 +299,7 @@ async function publish(src, payload, opts) {
   const db = fakeDb(opts);
   const fn = liftPublish(src, db);
   let result = null, thrown = null;
-  try { result = await fn({ id: "proposal-1", user_id: SUBJECT_USER_ID, payload: JSON.parse(JSON.stringify(payload)) }); }
+  try { result = await fn({ id: "proposal-1", user_id: (opts && opts.userId) || AUTHOR, payload: JSON.parse(JSON.stringify(payload)) }); }
   catch (e) { thrown = String((e && e.message) || e); }
   return { result: result, thrown: thrown, writes: db.writes };
 }
@@ -286,9 +354,9 @@ async function visit(h, body) {
   for (const v of [undefined, null, ""]) {
     const body = { topic: "wool care" }; if (v !== undefined) body.money_path = v;
     const a = await generate(SERVER, body, article(["/listing/wool-hat"])), b0 = await generate(SERVER0, { topic: "wool care" }, article(["/listing/wool-hat"]));
-    absent.push(a.status === b0.status && a.prompt === b0.prompt && JSON.stringify(a.writes) === JSON.stringify(b0.writes));
+    absent.push(a.status === b0.status && unFacts(a.prompt) === b0.prompt && JSON.stringify(a.writes) === JSON.stringify(b0.writes));
   }
-  check("1. absent, null and \"\" are no money_path: prompt, status and rows identical to " + BASELINE + " with no money_path", absent.every(Boolean), JSON.stringify(absent));
+  check("1. absent, null and \"\" are no money_path: status and rows identical to " + BASELINE + " with no money_path, and the prompt too once the no-invented-facts block is taken out", absent.every(Boolean), JSON.stringify(absent));
 
   console.log("\n══ 2. money_path and money_url together ══");
   const both = await generate(SERVER, { money_path: OWN, money_url: "https://example.com/product" }, article([OWN, "https://example.com/product"]));
@@ -297,14 +365,15 @@ async function visit(h, body) {
     both.status === 422 && both.calls === 0 && both.writes.length === 0 && /money_url or money_path, not both/.test((both.body || {}).error || ""), both.status + "/" + both.calls);
 
   console.log("\n══ 3. generation with money_path ══");
-  const g = await generate(SERVER, { money_path: OWN, topic: "what to do when your ad account is disabled" }, article([OWN, "/blog/" + HANDLE + "/older-post"]));
+  const g = await generate(SERVER, { money_path: OWN, topic: "what to do when your ad account is disabled" }, article([OWN, "/blog/" + HANDLE + "/customers-without-ads"]));
   const pr = g.prompt || "";
   check("3. the prompt names " + OWN + " as the money page, with what the page is and what it will not do",
     pr.indexOf("- href=" + OWN) !== -1 && /what the page is: BizForce AI's page/.test(pr) && /does not promise traffic, rankings or sales/.test(pr));
   check("3. no listing catalog and no listing rule in it",
     pr.indexOf("marketplace listings (the money pages)") === -1 && pr.indexOf("/listing/wool-hat") === -1 && pr.indexOf("EXACTLY ONE of the seller's listings") === -1 &&
     pr.indexOf("with href=\"" + OWN + "\" copied character for character") !== -1, pr.length);
-  check("3. the seller's own published posts are still offered as internal links", pr.indexOf("href=/blog/" + HANDLE + "/older-post") !== -1);
+  check("3. the author's published posts that link the same page are offered as internal links (section 9 has the rest)",
+    pr.indexOf("href=/blog/" + HANDLE + "/customers-without-ads") !== -1);
   const prop = (g.writes[0] || {}).payload || {};
   console.log("    " + g.status + "; filed payload keys " + JSON.stringify(Object.keys(prop.payload || {})));
   check("3. a post linking the page is filed with money_path and no money_url or site",
@@ -319,7 +388,7 @@ async function visit(h, body) {
     [noLink, listingOnly, absLink].map(r => r.status + "/" + r.writes.length).join(","));
 
   console.log("\n══ 4. publish with money_path ══");
-  const token = expectedBl(SUBJECT_USER_ID, SLUG);
+  const token = expectedBl(AUTHOR, SLUG);
   const tracked = OWN + "?ref=" + token;
   const p = await publish(SERVER, prop.payload || {});
   const row = (p.writes[0] || {}).payload || {};
@@ -331,7 +400,7 @@ async function visit(h, body) {
   check("4. the body's money link is " + tracked + " and no bare " + OWN + " link is left",
     String(row.body || "").indexOf('href="' + tracked + '"') !== -1 && String(row.body || "").indexOf('href="' + OWN + '"') === -1, String(row.body || "").slice(0, 80));
   check("4. internal_links carries the tracked link and the other links unchanged",
-    Array.isArray(row.internal_links) && row.internal_links.indexOf(tracked) !== -1 && row.internal_links.indexOf("/blog/" + HANDLE + "/older-post") !== -1 && row.internal_links.indexOf(OWN) === -1,
+    Array.isArray(row.internal_links) && row.internal_links.indexOf(tracked) !== -1 && row.internal_links.indexOf("/blog/" + HANDLE + "/customers-without-ads") !== -1 && row.internal_links.indexOf(OWN) === -1,
     JSON.stringify(row.internal_links));
   const variant = await publish(SERVER, Object.assign({}, prop.payload, { body: String(prop.payload.body).replace('href="' + OWN + '"', 'href="/Suppressed.html/"') }));
   check("4. a case or trailing-slash variant the check tolerates is stored as the canonical tracked path",
@@ -349,14 +418,14 @@ async function visit(h, body) {
   const s5 = shared();
   const tctx = { crypto: crypto }; vm.createContext(tctx);
   vm.runInContext(s5.definitionOf(SERVER, "blogRefToken") + "\nthis.f = blogRefToken;", tctx);
-  const t1 = tctx.f(SUBJECT_USER_ID, SLUG);
+  const t1 = tctx.f(AUTHOR, SLUG);
   console.log("    token for the fixture post: " + t1);
   check("5. bl- and ten hex of SHA-256 over \"blog:<user_id>:<slug>\", the token the published link carries", t1 === token && /^bl-[0-9a-f]{10}$/.test(t1), t1);
   check("5. the same post the same token; another slug, another author, another token",
-    tctx.f(SUBJECT_USER_ID, SLUG) === t1 && tctx.f(SUBJECT_USER_ID, SLUG + "-2") !== t1 && tctx.f("00000000-0000-0000-0000-000000000000", SLUG) !== t1);
-  check("5. no slug or account text in it", ["what", "ad-a", "disabled", SUBJECT_USER_ID.slice(0, 8)].every(x => t1.indexOf(x) === -1), t1);
+    tctx.f(AUTHOR, SLUG) === t1 && tctx.f(AUTHOR, SLUG + "-2") !== t1 && tctx.f("00000000-0000-0000-0000-000000000000", SLUG) !== t1);
+  check("5. no slug or account text in it", ["what", "ad-a", "disabled", AUTHOR.slice(0, 8)].every(x => t1.indexOf(x) === -1), t1);
 
-  console.log("\n══ 6. without money_path, nothing changed against " + BASELINE + " ══");
+  console.log("\n══ 6. without money_path, nothing changed against " + BASELINE + " but the no-invented-facts block ══");
   const CASES = [
     ["internal, with listings, no topic", { }, article(["/listing/wool-hat", "/blog/" + HANDLE + "/older-post"]), null],
     ["internal, with listings, topic", { topic: "how to wash a wool hat" }, article(["/listing/wool-hat"]), null],
@@ -369,8 +438,8 @@ async function visit(h, body) {
   ];
   for (const [label, body, text, opts] of CASES) {
     const a = await generate(SERVER, body, text, opts), b0 = await generate(SERVER0, body, text, opts);
-    check("6. generate · " + label + " — prompt, status, response and rows identical (" + a.status + ")",
-      a.prompt === b0.prompt && a.status === b0.status && JSON.stringify(a.body) === JSON.stringify(b0.body) && JSON.stringify(a.writes) === JSON.stringify(b0.writes) && a.nextErr === b0.nextErr,
+    check("6. generate · " + label + " — status, response and rows identical, and the prompt once the no-invented-facts block is out (" + a.status + ")",
+      unFacts(a.prompt) === b0.prompt && a.status === b0.status && JSON.stringify(a.body) === JSON.stringify(b0.body) && JSON.stringify(a.writes) === JSON.stringify(b0.writes) && a.nextErr === b0.nextErr,
       a.status + " vs " + b0.status + (a.prompt !== b0.prompt ? " (prompt differs)" : ""));
   }
   const internalProp = (await generate(SERVER0, {}, article(["/listing/wool-hat", "/blog/" + HANDLE + "/older-post"]))).writes[0].payload.payload;
@@ -391,7 +460,7 @@ async function visit(h, body) {
   console.log("\n══ 7. POST /api/engine-visits ══");
   const LR = "lr-" + crypto.createHash("sha256").update("leadradar:at://did:plc:fixture/app.bsky.feed.post/3k").digest("hex").slice(0, 10);
   const lrRoute = visitsRoute(SERVER), blRoute = visitsRoute(SERVER);
-  const rl = await visit(lrRoute, { ref: LR, path: "/" }), rb = await visit(blRoute, { ref: token, path: OWN, slug: SLUG, user: SUBJECT_USER_ID });
+  const rl = await visit(lrRoute, { ref: LR, path: "/" }), rb = await visit(blRoute, { ref: token, path: OWN, slug: SLUG, user: AUTHOR });
   console.log("    lr " + rl.status + " " + JSON.stringify(lrRoute.inserts) + "\n    bl " + rb.status + " " + JSON.stringify(blRoute.inserts));
   check("7. an lr- arrival is still 204 and writes exactly { ref, landing_path }",
     rl.status === 204 && lrRoute.inserts.length === 1 && JSON.stringify(lrRoute.inserts[0].payload) === JSON.stringify({ ref: LR, landing_path: "/" }));
@@ -421,6 +490,55 @@ async function visit(h, body) {
   const live = await supabase.from("engine_visits").select("id").limit(1);
   console.log("    live database: engine_visits " + (live.error ? "does not exist (" + (live.error.code || live.error.message) + ")" : "exists") +
     "; whether 130 is applied cannot be read without a write, and this check does not write");
+
+  console.log("\n══ 9. an own-page post links only posts that link the same page ══");
+  const BF_HREF = "/blog/" + HANDLE + "/customers-without-ads", OTHER_HREF = "/blog/" + HANDLE + "/older-post";
+  const t9 = await generate(SERVER, { money_path: OWN, topic: "customers after an ad ban" }, article([OWN, BF_HREF]));
+  console.log("    offered: " + JSON.stringify(((t9.prompt || "").match(/href=\/blog\/[^ ]+/g) || [])));
+  check("9. the post that links " + OWN + " is offered, the unrelated one is not, under a heading that says why",
+    (t9.prompt || "").indexOf("href=" + BF_HREF) !== -1 && (t9.prompt || "").indexOf(OTHER_HREF) === -1 &&
+    (t9.prompt || "").indexOf("posts that also link the money page above (the only posts available as internal links)") !== -1 && t9.status === 201, t9.status);
+  const first = await generate(SERVER, { money_path: OWN }, article([OWN]), { posts: [POSTS[0]] });
+  const none = await generate(SERVER, { money_path: OWN }, article([OWN]), { posts: [] });
+  console.log("    first own-page post, beside an unrelated one: " + first.status + "; with no posts at all: " + none.status);
+  check("9. the FIRST own-page post — beside unrelated posts or none at all — is offered nothing, told so, told to link no post, and is filed",
+    [first, none].every(r => r.status === 201 && r.writes.length === 1 && (r.prompt || "").indexOf(OTHER_HREF) === -1 &&
+      (r.prompt || "").indexOf("(none yet — this is the first post that links this page)") !== -1 &&
+      (r.prompt || "").indexOf("- Do not link to any other blog post — none are available as link targets.") !== -1),
+    [first, none].map(r => r.status).join(","));
+  const listing9 = await generate(SERVER, { topic: "wool care" }, article(["/listing/wool-hat"]));
+  check("9. a listing-mode post is still offered every published post the author owns",
+    (listing9.prompt || "").indexOf("href=" + OTHER_HREF) !== -1 && (listing9.prompt || "").indexOf("href=" + BF_HREF) !== -1);
+
+  console.log("\n══ 10. no invented facts, in every mode ══");
+  console.log("    block (" + FACTS.length + " characters):" + FACTS.replace(/\n/g, "\n      "));
+  const ext10 = await generate(SERVER, { money_url: "https://example.com/product" }, article(["https://example.com/product"]));
+  const modes10 = { "own page": t9, "listing": listing9, "external": ext10 };
+  const placed = Object.keys(modes10).map(k => {
+    const p = modes10[k].prompt || "";
+    return p.split(FACTS).length === 2 && p.indexOf(FACTS) < p.indexOf("Write ONE complete blog post") ? "ok" : k;
+  });
+  check("10. the block is in the own-page, listing and external prompts, once, ahead of the writing brief", placed.every(x => x === "ok"), JSON.stringify(placed));
+  check("10. it names the two claims the first article invented", /much higher rate than average/.test(FACTS) && /often within days/.test(FACTS) && /most owners/.test(FACTS));
+  check("10. it is not NO_INVENTION_RULE: none of that rule's sources or its printed-refusal sentence appear in the prompt",
+    Object.keys(modes10).every(k => !/LIVE PLATFORM STATS|ACCUMULATED MEMORY|I don't have that figure/.test(modes10[k].prompt || "")));
+
+  console.log("\n══ 11. own-page posts say plainly that BizForce AI is ours ══");
+  const disclosed = p => /write "we built"/.test(p || "") && /BizForce AI's own/.test(p || "") && /paid platform/.test(p || "");
+  check("11. the own-page prompt tells the writer to name BizForce AI, write \"we built\", and not hide that it is paid", disclosed(t9.prompt));
+  check("11. the external and listing prompts say none of it", !/we built/.test(ext10.prompt || "") && !/we built/.test(listing9.prompt || "") &&
+    !/BizForce AI's own/.test(ext10.prompt || "") && !/BizForce AI's own/.test(listing9.prompt || ""));
+
+  console.log("\n══ 12. money_path is the platform's own account's alone ══");
+  const other = await generate(SERVER, { money_path: OWN }, article([OWN]), { userId: SUBJECT_USER_ID });
+  console.log("    another account: " + other.status + " " + JSON.stringify(other.body));
+  check("12. another account sending money_path is 403, with no model call and nothing filed",
+    other.status === 403 && other.calls === 0 && other.writes.length === 0 && /only to the platform's own account/.test((other.body || {}).error || ""));
+  const otherPub = await publish(SERVER, prop.payload || {}, { userId: SUBJECT_USER_ID });
+  check("12. a money_path proposal belonging to another account throws at publish and writes nothing",
+    /only to the platform's own account/.test(otherPub.thrown || "") && otherPub.writes.length === 0, otherPub.thrown);
+  const otherPlain = await generate(SERVER, { topic: "wool care" }, article(["/listing/wool-hat"]), { userId: SUBJECT_USER_ID });
+  check("12. without money_path another account is unaffected: a listing post is filed as before", otherPlain.status === 201 && otherPlain.writes.length === 1, otherPlain.status);
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");
