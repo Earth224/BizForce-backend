@@ -10736,7 +10736,17 @@ function parseSeoPostResponse(rawText) {
    Each value is what the model is told the page is. It is the page's own copy,
    read from suppressed.html at the frontend's 088fa78, including what the page
    says the platform will not do, so the article cannot promise more than the
-   page it links to. If the page changes, this text changes with it. */
+   page it links to. If the page changes, this text changes with it.
+
+   Except the last three sentences, which are not the page's copy. The second
+   article read "owned channels" as "channels no platform can disable" and
+   called BizForce AI exactly that, and said an email list is a channel a
+   platform cannot disable. Neither is true: the blog and the storefront live on
+   this platform, and the email goes out through someone else's. What is true
+   is narrower — a business spread across more than one platform does not lose
+   everything when one of them drops it — and that is what these sentences say.
+   They name the blog, the storefront, the list and BizForce AI because each was
+   a candidate for the same claim. */
 const SEO_OWN_MONEY_PAGES = {
   "/suppressed.html":
     "BizForce AI's page for businesses an ad network, a platform or a payment processor has refused or cut off — " +
@@ -10745,7 +10755,12 @@ const SEO_OWN_MONEY_PAGES = {
     "business's own handle on bizforceai.net, email sequences drafted to send from whatever email service the business " +
     "already uses, and eighteen AI agents that work from one profile of the business. It says plainly what it will NOT do: " +
     "it does not get an ad account, social account or payment processor back; it does not process payments or replace a " +
-    "payment processor; and it does not promise traffic, rankings or sales."
+    "payment processor; and it does not promise traffic, rankings or sales. " +
+    "BizForce AI is itself a platform: the blog and the storefront live on bizforceai.net under its terms, and the email " +
+    "goes out through the business's email service, which has its own rules and can suspend sending — a business that " +
+    "keeps its own copy of its list can take it elsewhere, but cannot keep sending through a service that stopped it. " +
+    "What it offers is less dependence on any one platform, not freedom from platforms: never call BizForce AI, the blog, " +
+    "the storefront or an email list something no platform can disable, shut down or take away."
 };
 
 /* WHO MAY NAME ONE. Every page in SEO_OWN_MONEY_PAGES is BizForce AI's own, and
@@ -11110,7 +11125,11 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
           "\nSay nothing about that page, or about what it offers, beyond what is written here." +
           "\nThis blog and that page are BizForce AI's own, and so is this article. Be plain that you are connected to it: " +
           "name it as BizForce AI and write \"we built\", never as a neutral \"resource\", \"tool\" or \"service\" someone else made, " +
-          "and do not hide that it is a paid platform. Mention it once, near the end, after the article has answered the question on its own."
+          "and say in that mention that it is a paid platform and what it costs, as written above. Mention it once, near the end, after " +
+          "the article has answered the question on its own." +
+          (moneyAnchor
+            ? ""
+            : "\nThe link's text is words a reader understands, naming BizForce AI or what the page is for — never the href itself.")
         : "\n\nThis seller's marketplace listings (the money pages):\n" + listingLines);
 
     // Who the post is for. Emitted only when the caller said — an empty

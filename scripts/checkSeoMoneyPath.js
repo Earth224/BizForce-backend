@@ -54,6 +54,17 @@
         borrows nothing from NO_INVENTION_RULE.
     11. Only an own-page prompt tells the writer to name BizForce AI, write
         "we built" and not hide that it is paid.
+
+   ADDED AFTER THE SECOND ARTICLE ("A platform cannot promise escape from
+   platforms"), which called BizForce AI and an email list things no platform
+   can disable, never said the platform costs anything, and linked it with the
+   bare path as anchor text:
+    13. The own-page prompt says BizForce AI is itself a platform, that the
+        email service can suspend sending, and forbids calling BizForce AI, the
+        blog, the storefront or a list beyond any platform's reach; it tells the
+        writer to say the platform is paid and what it costs; and, without
+        money_anchor, not to use the href as the link's text. With money_anchor
+        it is the suggested text instead. No other mode's prompt says any of it.
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
@@ -76,6 +87,10 @@
      MUTATE=nodisclose   an own-page post is not told to say "we built"    → 11
      MUTATE=discloseall  an external post is told to say "we built"        → 11
      MUTATE=anyauthor    any account may send money_path                   → 12
+     MUTATE=escape       the page text no longer says BizForce AI is a platform → 13
+     MUTATE=emailsend    it no longer says the email service can suspend sending → 13
+     MUTATE=hideprice    the writer is only told "do not hide" that it is paid → 13
+     MUTATE=pathanchor   the writer is not told to keep the href out of the anchor → 13
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -103,7 +118,7 @@ residue.install();
 const BASELINE = "6f94afe";
 
 const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
-  "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor"];
+  "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -152,7 +167,7 @@ if (MUTATE === "nofacts") SERVER = mutate(SERVER, "      complianceSection +\n  
 if (MUTATE === "nodisclose") {
   /* Cut the disclosure sentences out of the own-page money section. */
   const from = " +\n          \"\\nThis blog and that page are BizForce AI's own";
-  const to = "after the article has answered the question on its own.\"";
+  const to = "the article has answered the question on its own.\"";
   const a = SERVER.indexOf(from), b = SERVER.indexOf(to, a);
   if (a < 0 || b < 0 || SERVER.split(from).length !== 2) { console.error("MUTATION REFUSED (nodisclose): anchor not found exactly once."); process.exit(3); }
   SERVER = SERVER.slice(0, a) + SERVER.slice(b + to.length);
@@ -161,6 +176,23 @@ if (MUTATE === "discloseall") SERVER = mutate(SERVER, "        \"- url=\" + mone
   "        \"- url=\" + moneyUrl + \"\\nBe plain that you are connected to it: write \\\"we built\\\".\" +\n", "discloseall");
 if (MUTATE === "anyauthor") SERVER = mutate(SERVER, "    if (ownPageMode && req.user.id !== SEO_OWN_PAGE_AUTHOR_ID) {", "    if (false) {", "anyauthor");
 if (MUTATE === "anyauthor") SERVER = mutate(SERVER, "      if (proposal.user_id !== SEO_OWN_PAGE_AUTHOR_ID) {", "      if (false) {", "anyauthor");
+if (MUTATE === "escape") {
+  /* Cut the three sentences that are not the page's own copy. */
+  const from = " \" +\n    \"BizForce AI is itself a platform";
+  const to = "shut down or take away.\"";
+  const a = SERVER.indexOf(from), b = SERVER.indexOf(to, a);
+  if (a < 0 || b < 0 || SERVER.split(from).length !== 2) { console.error("MUTATION REFUSED (escape): anchor not found exactly once."); process.exit(3); }
+  SERVER = SERVER.slice(0, a) + "\"" + SERVER.slice(b + to.length);
+}
+if (MUTATE === "emailsend") SERVER = mutate(SERVER,
+  "under its terms, and the email \" +\n    \"goes out through the business's email service, which has its own rules and can suspend sending — a business that \" +\n" +
+  "    \"keeps its own copy of its list can take it elsewhere, but cannot keep sending through a service that stopped it. \" +\n",
+  "under its terms. \" +\n", "emailsend");
+if (MUTATE === "hideprice") SERVER = mutate(SERVER, "\"and say in that mention that it is a paid platform and what it costs, as written above. Mention it once",
+  "\"and do not hide that it is a paid platform. Mention it once", "hideprice");
+if (MUTATE === "pathanchor") SERVER = mutate(SERVER,
+  "            : \"\\nThe link's text is words a reader understands, naming BizForce AI or what the page is for — never the href itself.\")",
+  "            : \"\")", "pathanchor");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -539,6 +571,25 @@ async function visit(h, body) {
     /only to the platform's own account/.test(otherPub.thrown || "") && otherPub.writes.length === 0, otherPub.thrown);
   const otherPlain = await generate(SERVER, { topic: "wool care" }, article(["/listing/wool-hat"]), { userId: SUBJECT_USER_ID });
   check("12. without money_path another account is unaffected: a listing post is filed as before", otherPlain.status === 201 && otherPlain.writes.length === 1, otherPlain.status);
+
+  console.log("\n══ 13. a platform cannot promise escape from platforms ══");
+  const p13 = t9.prompt || "";
+  check("13. the own-page prompt says BizForce AI is itself a platform, with the blog and storefront on bizforceai.net under its terms",
+    /BizForce AI is itself a platform: the blog and the storefront live on bizforceai\.net under its terms/.test(p13));
+  check("13. it forbids calling BizForce AI, the blog, the storefront or an email list beyond any platform's reach, and says what is true instead",
+    /less dependence on any one platform, not freedom from platforms/.test(p13) &&
+    /never call BizForce AI, the blog, the storefront or an email list something no platform can disable/.test(p13));
+  check("13. it says the email service can suspend sending, and that keeping the list does not keep the sending",
+    /email service, which has its own rules and can suspend sending/.test(p13) && /cannot keep sending through a service that stopped it/.test(p13));
+  check("13. it tells the writer to say the platform is paid and what it costs, and the price is in the prompt",
+    /say in that mention that it is a paid platform and what it costs/.test(p13) && p13.indexOf("$199/month") !== -1 && !/do not hide that it is a paid platform/.test(p13));
+  const ANCHOR_RULE = "never the href itself";
+  const anchored = await generate(SERVER, { money_path: OWN, money_anchor: "what BizForce AI does for suppressed businesses" }, article([OWN]));
+  check("13. without money_anchor the writer is told not to use the href as the link's text; with it, the suggestion stands in its place",
+    p13.indexOf(ANCHOR_RULE) !== -1 && anchored.status === 201 && (anchored.prompt || "").indexOf(ANCHOR_RULE) === -1 &&
+    (anchored.prompt || "").indexOf("- suggested anchor text=\"what BizForce AI does for suppressed businesses\"") !== -1, anchored.status);
+  check("13. the listing and external prompts say none of it",
+    [ext10, listing9].every(r => !/itself a platform|freedom from platforms|can suspend sending|never the href itself/.test(r.prompt || "")));
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");
