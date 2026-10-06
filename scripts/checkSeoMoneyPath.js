@@ -91,6 +91,17 @@
         stating one throws and writes nothing. The positives are the drafts'
         own sentences — the screen was tuned on them, so this proves it holds
         what it was built for, not how it does on text it has not seen.
+
+   ADDED WITH "Around the product, not around the problem":
+    16. In own-page mode, when site_context names a health-adjacent product
+        (supplements, CBD, hemp, wellness products and the like), the prompt
+        tells the writer to advise those sellers to write around the product,
+        never around a condition or problem — once, after the no-invented-facts
+        block (and after the product-type line when a profile is active), ahead
+        of the brief, and it is 60c9bc1's prompt plus exactly that line. With no
+        site_context, or one naming only firearms or esoteric goods, the
+        own-page prompt is byte-identical to 60c9bc1's; so are the listing and
+        external prompts, even with a supplement site_context.
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
@@ -135,6 +146,10 @@
      MUTATE=innocent     "your most …", "at most", "how many" are caught  → 15
      MUTATE=faqheading   "Frequently asked questions" is caught: every
                          article has that heading, so every one is refused → 3
+     MUTATE=problemnever   the around-the-product line is never emitted   → 16
+     MUTATE=problemalways  it fires in own-page mode whatever site_context says → 16
+     MUTATE=problemanymode it fires in every mode                          → 16
+     MUTATE=problemwording it no longer says "never around a condition"    → 16
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -164,7 +179,8 @@ const BASELINE = "6f94afe";
 const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
   "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor",
   "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok",
-  "noquantity", "notypicality", "nofigure", "noreach", "nocompany", "genscreen", "pubscreen", "innocent", "faqheading"];
+  "noquantity", "notypicality", "nofigure", "noreach", "nocompany", "genscreen", "pubscreen", "innocent", "faqheading",
+  "problemnever", "problemalways", "problemanymode", "problemwording"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -277,6 +293,13 @@ if (MUTATE === "innocent") {
   SERVER = mutate(SERVER, "new RegExp(\"(?<!\\\\b(?:the|your|my|our|their|its|his|her|a|at|how|as|too|what|which|so)\\\\s)\\\\b(?:most|", "new RegExp(\"\\\\b(?:most|", "innocent");
 }
 if (MUTATE === "faqheading") SERVER = mutate(SERVER, "frequently(?!\\s+asked\\b)", "frequently", "faqheading");
+const AROUND_LINE = "      (ownPageMode && siteContext && SEO_HEALTH_ADJACENT_CONTEXT.test(siteContext) ? SEO_AROUND_THE_PRODUCT : \"\") +\n";
+if (MUTATE === "problemnever") SERVER = mutate(SERVER, AROUND_LINE, "", "problemnever");
+if (MUTATE === "problemalways") SERVER = mutate(SERVER, AROUND_LINE, "      (ownPageMode ? SEO_AROUND_THE_PRODUCT : \"\") +\n", "problemalways");
+if (MUTATE === "problemanymode") SERVER = mutate(SERVER, AROUND_LINE,
+  "      (siteContext && SEO_HEALTH_ADJACENT_CONTEXT.test(siteContext) ? SEO_AROUND_THE_PRODUCT : \"\") +\n", "problemanymode");
+if (MUTATE === "problemwording") SERVER = mutate(SERVER,
+  " — \" +\n  \"never around a condition, a symptom or a problem it might be bought for.", ".", "problemwording");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -335,6 +358,10 @@ function unFacts(p) { return p == null ? p : p.split(PRODUCT_TYPE).join("").spli
    else changed". Pinned, not HEAD. */
 const PREV = "d5b077c";
 const SERVER_PREV = execSync("git show " + PREV + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
+/* Section 16's line, and the commit before it, for its "nothing else changed". */
+const AROUND = liftValue(SERVER, "SEO_AROUND_THE_PRODUCT");
+const PREV16 = "60c9bc1";
+const SERVER_PREV16 = execSync("git show " + PREV16 + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 
 /* ── a database that records what it is asked to write ── */
 const HANDLE = "check-handle";
@@ -723,8 +750,9 @@ async function visit(h, body) {
   ];
   for (const [label, body, text, opts] of WITHOUT) {
     const a = await generate(SERVER, body, text, opts), b = await generate(SERVER_PREV, body, text, opts);
-    check("14. without a profile · " + label + " — no product-type line, and the prompt is byte-identical to " + PREV,
-      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
+    check("14. without a profile · " + label + " — no product-type line, and the prompt is byte-identical to " + PREV +
+      " once section 16's line is out",
+      a.prompt != null && a.prompt.split(AROUND).join("") === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
   }
 
   console.log("\n══ 15. the claim screen ══");
@@ -803,6 +831,42 @@ async function visit(h, body) {
     pubClaim.thrown);
   const pubMeta = await publish(SERVER, Object.assign({}, prop.payload, { meta_description: "Most sellers recover in a week." }));
   check("15. publish · the meta description is screened too", /states 1 thing/.test(pubMeta.thrown || "") && pubMeta.writes.length === 0, pubMeta.thrown);
+
+  console.log("\n══ 16. around the product, not around the problem ══");
+  console.log("    line:" + AROUND.replace(/\n/g, "\n      "));
+  check("16. the line says to write around the product, its ingredients and questions about it, never around a condition, symptom or problem",
+    /write around the product, its ingredients and the questions a customer asks about the product itself/.test(AROUND) &&
+    /never around a condition, a symptom or a problem it might be bought for/.test(AROUND));
+  const HEALTH = [
+    ["supplements and CBD", "Businesses that sell natural supplements, CBD and hemp, adult wellness, esoteric and spiritual products, firearms accessories and similar."],
+    ["supplements only", "Our readers sell dietary supplements."],
+    ["herbal", "Small herbal and botanical brands."],
+    ["kratom", "Kratom vendors."]
+  ];
+  for (const [label, ctx] of HEALTH) {
+    const a = await generate(SERVER, { money_path: OWN, site_context: ctx }, article([OWN])), b = await generate(SERVER_PREV16, { money_path: OWN, site_context: ctx }, article([OWN]));
+    const p = a.prompt || "", at = p.indexOf(AROUND), factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
+    check("16. own page, site_context names " + label + " — the line is there once, right after the facts block, ahead of the brief, and nothing else changed against " + PREV16,
+      p.split(AROUND).length === 2 && at === p.indexOf(FACTS) + FACTS.length && at < p.indexOf("Write ONE complete blog post") &&
+      b.prompt != null && p === b.prompt.slice(0, factsEnd) + AROUND + b.prompt.slice(factsEnd), a.status);
+  }
+  const both16 = await generate(SERVER, { money_path: OWN, compliance_profile: "supplement_vitality", site_context: "Supplement sellers." }, article([OWN]));
+  const p16 = both16.prompt || "";
+  check("16. with a compliance profile too, it follows the product-type line, once each",
+    p16.split(AROUND).length === 2 && p16.split(PRODUCT_TYPE).length === 2 && p16.indexOf(AROUND) === p16.indexOf(PRODUCT_TYPE) + PRODUCT_TYPE.length);
+  const UNCHANGED16 = [
+    ["own page, no site_context", { money_path: OWN }, article([OWN])],
+    ["own page, site_context names only firearms and esoteric goods", { money_path: OWN, site_context: "Sellers of firearms accessories and esoteric and spiritual products." }, article([OWN])],
+    ["own page, site_context names no category", { money_path: OWN, site_context: "Small businesses cut off by an ad network." }, article([OWN])],
+    ["listing, supplement site_context", { topic: "wool care", site_context: "Natural supplements, CBD and hemp." }, article(["/listing/wool-hat"])],
+    ["external, supplement site_context", { money_url: "https://example.com/product", site_context: "Natural supplements, CBD and hemp." }, article(["https://example.com/product"])],
+    ["external, mrearthrose.com with its profile", { money_url: "https://mrearthrose.com/x.html", site_context: "Botanical supplements for men." }, article(["https://mrearthrose.com/x.html"])]
+  ];
+  for (const [label, body, text] of UNCHANGED16) {
+    const a = await generate(SERVER, body, text), b = await generate(SERVER_PREV16, body, text);
+    check("16. " + label + " — no line, and the prompt is byte-identical to " + PREV16,
+      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
+  }
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");

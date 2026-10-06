@@ -10846,6 +10846,34 @@ const SEO_CATEGORY_AS_PRODUCT_TYPE =
   "— a dietary supplement, a botanical product, a topical cosmetic — never by a condition it addresses, not even paraphrased, " +
   "hinted at or softened. The MANDATORY CONTENT RULES above win over anything in NO INVENTED FACTS.";
 
+/* AROUND THE PRODUCT, NOT AROUND THE PROBLEM. The fourth own-page draft told
+   supplement and CBD sellers that people "search for products like yours by
+   name and by problem", and to write for both. For those sellers, content
+   written around a problem is how a health claim gets made — and an own-page
+   post runs no compliance rail, whose patterns would not catch the advice
+   anyway. So when the brief says the readers sell health-adjacent products,
+   the writer is told what to advise instead.
+
+   Own-page mode only: there the article ADVISES sellers, and site_context
+   describes who they are. In listing and external mode the article is the
+   seller's own content, and a supplement brand's article is held to the
+   compliance profile instead.
+
+   DETECTED from site_context alone, by the words below. Absent site_context,
+   nothing is emitted: the topic and the money page name no category, and a
+   guess would put the line in articles for readers it does not describe. The
+   list is health-adjacent products, not every category the ad networks refuse
+   — firearms accessories and esoteric goods are restricted, but "write around
+   the problem" makes no health claim for them. It misses any product named in
+   other words ("tinctures", "gummies", "men's health"). */
+const SEO_HEALTH_ADJACENT_CONTEXT = /\b(?:supplements?|nutraceuticals?|vitamins?|CBD|hemp|cannabis|THC|delta[- ]?8|kratom|kava|nootropics?|herbal|botanicals?|(?:adult|sexual|men's|women's) wellness|wellness products?|weight[- ]loss)\b/i;
+const SEO_AROUND_THE_PRODUCT =
+  "\n\nCONTENT ADVICE FOR HEALTH-ADJACENT SELLERS. The readers described above include sellers of supplements, CBD, hemp, " +
+  "wellness or similar products. Where this article advises them on what to write, tell them to write around the product, its " +
+  "ingredients and the questions a customer asks about the product itself — what it is, what is in it, how it is made and used — " +
+  "never around a condition, a symptom or a problem it might be bought for. Content written around a problem is how a seller " +
+  "ends up making a health claim.";
+
 /* WHAT THE RULE COULD NOT STOP, SCREENED. SEO_NO_INVENTED_FACTS is in every
    prompt and four own-page drafts broke it anyway: each brief fix removed one
    violation and the writer made another ("most owners", then "no platform can
@@ -11318,6 +11346,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
       complianceSection +
       SEO_NO_INVENTED_FACTS +
       (complianceProfile ? SEO_CATEGORY_AS_PRODUCT_TYPE : "") +
+      (ownPageMode && siteContext && SEO_HEALTH_ADJACENT_CONTEXT.test(siteContext) ? SEO_AROUND_THE_PRODUCT : "") +
       "\n\nWrite ONE complete blog post that answers a specific question a real customer would type into a search engine. " +
       "Target a long-tail, question-shaped keyword — not a broad head term. A post that answers " +
       "\"how long does a mobile car detail take\" beats one targeting \"car detailing\"." +
