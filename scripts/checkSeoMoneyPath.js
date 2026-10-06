@@ -81,6 +81,16 @@
         no-invented-facts block, ahead of the writing brief, and it is that
         commit's prompt plus exactly this line. Without a profile, the own-page,
         external and listing prompts are byte-identical to that commit's.
+
+   ADDED WITH "Screen what the rule could not stop":
+    15. findArticleClaims catches every claim the four own-page drafts made, each
+        by its own class, and none of the innocent uses of the same words. An
+        article stating one is 422 at generation in own-page, listing and
+        external mode, listing each sentence and filing nothing; the same
+        article without it is filed. At publish a body or meta description
+        stating one throws and writes nothing. The positives are the drafts'
+        own sentences — the screen was tuned on them, so this proves it holds
+        what it was built for, not how it does on text it has not seen.
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
@@ -115,6 +125,16 @@
      MUTATE=productnever the product-type line is in no prompt            → 14
      MUTATE=productfirst it sits before the compliance section            → 14
      MUTATE=conditionok  it no longer forbids naming the condition        → 14
+     MUTATE=noquantity   the claim screen's quantity class never matches  → 15
+     MUTATE=notypicality its typicality class never matches               → 15
+     MUTATE=nofigure     its figure class never matches                   → 15
+     MUTATE=noreach      its beyond-reach class never matches             → 15
+     MUTATE=nocompany    its named-company class never matches            → 15
+     MUTATE=genscreen    generation does not screen                       → 15
+     MUTATE=pubscreen    publish does not screen                          → 15
+     MUTATE=innocent     "your most …", "at most", "how many" are caught  → 15
+     MUTATE=faqheading   "Frequently asked questions" is caught: every
+                         article has that heading, so every one is refused → 3
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -143,7 +163,8 @@ const BASELINE = "6f94afe";
 
 const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pubcheck", "noref", "personal", "leak", "lronly", "blonly", "migration",
   "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor",
-  "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok"];
+  "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok",
+  "noquantity", "notypicality", "nofigure", "noreach", "nocompany", "genscreen", "pubscreen", "innocent", "faqheading"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -238,6 +259,24 @@ if (MUTATE === "productfirst") SERVER = mutate(SERVER, "      complianceSection 
   PRODUCT_LINE + "      complianceSection +\n      SEO_NO_INVENTED_FACTS +\n", "productfirst");
 if (MUTATE === "conditionok") SERVER = mutate(SERVER,
   " never by a condition it addresses, not even paraphrased, \" +\n  \"hinted at or softened.", "", "conditionok");
+/* A class that never matches: its pattern moves to an unused key. */
+function silenceClass(name) {
+  const at = SERVER.indexOf("  { name: \"" + name + "\", says: ");
+  const re = at < 0 ? -1 : SERVER.indexOf("\n    re: ", at);
+  if (at < 0 || re < 0 || SERVER.split("  { name: \"" + name + "\", says: ").length !== 2) { console.error("MUTATION REFUSED (" + MUTATE + "): class not found exactly once."); process.exit(3); }
+  SERVER = SERVER.slice(0, re) + " re: /(?!)/,\n    re0: " + SERVER.slice(re + "\n    re: ".length);
+}
+if (MUTATE === "noquantity") silenceClass("quantity");
+if (MUTATE === "notypicality") silenceClass("typicality");
+if (MUTATE === "nofigure") silenceClass("figure");
+if (MUTATE === "noreach") silenceClass("beyond_reach");
+if (MUTATE === "nocompany") silenceClass("named_company_policy");
+if (MUTATE === "genscreen") SERVER = mutate(SERVER, "    if (articleClaims.length) {\n      console.warn(", "    if (false) {\n      console.warn(", "genscreen");
+if (MUTATE === "pubscreen") SERVER = mutate(SERVER, "    if (articleClaims.length) {\n      throw new Error(", "    if (false) {\n      throw new Error(", "pubscreen");
+if (MUTATE === "innocent") {
+  SERVER = mutate(SERVER, "new RegExp(\"(?<!\\\\b(?:the|your|my|our|their|its|his|her|a|at|how|as|too|what|which|so)\\\\s)\\\\b(?:most|", "new RegExp(\"\\\\b(?:most|", "innocent");
+}
+if (MUTATE === "faqheading") SERVER = mutate(SERVER, "frequently(?!\\s+asked\\b)", "frequently", "faqheading");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -687,6 +726,83 @@ async function visit(h, body) {
     check("14. without a profile · " + label + " — no product-type line, and the prompt is byte-identical to " + PREV,
       a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
   }
+
+  console.log("\n══ 15. the claim screen ══");
+  const sc = shared(), sctx = {};
+  vm.createContext(sctx);
+  /* Its own definitions only: the closure walker would read "Stripe" in the
+     company list as an identifier and lift the Stripe client. */
+  vm.runInContext(["ARTICLE_CLAIM_POPULATION", "ARTICLE_CLAIM_COMPANY", "ARTICLE_CLAIM_POLICY_VERB", "ARTICLE_CLAIM_CLASSES", "findArticleClaims"]
+    .map(n => sc.definitionOf(SERVER, n)).join("\n") + "\nthis.find = findArticleClaims;", sctx);
+  const classesOf = t => sctx.find([t]).map(h => h.class);
+  /* Every true hit in the four own-page drafts, one sentence per class it
+     must catch, copied from the drafts so this does not depend on their rows. */
+  const CLAIMS = [
+    ["quantity", "It varies widely by business, but most owners see the fastest recovery from email and SMS to an existing list."],
+    ["quantity", "Most disabled ad accounts show a reason code or a link to an appeal form inside Ads Manager or Business Suite."],
+    ["quantity", "Many businesses in restricted categories find it more useful to build channels they control instead of betting everything on one ad account again."],
+    ["typicality", "It's rarely about one bad ad — it's usually the category itself triggering extra scrutiny."],
+    ["typicality", "If your business sits in a category that often gets flagged, write straightforward answers."],
+    ["typicality", "Businesses that already had an email list or a website tend to have a faster path forward simply because they're not starting from zero."],
+    ["typicality", "The businesses that recover fastest from a disabled account are usually the ones that already had a way to reach customers."],
+    ["typicality", "Why do Facebook ad accounts get disabled for supplement and wellness businesses so often?"],
+    ["figure", "Review systems flag categories like supplements at a much higher rate than average."],
+    ["figure", "Around 40% of appeals succeed."],
+    ["beyond_reach", "A practical long-term response is to build the parts of your presence that no platform can disable."],
+    ["beyond_reach", "Yes — an email list is one of the few customer channels a platform can't disable."],
+    ["beyond_reach", "Your email list can't be disabled by someone else's policy team."],
+    ["beyond_reach", "But it's also not something a platform can turn off."],
+    ["beyond_reach", "Now is the time to build it, because it's yours regardless of what any platform decides."],
+    ["beyond_reach", "This takes more effort than running an ad, but nobody can disable a relationship."],
+    ["named_company_policy", "Ad platforms, including Meta, publish policies that restrict advertising for certain products and categories."],
+    ["named_company_policy", "Meta's review process for disabled ad accounts is largely automated."],
+    ["named_company_policy", "Supplements are routinely flagged by Facebook."]
+  ];
+  const missed = CLAIMS.filter(([cls, t]) => classesOf(t).indexOf(cls) === -1);
+  check("15. every claim from the four drafts is caught, by its own class (" + CLAIMS.length + " sentences)", missed.length === 0, JSON.stringify(missed.map(x => x[1].slice(0, 50))));
+  const byClass = {};
+  CLAIMS.forEach(([cls]) => { byClass[cls] = true; });
+  ["quantity", "typicality", "figure", "beyond_reach", "named_company_policy"].forEach(cls => {
+    const own = CLAIMS.filter(x => x[0] === cls), lost = own.filter(([c, t]) => classesOf(t).indexOf(c) === -1);
+    check("15. class " + cls + " catches its " + own.length + " sentence" + (own.length === 1 ? "" : "s"), own.length > 0 && lost.length === 0, lost.length + " lost");
+  });
+  /* The innocent uses of the same words, and the true sentences the drafts
+     scoped correctly. */
+  const INNOCENT = ["These are your most reachable customers right now.", "Make the most of the list you already have.", "Send at most one email a week.",
+    "Most importantly, keep a copy of your list.", "How many customers do you have on that list?", "There are many ways to reach people without ads.",
+    "Ask as many past customers as you can.", "Write to a few customers this week.", "How often should I email my list?", "Post as often as you can keep it useful.",
+    "Frequently asked questions", "Tend to your list every week.", "Read Meta's current policy for your product.", "The appeal form sits inside Ads Manager.",
+    "Your list doesn't disappear if an ad account is disabled.", "Keep your own copy regardless of what happens to any ad account.",
+    "Too many sellers wait on the appeal.", "Your most loyal buyers will read it.", "We built BizForce AI, a paid platform at $199 a month on one plan called All Access.",
+    "Ad platforms publish policies restricting some products in these categories.", "It varies, and there's no fixed timeline you can count on."];
+  const wrongly = INNOCENT.filter(t => sctx.find([t]).length);
+  check("15. none of the " + INNOCENT.length + " innocent uses is caught", wrongly.length === 0, JSON.stringify(wrongly));
+  const KNOWN_FALSE = "If your Facebook ad account was disabled, the first instinct is usually to find a way to get it back.";
+  console.log("    known false catch, kept: " + JSON.stringify(sctx.find([KNOWN_FALSE]).map(h => h.class)) + " — " + KNOWN_FALSE);
+
+  const CLAIM_P = "<p>Most owners see results from email often within days, and no platform can disable a list.</p>";
+  const MODES15 = [
+    ["own page", { money_path: OWN }, article([OWN], CLAIM_P)],
+    ["listing", { topic: "wool care" }, article(["/listing/wool-hat"], CLAIM_P)],
+    ["external", { money_url: "https://example.com/product" }, article(["https://example.com/product"], CLAIM_P)]
+  ];
+  for (const [label, body, text] of MODES15) {
+    const r = await generate(SERVER, body, text);
+    const got = ((r.body || {}).claims || []).map(c => c.class).sort().join(",");
+    check("15. generate · " + label + " — an article with claims is 422, lists each with its sentence, and files nothing",
+      r.status === 422 && r.writes.length === 0 && got === "beyond_reach,quantity,typicality" &&
+      /states 3 things it has no source for/.test((r.body || {}).error || "") && ((r.body || {}).claims || []).every(c => /Most owners/.test(c.sentence)),
+      r.status + " " + got);
+  }
+  const clean15 = await generate(SERVER, { money_path: OWN }, article([OWN]));
+  check("15. generate · the same article without the claims is filed", clean15.status === 201 && clean15.writes.length === 1, clean15.status);
+  const pubClaim = await publish(SERVER, Object.assign({}, prop.payload, { body: String(prop.payload.body) + CLAIM_P }));
+  console.log("    publish: " + pubClaim.thrown);
+  check("15. publish · a proposal whose body states a claim throws, naming the sentence, and writes nothing",
+    /states 3 things it has no source for, and was not published/.test(pubClaim.thrown || "") && /Most owners see results/.test(pubClaim.thrown || "") && pubClaim.writes.length === 0,
+    pubClaim.thrown);
+  const pubMeta = await publish(SERVER, Object.assign({}, prop.payload, { meta_description: "Most sellers recover in a week." }));
+  check("15. publish · the meta description is screened too", /states 1 thing/.test(pubMeta.thrown || "") && pubMeta.writes.length === 0, pubMeta.thrown);
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");

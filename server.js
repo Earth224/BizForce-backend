@@ -9697,6 +9697,22 @@ const PROPOSAL_EXECUTORS = {
       }
     }
 
+    // The generator's claim screen again, on the sanitized text that would be
+    // stored. A proposal filed before the screen existed, or written straight
+    // into agent_proposals, meets it here.
+    const articleClaims = findArticleClaims([title, metaDescription || "", body]);
+    if (articleClaims.length) {
+      throw new Error(
+        "publish_blog_post: the article states " + articleClaims.length + " thing" + (articleClaims.length === 1 ? "" : "s") +
+        " it has no source for, and was not published. " +
+        articleClaims.slice(0, 5).map(function (c) {
+          return c.says + ": " + JSON.stringify(c.sentence.slice(0, 160));
+        }).join("; ") +
+        (articleClaims.length > 5 ? "; and " + (articleClaims.length - 5) + " more" : "") +
+        ". Reject it and generate another"
+      );
+    }
+
     // An external post exists to send traffic to exactly one page. The
     // sanitizer passes absolute http(s) hrefs through untouched so this should
     // hold, but it is the last point at which its absence is catchable. body is
@@ -10830,6 +10846,92 @@ const SEO_CATEGORY_AS_PRODUCT_TYPE =
   "— a dietary supplement, a botanical product, a topical cosmetic — never by a condition it addresses, not even paraphrased, " +
   "hinted at or softened. The MANDATORY CONTENT RULES above win over anything in NO INVENTED FACTS.";
 
+/* WHAT THE RULE COULD NOT STOP, SCREENED. SEO_NO_INVENTED_FACTS is in every
+   prompt and four own-page drafts broke it anyway: each brief fix removed one
+   violation and the writer made another ("most owners", then "no platform can
+   disable", then Meta's policy, then "most", "usually", "many", "tend to" and
+   "nobody can disable a relationship"). So the finished article is checked.
+
+   REFUSED, NOT FLAGGED. The superlative screen flags because its reader is
+   the owner, who knows their own sales and can judge the claim. An article's
+   reader is the public, the claims are about other businesses and other
+   companies, and no one in the loop holds a source — the owner cannot verify
+   "most disabled ad accounts show a reason code" either. There is no route to
+   edit a proposal, so a flag could only end in a rejection; and an [UNVERIFIED]
+   mark in the body would publish on approval. A frequency claim is not untrue
+   by definition the way a health claim is, but in this route it is unsourced
+   by construction. Refused at generation (422, nothing filed) and again at
+   publish, on the sanitized text, as money_path and the compliance rail are.
+   Every mode: the rule is every mode's.
+
+   MEASURED on the four own-page drafts — the same four it was tuned on, so the
+   true rate is lower and the catch rate higher than it will be on new text:
+   28 hits in 24 sentences, every draft refused. 27 are claims the block
+   forbids; one is false,
+   draft 2's "the first instinct is usually to find a way to get it back", a
+   sentence about the reader that needs no source. One true hit is low-harm:
+   draft 3's "the fastest starting point is usually the list".
+
+   WHAT PASSES ON PURPOSE, the innocent uses of the same words: "most" after a
+   determiner ("your most reachable customers", "make the most of", "at most")
+   or before an -ly adverb ("most importantly"); "many" before anything that is
+   not a population ("many ways to reach people"), or after how/as/too/so; "a
+   few"; "how often", "as often as"; "frequently asked questions"; "tend to
+   your list" (the verb). A population quantifier needs a group noun —
+   businesses, owners, sellers, customers, accounts and the like — within two
+   words.
+
+   WHAT IT MISSES: a typical timeframe without a frequency word ("can take
+   weeks"); "likely"; "almost never" and other phrasings not listed; absolutes
+   in other words ("no account suspension touches it", "a site under your own
+   handle still works"); a named company's internals without a listed verb
+   ("Meta ties disabled accounts to your identity"); a superlative claim ("the
+   single fastest channel"). And it catches a named company within ten words of
+   "flagged" or "restricted" even when the company is not the subject. */
+const ARTICLE_CLAIM_POPULATION = "(?:business(?:es)?|owners|sellers|merchants|brands|companies|stores|shops|people|customers|buyers|" +
+  "shoppers|consumers|users|advertisers|accounts|appeals|cases|entrepreneurs|founders|marketers|retailers|operators|men|women)";
+const ARTICLE_CLAIM_COMPANY = "(?:Meta|Facebook|Instagram|Google|YouTube|TikTok|Amazon|Shopify|Stripe|PayPal|Square|Microsoft|Bing|" +
+  "Pinterest|Snapchat|Twitter|Klaviyo|Mailchimp)";
+const ARTICLE_CLAIM_POLICY_VERB = "(?:restrict(?:s|ed)?|prohibit(?:s|ed)?|bans?|banned|forbids?|flag(?:s|ged)?|disallows?|blocks?|" +
+  "(?:largely |mostly |fully )?automated|algorithms?)";
+const ARTICLE_CLAIM_CLASSES = [
+  { name: "quantity", says: "says how many of a group do something",
+    re: new RegExp("(?<!\\b(?:the|your|my|our|their|its|his|her|a|at|how|as|too|what|which|so)\\s)\\b(?:most|many|the majority of|the vast majority of|" +
+      "nearly all|almost all|few)\\s+(?:of\\s+(?:the|these|those)\\s+)?(?:(?!(?:to|of|for|in|with|that|who|than)\\b)[a-z-]+\\s+){0,2}?" +
+      ARTICLE_CLAIM_POPULATION + "\\b", "i") },
+  { name: "typicality", says: "says what usually or often happens",
+    re: /(?<!\b(?:how|as)\s)\b(?:usually|typically|generally|commonly|frequently(?!\s+asked\b)|rarely|seldom|often|almost always|nearly always|routinely|tends? to(?!\s+(?:your|their|our)\b)|more often than not|in most cases)\b(?!\s+as\b)/i },
+  { name: "figure", says: "states a statistic or a rate",
+    re: /\b\d+(?:\.\d+)?\s?%|\bper ?cent\b|\b\d+ (?:out of|in) (?:\d+|ten|a hundred)\b|\b(?:higher|lower|greater) rate\b|\b(?:above|below|than) (?:the )?average\b/i },
+  { name: "beyond_reach", says: "says something is beyond a platform's reach",
+    re: /\b(?:(?:no|any) (?:platform|company|gatekeeper|one)|nobody|no one|(?:a|the) platform|someone else(?:'s [a-z ]+)?)\s+(?:can(?:'t|not| not)?|could|will(?:n't| never)?)\s+(?:ever\s+)?(?:disable|shut (?:it |you )?down|take (?:it |that |them )?away|turn (?:it |that )?off|touch)\b|\bcan(?:'t|not| not)\s+be\s+(?:disabled|taken away|shut down|turned off)\b|\bregardless of what any (?:platform|company)\b|\bnot something (?:a|any|one) (?:platform|company) can\b/i },
+  { name: "named_company_policy", says: "says what a named company's policy or systems do",
+    re: new RegExp("\\b" + ARTICLE_CLAIM_COMPANY + "(?:'s)?\\b(?:\\W+[\\w'-]+){0,10}?\\W+" + ARTICLE_CLAIM_POLICY_VERB + "\\b|\\b" +
+      ARTICLE_CLAIM_POLICY_VERB + "\\s+by\\s+" + ARTICLE_CLAIM_COMPANY + "\\b") }
+];
+
+/* Each sentence of the visible text, from title, meta description and body.
+   Block-level closing tags end a sentence so a heading never runs into the
+   paragraph after it. One hit per class per sentence. */
+function findArticleClaims(parts) {
+  const hits = [];
+  parts.forEach(function (part) {
+    const text = String(part || "").replace(/<\/(?:p|li|h2|h3|ul)>/gi, "\n").replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'");
+    text.split(/\n+/).forEach(function (line) {
+      (line.match(/[^.!?]+[.!?]*/g) || []).forEach(function (raw) {
+        const sentence = raw.replace(/\s+/g, " ").trim();
+        if (!sentence) return;
+        ARTICLE_CLAIM_CLASSES.forEach(function (c) {
+          const m = sentence.match(c.re);
+          if (m) hits.push({ class: c.name, says: c.says, matched: m[0].trim(), sentence: sentence });
+        });
+      });
+    });
+  });
+  return hits;
+}
+
 /* The arrival token for a published post's money link: "bl" says a blog post
    sent the reader, then the first forty bits of SHA-256 over the author's id
    and the post's slug. Slugs are unique per author, not across authors, so the
@@ -11443,6 +11545,29 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
           required_text: complianceProfile.requiredText
         });
       }
+    }
+
+    // What SEO_NO_INVENTED_FACTS told the writer not to say, checked in what it
+    // wrote. Refused, not flagged — see ARTICLE_CLAIM_CLASSES for why.
+    const articleClaims = findArticleClaims([
+      safeText(parsed.title, 200) || "",
+      parsed.meta_description !== undefined ? (safeText(parsed.meta_description, 300) || "") : "",
+      body
+    ]);
+    if (articleClaims.length) {
+      console.warn(
+        "[agents/seo/generate-post] Claim screen rejection:" +
+        " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
+        " classes=" + JSON.stringify(articleClaims.map(function (c) { return c.class; }))
+      );
+      return res.status(422).json({
+        error: "The SEO Agent's article states " + articleClaims.length + " thing" + (articleClaims.length === 1 ? "" : "s") +
+          " it has no source for — how many or how often, a statistic, something beyond any platform's reach, or what a named " +
+          "company's policy does. It was told not to. No post was created; generating again is a new draft and a new model call.",
+        claims: articleClaims.map(function (c) {
+          return { class: c.class, says: c.says, matched: c.matched, sentence: c.sentence };
+        })
+      });
     }
 
     const slug = safeText(parsed.slug, 100);
