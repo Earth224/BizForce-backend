@@ -10890,7 +10890,9 @@ const SEO_AROUND_THE_PRODUCT =
    by definition the way a health claim is, but in this route it is unsourced
    by construction. Refused at generation (422, nothing filed) and again at
    publish, on the sanitized text, as money_path and the compliance rail are.
-   Every mode: the rule is every mode's.
+   Every mode: the rule is every mode's. At generation a hit first gets ONE
+   rewrite of the flagged sentences (repairSeoArticleClaims below), and only
+   an article that still fails is refused; at publish there is no repair.
 
    MEASURED on the four own-page drafts — the same four it was tuned on, so the
    true rate is lower and the catch rate higher than it will be on new text:
@@ -10898,7 +10900,12 @@ const SEO_AROUND_THE_PRODUCT =
    forbids; one is false,
    draft 2's "the first instinct is usually to find a way to get it back", a
    sentence about the reader that needs no source. One true hit is low-harm:
-   draft 3's "the fastest starting point is usually the list".
+   draft 3's "the fastest starting point is usually the list". With the two
+   narrowings below, 27 hits: draft 1's "...so often?" heading is the one lost.
+
+   ON THE FIRST ARTICLE IT HAD NOT SEEN (generation 5): 5 hits, 2 true. That,
+   not 27 of 28, is the better guess at its precision, and five is too few to
+   call it a rate. The narrowings below take that article to 3 hits, 2 true.
 
    WHAT PASSES ON PURPOSE, the innocent uses of the same words: "most" after a
    determiner ("your most reachable customers", "make the most of", "at most")
@@ -10922,28 +10929,57 @@ const ARTICLE_CLAIM_COMPANY = "(?:Meta|Facebook|Instagram|Google|YouTube|TikTok|
   "Pinterest|Snapchat|Twitter|Klaviyo|Mailchimp)";
 const ARTICLE_CLAIM_POLICY_VERB = "(?:restrict(?:s|ed)?|prohibit(?:s|ed)?|bans?|banned|forbids?|flag(?:s|ged)?|disallows?|blocks?|" +
   "(?:largely |mostly |fully )?automated|algorithms?)";
+/* TWO NARROWINGS, after the first article the screen had not seen. Generation
+   5 was refused on five hits, and only two were claims: "the two often get
+   scrutinized separately" (true) and "Email ... is usually the quickest to
+   activate, since ..." (true by the letter, reasoned, low-harm). The other
+   three were the writer doing what it was told — "not about why Facebook's
+   systems flagged you, which isn't something you can see", an FAQ heading
+   "How long does a Facebook ad account appeal usually take?", and "often"
+   inside the around-the-product advice. Two of those are narrowed away here;
+   the third is not, because no rule that passes it keeps the true catches
+   (see the repair pass in the generate route, which makes it cheap instead).
+
+   A QUESTION IS NOT A CLAIM of how often: typicality does not fire in a
+   sentence ending "?". FAQ headings are required to be phrased the way a
+   person asks, and people ask "usually". The answer underneath is screened.
+   LETS BACK IN: a heading that presupposes a frequency — draft 1's "Why do
+   Facebook ad accounts get disabled for supplement and wellness businesses so
+   often?" now passes. Its claim is in the premise, not in an answer.
+
+   DECLINING TO KNOW IS NOT A CLAIM about a company: named_company_policy does
+   not fire in a sentence carrying one of these five phrases, and only these.
+   LETS BACK IN: a claim wrapped in one — "It's not about why Meta flags
+   supplements; it flags them for the category" passes, though the second half
+   says exactly what the block forbids. Any looser rule (every "why" clause)
+   would also pass "That's why Meta's systems flag supplements". */
+const ARTICLE_CLAIM_QUESTION = /\?$/;
+const ARTICLE_CLAIM_DECLINES = /\b(?:not about why|isn['’]t something you can see|no way to know|can['’]t know why|don['’]t guess)\b/i;
 const ARTICLE_CLAIM_CLASSES = [
   { name: "quantity", says: "says how many of a group do something",
     re: new RegExp("(?<!\\b(?:the|your|my|our|their|its|his|her|a|at|how|as|too|what|which|so)\\s)\\b(?:most|many|the majority of|the vast majority of|" +
       "nearly all|almost all|few)\\s+(?:of\\s+(?:the|these|those)\\s+)?(?:(?!(?:to|of|for|in|with|that|who|than)\\b)[a-z-]+\\s+){0,2}?" +
       ARTICLE_CLAIM_POPULATION + "\\b", "i") },
   { name: "typicality", says: "says what usually or often happens",
-    re: /(?<!\b(?:how|as)\s)\b(?:usually|typically|generally|commonly|frequently(?!\s+asked\b)|rarely|seldom|often|almost always|nearly always|routinely|tends? to(?!\s+(?:your|their|our)\b)|more often than not|in most cases)\b(?!\s+as\b)/i },
+    re: /(?<!\b(?:how|as)\s)\b(?:usually|typically|generally|commonly|frequently(?!\s+asked\b)|rarely|seldom|often|almost always|nearly always|routinely|tends? to(?!\s+(?:your|their|our)\b)|more often than not|in most cases)\b(?!\s+as\b)/i,
+    except: ARTICLE_CLAIM_QUESTION },
   { name: "figure", says: "states a statistic or a rate",
     re: /\b\d+(?:\.\d+)?\s?%|\bper ?cent\b|\b\d+ (?:out of|in) (?:\d+|ten|a hundred)\b|\b(?:higher|lower|greater) rate\b|\b(?:above|below|than) (?:the )?average\b/i },
   { name: "beyond_reach", says: "says something is beyond a platform's reach",
     re: /\b(?:(?:no|any) (?:platform|company|gatekeeper|one)|nobody|no one|(?:a|the) platform|someone else(?:'s [a-z ]+)?)\s+(?:can(?:'t|not| not)?|could|will(?:n't| never)?)\s+(?:ever\s+)?(?:disable|shut (?:it |you )?down|take (?:it |that |them )?away|turn (?:it |that )?off|touch)\b|\bcan(?:'t|not| not)\s+be\s+(?:disabled|taken away|shut down|turned off)\b|\bregardless of what any (?:platform|company)\b|\bnot something (?:a|any|one) (?:platform|company) can\b/i },
   { name: "named_company_policy", says: "says what a named company's policy or systems do",
     re: new RegExp("\\b" + ARTICLE_CLAIM_COMPANY + "(?:'s)?\\b(?:\\W+[\\w'-]+){0,10}?\\W+" + ARTICLE_CLAIM_POLICY_VERB + "\\b|\\b" +
-      ARTICLE_CLAIM_POLICY_VERB + "\\s+by\\s+" + ARTICLE_CLAIM_COMPANY + "\\b") }
+      ARTICLE_CLAIM_POLICY_VERB + "\\s+by\\s+" + ARTICLE_CLAIM_COMPANY + "\\b"),
+    except: ARTICLE_CLAIM_DECLINES }
 ];
 
 /* Each sentence of the visible text, from title, meta description and body.
    Block-level closing tags end a sentence so a heading never runs into the
-   paragraph after it. One hit per class per sentence. */
+   paragraph after it. One hit per class per sentence. part is the index into
+   parts the sentence came from, so a repair knows where to put it back. */
 function findArticleClaims(parts) {
   const hits = [];
-  parts.forEach(function (part) {
+  parts.forEach(function (part, partIndex) {
     const text = String(part || "").replace(/<\/(?:p|li|h2|h3|ul)>/gi, "\n").replace(/<[^>]+>/g, " ")
       .replace(/&amp;/g, "&").replace(/&#39;|&rsquo;/g, "'");
     text.split(/\n+/).forEach(function (line) {
@@ -10951,13 +10987,260 @@ function findArticleClaims(parts) {
         const sentence = raw.replace(/\s+/g, " ").trim();
         if (!sentence) return;
         ARTICLE_CLAIM_CLASSES.forEach(function (c) {
+          if (c.except && c.except.test(sentence)) return;
           const m = sentence.match(c.re);
-          if (m) hits.push({ class: c.name, says: c.says, matched: m[0].trim(), sentence: sentence });
+          if (m) hits.push({ class: c.name, says: c.says, matched: m[0].trim(), sentence: sentence, part: partIndex });
         });
       });
     });
   });
   return hits;
+}
+
+/* ── the claim repair ─────────────────────────────────────────────────────────
+
+   A claim-screen hit used to throw the whole draft away: a full regeneration,
+   about $0.03–0.04 of Sonnet, to change one sentence — and the screen's
+   precision on text it was not tuned on was two in five, so most of what it
+   threw away was good. Now the flagged sentences get ONE rewrite.
+
+   WHAT THE MODEL IS GIVEN: the rules the writer had (the compliance section
+   when a profile is active, SEO_NO_INVENTED_FACTS, the product-type line), the
+   article itself for context, and the flagged sentences, numbered, each with
+   what the screen says it claims. WHAT IT MUST RETURN: exactly one plain-text
+   sentence per number, in a delimited format — nothing else. It never returns
+   the article and could not change it if it did: the server puts each
+   rewritten sentence back in place of the one it replaces and nothing else is
+   touched. A rewrite with markup, a line break, a marker, or more than half
+   again the length (plus 80 characters) of the sentence it replaces is not
+   used.
+
+   NOT SENT AT ALL — no call, no cost — when a flagged sentence cannot be found
+   in the text it came from as it was screened: the screen reads text with the
+   tags taken out, so a sentence that runs across <strong> or a link has no
+   single place to go back to. That draft is refused as before.
+
+   COST: the article goes in as context, so the repair's INPUT is larger than
+   the writer's — about 10,000 characters for a 7,000-character article, an
+   estimated 3,000–3,500 tokens — and its output is the sentences alone, a few
+   hundred tokens: about $0.01 on Sonnet 5's $2/$10. The five generations on
+   the ledger were 2,505–3,125 tokens in and 2,751–3,710 out, $0.033–0.043:
+   output is what a regeneration pays for, and a repair writes almost none. On
+   the ledger it is its own model_calls row under the route
+   "POST /api/agents/seo/generate-post (claim repair)". */
+const SEO_CLAIM_REPAIR_PARTS = ["title", "meta_description", "body"];
+const SEO_CLAIM_REPAIR_ROUTE = "POST /api/agents/seo/generate-post (claim repair)";
+
+/* Where a screened sentence sits in the text it was screened from. The screen
+   collapsed whitespace and decoded &amp;, &#39; and &rsquo;, so each is matched
+   in any of its forms; tags it replaced with a space are not, and a sentence
+   that ran across one is not found. Preceded by the start, whitespace or the
+   end of a tag, and followed by the end, whitespace or a tag, so it cannot
+   match the tail of a longer sentence. */
+function claimSentencePattern(sentence) {
+  let src = "";
+  for (const ch of String(sentence)) {
+    if (ch === " ") src += "\\s+";
+    else if (ch === "'") src += "(?:'|&#39;|&rsquo;)";
+    else if (ch === "&") src += "(?:&amp;|&)";
+    else src += ch.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+  }
+  return new RegExp("(^|[\\s>])" + src + "(?=$|[\\s<])", "g");
+}
+
+/* The repair's answer: ---SENTENCE 1--- through ---SENTENCE n---, in order,
+   then an optional ---END---, and nothing before the first marker or after the
+   last. Throws on anything else. */
+function parseClaimRepairResponse(text, n) {
+  const t = String(text || "").trim().replace(/^```[a-z]*\s*/i, "").replace(/\s*```$/, "").trim();
+  const marker = /^---(?:SENTENCE (\d+)|END)---[ \t]*$/gm;
+  const marks = [];
+  let m;
+  while ((m = marker.exec(t))) marks.push({ n: m[1] ? Number(m[1]) : null, start: m.index, end: m.index + m[0].length });
+  if (!marks.length || marks[0].start !== 0) throw new Error("the response does not begin with ---SENTENCE 1---");
+  const numbered = marks.filter(function (x) { return x.n !== null; });
+  if (numbered.length !== n || numbered.some(function (x, i) { return x.n !== i + 1; })) {
+    throw new Error("expected sentences 1 to " + n + " in order, got " + JSON.stringify(numbered.map(function (x) { return x.n; })));
+  }
+  const endAt = marks.findIndex(function (x) { return x.n === null; });
+  if (endAt !== -1 && (endAt !== marks.length - 1 || t.slice(marks[endAt].end).trim())) throw new Error("text after ---END---");
+  return numbered.map(function (x) {
+    const next = marks[marks.indexOf(x) + 1];
+    return t.slice(x.end, next ? next.start : t.length).trim();
+  });
+}
+
+async function repairSeoArticleClaims(draft, claims, opts) {
+  const repair = { outcome: null, reason: null, model_called: false, sentences: [], draft: null, response: null };
+
+  // One entry per flagged sentence, however many classes it tripped.
+  const items = [];
+  claims.forEach(function (c) {
+    const found = items.find(function (it) { return it.part === c.part && it.before === c.sentence; });
+    if (found) {
+      if (found.says.indexOf(c.says) === -1) found.says.push(c.says);
+      return;
+    }
+    items.push({ part: c.part, says: [c.says], before: c.sentence });
+  });
+  repair.sentences = items.map(function (it) {
+    return { part: SEO_CLAIM_REPAIR_PARTS[it.part], says: it.says, before: it.before, after: null };
+  });
+
+  const lost = items.filter(function (it) {
+    return !claimSentencePattern(it.before).test(String(draft[SEO_CLAIM_REPAIR_PARTS[it.part]] == null ? "" : draft[SEO_CLAIM_REPAIR_PARTS[it.part]]));
+  });
+  if (lost.length) {
+    repair.outcome = "unlocatable";
+    repair.reason = lost.length + " flagged sentence" + (lost.length === 1 ? " runs" : "s run") +
+      " across markup, so there is no single place to put a rewrite back";
+    return repair;
+  }
+
+  const prompt =
+    "You wrote the article below. A screen found " + items.length + " sentence" + (items.length === 1 ? "" : "s") +
+    " in it that " + (items.length === 1 ? "states" : "state") + " something you have no source for. Rewrite ONLY " +
+    (items.length === 1 ? "that sentence, so that it no longer makes" : "those sentences, so that each one no longer makes") + " the claim. Nothing else in the article will change: each sentence you return replaces " +
+    "exactly the one with its number, in the same place.\n\n" +
+    "For each sentence:\n" +
+    "- Remove the claim, not the point. Where it says how many or how often, or what usually happens, say what the reader can do " +
+    "instead, or say plainly that it varies.\n" +
+    "- Add nothing that would need a source: no frequency, no statistic, nothing about how a named company's systems work or why " +
+    "it acted, nothing beyond any platform's reach.\n" +
+    "- One sentence, in the article's language, about as long as the one it replaces. A question stays a question.\n" +
+    "- Plain text only: no HTML, no link, no markdown, no quotation marks around it." +
+    opts.rules +
+    "\n\nTHE ARTICLE, for context only — do not return it:\n" +
+    "---TITLE---\n" + String(draft.title == null ? "" : draft.title) + "\n" +
+    "---META_DESCRIPTION---\n" + String(draft.meta_description == null ? "" : draft.meta_description) + "\n" +
+    "---BODY---\n" + String(draft.body == null ? "" : draft.body) + "\n" +
+    "---END OF ARTICLE---\n\n" +
+    "THE SENTENCES TO REWRITE:\n" +
+    items.map(function (it, i) { return (i + 1) + ". (" + it.says.join("; ") + ") " + it.before; }).join("\n") +
+    "\n\nRespond with exactly " + items.length + " section" + (items.length === 1 ? "" : "s") + " and nothing else, each marker alone on its own line:\n" +
+    items.map(function (it, i) { return "---SENTENCE " + (i + 1) + "---\nthe rewritten sentence " + (i + 1); }).join("\n") +
+    "\n---END---";
+
+  let completion;
+  try {
+    repair.model_called = true;
+    completion = await callAnthropicText(prompt, 2000, opts.userId, "claude-sonnet-5", {
+      agent_type: "seo",
+      route: SEO_CLAIM_REPAIR_ROUTE
+    });
+  } catch (callError) {
+    // The daily cap refusing it, or the API failing: the draft is refused as
+    // it would have been without a repair, and says why.
+    repair.outcome = "call_failed";
+    repair.reason = String((callError && callError.message) || callError).slice(0, 300);
+    return repair;
+  }
+  repair.response = String((completion && completion.text) || "").slice(0, 20000);
+
+  let afters;
+  try {
+    afters = parseClaimRepairResponse(repair.response, items.length);
+  } catch (parseError) {
+    repair.outcome = "unparseable";
+    repair.reason = String(parseError.message || parseError);
+    return repair;
+  }
+
+  const bad = [];
+  afters.forEach(function (after, i) {
+    const before = items[i].before;
+    if (!after) bad.push((i + 1) + " is empty");
+    else if (/[<>\r\n]/.test(after) || after.indexOf("---") !== -1) bad.push((i + 1) + " is not one plain-text line");
+    else if (after.length > Math.max(before.length + 80, Math.ceil(before.length * 1.5))) bad.push((i + 1) + " is too long");
+  });
+  repair.sentences.forEach(function (s, i) { s.after = afters[i]; });
+  if (bad.length) {
+    repair.outcome = "invalid";
+    repair.reason = "rewrite " + bad.join(", rewrite ");
+    return repair;
+  }
+
+  const repaired = Object.assign({}, draft);
+  items.forEach(function (it, i) {
+    const field = SEO_CLAIM_REPAIR_PARTS[it.part];
+    repaired[field] = String(repaired[field]).replace(claimSentencePattern(it.before), function (whole, lead) { return lead + afters[i]; });
+  });
+  repair.outcome = "repaired";
+  repair.draft = repaired;
+  return repair;
+}
+
+/* The claim list as the 422 has always carried it. */
+function seoClaimsList(claims) {
+  return (claims || []).map(function (c) {
+    return { class: c.class, says: c.says, matched: c.matched, sentence: c.sentence };
+  });
+}
+
+function seoClaimRepairSummary(repair) {
+  if (!repair) return { outcome: "not_attempted" };
+  const summary = { outcome: repair.outcome, reason: repair.reason, model_called: repair.model_called, sentences: repair.sentences };
+  if (repair.claimsAfter) summary.claims_after = seoClaimsList(repair.claimsAfter);
+  return summary;
+}
+
+/* The 422 for an article the claim screen refused, once the repair has run. */
+function seoClaimsRefusalBody(claims, repair) {
+  const n = claims.length;
+  let tried = "";
+  if (repair && repair.outcome === "unlocatable") {
+    tried = " They were not sent for a rewrite: " + repair.reason + ".";
+  } else if (repair && repair.outcome === "call_failed") {
+    tried = " One rewrite of those sentences was attempted and the call failed: " + repair.reason + ".";
+  } else if (repair && (repair.outcome === "unparseable" || repair.outcome === "invalid")) {
+    tried = " One rewrite of those sentences was tried and could not be used: " + repair.reason + ".";
+  } else if (repair && repair.claimsAfter) {
+    tried = " One rewrite of those sentences was tried, and the rewritten article still states " + repair.claimsAfter.length +
+      " thing" + (repair.claimsAfter.length === 1 ? "" : "s") + " it has no source for.";
+  }
+  return {
+    error: "The SEO Agent's article states " + n + " thing" + (n === 1 ? "" : "s") +
+      " it has no source for — how many or how often, a statistic, something beyond any platform's reach, or what a named " +
+      "company's policy does. It was told not to." + tried + " No post was created; generating again is a new draft and a new model call.",
+    claims: seoClaimsList(claims),
+    repair: seoClaimRepairSummary(repair)
+  };
+}
+
+/* What seo_refused_drafts keeps of a repair: everything but the parsed draft
+   object itself, whose rewritten title, meta description and body are kept. */
+function seoClaimRepairRecord(repair) {
+  const record = seoClaimRepairSummary(repair);
+  record.response = repair.response;
+  if (repair.draft) {
+    record.draft = {
+      title: repair.draft.title == null ? null : String(repair.draft.title),
+      meta_description: repair.draft.meta_description == null ? null : String(repair.draft.meta_description),
+      body: repair.draft.body == null ? null : String(repair.draft.body)
+    };
+  }
+  return record;
+}
+
+/* A REFUSED DRAFT IS KEPT, so a refusal can be read. Every draft the generate
+   route refuses after the model answered — unreadable, or failing any gate,
+   repaired or not — is one row in seo_refused_drafts (migration 131): the draft
+   as the model returned it, the answer the caller got, the repair if one ran,
+   and the brief it was written from. Service role only. Best effort: a failed
+   insert is logged and the refusal goes out as it would have, because the
+   caller's answer does not depend on the record. Until 131 is applied every
+   insert fails, and the log line says so. */
+async function recordRefusedSeoDraft(row) {
+  try {
+    const { error } = await supabase.from("seo_refused_drafts").insert(row);
+    if (error) {
+      console.warn("[agents/seo/generate-post] refused draft NOT stored (stage=" + row.stage + "): " +
+        (error.code || "") + " " + (error.message || "") + " — is migration 131 applied?");
+    }
+  } catch (recordError) {
+    console.warn("[agents/seo/generate-post] refused draft NOT stored (stage=" + row.stage + "): " +
+      String((recordError && recordError.message) || recordError));
+  }
 }
 
 /* The arrival token for a published post's money link: "bl" says a blog post
@@ -11473,153 +11756,245 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         " length=" + raw.length +
         " tail(300)=" + JSON.stringify(raw.slice(-300))
       );
-      return res.status(502).json({ error: "The SEO Agent returned an unreadable response. No post was created." });
-    }
-
-    // One post is being generated, so there is nothing to fall back to — a
-    // failed check is a 422 naming the problem, not a silent drop.
-    const title = safeText(parsed.title, 200);
-    if (!title) {
-      return res.status(422).json({ error: "The SEO Agent returned a post with no title." });
-    }
-
-    const body = String(parsed.body === undefined || parsed.body === null ? "" : parsed.body).trim();
-    if (body.length < 800) {
-      return res.status(422).json({ error: "The SEO Agent returned a post body of only " + body.length + " characters; at least 800 are required." });
-    }
-
-    // In external mode the money link IS the post, so it is checked here as
-    // well as at publish time — a proposal that could never publish is not
-    // worth filing.
-    //
-    // Checked against a SANITIZED copy, not the raw body above. The proposal
-    // stores the raw string, but publish_blog_post sanitizes before it writes,
-    // and sanitizeBlogHtml answers an href it refuses with a bare <a> that keeps
-    // the link text — so the raw body can still contain the URL while the
-    // published post has no link at all. Sanitizing with the same handle,
-    // listing slugs and mode the executor will use is what makes this check see
-    // the markup that will actually be stored. The copy is used for the check
-    // only; what the proposal carries is unchanged.
-    if (externalMode) {
-      const publishedBody = sanitizeBlogHtml(
-        body,
-        authorHandle,
-        existingListings.map(function (l) { return l && l.slug; }),
-        externalMode
-      );
-
-      if (!bodyLinksToMoneyUrl(publishedBody, moneyUrl)) {
-        return res.status(422).json({ error: "The SEO Agent did not include the money link " + moneyUrl + " as a link anywhere in the post. No post was created." });
-      }
-    }
-    // The same check for an own-page post, on the same sanitized copy, with the
-    // flags the executor will use: internal, this handle, these listing slugs.
-    if (ownPageMode) {
-      const publishedBody = sanitizeBlogHtml(
-        body,
-        authorHandle,
-        existingListings.map(function (l) { return l && l.slug; }),
-        false
-      );
-      if (!bodyLinksToMoneyUrl(publishedBody, moneyPath)) {
-        return res.status(422).json({ error: "The SEO Agent did not include the money page " + moneyPath + " as a link anywhere in the post. No post was created." });
-      }
-    }
-
-    // The control, as opposed to the instruction. Title, meta description and
-    // body are scanned together — a claim in the search snippet is published
-    // just as publicly as one in the article.
-    if (complianceProfile) {
-      const complianceText = [
-        safeText(parsed.title, 200) || "",
-        parsed.meta_description !== undefined ? (safeText(parsed.meta_description, 300) || "") : "",
-        body
-      ].join("\n\n");
-
-      const violations = findComplianceViolations(complianceProfile, complianceText, 5);
-
-      if (violations.length) {
-        // One line per rejection, machine-greppable, so a pattern that keeps
-        // firing shows up as a trend instead of as scattered 422s.
-        console.warn(
-          "[agents/seo/generate-post] Compliance rejection:" +
-          " profile=" + complianceProfileName +
-          " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
-          " rules=" + JSON.stringify(violations.map(function (v) { return v.rule; }))
-        );
-
-        return res.status(422).json({
-          error: "The SEO Agent returned a post that violates the '" + complianceProfileName + "' compliance profile. No post was created.",
-          compliance_profile: complianceProfileName,
-          violations: violations.map(function (v) {
-            return { matched: v.matched, rule: v.rule };
-          })
-        });
-      }
-
-      // The banned patterns say what may not appear. This says what must.
-      // Checked against the body alone: the disclaimer belongs in the article,
-      // not in a meta description that would only leak it into search results.
-      if (!complianceRequiredTextPresent(complianceProfile, body)) {
-        console.warn(
-          "[agents/seo/generate-post] Compliance rejection:" +
-          " profile=" + complianceProfileName +
-          " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
-          " rules=" + JSON.stringify(["required disclaimer text is missing from the post body"])
-        );
-
-        return res.status(422).json({
-          error: "The SEO Agent returned a post that is missing the disclaimer required by the '" + complianceProfileName + "' compliance profile. No post was created.",
-          compliance_profile: complianceProfileName,
-          required_text: complianceProfile.requiredText
-        });
-      }
-    }
-
-    // What SEO_NO_INVENTED_FACTS told the writer not to say, checked in what it
-    // wrote. Refused, not flagged — see ARTICLE_CLAIM_CLASSES for why.
-    const articleClaims = findArticleClaims([
-      safeText(parsed.title, 200) || "",
-      parsed.meta_description !== undefined ? (safeText(parsed.meta_description, 300) || "") : "",
-      body
-    ]);
-    if (articleClaims.length) {
-      console.warn(
-        "[agents/seo/generate-post] Claim screen rejection:" +
-        " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
-        " classes=" + JSON.stringify(articleClaims.map(function (c) { return c.class; }))
-      );
-      return res.status(422).json({
-        error: "The SEO Agent's article states " + articleClaims.length + " thing" + (articleClaims.length === 1 ? "" : "s") +
-          " it has no source for — how many or how often, a statistic, something beyond any platform's reach, or what a named " +
-          "company's policy does. It was told not to. No post was created; generating again is a new draft and a new model call.",
-        claims: articleClaims.map(function (c) {
-          return { class: c.class, says: c.says, matched: c.matched, sentence: c.sentence };
-        })
+      const unreadable = { error: "The SEO Agent returned an unreadable response. No post was created." };
+      await recordRefusedSeoDraft({
+        user_id:            req.user.id,
+        mode:               externalMode ? "external" : (ownPageMode ? "own_page" : "listing"),
+        money_target:       externalMode ? moneyUrl : (ownPageMode ? moneyPath : null),
+        compliance_profile: complianceProfileName || null,
+        stage:              "unparseable",
+        refusal:            unreadable,
+        raw_response:       raw,
+        brief:              { topic: topic, site_name: siteName, site_context: siteContext, money_anchor: moneyAnchor }
       });
+      return res.status(502).json(unreadable);
     }
 
-    const slug = safeText(parsed.slug, 100);
-    if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-      return res.status(422).json({ error: "The SEO Agent returned an invalid slug: '" + String(parsed.slug) + "'. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen." });
+    /* Every gate a draft must pass before it is filed, in one function, so a
+       repaired draft meets exactly the gates the first one met — not a copy of
+       them that can drift. Returns null when the draft passes; otherwise the
+       refusal: which gate (stage), and the status and body the route answers
+       with. One post is being generated, so there is nothing to fall back to —
+       a failed check is a 422 naming the problem, not a silent drop.
+
+       THE CLAIM SCREEN RUNS LAST. Before the repair pass it sat ahead of the
+       slug checks; it moved so that a repair is only ever paid for when the
+       claims are the one thing standing between the draft and a proposal. Every
+       other gate answers exactly as it did. */
+    function seoDraftRefusal(draft) {
+      const title = safeText(draft.title, 200);
+      if (!title) {
+        return { stage: "title", status: 422, json: { error: "The SEO Agent returned a post with no title." } };
+      }
+
+      const body = String(draft.body === undefined || draft.body === null ? "" : draft.body).trim();
+      if (body.length < 800) {
+        return { stage: "body_length", status: 422, json: { error: "The SEO Agent returned a post body of only " + body.length + " characters; at least 800 are required." } };
+      }
+
+      // In external mode the money link IS the post, so it is checked here as
+      // well as at publish time — a proposal that could never publish is not
+      // worth filing.
+      //
+      // Checked against a SANITIZED copy, not the raw body above. The proposal
+      // stores the raw string, but publish_blog_post sanitizes before it writes,
+      // and sanitizeBlogHtml answers an href it refuses with a bare <a> that keeps
+      // the link text — so the raw body can still contain the URL while the
+      // published post has no link at all. Sanitizing with the same handle,
+      // listing slugs and mode the executor will use is what makes this check see
+      // the markup that will actually be stored. The copy is used for the check
+      // only; what the proposal carries is unchanged.
+      if (externalMode) {
+        const publishedBody = sanitizeBlogHtml(
+          body,
+          authorHandle,
+          existingListings.map(function (l) { return l && l.slug; }),
+          externalMode
+        );
+
+        if (!bodyLinksToMoneyUrl(publishedBody, moneyUrl)) {
+          return { stage: "money_link", status: 422, json: { error: "The SEO Agent did not include the money link " + moneyUrl + " as a link anywhere in the post. No post was created." } };
+        }
+      }
+      // The same check for an own-page post, on the same sanitized copy, with the
+      // flags the executor will use: internal, this handle, these listing slugs.
+      if (ownPageMode) {
+        const publishedBody = sanitizeBlogHtml(
+          body,
+          authorHandle,
+          existingListings.map(function (l) { return l && l.slug; }),
+          false
+        );
+        if (!bodyLinksToMoneyUrl(publishedBody, moneyPath)) {
+          return { stage: "money_link", status: 422, json: { error: "The SEO Agent did not include the money page " + moneyPath + " as a link anywhere in the post. No post was created." } };
+        }
+      }
+
+      // The control, as opposed to the instruction. Title, meta description and
+      // body are scanned together — a claim in the search snippet is published
+      // just as publicly as one in the article.
+      if (complianceProfile) {
+        const complianceText = [
+          safeText(draft.title, 200) || "",
+          draft.meta_description !== undefined ? (safeText(draft.meta_description, 300) || "") : "",
+          body
+        ].join("\n\n");
+
+        const violations = findComplianceViolations(complianceProfile, complianceText, 5);
+
+        if (violations.length) {
+          // One line per rejection, machine-greppable, so a pattern that keeps
+          // firing shows up as a trend instead of as scattered 422s.
+          console.warn(
+            "[agents/seo/generate-post] Compliance rejection:" +
+            " profile=" + complianceProfileName +
+            " title=" + JSON.stringify(String(draft.title || "").slice(0, 120)) +
+            " rules=" + JSON.stringify(violations.map(function (v) { return v.rule; }))
+          );
+
+          return {
+            stage: "compliance", status: 422, json: {
+              error: "The SEO Agent returned a post that violates the '" + complianceProfileName + "' compliance profile. No post was created.",
+              compliance_profile: complianceProfileName,
+              violations: violations.map(function (v) {
+                return { matched: v.matched, rule: v.rule };
+              })
+            }
+          };
+        }
+
+        // The banned patterns say what may not appear. This says what must.
+        // Checked against the body alone: the disclaimer belongs in the article,
+        // not in a meta description that would only leak it into search results.
+        if (!complianceRequiredTextPresent(complianceProfile, body)) {
+          console.warn(
+            "[agents/seo/generate-post] Compliance rejection:" +
+            " profile=" + complianceProfileName +
+            " title=" + JSON.stringify(String(draft.title || "").slice(0, 120)) +
+            " rules=" + JSON.stringify(["required disclaimer text is missing from the post body"])
+          );
+
+          return {
+            stage: "compliance_disclaimer", status: 422, json: {
+              error: "The SEO Agent returned a post that is missing the disclaimer required by the '" + complianceProfileName + "' compliance profile. No post was created.",
+              compliance_profile: complianceProfileName,
+              required_text: complianceProfile.requiredText
+            }
+          };
+        }
+      }
+
+      const slug = safeText(draft.slug, 100);
+      if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+        return { stage: "slug", status: 422, json: { error: "The SEO Agent returned an invalid slug: '" + String(draft.slug) + "'. Use lowercase letters, digits and hyphens only, with no leading or trailing hyphen." } };
+      }
+
+      if (takenSlugs[slug.toLowerCase()]) {
+        return { stage: "slug_taken", status: 422, json: { error: "The SEO Agent returned the slug '" + slug + "', which this author has already used." } };
+      }
+
+      if (draft.internal_links !== undefined && draft.internal_links !== null && !Array.isArray(draft.internal_links)) {
+        return { stage: "internal_links", status: 422, json: { error: "The SEO Agent returned internal_links that is not an array." } };
+      }
+
+      // What SEO_NO_INVENTED_FACTS told the writer not to say, checked in what it
+      // wrote. Refused, not flagged — see ARTICLE_CLAIM_CLASSES for why. The
+      // body the route answers with is built below, once the repair has run.
+      const articleClaims = findArticleClaims([
+        safeText(draft.title, 200) || "",
+        draft.meta_description !== undefined ? (safeText(draft.meta_description, 300) || "") : "",
+        body
+      ]);
+      if (articleClaims.length) {
+        return { stage: "claims", status: 422, claims: articleClaims };
+      }
+
+      return null;
     }
 
-    if (takenSlugs[slug.toLowerCase()]) {
-      return res.status(422).json({ error: "The SEO Agent returned the slug '" + slug + "', which this author has already used." });
+    /* ONE REPAIR, NEVER A LOOP. When the claim screen is the only gate a draft
+       fails, the flagged sentences — and only those — go back to the model once
+       to be rewritten without the claim (repairSeoArticleClaims). The repaired
+       draft then meets every gate above again, through the same function, and
+       its answer is final: this is an if, and nothing below it calls the repair
+       again. A repaired draft that still fails anything is refused. */
+    let draft = parsed;
+    let refusal = seoDraftRefusal(draft);
+    const firstClaims = refusal && refusal.stage === "claims" ? refusal.claims : null;
+    let claimRepair = null;
+    if (refusal && refusal.stage === "claims") {
+      claimRepair = await repairSeoArticleClaims(draft, refusal.claims, {
+        userId: req.user.id,
+        rules: complianceSection + SEO_NO_INVENTED_FACTS + (complianceProfile ? SEO_CATEGORY_AS_PRODUCT_TYPE : "")
+      });
+      if (claimRepair.draft) {
+        const after = seoDraftRefusal(claimRepair.draft);
+        if (after === null) {
+          draft = claimRepair.draft;
+          refusal = null;
+        } else {
+          refusal = after;
+          claimRepair.outcome = "refused_after_repair";
+          claimRepair.reason = "the rewritten article failed the " + after.stage + " check";
+          claimRepair.claimsAfter = after.stage === "claims" ? after.claims : null;
+        }
+      }
     }
 
-    const metaDescription = parsed.meta_description !== undefined ? safeText(parsed.meta_description, 300) : null;
-    const keyword = parsed.keyword !== undefined ? safeText(parsed.keyword, 100) : null;
+    if (refusal) {
+      if (refusal.stage === "claims") {
+        refusal.json = seoClaimsRefusalBody(firstClaims, claimRepair);
+      } else if (firstClaims) {
+        // A gate other than the claim screen refused the REPAIRED draft. Its
+        // own answer, saying that it was the repaired article it judged.
+        refusal.json = Object.assign({}, refusal.json, {
+          error: refusal.json.error + " This was the article after one rewrite of the " + claimRepair.sentences.length +
+            " sentence" + (claimRepair.sentences.length === 1 ? "" : "s") + " the claim screen flagged.",
+          claims: seoClaimsList(firstClaims),
+          repair: seoClaimRepairSummary(claimRepair)
+        });
+      }
+      if (firstClaims) {
+        console.warn(
+          "[agents/seo/generate-post] Claim screen rejection:" +
+          " title=" + JSON.stringify(String(parsed.title || "").slice(0, 120)) +
+          " classes=" + JSON.stringify(firstClaims.map(function (c) { return c.class; })) +
+          " repair=" + (claimRepair ? claimRepair.outcome : "none")
+        );
+      }
+      await recordRefusedSeoDraft({
+        user_id:            req.user.id,
+        mode:               externalMode ? "external" : (ownPageMode ? "own_page" : "listing"),
+        money_target:       externalMode ? moneyUrl : (ownPageMode ? moneyPath : null),
+        compliance_profile: complianceProfileName || null,
+        stage:              firstClaims && refusal.stage !== "claims" ? "after_repair:" + refusal.stage : refusal.stage,
+        refusal:            refusal.json,
+        title:              parsed.title === undefined ? null : String(parsed.title),
+        slug:               parsed.slug === undefined ? null : String(parsed.slug),
+        meta_description:   parsed.meta_description === undefined ? null : String(parsed.meta_description),
+        keyword:            parsed.keyword === undefined ? null : String(parsed.keyword),
+        body:               parsed.body === undefined || parsed.body === null ? null : String(parsed.body),
+        reasoning:          parsed.reasoning === undefined ? null : String(parsed.reasoning),
+        raw_response:       null,
+        repair:             claimRepair ? seoClaimRepairRecord(claimRepair) : null,
+        brief:              { topic: topic, site_name: siteName, site_context: siteContext, money_anchor: moneyAnchor }
+      });
+      return res.status(refusal.status).json(refusal.json);
+    }
+
+    const title = safeText(draft.title, 200);
+    const body = String(draft.body === undefined || draft.body === null ? "" : draft.body).trim();
+    const slug = safeText(draft.slug, 100);
+
+    const metaDescription = draft.meta_description !== undefined ? safeText(draft.meta_description, 300) : null;
+    const keyword = draft.keyword !== undefined ? safeText(draft.keyword, 100) : null;
 
     let internalLinks = null;
-    if (parsed.internal_links !== undefined && parsed.internal_links !== null) {
-      if (!Array.isArray(parsed.internal_links)) {
-        return res.status(422).json({ error: "The SEO Agent returned internal_links that is not an array." });
-      }
+    if (draft.internal_links !== undefined && draft.internal_links !== null) {
       // Same handle and listing slugs the executor will sanitize the body with,
       // so the proposal already carries the hrefs the published row will have.
       internalLinks = normalizeInternalLinkList(
-        parsed.internal_links,
+        draft.internal_links,
         authorHandle,
         existingListings.map(function (l) { return l && l.slug; }),
         10,
@@ -11655,6 +12030,15 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     // when no profile is active, on the same terms as money_url.
     if (complianceProfile) {
       proposalPayload.compliance_profile = complianceProfileName;
+    }
+
+    // Present only when the one repair ran and its article was filed: every
+    // sentence the model rewrote, as flagged and as rewritten, so whoever
+    // approves the proposal sees which lines a second call wrote and what they
+    // replaced. Absent otherwise, on the same terms as the keys above. The
+    // executor reads nothing from it, so a forged one changes nothing published.
+    if (claimRepair && claimRepair.outcome === "repaired") {
+      proposalPayload.claim_repair = { sentences: claimRepair.sentences };
     }
 
     const { data: inserted, error: insertError } = await supabase

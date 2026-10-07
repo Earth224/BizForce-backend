@@ -105,6 +105,32 @@
     12. money_path from any other account is 403 at generation and throws at
         publish; without money_path that account is unaffected.
 
+   ADDED WITH "Repair the sentence, not the article":
+    17. Two narrowings. typicality does not fire in a sentence ending "?", and
+        named_company_policy does not fire in one carrying "not about why",
+        "isn't something you can see", "no way to know", "can't know why" or
+        "don't guess". Of generation 5's five hits, the declining sentence and
+        the FAQ heading now pass and the other three are still caught. What each
+        lets back in is asserted, so the comment in server.js stays true:
+        draft 1's "...so often?" heading, and a claim wrapped in a declining
+        phrase. Section 15 no longer counts that heading as a catch.
+    18. ONE repair. When the claim screen is the only gate a draft fails, the
+        route makes exactly one more model call, under its own ledger route,
+        with the rules, the article and the numbered flagged sentences; the
+        filed article is the first one with only those sentences replaced —
+        title, meta description and body alike — and the proposal carries
+        claim_repair. A rewrite that still states a claim, an unusable answer,
+        a failed call, or a sentence that runs across markup (no call at all)
+        is 422, and never a third call. The rewritten article meets every gate
+        again: the money-link, compliance and claim checks run on it (counted),
+        and it is refused for a compliance violation or a body under 800
+        characters that only the rewrite introduced.
+    19. Every draft the route refuses after the model answered — unreadable or
+        failing any gate, repaired or not — is one seo_refused_drafts row with
+        the draft as returned, the refusal sent, the repair and the brief; a
+        filed draft writes none; a failed insert changes nothing the caller
+        sees; and migration 131 has a column for every key the route writes.
+
    MUTATIONS — each must turn the named section red:
      MUTATE=allowlist    any root-relative path is accepted               → 1
      MUTATE=silent       an off-allowlist path is dropped, not refused     → 1
@@ -150,6 +176,12 @@
      MUTATE=problemalways  it fires in own-page mode whatever site_context says → 16
      MUTATE=problemanymode it fires in every mode                          → 16
      MUTATE=problemwording it no longer says "never around a condition"    → 16
+     MUTATE=noquestion     typicality fires inside a question again        → 17
+     MUTATE=nodecline      declining to know no longer exempts a sentence  → 17
+     MUTATE=norepair       a claim hit is refused with no repair           → 18
+     MUTATE=repairloops    the repair runs until the article passes        → 18
+     MUTATE=repairunscreened the repaired article is filed unchecked       → 18
+     MUTATE=norecord       a refused draft is not stored                   → 19
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -180,7 +212,8 @@ const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pu
   "alltargets", "firstpost", "nofacts", "nodisclose", "discloseall", "anyauthor", "escape", "emailsend", "hideprice", "pathanchor",
   "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok",
   "noquantity", "notypicality", "nofigure", "noreach", "nocompany", "genscreen", "pubscreen", "innocent", "faqheading",
-  "problemnever", "problemalways", "problemanymode", "problemwording"];
+  "problemnever", "problemalways", "problemanymode", "problemwording",
+  "noquestion", "nodecline", "norepair", "repairloops", "repairunscreened", "norecord"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -287,7 +320,7 @@ if (MUTATE === "notypicality") silenceClass("typicality");
 if (MUTATE === "nofigure") silenceClass("figure");
 if (MUTATE === "noreach") silenceClass("beyond_reach");
 if (MUTATE === "nocompany") silenceClass("named_company_policy");
-if (MUTATE === "genscreen") SERVER = mutate(SERVER, "    if (articleClaims.length) {\n      console.warn(", "    if (false) {\n      console.warn(", "genscreen");
+if (MUTATE === "genscreen") SERVER = mutate(SERVER, "      if (articleClaims.length) {\n        return { stage: \"claims\"", "      if (false) {\n        return { stage: \"claims\"", "genscreen");
 if (MUTATE === "pubscreen") SERVER = mutate(SERVER, "    if (articleClaims.length) {\n      throw new Error(", "    if (false) {\n      throw new Error(", "pubscreen");
 if (MUTATE === "innocent") {
   SERVER = mutate(SERVER, "new RegExp(\"(?<!\\\\b(?:the|your|my|our|their|its|his|her|a|at|how|as|too|what|which|so)\\\\s)\\\\b(?:most|", "new RegExp(\"\\\\b(?:most|", "innocent");
@@ -300,6 +333,13 @@ if (MUTATE === "problemanymode") SERVER = mutate(SERVER, AROUND_LINE,
   "      (siteContext && SEO_HEALTH_ADJACENT_CONTEXT.test(siteContext) ? SEO_AROUND_THE_PRODUCT : \"\") +\n", "problemanymode");
 if (MUTATE === "problemwording") SERVER = mutate(SERVER,
   " — \" +\n  \"never around a condition, a symptom or a problem it might be bought for.", ".", "problemwording");
+if (MUTATE === "noquestion") SERVER = mutate(SERVER, "    except: ARTICLE_CLAIM_QUESTION }", "    except: null }", "noquestion");
+if (MUTATE === "nodecline") SERVER = mutate(SERVER, "    except: ARTICLE_CLAIM_DECLINES }", "    except: null }", "nodecline");
+const REPAIR_IF = "    if (refusal && refusal.stage === \"claims\") {\n      claimRepair = await repairSeoArticleClaims(";
+if (MUTATE === "norepair") SERVER = mutate(SERVER, REPAIR_IF, "    if (false) {\n      claimRepair = await repairSeoArticleClaims(", "norepair");
+if (MUTATE === "repairloops") SERVER = mutate(SERVER, REPAIR_IF, "    while (refusal && refusal.stage === \"claims\") {\n      claimRepair = await repairSeoArticleClaims(", "repairloops");
+if (MUTATE === "repairunscreened") SERVER = mutate(SERVER, "        const after = seoDraftRefusal(claimRepair.draft);", "        const after = null;", "repairunscreened");
+if (MUTATE === "norecord") SERVER = mutate(SERVER, "    const { error } = await supabase.from(\"seo_refused_drafts\").insert(row);", "    const error = null;", "norecord");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -362,6 +402,9 @@ const SERVER_PREV = execSync("git show " + PREV + ":server.js", { cwd: REPO, max
 const AROUND = liftValue(SERVER, "SEO_AROUND_THE_PRODUCT");
 const PREV16 = "60c9bc1";
 const SERVER_PREV16 = execSync("git show " + PREV16 + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
+/* Section 17's screen before the narrowings. Pinned, not HEAD. */
+const PREV17 = "b86aa99";
+const SERVER_PREV17 = execSync("git show " + PREV17 + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 
 /* ── a database that records what it is asked to write ── */
 const HANDLE = "check-handle";
@@ -377,8 +420,12 @@ const POSTS = [
 function likeToRegExp(pattern) {
   return new RegExp("^" + pattern.split("").map(c => c === "%" ? "[\\s\\S]*" : c === "_" ? "[\\s\\S]" : c.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&")).join("") + "$", "i");
 }
+/* Refused drafts (section 19) are recorded apart from every other write, so
+   "nothing filed" everywhere above still means exactly what it meant before
+   refusals were stored, and section 6 still compares filed rows with BASELINE. */
+const REFUSED_TABLE = "seo_refused_drafts";
 function fakeDb(opts) {
-  const writes = [];
+  const writes = [], drafts = [];
   const listings = opts && opts.noListings ? [] : LISTINGS;
   const posts = opts && opts.posts ? opts.posts : POSTS;
   function q(table) {
@@ -386,7 +433,13 @@ function fakeDb(opts) {
     const b = {};
     ["select", "eq", "neq", "gte", "lte", "gt", "in", "is", "not", "order", "limit"].forEach(k => { b[k] = () => b; });
     b.ilike = (col, pattern) => { st.likes.push([col, likeToRegExp(pattern)]); return b; };
-    b.insert = (p) => { st.insert = p; writes.push({ table: table, payload: JSON.parse(JSON.stringify(p)) }); return b; };
+    b.insert = (p) => {
+      if (table === REFUSED_TABLE) {
+        drafts.push(JSON.parse(JSON.stringify(p)));
+        return Promise.resolve({ data: null, error: opts && opts.draftInsertError ? opts.draftInsertError : null });
+      }
+      st.insert = p; writes.push({ table: table, payload: JSON.parse(JSON.stringify(p)) }); return b;
+    };
     b.maybeSingle = () => Promise.resolve({ data: table === "bf_profiles" ? { username: HANDLE } : null, error: null });
     b.single = () => Promise.resolve(st.insert ? { data: Object.assign({ id: "row-1" }, st.insert), error: null } : { data: null, error: null });
     b.then = (res, rej) => Promise.resolve({
@@ -395,11 +448,16 @@ function fakeDb(opts) {
     }).then(res, rej);
     return b;
   }
-  return { client: { from: q }, writes: writes };
+  return { client: { from: q }, writes: writes, drafts: drafts };
 }
 
-function baseCtx(db, modelText) {
-  const prompts = [];
+/* The scripted model. modelText answers the first call; a repair (the second
+   call) gets opts.repair when given — a string, an Error to throw, or a
+   function of the prompt — and modelText again otherwise. A fourth call for
+   one article is a repair that loops: this says so as a section-18 failure
+   and stops the run, because a looping route would never return. */
+function baseCtx(db, modelText, opts) {
+  const prompts = [], routes = [];
   const ctx = {
     supabase: db.client, nowIso: () => "2026-10-05T12:00:00.000Z", process: { env: {} }, require: require, Buffer: Buffer, URL: URL,
     console: { log() {}, warn() {}, error() {} },
@@ -410,28 +468,49 @@ function baseCtx(db, modelText) {
     /* server.js destructures it from lib/ownerAccount.js, which the lifter
        cannot follow; this is the same module's value. */
     OWNER_ACCOUNT_ID: AUTHOR,
-    callAnthropicText: async (prompt) => { prompts.push(prompt); return { text: modelText, stopReason: "end_turn" }; }
+    callAnthropicText: async (prompt, maxTokens, userId, model, ledger) => {
+      prompts.push(prompt); routes.push(ledger && ledger.route);
+      if (prompts.length > 3) {
+        console.log("    FAIL  18. one article made " + prompts.length + " model calls — the repair loops");
+        console.log("\nCHECKS FAILED: the run was stopped");
+        process.exit(1);
+      }
+      const answer = prompts.length > 1 && opts && opts.repair !== undefined ? opts.repair : modelText;
+      if (answer instanceof Error) throw answer;
+      return { text: typeof answer === "function" ? answer(prompt) : answer, stopReason: "end_turn" };
+    }
   };
-  return { ctx: ctx, prompts: prompts };
+  return { ctx: ctx, prompts: prompts, routes: routes };
 }
 
-function liftRoute(src, db, modelText) {
+/* The gates a draft meets, counted per call, so section 18 can show the
+   repaired article met them again. Function declarations in the lifted script
+   are properties of its global, and the route reaches them through it. */
+const COUNTED = ["bodyLinksToMoneyUrl", "findComplianceViolations", "complianceRequiredTextPresent", "findArticleClaims"];
+function liftRoute(src, db, modelText, opts) {
   const s = shared();
-  const b = baseCtx(db, modelText);
+  const b = baseCtx(db, modelText, opts);
   let handler = null;
   b.ctx.app = { post() { handler = arguments[arguments.length - 1]; } };
   vm.createContext(b.ctx);
   vm.runInContext(closure(s, src, s.routeCode(src, "seo/generate-post")), b.ctx);
   if (!handler) throw new Error("EXTRACTION FAILED: generate-post");
-  return { handler: handler, prompts: b.prompts };
+  const counts = {};
+  COUNTED.forEach(n => {
+    const f = b.ctx[n];
+    counts[n] = 0;
+    if (typeof f === "function") b.ctx[n] = function () { counts[n]++; return f.apply(this, arguments); };
+  });
+  return { handler: handler, prompts: b.prompts, routes: b.routes, counts: counts };
 }
 async function generate(src, body, modelText, opts) {
   const db = fakeDb(opts);
-  const r = liftRoute(src, db, modelText);
+  const r = liftRoute(src, db, modelText, opts);
   const res = { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(p) { this.body = JSON.parse(JSON.stringify(p)); return this; } };
   let nextErr = null;
   await r.handler({ user: { id: (opts && opts.userId) || AUTHOR }, body: body }, res, (e) => { nextErr = e || new Error("next"); });
-  return { status: res.statusCode, body: res.body, prompt: r.prompts[0] || null, calls: r.prompts.length, writes: db.writes, nextErr: nextErr && String(nextErr.message || nextErr) };
+  return { status: res.statusCode, body: res.body, prompt: r.prompts[0] || null, prompts: r.prompts, routes: r.routes, counts: r.counts,
+    calls: r.prompts.length, writes: db.writes, drafts: db.drafts, nextErr: nextErr && String(nextErr.message || nextErr) };
 }
 
 function liftPublish(src, db) {
@@ -760,11 +839,13 @@ async function visit(h, body) {
   vm.createContext(sctx);
   /* Its own definitions only: the closure walker would read "Stripe" in the
      company list as an identifier and lift the Stripe client. */
-  vm.runInContext(["ARTICLE_CLAIM_POPULATION", "ARTICLE_CLAIM_COMPANY", "ARTICLE_CLAIM_POLICY_VERB", "ARTICLE_CLAIM_CLASSES", "findArticleClaims"]
+  vm.runInContext(["ARTICLE_CLAIM_POPULATION", "ARTICLE_CLAIM_COMPANY", "ARTICLE_CLAIM_POLICY_VERB", "ARTICLE_CLAIM_QUESTION", "ARTICLE_CLAIM_DECLINES",
+    "ARTICLE_CLAIM_CLASSES", "findArticleClaims"]
     .map(n => sc.definitionOf(SERVER, n)).join("\n") + "\nthis.find = findArticleClaims;", sctx);
   const classesOf = t => sctx.find([t]).map(h => h.class);
   /* Every true hit in the four own-page drafts, one sentence per class it
-     must catch, copied from the drafts so this does not depend on their rows. */
+     must catch, copied from the drafts so this does not depend on their rows —
+     less draft 1's "...so often?" heading, which section 17 lets back in. */
   const CLAIMS = [
     ["quantity", "It varies widely by business, but most owners see the fastest recovery from email and SMS to an existing list."],
     ["quantity", "Most disabled ad accounts show a reason code or a link to an appeal form inside Ads Manager or Business Suite."],
@@ -773,7 +854,6 @@ async function visit(h, body) {
     ["typicality", "If your business sits in a category that often gets flagged, write straightforward answers."],
     ["typicality", "Businesses that already had an email list or a website tend to have a faster path forward simply because they're not starting from zero."],
     ["typicality", "The businesses that recover fastest from a disabled account are usually the ones that already had a way to reach customers."],
-    ["typicality", "Why do Facebook ad accounts get disabled for supplement and wellness businesses so often?"],
     ["figure", "Review systems flag categories like supplements at a much higher rate than average."],
     ["figure", "Around 40% of appeals succeed."],
     ["beyond_reach", "A practical long-term response is to build the parts of your presence that no platform can disable."],
@@ -867,6 +947,172 @@ async function visit(h, body) {
     check("16. " + label + " — no line, and the prompt is byte-identical to " + PREV16,
       a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
   }
+
+  console.log("\n══ 17. two narrowings ══");
+  /* The screen as it stood before them, for "these are what changed". */
+  const s17 = shared(), hctx = {};
+  vm.createContext(hctx);
+  vm.runInContext(["ARTICLE_CLAIM_POPULATION", "ARTICLE_CLAIM_COMPANY", "ARTICLE_CLAIM_POLICY_VERB", "ARTICLE_CLAIM_CLASSES", "findArticleClaims"]
+    .map(n => s17.definitionOf(SERVER_PREV17, n)).join("\n") + "\nthis.find = findArticleClaims;", hctx);
+  const classesBefore = t => hctx.find([t]).map(h => h.class);
+  /* Generation 5's five hits, verbatim, and what each must now be. */
+  const FIVE = [
+    [[], "This is about what you can actually do right now — not about why Facebook's systems flagged you, which isn't something you can see or verify from the outside."],
+    [["typicality"], "If you sell supplements, CBD or hemp, adult wellness items, or esoteric and spiritual products, the instinct after losing an ad account is to write content aimed at the problem a customer has — because that's often what ad copy used to do."],
+    [["typicality"], "If your ad account was disabled, check whether your payment processor has flagged your account for the same category of product — the two often get scrutinized separately, but a business in a restricted category can get cut off from both around the same time."],
+    [[], "How long does a Facebook ad account appeal usually take?"],
+    [["typicality"], "Email to any list you already have is usually the quickest to activate, since it doesn't require building new traffic — it only requires having addresses and a service to send through."]
+  ];
+  FIVE.forEach(([want, t], i) => console.log("    #" + (i + 1) + " before " + JSON.stringify(classesBefore(t)) + " now " + JSON.stringify(classesOf(t))));
+  check("17. before the narrowings, all five of generation 5's hits were caught", FIVE.every(([w, t]) => classesBefore(t).length === 1));
+  check("17. now the declining sentence (#1) and the FAQ heading (#4) pass, and #2, #3 and #5 are still caught as typicality",
+    FIVE.every(([want, t]) => JSON.stringify(classesOf(t)) === JSON.stringify(want)));
+  const DECLINES = [
+    ["It's not about why Google flagged the account.", "Google flagged the account."],
+    ["Why Meta flagged you isn't something you can see.", "Meta flagged you."],
+    ["Why Meta flagged you isn’t something you can see.", "Meta flagged you for the category."],
+    ["There is no way to know why Meta flagged your account.", "Meta flagged your account."],
+    ["You can't know why Facebook restricted it.", "Facebook restricted it."],
+    ["Don't guess why Meta flagged it.", "Meta flagged it."]
+  ];
+  check("17. each of the five declining phrases — either apostrophe — exempts its sentence, and the same sentence without it is still caught",
+    DECLINES.every(([with_, without]) => classesOf(with_).length === 0 && classesOf(without).indexOf("named_company_policy") !== -1),
+    JSON.stringify(DECLINES.map(([a, b]) => [classesOf(a), classesOf(b)])));
+  /* What each lets back in, asserted so the comment in server.js stays true. */
+  const LET_IN = ["Why do Facebook ad accounts get disabled for supplement and wellness businesses so often?",
+    "It's not about why Meta flags supplements; it flags them for the category."];
+  check("17. LETS BACK IN: draft 1's \"...so often?\" heading, and a claim wrapped in a declining phrase — both were caught, both now pass",
+    LET_IN.every(t => classesBefore(t).length > 0 && classesOf(t).length === 0), JSON.stringify(LET_IN.map(classesOf)));
+  const STILL = [["named_company_policy", "That's why Meta's systems flag supplements."], ["typicality", "Appeals usually take weeks."],
+    ["typicality", "They usually do."], ["quantity", "Why do most sellers lose their accounts?"], ["figure", "Do 40% of appeals succeed?"]];
+  check("17. still caught: a \"why\" clause that does not decline, a statement, the answer after a question, and a question's quantity or figure",
+    STILL.every(([cls, t]) => classesOf(t).indexOf(cls) !== -1) && classesOf("Do appeals usually take weeks? They usually do.").length === 1,
+    JSON.stringify(STILL.map(([c, t]) => classesOf(t))));
+
+  console.log("\n══ 18. one repair ══");
+  const REPAIR_ROUTE = liftValue(SERVER, "SEO_CLAIM_REPAIR_ROUTE");
+  const bodyOf = text => String(text).split("---BODY---\n")[1].trim();
+  const SENT = "Most owners see results from email often within days, and no platform can disable a list.";
+  const FIXED = "Email to people who already know you is one place to start, and how quickly it works varies.";
+  const one = s => "---SENTENCE 1---\n" + s + "\n---END---";
+  const first18 = article([OWN], CLAIM_P);
+  const rep = await generate(SERVER, { money_path: OWN }, first18, { repair: one(FIXED) });
+  const filed18 = ((rep.writes[0] || {}).payload || {}).payload || {};
+  const plain18 = ((clean15.writes[0] || {}).payload || {}).payload || {};
+  console.log("    " + rep.status + ", calls " + JSON.stringify(rep.routes) + "; claim_repair " + JSON.stringify(filed18.claim_repair));
+  check("18. a claim hit gets exactly one more model call, under " + JSON.stringify(REPAIR_ROUTE) + ", and the repaired article is filed",
+    rep.status === 201 && rep.calls === 2 && rep.routes[0] === "POST /api/agents/seo/generate-post" && rep.routes[1] === REPAIR_ROUTE &&
+    rep.writes.length === 1 && rep.drafts.length === 0, rep.status + "/" + rep.calls);
+  check("18. the filed body is the first draft's with only the flagged sentence replaced, and nothing else in the proposal differs",
+    filed18.body === bodyOf(first18).replace(SENT, FIXED) &&
+    ["title", "slug", "meta_description", "keyword", "internal_links", "money_path"].every(k => JSON.stringify(filed18[k]) === JSON.stringify(plain18[k])));
+  check("18. the proposal records the repair: the sentence as flagged and as rewritten, where it was, and what it claimed",
+    JSON.stringify(filed18.claim_repair) === JSON.stringify({ sentences: [{ part: "body", says: ["says how many of a group do something", "says what usually or often happens",
+      "says something is beyond a platform's reach"], before: SENT, after: FIXED }] }) && !("claim_repair" in plain18));
+  const rp = rep.prompts[1] || "";
+  console.log("    the repair prompt (fixture), up to the article:\n      " + rp.slice(0, rp.indexOf("\n\nNO INVENTED FACTS")).replace(/\n/g, "\n      "));
+  console.log("    ...the rules, the article, then:\n      " + rp.slice(rp.indexOf("THE SENTENCES TO REWRITE")).replace(/\n/g, "\n      "));
+  check("18. the repair is given the rules, the article and the numbered sentence with what it claims, and asked for that sentence alone",
+    rp.indexOf("Rewrite ONLY that sentence") !== -1 && rp.indexOf(FACTS) !== -1 && rp.indexOf(bodyOf(first18)) !== -1 &&
+    rp.indexOf("1. (says how many of a group do something; says what usually or often happens; says something is beyond a platform's reach) " + SENT) !== -1 &&
+    /Respond with exactly 1 section and nothing else[\s\S]*---SENTENCE 1---\nthe rewritten sentence 1\n---END---$/.test(rp) &&
+    rp.indexOf("Write ONE complete blog post") === -1 && rp.indexOf("SEO SYSTEM") === -1);
+  check("18. the repaired article met the money-link and claim checks again (each ran twice)",
+    rep.counts.bodyLinksToMoneyUrl === 2 && rep.counts.findArticleClaims === 2, JSON.stringify(rep.counts));
+  const twoParts = first18.replace("---META_DESCRIPTION---\nA plain answer.", "---META_DESCRIPTION---\nMost sellers recover in a week.");
+  const rep2 = await generate(SERVER, { money_path: OWN }, twoParts, { repair: "---SENTENCE 1---\nA plain answer for sellers whose ads were stopped.\n---SENTENCE 2---\n" + FIXED });
+  const filed2 = ((rep2.writes[0] || {}).payload || {}).payload || {};
+  check("18. sentences in the meta description and the body are each put back where they were, and the title is untouched",
+    rep2.status === 201 && rep2.calls === 2 && filed2.meta_description === "A plain answer for sellers whose ads were stopped." &&
+    filed2.body === bodyOf(first18).replace(SENT, FIXED) && filed2.title === plain18.title && (filed2.claim_repair || {}).sentences.map(s => s.part).join() === "meta_description,body",
+    rep2.status + " " + JSON.stringify(rep2.body || "").slice(0, 200));
+  const stillClaims = await generate(SERVER, { money_path: OWN }, first18, { repair: one("Most sellers usually see results within days.") });
+  const sb18 = stillClaims.body || {};
+  console.log("    still claims: " + stillClaims.status + " " + JSON.stringify(sb18.error));
+  check("18. a rewrite that still states a claim is 422 after exactly two calls — never a third — naming both sets of claims, and nothing is filed",
+    stillClaims.status === 422 && stillClaims.calls === 2 && stillClaims.writes.length === 0 && /still states 2 things it has no source for/.test(sb18.error || "") &&
+    (sb18.claims || []).map(c => c.class).sort().join() === "beyond_reach,quantity,typicality" && (sb18.repair || {}).outcome === "refused_after_repair" &&
+    ((sb18.repair || {}).claims_after || []).length === 2, stillClaims.status + "/" + stillClaims.calls);
+  const UNUSABLE = [
+    ["unparseable", "I rewrote it: Email is one place to start."],
+    ["unparseable", "---SENTENCE 1---\n" + FIXED + "\n---SENTENCE 2---\nextra\n---END---"],
+    ["invalid", one("<a href=\"/pricing\">See pricing</a>, which varies.")],
+    ["invalid", one(FIXED + " " + "And more. ".repeat(20))],
+    ["call_failed", new Error("Daily model-call limit reached")]
+  ];
+  const unusable = [];
+  for (const [want, answer] of UNUSABLE) {
+    const r = await generate(SERVER, { money_path: OWN }, first18, { repair: answer });
+    unusable.push(r.status === 422 && r.calls === 2 && r.writes.length === 0 && ((r.body || {}).repair || {}).outcome === want ? "ok" : want + ":" + r.status + "/" + r.calls + "/" + ((r.body || {}).repair || {}).outcome);
+  }
+  check("18. an unusable rewrite — no format, the wrong count, markup, too long — or a failed repair call is 422 after two calls, nothing filed",
+    unusable.every(x => x === "ok"), JSON.stringify(unusable));
+  const across = await generate(SERVER, { money_path: OWN }, article([OWN], "<p><strong>Most owners</strong> see results from email within days.</p>"), { repair: one(FIXED) });
+  check("18. a flagged sentence that runs across markup is not sent for repair at all: one call, 422, nothing filed",
+    across.status === 422 && across.calls === 1 && across.writes.length === 0 && ((across.body || {}).repair || {}).outcome === "unlocatable" &&
+    ((across.body || {}).repair || {}).model_called === false, across.status + "/" + across.calls);
+  const otherGate = await generate(SERVER, { money_path: OWN }, article(["/blog/" + HANDLE + "/older-post"], CLAIM_P), { repair: one(FIXED) });
+  check("18. a draft that fails another gate as well is refused by that gate with no repair call: the claim screen runs last",
+    otherGate.status === 422 && otherGate.calls === 1 && /money page \/suppressed\.html/.test((otherGate.body || {}).error || ""), otherGate.status + "/" + otherGate.calls);
+  /* The rewritten article meets every gate again: a violation only the rewrite
+     introduced is caught by the gate that owns it. */
+  const DISCLAIMER = liftValue(SERVER, "COMPLIANCE_DISCLAIMER");
+  const comp = await generate(SERVER, { topic: "wool care", compliance_profile: "supplement_vitality" },
+    article(["/listing/wool-hat"], CLAIM_P + "<p>" + DISCLAIMER + "</p>"), { repair: one("Some sellers write about diabetes instead.") });
+  console.log("    compliance after repair: " + comp.status + " " + JSON.stringify((comp.body || {}).error));
+  check("18. a compliance violation only the rewrite introduced is refused by the compliance gate, which ran on both drafts",
+    comp.status === 422 && comp.calls === 2 && comp.writes.length === 0 && (comp.body || {}).compliance_profile === "supplement_vitality" &&
+    /This was the article after one rewrite of the 1 sentence the claim screen flagged\./.test((comp.body || {}).error || "") &&
+    comp.counts.findComplianceViolations === 2, comp.status + " " + JSON.stringify(comp.counts));
+  const LONG = "Most owners see results from email often within days, and no platform can disable a list that they have built up carefully over years of selling to the same loyal customers in their own community.";
+  let pad18 = "<p>Owned channels keep working when a platform withdraws approval.</p>";
+  while ((pad18 + LONG).length < 830) pad18 += "<p>Owned channels keep working when a platform withdraws approval.</p>";
+  const shortBody = "<h2>Answer</h2>" + pad18 + '<p><a href="' + OWN + '">BizForce AI</a></p><p>' + LONG + "</p>";
+  const shortText = article([OWN]).split("---BODY---\n")[0] + "---BODY---\n" + shortBody;
+  const short = await generate(SERVER, { money_path: OWN }, shortText, { repair: one("Email is one place to start.") });
+  console.log("    body " + shortBody.length + " → " + (shortBody.length - LONG.length + "Email is one place to start.".length) + " characters after the rewrite: " + short.status + " " + JSON.stringify((short.body || {}).error));
+  check("18. a body the rewrite takes under 800 characters is refused by the length gate",
+    short.status === 422 && short.calls === 2 && /post body of only \d+ characters/.test((short.body || {}).error || "") && short.writes.length === 0, short.status);
+  const ext18 = await generate(SERVER, { money_url: "https://example.com/product" }, article(["https://example.com/product"], CLAIM_P), { repair: one(FIXED) });
+  check("18. external mode: repaired and filed, its money link checked on both drafts",
+    ext18.status === 201 && ext18.calls === 2 && ext18.counts.bodyLinksToMoneyUrl === 2, ext18.status + " " + JSON.stringify(ext18.counts));
+
+  console.log("\n══ 19. refused drafts are kept ══");
+  const BRIEF = { money_path: OWN, topic: "ad account disabled", site_context: "Sellers cut off by ad networks.", money_anchor: "BizForce AI" };
+  const noLinkText = article(["/blog/" + HANDLE + "/older-post"]);
+  const r19 = await generate(SERVER, BRIEF, noLinkText);
+  const d19 = r19.drafts[0] || {};
+  console.log("    row: " + JSON.stringify(Object.assign({}, d19, { body: (d19.body || "").slice(0, 40) + "…" })));
+  check("19. a draft refused at a gate is one row: the gate, the refusal exactly as sent, the draft as returned, the mode and the brief",
+    r19.status === 422 && r19.drafts.length === 1 && d19.stage === "money_link" && JSON.stringify(d19.refusal) === JSON.stringify(r19.body) &&
+    d19.body === bodyOf(noLinkText) && d19.title === "What to do when your ad account is disabled" && d19.slug === SLUG && d19.meta_description === "A plain answer." &&
+    d19.mode === "own_page" && d19.money_target === OWN && d19.user_id === AUTHOR && d19.repair === null &&
+    JSON.stringify(d19.brief) === JSON.stringify({ topic: "ad account disabled", site_name: null, site_context: "Sellers cut off by ad networks.", money_anchor: "BizForce AI" }));
+  const garbled = await generate(SERVER, { money_path: OWN }, "Here is your article about ad accounts.");
+  check("19. an unreadable answer is kept whole, as raw_response, under stage unparseable",
+    garbled.status === 502 && garbled.drafts.length === 1 && garbled.drafts[0].stage === "unparseable" && garbled.drafts[0].raw_response === "Here is your article about ad accounts.");
+  const dr = stillClaims.drafts[0] || {};
+  check("19. a claim refusal after a repair keeps the FIRST draft, and the rewrite beside it: each sentence before and after, the model's answer, the rewritten body",
+    stillClaims.drafts.length === 1 && dr.stage === "claims" && dr.body === bodyOf(first18) && (dr.repair || {}).outcome === "refused_after_repair" &&
+    ((dr.repair || {}).draft || {}).body === bodyOf(first18).replace(SENT, "Most sellers usually see results within days.") &&
+    ((dr.repair || {}).sentences || [])[0].before === SENT && (dr.repair || {}).response === one("Most sellers usually see results within days."));
+  check("19. a refusal by another gate after a repair is stored as after_repair:<gate>",
+    (comp.drafts[0] || {}).stage === "after_repair:compliance" && (short.drafts[0] || {}).stage === "after_repair:body_length");
+  check("19. a filed draft, repaired or not, writes no row", clean15.drafts.length === 0 && rep.drafts.length === 0 && ext18.drafts.length === 0);
+  const noTable = await generate(SERVER, BRIEF, noLinkText, { draftInsertError: { code: "PGRST205", message: "Could not find the table" } });
+  check("19. when the insert fails (131 not applied) the caller's answer is exactly the same",
+    noTable.status === r19.status && JSON.stringify(noTable.body) === JSON.stringify(r19.body) && noTable.writes.length === 0);
+  const MIG131 = fs.readFileSync(path.join(REPO, "supabase", "migrations", "131_seo_refused_drafts.sql"), "utf8").replace(/\r\n/g, "\n");
+  const tableSql = (/create table if not exists public\.seo_refused_drafts \(([\s\S]*?)\n\);/.exec(MIG131) || [])[1] || "";
+  const columns = tableSql.split("\n").map(l => (/^\s+([a-z_]+)\s/.exec(l) || [])[1]).filter(Boolean);
+  const written = new Set();
+  [r19, garbled, stillClaims, comp, short, across].forEach(r => r.drafts.forEach(d => Object.keys(d).forEach(k => written.add(k))));
+  const modes = new Set(); [r19, garbled, stillClaims, comp].forEach(r => r.drafts.forEach(d => modes.add(d.mode)));
+  console.log("    columns " + JSON.stringify(columns) + "\n    written " + JSON.stringify([...written]));
+  check("19. migration 131 has a column for every key the route writes, a mode check that admits every mode written, and no access but the service role's",
+    [...written].every(k => columns.indexOf(k) !== -1) && [...modes].every(m => new RegExp("mode in \\([^)]*'" + m + "'").test(MIG131)) &&
+    /enable row level security/.test(MIG131) && /revoke all on public\.seo_refused_drafts from anon, authenticated/.test(MIG131),
+    JSON.stringify([...written].filter(k => columns.indexOf(k) === -1)));
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");
