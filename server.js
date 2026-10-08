@@ -10779,6 +10779,19 @@ const SEO_OWN_MONEY_PAGES = {
     "the storefront or an email list something no platform can disable, shut down or take away."
 };
 
+/* THE MENTION SAYS WHERE THE BLOG LIVES. The page text above forbids calling
+   the blog or the storefront beyond any platform's reach, and the sixth article
+   obeyed it and still misled: it told the reader to build "a blog or content
+   hub you control", then offered a blog on bizforceai.net without saying that
+   one is rented too. Forbidding the claim did not require the disclosure. The
+   seventh made it in one clause — "the blog and storefront run on our terms
+   too" — so this asks for that clause in every own-page article, in the
+   mention itself. Own-page mode only: no other mode mentions BizForce AI. */
+const SEO_OWN_PAGE_HOSTED =
+  "\nIn that same mention, say that the blog and the storefront run on BizForce AI's platform and under its terms — a channel " +
+  "beside the business's others, not one it owns outright. Where the article tells the reader to build channels they own or " +
+  "control, do not let BizForce AI's blog or storefront read as one of them.";
+
 /* WHO MAY NAME ONE. Every page in SEO_OWN_MONEY_PAGES is BizForce AI's own, and
    an article linking one says so in the first person ("we built"). That is true
    only on the platform's own account, so money_path is refused for any other —
@@ -10913,8 +10926,20 @@ const SEO_AROUND_THE_PRODUCT =
    not a population ("many ways to reach people"), or after how/as/too/so; "a
    few"; "how often", "as often as"; "frequently asked questions"; "tend to
    your list" (the verb). A population quantifier needs a group noun —
-   businesses, owners, sellers, customers, accounts and the like — within two
-   words.
+   businesses, owners, sellers, customers, accounts and the like, or the
+   systems they answer to (below) — within two words.
+
+   A PLATFORM IS A POPULATION TOO. Generation 7 wrote "most ad networks publish
+   one" and it passed, while "most advertisers publish one" was caught: the list
+   counted people and their records, never the gatekeepers an article in this
+   route is mostly about. So it also counts networks, platforms, processors,
+   providers, services, sites, websites, marketplaces and engines. On the six
+   own-page articles filed so far that adds one hit, that sentence. NOT ADDED:
+   channels, tools and apps. "Spread your business across many channels" is
+   this route's own advice, "there are many tools for building a list" is true
+   by inspection, and a claim about what an app does is not one about who may
+   sell. LETS IN, as false catches the repair makes cheap: "there are many
+   platforms you can post on", "you don't need to be on many platforms at once".
 
    WHAT IT MISSES: a typical timeframe without a frequency word ("can take
    weeks"); "likely"; "almost never" and other phrasings not listed; absolutes
@@ -10924,7 +10949,8 @@ const SEO_AROUND_THE_PRODUCT =
    single fastest channel"). And it catches a named company within ten words of
    "flagged" or "restricted" even when the company is not the subject. */
 const ARTICLE_CLAIM_POPULATION = "(?:business(?:es)?|owners|sellers|merchants|brands|companies|stores|shops|people|customers|buyers|" +
-  "shoppers|consumers|users|advertisers|accounts|appeals|cases|entrepreneurs|founders|marketers|retailers|operators|men|women)";
+  "shoppers|consumers|users|advertisers|accounts|appeals|cases|entrepreneurs|founders|marketers|retailers|operators|men|women|" +
+  "networks|platforms|processors|providers|services|sites|websites|marketplaces|engines)";
 const ARTICLE_CLAIM_COMPANY = "(?:Meta|Facebook|Instagram|Google|YouTube|TikTok|Amazon|Shopify|Stripe|PayPal|Square|Microsoft|Bing|" +
   "Pinterest|Snapchat|Twitter|Klaviyo|Mailchimp)";
 const ARTICLE_CLAIM_POLICY_VERB = "(?:restrict(?:s|ed)?|prohibit(?:s|ed)?|bans?|banned|forbids?|flag(?:s|ged)?|disallows?|blocks?|" +
@@ -11568,6 +11594,7 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
           "name it as BizForce AI and write \"we built\", never as a neutral \"resource\", \"tool\" or \"service\" someone else made, " +
           "and say in that mention that it is a paid platform and what it costs, as written above. Mention it once, near the end, after " +
           "the article has answered the question on its own." +
+          SEO_OWN_PAGE_HOSTED +
           (moneyAnchor
             ? ""
             : "\nThe link's text is words a reader understands, naming BizForce AI or what the page is for — never the href itself.")

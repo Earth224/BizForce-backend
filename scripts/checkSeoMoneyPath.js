@@ -131,6 +131,24 @@
         filed draft writes none; a failed insert changes nothing the caller
         sees; and migration 131 has a column for every key the route writes.
 
+   ADDED WITH "A platform is a population too":
+    20. The quantity class counts the systems as well as the people: one
+        sentence per noun added — networks, platforms, processors, providers,
+        services, sites, websites, marketplaces, engines — is caught, generation
+        7's "most ad networks publish one" verbatim among them, and none was
+        caught at 44535d4. Channels, tools and apps are not counted, and a
+        system noun after how, as, the or a few still passes. What it lets in —
+        "there are many platforms you can post on" — is asserted, so the
+        comment in server.js stays true.
+    21. Every own-page prompt tells the writer to say, in the same mention,
+        that the blog and storefront run on BizForce AI's platform under its
+        terms and are not owned outright — once, right after the disclosure,
+        ahead of the brief — and is 44535d4's prompt plus exactly that clause,
+        with or without money_anchor or a compliance profile. The listing and
+        external prompts are byte-identical to 44535d4's. Sections 14 and 16
+        take the clause out before comparing an own-page prompt with their
+        older commits.
+
    MUTATIONS — each must turn the named section red:
      MUTATE=allowlist    any root-relative path is accepted               → 1
      MUTATE=silent       an off-allowlist path is dropped, not refused     → 1
@@ -182,6 +200,10 @@
      MUTATE=repairloops    the repair runs until the article passes        → 18
      MUTATE=repairunscreened the repaired article is filed unchecked       → 18
      MUTATE=norecord       a refused draft is not stored                   → 19
+     MUTATE=nosystems      the system nouns are gone from the population   → 20
+     MUTATE=nothosted      the own-page prompt has no hosted-blog clause   → 21
+     MUTATE=hostedanymode  the external prompt gets the clause too         → 21
+     MUTATE=hostedwording  it no longer says "not one it owns outright"    → 21
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 require("dotenv").config();
@@ -213,7 +235,8 @@ const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pu
   "generaladvice", "statepolicy", "internals", "ratesback", "productalways", "productnever", "productfirst", "conditionok",
   "noquantity", "notypicality", "nofigure", "noreach", "nocompany", "genscreen", "pubscreen", "innocent", "faqheading",
   "problemnever", "problemalways", "problemanymode", "problemwording",
-  "noquestion", "nodecline", "norepair", "repairloops", "repairunscreened", "norecord"];
+  "noquestion", "nodecline", "norepair", "repairloops", "repairunscreened", "norecord",
+  "nosystems", "nothosted", "hostedanymode", "hostedwording"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
@@ -340,6 +363,11 @@ if (MUTATE === "norepair") SERVER = mutate(SERVER, REPAIR_IF, "    if (false) {\
 if (MUTATE === "repairloops") SERVER = mutate(SERVER, REPAIR_IF, "    while (refusal && refusal.stage === \"claims\") {\n      claimRepair = await repairSeoArticleClaims(", "repairloops");
 if (MUTATE === "repairunscreened") SERVER = mutate(SERVER, "        const after = seoDraftRefusal(claimRepair.draft);", "        const after = null;", "repairunscreened");
 if (MUTATE === "norecord") SERVER = mutate(SERVER, "    const { error } = await supabase.from(\"seo_refused_drafts\").insert(row);", "    const error = null;", "norecord");
+if (MUTATE === "nosystems") SERVER = mutate(SERVER, "|men|women|\" +\n  \"networks|platforms|processors|providers|services|sites|websites|marketplaces|engines)\";",
+  "|men|women)\";", "nosystems");
+if (MUTATE === "nothosted") SERVER = mutate(SERVER, "          SEO_OWN_PAGE_HOSTED +\n", "", "nothosted");
+if (MUTATE === "hostedanymode") SERVER = mutate(SERVER, "        \"- url=\" + moneyUrl +\n", "        \"- url=\" + moneyUrl + SEO_OWN_PAGE_HOSTED +\n", "hostedanymode");
+if (MUTATE === "hostedwording") SERVER = mutate(SERVER, "under its terms — a channel \" +\n  \"beside the business's others, not one it owns outright.", "under its terms.", "hostedwording");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 /* _shared caches definitions by whether the source is the working copy, so a
@@ -405,6 +433,14 @@ const SERVER_PREV16 = execSync("git show " + PREV16 + ":server.js", { cwd: REPO,
 /* Section 17's screen before the narrowings. Pinned, not HEAD. */
 const PREV17 = "b86aa99";
 const SERVER_PREV17 = execSync("git show " + PREV17 + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
+/* Section 21's clause, and the commit before it, for its "nothing else changed".
+   Own-page prompts carry it, so sections 14 and 16 take it out before they
+   compare an own-page prompt with their older commits; no other mode's prompt
+   has it to take out. */
+const HOSTED = liftValue(SERVER, "SEO_OWN_PAGE_HOSTED");
+function unHosted(p) { return p == null ? p : p.split(HOSTED).join(""); }
+const PREV21 = "44535d4";
+const SERVER_PREV21 = execSync("git show " + PREV21 + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 
 /* ── a database that records what it is asked to write ── */
 const HANDLE = "check-handle";
@@ -813,12 +849,12 @@ async function visit(h, body) {
   ];
   for (const [label, body, text, opts] of WITH) {
     const a = await generate(SERVER, body, text, opts), b = await generate(SERVER_PREV, body, text, opts);
-    const p = a.prompt || "", at = p.indexOf(PRODUCT_TYPE);
+    const p = unHosted(a.prompt) || "", at = p.indexOf(PRODUCT_TYPE);
     const placed = p.split(PRODUCT_TYPE).length === 2 && at > p.indexOf("MANDATORY CONTENT RULES") && p.indexOf("MANDATORY CONTENT RULES") !== -1 &&
       at === p.indexOf(FACTS) + FACTS.length && at < p.indexOf("Write ONE complete blog post");
     const factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
     const exact = b.prompt != null && p === b.prompt.slice(0, factsEnd) + PRODUCT_TYPE + b.prompt.slice(factsEnd);
-    check("14. with a profile · " + label + " — the line is there once, after the compliance section and the facts block, ahead of the brief, and nothing else changed against " + PREV,
+    check("14. with a profile · " + label + " — the line is there once, after the compliance section and the facts block, ahead of the brief, and nothing else changed against " + PREV + " but section 21's clause",
       placed && exact, "placed=" + placed + " exact=" + exact);
   }
   const WITHOUT = [
@@ -830,8 +866,8 @@ async function visit(h, body) {
   for (const [label, body, text, opts] of WITHOUT) {
     const a = await generate(SERVER, body, text, opts), b = await generate(SERVER_PREV, body, text, opts);
     check("14. without a profile · " + label + " — no product-type line, and the prompt is byte-identical to " + PREV +
-      " once section 16's line is out",
-      a.prompt != null && a.prompt.split(AROUND).join("") === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
+      " once section 16's line and section 21's clause are out",
+      a.prompt != null && unHosted(a.prompt).split(AROUND).join("") === b.prompt && a.prompt.indexOf("NAMING THE CATEGORY") === -1, a.status + " vs " + b.status);
   }
 
   console.log("\n══ 15. the claim screen ══");
@@ -925,8 +961,8 @@ async function visit(h, body) {
   ];
   for (const [label, ctx] of HEALTH) {
     const a = await generate(SERVER, { money_path: OWN, site_context: ctx }, article([OWN])), b = await generate(SERVER_PREV16, { money_path: OWN, site_context: ctx }, article([OWN]));
-    const p = a.prompt || "", at = p.indexOf(AROUND), factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
-    check("16. own page, site_context names " + label + " — the line is there once, right after the facts block, ahead of the brief, and nothing else changed against " + PREV16,
+    const p = unHosted(a.prompt) || "", at = p.indexOf(AROUND), factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
+    check("16. own page, site_context names " + label + " — the line is there once, right after the facts block, ahead of the brief, and nothing else changed against " + PREV16 + " but section 21's clause",
       p.split(AROUND).length === 2 && at === p.indexOf(FACTS) + FACTS.length && at < p.indexOf("Write ONE complete blog post") &&
       b.prompt != null && p === b.prompt.slice(0, factsEnd) + AROUND + b.prompt.slice(factsEnd), a.status);
   }
@@ -944,8 +980,8 @@ async function visit(h, body) {
   ];
   for (const [label, body, text] of UNCHANGED16) {
     const a = await generate(SERVER, body, text), b = await generate(SERVER_PREV16, body, text);
-    check("16. " + label + " — no line, and the prompt is byte-identical to " + PREV16,
-      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
+    check("16. " + label + " — no line, and the prompt is byte-identical to " + PREV16 + " once section 21's clause is out",
+      a.prompt != null && unHosted(a.prompt) === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
   }
 
   console.log("\n══ 17. two narrowings ══");
@@ -1113,6 +1149,70 @@ async function visit(h, body) {
     [...written].every(k => columns.indexOf(k) !== -1) && [...modes].every(m => new RegExp("mode in \\([^)]*'" + m + "'").test(MIG131)) &&
     /enable row level security/.test(MIG131) && /revoke all on public\.seo_refused_drafts from anon, authenticated/.test(MIG131),
     JSON.stringify([...written].filter(k => columns.indexOf(k) === -1)));
+
+  console.log("\n══ 20. a platform is a population too ══");
+  /* The screen at the commit before, for "none of these was caught". */
+  const s20 = shared(), pctx = {};
+  vm.createContext(pctx);
+  vm.runInContext(["ARTICLE_CLAIM_POPULATION", "ARTICLE_CLAIM_COMPANY", "ARTICLE_CLAIM_POLICY_VERB", "ARTICLE_CLAIM_QUESTION", "ARTICLE_CLAIM_DECLINES",
+    "ARTICLE_CLAIM_CLASSES", "findArticleClaims"]
+    .map(n => s20.definitionOf(SERVER_PREV21, n)).join("\n") + "\nthis.find = findArticleClaims;", pctx);
+  const classesAt21 = t => pctx.find([t]).map(h => h.class);
+  /* The first is generation 7's sentence, verbatim. One or more per noun added. */
+  const SYSTEMS = [
+    "Look for an appeal form or a review request inside the ads platform's own interface — most ad networks publish one, even if it's buried a few clicks deep.",
+    "Many platforms restrict supplement ads.", "Most payment processors review high-risk merchants more closely.",
+    "Most email service providers let you export your list.", "Many services suspend sending without notice.",
+    "Most sites that sell supplements carry a disclaimer.", "Many websites in this category were deindexed.",
+    "Few marketplaces allow CBD listings.", "Most search engines index a new blog within weeks.",
+    "Most of the platforms you rely on have their own rules."
+  ];
+  SYSTEMS.forEach(t => console.log("    " + JSON.stringify(classesAt21(t)) + " → " + JSON.stringify(classesOf(t)) + "  " + t.slice(0, 70)));
+  check("20. each is caught as quantity, and none was caught at " + PREV21 + " (" + SYSTEMS.length + " sentences, generation 7's first)",
+    SYSTEMS.every(t => classesOf(t).indexOf("quantity") !== -1 && classesAt21(t).length === 0),
+    JSON.stringify(SYSTEMS.filter(t => classesOf(t).indexOf("quantity") === -1 || classesAt21(t).length).map(t => t.slice(0, 40))));
+  const ADDED = ["networks", "platforms", "processors", "providers", "services", "sites", "websites", "marketplaces", "engines"];
+  check("20. every system noun added has a sentence above that it alone makes a catch",
+    ADDED.every(n => SYSTEMS.some(t => new RegExp("\\b" + n + "\\b", "i").test(t) && classesOf(t).length)));
+  const NOT_ADDED = ["Spread your business across many channels.", "There are many tools for building an email list.", "Most apps let you export your contacts.",
+    "Post on as many platforms as you can keep up with.", "How many platforms should I be on?", "Choose the platforms that fit your product.",
+    "The most useful sites for this are your own.", "Pick the few services you actually use.", "Try a few marketplaces before committing to one."];
+  check("20. channels, tools and apps are not counted, and a system noun after how/as/the/a few still passes (" + NOT_ADDED.length + " sentences)",
+    NOT_ADDED.every(t => classesOf(t).length === 0), JSON.stringify(NOT_ADDED.filter(t => classesOf(t).length)));
+  /* What it lets in, asserted so the comment in server.js stays true. */
+  const LET_IN20 = ["There are many platforms you can post on.", "You don't need to be on many platforms at once."];
+  check("20. LETS IN: \"there are many platforms you can post on\" and \"on many platforms at once\" — passed at " + PREV21 + ", caught now",
+    LET_IN20.every(t => classesAt21(t).length === 0 && classesOf(t).indexOf("quantity") !== -1), JSON.stringify(LET_IN20.map(classesOf)));
+
+  console.log("\n══ 21. the mention says where the blog lives ══");
+  console.log("    clause:" + HOSTED.replace(/\n/g, "\n      "));
+  check("21. the clause asks for the blog and storefront to be named as running on BizForce AI's platform under its terms, not owned outright, and not among the channels the reader controls",
+    /say that the blog and the storefront run on BizForce AI's platform and under its terms/.test(HOSTED) && /not one it owns outright/.test(HOSTED) &&
+    /do not let BizForce AI's blog or storefront read as one of them/.test(HOSTED) && /^\nIn that same mention/.test(HOSTED));
+  const DISCLOSED = "the article has answered the question on its own.";
+  const OWN21 = [
+    ["own page", { money_path: OWN, topic: "customers after an ad ban" }],
+    ["own page, money_anchor", { money_path: OWN, money_anchor: "what BizForce AI does for businesses the ad networks won't serve" }],
+    ["own page, supplement site_context and a profile", { money_path: OWN, site_context: "Supplement and CBD sellers.", compliance_profile: "supplement_vitality" }]
+  ];
+  for (const [label, body] of OWN21) {
+    const a = await generate(SERVER, body, article([OWN])), b = await generate(SERVER_PREV21, body, article([OWN]));
+    const p = a.prompt || "", q = b.prompt || "", cut = q.indexOf(DISCLOSED) + DISCLOSED.length;
+    const placed = p.split(HOSTED).length === 2 && p.indexOf(HOSTED) === p.indexOf(DISCLOSED) + DISCLOSED.length && p.indexOf(HOSTED) < p.indexOf("Write ONE complete blog post");
+    const exact = q.split(DISCLOSED).length === 2 && p === q.slice(0, cut) + HOSTED + q.slice(cut);
+    check("21. " + label + " — the clause is there once, right after the disclosure, ahead of the brief, and nothing else changed against " + PREV21,
+      a.prompt != null && placed && exact, a.status + " placed=" + placed + " exact=" + exact);
+  }
+  const OTHER21 = [
+    ["listing", { topic: "wool care" }, article(["/listing/wool-hat"])],
+    ["external, example.com", { money_url: "https://example.com/product", site_context: "A shop." }, article(["https://example.com/product"])],
+    ["external, mrearthrose.com with its profile", { money_url: "https://mrearthrose.com/x.html", site_context: "Botanical supplements for men." }, article(["https://mrearthrose.com/x.html"])]
+  ];
+  for (const [label, body, text] of OTHER21) {
+    const a = await generate(SERVER, body, text), b = await generate(SERVER_PREV21, body, text);
+    check("21. " + label + " — no clause, and the prompt is byte-identical to " + PREV21,
+      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("owns outright") === -1, a.status + " vs " + b.status);
+  }
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");
