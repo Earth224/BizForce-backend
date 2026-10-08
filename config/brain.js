@@ -40,7 +40,7 @@ const PLATFORM_KNOWLEDGE = {
     { key: "publicist",  name: "Publicist Agent",  description: "Press releases, media pitches, PR campaigns, and brand narrative development." },
     { key: "broker",     name: "Broker Agent",     description: "Deal flow identification, partnership structuring, negotiation briefs, due diligence, and term sheets." },
     { key: "rd",         name: "R&D Agent",        description: "Market research, competitive intelligence, trend analysis, and executive-ready briefings. (Also addressable as \"research\".)" },
-    { key: "etsy",       name: "Etsy Agent",       description: "Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis." },
+    { key: "etsy",       name: "Etsy Agent",       description: "Etsy listing copy, tag-length keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace." },
     { key: "social",     name: "Social Agent",     description: "Social media campaigns, content calendars, engagement strategy, and platform-specific playbooks." },
     { key: "vertical_marketing", name: "Vertical Marketing Agent", description: "Marketing built for one industry vertical rather than in general: positioning, language, channels, and objections particular to a single trade." }
   ],

@@ -53,6 +53,14 @@ const residue = createResidueGuard({ supabase: supabase, name: "specialistNotes"
 residue.install();
 
 const BASELINE = "1c7c5dd";
+/* THE ONE ROSTER LINE THAT HAS CHANGED SINCE BASELINE. The assembled prompt
+   carries the agent roster, and the Etsy agent's description was corrected
+   after BASELINE: it promised competitor shop analysis, which nothing here can
+   do. Section 4 swaps exactly this description in BASELINE's prompt and still
+   demands every other byte be identical — and that the old line was there to
+   swap, so the exception cannot pass vacuously. */
+const ETSY_ROSTER_BEFORE = "Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis.";
+const ETSY_ROSTER_NOW = "Etsy listing copy, tag-length keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace.";
 const MUTATIONS = ["nocap", "silentcut", "midword", "oracle", "leadnotes", "peragent", "limit", "self", "notrunc", "unwired"];
 const MUTATE = process.env.MUTATE || "";
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
@@ -183,9 +191,14 @@ async function pages(table, cols, filter) {
   check("4. with notes: the header, then one line per note, after ACCUMULATED MEMORY and before the closing rule",
     iNotes > iMem && iMem > 0 && withNotes.indexOf("- From the sales agent (2026-10-08) — ") > iNotes && withNotes.indexOf("- From the SEO agent (2026-10-06) — seo note: seo content") > iNotes &&
     withNotes.slice(iNotes).indexOf("\n\n") > 0 && withNotes.endsWith(brain0.buildAgentSystemPrompt("A", {}, {}, []).split("\n\n").slice(-1)[0]));
-  const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === brain0.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) &&
-    brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === brain0.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]));
-  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE, same);
+  function baselinePrompt(a) {
+    const p = brain0.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]);
+    return p.split(ETSY_ROSTER_BEFORE).length === 2 ? p.replace(ETSY_ROSTER_BEFORE, ETSY_ROSTER_NOW) : null;
+  }
+  const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => baselinePrompt(a) !== null &&
+    brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === baselinePrompt(a) &&
+    brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === baselinePrompt(a));
+  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the corrected Etsy roster line", same);
 
   console.log("\n══ 5. only the typed-task path reads them ══");
   const handler = defs(SERVER, ["handleAiTaskRequest"]);
