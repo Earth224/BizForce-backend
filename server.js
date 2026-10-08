@@ -51,6 +51,7 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
+const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine } = require("./lib/guardedFetch");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -11308,7 +11309,7 @@ function withBlogArrivalTracking(html, moneyPath, token) {
    account, paying or not, could run it twenty times a minute on aiLimiter
    alone. Every other subscription-gated AI route uses this exact middleware
    order (requireAuth, requireActiveSubscription, aiLimiter) — /api/ai/tasks,
-   /api/seo/audit, /api/agents/seo/optimize, /api/agents/sales/convert — so the
+   /api/agents/seo/optimize, /api/agents/sales/convert — so the
    gate runs before the limiter and an unentitled caller is refused without
    consuming a slot in their own rate-limit bucket. */
 app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
@@ -14089,12 +14090,11 @@ async function countTasksByAgent(userId) {
    Twenty-seven accepted values still have no instruction of their own. They run
    general's instruction with their own name in the prompt; the startup check
    names every one, and writing those instructions is the work that remains. */
-var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "seo_audit", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign", "vertical_positioning", "channel_research", "objection_handling", "audience_growth", "platform_playbook", "social_campaign", "blog_post", "repurpose_plan", "social_media_drafts", "video_script", "content_calendar", "funnel_analysis", "growth_analysis", "kpi_review", "revenue_forecast", "lead_gen", "offer_build", "outreach_script", "local_seo"];
+var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign", "vertical_positioning", "channel_research", "objection_handling", "audience_growth", "platform_playbook", "social_campaign", "blog_post", "repurpose_plan", "social_media_drafts", "video_script", "content_calendar", "funnel_analysis", "growth_analysis", "kpi_review", "revenue_forecast", "lead_gen", "offer_build", "outreach_script", "local_seo"];
 
 var taskInstructions = {
   general: "Handle the user request directly and produce a specific, actionable business output. Give concrete steps, examples, and measurable actions — not generic advice.",
   executive_plan: "Produce an Executive Command Plan. Act as the coordinator over all BizForce agents. Break the business objective into agent assignments for SEO, Sales, Content, Ads, Reputation, Analytics, Email, Community, Influencer, and Operations. For each agent include mission, priority level, exact tasks, deadline, KPI, expected outcome, dependencies, and owner approval needs. End with a 7-day, 30-day, 60-day, and 90-day execution roadmap.",
-  seo_audit: "Produce a structured SEO audit with technical SEO, keyword strategy, local SEO, content strategy, backlinks, metadata, schema, sitemap, page speed, and conversion recommendations.",
   sales_funnel: "Produce a sales funnel with offer, landing page structure, lead magnet, email sequence, objections, conversion points, upsell path, and tracking KPIs.",
   content_plan: "Produce a content plan with themes, post ideas, schedule, hooks, CTAs, platform strategy, repurposing plan, and brand voice guidance.",
   ad_campaign: "Produce an ad campaign with audience, offer, hooks, creative angles, copy, budget guidance, testing plan, and compliance-safe language.",
@@ -20034,15 +20034,14 @@ app.post("/api/insights/page", requireAuth, requireActiveSubscription, aiLimiter
   }
 });
 
-app.post("/api/seo/audit", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
-  req.body.agent_type = "seo";
-  req.body.task_type = "seo_audit";
-  req.body.prompt =
-    "Run a complete SEO audit for this website: " +
-    safeText(req.body.website, 1000) +
-    ". Include technical SEO, keywords, local SEO, content gaps, backlink opportunities, ranking issues, and 10 priority actions.";
-  return handleAiTaskRequest(req, res, next);
-});
+/* POST /api/seo/audit WAS HERE, AND IT NEVER LOOKED AT THE SITE. It put the
+   URL into a sentence — "Run a complete SEO audit for this website: <url>.
+   Include technical SEO, … backlink opportunities, ranking issues" — and handed
+   that to the model, which answered with findings about a page it had not
+   fetched. No frontend page called it and it had never run. The seo_audit task
+   type it set went in the same change. A real audit — measured from a guarded
+   fetch, with the model only explaining what was measured — is the next build;
+   until then there is no route that claims to audit a site. */
 
 // Pulls <title>, meta description/keywords, canonical, H1-H6, image alt
 // attributes, JSON-LD structured data, and visible body text out of raw
@@ -20123,7 +20122,7 @@ function extractSeoPageData(html) {
 }
 
 // Shared marker prefix identifying an ai_tasks row as a completed website
-// optimization run (as opposed to a seo_audit or any other seo task) —
+// optimization run (as opposed to any other seo task) —
 // written by POST /optimize, read back by GET /optimize-count so the two
 // routes can never drift out of sync with each other.
 var SEO_OPTIMIZE_TASK_PROMPT_PREFIX = "SEO optimize: ";
@@ -20141,19 +20140,23 @@ app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiL
       return res.status(400).json({ error: "A website URL is required." });
     }
 
+    /* THROUGH guardedFetch, NEVER fetch(). This route returns what it fetched
+       (page_data, and the model's reading of it) to the caller, so a fetch
+       that would go anywhere was a way to read the server's own network. See
+       lib/guardedFetch.js for what is refused; a refused address gets the same
+       answer as one that does not exist. */
     var pageData;
     try {
-      var pageResponse = await fetch(targetUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; BizForceSEOBot/1.0; +https://bizforceai.net)" }
+      var page = await guardedFetch(targetUrl, {
+        userAgent: "Mozilla/5.0 (compatible; BizForceSEOBot/1.0; +https://bizforceai.net)"
       });
-      if (!pageResponse.ok) {
-        return res.status(422).json({ error: "Could not fetch that website (HTTP " + pageResponse.status + ")." });
+      if (!page.ok) {
+        return res.status(422).json({ error: "Could not fetch that website (HTTP " + page.status + ")." });
       }
-      var html = await pageResponse.text();
-      pageData = extractSeoPageData(html);
+      pageData = extractSeoPageData(page.body);
     } catch (fetchErr) {
-      console.error("[seo/optimize] Fetch failed:", fetchErr.message || fetchErr);
-      return res.status(422).json({ error: "Could not reach that URL. Check that it is correct and publicly accessible." });
+      console.error("[seo/optimize] Fetch refused or failed for " + safeText(targetUrl, 200) + ": " + guardedFetchLogLine(fetchErr));
+      return res.status(422).json({ error: guardedFetchPublicMessage(fetchErr) });
     }
 
     var profileResult = await supabase
@@ -42475,8 +42478,8 @@ async function finishAgentScheduleRun(now, errorMessage) {
 
 /* Launches one scheduled run THROUGH THE MANUAL PATH. handleAiTaskRequest is
    called with a synthesised req and res rather than a second task builder being
-   written here, which is the same thing POST /api/seo/audit already does: it
-   sets agent_type, task_type and prompt on req.body and hands off.
+   written here: it sets agent_type, task_type and prompt on req.body and hands
+   off, as the routes that front handleAiTaskRequest do.
 
    The reason is that a scheduled run and a hand-pressed one must not be able to
    diverge. That handler owns the agent-type resolution, the high-risk approval

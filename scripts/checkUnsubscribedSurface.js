@@ -128,7 +128,7 @@ const EXPECTED_GATED = [
   "post /api/business-chat", "post /api/agents", "post /api/agents/store/generate-proposals",
   "post /api/agents/seo/generate-post", "post /api/ai/tasks", "post /api/assignments/:id/start",
   "post /api/oracle", "get /api/oracle/invocation", "post /api/oracle/chat", "post /api/insights/page",
-  "post /api/seo/audit", "post /api/agents/seo/optimize", "post /api/agents/etsy/keyword-research",
+  "post /api/agents/seo/optimize", "post /api/agents/etsy/keyword-research",
   "post /api/agents/etsy/pricing-strategy", "post /api/agents/email/sequence", "post /api/agents/email/subject-lines",
   "post /api/agents/publicist/press-release", "post /api/agents/publicist/pitch", "post /api/agents/operations/sop",
   "post /api/agents/operations/checklist", "post /api/agents/ads/copy", "post /api/agents/ads/policy-check",
