@@ -77,7 +77,11 @@ const deletedKeys = new Set(DELETED.map(function (d) { return d[0] + " " + d[1];
 const ADDED = [
   ["post", "/api/engine-visits"]   // records an arrival from a Lead Radar reply (migration 128)
 ];
-const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k); })
+/* Routes removed since, each on purpose, by a later change. */
+const REMOVED = new Set([
+  "post /api/seo/audit"            // never fetched the site, so every audit was invented (5d014de)
+]);
+const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k) && !REMOVED.has(k); })
   .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }));
 
 /* ── boot the real server, capturing the app ────────────────────────────── */
