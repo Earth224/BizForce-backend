@@ -32527,6 +32527,14 @@ function blogSafeHref(value) {
   // two shapes below, and a published post has no use for one.
   if (v.charAt(0) === "/" && v.charAt(1) === "/") return null;
 
+  // The same host-naming trick, spelled so the check above misses it. URL
+  // parsers read "\" as "/" and delete tabs and newlines before resolving, so
+  // "/\evil.example" and "/<TAB>/evil.example" are both //evil.example to a
+  // browser. A real link has no use for any of these characters, so none of
+  // them is allowed anywhere in the value: backslash, the C0 controls and
+  // space (0x00-0x20), and DEL (0x7F).
+  if (/[\\\x00-\x20\x7f]/.test(v)) return null;
+
   // Allowlist of shapes: site-relative, or an explicit http(s) URL. Anything
   // else — javascript:, data:, vbscript:, a bare word — is dropped.
   if (v.charAt(0) === "/") return v;
@@ -32573,7 +32581,29 @@ function sanitizeBlogHtml(html, authorHandle, listingSlugs, isExternalPost) {
 
   // 3. Rebuild every remaining tag. Anything not allowed is dropped while its
   //    inner text is kept, so removing a <div> does not delete the paragraph.
-  out = out.replace(/<\/?([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>/g, function (match, rawName, rawAttrs) {
+  //
+  //    The text BETWEEN tags is encoded, not passed through. Dropping a tag
+  //    used to splice its neighbours together, and nothing looked at the
+  //    result again: "<<b>img src=x onerror=alert(1)>" lost its <b> and came
+  //    out as a live <img onerror>. Now every "<" and ">" this pass did not
+  //    write itself leaves as &lt; / &gt;, so the only markup in the output is
+  //    the markup rebuilt here from BLOG_ALLOWED_TAGS — whatever the removals
+  //    leave next to each other. One pass is enough; nothing is rescanned
+  //    because nothing needs to be.
+  const TAG_RE = /<\/?([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>/g;
+  const encodeText = function (text) { return text.replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+  let rebuilt = "";
+  let last = 0;
+  let tagMatch;
+  while ((tagMatch = TAG_RE.exec(out))) {
+    rebuilt += encodeText(out.slice(last, tagMatch.index)) + rebuildBlogTag(tagMatch[0], tagMatch[1], tagMatch[2]);
+    last = TAG_RE.lastIndex;
+  }
+  out = rebuilt + encodeText(out.slice(last));
+
+  return out;
+
+  function rebuildBlogTag(match, rawName, rawAttrs) {
     const tag = String(rawName).toLowerCase();
     if (BLOG_ALLOWED_TAGS.indexOf(tag) === -1) return "";
 
@@ -32589,15 +32619,29 @@ function sanitizeBlogHtml(html, authorHandle, listingSlugs, isExternalPost) {
       if (name.indexOf("on") === 0) continue;
       if (name !== "href") continue;
       const value = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : (m[4] !== undefined ? m[4] : ""));
-      const safe = blogSafeHref(normalizeBlogHref(value, authorHandle, knownListingSlugs, isExternalPost));
+      const safe = blogSafeHref(normalizeBlogHref(decodeBlogAttr(value), authorHandle, knownListingSlugs, isExternalPost));
       if (safe) href = safe;
     }
 
     if (!href) return "<a>";
     return '<a href="' + href.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;") + '">';
-  });
+  }
+}
 
-  return out;
+// The value a browser reads out of an attribute is entity-decoded, so the
+// href is judged in that form: "&#x2f;" is a slash, and "/&#x2f;evil.example"
+// is the protocol-relative //evil.example. It is also what makes the sanitizer
+// idempotent — its own output writes & as &amp;, and without the decode a
+// second pass turned every "?a=1&amp;b=2" into "&amp;amp;". Exactly the
+// characters the rebuild escapes, plus numeric references; any other named
+// entity is left as text and escaped again on the way out. Numeric references
+// decode with or without the ";", as browsers do; the named ones need it.
+function decodeBlogAttr(value) {
+  return String(value).replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|(amp|quot|lt|gt|apos);)/g, function (whole, dec, hex, named) {
+    if (named) return { amp: "&", quot: "\"", lt: "<", gt: ">", apos: "'" }[named];
+    const code = dec !== undefined ? parseInt(dec, 10) : parseInt(hex, 16);
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
 }
 
 /* Presence was never the question. body.indexOf(moneyUrl) passes on the money
