@@ -545,6 +545,12 @@ async function generate(src, body, modelText, opts) {
   const res = { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(p) { this.body = JSON.parse(JSON.stringify(p)); return this; } };
   let nextErr = null;
   await r.handler({ user: { id: (opts && opts.userId) || AUTHOR }, body: body }, res, (e) => { nextErr = e || new Error("next"); });
+  /* A filed proposal carries brief since migration 132, and every commit this
+     file compares against predates it. checkProposalBrief holds brief to its
+     own terms and the rest of the row to the commit before it, so it is taken
+     out here and every comparison below still sees the whole of the rest. */
+  db.writes.forEach(w => { if (w.table === "agent_proposals" && w.payload) delete w.payload.brief; });
+  if (res.body && res.body.proposal) delete res.body.proposal.brief;
   return { status: res.statusCode, body: res.body, prompt: r.prompts[0] || null, prompts: r.prompts, routes: r.routes, counts: r.counts,
     calls: r.prompts.length, writes: db.writes, drafts: db.drafts, nextErr: nextErr && String(nextErr.message || nextErr) };
 }

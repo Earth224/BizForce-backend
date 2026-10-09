@@ -11151,6 +11151,10 @@ async function repairSeoArticleClaims(draft, claims, opts) {
   let completion;
   try {
     repair.model_called = true;
+    // The filed proposal's brief.repair_prompt_sha256 (migration 132): the
+    // prompt exactly as it is sent, hashed, never kept. Set only here, where
+    // the call is made, so a repair that never reached the model has none.
+    repair.prompt_sha256 = crypto.createHash("sha256").update(prompt, "utf8").digest("hex");
     completion = await callAnthropicText(prompt, 2000, opts.userId, "claude-sonnet-5", {
       agent_type: "seo",
       route: SEO_CLAIM_REPAIR_ROUTE
@@ -11757,6 +11761,9 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
     // cuts the article off mid-sentence or stops before ---BODY--- arrives at
     // all, and the second one throws the whole response away after the model
     // has already done all the work. stopReason below names that case outright.
+    // Hashed exactly as it is sent, for the filed proposal's brief. The text
+    // itself is never stored.
+    const promptSha256 = crypto.createHash("sha256").update(promptText, "utf8").digest("hex");
     const completion = await callAnthropicText(promptText, 32000, req.user.id, "claude-sonnet-5", {
       agent_type: "seo",
       route: "POST /api/agents/seo/generate-post"
@@ -12083,7 +12090,21 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
         reversible:    true,
         reasoning:     safeText(parsed.reasoning, 2000),
         status:        "pending",
-        created_at:    nowIso()
+        created_at:    nowIso(),
+        // What produced this article (migration 132). The four request fields
+        // under the same names, from the same variables, as a refused draft's
+        // brief in seo_refused_drafts, so the two tables describe a brief the
+        // same way; then the prompts as hashes, never as text. The repair hash
+        // is null, not absent, when no repair call was made. Written here at
+        // insert and nowhere else.
+        brief: {
+          topic:                topic,
+          site_name:            siteName,
+          site_context:         siteContext,
+          money_anchor:         moneyAnchor,
+          prompt_sha256:        promptSha256,
+          repair_prompt_sha256: claimRepair && claimRepair.prompt_sha256 ? claimRepair.prompt_sha256 : null
+        }
       })
       .select("*")
       .single();
