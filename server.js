@@ -20,6 +20,9 @@ const Astronomy = require("astronomy-engine");
 const cityTimezones = require("city-timezones");
 const { Resend } = require("resend");
 const { AsyncLocalStorage } = require("async_hooks");
+/* The full HTML5 entity table, named and numeric, for extractSeoPageData.
+   Pinned at 7.0.1, the last major with a CommonJS build: 8.x ships ESM only. */
+const { decodeHTML, decodeHTMLAttribute } = require("entities");
 
 /* Plain require, not a dynamic import: @simplewebauthn/server ships a dual
    build and its exports map resolves "require" to ./script/index.js, so the
@@ -20067,27 +20070,93 @@ app.post("/api/insights/page", requireAuth, requireActiveSubscription, aiLimiter
 // Pulls <title>, meta description/keywords, canonical, H1-H6, image alt
 // attributes, JSON-LD structured data, and visible body text out of raw
 // HTML via regex (no DOM/headless browser dependency available here).
+//
+// Every value is measured as the page writes it, because each one is reported
+// as a finding:
+//   - an attribute value is read whole: "..." may hold ', '...' may hold ",
+//     and an unquoted value runs to whitespace or ">". A tag ends at the first
+//     ">" outside a quoted value, so content="a > b" does not cut it short;
+//   - entities, named and numeric, are decoded in every value (the full HTML5
+//     table from the entities package, never a hand-kept list);
+//   - an image with alt="" is decorative and one with no alt is missing its
+//     text, so they are opposite findings: alt "" with has_alt true for the
+//     first, alt null with has_alt false for the second;
+//   - the title is the document's own. A <title> inside svg, template, script,
+//     style, noscript or a comment is not it, the one in <head> wins, and with
+//     none the title is null, never an icon's.
+
+// The attributes of an opening tag, up to its closing ">". The alternatives
+// cannot overlap ("=" starts only the last three), so a tag that never closes
+// fails in linear time.
+var SEO_TAG_ATTRS = "(?:[^>=]|=\\s*\"[^\"]*\"|=\\s*'[^']*'|=(?!\\s*[\"']))*";
+
+// name -> decoded value for one opening tag. Names are lowercased; the first
+// of a repeated attribute wins, as it does in a browser. An attribute with no
+// value (<img alt>) is present with "".
+function seoTagAttributes(tag) {
+  var attrs = Object.create(null);
+  var body = tag.replace(/^<[^\s\/>]+/, "").replace(/>$/, "");
+  var re = /([^\s"'>\/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, m;
+  while ((m = re.exec(body)) !== null) {
+    var name = m[1].toLowerCase();
+    if (name in attrs) continue;
+    var value = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4] !== undefined ? m[4] : "";
+    attrs[name] = decodeHTMLAttribute(value);
+  }
+  return attrs;
+}
+
+function seoTags(raw, tagName) {
+  var re = new RegExp("<" + tagName + "\\b" + SEO_TAG_ATTRS + ">", "gi"), m, found = [];
+  while ((m = re.exec(raw)) !== null) found.push(seoTagAttributes(m[0]));
+  return found;
+}
+
+// Whitespace, a decoded &nbsp; included, collapsed. An attribute value is
+// already decoded by seoTagAttributes and goes through this alone, so nothing
+// is decoded twice.
+function seoCollapse(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+// Text between tags as a reader sees it: entities decoded, then collapsed.
+function seoText(html) {
+  return seoCollapse(decodeHTML(String(html)));
+}
+
+function seoDocumentTitle(raw) {
+  var doc = raw.replace(/<!--[\s\S]*?(?:-->|$)|<(svg|template|script|style|noscript)\b[\s\S]*?(?:<\/\1\s*>|$)/gi, " ");
+  var titleRe = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i;
+  var head = doc.match(/<head\b[^>]*>([\s\S]*?)<\/head\s*>/i);
+  var m = (head && head[1].match(titleRe)) || doc.match(titleRe);
+  return m ? seoText(m[1]) : null;
+}
+
 function extractSeoPageData(html) {
   var raw = String(html || "");
 
-  var titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  var title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : "";
+  var title = seoDocumentTitle(raw);
 
+  var metas = seoTags(raw, "meta");
   function metaContent(name) {
-    var tagMatch = raw.match(new RegExp("<meta[^>]+name=[\"']" + name + "[\"'][^>]*>", "i"));
-    if (!tagMatch) return "";
-    var contentMatch = tagMatch[0].match(/content=["']([\s\S]*?)["']/i);
-    return contentMatch ? contentMatch[1].replace(/\s+/g, " ").trim() : "";
+    for (var i = 0; i < metas.length; i++) {
+      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {
+        return metas[i].content !== undefined ? seoCollapse(metas[i].content) : "";
+      }
+    }
+    return "";
   }
 
   var metaDescription = metaContent("description");
   var metaKeywords = metaContent("keywords");
 
-  var canonicalTagMatch = raw.match(/<link[^>]+rel=["']canonical["'][^>]*>/i);
   var canonical = "";
-  if (canonicalTagMatch) {
-    var hrefMatch = canonicalTagMatch[0].match(/href=["']([\s\S]*?)["']/i);
-    canonical = hrefMatch ? hrefMatch[1].trim() : "";
+  var links = seoTags(raw, "link");
+  for (var li = 0; li < links.length; li++) {
+    if (links[li].rel !== undefined && links[li].rel.trim().toLowerCase() === "canonical") {
+      canonical = links[li].href !== undefined ? links[li].href.trim() : "";
+      break;
+    }
   }
 
   var headings = {};
@@ -20095,40 +20164,37 @@ function extractSeoPageData(html) {
     var re = new RegExp("<" + tag + "[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "gi");
     var found = [], match;
     while ((match = re.exec(raw)) !== null) {
-      var text = match[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      var text = seoText(match[1].replace(/<[^>]+>/g, " "));
       if (text) found.push(text);
     }
     headings[tag] = found;
   });
 
-  var imageAlts = [];
-  var imgRe = /<img\b[^>]*>/gi, imgMatch;
-  while ((imgMatch = imgRe.exec(raw)) !== null) {
-    var tag = imgMatch[0];
-    var altMatch = tag.match(/alt=["']([\s\S]*?)["']/i);
-    var srcMatch = tag.match(/src=["']([\s\S]*?)["']/i);
-    imageAlts.push({
-      src: srcMatch ? srcMatch[1].trim() : "",
-      alt: altMatch ? altMatch[1].trim() : ""
-    });
-  }
+  var imageAlts = seoTags(raw, "img").map(function (a) {
+    var hasAlt = a.alt !== undefined;
+    return {
+      src: a.src !== undefined ? a.src.trim() : "",
+      alt: hasAlt ? seoCollapse(a.alt) : null,
+      has_alt: hasAlt
+    };
+  });
 
   var structuredData = [];
-  var ldRe = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi, ldMatch;
+  var ldRe = new RegExp("<script\\b(" + SEO_TAG_ATTRS + ")>([\\s\\S]*?)<\\/script\\s*>", "gi"), ldMatch;
   while ((ldMatch = ldRe.exec(raw)) !== null) {
-    structuredData.push(ldMatch[1].trim());
+    var scriptType = seoTagAttributes("<script" + ldMatch[1] + ">").type;
+    if (scriptType !== undefined && scriptType.trim().toLowerCase() === "application/ld+json") {
+      structuredData.push(ldMatch[2].trim());
+    }
   }
 
   var bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
   var bodyHtml = bodyMatch ? bodyMatch[1] : raw;
-  var visibleText = bodyHtml
+  var visibleText = seoText(bodyHtml
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/<[^>]+>/g, " "));
 
   return {
     title: title,
@@ -20140,6 +20206,14 @@ function extractSeoPageData(html) {
     structuredData: structuredData,
     visibleText: safeText(visibleText, 8000) || ""
   };
+}
+
+// One image as the optimize prompt states it. A missing alt and an empty one
+// are opposite findings and are never written the same way.
+function describeSeoImageAlt(img) {
+  if (!img.has_alt) return "alt MISSING";
+  if (img.alt === "") return "alt=\"\" (empty: marked decorative)";
+  return "alt=\"" + img.alt + "\"";
 }
 
 // Shared marker prefix identifying an ai_tasks row as a completed website
@@ -20229,7 +20303,7 @@ app.post("/api/agents/seo/optimize", requireAuth, requireActiveSubscription, aiL
       "\nImages (" + pageData.imageAlts.length + " found, alt text shown): " +
         (pageData.imageAlts.length
           ? pageData.imageAlts.map(function (img, i) {
-              return (i + 1) + ". alt=\"" + (img.alt || "MISSING") + "\"";
+              return (i + 1) + ". " + describeSeoImageAlt(img);
             }).join("; ")
           : "None found") +
       "\nStructured data (JSON-LD blocks found: " + pageData.structuredData.length + "): " +
