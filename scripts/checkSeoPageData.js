@@ -263,8 +263,20 @@ console.log("\n══ 5. a page none of the four touch measures exactly as it di
 /* ── every reader of the output ─────────────────────────────────────────── */
 console.log("\n══ 6. every reader of the output reads the new shape ══");
 {
-  const callers = nowSrc.match(/extractSeoPageData\(/g) || [];
-  same("6. extractSeoPageData has one definition and one caller", callers.length, 2);
+  same("6. extractSeoPageData has exactly one definition", (nowSrc.match(/^function extractSeoPageData\(/gm) || []).length, 1);
+  // Each call, named by the route or top-level function it sits in, so a
+  // third caller fails here by name rather than by a count.
+  const callers = [];
+  const callRe = /extractSeoPageData\(/g;
+  let call;
+  while ((call = callRe.exec(nowSrc)) !== null) {
+    if (nowSrc.slice(call.index - 9, call.index) === "function ") continue;
+    const heads = [...nowSrc.slice(0, call.index).matchAll(/^(?:async )?function ([A-Za-z0-9_$]+)\(|^app\.(get|post|put|patch|delete)\("([^"]+)"/gm)];
+    const head = heads[heads.length - 1];
+    callers.push(!head ? "(top level)" : head[1] || head[2].toUpperCase() + " " + head[3]);
+  }
+  same("6. extractSeoPageData is called by exactly POST /api/agents/seo/optimize and seoAuditPageMeasure",
+    callers.sort(), ["POST /api/agents/seo/optimize", "seoAuditPageMeasure"]);
   const route = nowSrc.slice(nowSrc.indexOf("app.post(\"/api/agents/seo/optimize\""), nowSrc.indexOf("app.get(\"/api/agents/seo/optimize-count\""));
   check("6. the optimize route was found", route.length > 1000, route.length);
   check("6. the optimize route states each image through describeSeoImageAlt", /pageData\.imageAlts\.map\(function \(img, i\) \{\s*return \(i \+ 1\) \+ "\. " \+ describeSeoImageAlt\(img\);/.test(route));

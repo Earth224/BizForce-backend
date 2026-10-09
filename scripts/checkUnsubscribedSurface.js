@@ -143,7 +143,9 @@ const EXPECTED_GATED = [
   "post /api/saved-prompts/:id/run", "post /api/routines/:id/run", "post /api/leads/draft-reply", "post /api/agents/sales/convert",
   // gated 2026-10-05, "Publishing needs a subscription; preparing does not"
   "post /api/marketplace/listings", "post /api/cards/share-token", "post /api/crowdfunding/campaigns",
-  "put /api/crowdfunding/campaigns/:id", "post /api/wallet/transfer"
+  "put /api/crowdfunding/campaigns/:id", "post /api/wallet/transfer",
+  // A real SEO audit, measured before it is explained
+  "post /api/agents/seo/audit"
 ];
 
 const EXPECTED_ADMIN = [

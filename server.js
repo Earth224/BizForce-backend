@@ -54,7 +54,7 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
-const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine } = require("./lib/guardedFetch");
+const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine, UNREACHABLE_MESSAGE: GUARDED_FETCH_UNREACHABLE } = require("./lib/guardedFetch");
 const webpush = require("web-push");
 const cron = require("node-cron");
 
@@ -20064,8 +20064,8 @@ app.post("/api/insights/page", requireAuth, requireActiveSubscription, aiLimiter
    that to the model, which answered with findings about a page it had not
    fetched. No frontend page called it and it had never run. The seo_audit task
    type it set went in the same change. A real audit — measured from a guarded
-   fetch, with the model only explaining what was measured — is the next build;
-   until then there is no route that claims to audit a site. */
+   fetch, with the model only explaining what was measured — is POST
+   /api/agents/seo/audit, below the optimize routes. */
 
 // Pulls <title>, meta description/keywords, canonical, H1-H6, image alt
 // attributes, JSON-LD structured data, and visible body text out of raw
@@ -20443,6 +20443,649 @@ app.get("/api/agents/seo/optimize-count", requireAuth, async function (req, res,
     next(error);
   }
 });
+
+/* ══ POST /api/agents/seo/audit — MEASURED BEFORE IT IS EXPLAINED ════════════
+   The audit the deleted /api/seo/audit pretended to be. That route put a URL
+   into a sentence and let the model describe a page it never fetched. This one
+   reads the page, its robots.txt and one sitemap through guardedFetch, and
+   everything it reports about them is computed here, by code:
+
+     measured      every value taken off the page and the two files, with null
+                   where a thing is absent and the evidence for each heuristic;
+     flags         fixed rules over `measured`, each with a stable id, the rule
+                   in words, the evidence and its basis: "error" for a page
+                   that did not answer 2xx or JSON-LD that does not parse,
+                   "guideline" for everything else, because a 61-character title
+                   is a convention broken, not a fault;
+     explanation   the only part the model writes: a prioritised list in which
+                   every point cites a flag id or a measurement key. A point that
+                   cites nothing real is dropped and counted.
+
+   THE MODEL SEES `measured` AND `flags` AND NOTHING ELSE. Not the visible
+   text, not the HTML, not robots.txt or the sitemap as written. It cannot be
+   led by the page's own words, and anything it says is traceable to an id.
+
+   THE MEASURED PART IS THE PRODUCT. A model that throws or cannot be parsed
+   after the one retry leaves explanation null and explanation_error saying
+   why, and the run COMPLETES: the measurements were made and are delivered.
+
+   A REACHED PAGE IS AUDITED WHATEVER ITS STATUS. A 404 is the finding, not a
+   refusal. Only an address guardedFetch refuses or cannot reach ends the run,
+   with 422 and the same message seo/optimize gives, and no model call.
+
+   extractSeoPageData is called, not changed: seo/optimize and
+   checkSeoPageData depend on its output exactly as it is. */
+
+var SEO_AUDIT_TITLE_MAX = 60;
+var SEO_AUDIT_DESCRIPTION_MIN = 70;
+var SEO_AUDIT_DESCRIPTION_MAX = 160;
+// Below this much visible text, a page with scripts or an empty app root is
+// taken to be a shell that JavaScript fills in. A heuristic, and labelled so.
+var SEO_AUDIT_THIN_TEXT = 250;
+var SEO_AUDIT_USER_AGENT = "Mozilla/5.0 (compatible; BizForceSEOBot/1.0; +https://bizforceai.net)";
+
+var SEO_AUDIT_NOT_MEASURED = [
+  "Search rankings",
+  "Traffic",
+  "Backlinks",
+  "Competitors",
+  "Page speed and Core Web Vitals",
+  "Content rendered by JavaScript",
+  "Other pages on the site",
+  "Whether any search engine has indexed the page"
+];
+
+/* A URL in the form two URLs are compared in: resolved, fragment dropped, one
+   trailing slash dropped. null when it does not parse. */
+function seoAuditComparableUrl(value, base) {
+  try {
+    var u = base ? new URL(value, base) : new URL(value);
+    u.hash = "";
+    var href = u.href;
+    return href.charAt(href.length - 1) === "/" ? href.slice(0, -1) : href;
+  } catch (e) {
+    return null;
+  }
+}
+
+function seoAuditCharLength(text) {
+  return Array.from(String(text)).length;
+}
+
+/* noindex / nofollow in a robots directive, meta or header. "none" is both. */
+function seoAuditDirectives(value) {
+  if (value === null || value === undefined) return { value: null, noindex: false, nofollow: false };
+  var v = String(value).toLowerCase();
+  return {
+    value: String(value),
+    noindex: /(^|[\s,:])(noindex|none)(?=$|[\s,])/.test(v),
+    nofollow: /(^|[\s,:])(nofollow|none)(?=$|[\s,])/.test(v)
+  };
+}
+
+/* robots.txt as the rules that apply to User-agent: *, and the first Sitemap:
+   line. Consecutive User-agent lines share one group; an empty Disallow
+   allows everything and is not a rule. */
+function seoRobotsParse(text) {
+  var rules = [], sitemap = null, inStarGroup = false, lastWasAgent = false;
+  String(text || "").split(/\r\n|\r|\n/).forEach(function (line) {
+    var m = line.replace(/#.*$/, "").trim().match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
+    if (!m) return;
+    var field = m[1].toLowerCase(), value = m[2].trim();
+    if (field === "sitemap") {
+      if (sitemap === null && value) sitemap = value;
+      return;
+    }
+    if (field === "user-agent") {
+      if (!lastWasAgent) inStarGroup = false;
+      if (value === "*") inStarGroup = true;
+      lastWasAgent = true;
+      return;
+    }
+    lastWasAgent = false;
+    if ((field === "allow" || field === "disallow") && inStarGroup && value) {
+      rules.push({ type: field, pattern: value });
+    }
+  });
+  return { rules: rules, sitemap: sitemap };
+}
+
+function seoRobotsPatternMatches(pattern, path) {
+  var anchored = pattern.charAt(pattern.length - 1) === "$";
+  var body = anchored ? pattern.slice(0, -1) : pattern;
+  var re = "^" + body.split("*").map(function (part) {
+    return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join(".*") + (anchored ? "$" : "");
+  return new RegExp(re).test(path);
+}
+
+/* The longest matching pattern decides; on a tie Allow wins. */
+function seoRobotsVerdict(rules, path) {
+  var best = null;
+  rules.forEach(function (rule) {
+    if (!seoRobotsPatternMatches(rule.pattern, path)) return;
+    if (!best || rule.pattern.length > best.pattern.length ||
+        (rule.pattern.length === best.pattern.length && rule.type === "allow")) {
+      best = rule;
+    }
+  });
+  return {
+    disallowed: !!best && best.type === "disallow",
+    matched_rule: best ? (best.type === "allow" ? "Allow: " : "Disallow: ") + best.pattern : null
+  };
+}
+
+/* A sitemap by its root element. For a urlset, whether the audited URL is one
+   of its <loc>s; for an index the answer is "not checked", because the page
+   may be in a child sitemap that was not read, and false would be a claim. */
+function seoSitemapMeasure(xml, finalUrl) {
+  var text = String(xml || "");
+  var root = text
+    .replace(/<\?[\s\S]*?\?>/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!DOCTYPE[^>]*>/gi, "")
+    .match(/^\s*<([A-Za-z0-9_.:-]+)/);
+  var rootName = root ? root[1].replace(/^[^:]*:/, "").toLowerCase() : null;
+  var kind = rootName === "urlset" ? "urlset" : (rootName === "sitemapindex" ? "sitemapindex" : "unrecognised");
+
+  var locs = [];
+  var re = /<(?:[A-Za-z0-9_.-]+:)?loc\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_.-]+:)?loc\s*>/g, m;
+  while ((m = re.exec(text)) !== null) {
+    locs.push(decodeHTML(m[1].replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1")).trim());
+  }
+
+  var pageListed = null;
+  if (kind === "urlset") {
+    var target = seoAuditComparableUrl(finalUrl);
+    pageListed = locs.some(function (loc) { return seoAuditComparableUrl(loc) === target; });
+  } else if (kind === "sitemapindex") {
+    pageListed = "not checked";
+  }
+  return { kind: kind, loc_count: locs.length, page_listed: pageListed };
+}
+
+/* A secondary fetch as a measurement. A refusal is recorded by what the
+   person may be told: every way of failing to reach an address reads as
+   "unreachable", exactly as guardedFetch's own message does, so a sitemap URL
+   pointed at an internal address learns nothing about it. */
+async function seoAuditFetchFile(fetcher, url, accept) {
+  try {
+    var r = await fetcher(url, { userAgent: SEO_AUDIT_USER_AGENT, accept: accept });
+    return {
+      url: url,
+      final_url: r.url,
+      status: r.status,
+      refusal: null,
+      content_type: r.headers ? (r.headers["content-type"] || null) : null,
+      bytes: r.bytes,
+      chain: r.chain || [],
+      body: r.ok ? r.body : null
+    };
+  } catch (err) {
+    console.warn("[seo/audit] " + url + " not read: " + guardedFetchLogLine(err));
+    var message = guardedFetchPublicMessage(err);
+    return {
+      url: url,
+      final_url: null,
+      status: null,
+      refusal: message === GUARDED_FETCH_UNREACHABLE ? "unreachable" : (err && err.code) || "error",
+      refusal_message: message,
+      content_type: null,
+      bytes: 0,
+      chain: [],
+      body: null
+    };
+  }
+}
+
+/* Everything measured from the served HTML. Null-valued keys, never missing
+   ones, when there is no HTML to read. */
+function seoAuditPageMeasure(html, finalUrl) {
+  var data = extractSeoPageData(html);
+  var raw = String(html);
+  var finalHost = (function () { try { return new URL(finalUrl).host; } catch (e) { return null; } })();
+
+  var metas = seoTags(raw, "meta");
+  function metaNamed(name) {
+    for (var i = 0; i < metas.length; i++) {
+      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {
+        return metas[i].content !== undefined ? seoCollapse(metas[i].content) : "";
+      }
+    }
+    return null;
+  }
+
+  var description = metaNamed("description");
+  var viewport = metaNamed("viewport");
+  var htmlTag = seoTags(raw, "html")[0] || {};
+  var lang = htmlTag.lang !== undefined ? htmlTag.lang.trim() : null;
+
+  var canonical = null;
+  if (data.canonical) {
+    var resolved = seoAuditComparableUrl(data.canonical, finalUrl);
+    canonical = {
+      value: data.canonical,
+      resolved: resolved,
+      matches_final_url: resolved === null ? null : resolved === seoAuditComparableUrl(finalUrl)
+    };
+  }
+
+  // Headings in document order, by their own pass: extractSeoPageData groups
+  // them by level, which loses the order a skipped level is read from.
+  var sequence = [];
+  var headingRe = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1\s*>/gi, hm;
+  while ((hm = headingRe.exec(raw)) !== null) {
+    var headingText = seoText(hm[2].replace(/<[^>]+>/g, " "));
+    if (headingText) sequence.push({ level: Number(hm[1]), text: headingText });
+  }
+  var skips = [];
+  for (var s = 1; s < sequence.length; s++) {
+    if (sequence[s].level > sequence[s - 1].level + 1) {
+      skips.push({ from: "h" + sequence[s - 1].level, to: "h" + sequence[s].level, at_heading: s + 1, text: sequence[s].text });
+    }
+  }
+
+  var images = {
+    total: data.imageAlts.length,
+    with_alt_text: data.imageAlts.filter(function (img) { return img.has_alt && img.alt !== ""; }).length,
+    decorative_empty_alt: data.imageAlts.filter(function (img) { return img.has_alt && img.alt === ""; }).length,
+    missing_alt_attribute: data.imageAlts.filter(function (img) { return !img.has_alt; }).length
+  };
+
+  var links = { total: 0, internal: 0, external: 0, nofollow: 0, empty_or_javascript: 0, other: 0 };
+  seoTags(raw, "a").forEach(function (a) {
+    if (a.href === undefined) return;
+    links.total++;
+    var href = a.href.trim();
+    if (a.rel !== undefined && /(^|\s)nofollow(\s|$)/i.test(a.rel)) links.nofollow++;
+    if (href === "" || /^javascript:/i.test(href)) { links.empty_or_javascript++; return; }
+    var u = null;
+    try { u = new URL(href, finalUrl); } catch (e) { u = null; }
+    if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) { links.other++; return; }
+    if (u.host === finalHost) links.internal++;
+    else links.external++;
+  });
+
+  var types = [];
+  var parsedBlocks = 0;
+  function collectTypes(node) {
+    if (Array.isArray(node)) { node.forEach(collectTypes); return; }
+    if (!node || typeof node !== "object") return;
+    [].concat(node["@type"] || []).forEach(function (t) {
+      if (typeof t === "string" && types.indexOf(t) === -1) types.push(t);
+    });
+    if (node["@graph"]) collectTypes(node["@graph"]);
+  }
+  data.structuredData.forEach(function (block) {
+    try {
+      collectTypes(JSON.parse(block));
+      parsedBlocks++;
+    } catch (e) { /* counted below as unparsed */ }
+  });
+
+  var scriptCount = seoTags(raw, "script").filter(function (a) {
+    return !(a.type !== undefined && a.type.trim().toLowerCase() === "application/ld+json");
+  }).length;
+  var rootMatch = raw.match(/<(div|main|body|app-root)\b[^>]*\bid\s*=\s*["']?(root|app|__next|__nuxt|svelte)["']?[^>]*>\s*<\/\1\s*>/i);
+  var emptyRoot = rootMatch ? rootMatch[2] : null;
+  var visibleLength = data.visibleText.length;
+
+  return {
+    title: data.title === null ? null : { value: data.title, length: seoAuditCharLength(data.title) },
+    meta_description: description === null ? null : { value: description, length: seoAuditCharLength(description) },
+    canonical: canonical,
+    meta_robots: seoAuditDirectives(metaNamed("robots")),
+    lang: { present: !!lang, value: lang },
+    viewport: { present: viewport !== null, value: viewport },
+    h1: { count: data.headings.h1.length, values: data.headings.h1 },
+    heading_sequence: sequence,
+    heading_skips: skips,
+    images: images,
+    links: links,
+    json_ld: { blocks: data.structuredData.length, parsed: parsedBlocks, unparsed: data.structuredData.length - parsedBlocks, types: types },
+    client_rendering: {
+      appears_client_rendered: visibleLength < SEO_AUDIT_THIN_TEXT && (emptyRoot !== null || scriptCount > 0),
+      heuristic: true,
+      basis: "True when the served HTML has under " + SEO_AUDIT_THIN_TEXT + " characters of visible text and either an " +
+        "empty app root element or at least one script. A guess about how the page is built, not a measurement of it.",
+      visible_text_length: visibleLength,
+      script_count: scriptCount,
+      empty_app_root: emptyRoot
+    }
+  };
+}
+
+/* The whole of `measured`, from the three fetch results. */
+function measureSeoAudit(page, robots, sitemap) {
+  var finalUrl = page.url;
+  var chain = page.chain || [];
+  var html = page.ok ? page.body : null;
+  var content = html !== null ? seoAuditPageMeasure(html, finalUrl) : null;
+
+  var path = (function () { try { var u = new URL(finalUrl); return u.pathname + u.search; } catch (e) { return "/"; } })();
+  var robotsRead = robots.body !== null;
+  var robotsRules = robotsRead ? seoRobotsParse(robots.body) : null;
+  var verdict = robotsRead ? seoRobotsVerdict(robotsRules.rules, path) : null;
+  var sitemapRead = sitemap.body !== null;
+  var sitemapShape = sitemapRead ? seoSitemapMeasure(sitemap.body, finalUrl) : null;
+
+  var headerRobots = page.headers ? page.headers["x-robots-tag"] : undefined;
+  var metaRobots = content ? content.meta_robots : seoAuditDirectives(null);
+  var xRobots = seoAuditDirectives(headerRobots === undefined ? null : [].concat(headerRobots).join(", "));
+
+  return {
+    final_status: page.status,
+    final_url: finalUrl,
+    final_url_is_https: /^https:/i.test(String(finalUrl)),
+    redirect_count: Math.max(0, chain.length - 1),
+    redirect_chain: chain,
+    page_html_read: html !== null,
+    title: content ? content.title : null,
+    meta_description: content ? content.meta_description : null,
+    canonical: content ? content.canonical : null,
+    robots_directives: {
+      meta_robots: metaRobots,
+      x_robots_tag: xRobots,
+      noindex: metaRobots.noindex || xRobots.noindex,
+      nofollow: metaRobots.nofollow || xRobots.nofollow
+    },
+    lang: content ? content.lang : null,
+    viewport: content ? content.viewport : null,
+    h1: content ? content.h1 : null,
+    heading_sequence: content ? content.heading_sequence : null,
+    heading_skips: content ? content.heading_skips : null,
+    images: content ? content.images : null,
+    links: content ? content.links : null,
+    json_ld: content ? content.json_ld : null,
+    client_rendering: content ? content.client_rendering : null,
+    robots_txt: {
+      url: robots.url,
+      status: robots.status,
+      refusal: robots.refusal,
+      read: robotsRead,
+      path_checked: path,
+      path_disallowed: robotsRead ? verdict.disallowed : null,
+      matched_rule: robotsRead ? verdict.matched_rule : null,
+      sitemap_declared: robotsRead ? robotsRules.sitemap : null
+    },
+    sitemap: {
+      url_tried: sitemap.url,
+      source: sitemap.source,
+      status: sitemap.status,
+      refusal: sitemap.refusal,
+      read: sitemapRead,
+      kind: sitemapRead ? sitemapShape.kind : null,
+      loc_count: sitemapRead ? sitemapShape.loc_count : null,
+      page_listed: sitemapRead ? sitemapShape.page_listed : null
+    }
+  };
+}
+
+/* The flags: fixed rules over `measured`, each id fixed to its rule. */
+function seoAuditFlags(m) {
+  var flags = [];
+  function raise(id, rule, evidence, basis) {
+    flags.push({ id: id, rule: rule, evidence: evidence, basis: basis || "guideline" });
+  }
+  function statusText(file) {
+    return file.status !== null ? "HTTP " + file.status : "not reached (" + file.refusal + ")";
+  }
+
+  if (m.final_status < 200 || m.final_status >= 300) {
+    raise("F1", "The page should answer with a 2xx status.", "The final response was HTTP " + m.final_status + ".", "error");
+  }
+  if (m.redirect_count > 1) {
+    raise("F2", "A page should be reached in at most one redirect.", m.redirect_count + " redirects: " +
+      m.redirect_chain.map(function (h) { return h.status + " " + h.url; }).join(" → ") + ".");
+  }
+  if (!m.final_url_is_https) {
+    raise("F3", "The final URL should be https.", "The final URL is " + m.final_url + ".");
+  }
+
+  if (m.page_html_read) {
+    if (m.title === null) {
+      raise("F4", "The page should have a <title>.", "No document <title> was found.");
+    } else if (m.title.length > SEO_AUDIT_TITLE_MAX) {
+      raise("F5", "A title should be at most " + SEO_AUDIT_TITLE_MAX + " characters. Search results truncate by pixel " +
+        "width, and the character count only approximates that limit.", "The title is " + m.title.length + " characters.");
+    }
+    if (m.meta_description === null) {
+      raise("F6", "The page should have a meta description.", "No <meta name=\"description\"> was found.");
+    } else if (m.meta_description.length < SEO_AUDIT_DESCRIPTION_MIN || m.meta_description.length > SEO_AUDIT_DESCRIPTION_MAX) {
+      raise("F7", "A meta description should be " + SEO_AUDIT_DESCRIPTION_MIN + "–" + SEO_AUDIT_DESCRIPTION_MAX + " characters.",
+        "The meta description is " + m.meta_description.length + " characters.");
+    }
+
+    if (m.client_rendering.appears_client_rendered) {
+      raise("F20", "The served HTML should hold the page's content. This one holds little, so the H1, heading and " +
+        "image checks could not be made on it.", "Visible text " + m.client_rendering.visible_text_length +
+        " characters, " + m.client_rendering.script_count + " script(s), empty app root: " +
+        (m.client_rendering.empty_app_root || "none") + " (a heuristic).");
+    } else {
+      if (m.h1.count !== 1) {
+        raise("F8", "A page should have exactly one H1.", m.h1.count + " H1 element(s)" +
+          (m.h1.count ? ": " + m.h1.values.map(function (v) { return "\"" + v + "\""; }).join(", ") : "") + ".");
+      }
+      if (m.heading_skips.length) {
+        raise("F9", "Headings should not skip a level.", m.heading_skips.map(function (sk) {
+          return sk.from + " followed by " + sk.to + " (\"" + sk.text + "\")";
+        }).join("; ") + ".");
+      }
+      if (m.images.missing_alt_attribute > 0) {
+        raise("F16", "Every image should have an alt attribute (alt=\"\" marks it decorative and is fine).",
+          m.images.missing_alt_attribute + " of " + m.images.total + " image(s) have no alt attribute.");
+      }
+    }
+
+    if (m.canonical && m.canonical.matches_final_url === false) {
+      raise("F10", "The canonical URL should be the page's own URL, unless the page means to defer to another.",
+        "The canonical is " + m.canonical.resolved + "; the page is " + m.final_url + ".");
+    }
+    if (m.json_ld.unparsed > 0) {
+      raise("F17", "Every JSON-LD block should parse as JSON.", m.json_ld.unparsed + " of " + m.json_ld.blocks + " block(s) do not parse.", "error");
+    }
+    if (!m.lang.present) {
+      raise("F18", "The <html> element should declare a lang.", "No lang attribute on <html>.");
+    }
+    if (!m.viewport.present) {
+      raise("F19", "The page should have a meta viewport.", "No <meta name=\"viewport\"> was found.");
+    }
+  }
+
+  if (m.robots_directives.noindex) {
+    var where = [];
+    if (m.robots_directives.meta_robots.noindex) where.push("meta robots \"" + m.robots_directives.meta_robots.value + "\"");
+    if (m.robots_directives.x_robots_tag.noindex) where.push("X-Robots-Tag \"" + m.robots_directives.x_robots_tag.value + "\"");
+    raise("F11", "A page meant to be found should not say noindex.", "noindex in " + where.join(" and ") + ".");
+  }
+  if (m.robots_txt.path_disallowed === true) {
+    raise("F12", "robots.txt should not disallow the audited page for User-agent: *.", m.robots_txt.path_checked +
+      " is disallowed by \"" + m.robots_txt.matched_rule + "\".");
+  }
+  if (!m.robots_txt.read) {
+    raise("F13", "The site should serve a robots.txt.", m.robots_txt.url + ": " + statusText(m.robots_txt) + ".");
+  }
+  if (!m.sitemap.read || m.sitemap.kind === "unrecognised") {
+    raise("F14", "The site should serve a readable sitemap.", m.sitemap.url_tried + ": " +
+      (m.sitemap.read ? "read, but it is neither a urlset nor a sitemapindex" : statusText(m.sitemap)) + ".");
+  }
+  if (m.sitemap.kind === "urlset" && m.sitemap.page_listed === false) {
+    raise("F15", "The sitemap should list the audited page.", m.final_url + " is not among the sitemap's " + m.sitemap.loc_count + " URL(s).");
+  }
+
+  return flags.sort(function (a, b) { return Number(a.id.slice(1)) - Number(b.id.slice(1)); });
+}
+
+/* What the model is given: measured and flags, and nothing else. */
+function seoAuditModelInput(measured, flags) {
+  return JSON.stringify({ measured: measured, flags: flags }, null, 1);
+}
+
+/* The model's points, kept only where they cite a real id. */
+function parseSeoAuditPoints(raw, validIds) {
+  var points = [], dropped = 0;
+  String(raw || "").split(/\r?\n/).forEach(function (line) {
+    var m = line.match(/^\s*(?:[-*•]\s*|\d+[.)]\s*)?POINT\s*:\s*(.*?)\s*(?:\|\s*CITES\s*:\s*(.*))?$/i);
+    if (!m || !m[1]) return;
+    var cited = [];
+    String(m[2] || "").split(/[,\s]+/).forEach(function (id) {
+      var clean = id.replace(/[^A-Za-z0-9_]/g, "");
+      if (/^f\d+$/i.test(clean)) clean = clean.toUpperCase();
+      if (validIds.indexOf(clean) !== -1 && cited.indexOf(clean) === -1) cited.push(clean);
+    });
+    if (!cited.length) { dropped++; return; }
+    points.push({ priority: points.length + 1, point: m[1], cites: cited });
+  });
+  return { points: points, dropped: dropped };
+}
+
+app.post("/api/agents/seo/audit", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var targetUrl = normalizeUrl(safeText(req.body.url || req.body.website, 2000));
+
+      if (!targetUrl) {
+        return res.status(400).json({ error: "A URL is required — the page you want audited." });
+      }
+
+      run = await startToolRun(req, {
+        agentType: "seo",
+        taskType: "seo/audit",
+        title: "SEO · Audit: " + targetUrl
+      });
+
+      /* THROUGH guardedFetch, NEVER fetch(), and the same answer seo/optimize
+         gives when it refuses. A REACHED non-2xx is not a refusal: guardedFetch
+         returns it, and it is audited below. */
+      var page;
+      try {
+        page = await guardedFetch(targetUrl, { userAgent: SEO_AUDIT_USER_AGENT });
+      } catch (fetchErr) {
+        console.error("[seo/audit] Fetch refused or failed for " + safeText(targetUrl, 200) + ": " + guardedFetchLogLine(fetchErr));
+        var refusal = guardedFetchPublicMessage(fetchErr);
+        await run.fail(new Error(refusal));
+        return res.status(422).json({ error: refusal });
+      }
+
+      var origin = new URL(page.url).origin;
+      var robots = await seoAuditFetchFile(guardedFetch, origin + "/robots.txt", ["text/plain"]);
+      var declared = robots.body !== null ? seoRobotsParse(robots.body).sitemap : null;
+      var sitemapUrl = null;
+      if (declared) {
+        try { sitemapUrl = new URL(declared, robots.final_url || robots.url).href; } catch (e) { sitemapUrl = null; }
+      }
+      var sitemap = await seoAuditFetchFile(guardedFetch, sitemapUrl || origin + "/sitemap.xml", ["application/xml", "text/xml"]);
+      sitemap.source = sitemapUrl ? "robots.txt" : "default /sitemap.xml";
+
+      var measured = measureSeoAudit(page, robots, sitemap);
+      var flags = seoAuditFlags(measured);
+
+      /* The explanation. Its input is measured and flags, serialised, and
+         nothing else; everything after this line that fails leaves the
+         measured audit standing. */
+      var validIds = flags.map(function (f) { return f.id; }).concat(Object.keys(measured));
+      var explanation = null, explanationError = null, pointsDropped = 0, modelCallMade = false;
+      var completionExtra = null;
+      try {
+        var languageTag = await resolvePreferredLanguage(userId);
+        var prompt =
+          "You are the BizForce SEO agent, explaining an audit of one web page to its owner. Everything you " +
+          "may use is in the AUDIT block below: measurements taken by code, and flags raised by fixed rules over " +
+          "those measurements. You have not seen the page and must not describe it beyond what the AUDIT says.\n\n" +
+          "RULES:\n" +
+          "- Use only the AUDIT block. Do not estimate or mention search rankings, traffic, backlinks, competitors, " +
+          "page speed, or anything else that is not in it, and do not guess at what the page says.\n" +
+          "- Write a prioritised list of what to fix, most important first, at most 10 points. An \"error\" flag " +
+          "outranks a \"guideline\" flag.\n" +
+          "- Every point cites one or more ids from VALID IDS: flag ids (F1, F2 ...) or measurement keys. A point " +
+          "that cites no valid id is thrown away.\n\n" +
+          "FORMAT: one point per line, exactly like this, and nothing else:\n" +
+          "POINT: <what to do and why, in one or two sentences> | CITES: <id>, <id>\n\n" +
+          "VALID IDS: " + validIds.join(", ") + "\n\n" +
+          "AUDIT:\n" + seoAuditModelInput(measured, flags) +
+          buildLanguageInstruction(languageTag, false);
+
+        var parsed = { points: [], dropped: 0 };
+        modelCallMade = true;
+        var attempt = await toolGenerateWithOneRetry({
+          label: "seo/audit",
+          prompt: prompt,
+          maxTokens: 2000,
+          ledger: {
+            user_id: req.user.id,
+            agent_type: "seo",
+            route: "POST /api/agents/seo/audit"
+          },
+          correction: toolLineShapeCorrection({
+            unit: "point",
+            lineFormat: "POINT: <what to do and why> | CITES: <id>, <id>",
+            example: "POINT: Add a meta description of 70 to 160 characters. | CITES: F6, meta_description",
+            extra: "- Every id after CITES must be one listed in VALID IDS."
+          }),
+          parse: function (text) {
+            parsed = parseSeoAuditPoints(text, validIds);
+            return parsed.points.length + parsed.dropped;
+          }
+        });
+
+        if (attempt.count > 0) {
+          explanation = parsed.points;
+          pointsDropped = parsed.dropped;
+          completionExtra = attempt.completionExtra;
+        } else {
+          explanationError = "The model's reply could not be read as a cited list, even after one retry, so there " +
+            "is no explanation. Everything measured and flagged above stands.";
+          completionExtra = { explanation_parse_failure: toolFailureOutput(attempt.failureDetails) };
+        }
+      } catch (modelErr) {
+        console.error("[seo/audit] The explanation failed; the measured audit is returned without it:", modelErr);
+        explanationError = "The explanation could not be generated (" + ((modelErr && modelErr.message) || String(modelErr)) +
+          "). Everything measured and flagged above stands.";
+      }
+
+      var responseBody = {
+        success: true,
+        url: targetUrl,
+        measured: measured,
+        flags: flags,
+        explanation: explanation,
+        explanation_error: explanationError,
+        points_dropped: pointsDropped,
+        not_measured: SEO_AUDIT_NOT_MEASURED,
+        provenance: toolProvenance(
+          [
+            "The page's final status, URL and redirect chain, fetched through the guarded fetcher",
+            "Title, meta description, canonical, robots directives, lang, viewport, headings, images, links and JSON-LD, read from the served HTML",
+            "robots.txt and one sitemap, fetched and read",
+            "Every flag, by a fixed rule over those measurements"
+          ],
+          explanation ? ["The explanation: which flags to fix first and why, citing the ids above"] : [],
+          "Only the HTML the server was sent was read: nothing JavaScript adds after load, no other page on the " +
+          "site, and no search engine's data. The model saw the measurements and flags only, never the page's " +
+          "text, and every point it makes cites the id it rests on.",
+          {
+            model_call_made: modelCallMade,
+            page_text_sent_to_model: false
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody, completionExtra);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[seo/audit] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
 
 // ── Etsy Agent tools ─────────────────────────────────────────────────────────
 //
@@ -28047,6 +28690,9 @@ var TOOL_INPUT_SPECS = {
   ],
 
   /* Routes the catalogue regex admits that are not measured/provenance tools. */
+  "seo/audit": [
+    toolField("url", "string", true, "The page to audit; normalised to https:// when no scheme is given, and a 400 when missing.", ["website"])
+  ],
   "seo/optimize": [
     toolField("website", "string", true, "The URL to optimise; normalised, and a 400 when missing or unusable.", ["url"]),
     toolField("business_description", "string", false, "Description of the business, up to 2000 characters.", ["description", "brand_description"])
