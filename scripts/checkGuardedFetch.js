@@ -34,6 +34,18 @@
     11. THE ROUTE. server.js's live POST /api/agents/seo/optimize refuses
         private targets with that message; /api/seo/audit and seo_audit are gone
         from the backend and the frontend.
+    12. options.accept (for robots.txt and sitemaps). The default still refuses
+        text/plain and XML with the message it always had. The option reads
+        only the types it lists, matched on the media type alone and without
+        regard to case, and refuses HTML unless HTML is listed. With it set,
+        every blocked range is refused again as a literal and as a name, as are
+        bad schemes, ports and credentials, redirects to blocked addresses, a
+        6th redirect, rebinding, a 4 MB / 3 MB + 1 / gzip-bomb text/plain body
+        and a text/plain answer that hangs or drips past 10 s. Challenge
+        headers still refuse; a <title> is judged only in HTML. Every result
+        carries its chain, every hop in order with its status; a reached 404
+        is returned, with or without the option, exactly as before, while a
+        blocked address is thrown.
 
    No request leaves the machine. Names resolve through a stub; sockets land on
    a local server through a stub dial that asks the fetcher's OWN lookup where
@@ -79,10 +91,17 @@ const MUTATIONS = {
   "timeout":          [["      const timer = setTimeout(function () {\n", "      const timer = setTimeout(function () {\n        return;\n"]],
   "size-declared":    [["          if (isFinite(declared) && declared > MAX_BODY_BYTES) {", "          if (false) {"]],
   "size-stream":      [["            if (bytes > MAX_BODY_BYTES) {", "            if (false) {"]],
-  "content-type":     [["          if (ALLOWED_CONTENT_TYPES.indexOf(contentType) === -1) {", "          if (false) {"]],
+  "content-type":     [["          } else if (!isHtml) {", "          } else if (false) {"]],
   "challenge":        [["            if (challenge) return fail(", "            if (false) return fail("]],
   "leak-blocked":     [["    default:\n      return UNREACHABLE_MESSAGE;", "    case \"blocked\":\n      return \"That address is private.\";\n    default:\n      return UNREACHABLE_MESSAGE;"]],
-  "leak-timeout":     [["      return err.connected ? \"That website did not finish", "      return true ? \"That website did not finish"]]
+  "leak-timeout":     [["      return err.connected ? \"That website did not finish", "      return true ? \"That website did not finish"]],
+  // options.accept may change the content-type rule and nothing else
+  "accept-skips-dns": [["            if (verdict) {\n              return callback(new GuardedFetchError(\"blocked\"", "            if (verdict && !accepted) {\n              return callback(new GuardedFetchError(\"blocked\""]],
+  "accept-skips-url": [["          target = checkUrl(urlString);", "          target = accepted ? (function (u) { return { url: u, hostname: u.hostname.replace(/^\\[|\\]$/g, \"\"), port: Number(u.port) || 80, isHttps: u.protocol === \"https:\" }; })(new URL(urlString)) : checkUrl(urlString);"]],
+  "accept-ignored":   [["            if (accepted.indexOf(contentType) === -1) {", "            if (!isHtml) {"]],
+  "accept-anything":  [["            if (accepted.indexOf(contentType) === -1) {", "            if (false) {"]],
+  "title-non-html":   [["  if (!isHtml) return null;\n", ""]],
+  "chain-drop-hop":   [["          chain.push({ url: urlString, status: status });", "          if (hopNumber !== 1) chain.push({ url: urlString, status: status });"]]
 };
 const MUTATE = process.env.MUTATE || "";
 
@@ -154,6 +173,7 @@ const ROUTES = {
   "/r/metadata":    function (req, res) { res.writeHead(307, { Location: "http://169.254.169.254/landing" }); res.end(); },
   "/r/port":        function (req, res) { res.writeHead(302, { Location: "http://public.test:8080/landing" }); res.end(); },
   "/r/relative":    function (req, res) { res.writeHead(302, { Location: "/landing" }); res.end(); },
+  "/r/relative-404": function (req, res) { res.writeHead(302, { Location: "/missing" }); res.end(); },
   "/hang":          function () { /* never answers */ },
   "/drip":          function (req, res) {
     res.writeHead(200, { "Content-Type": "text/html" });
@@ -173,8 +193,36 @@ const ROUTES = {
   "/cf-title":      function (req, res) { res.writeHead(200, { "Content-Type": "text/html" }); res.end(page("Just a moment...")); },
   "/aws-waf":       function (req, res) { res.writeHead(200, { "Content-Type": "text/html", "x-amzn-waf-action": "challenge" }); res.end(page("Shop")); },
   "/says-moment":   function (req, res) { res.writeHead(200, { "Content-Type": "text/html" }); res.end(page("Bakery", "<p>Just a moment, the oven is hot.</p>")); },
-  "/missing":       function (req, res) { res.writeHead(404, { "Content-Type": "text/html" }); res.end(page("Not found")); }
+  "/missing":       function (req, res) { res.writeHead(404, { "Content-Type": "text/html" }); res.end(page("Not found")); },
+  // for options.accept (section 12)
+  "/robots.txt":    function (req, res) { res.writeHead(200, { "Content-Type": "text/plain" }); res.end(ROBOTS); },
+  "/robots-cased":  function (req, res) { res.writeHead(200, { "Content-Type": "Text/Plain; charset=utf-8" }); res.end(ROBOTS); },
+  "/sitemap.xml":   function (req, res) { res.writeHead(200, { "Content-Type": "application/xml" }); res.end(SITEMAP); },
+  "/sitemap-tx":    function (req, res) { res.writeHead(200, { "Content-Type": "text/xml; charset=UTF-8" }); res.end(SITEMAP); },
+  "/r/robots-private": function (req, res) { res.writeHead(302, { Location: "http://internal.test/robots.txt" }); res.end(); },
+  "/r/robots-literal": function (req, res) { res.writeHead(301, { Location: "http://127.0.0.1/robots.txt" }); res.end(); },
+  "/r/robots-meta": function (req, res) { res.writeHead(308, { Location: "http://metadata.test/robots.txt" }); res.end(); },
+  "/r/robots-port": function (req, res) { res.writeHead(302, { Location: "http://public.test:8080/robots.txt" }); res.end(); },
+  "/mix/1":         function (req, res) { res.writeHead(301, { Location: "/mix/2" }); res.end(); },
+  "/mix/2":         function (req, res) { res.writeHead(308, { Location: "http://public6.test/mix/3" }); res.end(); },
+  "/mix/3":         function (req, res) { res.writeHead(307, { Location: "/robots.txt" }); res.end(); },
+  "/plain-hang":    function (req, res) { res.writeHead(200, { "Content-Type": "text/plain" }); res.flushHeaders(); },
+  "/plain-drip":    function (req, res) {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    const t = setInterval(function () { if (res.writableEnded || res.destroyed) return clearInterval(t); res.write("x"); }, 300);
+    res.on("close", function () { clearInterval(t); });
+  },
+  "/plain-declared": function (req, res) { res.writeHead(200, { "Content-Type": "text/plain", "Content-Length": String(4 * 1024 * 1024) }); res.write("User-agent"); },
+  "/plain-stream":  function (req, res) { res.writeHead(200, { "Content-Type": "text/plain" }); pump(res, Buffer.alloc(THREE_MB + 1, 97)); },
+  "/plain-exact":   function (req, res) { res.writeHead(200, { "Content-Type": "text/plain" }); pump(res, Buffer.alloc(THREE_MB, 97)); },
+  "/plain-bomb":    function (req, res) { res.writeHead(200, { "Content-Type": "text/plain", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(Buffer.alloc(20 * 1024 * 1024, 32))); },
+  "/plain-gzip":    function (req, res) { res.writeHead(200, { "Content-Type": "text/plain", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(ROBOTS)); },
+  "/plain-cf":      function (req, res) { res.writeHead(200, { "Content-Type": "text/plain", "cf-mitigated": "challenge" }); res.end(ROBOTS); },
+  "/plain-aws":     function (req, res) { res.writeHead(200, { "Content-Type": "text/plain", "x-amzn-waf-action": "captcha" }); res.end(ROBOTS); },
+  "/plain-moment":  function (req, res) { res.writeHead(200, { "Content-Type": "text/plain" }); res.end("# <title>Just a moment...</title>\n" + ROBOTS); }
 };
+const ROBOTS = "User-agent: *\nDisallow: /private/\nSitemap: https://public.test/sitemap.xml\n";
+const SITEMAP = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://public.test/</loc></url></urlset>\n";
 for (let i = 1; i <= 6; i++) {
   ROUTES["/chain/" + i] = (function (n) { return function (req, res) { res.writeHead(302, { Location: n > 1 ? "/chain/" + (n - 1) : "/landing" }); res.end(); }; })(i);
 }
@@ -229,10 +277,10 @@ function dial(options) {
 }
 const fetchStub = lib.createGuardedFetch({ resolve: resolve, dial: dial });
 
-async function attempt(url, fetcher) {
+async function attempt(url, fetcher, extra) {
   const t0 = Date.now();
   try {
-    const r = await (fetcher || fetchStub)(url, { userAgent: "checkGuardedFetch" });
+    const r = await (fetcher || fetchStub)(url, Object.assign({ userAgent: "checkGuardedFetch" }, extra || {}));
     return { ok: true, value: r, ms: Date.now() - t0 };
   } catch (err) {
     return { ok: false, err: err, ms: Date.now() - t0 };
@@ -423,6 +471,166 @@ async function sectionLeak(silent) {
   check("a bad port reads the same whatever the host", portA === portB, portA + " | " + portB);
 }
 
+/* ── 12. options.accept, and what a caller gets back ───────────────────── */
+const PLAIN = { accept: ["text/plain"] };
+const XML = { accept: ["application/xml", "text/xml"] };
+function sameJson(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+async function sectionAccept() {
+  console.log("\n══ 12a. the default still reads HTML only ══");
+  for (const [p, type] of [["/robots.txt", "text/plain"], ["/sitemap.xml", "application/xml"], ["/sitemap-tx", "text/xml"]]) {
+    const a = await attempt("http://public.test" + p);
+    check("default: " + type + " is refused not_html, with the message it always had",
+      !a.ok && a.err.code === "not_html" && lib.publicMessage(a.err) === "That address returned " + type + ", not an HTML page.", code(a) + (a.ok ? "" : " | " + lib.publicMessage(a.err)));
+  }
+
+  console.log("\n══ 12b. options.accept reads only what it lists ══");
+  const robots = await attempt("http://public.test/robots.txt", null, PLAIN);
+  check("accept text/plain reads /robots.txt whole, as text/plain", robots.ok && robots.value.ok && robots.value.status === 200 && robots.value.body === ROBOTS && robots.value.contentType === "text/plain", code(robots));
+  const cased = await attempt("http://public.test/robots-cased", null, PLAIN);
+  check("\"Text/Plain; charset=utf-8\" matches text/plain", cased.ok && cased.value.ok && cased.value.body === ROBOTS && cased.value.contentType === "text/plain", code(cased));
+  const upper = await attempt("http://public.test/robots.txt", null, { accept: [" TEXT/Plain "] });
+  check("the accept list itself is matched case-insensitively", upper.ok && upper.value.ok, code(upper));
+  for (const p of ["/sitemap.xml", "/sitemap-tx"]) {
+    const a = await attempt("http://public.test" + p, null, XML);
+    check("accept application/xml + text/xml reads " + p, a.ok && a.value.ok && a.value.body === SITEMAP, code(a));
+  }
+  for (const [p, opts, label] of [["/", PLAIN, "text/html when only text/plain is listed"], ["/xhtml", PLAIN, "application/xhtml+xml when only text/plain is listed"],
+    ["/", XML, "text/html when only XML is listed"], ["/robots.txt", XML, "text/plain when only XML is listed"],
+    ["/sitemap.xml", PLAIN, "application/xml when only text/plain is listed"], ["/json", PLAIN, "application/json"], ["/none", PLAIN, "no content type"]]) {
+    const a = await attempt("http://public.test" + p, null, opts);
+    check("accept refuses " + label + " (unaccepted_type)", !a.ok && a.err.code === "unaccepted_type", code(a));
+  }
+  const both = await attempt("http://public.test/", null, { accept: ["text/plain", "text/html"] });
+  check("HTML is read under the option when it is listed", both.ok && both.value.ok && /<h1>Home<\/h1>/.test(both.value.body), code(both));
+  const told = await attempt("http://public.test/", null, PLAIN);
+  check("and a refused type tells the caller what came back and what was wanted",
+    !told.ok && lib.publicMessage(told.err) === "That address returned text/html, not text/plain.", !told.ok && lib.publicMessage(told.err));
+  hits["/robots.txt"] = 0;
+  for (const bad of [[], "text/plain", ["text/plain; charset=utf-8"], ["*/*"], ["text"], [null]]) {
+    const a = await attempt("http://public.test/robots.txt", null, { accept: bad });
+    check("accept " + JSON.stringify(bad) + " is refused as a programming error", !a.ok && a.err instanceof TypeError, a.ok ? "fetched" : String(a.err));
+  }
+  check("and none of those reached the server", !hits["/robots.txt"], hits["/robots.txt"]);
+
+  console.log("\n══ 12c. every address guard holds with the option set ══");
+  hits["/robots.txt"] = 0;
+  for (const [cidr] of lib.BLOCKED_IPV4) {
+    const [base, bits] = cidr.split("/");
+    const start = ip2int(base), size = 2 ** (32 - Number(bits));
+    const inside = [start, start + Math.floor(size / 2), start + size - 1].map(int2ip);
+    const results = [];
+    for (const ip of inside) {
+      NAMES["b-" + ip + ".test"] = [{ address: ip, family: 4 }];
+      results.push(await attempt("http://" + ip + "/robots.txt", null, PLAIN));
+      results.push(await attempt("http://b-" + ip + ".test/robots.txt", null, PLAIN));
+    }
+    const refused = results.filter(function (a) { return !a.ok && a.err.code === "blocked"; }).length;
+    check("with accept: " + cidr + " refused as a literal and as a name (" + inside.join(", ") + ")", refused === 6, refused + " of 6 refused blocked");
+  }
+  const v6 = ["::1", "::7f00:1", "64:ff9b::7f00:1", "100::1", "fc00::1", "fd12:3456:789a::5", "fe80::1", "fec0::1", "ff02::1", "2001::1", "2001:db8::1",
+    "2002:7f00:1::1", "3fff::1", "4000::1", "::ffff:127.0.0.1", "::ffff:10.1.2.3", "::ffff:169.254.169.254"];
+  let v6Refused = 0;
+  for (const ip of v6) {
+    NAMES["v6-" + v6.indexOf(ip) + ".test"] = [{ address: ip, family: 6 }];
+    const lit = await attempt("http://[" + ip + "]/robots.txt", null, PLAIN);
+    const name = await attempt("http://v6-" + v6.indexOf(ip) + ".test/robots.txt", null, PLAIN);
+    if (!lit.ok && lit.err.code === "blocked" && !name.ok && name.err.code === "blocked") v6Refused++;
+  }
+  check("with accept: " + v6.length + " blocked IPv6 addresses refused as literals and as names", v6Refused === v6.length, v6Refused + " of " + v6.length);
+  for (const name of ["internal.test", "loop.test", "metadata.test", "railway.test", "mixed.test"]) {
+    const a = await attempt("http://" + name + "/robots.txt", null, XML);
+    check("with accept: " + name + " refused blocked", !a.ok && a.err.code === "blocked", code(a));
+  }
+  const real = await attempt("http://localhost/robots.txt", lib.guardedFetch, PLAIN);
+  check("with accept: localhost through the real resolver is refused blocked", !real.ok && real.err.code === "blocked", code(real));
+  for (const u of ["ftp://public.test/robots.txt", "http://public.test:8080/robots.txt", "https://public.test:6379/robots.txt", "http://user:pass@public.test/robots.txt"]) {
+    const a = await attempt(u, null, PLAIN);
+    check("with accept: " + u + " refused invalid_url", !a.ok && a.err.code === "invalid_url", code(a));
+  }
+  check("with accept: no blocked address reached the server", !hits["/robots.txt"], (hits["/robots.txt"] || 0) + " arrived");
+  rebindCalls = 0; resolverCalls = {}; dialed = [];
+  const rebind = await attempt("http://rebind.test/robots.txt", null, PLAIN);
+  const d = dialed.filter(function (x) { return x.host === "rebind.test"; });
+  check("with accept: rebinding still asks once and connects to the address checked",
+    rebind.ok && rebind.value.ok && resolverCalls["rebind.test"] === 1 && d.length === 1 && d[0].address === PUBLIC_V4, code(rebind) + " " + JSON.stringify(d));
+  const blockedMsg = await attempt("http://internal.test/robots.txt", null, PLAIN);
+  check("with accept: a blocked address still gets the one unreachable message", !blockedMsg.ok && lib.publicMessage(blockedMsg.err) === lib.UNREACHABLE_MESSAGE, !blockedMsg.ok && lib.publicMessage(blockedMsg.err));
+
+  console.log("\n══ 12d. redirects with the option set ══");
+  hits["/robots.txt"] = 0;
+  for (const [p, want] of [["/r/robots-private", "blocked"], ["/r/robots-literal", "blocked"], ["/r/robots-meta", "blocked"], ["/r/robots-port", "invalid_url"]]) {
+    const a = await attempt("http://public.test" + p, null, PLAIN);
+    check("with accept: " + p + " → refused " + want + " at the second hop", !a.ok && a.err.code === want, code(a));
+  }
+  check("with accept: no redirect target was reached", !hits["/robots.txt"], (hits["/robots.txt"] || 0) + " arrived");
+  const six = await attempt("http://public.test/chain/6", null, { accept: ["text/html"] });
+  check("with accept: a 6th redirect is refused too_many_redirects", !six.ok && six.err.code === "too_many_redirects", code(six));
+
+  console.log("\n══ 12e. the redirect chain ══");
+  const mix = await attempt("http://public.test/mix/1", null, PLAIN);
+  const wantMix = [{ url: "http://public.test/mix/1", status: 301 }, { url: "http://public.test/mix/2", status: 308 },
+    { url: "http://public6.test/mix/3", status: 307 }, { url: "http://public6.test/robots.txt", status: 200 }];
+  check("every hop is in the chain, in order, with its status (301, 308, 307, 200)", mix.ok && sameJson(mix.value.chain, wantMix), mix.ok ? JSON.stringify(mix.value.chain) : code(mix));
+  check("url is the final URL and status the final status", mix.ok && mix.value.url === "http://public6.test/robots.txt" && mix.value.status === 200, mix.ok && mix.value.url + " " + mix.value.status);
+  check("redirects is still the list of redirect targets", mix.ok && sameJson(mix.value.redirects, ["http://public.test/mix/2", "http://public6.test/mix/3", "http://public6.test/robots.txt"]), mix.ok && JSON.stringify(mix.value.redirects));
+  const five = await attempt("http://public.test/chain/5");
+  check("default: 5 redirects give a chain of 6, five 302s then the 200", five.ok && five.value.chain.length === 6 &&
+    sameJson(five.value.chain.map(function (h) { return h.status; }), [302, 302, 302, 302, 302, 200]) &&
+    sameJson(five.value.chain.map(function (h) { return h.url; }), ["http://public.test/chain/5", "http://public.test/chain/4", "http://public.test/chain/3",
+      "http://public.test/chain/2", "http://public.test/chain/1", "http://public.test/landing"]), five.ok ? JSON.stringify(five.value.chain) : code(five));
+  const one = await attempt("http://public.test/");
+  check("default: no redirect gives a chain of the one answer", one.ok && sameJson(one.value.chain, [{ url: "http://public.test/", status: 200 }]), one.ok && JSON.stringify(one.value.chain));
+  const stopped = await attempt("http://public.test/r/robots-private", null, PLAIN);
+  check("a refusal carries the chain as far as it got", !stopped.ok && sameJson(stopped.err.chain, [{ url: "http://public.test/r/robots-private", status: 302 }]), !stopped.ok && JSON.stringify(stopped.err.chain));
+
+  console.log("\n══ 12f. a reached 404 is a result; a blocked address is not ══");
+  const m0 = await attempt("http://public.test/missing");
+  const m1 = await attempt("http://public.test/missing", null, PLAIN);
+  for (const [label, a] of [["default", m0], ["with accept", m1]]) {
+    check(label + ": a 404 is returned, not thrown, with status 404, ok:false, no body and its chain",
+      a.ok && a.value.status === 404 && a.value.ok === false && a.value.body === null && a.value.bytes === 0 &&
+      sameJson(a.value.chain, [{ url: "http://public.test/missing", status: 404 }]), code(a));
+  }
+  const strip = function (v) { const o = Object.assign({}, v); delete o.ms; delete o.headers; return o; };
+  check("the 404 result is the same with the option as without", m0.ok && m1.ok && sameJson(strip(m0.value), strip(m1.value)), m0.ok && m1.ok && JSON.stringify(strip(m1.value)));
+  const viaRedirect = await attempt("http://public.test/r/relative-404", null, PLAIN);
+  check("a 404 at the end of a redirect is returned with the whole chain", viaRedirect.ok && viaRedirect.value.status === 404 &&
+    sameJson(viaRedirect.value.chain, [{ url: "http://public.test/r/relative-404", status: 302 }, { url: "http://public.test/missing", status: 404 }]),
+    viaRedirect.ok ? JSON.stringify(viaRedirect.value.chain) : code(viaRedirect));
+  const blk = await attempt("http://10.0.0.1/robots.txt", null, PLAIN);
+  check("a blocked address is thrown with code blocked, never returned as a status", !blk.ok && blk.err.code === "blocked" && blk.err.status === undefined, code(blk));
+
+  console.log("\n══ 12g. size and decompression for text/plain ══");
+  const declared = await withWatchdog(attempt("http://public.test/plain-declared", null, PLAIN), 15000);
+  check("text/plain: a declared 4 MB body is refused too_large", !declared.ok && declared.err.code === "too_large" && declared.ms < 5000, code(declared) + " in " + declared.ms + " ms");
+  const stream = await attempt("http://public.test/plain-stream", null, PLAIN);
+  check("text/plain: a streamed 3 MB + 1 byte body is refused too_large", !stream.ok && stream.err.code === "too_large", code(stream));
+  const bomb = await attempt("http://public.test/plain-bomb", null, PLAIN);
+  check("text/plain: a gzip that expands to 20 MB is refused too_large", !bomb.ok && bomb.err.code === "too_large", code(bomb));
+  const exact = await attempt("http://public.test/plain-exact", null, PLAIN);
+  check("text/plain: exactly 3 MB is read", exact.ok && exact.value.ok && exact.value.bytes === THREE_MB, code(exact));
+  const gz = await attempt("http://public.test/plain-gzip", null, PLAIN);
+  check("text/plain: a gzip body is decoded", gz.ok && gz.value.ok && gz.value.body === ROBOTS, code(gz));
+
+  console.log("\n══ 12h. challenge pages with the option set ══");
+  for (const [p, label] of [["/plain-cf", "cf-mitigated header"], ["/plain-aws", "x-amzn-waf-action header"]]) {
+    const a = await attempt("http://public.test" + p, null, PLAIN);
+    check("text/plain with a " + label + " is still refused challenge", !a.ok && a.err.code === "challenge", code(a));
+  }
+  const moment = await attempt("http://public.test/plain-moment", null, PLAIN);
+  check("a text/plain body is not judged by a <title> in it", moment.ok && moment.value.ok, code(moment));
+  const htmlTitle = await attempt("http://public.test/cf-title", null, { accept: ["text/html"] });
+  check("HTML read under the option is still judged by its title", !htmlTitle.ok && htmlTitle.err.code === "challenge", code(htmlTitle));
+
+  console.log("\n══ 12i. the 10 s limit for text/plain (two at once, about 10 s) ══");
+  const [hang, drip] = await Promise.all([
+    withWatchdog(attempt("http://public.test/plain-hang", null, PLAIN), 15000),
+    withWatchdog(attempt("http://public.test/plain-drip", null, PLAIN), 15000)
+  ]);
+  check("text/plain: headers and then nothing is cut off at 10 s", !hang.ok && hang.err.code === "timeout" && hang.ms >= 9500 && hang.ms < 12000, code(hang) + " in " + hang.ms + " ms");
+  check("text/plain: a dripped body is cut off at 10 s in total", !drip.ok && drip.err.code === "timeout" && drip.ms < 12000, code(drip) + " in " + drip.ms + " ms");
+}
+
 /* ── 11. the route, the task type, the frontend ────────────────────────── */
 async function sectionRoute() {
   console.log("\n══ 11. the live optimize route, and seo_audit gone ══");
@@ -479,6 +687,7 @@ async function sectionRoute() {
   await sectionContentType();
   await sectionChallenge();
   await sectionLeak(silent);
+  await sectionAccept();
   await sectionRoute();
 
   console.log(failures ? "\n" + failures + " FAILED" : "\nALL CHECKS PASSED");
