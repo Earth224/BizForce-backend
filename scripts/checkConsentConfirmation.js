@@ -244,7 +244,8 @@ function fakeDb(seed, fail) {
 
 const OWNER = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
 const POSTAL = "BizForce AI\n123 Example Street\nSpringfield, ST 00000";
-const ENV = { RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret", MAIL_POSTAL_ADDRESS: POSTAL };
+// No marketing mail while bounces cannot be heard: the fixture sets the webhook secret too.
+const ENV = { RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret", MAIL_POSTAL_ADDRESS: POSTAL, RESEND_WEBHOOK_SECRET: "whsec_check" };
 const ROUTES = [["post", "/api/contacts/capture"], ["post", "/api/confirm"], ["get", "/api/confirm"], ["post", "/api/unsubscribe"]];
 const API = ["sendEmail", "sendMarketingEmail", "makeUnsubscribeToken", "verifyUnsubscribeToken", "makeConsentConfirmToken",
   "consentConfirmDigest", "readConsentConfirmToken", "verifyConsentConfirmToken"];

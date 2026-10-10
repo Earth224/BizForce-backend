@@ -2581,6 +2581,15 @@ async function sendMarketingEmail(options) {
     throw emailMarketingRefusal("no_postal_address", "MAIL_POSTAL_ADDRESS is not set, and marketing mail must carry a physical postal address.");
   }
 
+  // ── 1b. Bounce and complaint reports can be received ─────────────────────
+  // Suppression is built from the bounces and complaints Resend reports to
+  // POST /api/webhooks/resend, which refuses every report without this secret.
+  // Mail whose bounces cannot be heard would keep going to addresses that
+  // bounced or complained, so none is sent until they can.
+  if (!String(process.env.RESEND_WEBHOOK_SECRET || "").trim()) {
+    throw emailMarketingRefusal("no_webhook_secret", "RESEND_WEBHOOK_SECRET is not set, so bounce and complaint reports cannot be received and marketing mail is held.");
+  }
+
   // ── 2. Confirmed consent ─────────────────────────────────────────────────
   // Double opt-in: a form submission alone is not enough to be mailed. A new
   // grant after a confirmation is a new "granted" and refuses again until it is
@@ -44959,8 +44968,9 @@ async function agentScheduleTick() {
 //   not_confirmed                 person who asked not to be mailed stays unmailed.
 //   cap_reached                   left due; that owner's other enrollments wait
 //                                 for the next tick.
-//   no_postal_address,            the tick ends. Both are true of every send, so
-//   cap_unreadable                going on would refuse the same way every time.
+//   no_postal_address,            the tick ends. Each is true of every send, so
+//   no_webhook_secret,            going on would refuse the same way every time.
+//   cap_unreadable                Nothing is stopped by them.
 //   anything else                 left due, retried next hour. That includes
 //                                 lookup_failed: a read that failed says nothing
 //                                 about the person, so it never stops anyone.
@@ -44988,7 +44998,7 @@ var EMAIL_SEQUENCE_DEFAULT_MAX_PER_TICK = 25;
 // this only bounds the read, and anything past it is still due next hour.
 var EMAIL_SEQUENCE_DUE_READ_LIMIT = 1000;
 var EMAIL_SEQUENCE_STOP_REASONS = ["suppressed", "no_consent", "not_confirmed"];
-var EMAIL_SEQUENCE_ABORT_REASONS = ["no_postal_address", "cap_unreadable"];
+var EMAIL_SEQUENCE_ABORT_REASONS = ["no_postal_address", "no_webhook_secret", "cap_unreadable"];
 var EMAIL_SEQUENCE_SWEEP_GRACE_MS = 3600000;
 
 function emailSequencesEnabled() {

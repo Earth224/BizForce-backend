@@ -48,6 +48,7 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const BEFORE = "f516f8c";
 const MUTATE = process.env.MUTATE || "";
+const ANCHOR_ERROR_EXIT = 3;
 
 const MUTATIONS = {
   // the bounce history is never consulted
@@ -66,6 +67,9 @@ const MUTATIONS = {
     ["\"Unsubscribe: \" + unsubscribeUrl + \"\\n\" + postal;", "postal;"]],
   // a failed consent lookup is reported as no_consent
   "consent-failure-as-no-consent": [["  if (!consent.ok) {\n    throw emailMarketingRefusal(\"lookup_failed\", \"the contact's email consent could not be read.\");\n  }\n", ""]],
+  // the webhook gate is gone
+  "drop-webhook-gate": [["  if (!String(process.env.RESEND_WEBHOOK_SECRET || \"\").trim()) {\n    throw emailMarketingRefusal(\"no_webhook_secret\",",
+    "  if (false) {\n    throw emailMarketingRefusal(\"no_webhook_secret\","]],
   // the marketing gates reach transactional mail
   "gates-on-transactional": [["    if (opts.skipConsentCheck !== true) {\n      if (!(await emailConsentGranted(contactId))) {",
     "    if (!String(process.env.MAIL_POSTAL_ADDRESS || \"\").trim()) { return { sent: false, reason: \"no_postal_address\" }; }\n    if (opts.skipConsentCheck !== true) {\n      if (!(await emailConsentGranted(contactId))) {"]]
@@ -73,17 +77,25 @@ const MUTATIONS = {
 
 if (MUTATE === "all") {
   const names = Object.keys(MUTATIONS);
-  let survived = 0;
+  let survived = 0, errors = 0;
   for (const name of names) {
     const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 300000 });
+    // An unmatched search text is an ERROR, never counted as caught.
+    if (r.status === ANCHOR_ERROR_EXIT) {
+      errors++;
+      console.log("    ERROR     " + name.padEnd(24) + " " + (r.stdout.trim().split("\n").pop() || r.stderr.trim()));
+      continue;
+    }
     const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
     const caught = r.status !== 0 && fails.length > 0;
     if (!caught) survived++;
     console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(24) + " " + fails.length + " failing check(s)" +
       (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
   }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
+  const ok = survived === 0 && errors === 0;
+  console.log(ok ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught"
+    : "\nCHECKS FAILED: " + survived + " mutation(s) survived, " + errors + " mutation(s) could not be applied");
+  process.exit(ok ? 0 : 1);
 }
 
 let failures = 0, passes = 0;
@@ -98,7 +110,8 @@ if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [from, to] of edits) {
-    if (SRC.split(from).length !== 2) { console.log("    FAIL  mutation anchor not found exactly once: " + from.slice(0, 80)); process.exit(1); }
+    const hits = SRC.split(from).length - 1;
+    if (hits !== 1) { console.log("MUTATION ANCHOR ERROR: expected exactly one match, found " + hits + ": " + JSON.stringify(from.slice(0, 80))); process.exit(ANCHOR_ERROR_EXIT); }
     SRC = SRC.replace(from, () => to);
   }
   console.log("\n!! MUTATION: " + MUTATE);
@@ -245,7 +258,8 @@ const GOOD = {
 const MSG = { contactId: CONTACT, subject: "Spring news", html: "<p>Hello</p>", text: "Hello", template: "spring-news" };
 const ROOT = "this.api = { sendEmail: sendEmail, sendMarketingEmail: sendMarketingEmail, verifyUnsubscribeToken: verifyUnsubscribeToken, emailBounceTypeOf: emailBounceTypeOf, emailBounceToken: emailBounceToken };";
 const plan = (over) => Object.assign({}, GOOD, over || {});
-const ENV = { MAIL_POSTAL_ADDRESS: POSTAL };
+// No marketing mail while bounces cannot be heard: the fixture sets the webhook secret too.
+const ENV = { MAIL_POSTAL_ADDRESS: POSTAL, RESEND_WEBHOOK_SECRET: "whsec_check" };
 
 async function marketing(planOver, env, msg) {
   const b = build(SRC, ROOT, plan(planOver), env === undefined ? ENV : env);
@@ -271,6 +285,17 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
   check("MAIL_POSTAL_ADDRESS unset: refused before any database read", r.b.db.log.length === 0, r.b.db.log.map(q => q.table).join(","));
   r = await marketing({}, { MAIL_POSTAL_ADDRESS: "   " });
   refused("MAIL_POSTAL_ADDRESS blank", r, "no_postal_address");
+  // No marketing mail while bounces cannot be heard.
+  r = await marketing({}, { MAIL_POSTAL_ADDRESS: POSTAL });
+  refused("RESEND_WEBHOOK_SECRET unset", r, "no_webhook_secret");
+  check("RESEND_WEBHOOK_SECRET unset: refused before any database read", r.b.db.log.length === 0, r.b.db.log.map(q => q.table).join(","));
+  r = await marketing({}, { MAIL_POSTAL_ADDRESS: POSTAL, RESEND_WEBHOOK_SECRET: "  " });
+  refused("RESEND_WEBHOOK_SECRET blank", r, "no_webhook_secret");
+  check("RESEND_WEBHOOK_SECRET blank: refused before any database read", r.b.db.log.length === 0);
+  r = await marketing({}, {});
+  check("order: with both unset, the postal address is refused first", r.error && r.error.reason === "no_postal_address", r.error && r.error.reason);
+  r = await marketing({ consent: [] }, { MAIL_POSTAL_ADDRESS: POSTAL, RESEND_WEBHOOK_SECRET: "whsec_check" });
+  check("order: with the secret set, the next gate (consent) is reached", r.error && r.error.reason === "no_consent", r.error && r.error.reason);
 
   r = await marketing({ consent: [] });
   refused("no consent row", r, "no_consent");
@@ -366,8 +391,11 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
     ["provider error", { contactId: CONTACT, to: "a@example.com", subject: "s", html: "h", text: "t", template: "x", skipConsentCheck: true }, { providerError: true }],
     ["bounced and complained history present (must not matter)", { contactId: CONTACT, to: "a@example.com", subject: "s", html: "h", text: "t", template: "password_reset", skipConsentCheck: true }, { byContact: [bounce("b9", "Permanent")], count: 999 }]
   ];
-  for (const envName of ["MAIL_POSTAL_ADDRESS unset", "MAIL_POSTAL_ADDRESS set, cap malformed"]) {
-    const env = envName.startsWith("MAIL_POSTAL_ADDRESS unset") ? {} : { MAIL_POSTAL_ADDRESS: POSTAL, EMAIL_MARKETING_DAILY_CAP: "abc" };
+  // No marketing mail while bounces cannot be heard: transactional mail is unaffected by the secret.
+  const TX_ENVS = { "MAIL_POSTAL_ADDRESS unset": {}, "MAIL_POSTAL_ADDRESS set, cap malformed": { MAIL_POSTAL_ADDRESS: POSTAL, EMAIL_MARKETING_DAILY_CAP: "abc" },
+    "MAIL_POSTAL_ADDRESS set, RESEND_WEBHOOK_SECRET unset": { MAIL_POSTAL_ADDRESS: POSTAL } };
+  for (const envName of Object.keys(TX_ENVS)) {
+    const env = TX_ENVS[envName];
     for (const [name, opts, p] of cases) {
       const before = build(OLD, TX_ROOT, p, env), after = build(SRC, TX_ROOT, p, env);
       const rb = await before.api.sendEmail(JSON.parse(JSON.stringify(opts)));

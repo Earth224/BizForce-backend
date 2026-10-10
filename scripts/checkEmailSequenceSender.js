@@ -80,6 +80,9 @@ const MUTATIONS = {
   "drop-status-reread": [["      var statusRead = await supabase\n        .from(\"email_sequences\")\n        .select(\"status\")\n        .eq(\"id\", sequence.id)\n        .maybeSingle();\n      if (statusRead.error) {\n",
     "      var statusRead = { data: { status: \"active\" }, error: null };\n      if (statusRead.error) {\n"]],
   // the sweep completes sequences that still have active enrollments
+  // no_webhook_secret stops the enrollment instead of ending the tick
+  "stop-on-no-webhook-secret": [["var EMAIL_SEQUENCE_ABORT_REASONS = [\"no_postal_address\", \"no_webhook_secret\", \"cap_unreadable\"];",
+    "var EMAIL_SEQUENCE_ABORT_REASONS = [\"no_postal_address\", \"cap_unreadable\"];\nEMAIL_SEQUENCE_STOP_REASONS.push(\"no_webhook_secret\");"]],
   "sweep-with-active-enrollments": [["    if (open.data && open.data.length > 0) continue;\n    var done = await supabase\n", "    var done = await supabase\n"]]
 };
 
@@ -290,7 +293,9 @@ const STEPS = [
 ];
 let n = 0;
 const cid = (k) => "c0000000-0000-4000-8000-" + String(k).padStart(12, "0");
-const ENV = { ENABLE_EMAIL_SEQUENCES: "true", RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret", MAIL_POSTAL_ADDRESS: "BizForce AI\n1 Example St" };
+// No marketing mail while bounces cannot be heard: the fixture sets the webhook secret too.
+const ENV = { ENABLE_EMAIL_SEQUENCES: "true", RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret", MAIL_POSTAL_ADDRESS: "BizForce AI\n1 Example St",
+  RESEND_WEBHOOK_SECRET: "whsec_check" };
 
 // Every fixture sequence is older than the sweep's grace period.
 const OLD = iso(T0 - 30 * DAY);
@@ -488,12 +493,16 @@ const untouched = (b, seed, k) => JSON.stringify(b.enr(k)) === JSON.stringify(se
   check("cap_reached: another owner's enrollment is still sent", b.sent.length === 1 && b.sent[0].to === "p3@example.com" && b.enr(3).next_step === 1, b.sent.map(m => m.to).join(","));
   check("cap_reached: attempted 2, deferred 2", /attempted 2 .*deferred 2, aborted no/.test(b.summary()), b.summary());
 
-  for (const [reason, env] of [["no_postal_address", Object.assign({}, ENV, { MAIL_POSTAL_ADDRESS: "  " })], ["cap_unreadable", Object.assign({}, ENV, { EMAIL_MARKETING_DAILY_CAP: "lots" })]]) {
+  // no_webhook_secret: No marketing mail while bounces cannot be heard.
+  for (const [reason, env] of [["no_postal_address", Object.assign({}, ENV, { MAIL_POSTAL_ADDRESS: "  " })], ["no_webhook_secret", Object.assign({}, ENV, { RESEND_WEBHOOK_SECRET: "" })],
+    ["cap_unreadable", Object.assign({}, ENV, { EMAIL_MARKETING_DAILY_CAP: "lots" })]]) {
     seed = world([{ k: 1, consent: "confirmed", due_ms: 3 * DAY }, { k: 2, consent: "confirmed", due_ms: 2 * DAY }, { k: 3, consent: "confirmed", seq: SEQ.other, due_ms: DAY }]);
     b = build(seed, { env });
     await b.tick();
     check(reason + ": the tick aborts after one attempt — nothing sent, every enrollment unchanged",
       b.sent.length === 0 && [1, 2, 3].every(k => untouched(b, seed, k)) && new RegExp("attempted 1 .*aborted " + reason).test(b.summary()), b.summary());
+    check(reason + ": no enrollment is stopped", !b.db.tables.email_sequence_enrollments.some(x => x.status === "stopped"),
+      JSON.stringify(b.db.tables.email_sequence_enrollments.map(x => x.status)));
     check(reason + ": the hour's job_runs row records the abort", /aborted: /.test(b.db.tables.job_runs[0].last_error || "") && !!b.db.tables.job_runs[0].finished_at,
       JSON.stringify(b.db.tables.job_runs[0]));
   }
