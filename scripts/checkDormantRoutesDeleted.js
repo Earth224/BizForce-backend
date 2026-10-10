@@ -76,7 +76,9 @@ const deletedKeys = new Set(DELETED.map(function (d) { return d[0] + " " + d[1];
    in neither list is still an extra. */
 const ADDED = [
   ["post", "/api/engine-visits"],  // records an arrival from a Lead Radar reply (migration 128)
-  ["post", "/api/agents/seo/audit"] // A real SEO audit, measured before it is explained
+  ["post", "/api/agents/seo/audit"], // A real SEO audit, measured before it is explained
+  ["post", "/api/confirm"],          // Ask before mailing: confirmed consent for marketing
+  ["get", "/api/confirm"]            // Ask before mailing: confirmed consent for marketing
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -2108,6 +2108,77 @@ function verifyUnsubscribeToken(token) {
   }
 }
 
+// ── Consent confirmation tokens (double opt-in) ─────────────────────────────
+//
+// The link in the confirmation email that POST /api/contacts/capture sends. A
+// submitted form is a grant; only this link, opened by whoever reads that
+// inbox, turns it into "confirmed", which is what marketing mail requires.
+//
+// Format: "c1.<contactId>.<expiresAt>.<digest>"
+//   expiresAt  whole seconds since the epoch, seven days after issue
+//   digest     base64url HMAC-SHA256(JWT_SECRET,
+//                "confirm:" + contactId + ":" + address + ":" + expiresAt)
+//
+// Signed on the same key as unsubscribe tokens, over a different message, so
+// the two cannot stand in for each other: an unsubscribe token signs
+// "unsub:" + contactId and has neither the prefix nor the shape read here, and
+// a confirm token split at its first dot is not an unsubscribe token either.
+//
+// The address is signed but not carried. The link reveals nothing about it,
+// and the token verifies only against the contact's CURRENT address, so a
+// contact whose address has changed holds a link that no longer confirms
+// anything — the new address has to be asked again. The expiry is signed too,
+// so it cannot be extended by editing the number.
+var CONSENT_CONFIRM_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function consentConfirmDigest(contactId, address, expiresAt) {
+  return crypto
+    .createHmac("sha256", process.env.JWT_SECRET)
+    .update("confirm:" + contactId + ":" + String(address).trim().toLowerCase() + ":" + expiresAt)
+    .digest("base64url");
+}
+
+function makeConsentConfirmToken(contactId, address) {
+  var expiresAt = Math.floor(Date.now() / 1000) + CONSENT_CONFIRM_TOKEN_TTL_SECONDS;
+  return "c1." + contactId + "." + expiresAt + "." + consentConfirmDigest(contactId, address, expiresAt);
+}
+
+// The token's unsigned claims, { contactId, expiresAt }, when it has the shape;
+// null otherwise. NOT a verification — it names the contact to look up, and
+// verifyConsentConfirmToken decides whether the token is genuine. Total, like
+// verifyUnsubscribeToken, because its input comes from a public route.
+function readConsentConfirmToken(token) {
+  if (typeof token !== "string" || token.length > 200) {
+    return null;
+  }
+  var match = /^c1\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([1-9][0-9]{0,11})\.([A-Za-z0-9_-]{43})$/.exec(token);
+  if (!match) {
+    return null;
+  }
+  return { contactId: match[1], expiresAt: Number(match[2]) };
+}
+
+function consentConfirmTokenExpired(claims) {
+  return !claims || claims.expiresAt <= Math.floor(Date.now() / 1000);
+}
+
+// True only for a token this server issued, for this address, and not yet
+// expired. Total: anything else, including an unset JWT_SECRET, is false.
+function verifyConsentConfirmToken(token, address) {
+  var claims = readConsentConfirmToken(token);
+  if (!claims || consentConfirmTokenExpired(claims) || typeof address !== "string" || !address.trim()) {
+    return false;
+  }
+  try {
+    var expectedBuf = Buffer.from(consentConfirmDigest(claims.contactId, address, claims.expiresAt), "utf8");
+    var providedBuf = Buffer.from(token.slice(token.lastIndexOf(".") + 1), "utf8");
+    // Length first, for the reason verifyUnsubscribeToken gives.
+    return providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
+  } catch (error) {
+    return false;
+  }
+}
+
 // ── Email sending ───────────────────────────────────────────────────────────
 //
 // THE ONLY WAY MAIL LEAVES THIS SYSTEM. Every future send path goes through this
@@ -2356,12 +2427,12 @@ async function markSendFailed(sendRowId, message) {
   }
 }
 
-// The consent check sendEmail has always made, as its own function so the
-// marketing path below asks the identical question rather than a copy of it.
-// Derived from consent_events (migration 069): the latest email row for the
-// contact must say granted. No row is no consent, and a lookup that fails is
-// no consent too — a check that could not run is not a check that passed.
-async function emailConsentGranted(contactId) {
+// The contact's latest email consent event, from consent_events (migration
+// 069): { ok: true, action } with action "granted", "confirmed", "revoked", or
+// null when there is no row; { ok: false } when the lookup failed. One query,
+// shared by sendEmail, sendMarketingEmail and the confirm route, so all three
+// read consent the same way.
+async function emailConsentLatest(contactId) {
   var consent = await supabase
     .from("consent_events")
     .select("action")
@@ -2374,11 +2445,20 @@ async function emailConsentGranted(contactId) {
     // A consent check that could not run is not a consent check that passed.
     console.error("[sendEmail] consent lookup failed for contact " + contactId +
       " — " + consent.error.message + ". Treating as no consent and not sending.");
-    return false;
+    return { ok: false, action: null };
   }
 
   var latest = consent.data && consent.data[0];
-  return !!latest && latest.action === "granted";
+  return { ok: true, action: (latest && latest.action) || null };
+}
+
+// The consent check sendEmail has always made: the latest email row must be a
+// grant — "granted" from a form, or "confirmed" from the link that followed it.
+// No row is no consent, and a lookup that fails is no consent too. Marketing
+// asks the narrower question (confirmed only) in sendMarketingEmail.
+async function emailConsentGranted(contactId) {
+  var latest = await emailConsentLatest(contactId);
+  return latest.ok && (latest.action === "granted" || latest.action === "confirmed");
 }
 
 // The one unsubscribe URL, for the List-Unsubscribe header and the marketing
@@ -2399,8 +2479,9 @@ function emailUnsubscribeUrl(contactId) {
    IT REFUSES BY THROWING, before anything is written or sent, in this order:
      1. MAIL_POSTAL_ADDRESS unset or blank — commercial mail must carry a
         physical postal address, so without one there is nothing lawful to send.
-     2. the contact's latest email consent is not "granted" (emailConsentGranted,
-        the check sendEmail makes; a failed lookup refuses).
+     2. the contact's latest email consent is not "confirmed": "not_confirmed"
+        when it is a "granted" still waiting on the confirmation link,
+        "no_consent" when it is revoked, absent, or could not be read.
      3. the address is suppressed: any complained email_sends row, any bounced
         row whose type is permanent, or any bounced row whose type cannot be read
         (fail closed). A temporary bounce alone does not suppress. Rows are found
@@ -2500,9 +2581,16 @@ async function sendMarketingEmail(options) {
     throw emailMarketingRefusal("no_postal_address", "MAIL_POSTAL_ADDRESS is not set, and marketing mail must carry a physical postal address.");
   }
 
-  // ── 2. Consent, exactly as sendEmail checks it ───────────────────────────
-  if (!(await emailConsentGranted(contactId))) {
-    throw emailMarketingRefusal("no_consent", "the contact's latest email consent is not granted.");
+  // ── 2. Confirmed consent ─────────────────────────────────────────────────
+  // Double opt-in: a form submission alone is not enough to be mailed. A new
+  // grant after a confirmation is a new "granted" and refuses again until it is
+  // confirmed again; an unsubscribe is a "revoked" and refuses outright.
+  var consent = await emailConsentLatest(contactId);
+  if (consent.action !== "confirmed") {
+    if (consent.action === "granted") {
+      throw emailMarketingRefusal("not_confirmed", "the contact has not confirmed their address through the confirmation link.");
+    }
+    throw emailMarketingRefusal("no_consent", "the contact's latest email consent is not a confirmed grant.");
   }
 
   // The address and owner come from the contact row, never from the caller, so
@@ -16897,9 +16985,108 @@ app.get("/api/moon", async function (req, res) {
 // written by this handler because the submission itself IS the grant. A body
 // carrying its own owner_id is not rejected, it is simply never consulted.
 //
-// NO EMAIL IS SENT HERE. This route records consent and nothing else. Mail is
-// sent only through sendEmail (transactional) and sendMarketingEmail, which
-// reads the consent recorded here at send time; no marketing caller exists yet.
+// ONE EMAIL IS SENT HERE: the confirmation request (sendConsentConfirmation
+// below), and only that. The grant recorded here is single opt-in; marketing
+// mail waits for the "confirmed" row the link in that email writes.
+//
+// A failed confirmation never fails the capture: the grant still stands,
+// unconfirmed, and the response is the same either way.
+
+// The confirmation email, in both parts. Plain words: who is asking, why, and
+// that ignoring it is a complete answer. No image, no tracking, no font.
+function buildConsentConfirmationEmail(confirmUrl) {
+  var paragraphs = [
+    "Someone, hopefully you, entered this email address on a BizForce AI form and asked to hear from us.",
+    "We will not send you anything else unless you confirm. If you would like our emails, open the link below and press Confirm.",
+    "If this was not you, or you have changed your mind, simply ignore this email. Nothing further will be sent to you.",
+    "The link works for 7 days."
+  ];
+
+  var html =
+    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1.0">' +
+    '<title>Confirm your email</title></head>' +
+    '<body style="margin:0;padding:24px 12px;background:#ffffff;color:#1a1a2e;' +
+      'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">' +
+    '<div style="max-width:520px;margin:0 auto;font-size:15px;line-height:1.6;">' +
+      '<p style="margin:0 0 14px;">' + escapeHtml(paragraphs[0]) + '</p>' +
+      '<p style="margin:0 0 20px;">' + escapeHtml(paragraphs[1]) + '</p>' +
+      '<p style="margin:0 0 20px;"><a href="' + escapeHtml(confirmUrl) + '" ' +
+        'style="display:inline-block;padding:12px 22px;border-radius:8px;background:#34d399;' +
+        'color:#070b18;font-weight:700;text-decoration:none;">Confirm my email</a></p>' +
+      '<p style="margin:0 0 14px;">' + escapeHtml(paragraphs[2]) + '</p>' +
+      '<p style="margin:0 0 14px;color:#6b6b80;font-size:13px;">' + escapeHtml(paragraphs[3]) + '</p>' +
+      '<p style="margin:0;color:#6b6b80;font-size:13px;">BizForce AI</p>' +
+    '</div></body></html>';
+
+  var text =
+    paragraphs[0] + "\n\n" +
+    paragraphs[1] + "\n" +
+    confirmUrl + "\n\n" +
+    paragraphs[2] + "\n\n" +
+    paragraphs[3] + "\n\n" +
+    "BizForce AI";
+
+  return { html: html, text: text };
+}
+
+var CONSENT_CONFIRMATION_TEMPLATE = "consent_confirmation";
+
+// Sends the confirmation request for a grant just recorded. Total: it never
+// throws, because the capture that calls it must not fail on its account.
+//
+// AT MOST ONE PER ADDRESS PER 24 HOURS, counted from email_sends, so nobody can
+// fill a stranger's inbox by submitting their address over and over. Every row
+// counts, failed ones included, and a count that cannot be read does not send.
+// Count and send run one at a time per address in this process, so two
+// submissions at once cannot both read zero.
+//
+// Transactional (skipConsentCheck): it asks for consent rather than using it.
+async function sendConsentConfirmation(contactId, address) {
+  try {
+    var to = String(address).trim().toLowerCase();
+
+    return await emailMarketingSerial(CONSENT_CONFIRMATION_TEMPLATE + ":" + to, async function () {
+      var since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      // ilike with LIKE's metacharacters escaped is an exact, case-blind match.
+      var pattern = to.replace(/[\\%_]/g, function (c) { return "\\" + c; });
+      var recentConfirmations = await supabase
+        .from("email_sends")
+        .select("id", { count: "exact", head: true })
+        .eq("template", CONSENT_CONFIRMATION_TEMPLATE)
+        .ilike("to_email", pattern)
+        .gte("created_at", since);
+
+      if (recentConfirmations.error || typeof recentConfirmations.count !== "number") {
+        console.error("[capture] could not count confirmation emails for contact " + contactId +
+          (recentConfirmations.error ? " — " + recentConfirmations.error.message : "") + ". Not sending: the limit cannot be shown to hold.");
+        return { sent: false, reason: "count_failed" };
+      }
+      if (recentConfirmations.count > 0) {
+        return { sent: false, reason: "rate_limited" };
+      }
+
+      var confirmUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+        "/confirm?token=" + makeConsentConfirmToken(contactId, to);
+      var mail = buildConsentConfirmationEmail(confirmUrl);
+
+      return sendEmail({
+        contactId:        contactId,
+        to:               to,
+        subject:          "Please confirm: email from BizForce AI",
+        html:             mail.html,
+        text:             mail.text,
+        template:         CONSENT_CONFIRMATION_TEMPLATE,
+        skipConsentCheck: true
+      });
+    });
+  } catch (error) {
+    console.error("[capture] confirmation email for contact " + contactId + " failed — " +
+      ((error && error.message) || error) + ". The grant stands, unconfirmed.");
+    return { sent: false, reason: "error" };
+  }
+}
+
 app.post("/api/contacts/capture", async function (req, res, next) {
   try {
     // ── 1. Validate before touching the database ───────────────────────────
@@ -17064,7 +17251,12 @@ app.post("/api/contacts/capture", async function (req, res, next) {
       throw consentInsert.error;
     }
 
-    // ── 5. The same answer either way ──────────────────────────────────────
+    // ── 5. Ask the address to confirm ──────────────────────────────────────
+    // Never throws, and its outcome is deliberately not read: the response
+    // below is the same whether it sent, was rate limited, or failed.
+    await sendConsentConfirmation(contactId, email);
+
+    // ── 6. The same answer either way ──────────────────────────────────────
     // Identical for a new contact and a returning one, on purpose. A route that
     // said "already subscribed" for a known address would answer a question
     // nobody is entitled to ask: anyone could submit addresses one at a time and
@@ -17272,14 +17464,16 @@ async function recordEmailUnsubscribe(contactId, req) {
 // page that reports the unsubscribe to a third party. The confirm control is a
 // plain form for the same reason it is not a fetch(): a page reached from an
 // email has to work with scripts disabled.
-function renderUnsubscribePage(innerHtml) {
+//
+// The confirm pages below share this shell and pass their own title.
+function renderUnsubscribePage(innerHtml, title) {
   return '<!DOCTYPE html>' +
     '<html lang="en">' +
     '<head>' +
       '<meta charset="UTF-8">' +
       '<meta name="viewport" content="width=device-width, initial-scale=1.0">' +
       '<meta name="robots" content="noindex, nofollow">' +
-      '<title>Unsubscribe</title>' +
+      '<title>' + escapeHtml(title || "Unsubscribe") + '</title>' +
     '</head>' +
     '<body style="margin:0;min-height:100vh;background:#070b18;color:#e8e8ff;' +
       'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;' +
@@ -17437,6 +17631,150 @@ app.get("/api/unsubscribe", async function (req, res, next) {
     // the button is pressed.
     res.set("Content-Type", "text/html; charset=utf-8");
     return res.status(200).send(renderUnsubscribeConfirmPage(token));
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+// ── Confirming consent (double opt-in) ───────────────────────────────────
+//
+// Mirrors unsubscribe: FRONTEND_URL's /confirm, which bizforceai.net proxies to
+// GET /api/confirm, shows a button and changes nothing — link scanners and
+// preview services open every URL in a message, and a confirmation they could
+// trigger would be no confirmation at all. The button POSTs to /api/confirm,
+// which is the only thing that writes.
+//
+// The POST appends one consent_events row, action "confirmed", and only when
+// the token is genuine, unexpired, signed for the contact's current address,
+// and the latest email event is a grant. After a "revoked" it writes nothing:
+// an unsubscribe is undone only by a new form submission, never by an old link.
+
+// A confirmed consent row, with the same evidence capture records. page_url is
+// the confirm page itself, without the token, so the ledger never holds one.
+async function recordEmailConfirmation(contactId, req) {
+  var insert = await supabase
+    .from("consent_events")
+    .insert({
+      contact_id: contactId,
+      channel:    "email",
+      action:     "confirmed",
+      source:     "confirm_link",
+      page_url:   String(FRONTEND_URL).trim().replace(/\/+$/, "") + "/confirm",
+      ip_address: req.ip,
+      user_agent: safeText(req.get("User-Agent"), 500)
+    });
+
+  if (insert.error) {
+    console.error("[confirm] FAILED to record confirmation for contact " + contactId +
+      " — " + insert.error.message + ". The grant stays unconfirmed.");
+  }
+
+  return !insert.error;
+}
+
+// A page with a heading and a sentence, and nothing else to do.
+function renderConfirmMessagePage(heading, message) {
+  return renderUnsubscribePage(
+    '<h1 style="margin:0;font-size:1.25rem;font-weight:700;">' + escapeHtml(heading) + '</h1>' +
+    '<p style="margin:12px 0 0;font-size:0.9rem;line-height:1.6;color:rgba(232,232,255,0.65);">' +
+      escapeHtml(message) +
+    '</p>',
+    "Confirm your email"
+  );
+}
+
+function renderConfirmInvalidPage() {
+  return renderConfirmMessagePage("This link is not valid",
+    "It may have expired or been copied incompletely. Nothing has been changed, and nothing will be sent to you.");
+}
+
+// What the GET renders for a token that could be genuine: an ask.
+function renderConfirmAskPage(token) {
+  return renderUnsubscribePage(
+    '<h1 style="margin:0;font-size:1.25rem;font-weight:700;">Confirm your email</h1>' +
+    '<p style="margin:12px 0 0;font-size:0.9rem;line-height:1.6;color:rgba(232,232,255,0.65);">' +
+      'Press the button to start receiving email from BizForce AI. If you did not ask for this, ' +
+      'close this page and nothing will be sent.' +
+    '</p>' +
+    '<form method="post" action="/api/confirm" style="margin:20px 0 0;">' +
+      '<input type="hidden" name="token" value="' + escapeHtml(token) + '">' +
+      '<button type="submit" style="appearance:none;border:0;cursor:pointer;' +
+        'padding:12px 22px;border-radius:8px;background:#34d399;color:#070b18;' +
+        'font-size:0.95rem;font-weight:700;font-family:inherit;">' +
+        'Confirm' +
+      '</button>' +
+    '</form>',
+    "Confirm your email"
+  );
+}
+
+app.post("/api/confirm", async function (req, res, next) {
+  try {
+    var token = req.body && req.body.token;
+    res.set("Content-Type", "text/html; charset=utf-8");
+
+    var claims = readConsentConfirmToken(token);
+    if (!claims || consentConfirmTokenExpired(claims)) {
+      return res.status(200).send(renderConfirmInvalidPage());
+    }
+
+    var contactRead = await supabase
+      .from("contacts")
+      .select("id, email")
+      .eq("id", claims.contactId)
+      .maybeSingle();
+    if (contactRead.error) {
+      console.error("[confirm] contact lookup failed for " + claims.contactId + " — " + contactRead.error.message);
+      return res.status(200).send(renderConfirmMessagePage("Something went wrong",
+        "Your confirmation was not recorded. Please open the link from the email again in a little while."));
+    }
+
+    // Verified against the address on the contact NOW, so a link sent to an
+    // address the contact no longer has confirms nothing.
+    var contact = contactRead.data;
+    if (!contact || !contact.email || !verifyConsentConfirmToken(token, contact.email)) {
+      return res.status(200).send(renderConfirmInvalidPage());
+    }
+
+    var latest = await emailConsentLatest(contact.id);
+    if (!latest.ok) {
+      return res.status(200).send(renderConfirmMessagePage("Something went wrong",
+        "Your confirmation was not recorded. Please open the link from the email again in a little while."));
+    }
+    if (latest.action !== "granted" && latest.action !== "confirmed") {
+      // Revoked (or nothing to confirm): an old link does not undo an unsubscribe.
+      return res.status(200).send(renderConfirmMessagePage("Not confirmed",
+        "This address has unsubscribed, so this link no longer applies. To hear from us again, sign up again on our site."));
+    }
+
+    // Already confirmed is recorded again rather than skipped, as a second
+    // unsubscribe is: the ledger keeps every time someone said so.
+    if (!(await recordEmailConfirmation(contact.id, req))) {
+      return res.status(200).send(renderConfirmMessagePage("Something went wrong",
+        "Your confirmation was not recorded. Please open the link from the email again in a little while."));
+    }
+
+    return res.status(200).send(renderConfirmMessagePage("Thank you, you are confirmed",
+      "You will now receive email from BizForce AI. Every message carries an unsubscribe link."));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// What a person clicks. RENDERS ONLY — THIS ROUTE WRITES NOTHING AND READS NO
+// DATABASE. A malformed or expired token gets the plain message; anything else
+// gets the button, and the POST decides.
+app.get("/api/confirm", async function (req, res, next) {
+  try {
+    var token = typeof (req.query && req.query.token) === "string" ? req.query.token : "";
+    var claims = readConsentConfirmToken(token);
+
+    res.set("Content-Type", "text/html; charset=utf-8");
+    if (!claims || consentConfirmTokenExpired(claims)) {
+      return res.status(200).send(renderConfirmInvalidPage());
+    }
+    return res.status(200).send(renderConfirmAskPage(token));
   } catch (error) {
     next(error);
   }

@@ -11,7 +11,8 @@
    WHAT THIS PROVES
      1. Each refusal throws code "marketing_refused" with its reason, makes no
         Resend call and writes no email_sends row: postal address unset and
-        blank; consent absent, revoked and unreadable; a complaint; a permanent
+        blank; consent absent, revoked and unreadable; consent granted but not
+        confirmed (not_confirmed, before any other gate); a complaint; a permanent
         bounce; a bounce whose type is unreadable, empty, or neither Permanent
         nor Transient; a bounce found only by the address (another contact, other
         case); a history lookup that fails; the cap reached; the count unreadable
@@ -232,8 +233,10 @@ function build(src, root, plan, env) {
 const CONTACT = "3f1c2b8a-1111-4222-8333-444455556666";
 const OWNER = "ea887c6e-e278-4a15-b7e9-cd78a9949b78";
 const POSTAL = "BizForce AI\n123 Example Street, Suite 4 & 5\nSpringfield, ST 00000";
+// The baseline contact is CONFIRMED: marketing requires the latest email
+// consent to be "confirmed" (double opt-in), so every gate after consent runs.
 const GOOD = {
-  consent: [{ action: "granted" }],
+  consent: [{ action: "confirmed" }],
   contact: { id: CONTACT, email: "Person@Example.com", owner_id: OWNER },
   byAddress: [], byContact: [], count: 0
 };
@@ -270,6 +273,11 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
   r = await marketing({ consent: [] });
   refused("no consent row", r, "no_consent");
   check("no consent: refused before the contact, history or count is read", r.b.db.log.every(q => q.table === "consent_events"), r.b.db.log.map(q => q.table).join(","));
+  // A grant from a form that was never confirmed is not enough: refused with
+  // not_confirmed before the contact, history or count is read, and no Resend call.
+  r = await marketing({ consent: [{ action: "granted" }] });
+  refused("latest consent granted but not confirmed", r, "not_confirmed");
+  check("granted but not confirmed: refused before any other gate runs", r.b.db.log.every(q => q.table === "consent_events"), r.b.db.log.map(q => q.table).join(","));
   refused("latest consent revoked", await marketing({ consent: [{ action: "revoked" }] }), "no_consent");
   refused("consent lookup fails", await marketing({ consentError: true }), "no_consent");
 
@@ -335,7 +343,7 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
     m && JSON.stringify(call.headers) === JSON.stringify({ "List-Unsubscribe": "<" + url + m[1] + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), JSON.stringify(call.headers));
   check("from address unchanged", call.from === "BizForce AI <hello@mail.bizforceai.net>");
   check("consent is checked again by sendEmail on the way out", r.b.db.log.filter(q => q.table === "consent_events").length === 2);
-  r = await marketing({ consent: [{ action: "granted" }] }, ENV, { contactId: CONTACT, to: "attacker@example.com" });
+  r = await marketing({ consent: [{ action: "confirmed" }] }, ENV, { contactId: CONTACT, to: "attacker@example.com" });
   check("a caller-supplied `to` is ignored", (r.b.sent[0] || {}).to === "Person@Example.com", (r.b.sent[0] || {}).to);
 
   /* ── 4. transactional sends, against BEFORE ───────────────────────────── */

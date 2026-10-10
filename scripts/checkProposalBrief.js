@@ -368,9 +368,9 @@ function deepEqual(a, b) {
   console.log("\n══ 8. migration 132 ══");
   const dir = path.join(REPO, "supabase", "migrations");
   const files = fs.readdirSync(dir).filter(f => /^\d+_.*\.sql$/.test(f));
-  const nums = files.map(f => parseInt(f, 10));
+  // Not tied to which migration is newest: later migrations may follow 132.
   const mig = files.find(f => /^132_/.test(f));
-  check("8. 132 is the highest migration, and there is exactly one", Math.max.apply(null, nums) === 132 && files.filter(f => /^132_/.test(f)).length === 1, files.slice(-3).join(","));
+  check("8. exactly one migration is numbered 132", files.filter(f => /^132_/.test(f)).length === 1, files.filter(f => /^132_/.test(f)).join(","));
   const sql = mig ? fs.readFileSync(path.join(dir, mig), "utf8").replace(/\r\n/g, "\n") : "";
   const statements = sql.split("\n").filter(l => l.trim() && !/^\s*--/.test(l)).join("\n");
   check("8. it holds exactly the statements applied by hand", statements ===

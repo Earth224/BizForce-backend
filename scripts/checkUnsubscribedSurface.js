@@ -260,6 +260,9 @@ const EXPECTED_UNAUTH_WRITES = {
   "post /api/capture":                      "a lead capture from a public form",
   "get /api/unsubscribe":                   "an unsubscribe, from a signed token",
   "post /api/unsubscribe":                  "an unsubscribe, from a signed token (RFC 8058)",
+  // Writes one consent_events "confirmed" row, only for a genuine, unexpired
+  // token signed for the contact's current address, and nothing after "revoked".
+  "post /api/confirm":                      "a confirmed consent, from a signed token (double opt-in)",
   "post /api/engine-visits":                "an arrival from a Lead Radar reply (migration 128)",
   "post /api/sms/inbound":                  "an inbound SMS reply (STOP / HELP)"
 };
@@ -445,6 +448,10 @@ console.log("\n══ 5. every unauthenticated route that writes, reviewed ═�
 const unauthWriters = of("unauthenticated").filter(function (r) { return r.fx.length; });
 sameSet("5. the unauthenticated routes that write are exactly the " + Object.keys(EXPECTED_UNAUTH_WRITES).length + " reviewed",
   keys(unauthWriters), Object.keys(EXPECTED_UNAUTH_WRITES));
+// The confirm page's GET only renders; the POST is the one that writes.
+check("5. get /api/confirm is mounted, unauthenticated, and NOT a writer",
+  of("unauthenticated").some(function (r) { return r.key === "get /api/confirm"; }) &&
+  keys(unauthWriters).indexOf("get /api/confirm") === -1, keys(unauthWriters).join(", "));
 const unauthSpend = unauthWriters.concat(of("unauthenticated")).filter(function (r) { return r.fx.indexOf("MODEL") !== -1; });
 check("5. no unauthenticated route reaches a model call", unauthSpend.length === 0, keys(unauthSpend).join(", "));
 
