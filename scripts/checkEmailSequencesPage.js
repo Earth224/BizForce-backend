@@ -479,7 +479,8 @@ const movesIn = (rowHtml) => (rowHtml.match(/data-es-move="([a-z]+)"/g) || []).m
   const cases = [
     ["sender switched off", Object.assign({}, ENV_ALL, { ENABLE_EMAIL_SEQUENCES: "false" }), /switched off/],
     ["postal address not set", Object.assign({}, ENV_ALL, { MAIL_POSTAL_ADDRESS: " " }), /postal address/],
-    ["webhook secret not set", Object.assign({}, ENV_ALL, { RESEND_WEBHOOK_SECRET: "" }), /webhook secret/],
+    // Hold the page to the webhook rule: a missing secret holds marketing mail, so it is a blocking reason.
+    ["webhook secret not set", Object.assign({}, ENV_ALL, { RESEND_WEBHOOK_SECRET: "" }), /^Bounce and complaint reports are not connected, so marketing mail is held\.$/],
     ["daily cap unreadable", Object.assign({}, ENV_ALL, { EMAIL_MARKETING_DAILY_CAP: "lots" }), /daily cap could not be read/]
   ];
   for (const [label, env, re] of cases) {
@@ -487,7 +488,7 @@ const movesIn = (rowHtml) => (rowHtml.match(/data-es-move="([a-z]+)"/g) || []).m
     const reasons = reasonsIn(r.html);
     check(label + ": exactly one reason line, saying so", reasons.length === 1 && re.test(reasons[0]), JSON.stringify(reasons));
     check(label + ": no environment value in the server's sender or on the page", !LEAKS.some(x => JSON.stringify(r.body.sender).includes(x) || r.html.includes(x)));
-    if (label !== "webhook secret not set") check(label + ": 'Nothing is being sent', not 'Sending is on'", r.html.includes("Nothing is being sent") && !r.html.includes("Sending is on"));
+    check(label + ": 'Nothing is being sent', never 'Sending is on'", r.html.includes("Nothing is being sent") && !r.html.includes("Sending is on"), r.html);
   }
   // An unset cap is the server's default (50), so "nothing usable" sets it to garbage.
   const none = await senderFor({ EMAIL_MARKETING_DAILY_CAP: "lots" });
