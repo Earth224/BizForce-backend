@@ -10280,7 +10280,13 @@ const PROPOSAL_EXECUTORS = {
       created:         true,
       already_created: false
     };
-  }
+  },
+
+  // Creates an email sequence and enrolls the owner's confirmed contacts from
+  // an approved POST /api/agents/email/propose-sequence. Sends nothing.
+  // executeSendEmailSequence is defined further down the file; it only runs at
+  // call time.
+  send_email_sequence: executeSendEmailSequence
 };
 
 app.post("/api/proposals", requireAuth, async function (req, res, next) {
@@ -10536,8 +10542,9 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
 });
 
 /* The action types whose execution puts something in front of strangers. A
-   calendar event is the account's own record and stays free. */
-const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing"];
+   calendar event is the account's own record and stays free. An email sequence
+   is enrolled to be mailed to the owner's contacts. */
+const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -22914,9 +22921,11 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
   
           /* A delay that could not be read becomes null, NOT 0. Zero means "send
              immediately", which is a real instruction, and defaulting an unparsed
-             field to it would schedule a send the model never asked for. The
-             cumulative day stops advancing at the first unreadable delay rather
-             than silently treating it as same-day. */
+             field to it would schedule a send the model never asked for. An
+             unreadable delay adds nothing to the running total and its own
+             cumulative_day is null; the total keeps advancing with every later
+             readable delay, so each later step's cumulative_day leaves out the
+             days the unreadable delay would have added. */
           var delay = toolInt(f.DELAY_DAYS);
           if (delay !== null && delay >= 0) cumulative += delay;
   
@@ -23013,6 +23022,356 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
       next(error);
     }
   });
+
+/* ── Filing a sequence for approval ────────────────────────────────────────────
+   POST /api/agents/email/propose-sequence turns a drafted sequence (an
+   email/sequence run) into an agent_proposals row. Approving it runs
+   executeSendEmailSequence, which creates one email_sequences row and enrolls
+   the owner's contacts whose latest email consent is "confirmed" (migration
+   134). NOTHING HERE SENDS: no step is handed to sendEmail or
+   sendMarketingEmail, and no email_sends row is written. The scheduler that
+   will send due steps does not exist yet.
+
+   The steps are read from the stored ai_tasks output and from nowhere else, and
+   the same checks run twice — when the proposal is filed and again when it is
+   approved — because agent_proposals rows can also be written through
+   POST /api/proposals with any payload at all. */
+
+// Every step must be sendable as it stands: a subject, a body, and a delay that
+// is a whole number of days after the previous email. null is refused rather
+// than read as 0, for the reason the sequence route gives — 0 means "send
+// immediately", which the model never said. The first delay must be 0, the
+// route's own instruction to the model. Returns null when every step passes, or
+// the first problem, naming its 1-based step.
+function emailSequenceStepsProblem(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return "The sequence has no steps.";
+  }
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i];
+    var label = "Step " + (i + 1);
+    if (!step || typeof step !== "object") {
+      return label + " is not a step.";
+    }
+    if (typeof step.subject !== "string" || step.subject.trim() === "") {
+      return label + " has no subject.";
+    }
+    if (typeof step.body !== "string" || step.body.trim() === "") {
+      return label + " has no body.";
+    }
+    var delay = step.delay_days;
+    if (typeof delay !== "number" || !Number.isInteger(delay) || delay < 0) {
+      return label + " has no readable delay: delay_days must be a whole number of days of 0 or more, and it is " +
+        JSON.stringify(delay === undefined ? null : delay) + ".";
+    }
+    if (i === 0 && delay !== 0) {
+      return label + " must have delay_days 0, because it is the first email; it has " + delay + ".";
+    }
+  }
+  return null;
+}
+
+// The sequence's name: 1 to 100 characters after trimming, or null.
+function emailSequenceName(value) {
+  if (typeof value !== "string") return null;
+  var name = value.trim();
+  return name.length >= 1 && name.length <= 100 ? name : null;
+}
+
+// The owner's contacts, split by whether their latest email consent is
+// "confirmed" — read through emailConsentLatest, the reader sendEmail and
+// sendMarketingEmail use. "granted" (still waiting on the confirmation link),
+// "revoked", no row, and a lookup that failed all count as not confirmed.
+// brand, when set, keeps only contacts of that brand. Read in pages, because a
+// select returns at most 1000 rows. A failed contacts read throws.
+var EMAIL_SEQUENCE_CONTACT_PAGE = 1000;
+
+async function emailSequenceConfirmedContacts(ownerId, brand) {
+  var contactIds = [];
+  for (var from = 0; ; from += EMAIL_SEQUENCE_CONTACT_PAGE) {
+    var query = supabase
+      .from("contacts")
+      .select("id")
+      .eq("owner_id", ownerId);
+    if (brand) {
+      query = query.eq("brand", brand);
+    }
+    var page = await query.order("id", { ascending: true }).range(from, from + EMAIL_SEQUENCE_CONTACT_PAGE - 1);
+    if (page.error) {
+      throw new Error("Could not read the contacts: " + (page.error.message || page.error));
+    }
+    var rows = page.data || [];
+    rows.forEach(function (row) { contactIds.push(row.id); });
+    if (rows.length < EMAIL_SEQUENCE_CONTACT_PAGE) break;
+  }
+
+  var confirmed = [];
+  var notConfirmed = 0;
+  for (var i = 0; i < contactIds.length; i++) {
+    var latest = await emailConsentLatest(contactIds[i]);
+    if (latest.ok && latest.action === "confirmed") {
+      confirmed.push(contactIds[i]);
+    } else {
+      notConfirmed++;
+    }
+  }
+  return { confirmed: confirmed, not_confirmed: notConfirmed };
+}
+
+var EMAIL_SEQUENCE_OWNER_ONLY =
+  "Filing an email sequence is limited to the owner account for now. It will open to subscribers once " +
+  "they can verify their own sending domain.";
+
+app.post("/api/agents/email/propose-sequence", requireAuth, requireActiveSubscription,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+
+      if (req.user.role !== "admin") {
+        return res.status(403).json({ error: EMAIL_SEQUENCE_OWNER_ONLY });
+      }
+
+      var taskId = typeof req.body.task_id === "string" ? req.body.task_id.trim() : "";
+      if (!taskId) {
+        return res.status(400).json({ error: "task_id is required — the id of a completed email/sequence run." });
+      }
+
+      var name = emailSequenceName(req.body.name);
+      if (!name) {
+        return res.status(400).json({ error: "name is required, 1 to 100 characters." });
+      }
+
+      var brand = null;
+      if (req.body.brand !== undefined && req.body.brand !== null && req.body.brand !== "") {
+        brand = typeof req.body.brand === "string" ? req.body.brand.trim() : "";
+        if (!brand) {
+          return res.status(400).json({ error: "brand, when given, must be the name of one of your contact brands." });
+        }
+      }
+
+      // Not found and not yours answer the same, so the response says nothing
+      // about another account's runs. A malformed id is not found either.
+      var notFound = { error: "No sequence run with that task_id was found." };
+      if (!UUID_RE.test(taskId)) {
+        return res.status(404).json(notFound);
+      }
+      var taskRead = await supabase
+        .from("ai_tasks")
+        .select("id, task_type, status, output")
+        .eq("id", taskId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (taskRead.error) {
+        throw taskRead.error;
+      }
+      var task = taskRead.data;
+      if (!task) {
+        return res.status(404).json(notFound);
+      }
+      if (task.task_type !== "email/sequence") {
+        return res.status(400).json({ error: "That task is not an email sequence run (it is " + JSON.stringify(task.task_type) + ")." });
+      }
+      if (task.status !== "completed") {
+        return res.status(400).json({ error: "That sequence run is not completed (it is " + JSON.stringify(task.status) + ")." });
+      }
+
+      // The steps are the stored run's and nothing else: any steps in the
+      // request body are never read.
+      var steps = task.output && task.output.steps;
+      var problem = emailSequenceStepsProblem(steps);
+      if (problem) {
+        return res.status(400).json({ error: problem + " Nothing was filed." });
+      }
+
+      if (brand) {
+        var brandRead = await supabase
+          .from("contacts")
+          .select("id")
+          .eq("owner_id", userId)
+          .eq("brand", brand)
+          .limit(1);
+        if (brandRead.error) {
+          throw brandRead.error;
+        }
+        if (!brandRead.data || brandRead.data.length === 0) {
+          return res.status(400).json({ error: "None of your contacts has the brand " + JSON.stringify(brand) + ". Nothing was filed." });
+        }
+      }
+
+      // Measured before the proposal is written, so a count that cannot be read
+      // leaves nothing behind.
+      var audience = await emailSequenceConfirmedContacts(userId, brand);
+
+      var inserted = await supabase
+        .from("agent_proposals")
+        .insert({
+          user_id:       userId,
+          agent_type:    "email",
+          action_type:   "send_email_sequence",
+          title:         safeText("Email sequence: " + name, 200),
+          target:        "email_sequences",
+          payload:       { name: name, brand: brand, steps: steps, source_task_id: task.id },
+          cost_amount:   0,
+          cost_currency: "USD",
+          reversible:    false,
+          status:        "pending",
+          created_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (inserted.error) {
+        throw inserted.error;
+      }
+
+      return res.status(201).json({
+        proposal: inserted.data,
+        audience_now: {
+          confirmed_contacts: audience.confirmed.length,
+          brand: brand,
+          note: "Counted when this proposal was filed: your contacts" + (brand ? " of this brand" : "") +
+            " whose latest email consent is confirmed. Nothing has been sent and nothing is scheduled. " +
+            "Approving creates the sequence and enrolls whoever is confirmed at that moment, which may be a different number."
+        }
+      });
+    } catch (error) {
+      console.error("[email/propose-sequence] Error:", error);
+      next(error);
+    }
+  });
+
+/* The send_email_sequence executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal row; throws on any failure. Trusts nothing in the payload:
+   the name and every step are checked again, and the proposal's owner must
+   still be an admin. It creates the sequence and enrolls; it sends nothing.
+
+   A RERUN CREATES NOTHING TWICE. The sequence is looked up by proposal_id first
+   and reused when found; contacts already enrolled in it are counted as
+   already_enrolled, and an insert that meets the (sequence_id, contact_id)
+   unique key is counted the same way rather than failing. Zero confirmed
+   contacts still creates the sequence. */
+async function executeSendEmailSequence(proposal) {
+  var payload = proposal.payload || {};
+  var ownerId = proposal.user_id;
+
+  var name = emailSequenceName(payload.name);
+  if (!name) {
+    throw new Error("send_email_sequence: the stored name is not 1 to 100 characters. Nothing was created");
+  }
+  var brand = payload.brand === undefined || payload.brand === null ? null : payload.brand;
+  if (brand !== null && (typeof brand !== "string" || brand.trim() === "")) {
+    throw new Error("send_email_sequence: the stored brand is not a brand name. Nothing was created");
+  }
+  var steps = payload.steps;
+  var problem = emailSequenceStepsProblem(steps);
+  if (problem) {
+    throw new Error("send_email_sequence: the stored steps are not valid. " + problem + " Nothing was created");
+  }
+
+  var ownerRead = await supabase
+    .from("users")
+    .select("role")
+    .eq("id", ownerId)
+    .maybeSingle();
+  if (ownerRead.error) {
+    throw ownerRead.error;
+  }
+  if (!ownerRead.data || ownerRead.data.role !== "admin") {
+    throw new Error("send_email_sequence: " + EMAIL_SEQUENCE_OWNER_ONLY + " Nothing was created");
+  }
+
+  var sourceTaskId = typeof payload.source_task_id === "string" && UUID_RE.test(payload.source_task_id)
+    ? payload.source_task_id : null;
+
+  var existing = await supabase
+    .from("email_sequences")
+    .select("id")
+    .eq("proposal_id", proposal.id)
+    .eq("owner_id", ownerId)
+    .limit(1);
+  if (existing.error) {
+    throw existing.error;
+  }
+
+  var sequenceId;
+  if (existing.data && existing.data.length > 0) {
+    sequenceId = existing.data[0].id;
+  } else {
+    var created = await supabase
+      .from("email_sequences")
+      .insert({
+        owner_id:       ownerId,
+        proposal_id:    proposal.id,
+        source_task_id: sourceTaskId,
+        name:           name,
+        brand:          brand,
+        steps:          steps,
+        status:         "active",
+        approved_at:    nowIso()
+      })
+      .select("id")
+      .single();
+    if (created.error) {
+      throw created.error;
+    }
+    sequenceId = created.data.id;
+  }
+
+  var audience = await emailSequenceConfirmedContacts(ownerId, brand);
+
+  var enrolledAlready = {};
+  for (var from = 0; ; from += EMAIL_SEQUENCE_CONTACT_PAGE) {
+    var page = await supabase
+      .from("email_sequence_enrollments")
+      .select("contact_id")
+      .eq("sequence_id", sequenceId)
+      .order("contact_id", { ascending: true })
+      .range(from, from + EMAIL_SEQUENCE_CONTACT_PAGE - 1);
+    if (page.error) {
+      throw page.error;
+    }
+    var rows = page.data || [];
+    rows.forEach(function (row) { enrolledAlready[row.contact_id] = true; });
+    if (rows.length < EMAIL_SEQUENCE_CONTACT_PAGE) break;
+  }
+
+  // delay_days counts from the previous email; for the first step that is the
+  // moment of enrollment.
+  var firstSendAt = new Date(Date.now() + steps[0].delay_days * 86400000).toISOString();
+  var enrolled = 0;
+  var alreadyEnrolled = 0;
+
+  for (var i = 0; i < audience.confirmed.length; i++) {
+    var contactId = audience.confirmed[i];
+    if (enrolledAlready[contactId]) {
+      alreadyEnrolled++;
+      continue;
+    }
+    var enrollment = await supabase
+      .from("email_sequence_enrollments")
+      .insert({
+        sequence_id:  sequenceId,
+        contact_id:   contactId,
+        next_step:    0,
+        next_send_at: firstSendAt,
+        status:       "active"
+      });
+    if (enrollment.error) {
+      if (enrollment.error.code === "23505") {
+        alreadyEnrolled++;
+        continue;
+      }
+      throw enrollment.error;
+    }
+    enrolled++;
+  }
+
+  return {
+    sequence_id: sequenceId,
+    enrolled: enrolled,
+    already_enrolled: alreadyEnrolled,
+    skipped_not_confirmed: audience.not_confirmed
+  };
+}
 
 /* Subject-line variants, each one MEASURED. Length, both preview cutoffs, and
    spam-trigger wording are all properties of the string, so the server settles
@@ -29302,7 +29661,12 @@ var TOOL_INPUT_SPECS = {
     toolField("lead_post_uri", "string", true, "The lead's post URI, up to 500 characters."),
     toolField("status", "string", true, "One of SALES_LEAD_STATUSES (new, drafted, contacted, replied, converted); anything else is a 400.")
   ],
-  "store/generate-proposals": []
+  "store/generate-proposals": [],
+  "email/propose-sequence": [
+    toolField("task_id", "string", true, "The id of a completed email/sequence run of yours; its stored steps are the steps filed. Unknown or not yours is a 404."),
+    toolField("name", "string", true, "What to call the sequence, 1-100 characters."),
+    toolField("brand", "string", false, "Enroll only contacts of this brand; must be a brand your contacts already have, otherwise a 400.")
+  ]
 };
 
 /* One walk of the router, cached. Both catalogue shapes derive from it so they
@@ -29524,8 +29888,9 @@ function checkRoutesForShadowing() {
 
 /* Routes the catalogue admits that a chain may NOT run. Each one takes an
    action in the world or on live state — posting a generated article, writing a
-   proposal set, fetching and reporting on a live site, sending outreach, or
-   changing a lead's status. A tool that only writes text for a person to read is
+   proposal set, fetching and reporting on a live site, sending outreach,
+   changing a lead's status, or filing an email sequence to be mailed to
+   contacts. A tool that only writes text for a person to read is
    a safe thing to chain; a tool that acts is not, however good the plan looks.
    Refused by name so the reason is legible in the log. */
 var CHAIN_NON_DISPATCHABLE_TOOLS = [
@@ -29533,7 +29898,8 @@ var CHAIN_NON_DISPATCHABLE_TOOLS = [
   "seo/generate-post",
   "seo/optimize",
   "sales/convert",
-  "sales/lead-status"
+  "sales/lead-status",
+  "email/propose-sequence"
 ];
 
 /* The three limits. Each: absent or blank → the default; a whole number →

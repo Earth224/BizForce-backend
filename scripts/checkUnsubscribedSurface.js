@@ -145,7 +145,9 @@ const EXPECTED_GATED = [
   "post /api/marketplace/listings", "post /api/cards/share-token", "post /api/crowdfunding/campaigns",
   "put /api/crowdfunding/campaigns/:id", "post /api/wallet/transfer",
   // A real SEO audit, measured before it is explained
-  "post /api/agents/seo/audit"
+  "post /api/agents/seo/audit",
+  // File an email sequence for approval
+  "post /api/agents/email/propose-sequence"
 ];
 
 const EXPECTED_ADMIN = [
