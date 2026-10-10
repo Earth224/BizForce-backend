@@ -1110,6 +1110,24 @@ app.post(
         statusUpdate.error_message = safeText(String(reason), 500);
       }
 
+      /* A BOUNCE KEEPS ITS TYPE. The reason above takes message first, so the
+         bounce's type — what says whether the address is gone or the mailbox
+         was merely full — was dropped on every bounce. sendMarketingEmail
+         refuses an address by that type, so it is written here, at the front
+         of error_message in a fixed form emailBounceTypeOf reads back:
+           [bounce type=<type> subtype=<subType>] <message>
+         Field names are Resend's own EmailBounce (message, subType, type, in
+         node_modules/resend/dist/index.d.cts). The values are reduced to
+         letters, digits, _ and -, so nothing in a payload can forge the
+         bracket. A missing type is written empty and reads back as unknown,
+         which refuses. */
+      if (eventType === "email.bounced") {
+        var bounceDetail = (data.bounce && typeof data.bounce === "object") ? data.bounce : {};
+        statusUpdate.error_message = safeText("[bounce type=" + emailBounceToken(bounceDetail.type) +
+          " subtype=" + emailBounceToken(bounceDetail.subType) + "] " +
+          (reason ? String(reason) : ""), 500);
+      }
+
       /* No updated_at: the email_sends_set_updated_at trigger from migration
          070 stamps it, and the column comment says this is exactly what it is
          for — "when did we last learn something about this send", including a
@@ -1135,6 +1153,9 @@ app.post(
          the message, let alone objected to it. Writing a revoked row for one
          would record an objection nobody made. A complaint is the opposite:
          someone pressed "this is spam", which is a person asking to stop.
+         A bounce still stops marketing mail, by another route: the type kept
+         above is read by sendMarketingEmail, which refuses a permanent or
+         unknown-type bounce without anything being written to consent.
 
          The contact comes from the matched row and from nowhere else. It is
          NOT resolved by looking up the address: email_sends.contact_id is ON
@@ -2156,23 +2177,7 @@ async function sendEmail(options) {
     }
 
     if (opts.skipConsentCheck !== true) {
-      var consent = await supabase
-        .from("consent_events")
-        .select("action")
-        .eq("contact_id", contactId)
-        .eq("channel", "email")
-        .order("occurred_at", { ascending: false })
-        .limit(1);
-
-      if (consent.error) {
-        // A consent check that could not run is not a consent check that passed.
-        console.error("[sendEmail] consent lookup failed for contact " + contactId +
-          " — " + consent.error.message + ". Treating as no consent and not sending.");
-        return { sent: false, reason: "no_consent" };
-      }
-
-      var latest = consent.data && consent.data[0];
-      if (!latest || latest.action !== "granted") {
+      if (!(await emailConsentGranted(contactId))) {
         return { sent: false, reason: "no_consent" };
       }
     }
@@ -2261,8 +2266,7 @@ async function sendEmail(options) {
     // Note the path. FRONTEND_URL points at the frontend, which serves
     // /unsubscribe; this API serves /api/unsubscribe. The paths differ by
     // origin and that is deliberate — the same route reached two ways.
-    var unsubscribeUrl = String(FRONTEND_URL).trim().replace(/\/+$/, "") +
-      "/unsubscribe?token=" + makeUnsubscribeToken(contactId);
+    var unsubscribeUrl = emailUnsubscribeUrl(contactId);
 
     var resend = new Resend(apiKey);
 
@@ -2288,7 +2292,7 @@ async function sendEmail(options) {
     // ── 4. Outcome written back ─────────────────────────────────────────────
     // status 'sent' means the provider ACCEPTED it, not that it was delivered.
     // The gap between those two is what 'bounced' exists to record, and it is
-    // written later by a webhook that does not exist yet.
+    // written later by POST /api/webhooks/resend when Resend reports a bounce.
     var providerId = (result && result.data && result.data.id) || null;
 
     var sentUpdate = await supabase
@@ -2350,6 +2354,253 @@ async function markSendFailed(sendRowId, message) {
     console.error("[sendEmail] threw while marking send " + sendRowId + " as failed — " +
       ((error && error.message) || error));
   }
+}
+
+// The consent check sendEmail has always made, as its own function so the
+// marketing path below asks the identical question rather than a copy of it.
+// Derived from consent_events (migration 069): the latest email row for the
+// contact must say granted. No row is no consent, and a lookup that fails is
+// no consent too — a check that could not run is not a check that passed.
+async function emailConsentGranted(contactId) {
+  var consent = await supabase
+    .from("consent_events")
+    .select("action")
+    .eq("contact_id", contactId)
+    .eq("channel", "email")
+    .order("occurred_at", { ascending: false })
+    .limit(1);
+
+  if (consent.error) {
+    // A consent check that could not run is not a consent check that passed.
+    console.error("[sendEmail] consent lookup failed for contact " + contactId +
+      " — " + consent.error.message + ". Treating as no consent and not sending.");
+    return false;
+  }
+
+  var latest = consent.data && consent.data[0];
+  return !!latest && latest.action === "granted";
+}
+
+// The one unsubscribe URL, for the List-Unsubscribe header and the marketing
+// footer alike: FRONTEND_URL's /unsubscribe, which bizforceai.net proxies to
+// GET /api/unsubscribe — the confirmation page — carrying the signed token.
+function emailUnsubscribeUrl(contactId) {
+  return String(FRONTEND_URL).trim().replace(/\/+$/, "") +
+    "/unsubscribe?token=" + makeUnsubscribeToken(contactId);
+}
+
+/* ── Marketing email ─────────────────────────────────────────────────────────
+   sendMarketingEmail is the ONLY way marketing mail may leave this system, and
+   nothing calls it yet. It exists first so that the first marketing caller
+   cannot be written without its gates. Transactional mail (verification,
+   password reset) stays on sendEmail with skipConsentCheck and never passes
+   through here.
+
+   IT REFUSES BY THROWING, before anything is written or sent, in this order:
+     1. MAIL_POSTAL_ADDRESS unset or blank — commercial mail must carry a
+        physical postal address, so without one there is nothing lawful to send.
+     2. the contact's latest email consent is not "granted" (emailConsentGranted,
+        the check sendEmail makes; a failed lookup refuses).
+     3. the address is suppressed: any complained email_sends row, any bounced
+        row whose type is permanent, or any bounced row whose type cannot be read
+        (fail closed). A temporary bounce alone does not suppress. Rows are found
+        by the contact AND by the address, so a second contact holding the same
+        address does not escape it. A failed lookup refuses.
+     4. the owner's marketing sends in the last 24 hours have reached
+        EMAIL_MARKETING_DAILY_CAP (default 50 when unset or blank; set but not a
+        positive whole number refuses). The count must be read: a failed count
+        refuses, because a send cannot be taken back.
+   Every refusal is an Error with code "marketing_refused" and a `reason`.
+
+   Past the gates the body gets the footer — the unsubscribe link and the postal
+   address, in the HTML and in the text — and goes out through sendEmail, which
+   checks consent again, writes the email_sends row first and adds the same
+   List-Unsubscribe headers as always. Marketing rows are told apart by the
+   existing template column: always "marketing:<name>"; transactional templates
+   never carry that prefix.
+
+   The cap's count and the send run one at a time per owner in this process, so
+   two sends cannot both read the same count and both pass it. */
+var EMAIL_MARKETING_TEMPLATE_PREFIX = "marketing:";
+var EMAIL_MARKETING_DEFAULT_DAILY_CAP = 50;
+var emailMarketingQueues = {};
+
+function emailMarketingRefusal(reason, message) {
+  var err = new Error("Marketing email refused (" + reason + "): " + message);
+  err.code = "marketing_refused";
+  err.reason = reason;
+  return err;
+}
+
+// Parsed the way agentScheduleMaxPerTick parses its ceiling: unset or blank is
+// the default, a positive whole number is itself, and anything else is null —
+// a limit somebody set and nobody can read, which refuses rather than guessing.
+function emailMarketingDailyCap() {
+  var raw = process.env.EMAIL_MARKETING_DAILY_CAP;
+  if (raw == null || String(raw).trim() === "") {
+    return EMAIL_MARKETING_DEFAULT_DAILY_CAP;
+  }
+  var parsed = Number(String(raw).trim());
+  if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return null;
+}
+
+// A bounce field reduced to what can sit inside the webhook's bracket.
+function emailBounceToken(value) {
+  return String(value == null ? "" : value).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
+}
+
+// The type the webhook wrote at the front of error_message, read back as
+// permanent, temporary or unknown. Only Permanent and Transient are known;
+// a row with no bracket (written before the type was kept), an empty type, or
+// any other value is unknown, and unknown suppresses.
+function emailBounceTypeOf(errorMessage) {
+  var match = /^\[bounce type=([A-Za-z0-9_-]*) subtype=[A-Za-z0-9_-]*\]/.exec(String(errorMessage || ""));
+  if (!match) return "unknown";
+  var type = match[1].toLowerCase();
+  if (type === "permanent") return "permanent";
+  if (type === "transient") return "temporary";
+  return "unknown";
+}
+
+// Runs fn after every earlier fn queued under the same key has settled.
+function emailMarketingSerial(key, fn) {
+  var previous = emailMarketingQueues[key] || Promise.resolve();
+  var run = previous.then(fn, fn);
+  var tail = run.then(function () {}, function () {});
+  emailMarketingQueues[key] = tail;
+  tail.then(function () {
+    if (emailMarketingQueues[key] === tail) delete emailMarketingQueues[key];
+  });
+  return run;
+}
+
+async function sendMarketingEmail(options) {
+  var opts = options || {};
+  var contactId = opts.contactId;
+  var subject = opts.subject;
+  var html = opts.html;
+  var text = opts.text;
+  var templateName = opts.template;
+
+  if (!contactId) throw emailMarketingRefusal("no_contact", "a contactId is required.");
+  if (typeof subject !== "string" || !subject.trim()) throw emailMarketingRefusal("invalid", "a subject is required.");
+  if (typeof html !== "string" || !html.trim() || typeof text !== "string" || !text.trim()) {
+    throw emailMarketingRefusal("invalid", "both an HTML and a text body are required, so both can carry the footer.");
+  }
+  if (typeof templateName !== "string" || !/^[a-z0-9][a-z0-9_-]{0,58}$/.test(templateName)) {
+    throw emailMarketingRefusal("invalid", "template must be a short lowercase name (letters, digits, _ and -).");
+  }
+
+  // ── 1. The postal address ────────────────────────────────────────────────
+  var postal = String(process.env.MAIL_POSTAL_ADDRESS || "").trim();
+  if (!postal) {
+    throw emailMarketingRefusal("no_postal_address", "MAIL_POSTAL_ADDRESS is not set, and marketing mail must carry a physical postal address.");
+  }
+
+  // ── 2. Consent, exactly as sendEmail checks it ───────────────────────────
+  if (!(await emailConsentGranted(contactId))) {
+    throw emailMarketingRefusal("no_consent", "the contact's latest email consent is not granted.");
+  }
+
+  // The address and owner come from the contact row, never from the caller, so
+  // the mail cannot go anywhere but to the person whose consent was just read.
+  var contactRead = await supabase
+    .from("contacts")
+    .select("id, email, owner_id")
+    .eq("id", contactId)
+    .maybeSingle();
+  if (contactRead.error) {
+    throw emailMarketingRefusal("lookup_failed", "the contact could not be read (" + contactRead.error.message + ").");
+  }
+  var contact = contactRead.data;
+  if (!contact || !contact.email) throw emailMarketingRefusal("no_contact", "the contact does not exist or has no email address.");
+  if (!contact.owner_id) throw emailMarketingRefusal("no_owner", "the contact has no owner, so no daily cap can be applied.");
+  var address = String(contact.email).trim().toLowerCase();
+
+  // ── 3. Suppression ───────────────────────────────────────────────────────
+  // By address: ilike with LIKE's metacharacters escaped, then an exact
+  // lowercase comparison here, so a pattern that matched too much can only
+  // over-suppress, never let a suppressed address through.
+  var pattern = address.replace(/[\\%_]/g, function (c) { return "\\" + c; });
+  var byAddress = await supabase
+    .from("email_sends")
+    .select("id, to_email, status, error_message")
+    .in("status", ["bounced", "complained"])
+    .ilike("to_email", pattern);
+  var byContact = await supabase
+    .from("email_sends")
+    .select("id, to_email, status, error_message")
+    .in("status", ["bounced", "complained"])
+    .eq("contact_id", contactId);
+  if (byAddress.error || byContact.error) {
+    throw emailMarketingRefusal("lookup_failed", "the bounce and complaint history could not be read (" +
+      ((byAddress.error || byContact.error).message) + "), so the address cannot be shown to be safe.");
+  }
+  var history = (byContact.data || []).concat((byAddress.data || []).filter(function (row) {
+    return String(row.to_email || "").trim().toLowerCase() === address;
+  }));
+  for (var i = 0; i < history.length; i++) {
+    if (history[i].status === "complained") {
+      throw emailMarketingRefusal("suppressed", "this address marked earlier mail as spam (email_sends " + history[i].id + ").");
+    }
+    if (history[i].status === "bounced") {
+      var bounceType = emailBounceTypeOf(history[i].error_message);
+      if (bounceType !== "temporary") {
+        throw emailMarketingRefusal("suppressed", "earlier mail to this address bounced with a " + bounceType +
+          " bounce type (email_sends " + history[i].id + ").");
+      }
+    }
+  }
+
+  // ── 4. The daily cap, then the send, one at a time per owner ─────────────
+  var cap = emailMarketingDailyCap();
+  if (cap === null) {
+    throw emailMarketingRefusal("cap_unreadable", "EMAIL_MARKETING_DAILY_CAP is set to " +
+      JSON.stringify(process.env.EMAIL_MARKETING_DAILY_CAP) + ", which is not a positive whole number. " +
+      "Unset it to use the default of " + EMAIL_MARKETING_DEFAULT_DAILY_CAP + ".");
+  }
+
+  return emailMarketingSerial(contact.owner_id, async function () {
+    var since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    var counted = await supabase
+      .from("email_sends")
+      .select("id, contacts!inner(owner_id)", { count: "exact", head: true })
+      .like("template", EMAIL_MARKETING_TEMPLATE_PREFIX + "%")
+      .eq("contacts.owner_id", contact.owner_id)
+      .gte("created_at", since);
+    if (counted.error || typeof counted.count !== "number") {
+      throw emailMarketingRefusal("count_failed", "the last 24 hours of marketing sends could not be counted" +
+        (counted.error ? " (" + counted.error.message + ")" : "") + ", and a send cannot be taken back.");
+    }
+    if (counted.count >= cap) {
+      throw emailMarketingRefusal("cap_reached", counted.count + " marketing email(s) in the last 24 hours, " +
+        "and the cap is " + cap + ".");
+    }
+
+    // ── The footer, in both bodies ───────────────────────────────────────────
+    var unsubscribeUrl = emailUnsubscribeUrl(contactId);
+    var footerHtml =
+      '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5ef;font-size:12px;line-height:1.6;color:#6b6b80">' +
+      '<p style="margin:0 0 8px">You are receiving this because you asked to hear from us. ' +
+      '<a href="' + escapeHtml(unsubscribeUrl) + '" style="color:#6b6b80">Unsubscribe</a></p>' +
+      '<p style="margin:0">' + escapeHtml(postal).replace(/\r?\n/g, "<br>") + '</p>' +
+      '</div>';
+    var footerText =
+      "\n\n--\nYou are receiving this because you asked to hear from us.\n" +
+      "Unsubscribe: " + unsubscribeUrl + "\n" + postal;
+
+    return sendEmail({
+      contactId: contactId,
+      to:        contact.email,
+      subject:   subject,
+      html:      html + footerHtml,
+      text:      text + footerText,
+      template:  EMAIL_MARKETING_TEMPLATE_PREFIX + templateName
+    });
+  });
 }
 
 function publicUser(user) {
@@ -16646,9 +16897,9 @@ app.get("/api/moon", async function (req, res) {
 // written by this handler because the submission itself IS the grant. A body
 // carrying its own owner_id is not rejected, it is simply never consulted.
 //
-// NO EMAIL IS SENT. There is no email capability in this repo — no dependency,
-// no send call, no configuration. Recording consent and acting on it are
-// different things, and only the first exists today.
+// NO EMAIL IS SENT HERE. This route records consent and nothing else. Mail is
+// sent only through sendEmail (transactional) and sendMarketingEmail, which
+// reads the consent recorded here at send time; no marketing caller exists yet.
 app.post("/api/contacts/capture", async function (req, res, next) {
   try {
     // ── 1. Validate before touching the database ───────────────────────────
