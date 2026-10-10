@@ -243,7 +243,10 @@ const EXPECTED_OWN = [
   "post /api/social-drafts", "put /api/social-drafts/:id",
   "post /api/content-library", "post /api/content-library/empty", "delete /api/content-library/:id",
   "post /api/content-library/:id/external-published",
-  "post /api/agents/sales/lead-status"   // refuses every account but the credential owner (checkLeadRadarOwnerGate)
+  "post /api/agents/sales/lead-status",  // refuses every account but the credential owner (checkLeadRadarOwnerGate)
+  // Let the owner see and stop every sequence: pauses, resumes or cancels the
+  // caller's own sequence. Deliberately ungated, so stopping mail never needs a subscription.
+  "post /api/email/sequences/:id/status"
 ];
 
 /* Unauthenticated routes that write. */

@@ -23432,6 +23432,237 @@ async function executeSendEmailSequence(proposal) {
   };
 }
 
+/* ── The owner's view of their sequences, and the way to stop one ─────────────
+   GET /api/email/sequences, GET /api/email/sequences/:id and
+   POST /api/email/sequences/:id/status. requireAuth and the owner's id on every
+   read and write, and NOTHING ELSE: not requireActiveSubscription, not the
+   admin check. Stopping mail must always be possible, including for an account
+   that has lost access, and seeing what is queued is how anyone knows to stop
+   it. Not found and not yours answer the same 404.
+
+   Pausing is the sequence's status alone: runEmailSequencePass reads only
+   sequences whose status is 'active', so a paused one is never read and its
+   enrollments keep their place. Cancelling also stops every active enrollment,
+   so nothing under it is left looking due. */
+var EMAIL_SEQUENCE_STATUS_MOVES = {
+  active: ["paused", "cancelled"],
+  paused: ["active", "cancelled"]
+};
+var EMAIL_SEQUENCE_STATUSES = ["active", "paused", "completed", "cancelled"];
+var EMAIL_SEQUENCE_NOT_FOUND = { error: "No sequence with that id was found." };
+
+// Every enrollment row of the given sequences, in pages: a select returns at
+// most 1000 rows.
+async function emailSequenceEnrollmentRows(sequenceIds, columns) {
+  var rows = [];
+  if (!sequenceIds.length) return rows;
+  for (var from = 0; ; from += EMAIL_SEQUENCE_CONTACT_PAGE) {
+    var page = await supabase
+      .from("email_sequence_enrollments")
+      .select(columns)
+      .in("sequence_id", sequenceIds)
+      .order("id", { ascending: true })
+      .range(from, from + EMAIL_SEQUENCE_CONTACT_PAGE - 1);
+    if (page.error) {
+      throw page.error;
+    }
+    var got = page.data || [];
+    rows = rows.concat(got);
+    if (got.length < EMAIL_SEQUENCE_CONTACT_PAGE) break;
+  }
+  return rows;
+}
+
+// The caller's sequence, or null when it does not exist or is not theirs.
+async function ownEmailSequence(ownerId, sequenceId, columns) {
+  if (typeof sequenceId !== "string" || !UUID_RE.test(sequenceId)) return null;
+  var read = await supabase
+    .from("email_sequences")
+    .select(columns)
+    .eq("id", sequenceId)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
+  if (read.error) {
+    throw read.error;
+  }
+  return read.data || null;
+}
+
+app.get("/api/email/sequences", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var read = await supabase
+      .from("email_sequences")
+      .select("id, name, brand, status, steps, created_at, approved_at")
+      .eq("owner_id", userId)
+      .order("created_at", { ascending: false });
+    if (read.error) {
+      throw read.error;
+    }
+    var sequences = read.data || [];
+
+    var enrollments = await emailSequenceEnrollmentRows(
+      sequences.map(function (seq) { return seq.id; }),
+      "sequence_id, status, stop_reason, next_send_at");
+
+    var tally = {};
+    sequences.forEach(function (seq) {
+      tally[seq.id] = { counts: { active: 0, completed: 0, stopped: 0 }, stopped_by_reason: {}, next_send_at: null };
+    });
+    enrollments.forEach(function (row) {
+      var t = tally[row.sequence_id];
+      if (!t) return;
+      t.counts[row.status] = (t.counts[row.status] || 0) + 1;
+      if (row.status === "stopped") {
+        var reason = row.stop_reason || "unknown";
+        t.stopped_by_reason[reason] = (t.stopped_by_reason[reason] || 0) + 1;
+      }
+      if (row.status === "active" && row.next_send_at &&
+          (t.next_send_at === null || Date.parse(row.next_send_at) < Date.parse(t.next_send_at))) {
+        t.next_send_at = row.next_send_at;
+      }
+    });
+
+    // Whether the sender could send at all, as booleans and the cap — never a
+    // value read from the environment.
+    var cap = emailMarketingDailyCap();
+    return res.json({
+      sequences: sequences.map(function (seq) {
+        var t = tally[seq.id];
+        return {
+          id: seq.id,
+          name: seq.name,
+          brand: seq.brand,
+          status: seq.status,
+          step_count: Array.isArray(seq.steps) ? seq.steps.length : 0,
+          created_at: seq.created_at,
+          approved_at: seq.approved_at,
+          enrollments: t.counts,
+          next_send_at: t.next_send_at,
+          stopped_by_reason: t.stopped_by_reason
+        };
+      }),
+      sender: {
+        enabled: emailSequencesEnabled(),
+        postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+        webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
+        daily_cap: typeof cap === "number" ? cap : null
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/email/sequences/:id", requireAuth, async function (req, res, next) {
+  try {
+    var sequence = await ownEmailSequence(req.user.id, req.params.id,
+      "id, name, brand, status, steps, created_at, approved_at");
+    if (!sequence) {
+      return res.status(404).json(EMAIL_SEQUENCE_NOT_FOUND);
+    }
+
+    var rows = await emailSequenceEnrollmentRows([sequence.id],
+      "id, contact_id, next_step, next_send_at, status, stop_reason, last_sent_at, contacts(name, email)");
+
+    return res.json({
+      sequence: {
+        id: sequence.id,
+        name: sequence.name,
+        brand: sequence.brand,
+        status: sequence.status,
+        created_at: sequence.created_at,
+        approved_at: sequence.approved_at,
+        steps: (Array.isArray(sequence.steps) ? sequence.steps : []).map(function (step, i) {
+          return {
+            step: i + 1,
+            delay_days: step && step.delay_days,
+            subject: step && step.subject,
+            purpose: step && step.purpose
+          };
+        }),
+        enrollments: rows.map(function (row) {
+          var contact = row.contacts || {};
+          return {
+            id: row.id,
+            contact_name: contact.name || null,
+            contact_email: contact.email || null,
+            next_step: row.next_step,
+            next_send_at: row.next_send_at,
+            status: row.status,
+            stop_reason: row.stop_reason,
+            last_sent_at: row.last_sent_at
+          };
+        })
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/email/sequences/:id/status", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var wanted = req.body && req.body.status;
+    if (EMAIL_SEQUENCE_STATUSES.indexOf(wanted) === -1) {
+      return res.status(400).json({ error: "status must be one of paused, active or cancelled." });
+    }
+
+    var sequence = await ownEmailSequence(userId, req.params.id, "id, status");
+    if (!sequence) {
+      return res.status(404).json(EMAIL_SEQUENCE_NOT_FOUND);
+    }
+
+    var allowed = EMAIL_SEQUENCE_STATUS_MOVES[sequence.status] || [];
+    if (allowed.indexOf(wanted) === -1) {
+      return res.status(409).json({
+        error: "This sequence is " + sequence.status + ", so it cannot be set to " + wanted + "." +
+          (sequence.status === "completed" || sequence.status === "cancelled" ? " " + sequence.status + " is final." : ""),
+        status: sequence.status
+      });
+    }
+
+    // Conditional on the status just read, so a change made in between is a
+    // 409 rather than a move from a state nobody saw.
+    var moved = await supabase
+      .from("email_sequences")
+      .update({ status: wanted })
+      .eq("id", sequence.id)
+      .eq("owner_id", userId)
+      .eq("status", sequence.status)
+      .select("id, status")
+      .maybeSingle();
+    if (moved.error) {
+      throw moved.error;
+    }
+    if (!moved.data) {
+      return res.status(409).json({ error: "This sequence changed while the request was made; nothing was changed. Reload and try again." });
+    }
+
+    var stopped = 0;
+    if (wanted === "cancelled") {
+      // Only active enrollments: completed and stopped rows are history.
+      var stop = await supabase
+        .from("email_sequence_enrollments")
+        .update({ status: "stopped", stop_reason: "cancelled_by_owner", next_send_at: null })
+        .eq("sequence_id", sequence.id)
+        .eq("status", "active")
+        .select("id");
+      if (stop.error) {
+        console.error("[email/sequences] Sequence " + sequence.id + " is cancelled, so nothing more will be sent, " +
+          "but its active enrollments could not be marked stopped: " + stop.error.message);
+        throw stop.error;
+      }
+      stopped = (stop.data || []).length;
+    }
+
+    return res.json({ sequence: moved.data, enrollments_stopped: stopped });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* Subject-line variants, each one MEASURED. Length, both preview cutoffs, and
    spam-trigger wording are all properties of the string, so the server settles
    them. The model's job is to write lines worth measuring. */

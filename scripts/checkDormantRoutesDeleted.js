@@ -79,7 +79,10 @@ const ADDED = [
   ["post", "/api/agents/seo/audit"], // A real SEO audit, measured before it is explained
   ["post", "/api/confirm"],          // Ask before mailing: confirmed consent for marketing
   ["get", "/api/confirm"],           // Ask before mailing: confirmed consent for marketing
-  ["post", "/api/agents/email/propose-sequence"] // File an email sequence for approval
+  ["post", "/api/agents/email/propose-sequence"], // File an email sequence for approval
+  ["get", "/api/email/sequences"],                 // Let the owner see and stop every sequence
+  ["get", "/api/email/sequences/:id"],             // Let the owner see and stop every sequence
+  ["post", "/api/email/sequences/:id/status"]     // Let the owner see and stop every sequence
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
