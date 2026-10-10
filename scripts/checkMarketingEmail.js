@@ -419,8 +419,21 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
 
   /* ── the wiring ───────────────────────────────────────────────────────── */
   console.log("\n══ 6. the wiring ══");
-  const callers = (SRC.match(/\bsendMarketingEmail\(/g) || []).length;
-  check("sendMarketingEmail is defined once and called nowhere yet", callers === 1, callers);
+  function sendMarketingEmailCallers(src) {
+    const out = [];
+    const re = /\bsendMarketingEmail\(/g; let m;
+    while ((m = re.exec(src)) !== null) {
+      if (src.slice(m.index - 15, m.index) === "async function ") continue;   // the definition
+      const heads = [...src.slice(0, m.index).matchAll(/^(?:async )?function ([A-Za-z0-9_$]+)\(|^app\.(get|post|put|patch|delete)\("([^"]+)"/gm)];
+      const head = heads[heads.length - 1];
+      out.push(!head ? "(top level)" : head[1] || head[2].toUpperCase() + " " + head[3]);
+    }
+    return out;
+  }
+  // Send approved sequences, one due step at a time: defined once, one caller, named.
+  const callers = sendMarketingEmailCallers(SRC);
+  check("sendMarketingEmail is defined once and called only by runEmailSequencePass",
+    (SRC.match(/^async function sendMarketingEmail\(/gm) || []).length === 1 && JSON.stringify(callers) === JSON.stringify(["runEmailSequencePass"]), JSON.stringify(callers));
   const sendSites = (SRC.match(/\.emails\.send\(/g) || []).length;
   check("server.js still calls Resend in exactly one place (sendEmail)", sendSites === 1, sendSites);
 

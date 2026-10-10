@@ -63,8 +63,8 @@ const MUTATIONS = {
   // the executor no longer checks the owner is admin
   "executor-skips-admin": [["  if (!ownerRead.data || ownerRead.data.role !== \"admin\") {\n", "  if (false) {\n"]],
   // a grant still waiting on its confirmation link is enrolled
-  "enroll-granted": [["    if (latest.ok && latest.action === \"confirmed\") {\n",
-    "    if (latest.ok && (latest.action === \"confirmed\" || latest.action === \"granted\")) {\n"]],
+  "enroll-granted": [["    } else if (latest.action === \"confirmed\") {\n",
+    "    } else if (latest.action === \"confirmed\" || latest.action === \"granted\") {\n"]],
   // a rerun creates a second sequence
   "second-sequence-on-rerun": [["  if (existing.data && existing.data.length > 0) {\n", "  if (false) {\n"]],
   // a chain may dispatch the route
@@ -405,8 +405,10 @@ const sameSteps = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   b = build(seed());
   const t0 = Date.now();
   let x = await b.execute(good);
-  check("returns { sequence_id, enrolled 3, already_enrolled 0, skipped_not_confirmed 4 }",
-    x.result && JSON.stringify(Object.keys(x.result)) === JSON.stringify(["sequence_id", "enrolled", "already_enrolled", "skipped_not_confirmed"]) &&
+  // skipped_unreadable: Send approved sequences, one due step at a time (A1)
+  check("returns { sequence_id, enrolled 3, already_enrolled 0, skipped_not_confirmed 4, skipped_unreadable 0 }",
+    x.result && JSON.stringify(Object.keys(x.result)) === JSON.stringify(["sequence_id", "enrolled", "already_enrolled", "skipped_not_confirmed", "skipped_unreadable"]) &&
+    x.result.skipped_unreadable === 0 &&
     x.result.enrolled === 3 && x.result.already_enrolled === 0 && x.result.skipped_not_confirmed === 4,
     x.error ? x.error.message : JSON.stringify(x.result));
   const seqRow = b.db.tables.email_sequences[0];
@@ -477,8 +479,10 @@ const sameSteps = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check("zero sendEmail and sendMarketingEmail calls", SPIES.sendEmail === 0 && SPIES.sendMarketingEmail === 0, JSON.stringify(SPIES));
   check("the lifted code never names Resend, sendEmail, sendMarketingEmail or email_sends",
     !/\bResend\b|\bsendEmail\(|\bsendMarketingEmail\(|"email_sends"/.test(LIFTED.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
-  check("server.js still calls Resend in exactly one place and sendMarketingEmail nowhere",
-    (SRC.match(/\.emails\.send\(/g) || []).length === 1 && (SRC.match(/\bsendMarketingEmail\(/g) || []).length === 1);
+  // Send approved sequences, one due step at a time: sendMarketingEmail's one caller is the sender, not this path.
+  check("server.js still calls Resend in exactly one place, and sendMarketingEmail only from runEmailSequencePass",
+    (SRC.match(/\.emails\.send\(/g) || []).length === 1 && (SRC.match(/\bsendMarketingEmail\(/g) || []).length === 2 &&
+    (definitionOf("runEmailSequencePass") || "").includes("await sendMarketingEmail({"));
 
   /* ── 6. the wiring ────────────────────────────────────────────────────── */
   console.log("\n══ 6. the wiring ══");

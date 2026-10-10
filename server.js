@@ -10299,6 +10299,14 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
       return res.status(400).json({ error: "agent_type, action_type and title are required" });
     }
 
+    // An email sequence is filed only from a drafted run, by the route that
+    // reads that run's steps; never from a payload written here.
+    if (actionType === "send_email_sequence") {
+      return res.status(400).json({
+        error: "An email sequence cannot be filed here. Use POST /api/agents/email/propose-sequence with the task_id of a completed email/sequence run."
+      });
+    }
+
     const { data, error } = await supabase
       .from("agent_proposals")
       .insert({
@@ -23029,13 +23037,14 @@ app.post("/api/agents/email/sequence", requireAuth, requireActiveSubscription, a
    executeSendEmailSequence, which creates one email_sequences row and enrolls
    the owner's contacts whose latest email consent is "confirmed" (migration
    134). NOTHING HERE SENDS: no step is handed to sendEmail or
-   sendMarketingEmail, and no email_sends row is written. The scheduler that
-   will send due steps does not exist yet.
+   sendMarketingEmail, and no email_sends row is written. Sending is
+   emailSequenceTick's, one due step at a time.
 
    The steps are read from the stored ai_tasks output and from nowhere else, and
    the same checks run twice — when the proposal is filed and again when it is
-   approved — because agent_proposals rows can also be written through
-   POST /api/proposals with any payload at all. */
+   approved. POST /api/proposals refuses this action_type, and the executor
+   still trusts nothing in the stored row: it reads the source run back and
+   requires its steps to be the payload's, exactly. */
 
 // Every step must be sendable as it stands: a subject, a body, and a delay that
 // is a whole number of days after the previous email. null is refused rather
@@ -23071,6 +23080,27 @@ function emailSequenceStepsProblem(steps) {
   return null;
 }
 
+// Deep equality for JSON values, blind to object key order: jsonb hands keys
+// back in its own order, so two copies of the same steps need not stringify alike.
+function emailSequenceSameJson(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!emailSequenceSameJson(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  var keysA = Object.keys(a), keysB = Object.keys(b);
+  if (keysA.length !== keysB.length) return false;
+  for (var k = 0; k < keysA.length; k++) {
+    if (!Object.prototype.hasOwnProperty.call(b, keysA[k]) || !emailSequenceSameJson(a[keysA[k]], b[keysA[k]])) return false;
+  }
+  return true;
+}
+
 // The sequence's name: 1 to 100 characters after trimming, or null.
 function emailSequenceName(value) {
   if (typeof value !== "string") return null;
@@ -23081,7 +23111,9 @@ function emailSequenceName(value) {
 // The owner's contacts, split by whether their latest email consent is
 // "confirmed" — read through emailConsentLatest, the reader sendEmail and
 // sendMarketingEmail use. "granted" (still waiting on the confirmation link),
-// "revoked", no row, and a lookup that failed all count as not confirmed.
+// "revoked" and no row count as not confirmed. A lookup that failed is counted
+// apart, as unreadable: nobody whose consent could not be read is enrolled, and
+// nobody is reported as unconfirmed on the strength of a failed read.
 // brand, when set, keeps only contacts of that brand. Read in pages, because a
 // select returns at most 1000 rows. A failed contacts read throws.
 var EMAIL_SEQUENCE_CONTACT_PAGE = 1000;
@@ -23107,15 +23139,18 @@ async function emailSequenceConfirmedContacts(ownerId, brand) {
 
   var confirmed = [];
   var notConfirmed = 0;
+  var unreadable = 0;
   for (var i = 0; i < contactIds.length; i++) {
     var latest = await emailConsentLatest(contactIds[i]);
-    if (latest.ok && latest.action === "confirmed") {
+    if (!latest.ok) {
+      unreadable++;
+    } else if (latest.action === "confirmed") {
       confirmed.push(contactIds[i]);
     } else {
       notConfirmed++;
     }
   }
-  return { confirmed: confirmed, not_confirmed: notConfirmed };
+  return { confirmed: confirmed, not_confirmed: notConfirmed, unreadable: unreadable };
 }
 
 var EMAIL_SEQUENCE_OWNER_ONLY =
@@ -23279,8 +23314,31 @@ async function executeSendEmailSequence(proposal) {
     throw new Error("send_email_sequence: " + EMAIL_SEQUENCE_OWNER_ONLY + " Nothing was created");
   }
 
+  /* The steps must be the drafted run's steps, exactly. A proposal row can be
+     written with any payload, so the run it names is read back — owned by the
+     proposal's user, completed, an email/sequence run — and its stored steps
+     must equal the payload's. No readable run, no sequence. */
   var sourceTaskId = typeof payload.source_task_id === "string" && UUID_RE.test(payload.source_task_id)
     ? payload.source_task_id : null;
+  if (!sourceTaskId) {
+    throw new Error("send_email_sequence: the proposal names no source run, so its steps cannot be checked against one. Nothing was created");
+  }
+  var sourceRead = await supabase
+    .from("ai_tasks")
+    .select("id, task_type, status, output")
+    .eq("id", sourceTaskId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (sourceRead.error) {
+    throw new Error("send_email_sequence: the source run could not be read (" + (sourceRead.error.message || sourceRead.error) + "). Nothing was created");
+  }
+  var source = sourceRead.data;
+  if (!source || source.task_type !== "email/sequence" || source.status !== "completed") {
+    throw new Error("send_email_sequence: the source run is missing, not this owner's, not an email/sequence run, or not completed. Nothing was created");
+  }
+  if (!emailSequenceSameJson(steps, source.output && source.output.steps)) {
+    throw new Error("send_email_sequence: the stored steps differ from the steps the source run drafted. Nothing was created");
+  }
 
   var existing = await supabase
     .from("email_sequences")
@@ -23369,7 +23427,8 @@ async function executeSendEmailSequence(proposal) {
     sequence_id: sequenceId,
     enrolled: enrolled,
     already_enrolled: alreadyEnrolled,
-    skipped_not_confirmed: audience.not_confirmed
+    skipped_not_confirmed: audience.not_confirmed,
+    skipped_unreadable: audience.unreadable
   };
 }
 
@@ -44638,6 +44697,436 @@ async function agentScheduleTick() {
   }
 }
 
+// ── Hourly email sequence sends ──────────────────────────────────────────────
+//
+// Sends approved email sequences (migration 134), one due step per enrollment
+// per tick, through sendMarketingEmail and nothing else — so every gate that
+// function holds (postal address, confirmed consent, suppression, the daily cap)
+// is passed by every step, every time.
+//
+// OFF UNLESS ENABLE_EMAIL_SEQUENCES IS EXACTLY "true", read at startup to
+// register the cron and again at the top of every tick. Claimed per UTC hour
+// through job_runs exactly as agentScheduleTick is, under its own job names
+// (hourly_email_sequences_h13), so two processes cannot both send an hour. No
+// boot run, for the reason agentScheduleTick gives: a deploy is not a tick.
+//
+// WHAT EACH TICK SENDS. Active enrollments whose next_send_at has passed, whose
+// sequence is 'active' and whose owner is still an admin — oldest due first, up
+// to EMAIL_SEQUENCE_MAX_PER_TICK attempts. An attempt is an enrollment taken
+// up, whatever came of it, so a tick of failures is bounded exactly as a tick of
+// sends is.
+//
+// THE OUTCOMES.
+//   sent                          next step, due its delay_days after THIS send;
+//                                 after the last step, completed.
+//   suppressed, no_consent,       stopped, with the reason. Never retried: a
+//   not_confirmed                 person who asked not to be mailed stays unmailed.
+//   cap_reached                   left due; that owner's other enrollments wait
+//                                 for the next tick.
+//   no_postal_address,            the tick ends. Both are true of every send, so
+//   cap_unreadable                going on would refuse the same way every time.
+//   anything else                 left due, retried next hour.
+//
+// THE ALREADY-SENT GUARD. Every step has its own template,
+// "seq-<sequence id>-s<step index>", stored by sendMarketingEmail as
+// "marketing:seq-…". A step whose row already says sent for this contact is
+// advanced without sending — so a tick that sent and then failed to move the
+// enrollment on cannot send the same step twice.
+var EMAIL_SEQUENCE_JOB_PREFIX = "hourly_email_sequences_h";
+var EMAIL_SEQUENCE_DEFAULT_MAX_PER_TICK = 25;
+// The most due enrollments read in one tick. The ceiling is what limits sends;
+// this only bounds the read, and anything past it is still due next hour.
+var EMAIL_SEQUENCE_DUE_READ_LIMIT = 1000;
+var EMAIL_SEQUENCE_STOP_REASONS = ["suppressed", "no_consent", "not_confirmed"];
+var EMAIL_SEQUENCE_ABORT_REASONS = ["no_postal_address", "cap_unreadable"];
+
+function emailSequencesEnabled() {
+  return process.env.ENABLE_EMAIL_SEQUENCES === "true";
+}
+
+function emailSequenceJobName(now) {
+  var hour = now.getUTCHours();
+  return EMAIL_SEQUENCE_JOB_PREFIX + (hour < 10 ? "0" : "") + hour;
+}
+
+/* The per-tick ceiling, on agentScheduleMaxPerTick's three outcomes: unset or
+   blank is the default, a positive whole number is itself, and anything else is
+   null, which aborts the tick — a send cannot be taken back, so a limit nobody
+   can read is not replaced with a guess. */
+function emailSequenceMaxPerTick() {
+  var raw = process.env.EMAIL_SEQUENCE_MAX_PER_TICK;
+  if (raw == null || String(raw).trim() === "") {
+    return EMAIL_SEQUENCE_DEFAULT_MAX_PER_TICK;
+  }
+  var parsed = Number(String(raw).trim());
+  if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return null;
+}
+
+// The template a step is sent under: lowercase, so a sequence id can never put
+// it outside sendMarketingEmail's /^[a-z0-9][a-z0-9_-]{0,58}$/. A uuid makes it
+// 43 or 44 characters.
+function emailSequenceTemplate(sequenceId, stepIndex) {
+  return ("seq-" + sequenceId + "-s" + stepIndex).toLowerCase();
+}
+
+// The step's text as HTML: every character escaped, a blank line between
+// paragraphs, a single line break kept as <br>.
+function emailSequenceHtml(text) {
+  return String(text).replace(/\r\n/g, "\n").trim().split(/\n[ \t]*\n+/)
+    .map(function (para) { return para.trim(); })
+    .filter(function (para) { return para.length > 0; })
+    .map(function (para) { return "<p>" + escapeHtml(para).replace(/\n/g, "<br>") + "</p>"; })
+    .join("\n");
+}
+
+// Claim this hour: claimAgentScheduleHour's two statements, under this job's
+// own name.
+async function claimEmailSequenceHour(now) {
+  var jobName = emailSequenceJobName(now);
+  var today   = agentScheduleUtcDay(now);
+
+  var insertResult = await supabase
+    .from("job_runs")
+    .insert({
+      job_name:    jobName,
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .select("job_name");
+
+  if (!insertResult.error) {
+    return true;
+  }
+  if (insertResult.error.code !== "23505") {
+    console.error("[EmailSequences] Claim insert failed:", insertResult.error.message);
+    return false;
+  }
+
+  var updateResult = await supabase
+    .from("job_runs")
+    .update({
+      last_run_on: today,
+      started_at:  nowIso(),
+      finished_at: null,
+      last_error:  null
+    })
+    .eq("job_name", jobName)
+    .or("last_run_on.is.null,last_run_on.neq." + today)
+    .select("job_name");
+
+  if (updateResult.error) {
+    console.error("[EmailSequences] Claim update failed:", updateResult.error.message);
+    return false;
+  }
+  return (updateResult.data || []).length > 0;
+}
+
+async function finishEmailSequenceRun(now, errorMessage) {
+  var patch = { finished_at: nowIso() };
+  if (errorMessage) {
+    patch.last_error = String(errorMessage).slice(0, 2000);
+  }
+  var result = await supabase
+    .from("job_runs")
+    .update(patch)
+    .eq("job_name", emailSequenceJobName(now));
+  if (result.error) {
+    console.error("[EmailSequences] Failed to record run completion:", result.error.message);
+  }
+}
+
+// The pass body. `now` is the tick's own instant; each send's time is read
+// when the send returns, because the next delay counts from the email itself.
+async function runEmailSequencePass(now, maxPerTick) {
+  var summary = {
+    due: 0, attempted: 0, sent: 0, advanced_already_sent: 0, completed: 0,
+    stopped: { suppressed: 0, no_consent: 0, not_confirmed: 0 },
+    deferred: 0, aborted: null, failures: 0, first_failure: null, ceiling_reached: false
+  };
+  function noteFailure(enrollment, detail) {
+    summary.failures++;
+    if (!summary.first_failure) summary.first_failure = "enrollment " + enrollment.id + ": " + detail;
+    console.error("[EmailSequences] Enrollment " + enrollment.id + ": " + detail);
+  }
+
+  // Which sequences may send at all: active, and the owner still an admin.
+  var sequencesRead = await supabase
+    .from("email_sequences")
+    .select("id, owner_id, status, steps")
+    .eq("status", "active");
+  if (sequencesRead.error) {
+    throw new Error("Failed to load active sequences: " + sequencesRead.error.message);
+  }
+  var sequences = sequencesRead.data || [];
+  if (!sequences.length) return summary;
+
+  var ownerIds = [];
+  sequences.forEach(function (seq) { if (ownerIds.indexOf(seq.owner_id) === -1) ownerIds.push(seq.owner_id); });
+  var ownersRead = await supabase
+    .from("users")
+    .select("id, role")
+    .in("id", ownerIds);
+  if (ownersRead.error) {
+    throw new Error("Failed to load sequence owners: " + ownersRead.error.message);
+  }
+  var admins = {};
+  (ownersRead.data || []).forEach(function (u) { if (u.role === "admin") admins[u.id] = true; });
+
+  var sendable = {};
+  sequences.forEach(function (seq) {
+    if (!admins[seq.owner_id]) return;
+    var problem = emailSequenceStepsProblem(seq.steps);
+    if (problem) {
+      console.error("[EmailSequences] Sequence " + seq.id + " is not sent: its stored steps are not valid. " + problem);
+      return;
+    }
+    sendable[seq.id] = seq;
+  });
+  var sendableIds = Object.keys(sendable);
+  if (!sendableIds.length) return summary;
+
+  var dueRead = await supabase
+    .from("email_sequence_enrollments")
+    .select("id, sequence_id, contact_id, next_step, next_send_at, status")
+    .eq("status", "active")
+    .in("sequence_id", sendableIds)
+    .lte("next_send_at", now.toISOString())
+    .order("next_send_at", { ascending: true })
+    .limit(EMAIL_SEQUENCE_DUE_READ_LIMIT);
+  if (dueRead.error) {
+    throw new Error("Failed to load due enrollments: " + dueRead.error.message);
+  }
+  var due = dueRead.data || [];
+  summary.due = due.length;
+
+  var cappedOwners = {};
+  var finishedSequences = {};
+
+  // Moves an enrollment past the step it was on, timed from `sentAt`.
+  async function advance(enrollment, sequence, sentAt) {
+    var nextIndex = enrollment.next_step + 1;
+    var patch = { next_step: nextIndex, last_sent_at: sentAt.toISOString() };
+    if (nextIndex >= sequence.steps.length) {
+      patch.status = "completed";
+      patch.next_send_at = null;
+    } else {
+      patch.next_send_at = new Date(sentAt.getTime() + sequence.steps[nextIndex].delay_days * 86400000).toISOString();
+    }
+    var update = await supabase
+      .from("email_sequence_enrollments")
+      .update(patch)
+      .eq("id", enrollment.id)
+      .eq("status", "active");
+    if (update.error) {
+      // The mail is out and only the bookkeeping failed. The enrollment stays
+      // due, and next hour the already-sent guard advances it without a resend.
+      noteFailure(enrollment, "step " + enrollment.next_step + " was sent but the enrollment could not be advanced: " + update.error.message);
+      return;
+    }
+    if (patch.status === "completed") {
+      summary.completed++;
+      finishedSequences[sequence.id] = true;
+    }
+  }
+
+  for (var i = 0; i < due.length; i++) {
+    var enrollment = due[i];
+    var sequence = sendable[enrollment.sequence_id];
+
+    if (cappedOwners[sequence.owner_id]) {
+      summary.deferred++;
+      continue;
+    }
+    if (summary.attempted >= maxPerTick) {
+      summary.ceiling_reached = true;
+      break;
+    }
+    summary.attempted++;
+
+    try {
+      var step = sequence.steps[enrollment.next_step];
+      if (!step) {
+        // Past the last step yet still active: nothing is left to send.
+        var closed = await supabase
+          .from("email_sequence_enrollments")
+          .update({ status: "completed", next_send_at: null })
+          .eq("id", enrollment.id)
+          .eq("status", "active");
+        if (closed.error) {
+          noteFailure(enrollment, "has no step " + enrollment.next_step + " and could not be closed: " + closed.error.message);
+        } else {
+          summary.completed++;
+          finishedSequences[sequence.id] = true;
+        }
+        continue;
+      }
+
+      var template = emailSequenceTemplate(sequence.id, enrollment.next_step);
+      var prior = await supabase
+        .from("email_sends")
+        .select("id, created_at")
+        .eq("contact_id", enrollment.contact_id)
+        .eq("template", EMAIL_MARKETING_TEMPLATE_PREFIX + template)
+        .eq("status", "sent")
+        .limit(1);
+      if (prior.error) {
+        // Whether it went out cannot be known, so it is not sent again now.
+        summary.deferred++;
+        noteFailure(enrollment, "the earlier sends could not be read (" + prior.error.message + "); left due");
+        continue;
+      }
+      if (prior.data && prior.data.length > 0) {
+        var priorAt = new Date(prior.data[0].created_at);
+        summary.advanced_already_sent++;
+        await advance(enrollment, sequence, isNaN(priorAt.getTime()) ? new Date() : priorAt);
+        continue;
+      }
+
+      var result;
+      try {
+        result = await sendMarketingEmail({
+          contactId: enrollment.contact_id,
+          subject:   step.subject,
+          text:      step.body,
+          html:      emailSequenceHtml(step.body),
+          template:  template
+        });
+      } catch (sendErr) {
+        var reason = sendErr && sendErr.code === "marketing_refused" ? sendErr.reason : null;
+        if (reason && EMAIL_SEQUENCE_STOP_REASONS.indexOf(reason) !== -1) {
+          var stop = await supabase
+            .from("email_sequence_enrollments")
+            .update({ status: "stopped", stop_reason: reason, next_send_at: null })
+            .eq("id", enrollment.id)
+            .eq("status", "active");
+          if (stop.error) {
+            noteFailure(enrollment, "refused (" + reason + ") but could not be stopped: " + stop.error.message);
+          } else {
+            summary.stopped[reason]++;
+            finishedSequences[sequence.id] = true;
+          }
+          continue;
+        }
+        if (reason === "cap_reached") {
+          cappedOwners[sequence.owner_id] = true;
+          summary.deferred++;
+          continue;
+        }
+        if (reason && EMAIL_SEQUENCE_ABORT_REASONS.indexOf(reason) !== -1) {
+          summary.deferred++;
+          summary.aborted = reason;
+          console.error("[EmailSequences] Tick aborted — " + sendErr.message);
+          break;
+        }
+        summary.deferred++;
+        noteFailure(enrollment, "not sent, left due: " + ((sendErr && sendErr.message) || String(sendErr)));
+        continue;
+      }
+
+      if (!result || result.sent !== true) {
+        summary.deferred++;
+        noteFailure(enrollment, "not sent (" + ((result && result.reason) || "no result") + "), left due");
+        continue;
+      }
+
+      summary.sent++;
+      await advance(enrollment, sequence, new Date());
+    } catch (enrollmentErr) {
+      summary.deferred++;
+      noteFailure(enrollment, "left due after an error: " + ((enrollmentErr && enrollmentErr.message) || String(enrollmentErr)));
+    }
+  }
+
+  // A sequence whose every enrollment is completed or stopped is completed.
+  var finishedIds = Object.keys(finishedSequences);
+  for (var f = 0; f < finishedIds.length; f++) {
+    var open = await supabase
+      .from("email_sequence_enrollments")
+      .select("id")
+      .eq("sequence_id", finishedIds[f])
+      .eq("status", "active")
+      .limit(1);
+    if (open.error) {
+      console.error("[EmailSequences] Could not check whether sequence " + finishedIds[f] + " is finished: " + open.error.message);
+      continue;
+    }
+    if (open.data && open.data.length > 0) continue;
+    var done = await supabase
+      .from("email_sequences")
+      .update({ status: "completed" })
+      .eq("id", finishedIds[f])
+      .eq("status", "active");
+    if (done.error) {
+      console.error("[EmailSequences] Could not mark sequence " + finishedIds[f] + " completed: " + done.error.message);
+    }
+  }
+
+  return summary;
+}
+
+var emailSequencePassRunning = false;
+
+async function emailSequenceTick() {
+  if (!emailSequencesEnabled()) {
+    console.log("[EmailSequences] Tick skipped — ENABLE_EMAIL_SEQUENCES is not exactly \"true\".");
+    return;
+  }
+
+  // Read before the reentrancy flag is set, for agentScheduleTick's reasons: a
+  // limit that cannot be read stops the tick before anything is claimed or read,
+  // and this exit cannot leave the flag stuck.
+  var maxPerTick = emailSequenceMaxPerTick();
+  if (maxPerTick === null) {
+    console.error("[EmailSequences] Tick aborted — EMAIL_SEQUENCE_MAX_PER_TICK is set to " +
+      JSON.stringify(process.env.EMAIL_SEQUENCE_MAX_PER_TICK) + ", which is not a positive whole number. " +
+      "Nothing was read or sent. Unset it to use the default of " + EMAIL_SEQUENCE_DEFAULT_MAX_PER_TICK + ".");
+    return;
+  }
+
+  if (emailSequencePassRunning) {
+    console.log("[EmailSequences] Tick skipped — previous run still in progress");
+    return;
+  }
+  emailSequencePassRunning = true;
+
+  try {
+    var now = new Date();
+    var claimed = await claimEmailSequenceHour(now);
+    if (!claimed) {
+      console.log("[EmailSequences] Tick: claimed no — " + emailSequenceJobName(now) + " already claimed for " +
+        agentScheduleUtcDay(now) + ". Nothing was read or sent.");
+      return;
+    }
+
+    try {
+      var summary = await runEmailSequencePass(now, maxPerTick);
+      console.log("[EmailSequences] Tick: claimed yes, due " + summary.due + ", attempted " + summary.attempted +
+        " (ceiling " + maxPerTick + (summary.ceiling_reached ? ", reached" : "") + "), sent " + summary.sent +
+        ", advanced as already sent " + summary.advanced_already_sent + ", completed " + summary.completed +
+        ", stopped suppressed " + summary.stopped.suppressed + " / no_consent " + summary.stopped.no_consent +
+        " / not_confirmed " + summary.stopped.not_confirmed + ", deferred " + summary.deferred +
+        ", aborted " + (summary.aborted || "no") + ".");
+      var problem = summary.aborted
+        ? "aborted: " + summary.aborted
+        : (summary.failures > 0 ? summary.failures + " failure(s); first: " + summary.first_failure : null);
+      await finishEmailSequenceRun(now, problem);
+    } catch (passErr) {
+      var message = passErr && (passErr.message || String(passErr));
+      console.error("[EmailSequences] Pass error:", message);
+      await finishEmailSequenceRun(now, message);
+    }
+  } catch (err) {
+    console.error("[EmailSequences] Tick error:", (err && err.message) || err);
+  } finally {
+    emailSequencePassRunning = false;
+  }
+}
+
 app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
@@ -44815,6 +45304,23 @@ app.listen(PORT, function () {
       "schedule: agent_autonomy.enabled must be true for that user and agent.");
   } else {
     console.log("[startup] agentScheduleTick disabled (ENABLE_AGENT_SCHEDULES not exactly \"true\")");
+  }
+
+  /* Approved email sequences, one due step per enrollment per tick. Hourly on
+     the UTC hour, claimed through job_runs, off unless ENABLE_EMAIL_SEQUENCES
+     is exactly "true". No boot-time run. */
+  if (emailSequencesEnabled()) {
+    cron.schedule("0 * * * *", function () {
+      emailSequenceTick().catch(function (err) {
+        console.error("[EmailSequences] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] emailSequenceTick scheduled — hourly on the UTC hour, claimed through job_runs." +
+      EMAIL_SEQUENCE_JOB_PREFIX + "<hh>, ceiling " + JSON.stringify(emailSequenceMaxPerTick()) + " attempt(s) per tick.");
+  } else {
+    console.log("[startup] emailSequenceTick disabled (ENABLE_EMAIL_SEQUENCES not exactly \"true\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is

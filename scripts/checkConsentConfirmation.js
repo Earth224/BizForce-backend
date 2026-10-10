@@ -306,6 +306,17 @@ function build(src, opts) {
   };
 }
 
+function sendMarketingEmailCallers(src) {
+  const out = [];
+  const re = /\bsendMarketingEmail\(/g; let m;
+  while ((m = re.exec(src)) !== null) {
+    if (src.slice(m.index - 15, m.index) === "async function ") continue;   // the definition
+    const heads = [...src.slice(0, m.index).matchAll(/^(?:async )?function ([A-Za-z0-9_$]+)\(|^app\.(get|post|put|patch|delete)\("([^"]+)"/gm)];
+    const head = heads[heads.length - 1];
+    out.push(!head ? "(top level)" : head[1] || head[2].toUpperCase() + " " + head[3]);
+  }
+  return out;
+}
 const writesOf = (log, table) => log.filter(q => q.table === table && (q.op === "insert" || q.op === "update"));
 const confirmations = (b) => b.db.tables.consent_events.filter(r => r.action === "confirmed");
 const minusSecs = (n) => Math.floor(Date.now() / 1000) - n;
@@ -618,7 +629,9 @@ function tokenWith(api, contactId, address, expiresAt) {
   check("server.js still calls Resend in exactly one place (sendEmail)", (SRC.match(/\.emails\.send\(/g) || []).length === 1);
   check("sendConsentConfirmation is called once, from the capture route",
     (SRC.match(/\bsendConsentConfirmation\(/g) || []).length === 2 && routeText(SRC, "post", "/api/contacts/capture").includes("sendConsentConfirmation("));
-  check("sendMarketingEmail is still called nowhere", (SRC.match(/\bsendMarketingEmail\(/g) || []).length === 1);
+  // Send approved sequences, one due step at a time: its one caller, named.
+  check("sendMarketingEmail is called only by runEmailSequencePass", JSON.stringify(sendMarketingEmailCallers(SRC)) === JSON.stringify(["runEmailSequencePass"]),
+    JSON.stringify(sendMarketingEmailCallers(SRC)));
   check("the confirmation goes through sendEmail with skipConsentCheck and template consent_confirmation",
     /return sendEmail\(\{[\s\S]{0,400}template:\s+CONSENT_CONFIRMATION_TEMPLATE,\s+skipConsentCheck: true/.test(definitionOf(SRC, "sendConsentConfirmation") || ""));
   check("the only \"confirmed\" write is recordEmailConfirmation, reached only from POST /api/confirm",
