@@ -64,6 +64,8 @@ const MUTATIONS = {
   // the unsubscribe link is dropped from both bodies
   "drop-body-unsubscribe": [["      '<a href=\"' + escapeHtml(unsubscribeUrl) + '\" style=\"color:#6b6b80\">Unsubscribe</a></p>' +\n", "      '</p>' +\n"],
     ["\"Unsubscribe: \" + unsubscribeUrl + \"\\n\" + postal;", "postal;"]],
+  // a failed consent lookup is reported as no_consent
+  "consent-failure-as-no-consent": [["  if (!consent.ok) {\n    throw emailMarketingRefusal(\"lookup_failed\", \"the contact's email consent could not be read.\");\n  }\n", ""]],
   // the marketing gates reach transactional mail
   "gates-on-transactional": [["    if (opts.skipConsentCheck !== true) {\n      if (!(await emailConsentGranted(contactId))) {",
     "    if (!String(process.env.MAIL_POSTAL_ADDRESS || \"\").trim()) { return { sent: false, reason: \"no_postal_address\" }; }\n    if (opts.skipConsentCheck !== true) {\n      if (!(await emailConsentGranted(contactId))) {"]]
@@ -279,7 +281,11 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
   refused("latest consent granted but not confirmed", r, "not_confirmed");
   check("granted but not confirmed: refused before any other gate runs", r.b.db.log.every(q => q.table === "consent_events"), r.b.db.log.map(q => q.table).join(","));
   refused("latest consent revoked", await marketing({ consent: [{ action: "revoked" }] }), "no_consent");
-  refused("consent lookup fails", await marketing({ consentError: true }), "no_consent");
+  // Never stop a sequence on a read that failed: a failed lookup is lookup_failed,
+  // never no_consent, which the sequence sender treats as final.
+  r = await marketing({ consentError: true });
+  refused("consent lookup fails", r, "lookup_failed");
+  check("consent lookup fails: never reported as no_consent", !(r.error && r.error.reason === "no_consent"), r.error && r.error.reason);
 
   refused("a complained row", await marketing({ byContact: [{ id: "c1", to_email: "person@example.com", status: "complained", error_message: null }] }), "suppressed");
   refused("a permanent bounce", await marketing({ byContact: [bounce("b1", "Permanent")] }), "suppressed");

@@ -70,7 +70,17 @@ const MUTATIONS = {
   // the executor takes steps that differ from the source run
   "accept-differing-steps": [["  if (!emailSequenceSameJson(steps, source.output && source.output.steps)) {\n", "  if (false) {\n"]],
   // an unreadable consent is counted as not confirmed
-  "unreadable-as-not-confirmed": [["    if (!latest.ok) {\n      unreadable++;\n", "    if (!latest.ok) {\n      notConfirmed++;\n"]]
+  "unreadable-as-not-confirmed": [["    if (!latest.ok) {\n      unreadable++;\n", "    if (!latest.ok) {\n      notConfirmed++;\n"]],
+  // a failed consent lookup is reported as no_consent
+  "consent-failure-as-no-consent": [["  if (!consent.ok) {\n    throw emailMarketingRefusal(\"lookup_failed\", \"the contact's email consent could not be read.\");\n  }\n", ""]],
+  // lookup_failed stops the enrollment instead of deferring it
+  "stop-on-lookup-failed": [["var EMAIL_SEQUENCE_STOP_REASONS = [\"suppressed\", \"no_consent\", \"not_confirmed\"];",
+    "var EMAIL_SEQUENCE_STOP_REASONS = [\"suppressed\", \"no_consent\", \"not_confirmed\", \"lookup_failed\"];"]],
+  // the per-send status re-read is gone
+  "drop-status-reread": [["      var statusRead = await supabase\n        .from(\"email_sequences\")\n        .select(\"status\")\n        .eq(\"id\", sequence.id)\n        .maybeSingle();\n      if (statusRead.error) {\n",
+    "      var statusRead = { data: { status: \"active\" }, error: null };\n      if (statusRead.error) {\n"]],
+  // the sweep completes sequences that still have active enrollments
+  "sweep-with-active-enrollments": [["    if (open.data && open.data.length > 0) continue;\n    var done = await supabase\n", "    var done = await supabase\n"]]
 };
 
 if (MUTATE === "all") {
@@ -282,6 +292,9 @@ let n = 0;
 const cid = (k) => "c0000000-0000-4000-8000-" + String(k).padStart(12, "0");
 const ENV = { ENABLE_EMAIL_SEQUENCES: "true", RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret", MAIL_POSTAL_ADDRESS: "BizForce AI\n1 Example St" };
 
+// Every fixture sequence is older than the sweep's grace period.
+const OLD = iso(T0 - 30 * DAY);
+
 // A world: sequences, contacts with a consent state, and an enrollment each.
 // people: [{ k, seq, consent, next_step, due_ms, owner }]
 function world(people, extra) {
@@ -289,11 +302,11 @@ function world(people, extra) {
   const w = {
     users: [{ id: OWNER, role: "admin" }, { id: OWNER2, role: "admin" }, { id: PLAIN, role: "user" }],
     email_sequences: [
-      { id: SEQ.main, owner_id: OWNER, status: "active", steps: STEPS, name: "Main" },
-      { id: SEQ.paused, owner_id: OWNER, status: "paused", steps: STEPS, name: "Paused" },
-      { id: SEQ.cancelled, owner_id: OWNER, status: "cancelled", steps: STEPS, name: "Cancelled" },
-      { id: SEQ.plain, owner_id: PLAIN, status: "active", steps: STEPS, name: "Not admin" },
-      { id: SEQ.other, owner_id: OWNER2, status: "active", steps: STEPS, name: "Owner two" }
+      { id: SEQ.main, owner_id: OWNER, status: "active", steps: STEPS, name: "Main", created_at: OLD },
+      { id: SEQ.paused, owner_id: OWNER, status: "paused", steps: STEPS, name: "Paused", created_at: OLD },
+      { id: SEQ.cancelled, owner_id: OWNER, status: "cancelled", steps: STEPS, name: "Cancelled", created_at: OLD },
+      { id: SEQ.plain, owner_id: PLAIN, status: "active", steps: STEPS, name: "Not admin", created_at: OLD },
+      { id: SEQ.other, owner_id: OWNER2, status: "active", steps: STEPS, name: "Owner two", created_at: OLD }
     ],
     contacts: [], consent_events: [], email_sequence_enrollments: [], email_sends: [], job_runs: []
   };
@@ -539,6 +552,75 @@ const untouched = (b, seed, k) => JSON.stringify(b.enr(k)) === JSON.stringify(se
   await b.tick();
   check("one completed and one still active: the sequence stays active", b.enr(1).status === "completed" && b.seq(SEQ.main).status === "active", b.seq(SEQ.main).status);
 
+  /* ── 5b. never stop a sequence on a read that failed ──────────────────── */
+  console.log("\n══ 5b. failed reads defer, a pause mid-tick holds, and the sweep ══");
+  // A consent lookup that fails is lookup_failed: left due, never stopped, and sent once it reads.
+  let consentDown = true;
+  seed = world([{ k: 1, consent: "confirmed", due_ms: 2 * DAY }, { k: 2, consent: "confirmed", due_ms: DAY }]);
+  b = build(seed, { fail: q => consentDown && q.table === "consent_events" && q.filters.some(f => f[2] === cid(1)) ? { message: "down" } : null });
+  await b.tick();
+  e = b.enr(1);
+  check("a failed consent lookup: left due — still active, still due, no stop_reason, step unchanged",
+    untouched(b, seed, 1) && e.status === "active" && e.stop_reason === null && e.next_step === 0 && Date.parse(e.next_send_at) <= CLOCK, JSON.stringify(e));
+  check("a failed consent lookup: no send to them, the next contact is sent, deferred 1, stopped none",
+    !b.sent.some(m => m.to === "p1@example.com") && b.enr(2).next_step === 1 &&
+    /stopped suppressed 0 \/ no_consent 0 \/ not_confirmed 0, skipped not active 0, deferred 1,/.test(b.summary()), b.summary());
+  consentDown = false;
+  CLOCK = T0 + 3600000;
+  await b.tick();
+  check("a failed consent lookup: the next tick, once it reads, sends it",
+    b.sent.some(m => m.to === "p1@example.com") && b.enr(1).next_step === 1 && b.enr(1).status === "active", JSON.stringify(b.enr(1)));
+
+  // A pause or cancel between two sends of one tick stops the second.
+  for (const to of ["paused", "cancelled"]) {
+    seed = world([{ k: 1, consent: "confirmed", due_ms: 2 * DAY }, { k: 2, consent: "confirmed", due_ms: DAY }]);
+    b = build(seed);
+    const inner = b.ctx.Resend, db = b.db;
+    b.ctx.Resend = class extends inner { constructor() { super(); const send = this.emails.send; this.emails.send = async (a) => {
+      const r = await send(a); db.tables.email_sequences.find(x => x.id === SEQ.main).status = to; return r; }; } };
+    await b.tick();
+    check(to + " between two sends of one tick: the second is not sent", b.sent.length === 1 && b.sent[0].to === "p1@example.com", b.sent.map(m => m.to).join(","));
+    check(to + " between two sends: the second enrollment is unchanged, the sequence stays " + to,
+      untouched(b, seed, 2) && b.seq(SEQ.main).status === to && /skipped not active 1,/.test(b.summary()), b.summary());
+  }
+
+  // A status re-read that fails defers.
+  seed = world([{ k: 1, consent: "confirmed", due_ms: 2 * DAY }, { k: 2, consent: "confirmed", due_ms: DAY }]);
+  b = build(seed, { fail: q => q.table === "email_sequences" && q.op === "select" && q.cols === "status" ? { message: "down" } : null });
+  await b.tick();
+  check("a failed status re-read: nothing sent, both left due and unchanged, deferred 2",
+    b.sent.length === 0 && untouched(b, seed, 1) && untouched(b, seed, 2) && /deferred 2, aborted no/.test(b.summary()), b.summary());
+  check("a failed status re-read: the hour's job_runs row records it", /status could not be read again/.test(b.db.tables.job_runs[0].last_error || ""),
+    JSON.stringify(b.db.tables.job_runs[0]));
+
+  // The sweep.
+  seed = world([]);
+  seed.email_sequences.push({ id: "5e000000-0000-4000-8000-000000000006", owner_id: OWNER, status: "active", steps: STEPS, name: "Closed", created_at: OLD },
+    { id: "5e000000-0000-4000-8000-000000000007", owner_id: OWNER, status: "active", steps: STEPS, name: "Open", created_at: OLD },
+    { id: "5e000000-0000-4000-8000-000000000008", owner_id: OWNER, status: "active", steps: STEPS, name: "Just approved", created_at: iso(T0 - 10 * 60000) });
+  const enr = (id, sequence_id, status, due) => ({ id, sequence_id, contact_id: cid(9), next_step: 0, next_send_at: due === undefined ? null : iso(due), status, stop_reason: status === "stopped" ? "suppressed" : null, last_sent_at: null });
+  seed.email_sequence_enrollments.push(enr("x-1", "5e000000-0000-4000-8000-000000000006", "completed"), enr("x-2", "5e000000-0000-4000-8000-000000000006", "stopped"),
+    enr("x-3", "5e000000-0000-4000-8000-000000000007", "completed"), enr("x-4", "5e000000-0000-4000-8000-000000000007", "active", T0 + 3 * DAY),
+    enr("x-5", SEQ.paused, "completed"));
+  b = build(seed);
+  await b.tick();
+  check("the sweep: a sequence with no enrollments is completed", b.seq(SEQ.main).status === "completed", b.seq(SEQ.main).status);
+  check("the sweep: one whose enrollments were all closed elsewhere (completed, stopped) is completed",
+    b.seq("5e000000-0000-4000-8000-000000000006").status === "completed", b.seq("5e000000-0000-4000-8000-000000000006").status);
+  check("the sweep: one with an active enrollment (not yet due) stays active", b.seq("5e000000-0000-4000-8000-000000000007").status === "active");
+  check("the sweep: a paused sequence is never swept, nor a cancelled one", b.seq(SEQ.paused).status === "paused" && b.seq(SEQ.cancelled).status === "cancelled");
+  check("the sweep: a sequence younger than the grace period is left active (its enrollments may still be landing)",
+    b.seq("5e000000-0000-4000-8000-000000000008").status === "active");
+  check("the sweep: counted in the tick log — sequences completed 4 (main, closed, non-admin, second owner)", /sequences completed 4\.$/.test(b.summary()), b.summary());
+  check("the sweep: conditional on status active", b.db.log.filter(q => q.table === "email_sequences" && q.op === "update")
+    .every(q => q.filters.some(f => f[0] === "eq" && f[1] === "status" && f[2] === "active")));
+
+  seed = world([]);
+  seed.users.forEach(u => { u.role = "user"; });
+  b = build(seed);
+  await b.tick();
+  check("the sweep runs on a tick with nothing sendable (no admin owner)", b.seq(SEQ.main).status === "completed" && /due 0, .*sequences completed 3\.$/.test(b.summary()), b.summary());
+
   /* ── 6. the message and the log ───────────────────────────────────────── */
   console.log("\n══ 6. what is sent, and what is logged ══");
   seed = world([{ k: 1, consent: "confirmed" }]);
@@ -552,8 +634,10 @@ const untouched = (b, seed, k) => JSON.stringify(b.enr(k)) === JSON.stringify(se
   const tpl = b.api.template(SEQ.main, 0);
   check("template seq-<sequence id>-s<step>, inside sendMarketingEmail's rule", tpl === "seq-" + SEQ.main + "-s0" && /^[a-z0-9][a-z0-9_-]{0,58}$/.test(tpl), tpl);
   check("an upper-case id is lowered, step 11 still fits", b.api.template(SEQ.main.toUpperCase(), 11) === "seq-" + SEQ.main + "-s11" && /^[a-z0-9][a-z0-9_-]{0,58}$/.test(b.api.template(SEQ.main, 11)));
-  check("the tick logs claimed, due, attempted, sent, stopped by reason, deferred, aborted",
-    /^\[EmailSequences\] Tick: claimed yes, due 1, attempted 1 \(ceiling 25\), sent 1, .*stopped suppressed 0 \/ no_consent 0 \/ not_confirmed 0, deferred 0, aborted no\.$/.test(b.summary()), b.summary());
+  // Never stop a sequence on a read that failed: skipped not active, and the sweep's sequences completed
+  // (2: the non-admin and the second owner's sequences have no enrollment here, so the sweep completes them).
+  check("the tick logs claimed, due, attempted, sent, stopped by reason, skipped not active, deferred, aborted, sequences completed",
+    /^\[EmailSequences\] Tick: claimed yes, due 1, attempted 1 \(ceiling 25\), sent 1, .*stopped suppressed 0 \/ no_consent 0 \/ not_confirmed 0, skipped not active 0, deferred 0, aborted no, sequences completed 2\.$/.test(b.summary()), b.summary());
   check("the hour closes clean in job_runs", b.db.tables.job_runs[0].finished_at && !b.db.tables.job_runs[0].last_error, JSON.stringify(b.db.tables.job_runs[0]));
 
   /* ── 7. the filing path ───────────────────────────────────────────────── */

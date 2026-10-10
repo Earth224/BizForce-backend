@@ -2584,8 +2584,13 @@ async function sendMarketingEmail(options) {
   // ── 2. Confirmed consent ─────────────────────────────────────────────────
   // Double opt-in: a form submission alone is not enough to be mailed. A new
   // grant after a confirmation is a new "granted" and refuses again until it is
-  // confirmed again; an unsubscribe is a "revoked" and refuses outright.
+  // confirmed again; an unsubscribe is a "revoked" and refuses outright. A
+  // lookup that failed says nothing about consent, so it refuses as the failed
+  // read it is — never as "no_consent", which a caller may treat as final.
   var consent = await emailConsentLatest(contactId);
+  if (!consent.ok) {
+    throw emailMarketingRefusal("lookup_failed", "the contact's email consent could not be read.");
+  }
   if (consent.action !== "confirmed") {
     if (consent.action === "granted") {
       throw emailMarketingRefusal("not_confirmed", "the contact has not confirmed their address through the confirmation link.");
@@ -44956,7 +44961,21 @@ async function agentScheduleTick() {
 //                                 for the next tick.
 //   no_postal_address,            the tick ends. Both are true of every send, so
 //   cap_unreadable                going on would refuse the same way every time.
-//   anything else                 left due, retried next hour.
+//   anything else                 left due, retried next hour. That includes
+//                                 lookup_failed: a read that failed says nothing
+//                                 about the person, so it never stops anyone.
+//
+// PAUSE AND CANCEL MID-TICK. The sequence's status is read again by id
+// immediately before each send, and anything but 'active' skips the send — so
+// an owner who pauses or cancels while a tick runs stops that tick's remaining
+// sends too. A re-read that fails leaves the enrollment due.
+//
+// THE SWEEP. At the end of every tick that ran, every 'active' sequence with no
+// 'active' enrollment is marked 'completed' — whether or not this tick touched
+// it, so one with no enrollments, or whose last was closed another way, does
+// not stay active forever. Sequences younger than EMAIL_SEQUENCE_SWEEP_GRACE_MS
+// are left alone: executeSendEmailSequence creates the row 'active' before it
+// enrolls anyone, and a sweep in between must not complete it.
 //
 // THE ALREADY-SENT GUARD. Every step has its own template,
 // "seq-<sequence id>-s<step index>", stored by sendMarketingEmail as
@@ -44970,6 +44989,7 @@ var EMAIL_SEQUENCE_DEFAULT_MAX_PER_TICK = 25;
 var EMAIL_SEQUENCE_DUE_READ_LIMIT = 1000;
 var EMAIL_SEQUENCE_STOP_REASONS = ["suppressed", "no_consent", "not_confirmed"];
 var EMAIL_SEQUENCE_ABORT_REASONS = ["no_postal_address", "cap_unreadable"];
+var EMAIL_SEQUENCE_SWEEP_GRACE_MS = 3600000;
 
 function emailSequencesEnabled() {
   return process.env.ENABLE_EMAIL_SEQUENCES === "true";
@@ -45071,13 +45091,62 @@ async function finishEmailSequenceRun(now, errorMessage) {
   }
 }
 
+// The sweep: every 'active' sequence older than the grace period with no
+// 'active' enrollment is completed, conditionally, so a sequence the owner
+// paused or cancelled meanwhile is never overwritten.
+async function sweepFinishedEmailSequences(now, summary) {
+  function noteSweepFailure(detail) {
+    summary.failures++;
+    if (!summary.first_failure) summary.first_failure = "sweep: " + detail;
+    console.error("[EmailSequences] Sweep: " + detail);
+  }
+  var cutoff = new Date(now.getTime() - EMAIL_SEQUENCE_SWEEP_GRACE_MS).toISOString();
+  var activeRead = await supabase
+    .from("email_sequences")
+    .select("id")
+    .eq("status", "active")
+    .lte("created_at", cutoff);
+  if (activeRead.error) {
+    noteSweepFailure("active sequences could not be read: " + activeRead.error.message);
+    return;
+  }
+  var candidates = activeRead.data || [];
+  for (var f = 0; f < candidates.length; f++) {
+    var sequenceId = candidates[f].id;
+    var open = await supabase
+      .from("email_sequence_enrollments")
+      .select("id")
+      .eq("sequence_id", sequenceId)
+      .eq("status", "active")
+      .limit(1);
+    if (open.error) {
+      noteSweepFailure("could not check whether sequence " + sequenceId + " is finished: " + open.error.message);
+      continue;
+    }
+    if (open.data && open.data.length > 0) continue;
+    var done = await supabase
+      .from("email_sequences")
+      .update({ status: "completed" })
+      .eq("id", sequenceId)
+      .eq("status", "active")
+      .select("id");
+    if (done.error) {
+      noteSweepFailure("could not mark sequence " + sequenceId + " completed: " + done.error.message);
+      continue;
+    }
+    summary.sequences_completed += (done.data || []).length;
+  }
+}
+
 // The pass body. `now` is the tick's own instant; each send's time is read
 // when the send returns, because the next delay counts from the email itself.
+// Every way out once the reads succeeded ends in the sweep.
 async function runEmailSequencePass(now, maxPerTick) {
   var summary = {
     due: 0, attempted: 0, sent: 0, advanced_already_sent: 0, completed: 0,
     stopped: { suppressed: 0, no_consent: 0, not_confirmed: 0 },
-    deferred: 0, aborted: null, failures: 0, first_failure: null, ceiling_reached: false
+    skipped_not_active: 0, deferred: 0, aborted: null, failures: 0, first_failure: null,
+    ceiling_reached: false, sequences_completed: 0
   };
   function noteFailure(enrollment, detail) {
     summary.failures++;
@@ -45094,7 +45163,10 @@ async function runEmailSequencePass(now, maxPerTick) {
     throw new Error("Failed to load active sequences: " + sequencesRead.error.message);
   }
   var sequences = sequencesRead.data || [];
-  if (!sequences.length) return summary;
+  if (!sequences.length) {
+    await sweepFinishedEmailSequences(now, summary);
+    return summary;
+  }
 
   var ownerIds = [];
   sequences.forEach(function (seq) { if (ownerIds.indexOf(seq.owner_id) === -1) ownerIds.push(seq.owner_id); });
@@ -45119,7 +45191,10 @@ async function runEmailSequencePass(now, maxPerTick) {
     sendable[seq.id] = seq;
   });
   var sendableIds = Object.keys(sendable);
-  if (!sendableIds.length) return summary;
+  if (!sendableIds.length) {
+    await sweepFinishedEmailSequences(now, summary);
+    return summary;
+  }
 
   var dueRead = await supabase
     .from("email_sequence_enrollments")
@@ -45136,7 +45211,9 @@ async function runEmailSequencePass(now, maxPerTick) {
   summary.due = due.length;
 
   var cappedOwners = {};
-  var finishedSequences = {};
+  // Sequences found no longer 'active' by the re-read before a send: their
+  // other enrollments are skipped this tick without an attempt.
+  var haltedSequences = {};
 
   // Moves an enrollment past the step it was on, timed from `sentAt`.
   async function advance(enrollment, sequence, sentAt) {
@@ -45161,7 +45238,6 @@ async function runEmailSequencePass(now, maxPerTick) {
     }
     if (patch.status === "completed") {
       summary.completed++;
-      finishedSequences[sequence.id] = true;
     }
   }
 
@@ -45171,6 +45247,10 @@ async function runEmailSequencePass(now, maxPerTick) {
 
     if (cappedOwners[sequence.owner_id]) {
       summary.deferred++;
+      continue;
+    }
+    if (haltedSequences[sequence.id]) {
+      summary.skipped_not_active++;
       continue;
     }
     if (summary.attempted >= maxPerTick) {
@@ -45192,7 +45272,6 @@ async function runEmailSequencePass(now, maxPerTick) {
           noteFailure(enrollment, "has no step " + enrollment.next_step + " and could not be closed: " + closed.error.message);
         } else {
           summary.completed++;
-          finishedSequences[sequence.id] = true;
         }
         continue;
       }
@@ -45218,6 +45297,24 @@ async function runEmailSequencePass(now, maxPerTick) {
         continue;
       }
 
+      // The sequence's status now, not as it was when the tick began: a pause
+      // or cancel made since stops this send.
+      var statusRead = await supabase
+        .from("email_sequences")
+        .select("status")
+        .eq("id", sequence.id)
+        .maybeSingle();
+      if (statusRead.error) {
+        summary.deferred++;
+        noteFailure(enrollment, "the sequence's status could not be read again (" + statusRead.error.message + "); left due");
+        continue;
+      }
+      if (!statusRead.data || statusRead.data.status !== "active") {
+        haltedSequences[sequence.id] = true;
+        summary.skipped_not_active++;
+        continue;
+      }
+
       var result;
       try {
         result = await sendMarketingEmail({
@@ -45239,7 +45336,6 @@ async function runEmailSequencePass(now, maxPerTick) {
             noteFailure(enrollment, "refused (" + reason + ") but could not be stopped: " + stop.error.message);
           } else {
             summary.stopped[reason]++;
-            finishedSequences[sequence.id] = true;
           }
           continue;
         }
@@ -45273,30 +45369,7 @@ async function runEmailSequencePass(now, maxPerTick) {
     }
   }
 
-  // A sequence whose every enrollment is completed or stopped is completed.
-  var finishedIds = Object.keys(finishedSequences);
-  for (var f = 0; f < finishedIds.length; f++) {
-    var open = await supabase
-      .from("email_sequence_enrollments")
-      .select("id")
-      .eq("sequence_id", finishedIds[f])
-      .eq("status", "active")
-      .limit(1);
-    if (open.error) {
-      console.error("[EmailSequences] Could not check whether sequence " + finishedIds[f] + " is finished: " + open.error.message);
-      continue;
-    }
-    if (open.data && open.data.length > 0) continue;
-    var done = await supabase
-      .from("email_sequences")
-      .update({ status: "completed" })
-      .eq("id", finishedIds[f])
-      .eq("status", "active");
-    if (done.error) {
-      console.error("[EmailSequences] Could not mark sequence " + finishedIds[f] + " completed: " + done.error.message);
-    }
-  }
-
+  await sweepFinishedEmailSequences(now, summary);
   return summary;
 }
 
@@ -45340,8 +45413,9 @@ async function emailSequenceTick() {
         " (ceiling " + maxPerTick + (summary.ceiling_reached ? ", reached" : "") + "), sent " + summary.sent +
         ", advanced as already sent " + summary.advanced_already_sent + ", completed " + summary.completed +
         ", stopped suppressed " + summary.stopped.suppressed + " / no_consent " + summary.stopped.no_consent +
-        " / not_confirmed " + summary.stopped.not_confirmed + ", deferred " + summary.deferred +
-        ", aborted " + (summary.aborted || "no") + ".");
+        " / not_confirmed " + summary.stopped.not_confirmed + ", skipped not active " + summary.skipped_not_active +
+        ", deferred " + summary.deferred + ", aborted " + (summary.aborted || "no") +
+        ", sequences completed " + summary.sequences_completed + ".");
       var problem = summary.aborted
         ? "aborted: " + summary.aborted
         : (summary.failures > 0 ? summary.failures + " failure(s); first: " + summary.first_failure : null);

@@ -589,7 +589,8 @@ function tokenWith(api, contactId, address, expiresAt) {
   check("no consent row: refused with no_consent", m.error && m.error.reason === "no_consent", m.error ? m.error.reason : "sent");
   const fb = build(SRC, { seed: b.db.tables, fail: q => q.table === "consent_events" && q.op === "select" ? { message: "down" } : null });
   m = await fb.marketing(contact.id);
-  check("consent unreadable: refused with no_consent", m.error && m.error.reason === "no_consent", m.error ? m.error.reason : "sent");
+  // Never stop a sequence on a read that failed: lookup_failed, not no_consent.
+  check("consent unreadable: refused with lookup_failed", m.error && m.error.reason === "lookup_failed", m.error ? m.error.reason : "sent");
 
   const seedConfirmed = { contacts: [{ id: "c-1", owner_id: OWNER, email: "a@example.com" }], consent_events: [{ id: "e1", contact_id: "c-1", channel: "email", action: "confirmed", occurred_at: "1" }] };
   const MSGX = { contactId: "c-1", to: "a@example.com", subject: "s", html: "h", text: "t", template: "x" };
