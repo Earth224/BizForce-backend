@@ -303,7 +303,15 @@ function profileValue(value) {
   return String(value).trim();
 }
 
+/* A caller whose profile read FAILED passes { _unreadable: true }: the block
+   then says so, instead of eleven "Not provided" lines that read as a business
+   with nothing filled in. A profile that is really empty still reads as empty. */
+var PROFILE_UNREADABLE_KEY = "_unreadable";
+
 function formatBusinessProfile(businessProfile) {
+  if (businessProfile && businessProfile[PROFILE_UNREADABLE_KEY] === true) {
+    return "BUSINESS PROFILE:\nCould not be read just now — unknown for this request. Do not treat any field as missing or empty.";
+  }
   var p = businessProfile || {};
   var lines = [
     "BUSINESS PROFILE:",
@@ -360,8 +368,11 @@ var UNREADABLE_KEY = "_unreadable";
    "not zero" is the load-bearing half: without it a model reading "unavailable"
    still tends to reason as though there were none. */
 function unreadableLine(key) {
-  return "- " + key + ": unavailable (unknown for this request — not zero)";
+  return "- " + key + ": could not be read just now (unknown for this request — not zero)";
 }
+
+/* A caller whose whole getLiveStats call FAILED passes { _failed: true }. */
+var LIVE_STATS_FAILED_KEY = "_failed";
 
 /* WHAT THE STATS BLOCK IS — SAID IN THE BLOCK, BECAUSE IT WAS SAID WRONG THERE.
 
@@ -401,6 +412,9 @@ var LIVE_STATS_SCOPE = {
 };
 
 function formatLiveStats(liveStats) {
+  if (liveStats && liveStats[LIVE_STATS_FAILED_KEY] === true) {
+    return "LIVE PLATFORM STATS:\nCould not be read just now — unknown for this request, not zero.";
+  }
   if (!liveStats || typeof liveStats !== "object" || Object.keys(liveStats).length === 0) {
     return "LIVE PLATFORM STATS:\nNo live stats available for this request.";
   }
@@ -470,7 +484,10 @@ function formatSpecialistNotes(notes) {
   }).join("\n");
 }
 
-function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats, memories, specialistNotes) {
+/* extraBlocks: further context a caller adds after the memories and before
+   NO_INVENTION_RULE, which stays last whatever is passed. Only the Oracle passes
+   any (its agent records); every other caller's prompt is unchanged. */
+function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats, memories, specialistNotes, extraBlocks) {
   var blocks = [
     formatPlatformKnowledge(),
     BRAIN_DIRECTIVES,
@@ -480,6 +497,9 @@ function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats,
     formatMemories(memories)
   ];
   if (Array.isArray(specialistNotes) && specialistNotes.length) blocks.push(formatSpecialistNotes(specialistNotes));
+  (Array.isArray(extraBlocks) ? extraBlocks : []).forEach(function (block) {
+    if (typeof block === "string" && block.trim()) blocks.push(block.trim());
+  });
   blocks.push(NO_INVENTION_RULE);
   return blocks.join("\n\n");
 }

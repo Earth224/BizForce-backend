@@ -14280,7 +14280,13 @@ app.post("/api/business-profile", requireAuth, async function (req, res) {
 // (buildAgentSystemPrompt) read from one place instead of two. All
 // independent per-table counts run in a single Promise.all batch rather
 // than sequential awaits. Strictly scoped to the given user_id throughout.
-async function getLiveStats(userId) {
+/* options.perItem: a failed count of the first five no longer fails the whole
+   call; it is listed in _unreadable, and a prompt says that item could not be
+   read. Only POST /api/oracle asks for it. Every other caller is unchanged —
+   GET /api/analytics/summary returns these figures to the dashboard, where a
+   failed count must stay an error rather than become a 0. */
+async function getLiveStats(userId, options) {
+  var perItem = !!(options && options.perItem);
   var results = await Promise.all([
     supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId),
     supabase.from("ai_tasks").select("*", { count: "exact", head: true }).eq("user_id", userId).eq("status", "completed"),
@@ -14305,11 +14311,13 @@ async function getLiveStats(userId) {
   var socialDraftsResult   = results[8];
   var agentRowsResult      = results[9];
 
-  if (tasksRunResult.error)       throw tasksRunResult.error;
-  if (tasksCompletedResult.error) throw tasksCompletedResult.error;
-  if (contentItemsResult.error)   throw contentItemsResult.error;
-  if (blogItemsResult.error)      throw blogItemsResult.error;
-  if (smsItemsResult.error)       throw smsItemsResult.error;
+  if (!perItem) {
+    if (tasksRunResult.error)       throw tasksRunResult.error;
+    if (tasksCompletedResult.error) throw tasksCompletedResult.error;
+    if (contentItemsResult.error)   throw contentItemsResult.error;
+    if (blogItemsResult.error)      throw blogItemsResult.error;
+    if (smsItemsResult.error)       throw smsItemsResult.error;
+  }
 
   /* AN UNREADABLE COUNT REPORTS null, AND IS LISTED IN _unreadable BESIDE IT.
 
@@ -14383,11 +14391,15 @@ async function getLiveStats(userId) {
   }
 
   return {
-    tasksRun: tasksRunResult.count || 0,
-    tasksCompleted: tasksCompletedResult.count || 0,
-    contentItems: contentItemsResult.count || 0,
-    blogItems: blogItemsResult.count || 0,
-    smsItems: smsItemsResult.count || 0,
+    /* softCount, like socialDrafts. Without perItem a failed count has already
+       thrown above, so these are the counts as before. With perItem a failed
+       count is 0 for any numeric reader and listed in _unreadable, which the
+       prompt reads and says could not be read. */
+    tasksRun: softCount(tasksRunResult, "tasksRun"),
+    tasksCompleted: softCount(tasksCompletedResult, "tasksCompleted"),
+    contentItems: softCount(contentItemsResult, "contentItems"),
+    blogItems: softCount(blogItemsResult, "blogItems"),
+    smsItems: softCount(smsItemsResult, "smsItems"),
     subscribers: softCountNullable(subscribersResult, "subscribers"),
     optedIn: softCountNullable(optedInResult, "optedIn"),
     campaigns: softCountNullable(campaignsResult, "campaigns"),
@@ -16014,6 +16026,219 @@ app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── AGENT RECORDS: what this account's agents actually did ────────────────────
+   Read for POST /api/oracle only, so Termaximus can speak of real work rather
+   than counts. Every section reads ONE account's rows (user_id or owner_id),
+   with an explicit limit, and is one of three things: the records, "none", or
+   "could not be read just now" — never a default. No output, body, email
+   address or message text is included: titles, kinds, statuses, dates and
+   counts only, and at most 300 characters of the latest self-review.
+
+   The block opens by telling him these are records to be cited as records, and
+   that anything not listed is unknown to him, not zero. It is capped at
+   ORACLE_RECORDS_CAP characters, and says so inside itself when cut.
+
+   ARRIVALS are counted only where they can be attributed: a blog post's money
+   link carries blogRefToken(user_id, slug), so recomputing it over this
+   account's slugs joins engine_visits back to the account. A Lead Radar ref is
+   not tied to an account here and is not counted. */
+var ORACLE_RECORDS_CAP = 4000;
+var ORACLE_RECORDS_UNREADABLE = "could not be read just now";
+var ORACLE_RECORDS_HEADER =
+  "AGENT RECORDS (read from this account's own records just now). Cite these as records, exactly as written. " +
+  "Anything not listed here is unknown to you — not zero, and not none.";
+var ORACLE_RECORDS_TRUNCATED =
+  "[Cut at " + ORACLE_RECORDS_CAP.toLocaleString("en-US") + " characters: records past this point were left out and are unknown to you.]";
+var ORACLE_RECORDS_LIMITS = { runs: 10, proposals: 500, pending: 5, agents: 50, sequences: 10, enrollments: 5000, content: 3, slugs: 1000 };
+
+function oracleRecordDate(value) {
+  var s = String(value || "");
+  return s ? s.slice(0, 10) : "undated";
+}
+function oracleRecordText(value, max) {
+  var s = String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  // At most `max` characters, the ellipsis included.
+  return s.length > max ? s.slice(0, max - 1).replace(/\s+\S*$/, "") + "…" : s;
+}
+// GET /api/email/sequences' sender object, the same four readings.
+function emailSenderReadiness() {
+  var cap = emailMarketingDailyCap();
+  return {
+    enabled: emailSequencesEnabled(),
+    postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+    webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
+    daily_cap: typeof cap === "number" ? cap : null
+  };
+}
+
+async function buildOracleAgentRecords(userId, onFailure) {
+  var L = ORACLE_RECORDS_LIMITS;
+  var sections = [];
+  async function section(title, body) {
+    try {
+      var lines = await body();
+      sections.push(title + ":\n" + (lines.length ? lines.join("\n") : "- none"));
+    } catch (err) {
+      if (onFailure) onFailure("agent records: " + title, err);
+      sections.push(title + ": " + ORACLE_RECORDS_UNREADABLE + ".");
+    }
+  }
+  function must(result) {
+    if (result.error) throw result.error;
+    return result.data || [];
+  }
+
+  await section("Recent tool runs (newest " + L.runs + " with a stored result; no title is stored for a run, so each is named by its tool)", async function () {
+    var rows = must(await supabase
+      .from("ai_tasks")
+      .select("task_type, agent_type, status, created_at")
+      .eq("user_id", userId)
+      .not("output", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(L.runs));
+    return rows.map(function (r) {
+      return "- " + oracleRecordDate(r.created_at) + " · " + oracleRecordText(r.task_type || r.agent_type || "unknown tool", 60) + " · " + (r.status || "status unknown");
+    });
+  });
+
+  await section("Proposals", async function () {
+    var rows = must(await supabase
+      .from("agent_proposals")
+      .select("status, title, agent_type, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(L.proposals));
+    if (!rows.length) return [];
+    var byStatus = {};
+    rows.forEach(function (r) { var k = r.status || "unknown"; byStatus[k] = (byStatus[k] || 0) + 1; });
+    var lines = ["- " + (rows.length === L.proposals ? "the newest " + L.proposals + " by status (there may be more): " : "by status: ") +
+      Object.keys(byStatus).sort().map(function (k) { return k + " " + byStatus[k]; }).join(", ")];
+    var pending = rows.filter(function (r) { return r.status === "pending"; }).slice(0, L.pending);
+    lines.push(pending.length
+      ? "- newest pending: " + pending.map(function (r) {
+          return "\"" + oracleRecordText(r.title, 80) + "\" (" + (r.agent_type || "agent unknown") + ", " + oracleRecordDate(r.created_at) + ")";
+        }).join("; ")
+      : "- newest pending: none");
+    return lines;
+  });
+
+  await section("Schedules and autonomy (an agent with no autonomy row is off)", async function () {
+    var autonomy = must(await supabase
+      .from("agent_autonomy")
+      .select("agent_type, enabled")
+      .eq("user_id", userId)
+      .order("agent_type", { ascending: true })
+      .limit(L.agents));
+    var schedules = must(await supabase
+      .from("agent_schedules")
+      .select("agent_type, cadence, enabled")
+      .eq("user_id", userId)
+      .order("agent_type", { ascending: true })
+      .limit(L.agents));
+    var agents = {};
+    autonomy.forEach(function (r) { (agents[r.agent_type] = agents[r.agent_type] || {}).autonomy = r.enabled === true; });
+    schedules.forEach(function (r) {
+      (agents[r.agent_type] = agents[r.agent_type] || {}).schedule = (r.cadence || "cadence unknown") + (r.enabled === false ? " (paused)" : "");
+    });
+    return Object.keys(agents).sort().map(function (type) {
+      var a = agents[type];
+      return "- " + type + ": autonomy " + (a.autonomy === true ? "on" : "off") + "; schedule " + (a.schedule || "none");
+    });
+  });
+
+  await section("Email sequences (not cancelled)", async function () {
+    var sequences = must(await supabase
+      .from("email_sequences")
+      .select("id, name, status")
+      .eq("owner_id", userId)
+      .neq("status", "cancelled")
+      .order("created_at", { ascending: false })
+      .limit(L.sequences));
+    var sender = emailSenderReadiness();
+    var lines = [];
+    if (sequences.length) {
+      var enrollments = must(await supabase
+        .from("email_sequence_enrollments")
+        .select("sequence_id, status")
+        .in("sequence_id", sequences.map(function (s) { return s.id; }))
+        .limit(L.enrollments));
+      sequences.forEach(function (s) {
+        var counts = {};
+        enrollments.forEach(function (e) { if (e.sequence_id === s.id) counts[e.status] = (counts[e.status] || 0) + 1; });
+        var countText = Object.keys(counts).sort().map(function (k) { return k + " " + counts[k]; }).join(", ") || "no contacts enrolled";
+        lines.push("- \"" + oracleRecordText(s.name, 80) + "\" · " + s.status + " · " + countText);
+      });
+    } else {
+      lines.push("- sequences: none");
+    }
+    lines.push("- sender: switched " + (sender.enabled ? "on" : "off") + "; postal address " + (sender.postal_address_set ? "set" : "not set") +
+      "; bounce and complaint reports " + (sender.webhook_secret_set ? "connected" : "not connected") +
+      "; daily cap " + (sender.daily_cap === null ? ORACLE_RECORDS_UNREADABLE : sender.daily_cap));
+    return lines;
+  });
+
+  await section("Published content", async function () {
+    var read = await supabase
+      .from("content_library")
+      .select("title, created_at", { count: "exact" })
+      .eq("user_id", userId)
+      .eq("status", "published")
+      .order("created_at", { ascending: false })
+      .limit(L.content);
+    var rows = must(read);
+    if (typeof read.count !== "number") throw new Error("the published count was not returned");
+    if (read.count === 0) return [];
+    return ["- " + read.count + " published"].concat(rows.map(function (r) {
+      return "- \"" + oracleRecordText(r.title, 90) + "\" (" + oracleRecordDate(r.created_at) + ")";
+    }));
+  });
+
+  await section("Arrivals from this account's published posts", async function () {
+    var posts = must(await supabase
+      .from("content_library")
+      .select("slug")
+      .eq("user_id", userId)
+      .not("slug", "is", null)
+      .limit(L.slugs));
+    if (!posts.length) return [];
+    var refs = posts.map(function (p) { return blogRefToken(userId, p.slug); });
+    var visits = await supabase
+      .from("engine_visits")
+      .select("id", { count: "exact", head: true })
+      .in("ref", refs);
+    if (visits.error) throw visits.error;
+    if (typeof visits.count !== "number") throw new Error("the arrivals count was not returned");
+    return ["- " + visits.count + " arrival(s) through the tracked links of " + posts.length + " post(s); Lead Radar arrivals are not attributable per account and are not counted here"];
+  });
+
+  await section("Model spend this calendar month (platform-funded calls at list prices; calls on the account's own key are not counted)", async function () {
+    var spend = await modelSpendThisMonth(userId);
+    if (spend.error) throw new Error(spend.error);
+    return ["- $" + spend.usd.toFixed(2) + " across " + spend.rows + " call(s) since " + spend.month.since];
+  });
+
+  await section("Latest self-review", async function () {
+    var rows = must(await supabase
+      .from("self_reviews")
+      .select("created_at, period_type, narrative")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1));
+    if (!rows.length) return [];
+    var r = rows[0];
+    return ["- " + oracleRecordDate(r.created_at) + (r.period_type ? " (" + r.period_type + ")" : "") + ": " +
+      (r.narrative ? oracleRecordText(r.narrative, 300) : "no narrative stored")];
+  });
+
+  var text = ORACLE_RECORDS_HEADER + "\n" + sections.join("\n");
+  if (text.length <= ORACLE_RECORDS_CAP) return text;
+  var room = ORACLE_RECORDS_CAP - ORACLE_RECORDS_TRUNCATED.length - 1;
+  var cut = text.slice(0, room);
+  var lastBreak = cut.lastIndexOf("\n");
+  if (lastBreak > room * 0.5) cut = cut.slice(0, lastBreak);
+  return cut + "\n" + ORACLE_RECORDS_TRUNCATED;
+}
+
 app.get("/api/oracle", requireAuth, async function (req, res, next) {
   try {
     var result = await supabase
@@ -16103,6 +16328,19 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
       return res.status(400).json({ error: "message is required" });
     }
 
+    /* FAIL LOUDLY IN THE PROMPT. Every read below that can fail now puts an
+       explicit "could not be read just now" in the prompt for that item — never
+       a default, "Not provided", "" or 0, which the Oracle would state as a fact.
+       A real empty value still reads as empty. Each failure is logged once. */
+    var oracleReadFailuresLogged = {};
+    function noteOracleReadFailure(item, err) {
+      if (oracleReadFailuresLogged[item]) return;
+      oracleReadFailuresLogged[item] = true;
+      console.error("[oracle] " + item + " could not be read for user " + req.user.id + ": " +
+        ((err && (err.message || err.code)) || String(err)) + ". The prompt says so instead of a default.");
+    }
+    var ORACLE_UNREADABLE = "could not be read just now";
+
     // 0. Process any uploaded files — documents become labeled text
     //    context appended to the message; images become vision content
     //    blocks. A bad file returns a clean 400, never crashes the route.
@@ -16141,16 +16379,23 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
       : userMessageText;
 
     // 1. Load oracle_sync + business_profiles
+    // maybeSingle: no row is data null with no error (not synchronized, a real
+    // empty); an error is a failed read, said as one.
     var syncResult = await supabase
       .from("oracle_sync")
       .select("*")
       .eq("user_id", req.user.id)
-      .single();
-    var oracleSync = syncResult.data || null;
+      .maybeSingle();
+    var oracleSyncUnreadable = !!syncResult.error;
+    if (oracleSyncUnreadable) noteOracleReadFailure("oracle_sync", syncResult.error);
+    var oracleSync = oracleSyncUnreadable ? null : (syncResult.data || null);
 
     var numerologyContext = "";
     var natalContext = "";
-    if (oracleSync && oracleSync.birth_date) {
+    if (oracleSyncUnreadable) {
+      numerologyContext = "\n\nNUMEROLOGICAL SIGNATURE: " + ORACLE_UNREADABLE + " (the seeker's birth data could not be read). Do not compute, guess or describe it.";
+      natalContext = "\n\nNATAL CHART: " + ORACLE_UNREADABLE + " (the seeker's birth data could not be read). Do not infer, guess or describe planetary positions, angles or houses.";
+    } else if (oracleSync && oracleSync.birth_date) {
       try {
         // Full six-system numerology + quantum-synthesis convergence, so
         // Termaximus can draw on all of it for deeper soul-purpose insight.
@@ -16172,8 +16417,10 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
             "Expression: " + expression + "\n" +
             "Soul Urge: "  + soulUrge   + "\n" +
             "Birthday: "   + birthday;
+          noteOracleReadFailure("numerology (full synthesis; the Pythagorean signature was used)", enrichedNumerologyErr);
         } catch (basicNumerologyErr) {
-          numerologyContext = "";
+          noteOracleReadFailure("numerology", basicNumerologyErr);
+          numerologyContext = "\n\nNUMEROLOGICAL SIGNATURE: " + ORACLE_UNREADABLE + ". Do not compute, guess or describe it.";
         }
       }
 
@@ -16236,16 +16483,20 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
           natalContext = natalLines.join("\n");
         }
       } catch (natalErr) {
-        natalContext = "";
+        noteOracleReadFailure("natal chart", natalErr);
+        natalContext = "\n\nNATAL CHART: " + ORACLE_UNREADABLE + ". Do not infer, guess or describe planetary positions, angles or houses.";
       }
     }
 
+    // A failed read is { _unreadable: true }, which formatBusinessProfile says
+    // plainly; no row is {} — a profile not filled in, a real empty.
     var profileResult = await supabase
       .from("business_profiles")
       .select("*")
       .eq("user_id", req.user.id)
-      .single();
-    var businessProfile = profileResult.data || {};
+      .maybeSingle();
+    if (profileResult.error) noteOracleReadFailure("business_profiles", profileResult.error);
+    var businessProfile = profileResult.error ? { _unreadable: true } : (profileResult.data || {});
 
     // 2. Load last 20 oracle_messages oldest-first, then append the current message
     //    (saving it to the DB happens later and must never block the reply)
@@ -16273,6 +16524,8 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: false })
       .limit(20);
+    var oracleHistoryUnreadable = !!historyResult.error;
+    if (oracleHistoryUnreadable) noteOracleReadFailure("oracle_messages (conversation history)", historyResult.error);
     var messages = (historyResult.data || []).slice().reverse().map(function (row) {
       return { role: row.role, content: row.content };
     });
@@ -16352,7 +16605,10 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
     //    + business profile, now sourced from buildAgentSystemPrompt) plus
     //    the Oracle's own seeker-profile and numerology context, unchanged.
     var contextBlock;
-    if (oracleSync) {
+    if (oracleSyncUnreadable) {
+      contextBlock =
+        "\n\nSEEKER PROFILE:\n" + ORACLE_UNREADABLE + " — unknown for this request. Do not treat the seeker as unsynchronized, and do not ask them to synchronize again.\n";
+    } else if (oracleSync) {
       contextBlock =
         "\n\nSEEKER PROFILE:\n" +
         "Name: "             + (oracleSync.birth_name       || "Unknown")      + "\n" +
@@ -16369,18 +16625,25 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
         "\n\nSEEKER PROFILE:\nNo birth data has been provided. The seeker has not yet synchronized. Invite them to do so for deeper alignment, but proceed with what is given.\n";
     }
 
+    // A thrown getLiveStats is { _failed: true }, said plainly by formatLiveStats;
+    // a single failed count inside it is listed in its _unreadable.
     var oracleLiveStats = {};
     try {
-      oracleLiveStats = await getLiveStats(req.user.id);
+      oracleLiveStats = await getLiveStats(req.user.id, { perItem: true });
     } catch (statsErr) {
-      console.error("[oracle] getLiveStats failed:", statsErr.message || statsErr);
+      noteOracleReadFailure("live platform stats", statsErr);
+      oracleLiveStats = { _failed: true };
     }
+    ((oracleLiveStats && oracleLiveStats._unreadable) || []).forEach(function (key) {
+      noteOracleReadFailure("live stat " + key, "count failed");
+    });
 
     // This route is exclusively the Oracle, so its agent_memory scope is
     // always "oracle" — extends the same shared table the other agents use
     // (see MEMORY_AGENT_TYPES), alongside oracle_messages' own full history.
     var oracleAgentType = "oracle";
     var oracleMemoriesForBrain = [];
+    var oracleMemoryUnreadable = [];
     try {
       // Soul-record first (leads the memory block), then the most recent
       // distilled memories, then a few raw conversation memories — the
@@ -16413,6 +16676,10 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
         .order("created_at", { ascending: false })
         .limit(3);
 
+      if (oracleSoulRecordResult.error) { oracleMemoryUnreadable.push("the soul record"); noteOracleReadFailure("agent_memory soul record", oracleSoulRecordResult.error); }
+      if (oracleDistilledResult.error) { oracleMemoryUnreadable.push("the distilled memories"); noteOracleReadFailure("agent_memory distilled memories", oracleDistilledResult.error); }
+      if (oracleRecentRawResult.error) { oracleMemoryUnreadable.push("the recent conversation memories"); noteOracleReadFailure("agent_memory recent memories", oracleRecentRawResult.error); }
+
       if (!oracleSoulRecordResult.error && oracleSoulRecordResult.data) {
         oracleMemoriesForBrain.push({
           agent_type: oracleSoulRecordResult.data.agent_type,
@@ -16429,31 +16696,54 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
         oracleMemoriesForBrain.push({ agent_type: row.agent_type, title: row.title, content: row.content });
       });
     } catch (oracleMemoryReadErr) {
-      console.error("[oracle] agent_memory read error:", oracleMemoryReadErr.message || oracleMemoryReadErr);
+      oracleMemoryUnreadable = ["the soul record", "the distilled memories", "the recent conversation memories"];
+      noteOracleReadFailure("agent_memory", oracleMemoryReadErr);
     }
+    if (oracleHistoryUnreadable) oracleMemoryUnreadable.push("the earlier conversation");
+    // Placed right after the memories, so "No prior memory recorded yet" above
+    // is never read as the whole story when a read failed.
+    var oracleMemoryNote = oracleMemoryUnreadable.length
+      ? "MEMORY READ FAILURES: " + oracleMemoryUnreadable.join(", ") + " " + ORACLE_UNREADABLE +
+        ". Whatever is missing from the memory and conversation above is unknown for this request, not absent."
+      : "";
 
     // 3b. Live enterprise awareness — wallet, sales, listings, agent totals.
     //     Each fetch is independently guarded: a single failure leaves that
     //     piece out of enterpriseContext rather than breaking the reply.
-    var balance = null;
-    var walletOk = false;
+    /* Each line is its own read. A read that fails says so on its line instead
+       of disappearing, and the agent line no longer carries ai_agents.estimated_roi:
+       nothing ever computed it, so it was a placeholder 0 spoken as a figure. */
+    var enterpriseLines = [];
+
     try {
       var oracleWalletResult = await supabase
         .from("user_wallets")
         .select("balance")
         .eq("user_id", req.user.id)
         .maybeSingle();
-      if (!oracleWalletResult.error) {
-        balance = oracleWalletResult.data ? oracleWalletResult.data.balance : null;
-        walletOk = true;
-      }
+      if (oracleWalletResult.error) throw oracleWalletResult.error;
+      enterpriseLines.push(oracleWalletResult.data && oracleWalletResult.data.balance !== null && oracleWalletResult.data.balance !== undefined
+        ? "BFC Wallet Balance: " + oracleWalletResult.data.balance + " BFC"
+        : "BFC Wallet Balance: no wallet on this account");
     } catch (oracleWalletErr) {
-      console.error("[oracle] user_wallets read error:", oracleWalletErr.message || oracleWalletErr);
+      noteOracleReadFailure("user_wallets", oracleWalletErr);
+      enterpriseLines.push("BFC Wallet Balance: " + ORACLE_UNREADABLE);
     }
 
-    var recentSales = [];
-    var totalSalesCount = 0;
-    var salesOk = false;
+    try {
+      var oracleListingsResult = await supabase
+        .from("marketplace_listings")
+        .select("status")
+        .eq("seller_id", req.user.id);
+      if (oracleListingsResult.error) throw oracleListingsResult.error;
+      var oracleListingRows = oracleListingsResult.data || [];
+      var activeListings = oracleListingRows.filter(function (row) { return row.status === "active"; }).length;
+      enterpriseLines.push("Active Marketplace Listings: " + activeListings + " (of " + oracleListingRows.length + " total)");
+    } catch (oracleListingsErr) {
+      noteOracleReadFailure("marketplace_listings", oracleListingsErr);
+      enterpriseLines.push("Active Marketplace Listings: " + ORACLE_UNREADABLE);
+    }
+
     try {
       var oracleSalesResult = await supabase
         .from("marketplace_orders")
@@ -16461,83 +16751,40 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
         .eq("seller_id", req.user.id)
         .order("created_at", { ascending: false })
         .limit(5);
-      if (!oracleSalesResult.error) {
-        recentSales = oracleSalesResult.data || [];
-        totalSalesCount = recentSales.length; // a recent-sales sample (last 5), not a lifetime count
-        salesOk = true;
-      }
-    } catch (oracleSalesErr) {
-      console.error("[oracle] marketplace_orders read error:", oracleSalesErr.message || oracleSalesErr);
-    }
-
-    var activeListings = 0;
-    var totalListings = 0;
-    var listingsOk = false;
-    try {
-      var oracleListingsResult = await supabase
-        .from("marketplace_listings")
-        .select("status")
-        .eq("seller_id", req.user.id);
-      if (!oracleListingsResult.error) {
-        var oracleListingRows = oracleListingsResult.data || [];
-        totalListings = oracleListingRows.length;
-        activeListings = oracleListingRows.filter(function (row) {
-          return row.status === "active";
-        }).length;
-        listingsOk = true;
-      }
-    } catch (oracleListingsErr) {
-      console.error("[oracle] marketplace_listings read error:", oracleListingsErr.message || oracleListingsErr);
-    }
-
-    var agentCount = 0;
-    var totalTasksCompleted = 0;
-    var totalEstimatedRoi = 0;
-    var agentsOk = false;
-    try {
-      var oracleAgentsResult = await supabase
-        .from("ai_agents")
-        .select("tasks_completed, estimated_roi")
-        .eq("user_id", req.user.id);
-      if (!oracleAgentsResult.error) {
-        var oracleAgentRows = oracleAgentsResult.data || [];
-        agentCount = oracleAgentRows.length;
-        totalTasksCompleted = oracleAgentRows.reduce(function (sum, row) {
-          return sum + Number(row.tasks_completed || 0);
-        }, 0);
-        totalEstimatedRoi = oracleAgentRows.reduce(function (sum, row) {
-          return sum + Number(row.estimated_roi || 0);
-        }, 0);
-        agentsOk = true;
-      }
-    } catch (oracleAgentsErr) {
-      console.error("[oracle] ai_agents read error:", oracleAgentsErr.message || oracleAgentsErr);
-    }
-
-    var enterpriseLines = [];
-    if (walletOk && balance !== null) {
-      enterpriseLines.push("BFC Wallet Balance: " + balance + " BFC");
-    }
-    if (listingsOk) {
-      enterpriseLines.push("Active Marketplace Listings: " + activeListings + " (of " + totalListings + " total)");
-    }
-    if (salesOk) {
+      if (oracleSalesResult.error) throw oracleSalesResult.error;
+      var recentSales = oracleSalesResult.data || [];
       enterpriseLines.push(
         "Recent Sales (last 5 orders): " +
-        (totalSalesCount === 0
+        (recentSales.length === 0
           ? "No recent sales recorded"
-          : totalSalesCount + " — " + recentSales.map(function (order) {
+          : recentSales.length + " — " + recentSales.map(function (order) {
               var amount = order.amount_usd ? ("$" + order.amount_usd) : ((order.amount_bfc || 0) + " BFC");
               return amount + " (" + (order.status || "unknown") + ")";
             }).join(", "))
       );
+    } catch (oracleSalesErr) {
+      noteOracleReadFailure("marketplace_orders", oracleSalesErr);
+      enterpriseLines.push("Recent Sales (last 5 orders): " + ORACLE_UNREADABLE);
     }
-    if (agentsOk) {
-      enterpriseLines.push("AI Agent Team: " + agentCount + " agents, " + totalTasksCompleted + " tasks completed, $" + totalEstimatedRoi + " estimated ROI");
+
+    try {
+      var oracleAgentsResult = await supabase
+        .from("ai_agents")
+        .select("tasks_completed")
+        .eq("user_id", req.user.id);
+      if (oracleAgentsResult.error) throw oracleAgentsResult.error;
+      var oracleAgentRows = oracleAgentsResult.data || [];
+      var totalTasksCompleted = oracleAgentRows.reduce(function (sum, row) {
+        return sum + Number(row.tasks_completed || 0);
+      }, 0);
+      enterpriseLines.push("AI Agent Team: " + oracleAgentRows.length + " agents, " + totalTasksCompleted + " tasks completed");
+    } catch (oracleAgentsErr) {
+      noteOracleReadFailure("ai_agents", oracleAgentsErr);
+      enterpriseLines.push("AI Agent Team: " + ORACLE_UNREADABLE);
     }
 
     var enterpriseContext = enterpriseLines.length
-      ? "\n\nLIVE STATE OF THE SEEKER'S ENTERPRISE (these are the seeker's real, current BizForce figures, read live from the platform this moment — speak them as the one who walks these halls and reads the ledger. State only these true numbers; never invent, estimate, or fabricate any figure you were not given here. If a figure is absent, do not guess it):\n" +
+      ? "\n\nLIVE STATE OF THE SEEKER'S ENTERPRISE (these are the seeker's real, current BizForce figures, read live from the platform this moment — speak them as the one who walks these halls and reads the ledger. State only these true numbers; never invent, estimate, or fabricate any figure you were not given here. A line that says it could not be read is unknown for this request, not zero; do not guess it):\n" +
         enterpriseLines.join("\n")
       : "";
 
@@ -16571,9 +16818,14 @@ app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.arr
        and that is exactly where the only copy used to be. The duplication is not
        redundancy to be tidied away later — removing either copy puts it back in
        the middle. */
+    /* What the agents actually did, after his memories and before
+       NO_INVENTION_RULE, which buildAgentSystemPrompt keeps last. */
+    var oracleAgentRecords = await buildOracleAgentRecords(req.user.id, noteOracleReadFailure);
+
     var systemPrompt =
       oracleLanguageInstruction +
-      buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain) +
+      buildAgentSystemPrompt(ORACLE_SYSTEM_PROMPT, businessProfile, oracleLiveStats, oracleMemoriesForBrain, undefined,
+        [oracleMemoryNote, oracleAgentRecords]) +
       contextBlock +
       numerologyContext +
       natalContext +
