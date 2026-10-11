@@ -57,6 +57,9 @@ residue.install();
 
 const MUTATIONS = ["add-field", "drop-field"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -92,8 +95,7 @@ function functionSource(src, name) {
   return src.slice(m.index, braceMatch(src, src.indexOf(") {", m.index) + 2));
 }
 function mutate(src, from, to) {
-  if (src.split(from).length !== 2) throw new Error("mutation target not found exactly once: " + from);
-  return src.replace(from, to);
+  return MUT.replaceOnce(src, from, to, MUTATE);
 }
 
 let PUBLIC_USER = functionSource(SRC, "publicUser");

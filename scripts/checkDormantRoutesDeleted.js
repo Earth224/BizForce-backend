@@ -47,6 +47,9 @@ const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
 const PORT = Number(process.env.CHECK_PORT || 4791);
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["revive"]);
 if (MUTATE && MUTATE !== "revive") { console.error("Unknown MUTATE=" + MUTATE + ". Known: revive"); process.exit(2); }
 
 let failures = 0;

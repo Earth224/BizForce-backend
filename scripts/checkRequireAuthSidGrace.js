@@ -66,6 +66,9 @@ const { after, definitionOf } = require("./_shared.js");
 
 const MUTATE = process.env.MUTATE || "";
 const MUTATIONS = ["reject-sidless", "always-log", "cap-stops-logging"];
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE value: " + MUTATE + " (use " + MUTATIONS.join(", ") + ")");
   process.exit(64);
@@ -92,24 +95,18 @@ for (const n of NAMES) {
 const CAP = Number(/=\s*(\d+)/.exec(parts.LEGACY_TOKEN_GRACE_LOG_CAP)[1]);
 
 if (MUTATE === "reject-sidless") {
-  const before = parts.requireAuth;
-  parts.requireAuth = parts.requireAuth.replace(
+  parts.requireAuth = MUT.replaceOnce(parts.requireAuth,
     "    } else {\n      noteLegacyToken(decoded.id);\n    }",
-    "    } else {\n      noteLegacyToken(decoded.id);\n      return res.status(401).json({ error: \"Session required\" });\n    }");
-  if (parts.requireAuth === before) { console.error("MUTATION REFUSED: the grace arm was not found verbatim."); process.exit(1); }
+    "    } else {\n      noteLegacyToken(decoded.id);\n      return res.status(401).json({ error: \"Session required\" });\n    }", "reject-sidless");
   console.log("\n!! MUTATION: a 401 added for a sid-less token — items 1, 2 and 3 must fail.");
 } else if (MUTATE === "always-log") {
-  const before = parts.noteLegacyToken;
-  parts.noteLegacyToken = parts.noteLegacyToken.replace(
-    "  if (LEGACY_TOKEN_GRACE_LOGGED.has(userId)) return;\n", "");
-  if (parts.noteLegacyToken === before) { console.error("MUTATION REFUSED: the already-logged guard was not found."); process.exit(1); }
+  parts.noteLegacyToken = MUT.replaceOnce(parts.noteLegacyToken,
+    "  if (LEGACY_TOKEN_GRACE_LOGGED.has(userId)) return;\n", "", "always-log");
   console.log("\n!! MUTATION: noteLegacyToken's already-logged guard removed — item 4 must fail.");
 } else if (MUTATE === "cap-stops-logging") {
-  const before = parts.noteLegacyToken;
-  parts.noteLegacyToken = parts.noteLegacyToken.replace(
+  parts.noteLegacyToken = MUT.replaceOnce(parts.noteLegacyToken,
     "    LEGACY_TOKEN_GRACE_LOGGED.add(userId);\n  }\n",
-    "    LEGACY_TOKEN_GRACE_LOGGED.add(userId);\n  } else { return; }\n");
-  if (parts.noteLegacyToken === before) { console.error("MUTATION REFUSED: the cap block was not found."); process.exit(1); }
+    "    LEGACY_TOKEN_GRACE_LOGGED.add(userId);\n  } else { return; }\n", "cap-stops-logging");
   console.log("\n!! MUTATION: logging suppressed past the cap — item 5's second half must fail.");
 }
 

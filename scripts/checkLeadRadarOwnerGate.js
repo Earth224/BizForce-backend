@@ -59,6 +59,9 @@ const Module = require("module");
 const REPO = path.join(__dirname, "..");
 const { OWNER_ACCOUNT_ID } = require(path.join(REPO, "lib", "ownerAccount.js"));
 
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["unguard-leads"]);
 const MUTATING = process.env.MUTATE === "unguard-leads";
 
 /* ── the SDK, stubbed ─────────────────────────────────────────────────────
@@ -136,12 +139,7 @@ if (MUTATING) {
   const realCompile = Module.prototype._compile;
   Module.prototype._compile = function (content, filename) {
     if (path.resolve(filename) === path.resolve(SERVER_PATH)) {
-      const hits = content.split(NEEDLE).length - 1;
-      if (hits !== 1) {
-        console.error("MUTATION REFUSED: expected exactly one `" + NEEDLE + "` in server.js, found " + hits + ".");
-        process.exit(1);
-      }
-      content = content.replace(NEEDLE, "if (false) {");
+      content = MUT.replaceOnce(content, NEEDLE, "if (false) {", "unguard-leads");
       mutationApplied = true;
       console.log("\n!! MUTATION: the owner guard on GET /api/leads is now `if (false)` — that route's refusal checks below must fail.");
     }

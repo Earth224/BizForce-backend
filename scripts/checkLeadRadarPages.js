@@ -42,6 +42,9 @@ const { JSDOM, VirtualConsole } = require("jsdom");
 
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["ignore-refusal"]);
 const MUTATING = process.env.MUTATE === "ignore-refusal";
 
 const PAGES = {
@@ -92,12 +95,7 @@ function reply(status, body) {
 }
 
 function mutate(html, needle, label) {
-  const hits = html.split(needle).length - 1;
-  if (hits !== 1) {
-    console.error("MUTATION REFUSED: expected exactly one `" + needle + "` in " + label + ", found " + hits + ".");
-    process.exit(1);
-  }
-  return html.replace(needle, "false");
+  return MUT.replaceOnce(html, needle, "false", "ignore-refusal in " + label);
 }
 
 /* Boots one page. mode is "refuse" (every lead route answers the 403) or

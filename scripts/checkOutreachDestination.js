@@ -58,6 +58,9 @@ const residue = createResidueGuard({ supabase: supabase, name: "outreachDestinat
 residue.install();
 
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["no-rejection"]);
 if (MUTATE && MUTATE !== "no-rejection") { console.error("Unknown MUTATE=" + MUTATE + ". Known: no-rejection"); process.exit(2); }
 
 let failures = 0;
@@ -79,7 +82,7 @@ let csl = def("convertSingleLead");
 const REJECTION_CALL = /  var draftRejection = cleanMessage\n    \? outreachDraftRejection\([^;]*\)\n    : null;/;
 if (!REJECTION_CALL.test(csl)) { console.error("EXTRACTION FAILED: the rejection call was not found in convertSingleLead."); process.exit(3); }
 if (MUTATE === "no-rejection") {
-  csl = csl.replace(REJECTION_CALL, "  var draftRejection = null;");
+  csl = MUT.replaceRegexOnce(csl, REJECTION_CALL, "  var draftRejection = null;", "no-rejection");
   console.log("\n!! MUTATION: convertSingleLead runs with the rejection removed — every assertion in 3 must fail.");
 }
 const LIFTED = ["formatLeadHandle", "OUTREACH_BOOK_PRODUCT", "OUTREACH_SUPPLEMENT_PRODUCTS", "OUTREACH_DAILY_CAP", "OUTREACH_PRODUCT_FACTS",

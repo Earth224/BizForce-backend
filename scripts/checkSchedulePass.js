@@ -35,6 +35,9 @@ const assert = require("assert");
 
 const MUTATIONS = ["gate"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -65,9 +68,7 @@ let code = [
 
 if (MUTATE === "gate") {
   const GATE = "    if (entitlement.plan.active !== true) {\n";
-  const hits = code.split(GATE).length - 1;
-  if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one gate in the extracted pass, found " + hits); process.exit(1); }
-  code = code.replace(GATE, "    if (false) {\n");
+  code = MUT.replaceOnce(code, GATE, "    if (false) {\n", "gate");
   console.log("\n!! MUTATION: the entitlement gate is gone from runAgentSchedulePass — an unentitled schedule must now run.");
 }
 

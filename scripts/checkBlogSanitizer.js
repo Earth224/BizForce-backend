@@ -33,6 +33,7 @@ const { execSync, spawnSync } = require("child_process");
 const REPO = path.join(__dirname, "..");
 const BEFORE = "b2ac83d";
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 
 /* Each mutation is [exact anchor in server.js, replacement]. An anchor that is
    not found is itself a failure, so a mutation cannot silently stop biting. */
@@ -64,20 +65,8 @@ const MUTATIONS = {
   "decode": [["blogSafeHref(normalizeBlogHref(decodeBlogAttr(value),", "blogSafeHref(normalizeBlogHref(value,"]]
 };
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 120000 });
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(16) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 let failures = 0;
 let passes = 0;
@@ -123,8 +112,7 @@ if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [from, to] of edits) {
-    if (nowSrc.indexOf(from) === -1) { console.log("    FAIL  mutation anchor not found: " + from); process.exit(1); }
-    nowSrc = nowSrc.split(from).join(to);
+    nowSrc = MUT.replaceOnce(nowSrc, from, to, MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE);
 }

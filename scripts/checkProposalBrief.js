@@ -75,21 +75,10 @@ const MUTATIONS = {
   rejectwrites: [["      .update({\n        status:     \"rejected\",", "      .update({\n        brief:      null,\n        status:     \"rejected\","]]
 };
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 300000 });
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(16) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 if (MUTATE && !MUTATIONS[MUTATE]) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
 
 let failures = 0, passes = 0;
@@ -102,8 +91,7 @@ let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n
 const SERVER0 = execSync("git show " + BASELINE + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
 if (MUTATE) {
   for (const [from, to] of MUTATIONS[MUTATE]) {
-    if (SERVER.split(from).length !== 2) { console.error("MUTATION REFUSED (" + MUTATE + "): anchor not found exactly once: " + JSON.stringify(from.slice(0, 80))); process.exit(3); }
-    SERVER = SERVER.replace(from, () => to);
+    SERVER = MUT.replaceOnce(SERVER, from, to, MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE);
 }

@@ -112,6 +112,9 @@ const SERVER_PATH = path.join(REPO, "server.js");
 
 const MUTATIONS = ["add-public", "ungate", "serve-open"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -305,9 +308,7 @@ if (MUTATE === "serve-open") {
   Module.prototype._compile = function (content, filename) {
     if (path.resolve(filename) === path.resolve(SERVER_PATH)) {
       content = content.replace(/\r\n/g, "\n");
-      const hits = content.split(GUARD_LINE).length - 1;
-      if (hits !== 1) { console.error("MUTATION REFUSED: expected the seller page's guard exactly once, found " + hits); process.exit(1); }
-      content = content.replace(GUARD_LINE, "");
+      content = MUT.replaceOnce(content, GUARD_LINE, "", "serve-open");
       console.error("\n!! MUTATION: GET /api/bfp/seller/:handle serves every seller page, entitled or not — section 6 must fail.");
     }
     return realCompile.call(this, content, filename);

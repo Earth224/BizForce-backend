@@ -45,6 +45,9 @@ const assert = require("assert");
 
 const MUTATIONS = ["stale-cancel"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -64,9 +67,7 @@ let fnSrc = src.slice(start, end);
 
 if (MUTATE === "stale-cancel") {
   const GUARD = "      if (!sameOrEmpty && !isCreated && !statusEntitles) {\n";
-  const hits = fnSrc.split(GUARD).length - 1;
-  if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one older-subscription guard, found " + hits); process.exit(1); }
-  fnSrc = fnSrc.replace(GUARD, "      if (false) {\n");
+  fnSrc = MUT.replaceOnce(fnSrc, GUARD, "      if (false) {\n", "stale-cancel");
   console.log("\n!! MUTATION: the older-subscription guard is gone — a stale \"canceled\" update must now overwrite the current row.");
 }
 

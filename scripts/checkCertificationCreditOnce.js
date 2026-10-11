@@ -92,6 +92,9 @@ residue.install();
 
 const MUTATIONS = ["credit-every-pass", "old-handler", "read-then-write", "credit-unentitled"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -195,13 +198,11 @@ function buildHandler(which, plan) {
 
   if (which === "new" && MUTATE === "credit-unentitled") {
     const gate = "if (creditPlan && creditPlan.active === true) {";
-    if (route.split(gate).length !== 2) throw new Error("mutation target not found exactly once: " + gate);
-    route = route.replace(gate, "if (true) {");
+    route = MUT.replaceOnce(route, gate, "if (true) {", MUTATE);
   }
   if (which === "new" && MUTATE === "credit-every-pass") {
     const guard = "if (becameEarned) {";
-    if (route.split(guard).length !== 2) throw new Error("mutation target not found exactly once: " + guard);
-    route = route.replace(guard, "if (passed) {");
+    route = MUT.replaceOnce(route, guard, "if (passed) {", MUTATE);
   }
   if (which === "new" && MUTATE === "old-handler") route = routeSource(SRC_OLD);
 

@@ -104,22 +104,10 @@ const MUTATIONS = {
   "chain-drop-hop":   [["          chain.push({ url: urlString, status: status });", "          if (hopNumber !== 1) chain.push({ url: urlString, status: status });"]]
 };
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 
-if (MUTATE === "all") {
-  let survived = 0;
-  for (const name of Object.keys(MUTATIONS)) {
-    const t0 = Date.now();
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 180000 });
-    const out = (r.stdout || "") + (r.stderr || "");
-    const fails = out.split("\n").filter(function (l) { return /^\s+FAIL /.test(l); });
-    const bit = r.status !== 0 && fails.length > 0;
-    if (!bit) survived++;
-    console.log((bit ? "  bites    " : "  SURVIVED ") + name.padEnd(17) + " exit " + r.status + ", " + fails.length + " failing check(s), " + Math.round((Date.now() - t0) / 1000) + "s");
-    fails.slice(0, 3).forEach(function (l) { console.log("             " + l.trim().slice(0, 150)); });
-  }
-  console.log(survived ? "\n" + survived + " MUTATION(S) SURVIVED — a guard can be removed without any check noticing." : "\nALL CHECKS PASSED — every one of " + Object.keys(MUTATIONS).length + " mutations was caught.");
-  process.exit(survived ? 1 : 0);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
@@ -129,9 +117,7 @@ if (MUTATE) {
     if (path.resolve(filename) === path.resolve(LIB_PATH)) {
       content = content.replace(/\r\n/g, "\n");
       for (const [from, to] of edits) {
-        const hits = content.split(from).length - 1;
-        if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one anchor, found " + hits + ": " + from.trim().slice(0, 80)); process.exit(1); }
-        content = content.replace(from, to);
+        content = MUT.replaceOnce(content, from, to, MUTATE);
       }
       console.log("\n!! MUTATION: " + MUTATE);
     }

@@ -59,6 +59,9 @@ const supabase = createClient(
 
 const MUTATIONS = ["no-host-check"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -95,7 +98,7 @@ if (!HOST_CHECK.test(routeCode)) {
   process.exit(3);
 }
 if (MUTATE === "no-host-check") {
-  routeCode = routeCode.replace(HOST_CHECK, "\n");
+  routeCode = MUT.replaceRegexOnce(routeCode, HOST_CHECK, "\n", "no-host-check");
   console.log("\n!! MUTATION: the host check is removed — 2, 4 and 5 must fail.");
 }
 

@@ -47,6 +47,9 @@
    ══════════════════════════════════════════════════════════════════════════ */
 
 require("dotenv").config();
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["no-sold-update"]);
 
 const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
 const SUBJECT_USER_ID = resolveSubjectAccount();

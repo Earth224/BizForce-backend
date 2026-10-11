@@ -63,6 +63,9 @@ const SUBJECT_USER_ID = resolveSubjectAccount();
 
 const MUTATIONS = ["blocked", "cross-user", "depth"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -107,9 +110,7 @@ if (MUTATE) {
   Module.prototype._compile = function (content, filename) {
     if (path.resolve(filename) === path.resolve(SERVER_PATH)) {
       content = content.replace(/\r\n/g, "\n");   // the anchors span lines; a CRLF checkout would never match
-      const hits = content.split(edit.from).length - 1;
-      if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one anchor, found " + hits + ": " + edit.from.trim()); process.exit(1); }
-      content = content.replace(edit.from, edit.to);
+      content = MUT.replaceOnce(content, edit.from, edit.to, MUTATE);
       console.log("\n!! MUTATION: " + edit.say);
     }
     return realCompile.call(this, content, filename);

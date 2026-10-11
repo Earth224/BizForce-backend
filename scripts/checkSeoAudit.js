@@ -44,6 +44,7 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const BEFORE = "85bd811";
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 const gf = require(path.join(REPO, "lib", "guardedFetch.js"));
 
 const MUTATIONS = {
@@ -66,20 +67,8 @@ const MUTATIONS = {
   "index-as-absent": [["    pageListed = \"not checked\";\n", "    pageListed = false;\n"]]
 };
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 300000 });
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(18) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 let failures = 0, passes = 0;
 function check(label, ok, detail) {
@@ -97,8 +86,7 @@ if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [from, to] of edits) {
-    if (SRC.split(from).length !== 2) { console.log("    FAIL  mutation anchor not found exactly once: " + from.slice(0, 80)); process.exit(1); }
-    SRC = SRC.replace(from, () => to);
+    SRC = MUT.replaceOnce(SRC, from, to, MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE);
 }

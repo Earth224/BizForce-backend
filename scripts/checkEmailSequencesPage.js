@@ -50,7 +50,7 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const MUTATE = process.env.MUTATE || "";
-const ANCHOR_ERROR_EXIT = 3;
+const MUT = require("./_shared");
 
 const SEQ_JS = "scripts/email-sequences.js", PROPOSALS = "proposals.html", PROFILE = "scripts/agent-profile.js";
 const MUTATIONS = {
@@ -69,27 +69,8 @@ const MUTATIONS = {
     "  [\"skipped_not_confirmed\", \"Skipped — consent not confirmed\"]\n"]]
 };
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0, errors = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 300000 });
-    if (r.status === ANCHOR_ERROR_EXIT) {
-      errors++;
-      console.log("    ERROR     " + name.padEnd(26) + " " + (r.stdout.trim().split("\n").pop() || r.stderr.trim()));
-      continue;
-    }
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(26) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  const ok = survived === 0 && errors === 0;
-  console.log(ok ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught"
-    : "\nCHECKS FAILED: " + survived + " mutation(s) survived, " + errors + " mutation(s) could not be applied");
-  process.exit(ok ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 /* ── the frontend files, mutated in memory ──────────────────────────────── */
 const FILES = {};
@@ -98,9 +79,7 @@ if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [file, from, to] of edits) {
-    const hits = FILES[file].split(from).length - 1;
-    if (hits !== 1) { console.log("MUTATION ANCHOR ERROR: expected exactly one match in " + file + ", found " + hits + ": " + JSON.stringify(from.slice(0, 80))); process.exit(ANCHOR_ERROR_EXIT); }
-    FILES[file] = FILES[file].replace(from, () => to);
+    FILES[file] = MUT.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   }
   console.log("\n!! MUTATION: " + MUTATE + " (frontend, in memory)");
 }

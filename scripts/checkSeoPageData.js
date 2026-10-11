@@ -39,6 +39,7 @@ const { decodeHTML, decodeHTMLAttribute } = require("entities");
 const REPO = path.join(__dirname, "..");
 const BEFORE = "7e8446d";
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 
 /* Each mutation is [exact anchor in server.js, replacement]. An anchor that is
    not found exactly once is itself a failure, so a mutation cannot silently
@@ -59,27 +60,16 @@ const MUTATIONS = {
   "decode-attr": [["attrs[name] = decodeHTMLAttribute(value);", "attrs[name] = value;"]],
   // (3) attribute values are decoded a second time, as text
   "decode-twice": [["alt: hasAlt ? seoCollapse(a.alt) : null,", "alt: hasAlt ? seoText(a.alt) : null,"],
-                   ["metas[i].content !== undefined ? seoCollapse(metas[i].content)", "metas[i].content !== undefined ? seoText(metas[i].content)"]],
+                   ["  function metaContent(name) {\n    for (var i = 0; i < metas.length; i++) {\n      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n        return metas[i].content !== undefined ? seoCollapse(metas[i].content)",
+                    "  function metaContent(name) {\n    for (var i = 0; i < metas.length; i++) {\n      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n        return metas[i].content !== undefined ? seoText(metas[i].content)"]],
   // (4) the first <title> anywhere is the title again
   "first-title": [["var m = (head && head[1].match(titleRe)) || doc.match(titleRe);", "var m = raw.match(titleRe);"]],
   // (4) an absent title reads "" again
   "title-empty": [["return m ? seoText(m[1]) : null;", "return m ? seoText(m[1]) : \"\";"]]
 };
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 120000 });
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(14) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 let failures = 0;
 let passes = 0;
@@ -124,8 +114,7 @@ if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [from, to] of edits) {
-    if (nowSrc.split(from).length !== 2) { console.log("    FAIL  mutation anchor not found exactly once: " + from); process.exit(1); }
-    nowSrc = nowSrc.split(from).join(to);
+    nowSrc = MUT.replaceOnce(nowSrc, from, to, MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE);
 }

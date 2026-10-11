@@ -63,6 +63,9 @@ const BASELINE = "7cefe53";
 
 const MUTATIONS = ["keywords", "pipeline", "everylead", "products", "offer", "instruction", "domain"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
 let failures = 0;
@@ -71,8 +74,7 @@ function check(label, ok, detail) {
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
 }
 function mutate(src, from, to, what) {
-  if (src.split(from).length !== 2) { console.error("MUTATION REFUSED (" + what + "): anchor not found exactly once."); process.exit(3); }
-  return src.replace(from, () => to);
+  return MUT.replaceOnce(src, from, to, what);
 }
 const read = f => fs.readFileSync(path.join(REPO, f), "utf8").replace(/\r\n/g, "\n");
 const atBaseline = f => execSync("git show " + BASELINE + ":" + f, { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");

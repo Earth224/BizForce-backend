@@ -51,6 +51,9 @@ const http = require("http");
 const Module = require("module");
 const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["revive"]);
 const MUTATING = process.env.MUTATE === "revive";
 const PORT = Number(process.env.CHECK_PORT || 4787);
 
@@ -106,7 +109,7 @@ if (MUTATING) {
       content = content.replace(/\r\n/g, "\n");   // RESULT_ANCHOR spans lines; a CRLF checkout would never match it
       [INSERT_ANCHOR, RESULT_ANCHOR].forEach(function (needle) {
         const hits = content.split(needle).length - 1;
-        if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one anchor, found " + hits + ": " + needle.slice(0, 60)); process.exit(1); }
+        if (hits !== 1) MUT.mutationAnchorError("revive: expected exactly one match, found " + hits + ": " + JSON.stringify(needle.slice(0, 60)));
       });
       content = content
         .replace(INSERT_ANCHOR,

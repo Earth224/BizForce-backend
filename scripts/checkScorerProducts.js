@@ -54,6 +54,9 @@ const residue = createResidueGuard({ supabase: supabase, name: "scorerProducts",
 residue.install();
 
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["drop"]);
 if (MUTATE && !/^drop(:.+)?$/.test(MUTATE)) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: drop, drop:<product name>");
   process.exit(2);
@@ -80,10 +83,13 @@ if (DROPPED) {
   const dropFromList = (src, name) => src.replace(new RegExp("(const " + name + " = \\[[^\\]]*\\])"), function (lit) {
     return lit.split(q + ", ").join("").split(", " + q).join("").split(q).join("");
   });
+  const radarBefore = RADAR, serverBefore = SERVER;
   RADAR = dropFromList(RADAR, "SCORER_ALLOWED_PRODUCTS");
   SERVER = dropFromList(SERVER, "OUTREACH_SUPPLEMENT_PRODUCTS");
   RADAR = RADAR.split("\n").filter(function (l) { return l.indexOf('"- ' + DROPPED + ":") === -1; }).join("\n");
   RADAR = RADAR.split(" | " + DROPPED + " |").join(" |");
+  MUT.requireChanged(serverBefore, SERVER, "drop " + DROPPED + " from OUTREACH_SUPPLEMENT_PRODUCTS");
+  MUT.requireChanged(radarBefore, RADAR, "drop " + DROPPED + " from the scorer");
   console.log("\n!! MUTATION: " + JSON.stringify(DROPPED) + " removed from both lists and the scorer prompt — its assertions must fail.");
 }
 

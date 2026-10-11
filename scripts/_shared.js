@@ -196,4 +196,76 @@ const F = {
 };
 
 
-module.exports={after,before,braceMatch,definitionOf,routeCode,STUBS,closureFor,fakeSupabase,build,call,strip,norm,F,AGENTS};
+/* ── mutation runners: one rule for every check ─────────────────────────────
+   A mutation is proven caught only if it was APPLIED. So a search text that
+   does not match EXACTLY ONCE — zero matches, or more than one — is never a
+   catch: the child exits MUTATION_ANCHOR_EXIT with "MUTATION ANCHOR ERROR",
+   and runAllMutations reports it as ERROR and fails the MUTATE=all run. A
+   mutation that is not a plain search text (a regex, a derived edit) goes
+   through requireChanged: if it changed nothing, that is the same error. */
+const MUTATION_ANCHOR_EXIT = 3;
+function mutationAnchorError(detail) {
+  console.log("MUTATION ANCHOR ERROR: " + detail);
+  process.exit(MUTATION_ANCHOR_EXIT);
+}
+// `src` with the one occurrence of `from` replaced by `to`, or the error.
+function replaceOnce(src, from, to, what) {
+  const hits = String(src).split(from).length - 1;
+  if (hits !== 1) {
+    mutationAnchorError((what ? what + ": " : "") + "expected exactly one match, found " + hits + ": " + JSON.stringify(String(from).slice(0, 80)));
+  }
+  return String(src).replace(from, () => to);
+}
+// The same rule for a regular-expression search: exactly one match, or the error.
+function replaceRegexOnce(src, re, to, what) {
+  const all = new RegExp(re.source, re.flags.indexOf("g") === -1 ? re.flags + "g" : re.flags);
+  const hits = (String(src).match(all) || []).length;
+  if (hits !== 1) mutationAnchorError((what ? what + ": " : "") + "expected exactly one match of " + re + ", found " + hits);
+  return String(src).replace(new RegExp(re.source, re.flags.replace("g", "")), to);
+}
+// `after`, provided the mutation changed something.
+function requireChanged(before, after, what) {
+  if (before === after) mutationAnchorError((what ? what + ": " : "") + "the mutation changed nothing, so it was not applied");
+  return after;
+}
+/* MUTATE=all: each mutation in its own process. CAUGHT is a non-zero exit with
+   at least one FAIL line. ERROR is the anchor exit, an unknown-mutation exit
+   (2), or a child that did not finish. Anything else SURVIVED. Passes only if
+   every mutation was caught. Ends the process. */
+function runAllMutations(file, names, opts) {
+  const { spawnSync } = require("child_process");
+  opts = opts || {};
+  const failLine = opts.failLine || /^\s*FAIL\b.*$/gm;
+  const width = Math.max(12, ...names.map(n => n.length)) + 2;
+  let caught = 0, survived = 0, errors = 0;
+  for (const name of names) {
+    const r = spawnSync(process.execPath, [file], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8",
+      timeout: opts.timeout || 600000, maxBuffer: 64 << 20 });
+    const out = String(r.stdout || "");
+    const fails = out.match(failLine) || [];
+    if (r.status === MUTATION_ANCHOR_EXIT || r.status === 2 || r.status === null) {
+      errors++;
+      const why = r.status === null ? "did not finish (" + (r.signal || (r.error && r.error.code) || "no exit code") + ")"
+        : ((out.trim().split("\n").filter(l => /MUTATION ANCHOR ERROR|Unknown MUTATE|REFUSED|ERROR/.test(l)).pop()) ||
+           out.trim().split("\n").pop() || String(r.stderr || "").trim().split("\n").pop() || "exit " + r.status);
+      console.log("    ERROR     " + name.padEnd(width) + " " + why);
+      continue;
+    }
+    if (r.status !== 0 && fails.length > 0) {
+      caught++;
+      console.log("    caught    " + name.padEnd(width) + " " + fails.length + " failing check(s)  e.g. " + fails[0].trim().replace(/^FAIL\s*/, "").slice(0, 100));
+    } else {
+      survived++;
+      console.log("    SURVIVED  " + name.padEnd(width) + " exit " + r.status + ", " + fails.length + " failing check(s)" +
+        (r.stderr ? "  stderr: " + String(r.stderr).trim().split("\n")[0].slice(0, 120) : ""));
+    }
+  }
+  console.log("\nMUTATION SUMMARY: mutations=" + names.length + " caught=" + caught + " survived=" + survived + " errors=" + errors);
+  const ok = survived === 0 && errors === 0;
+  console.log(ok ? "ALL CHECKS PASSED — every one of " + names.length + " mutations was caught"
+    : "CHECKS FAILED: " + survived + " mutation(s) survived, " + errors + " mutation(s) could not be applied");
+  process.exit(ok ? 0 : 1);
+}
+
+module.exports={after,before,braceMatch,definitionOf,routeCode,STUBS,closureFor,fakeSupabase,build,call,strip,norm,F,AGENTS,
+  MUTATION_ANCHOR_EXIT,mutationAnchorError,replaceOnce,replaceRegexOnce,requireChanged,runAllMutations};

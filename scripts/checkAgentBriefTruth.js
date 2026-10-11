@@ -154,6 +154,9 @@ const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms
   "harnessgate", "allowlist", "modelpass", "taskdefault",
   "thinkinggate", "thinkingpass", "thinkingsend", "haikuceiling", "sonnetceiling", "thinkingnull", "thinkingretry"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
 let failures = 0;
@@ -162,8 +165,7 @@ function check(label, ok, detail) {
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
 }
 function mutate(src, from, to, what) {
-  if (src.split(from).length !== 2) { console.error("MUTATION REFUSED (" + what + "): anchor not found exactly once."); process.exit(3); }
-  return src.replace(from, () => to);
+  return MUT.replaceOnce(src, from, to, what);
 }
 
 let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
@@ -273,7 +275,8 @@ if (MUTATE === "screen") {
   console.log("\n!! MUTATION: processAiTask screens the output but stores the original — 17 must fail.");
 }
 if (MUTATE === "cue") {
-  SERVER = mutate(SERVER, "    if (!(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;\n", "", "cue");
+  // The cue now shares its condition with insideSlot; a cue that never exempts is the same as the line removed.
+  SERVER = mutate(SERVER, "        !(CUSTOMER_CUE.test(before) || CUSTOMER_CUE.test(after) || SIGNATURE.test(after))) continue;\n", "        false) continue;\n", "cue");
   console.log("\n!! MUTATION: any first-person quote is taken out, attributed or not — 17 must fail.");
 }
 function def(name) {
@@ -327,8 +330,10 @@ if (MUTATE === "social") {
 }
 if (MUTATE === "invent") {
   BRAIN = mutate(BRAIN, `    BRAIN_DIRECTIVES,\n    String(agentSpecificPrompt || "").trim(),`, `    BRAIN_DIRECTIVES,\n    NO_INVENTION_RULE,\n    String(agentSpecificPrompt || "").trim(),`, "invent");
-  BRAIN = mutate(BRAIN, `    formatMemories(memories),\n    NO_INVENTION_RULE\n  ].join`, `    formatMemories(memories)\n  ].join`, "invent");
-  console.log("\n!! MUTATION: the no-invention rule sits with the directives, ahead of the agent prompt and memory — 11 must fail.");
+  // The rule is MOVED, never deleted: the edit above puts it directly after the directives, and this
+  // removes the final blocks.push that made it last (config/brain.js), so it appears once, earlier.
+  BRAIN = mutate(BRAIN, `  blocks.push(NO_INVENTION_RULE);\n`, ``, "invent");
+  console.log("\n!! MUTATION: the no-invention rule is pushed directly after the directives, before the agent prompt, profile, stats and memories, and its final blocks.push is removed — it is no longer last, so 11's ordering assertion must fail.");
 }
 if (MUTATE === "owner") {
   BRAIN = mutate(BRAIN, /IT WORKS ON ONE ACCOUNT ONLY:[^"]*"/.exec(BRAIN)[0],

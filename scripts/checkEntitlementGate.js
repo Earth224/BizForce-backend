@@ -32,6 +32,9 @@
    ══════════════════════════════════════════════════════════════════════════ */
 
 require("dotenv").config();
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["ungate-one"]);
 
 /* Nothing here should write a row. The guard is installed anyway: if some
    layer ever does, it is cleaned up on every way out rather than left in a
@@ -197,7 +200,8 @@ async function countsFor(userId) {
   if (process.env.MUTATE === "ungate-one") {
     const victim = layerFor(ROUTES[0].path, ROUTES[0].method);
     const idx = victim.route.stack.map(function (l) { return l.handle.name; }).indexOf("requireActiveSubscription");
-    if (idx !== -1) {
+    if (idx === -1) MUT.mutationAnchorError("ungate-one: requireActiveSubscription is not on " + ROUTES[0].method.toUpperCase() + " " + ROUTES[0].path + ", so there is nothing to remove");
+    {
       victim.route.stack.splice(idx, 1);
       console.log("\n!! MUTATION: requireActiveSubscription removed from " +
         ROUTES[0].method.toUpperCase() + " " + ROUTES[0].path + " — the checks below must fail.");

@@ -44,6 +44,9 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 
 const MUTATIONS = ["digit-count", "word-count", "extra-agent"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -94,7 +97,7 @@ const decl = /^(?:const|var|let) AGENT_SYSTEM_PROMPTS\s*=\s*\{/m.exec(SRC);
 if (!decl) { console.log("    FAIL  AGENT_SYSTEM_PROMPTS not found in server.js"); process.exit(1); }
 const open = SRC.indexOf("{", decl.index);
 let literal = SRC.slice(open, braceMatch(SRC, open));
-if (MUTATE === "extra-agent") literal = literal.replace(/\}\s*$/, ', check_extra_agent: "added by MUTATE=extra-agent" }');
+if (MUTATE === "extra-agent") literal = MUT.replaceRegexOnce(literal, /\}\s*$/, ', check_extra_agent: "added by MUTATE=extra-agent" }', "extra-agent");
 const keys = Object.keys(vm.runInNewContext("(" + literal + ")", {}));
 const EXPECTED = keys.length;
 const declLine = SRC.slice(0, decl.index).split("\n").length;
@@ -118,6 +121,8 @@ function read(file) {
 function mutateSite(file, what, n) {
   const site = SITES.find(function (s) { return s.file === file && s.what === what; });
   const text = read(file);
+  const hits = (text.match(new RegExp(site.re.source, site.re.flags.replace("g", "") + "g")) || []).length;
+  if (hits !== 1) MUT.mutationAnchorError(MUTATE + ": expected exactly one match of " + site.re + " in " + file + ", found " + hits);
   const m = site.re.exec(text);
   const token = m[1];
   const replacement = /^\d+$/.test(token) ? String(n) : asWord(n, token);

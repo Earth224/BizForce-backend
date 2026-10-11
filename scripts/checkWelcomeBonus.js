@@ -50,6 +50,9 @@ const SERVER_PATH = path.join(REPO, "server.js");
 
 const MUTATIONS = ["grant-twice", "register-grant"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
   console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", "));
   process.exit(2);
@@ -78,9 +81,7 @@ let compiledSource = null;
       content = content.replace(/\r\n/g, "\n");
       if (MUTATE) {
         const edit = EDITS[MUTATE];
-        const hits = content.split(edit.from).length - 1;
-        if (hits !== 1) { console.error("MUTATION REFUSED: expected exactly one anchor, found " + hits); process.exit(1); }
-        content = content.replace(edit.from, edit.to);
+        content = MUT.replaceOnce(content, edit.from, edit.to, MUTATE);
         console.error("\n!! MUTATION: " + edit.say);
       }
       compiledSource = content;

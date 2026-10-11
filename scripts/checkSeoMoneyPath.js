@@ -238,6 +238,9 @@ const MUTATIONS = ["allowlist", "silent", "both", "listingrule", "gencheck", "pu
   "noquestion", "nodecline", "norepair", "repairloops", "repairunscreened", "norecord",
   "nosystems", "nothosted", "hostedanymode", "hostedwording"];
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
 if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) { console.error("Unknown MUTATE=" + MUTATE + ". Known: " + MUTATIONS.join(", ")); process.exit(2); }
 
 let failures = 0;
@@ -246,8 +249,7 @@ function check(label, ok, detail) {
   else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
 }
 function mutate(src, from, to, what) {
-  if (src.split(from).length !== 2) { console.error("MUTATION REFUSED (" + what + "): anchor not found exactly once."); process.exit(3); }
-  return src.replace(from, () => to);
+  return MUT.replaceOnce(src, from, to, what);
 }
 
 let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");

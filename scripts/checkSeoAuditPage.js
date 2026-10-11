@@ -51,6 +51,7 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const BEFORE = "8a47d80";
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
 
 const MUTATIONS = {
   // a response without a flags array is rendered as a clean page
@@ -80,28 +81,15 @@ const MUTATIONS = {
     "'<div class=\"ap-zone-label\">Written by the model.</div>' + parts.join(\"\") + '</div>';"]]
 };
 
-if (MUTATE === "all") {
-  const names = Object.keys(MUTATIONS);
-  let survived = 0;
-  for (const name of names) {
-    const r = spawnSync(process.execPath, [__filename], { env: Object.assign({}, process.env, { MUTATE: name }), encoding: "utf8", timeout: 300000 });
-    const fails = (r.stdout.match(/^ {4}FAIL {2}.*$/gm) || []);
-    const caught = r.status !== 0 && fails.length > 0;
-    if (!caught) survived++;
-    console.log((caught ? "    caught    " : "    SURVIVED  ") + name.padEnd(26) + " " + fails.length + " failing check(s)" +
-      (fails.length ? "  e.g. " + fails[0].trim().slice(6, 110) : (r.stderr ? "  stderr: " + r.stderr.trim().split("\n")[0] : "")));
-  }
-  console.log(survived === 0 ? "\nALL CHECKS PASSED — every one of " + names.length + " mutations was caught" : "\nCHECKS FAILED: " + survived + " mutation(s) survived");
-  process.exit(survived === 0 ? 0 : 1);
-}
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 let NEW_SRC = fs.readFileSync(path.join(FRONTEND, "scripts", "agent-profile.js"), "utf8").replace(/\r\n/g, "\n");
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
   for (const [from, to] of edits) {
-    if (NEW_SRC.split(from).length !== 2) { console.log("    FAIL  mutation anchor not found exactly once: " + from.slice(0, 80)); process.exit(1); }
-    NEW_SRC = NEW_SRC.replace(from, () => to);
+    NEW_SRC = MUT.replaceOnce(NEW_SRC, from, to, MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE + " (agent-profile.js, in memory)");
 }

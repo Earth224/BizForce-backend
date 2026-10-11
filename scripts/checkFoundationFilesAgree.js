@@ -64,6 +64,9 @@ const DIR = path.join(__dirname, "..", "supabase", "migrations");
 const FILE_000 = path.join(DIR, "000_foundation_tables.sql");
 const FILE_071 = path.join(DIR, "071_transcribe_foundation_tables.sql");
 const MUTATE = process.env.MUTATE || "";
+const MUT = require("./_shared");
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, ["drift-column", "drift-statement", "drift-search-path", "drift-whitespace"]);
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -136,27 +139,22 @@ const sql071 = load(FILE_071);
 
 /* ── the mutation, applied to 000's text before parsing ─────────────────── */
 if (MUTATE === "drift-column") {
-  const before = sql000;
-  sql000 = sql000.replace(/(create table if not exists public\.ai_tasks \([\s\S]*?)\n\s*result text,?\n/i, "$1\n");
-  if (sql000 === before) { console.error("MUTATION REFUSED: could not find ai_tasks.result to remove."); process.exit(1); }
+  sql000 = MUT.replaceRegexOnce(sql000, /(create table if not exists public\.ai_tasks \([\s\S]*?)\n\s*result text,?\n/i, "$1\n", "drift-column");
   console.log("\n!! MUTATION: ai_tasks.result removed from 000's copy — layer 1 must fail.");
 } else if (MUTATE === "drift-statement") {
   const before = sql000;
-  const idx = sql000.search(/do \$\$ begin if not exists \(select 1 from pg_policy where polname = 'Public read videos'/i);
-  if (idx === -1) { console.error("MUTATION REFUSED: could not find the 'Public read videos' policy block."); process.exit(1); }
+  const POLICY = /do \$\$ begin if not exists \(select 1 from pg_policy where polname = 'Public read videos'/i;
+  MUT.replaceRegexOnce(sql000, POLICY, "", "drift-statement");   // exactly one such block, or the error
+  const idx = sql000.search(POLICY);
   const end = sql000.indexOf("end $$;", idx) + "end $$;".length;
   sql000 = sql000.slice(0, idx) + sql000.slice(end);
-  if (sql000 === before) { console.error("MUTATION REFUSED: nothing removed."); process.exit(1); }
+  MUT.requireChanged(before, sql000, "drift-statement");
   console.log("\n!! MUTATION: the 'Public read videos' policy removed from 000's copy — layer 2 must fail.");
 } else if (MUTATE === "drift-search-path") {
-  const before = sql000;
-  sql000 = sql000.replace(/set search_path = public, extensions/i, "set search_path = public");
-  if (sql000 === before) { console.error("MUTATION REFUSED: could not find 000's search_path statement."); process.exit(1); }
+  sql000 = MUT.replaceRegexOnce(sql000, /set search_path = public, extensions/i, "set search_path = public", "drift-search-path");
   console.log("\n!! MUTATION: 000's search_path reverted to public alone -- layers 2 and 3 must fail.");
 } else if (MUTATE === "drift-whitespace") {
-  const before = sql000;
-  sql000 = sql000.replace(/set search_path = public, extensions/i, "set  search_path = public,  extensions");
-  if (sql000 === before) { console.error("MUTATION REFUSED: could not find 000's search_path statement."); process.exit(1); }
+  sql000 = MUT.replaceRegexOnce(sql000, /set search_path = public, extensions/i, "set  search_path = public,  extensions", "drift-whitespace");
   console.log("\n!! MUTATION: 000's search_path re-spaced -- layer 2 must stay green, layer 3 must fail.");
 } else if (MUTATE) {
   console.error("Unknown MUTATE value: " + MUTATE + " (use drift-column, drift-statement, drift-search-path or drift-whitespace)");
