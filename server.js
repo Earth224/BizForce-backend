@@ -46,7 +46,7 @@ const { Webhook: SvixWebhook } = require("svix");
 const { DateTime } = require("luxon");
 const { buildAgentSystemPrompt, useBillingPlans } = require("./config/brain");
 const { RichText } = require("@atproto/api");
-const { startLeadRadar, bskyAgent, ensureBskyLogin } = require("./leadRadar");
+const { startLeadRadar, bskyGate } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
@@ -41391,83 +41391,8 @@ function withOutreachTracking(message, destination, lead) {
    widened who gets messaged. */
 const OUTREACH_MAX_POST_AGE_DAYS = 7;
 
-/* Is this thrown thing Bluesky telling us to stop?
-
-   @atproto/api rejects with an XRPCError carrying a numeric `status` and a
-   string `error`; 429 is ResponseType.RateLimitExceeded and the error string
-   is "RateLimitExceeded". Both are checked, plus a couple of shapes the SDK
-   does not itself produce — a bare `statusCode`, a wrapped `response.status`
-   — because this value has been through a catch by the time it reaches here
-   and the one outcome worth avoiding is a rate limit read as a generic
-   failure and retried into a harder one.
-
-   Name-only matching is deliberately NOT done on the message text. A message
-   containing "rate limit" is not evidence, and the point of this check is to
-   change behaviour, so a false positive would stop a pass that had no reason
-   to stop. Status codes are the evidence. */
-function isBlueskyRateLimit(err) {
-  if (!err) return false;
-
-  var status = err.status;
-  if (status == null) status = err.statusCode;
-  if (status == null && err.response) status = err.response.status;
-
-  if (Number(status) === 429) return true;
-
-  return String(err.error || "") === "RateLimitExceeded";
-}
-
-/* When the limit lifts, if the response says so. Bluesky sends
-   `ratelimit-reset` as a UNIX epoch SECOND, not a duration, which is the
-   trap here: reading it as "seconds from now" would report a wait of about
-   fifty-six years. It is converted to a remaining duration; the standard
-   `retry-after`, when present, is already a duration and is taken as one.
-
-   Returns null when the response carries neither, which is a normal answer
-   and not an error — nothing in this file depends on having a number, and a
-   guess would be worse than the absence. Headers arrive as an XRPC HeadersMap
-   with lowercase keys; both cases are read anyway, since this object has been
-   through a catch and is not guaranteed to be the SDK’s own. */
-function blueskyRetryAfterSeconds(err) {
-  var headers = (err && (err.headers || (err.response && err.response.headers))) || null;
-  if (!headers || typeof headers !== "object") return null;
-
-  function header(name) {
-    if (typeof headers.get === "function") {
-      try { return headers.get(name); } catch (getErr) { /* not a Headers */ }
-    }
-    return headers[name] != null ? headers[name] : headers[name.toUpperCase()];
-  }
-
-  /* Presence is tested before parsing, never after. Headers.get() returns
-     null for a header that is not there and Number(null) is 0, not NaN — so
-     an isFinite check alone would read a MISSING retry-after as a retry-after
-     of zero seconds and report "retry immediately" for a response that said
-     nothing at all. Same discipline as the OUTREACH_MIN_INTENT parser, and
-     the same trap. */
-  function headerNumber(name) {
-    var raw = header(name);
-    if (raw == null || String(raw).trim() === "") return null;
-
-    var parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  var retryAfter = headerNumber("retry-after");
-  if (retryAfter != null && retryAfter >= 0) {
-    return Math.round(retryAfter);
-  }
-
-  // Epoch seconds, so the remaining wait is reset minus now. A reset already
-  // in the past reports 0 rather than a negative number: the limit has
-  // lifted, and "0" says that where "-4" would just look broken.
-  var reset = headerNumber("ratelimit-reset");
-  if (reset != null && reset > 0) {
-    return Math.max(0, Math.round(reset - Date.now() / 1000));
-  }
-
-  return null;
-}
+/* Rate-limit detection and the wait a 429 asks for live in lib/bskyGate.js now,
+   with the one session both the radar and this sender use. */
 
 // Bluesky reply-send. Gated behind SALES_SEND_LIVE — a NEW flag, entirely
 // separate from SALES_AUTOLOOP_DRY_RUN (which only controls AI drafting/
@@ -41518,59 +41443,55 @@ async function sendBlueskyReply(lead, replyText) {
     return { sent: false, reason: "send_dry" };
   }
 
+  /* THROUGH THE GATE (lib/bskyGate.js), never a fresh login: the session the
+     radar already holds is reused, a login happens only when there is none,
+     and a back-off in force answers rate_limited here without calling
+     Bluesky at all. */
+  if (bskyGate.backoffRemainingMs() > 0) {
+    var waitSeconds = Math.ceil(bskyGate.backoffRemainingMs() / 1000);
+    console.error("[SendBluesky] Not posting to " + handle + " — Bluesky rate-limit back-off until " +
+      new Date(bskyGate.backoffUntil()).toISOString() + ". Nothing was posted and nothing was recorded.");
+    return { sent: false, reason: "rate_limited", retry_after_seconds: waitSeconds, error: "bluesky_backoff_in_force" };
+  }
+
+  var postRef = { uri: lead.post_uri, cid: lead.post_cid };
+  var postRecord = {
+    text: text,
+    reply: { root: postRef, parent: postRef },
+    createdAt: new Date().toISOString()
+  };
+
+  // Omitted entirely rather than sent as an empty array, so a reply with no
+  // links produces the same record it always has.
+  if (facets.length) {
+    postRecord.facets = facets;
+  }
+
   try {
-    var loggedIn = await ensureBskyLogin();
-    if (!loggedIn) {
-      console.error("[SendBluesky] Not logged in, cannot post reply to " + handle);
-      return { sent: false, reason: "post_error", error: "bluesky_login_failed" };
+    var posted = await bskyGate.call(function (agent) { return agent.post(postRecord); });
+
+    if (posted.ok) {
+      return { sent: true, uri: posted.value && posted.value.uri };
     }
 
-    var postRef = { uri: lead.post_uri, cid: lead.post_cid };
-    var postRecord = {
-      text: text,
-      reply: { root: postRef, parent: postRef },
-      createdAt: new Date().toISOString()
-    };
-
-    // Omitted entirely rather than sent as an empty array, so a reply with no
-    // links produces the same record it always has.
-    if (facets.length) {
-      postRecord.facets = facets;
-    }
-
-    var postResult = await bskyAgent.post(postRecord);
-
-    return { sent: true, uri: postResult && postResult.uri };
-  } catch (err) {
     /* A rate limit is not a failed post, it is the account being told to
-       stop, and the two must not return the same thing. Reported before the
-       generic branch and with its own reason so the caller can act on it;
-       "post_error" means one lead went wrong and the next may be fine, which
-       is the opposite of what this means.
-
-       NO RETRY, no sleep, no backoff, by design. Retrying into a rate limit
-       is how a limit becomes a suspension, and this account is also the one
-       leadRadar.js runs capture with — losing it costs more than the send.
-       The wait is returned for the caller to log and act on, not to await. */
-    if (isBlueskyRateLimit(err)) {
-      var retryAfter = blueskyRetryAfterSeconds(err);
-
+       stop, and the two must not return the same thing. NO RETRY, no sleep:
+       the gate has set the back-off, and every later call will be refused
+       until it ends. The wait is returned for the caller to log, not await. */
+    if (posted.reason === "rate_limited") {
       console.error("[SendBluesky] RATE LIMITED by Bluesky posting to " + handle +
-        (retryAfter == null
-          ? " — the response carried no retry-after or ratelimit-reset, so how long is unknown."
-          : " — retry after roughly " + retryAfter + "s.") +
-        " Not retrying and not backing off: this is the same account leadRadar" +
-        " captures with, and retrying into a limit is how it gets suspended." +
-        " Nothing was posted and nothing was recorded. (" + (err.message || err) + ")");
-
+        " — no Bluesky call until " + posted.resumes_at + ". Nothing was posted and nothing was recorded.");
       return {
         sent: false,
         reason: "rate_limited",
-        retry_after_seconds: retryAfter,
-        error: err.message || String(err)
+        retry_after_seconds: posted.retry_after_seconds,
+        error: posted.error || "bluesky_rate_limited"
       };
     }
 
+    console.error("[SendBluesky] Not logged in, cannot post reply to " + handle + " (" + posted.reason + ")");
+    return { sent: false, reason: "post_error", error: "bluesky_login_failed" };
+  } catch (err) {
     console.error("[SendBluesky] Failed to post reply to " + handle + ":", err.message || err);
     return { sent: false, reason: "post_error", error: err.message || String(err) };
   }
@@ -41584,7 +41505,7 @@ function truncateToMastodonLimit(text) {
   return chars.slice(0, 497).join("") + "…";
 }
 
-/* The Mastodon equivalent of blueskyRetryAfterSeconds, and separate from it
+/* The Mastodon equivalent of requestedWaitMs in lib/bskyGate.js, and separate from it
    for one reason that matters: THE RESET HEADER IS A DIFFERENT FORMAT.
    Bluesky sends `ratelimit-reset` as a UNIX epoch second; Mastodon sends
    `X-RateLimit-Reset` as an ISO 8601 datetime string. Number() on the ISO
@@ -41608,7 +41529,7 @@ function mastodonRetryAfterSeconds(response) {
   var headers = response && response.headers;
   if (!headers || typeof headers.get !== "function") return null;
 
-  /* Present-then-parse, for the reason blueskyRetryAfterSeconds spells out:
+  /* Present-then-parse, for the reason requestedWaitMs (lib/bskyGate.js) spells out:
      Headers.get() answers null for an absent header and Number(null) is 0,
      so parsing first would turn "no retry-after header" into "retry after 0
      seconds" — a confident wrong answer where null is the honest one. */
@@ -45731,9 +45652,20 @@ app.listen(PORT, function () {
     console.log("[startup] agent chaining disabled (ENABLE_AGENT_CHAINING not exactly \"true\"); dispatchToolCall refuses every call.");
   }
 
-  startLeadRadar().catch(function (err) {
-    console.error("[LeadRadar] startup error:", err.message || err);
-  });
+  /* ONLY WHEN THIS FILE IS THE PROGRAM. The radar logs in to the one live
+     Bluesky account at startup and searches 32 phrases every five minutes. The
+     check scripts load server.js to test it — about twenty of them — and every
+     one of those loads started the radar against the live account, a login
+     each, which is how a suite run hammered the login into 429s. Production
+     runs `node server.js` (package.json "start"), where this holds. */
+  if (require.main === module) {
+    startLeadRadar().catch(function (err) {
+      console.error("[LeadRadar] startup error:", err.message || err);
+    });
+  } else {
+    console.log("[startup] Lead Radar not started: server.js was loaded by another script (a check), not run as the program, " +
+      "and the radar would log in to the live Bluesky account.");
+  }
 
   // Fire once ~60s after boot (so it doesn't compete with startup load),
   // then on its own independent 5-minute interval thereafter. Gated behind

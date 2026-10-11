@@ -27,8 +27,10 @@
         path, a query string or Stripe is held; and a supplement draft linking
         bizforceai.net is now held too — the one tightening, and the
         supplement instruction already forbade any URL but its own.
-     5. Sending: every server.js line naming a send flag is identical to
-        BASELINE.
+     5. Sending: every server.js code line naming a send flag (comments
+        stripped) is identical to BASELINE, and so are sendMastodonReply and
+        canSendOutreach. sendBlueskyReply's behaviour is pinned by
+        checkBskyGate.js since it moved onto the shared Bluesky gate.
 
    MUTATIONS — each must turn the named section red:
      MUTATE=keywords     the BizForce phrases are never searched      → 1
@@ -232,11 +234,20 @@ async function draftRun(src, product, modelMessage) {
     !cross.sent && cross.reason === "draft_rejected" && cross0.sent, JSON.stringify([cross0.sent, cross.sent]));
 
   console.log("\n══ 5. sending is unchanged ══");
-  const flagLines = src => src.split("\n").filter(l => /ENABLE_SALES_AUTOLOOP|SALES_SEND_LIVE|SALES_AUTOLOOP_DRY_RUN|OUTREACH_DAILY_CAP|OUTREACH_ACCOUNT_DAILY_CEILING|OUTREACH_MIN_INTENT|SALES_AUTOLOOP_DAILY_DRAFT_CAP/.test(l)).join("\n");
-  check("5. every server.js line naming a send flag is identical to " + BASELINE, flagLines(SERVER) === flagLines(SERVER0),
+  /* Code only, comments stripped (Stop anything hammering the Bluesky login):
+     a comment that named a flag moved with the code it described into
+     lib/bskyGate.js, and a comment is not a send flag. */
+  const codeOnly = src => src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+  const flagLines = src => codeOnly(src).split("\n").filter(l => /ENABLE_SALES_AUTOLOOP|SALES_SEND_LIVE|SALES_AUTOLOOP_DRY_RUN|OUTREACH_DAILY_CAP|OUTREACH_ACCOUNT_DAILY_CEILING|OUTREACH_MIN_INTENT|SALES_AUTOLOOP_DAILY_DRAFT_CAP/.test(l)).map(l => l.trimEnd()).join("\n");
+  check("5. every server.js code line naming a send flag (comments stripped) is identical to " + BASELINE, flagLines(SERVER) === flagLines(SERVER0),
     flagLines(SERVER).split("\n").length + " lines");
-  check("5. sendBlueskyReply, sendMastodonReply and canSendOutreach are identical to " + BASELINE,
-    ["sendBlueskyReply", "sendMastodonReply", "canSendOutreach"].every(n => defs(SERVER, [n]) === defs(SERVER0, [n])));
+  /* sendBlueskyReply now posts through the shared Bluesky gate, so it is no
+     longer pinned to BASELINE here; what it sends — send_dry unless
+     SALES_SEND_LIVE is exactly "true", the 300-code-point cut, link facets
+     only after the cut, the reply target, the returned uri — is pinned by
+     scripts/checkBskyGate.js (section H). */
+  check("5. sendMastodonReply and canSendOutreach are identical to " + BASELINE,
+    ["sendMastodonReply", "canSendOutreach"].every(n => defs(SERVER, [n]) === defs(SERVER0, [n])));
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");

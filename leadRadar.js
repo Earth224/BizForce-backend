@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const { BskyAgent } = require("@atproto/api");
+const { createBskyGate } = require("./lib/bskyGate");
 const Anthropic = require("@anthropic-ai/sdk");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { runYoutubeRadarOnce } = require("./youtubeRadar");
@@ -160,52 +161,44 @@ function isBizforceLead(lead) {
   return !!lead && (lead.source || "bluesky") === "bluesky" && BIZFORCE_KEYWORDS.indexOf(lead.matched_keyword) !== -1;
 }
 
+/* ONE SESSION, ONE GATE (lib/bskyGate.js), shared with server.js's sender: the
+   session is reused, a login happens only when there is none (and once more on
+   an expired token), and a 429 anywhere stops every Bluesky call until the
+   back-off ends. The radar gives each tick a budget of one login attempt, so a
+   failing login can no longer be retried for each of its 32 searches. */
 const agent = new BskyAgent({ service: "https://bsky.social" });
-var agentLoggedIn = false;
+const bskyGate = createBskyGate({
+  agent: agent,
+  credentials: function () { return { identifier: BLUESKY_IDENTIFIER, password: BLUESKY_APP_PASSWORD }; }
+});
 
+// The session for a caller outside a tick (server.js). true when there is one.
 async function ensureBskyLogin() {
-  if (!BLUESKY_IDENTIFIER || !BLUESKY_APP_PASSWORD) {
-    console.log("[LeadRadar] skipped: missing or invalid Bluesky credentials");
-    return false;
-  }
-  try {
-    await agent.login({
-      identifier: BLUESKY_IDENTIFIER,
-      password:   BLUESKY_APP_PASSWORD
-    });
-    agentLoggedIn = true;
-    return true;
-  } catch (err) {
-    console.error("[LeadRadar] Bluesky login failed:", err.message || err);
-    agentLoggedIn = false;
-    return false;
-  }
+  var session = await bskyGate.ensureSession();
+  return session.ok === true;
 }
 
-async function withBsky(fn) {
-  if (!agentLoggedIn) {
-    var ok = await ensureBskyLogin();
-    if (!ok) return null;
-  }
-  try {
-    return await fn(agent);
-  } catch (err) {
-    var isAuthError =
-      (err.status === 401) ||
-      (err.error && (err.error === "AuthRequired" || err.error === "ExpiredToken"));
-    if (isAuthError) {
-      console.warn("[LeadRadar] Session expired, re-logging in...");
-      agentLoggedIn = false;
-      var ok = await ensureBskyLogin();
-      if (!ok) return null;
-      return await fn(agent);
-    }
-    throw err;
-  }
-}
+// The back-off end the radar last logged, so a skipped tick is logged once per back-off.
+var radarBackoffLogged = 0;
 
 async function runLeadRadarOnce() {
   try {
+    /* A back-off in force skips the BLUESKY CAPTURE this tick — every search,
+       and any login — logged once per back-off with the time it resumes. Only
+       the Bluesky part: radarTick still runs Mastodon, YouTube and scoring,
+       which never touch Bluesky, because leads not collected are gone for
+       good and a Bluesky rate limit is no reason to lose them. */
+    if (bskyGate.backoffRemainingMs() > 0) {
+      if (radarBackoffLogged !== bskyGate.backoffUntil()) {
+        radarBackoffLogged = bskyGate.backoffUntil();
+        console.log("[LeadRadar] Bluesky capture skipped — rate-limit back-off until " +
+          new Date(bskyGate.backoffUntil()).toISOString() + "; no search or login until then.");
+      }
+      return;
+    }
+
+    // One login attempt for the whole tick, whatever happens.
+    var tickBudget = { logins: 1 };
     var capturePhrases = KEYWORDS.concat(BIZFORCE_KEYWORDS);
     for (var i = 0; i < capturePhrases.length; i++) {
       var keyword = capturePhrases[i];
@@ -226,10 +219,21 @@ async function runLeadRadarOnce() {
            post_created_at against its own window before spending anything. */
         var sinceIso = new Date(Date.now() - CAPTURE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-        var result = await withBsky(function (a) {
+        var call = await bskyGate.call(function (a) {
           return a.app.bsky.feed.searchPosts({ q: keyword, limit: 25, sort: "latest", since: sinceIso });
-        });
+        }, tickBudget);
 
+        /* No session (a failed or refused login, missing credentials, the
+           tick's one login already spent) or a 429: the rest of this tick's
+           searches would fail the same way, so the tick ends here and the next
+           one tries again — never a login per keyword. */
+        if (!call.ok) {
+          console.log("[LeadRadar] Bluesky capture stopped for this tick at '" + keyword + "' — " + call.reason +
+            (call.resumes_at ? " (no Bluesky call until " + call.resumes_at + ")" : "") + ".");
+          break;
+        }
+
+        var result = call.value;
         if (!result || !result.data || !result.data.posts) continue;
 
         var rows = result.data.posts.map(function (post) {
@@ -942,4 +946,4 @@ async function scoreNewLeads() {
   }
 }
 
-module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS };
+module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, bskyGate, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS };
