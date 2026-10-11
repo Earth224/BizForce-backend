@@ -181,7 +181,83 @@ async function ensureBskyLogin() {
 // The back-off end the radar last logged, so a skipped tick is logged once per back-off.
 var radarBackoffLogged = 0;
 
+/* ── THE HEARTBEAT (migration 135, public.radar_status) ─────────────────────
+   One row per source, overwritten by the running radar: when the process
+   starts the radar, and at the end of every Bluesky capture tick, with what
+   that tick did. It answers "is the radar running?" from the database, where
+   a count of new leads cannot (the base rate is about one a day).
+
+   ONLY A STARTED RADAR WRITES IT. radarStarted is set by startLeadRadar alone,
+   so loading this file — as server.js does in every check that loads it, where
+   the radar is never started — writes nothing.
+
+   NEVER IN THE WAY. A heartbeat write that fails is logged, once per tick, and
+   never throws: the tick has already done its work and the next one must run.
+
+   NOTHING UNCOUNTED IS A 0. searches and captured are null when they were not
+   counted — a tick skipped for a back-off searched nothing, and a tick whose
+   insert count did not come back does not know what it captured. */
+var RADAR_HEARTBEAT_SOURCE = "bluesky";
+var radarStarted = false;
+
+async function writeRadarHeartbeat(fields, when) {
+  if (!radarStarted) return;
+  try {
+    var result = await supabase
+      .from("radar_status")
+      .upsert(Object.assign({ source: RADAR_HEARTBEAT_SOURCE }, fields), { onConflict: "source" });
+    if (result && result.error) {
+      console.error("[LeadRadar] heartbeat (" + when + ") not written: " + (result.error.message || result.error) + ". The radar carries on.");
+    }
+  } catch (heartbeatErr) {
+    console.error("[LeadRadar] heartbeat (" + when + ") not written: " + ((heartbeatErr && heartbeatErr.message) || heartbeatErr) + ". The radar carries on.");
+  }
+}
+
+/* One Bluesky capture tick, then its heartbeat — written however the tick
+   ended (finally), and only by a started radar (writeRadarHeartbeat). */
 async function runLeadRadarOnce() {
+  var tick = { startedAt: new Date().toISOString(), searches: 0, captured: 0, capturedKnown: true, stop: null, errors: [] };
+  try {
+    await captureBlueskyTick(tick);
+  } finally {
+    await writeRadarHeartbeat(tickHeartbeat(tick), "tick");
+  }
+}
+
+/* What the tick did, as a radar_status row. A stop (back-off, no credentials,
+   a failed login) is the outcome whatever else happened; otherwise captured
+   when it captured, an error when something failed or the insert count did
+   not come back, and nothing_new only when it searched, counted, and found
+   nothing new. A back-off skip searched nothing and counted nothing: null. */
+function tickHeartbeat(tick) {
+  var skipped = tick.stop && tick.stop.skipped;
+  var row = {
+    last_tick_started_at: tick.startedAt,
+    last_tick_finished_at: new Date().toISOString(),
+    searches: skipped ? null : tick.searches,
+    captured: skipped || !tick.capturedKnown ? null : tick.captured,
+    resumes_at: null,
+    last_error: tick.errors.length ? String(tick.errors[0]).slice(0, 1000) : null
+  };
+  if (tick.stop) {
+    row.last_outcome = tick.stop.outcome;
+    if (tick.stop.outcome === "backoff") row.resumes_at = tick.stop.resumes_at || null;
+    if (tick.stop.error) row.last_error = String(tick.stop.error).slice(0, 1000);
+  } else if (tick.capturedKnown && tick.captured > 0) {
+    row.last_outcome = "captured";
+  } else if (tick.errors.length) {
+    row.last_outcome = "error";
+  } else if (!tick.capturedKnown) {
+    row.last_outcome = "error";
+    row.last_error = "the insert count did not come back, so what was captured is unknown";
+  } else {
+    row.last_outcome = "nothing_new";
+  }
+  return row;
+}
+
+async function captureBlueskyTick(tick) {
   try {
     /* A back-off in force skips the BLUESKY CAPTURE this tick — every search,
        and any login — logged once per back-off with the time it resumes. Only
@@ -194,6 +270,7 @@ async function runLeadRadarOnce() {
         console.log("[LeadRadar] Bluesky capture skipped — rate-limit back-off until " +
           new Date(bskyGate.backoffUntil()).toISOString() + "; no search or login until then.");
       }
+      tick.stop = { outcome: "backoff", skipped: true, resumes_at: new Date(bskyGate.backoffUntil()).toISOString() };
       return;
     }
 
@@ -230,9 +307,15 @@ async function runLeadRadarOnce() {
         if (!call.ok) {
           console.log("[LeadRadar] Bluesky capture stopped for this tick at '" + keyword + "' — " + call.reason +
             (call.resumes_at ? " (no Bluesky call until " + call.resumes_at + ")" : "") + ".");
+          tick.stop = call.reason === "rate_limited"
+            ? { outcome: "backoff", resumes_at: call.resumes_at }
+            : call.reason === "no_credentials"
+              ? { outcome: "no_credentials" }
+              : { outcome: "login_failed", error: call.error || call.reason };
           break;
         }
 
+        tick.searches++;
         var result = call.value;
         if (!result || !result.data || !result.data.posts) continue;
 
@@ -296,6 +379,8 @@ async function runLeadRadarOnce() {
         // write, and both arrive in the same `error` and are handled the same.
         if (error) {
           console.error("[LeadRadar] Supabase upsert error for keyword '" + keyword + "':", error.message);
+          tick.errors.push("upsert for '" + keyword + "': " + error.message);
+          tick.capturedKnown = false;
           continue;
         }
 
@@ -303,16 +388,20 @@ async function runLeadRadarOnce() {
         // a different fact from "nothing was inserted" and should not be
         // printed as one.
         var insertedCount = Array.isArray(insertedRows) ? insertedRows.length : null;
+        if (insertedCount === null) tick.capturedKnown = false;
+        else tick.captured += insertedCount;
 
         console.log("[LeadRadar] " + keyword + " -> " + rows.length + " matched, " +
           (insertedCount === null ? "unknown" : insertedCount) + " new");
 
       } catch (kwErr) {
         console.error("[LeadRadar] Error processing keyword '" + keyword + "':", kwErr.message || kwErr);
+        tick.errors.push("'" + keyword + "': " + ((kwErr && kwErr.message) || kwErr));
       }
     }
   } catch (err) {
     console.error("[LeadRadar] runLeadRadarOnce error:", err.message || err);
+    tick.errors.push((err && err.message) || String(err));
   }
 }
 
@@ -434,6 +523,8 @@ async function startLeadRadar() {
   // the reason no longer applies to the tick as a whole. What is left is
   // capture (Bluesky, Mastodon, YouTube), which costs nothing and should
   // always run: leads not collected are gone for good.
+  radarStarted = true;
+  await writeRadarHeartbeat({ process_started_at: new Date().toISOString() }, "process start");
   radarTick().catch(function (err) {
     console.error("[LeadRadar] Initial run error:", err.message || err);
   });
