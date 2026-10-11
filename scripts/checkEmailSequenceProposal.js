@@ -67,8 +67,9 @@ const MUTATIONS = {
     "    } else if (latest.action === \"confirmed\" || latest.action === \"granted\") {\n"]],
   // a rerun creates a second sequence
   "second-sequence-on-rerun": [["  if (existing.data && existing.data.length > 0) {\n", "  if (false) {\n"]],
-  // a chain may dispatch the route
-  "chain-dispatchable": [["  \"sales/lead-status\",\n  \"email/propose-sequence\"\n];", "  \"sales/lead-status\"\n];"]]
+  // a chain may dispatch the route (Publish approved posts to Bluesky:
+  // social/propose-post now follows it in the list)
+  "chain-dispatchable": [["  \"sales/lead-status\",\n  \"email/propose-sequence\",\n", "  \"sales/lead-status\",\n"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.

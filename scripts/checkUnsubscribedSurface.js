@@ -150,7 +150,9 @@ const EXPECTED_GATED = [
   // A real SEO audit, measured before it is explained
   "post /api/agents/seo/audit",
   // File an email sequence for approval
-  "post /api/agents/email/propose-sequence"
+  "post /api/agents/email/propose-sequence",
+  // Publish approved posts to Bluesky
+  "post /api/agents/social/propose-post"
 ];
 
 const EXPECTED_ADMIN = [

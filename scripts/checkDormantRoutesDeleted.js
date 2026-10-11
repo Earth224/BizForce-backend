@@ -85,7 +85,8 @@ const ADDED = [
   ["post", "/api/agents/email/propose-sequence"], // File an email sequence for approval
   ["get", "/api/email/sequences"],                 // Let the owner see and stop every sequence
   ["get", "/api/email/sequences/:id"],             // Let the owner see and stop every sequence
-  ["post", "/api/email/sequences/:id/status"]     // Let the owner see and stop every sequence
+  ["post", "/api/email/sequences/:id/status"],    // Let the owner see and stop every sequence
+  ["post", "/api/agents/social/propose-post"]     // Publish approved posts to Bluesky
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

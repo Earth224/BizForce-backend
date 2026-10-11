@@ -120,7 +120,9 @@ app.get("/", (req, res) => {
 // Angeles year-round, under both PST (-8) and PDT (-7), so the verdict never
 // depends on when this is called or on which side of a DST change it lands.
 //
-// Only the two dates, the instant they came from, and the verdict are reported.
+// Only the two dates, the instant they came from, and the verdict are reported,
+// with one more verdict: graphemes_counted, whether Intl.Segmenter counts a
+// family emoji as the one grapheme Bluesky counts it as (see countGraphemes).
 // No versions, no build flags, no environment. This route is public.
 //
 // THE INSTANT IS REPORTED BECAUSE ITS ABSENCE WAS READ AS A BUG. Two ISO dates
@@ -146,7 +148,8 @@ function icuHealth() {
       probe_instant: ICU_PROBE_INSTANT,
       los_angeles: losAngeles,
       utc: utc,
-      timezone_applied: losAngeles !== utc
+      timezone_applied: losAngeles !== utc,
+      graphemes_counted: graphemesCounted()
     };
   } catch (err) {
     // A degraded runtime is the thing this probe exists to report, so the probe
@@ -155,8 +158,19 @@ function icuHealth() {
     // nothing about this deployment beyond locales and zone names.
     return {
       timezone_applied: false,
-      reason: String((err && err.message) || "unknown").slice(0, 80)
+      reason: String((err && err.message) || "unknown").slice(0, 80),
+      graphemes_counted: graphemesCounted()
     };
+  }
+}
+
+// Never throws, for the reason icuHealth never does.
+function graphemesCounted() {
+  try {
+    // A family emoji: three people joined by zero-width joiners, one grapheme.
+    return !!GRAPHEME_SEGMENTER && countGraphemes("\u{1F468}\u200D\u{1F469}\u200D\u{1F467}") === 1;
+  } catch (err) {
+    return false;
   }
 }
 
@@ -10296,6 +10310,12 @@ const PROPOSAL_EXECUTORS = {
     };
   },
 
+  // Posts an approved Bluesky draft from POST /api/agents/social/propose-post,
+  // as a top-level post through lib/bskyGate.js, and records its uri and cid.
+  // executePublishSocialPost is defined further down the file; it only runs at
+  // call time.
+  publish_social_post: executePublishSocialPost,
+
   // Creates an email sequence and enrolls the owner's confirmed contacts from
   // an approved POST /api/agents/email/propose-sequence. Sends nothing.
   // executeSendEmailSequence is defined further down the file; it only runs at
@@ -10318,6 +10338,14 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "send_email_sequence") {
       return res.status(400).json({
         error: "An email sequence cannot be filed here. Use POST /api/agents/email/propose-sequence with the task_id of a completed email/sequence run."
+      });
+    }
+
+    // A Bluesky post likewise: filed only from a drafted social/post run, by the
+    // route that reads that run's text.
+    if (actionType === "publish_social_post") {
+      return res.status(400).json({
+        error: "A social post cannot be filed here. Use POST /api/agents/social/propose-post with the task_id of a completed social/post run for Bluesky."
       });
     }
 
@@ -10565,8 +10593,10 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
 
 /* The action types whose execution puts something in front of strangers. A
    calendar event is the account's own record and stays free. An email sequence
-   is enrolled to be mailed to the owner's contacts. */
-const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence"];
+   is enrolled to be mailed to the owner's contacts. A social post is published
+   on Bluesky. */
+const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
+  "publish_social_post"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -26107,7 +26137,52 @@ var SOCIAL_PLATFORMS = {
     hashtag_max: null, hashtag_practical: 5,
     note: "2,200 characters is enforced for the caption. Very little of it is visible over the " +
           "video before it is cut, so the first line is effectively the caption."
+  },
+  bluesky: {
+    label: "Bluesky",
+    max: 300, kind: "hard", unit: "graphemes",
+    truncates_at: null,
+    hashtag_max: null, hashtag_practical: 2,
+    note: "300 graphemes is enforced: characters as a reader sees them, so an emoji built from " +
+          "several code points counts once. A longer post cannot be published as a single post."
   }
+};
+
+/* BLUESKY COUNTS GRAPHEMES, NOT String.length. String.length counts UTF-16 code
+   units: a family emoji is 8 of them and an accented letter typed as two code
+   points is 2, so a post Bluesky accepts would be reported over its limit, and
+   Array.from (code points) is wrong the same way, less often. Intl.Segmenter
+   with granularity "grapheme" is the only counter here that agrees with
+   Bluesky. It is looked for once, at boot. A runtime without it does not fall
+   back to a wrong count: Bluesky drafts are refused with a 503, and
+   /health's icu.graphemes_counted says false. */
+var BLUESKY_MAX_GRAPHEMES = 300;
+var GRAPHEME_SEGMENTER = (function () {
+  try {
+    if (typeof Intl === "undefined" || typeof Intl.Segmenter !== "function") return null;
+    return new Intl.Segmenter("en", { granularity: "grapheme" });
+  } catch (err) {
+    return null;
+  }
+})();
+if (!GRAPHEME_SEGMENTER) {
+  console.error("[social] Intl.Segmenter is not available in this runtime: Bluesky drafts will be refused with 503 rather than counted wrongly.");
+}
+
+// Throws when there is no segmenter; callers check GRAPHEME_SEGMENTER first.
+function countGraphemes(text) {
+  if (!GRAPHEME_SEGMENTER) {
+    throw new Error("Intl.Segmenter is not available, so graphemes cannot be counted.");
+  }
+  var count = 0;
+  for (var piece of GRAPHEME_SEGMENTER.segment(String(text))) count++;
+  return count;
+}
+
+var BLUESKY_UNCOUNTABLE = {
+  error: "Bluesky posts cannot be measured on this server: its runtime has no Intl.Segmenter, and counting " +
+    "Bluesky's 300-grapheme limit any other way would be wrong. Nothing was drafted or filed.",
+  code: "graphemes_uncountable"
 };
 
 /* Hashtags counted in code. The pattern deliberately requires a letter after the
@@ -26127,22 +26202,26 @@ function countHashtags(text) {
   return { total: matches.length, unique: unique, unique_count: unique.length };
 }
 
+/* A platform with unit "graphemes" (Bluesky) is measured with countGraphemes,
+   and says so in length_unit; every other platform keeps String.length and the
+   shape it always had. */
 function measureSocialPost(text, spec) {
   var value = String(text || "").trim();
   var tags = countHashtags(value);
+  var length = spec.unit === "graphemes" ? countGraphemes(value) : value.length;
 
-  return {
-    length: value.length,
+  var measured = {
+    length: length,
     limit: spec.max,
     limit_kind: spec.kind,
-    within_limit: value.length > 0 && value.length <= spec.max,
-    chars_over_limit: value.length > spec.max ? value.length - spec.max : 0,
+    within_limit: length > 0 && length <= spec.max,
+    chars_over_limit: length > spec.max ? length - spec.max : 0,
     truncates_at: spec.truncates_at,
     visible_before_truncation: spec.truncates_at
       ? value.slice(0, spec.truncates_at)
       : null,
-    chars_hidden_by_truncation: spec.truncates_at && value.length > spec.truncates_at
-      ? value.length - spec.truncates_at
+    chars_hidden_by_truncation: spec.truncates_at && length > spec.truncates_at
+      ? length - spec.truncates_at
       : 0,
     word_count: countWords(value),
     hashtag_count: tags.total,
@@ -26152,6 +26231,10 @@ function measureSocialPost(text, spec) {
     within_hashtag_max: spec.hashtag_max === null ? null : tags.total <= spec.hashtag_max,
     within_hashtag_practical_max: tags.total <= spec.hashtag_practical
   };
+  if (spec.unit) {
+    measured.length_unit = spec.unit;
+  }
+  return measured;
 }
 
 app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLimiter,
@@ -26176,6 +26259,12 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         });
       }
 
+      // A platform measured in graphemes, on a runtime that cannot count them:
+      // refused before anything is spent, never measured with the wrong unit.
+      if (SOCIAL_PLATFORMS[platformKey].unit === "graphemes" && !GRAPHEME_SEGMENTER) {
+        return res.status(503).json(BLUESKY_UNCOUNTABLE);
+      }
+
       // After validation, before anything is spent: a 400 records nothing, and a
       // run that cannot be recorded throws here rather than running unrecorded.
       var run = await startToolRun(req, {
@@ -26196,6 +26285,9 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         "Write one " + spec.label + " post for the idea below.\n\n" +
         "PLATFORM CONSTRAINTS:\n" +
         "- Hard limit: " + spec.max + " characters. Longer cannot be published.\n" +
+        (spec.unit === "graphemes"
+          ? "- " + spec.label + " counts characters as a reader sees them: each emoji counts as one.\n"
+          : "") +
         (spec.truncates_at
           ? "- Cut off at roughly " + spec.truncates_at + " characters behind a \"more\" link, so the " +
             "first " + spec.truncates_at + " characters have to carry the post on their own.\n"
@@ -26271,7 +26363,7 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         measured: Object.assign({}, m, {
           placeholders_left_for_you: (raw.match(/\[[A-Z][A-Z \-]+\]/g) || []),
           note: !m.within_limit
-            ? "This post is " + m.chars_over_limit + " characters over " + spec.label + "'s hard " +
+            ? "This post is " + m.chars_over_limit + " " + (spec.unit || "characters") + " over " + spec.label + "'s hard " +
               "limit of " + spec.max + " and cannot be published as written."
             : (m.chars_hidden_by_truncation > 0
                 ? "This post fits, but roughly " + m.chars_hidden_by_truncation + " characters sit " +
@@ -26561,6 +26653,313 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
       next(error);
     }
   });
+
+/* ── Filing a Bluesky post for approval ───────────────────────────────────────
+   POST /api/agents/social/propose-post turns a drafted Bluesky post (a
+   completed social/post run for platform "bluesky") into a social_post_drafts
+   row with status "pending_approval" and an agent_proposals row,
+   publish_social_post, that points at it. NOTHING HERE POSTS. Approving the
+   proposal runs executePublishSocialPost, which posts the text as a top-level
+   post through lib/bskyGate.js and records the uri and cid on the draft
+   (migration 136).
+
+   OWNER ONLY. There is one Bluesky account in this process (BLUESKY_IDENTIFIER),
+   so a post filed by anyone else would go out from the owner's account.
+
+   The text is the stored run's post and nothing else; text in the request body
+   is never read. The same checks run again at approval, and the executor trusts
+   nothing in the stored rows: it reads the draft and the source run back and
+   requires all three copies of the text to be the same. POST /api/proposals
+   refuses this action_type, and PUT /api/social-drafts/:id can neither set a
+   status only the server sets nor edit a draft that is filed or published. */
+var SOCIAL_POST_OWNER_ONLY =
+  "Filing a Bluesky post is limited to the owner account: posts go out from this platform's single Bluesky " +
+  "account, not from yours.";
+
+app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+
+      if (req.user.role !== "admin") {
+        return res.status(403).json({ error: SOCIAL_POST_OWNER_ONLY });
+      }
+      if (!GRAPHEME_SEGMENTER) {
+        return res.status(503).json(BLUESKY_UNCOUNTABLE);
+      }
+
+      var taskId = typeof req.body.task_id === "string" ? req.body.task_id.trim() : "";
+      if (!taskId) {
+        return res.status(400).json({ error: "task_id is required — the id of a completed social/post run for Bluesky." });
+      }
+
+      // Not found and not yours answer the same, so the response says nothing
+      // about another account's runs. A malformed id is not found either.
+      var notFound = { error: "No social post run with that task_id was found." };
+      if (!UUID_RE.test(taskId)) {
+        return res.status(404).json(notFound);
+      }
+      var taskRead = await supabase
+        .from("ai_tasks")
+        .select("id, task_type, status, output")
+        .eq("id", taskId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (taskRead.error) {
+        throw taskRead.error;
+      }
+      var task = taskRead.data;
+      if (!task) {
+        return res.status(404).json(notFound);
+      }
+      if (task.task_type !== "social/post") {
+        return res.status(400).json({ error: "That task is not a social post run (it is " + JSON.stringify(task.task_type) + ")." });
+      }
+      if (task.status !== "completed") {
+        return res.status(400).json({ error: "That social post run is not completed (it is " + JSON.stringify(task.status) + ")." });
+      }
+      var output = task.output || {};
+      if (output.platform !== "bluesky") {
+        return res.status(400).json({ error: "That run drafted a post for " + JSON.stringify(output.platform || null) + ", not Bluesky. Nothing was filed." });
+      }
+
+      // The text is the stored run's, exactly as stored, and nothing else: any
+      // text in the request body is never read.
+      var text = typeof output.post === "string" ? output.post : "";
+      if (!text.trim()) {
+        return res.status(400).json({ error: "That run's post is empty. Nothing was filed." });
+      }
+      var graphemes = countGraphemes(text);
+      if (graphemes > BLUESKY_MAX_GRAPHEMES) {
+        return res.status(400).json({
+          error: "That post is " + graphemes + " graphemes, over Bluesky's limit of " + BLUESKY_MAX_GRAPHEMES +
+            ". It cannot be published as written. Nothing was filed."
+        });
+      }
+
+      var draftInsert = await supabase
+        .from("social_post_drafts")
+        .insert({
+          user_id:       userId,
+          platform:      "bluesky",
+          content:       text,
+          status:        "pending_approval",
+          scheduled_for: null,
+          created_at:    nowIso(),
+          updated_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (draftInsert.error) {
+        throw draftInsert.error;
+      }
+      var draft = draftInsert.data;
+
+      var proposalInsert = await supabase
+        .from("agent_proposals")
+        .insert({
+          user_id:       userId,
+          agent_type:    "social",
+          action_type:   "publish_social_post",
+          title:         safeText("Bluesky post: " + text.replace(/\s+/g, " ").slice(0, 120), 200),
+          target:        "bluesky",
+          payload:       { draft_id: draft.id, text: text, source_task_id: task.id },
+          cost_amount:   0,
+          cost_currency: "USD",
+          reversible:    false,
+          status:        "pending",
+          created_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (proposalInsert.error) {
+        // A filed draft with no proposal could never be approved, and PUT may not
+        // edit it, so it is removed rather than left behind.
+        await supabase.from("social_post_drafts").delete().eq("id", draft.id).eq("user_id", userId);
+        throw proposalInsert.error;
+      }
+      var proposal = proposalInsert.data;
+
+      var linked = await supabase
+        .from("social_post_drafts")
+        .update({ proposal_id: proposal.id, updated_at: nowIso() })
+        .eq("id", draft.id)
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+      if (linked.error) {
+        throw linked.error;
+      }
+
+      return res.status(201).json({
+        draft: linked.data,
+        proposal: proposal,
+        measured: { length: graphemes, length_unit: "graphemes", limit: BLUESKY_MAX_GRAPHEMES },
+        note: "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
+          "top-level post, from the platform's Bluesky account."
+      });
+    } catch (error) {
+      console.error("[social/propose-post] Error:", error);
+      next(error);
+    }
+  });
+
+/* The publish_social_post executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal row; throws on any failure. Trusts nothing stored: the owner
+   must still be admin; the draft must exist, belong to the proposal's user and
+   be for Bluesky; the payload's text must equal both the draft's content and
+   the source run's stored post, and still be within 300 graphemes.
+
+   A REPLAY POSTS NOTHING. A draft already published with a uri is returned as
+   { already_published: true, uri }. Otherwise one top-level post goes out
+   through the gate — no reply field, link facets only, detected on the exact
+   text posted — and the draft is marked published only if it is still
+   pending_approval. Bluesky refusing, or rate limiting, marks the draft
+   publish_failed with the reason and throws. Nothing is retried here or later:
+   the gate has set any back-off, and a failed proposal is not approvable again. */
+async function executePublishSocialPost(proposal) {
+  var payload = proposal.payload || {};
+  var ownerId = proposal.user_id;
+
+  var text = payload.text;
+  if (typeof text !== "string" || !text.trim()) {
+    throw new Error("publish_social_post: the stored text is empty. Nothing was posted");
+  }
+  if (!GRAPHEME_SEGMENTER) {
+    throw new Error("publish_social_post: " + BLUESKY_UNCOUNTABLE.error + " Nothing was posted");
+  }
+  var graphemes = countGraphemes(text);
+  if (graphemes > BLUESKY_MAX_GRAPHEMES) {
+    throw new Error("publish_social_post: the stored text is " + graphemes + " graphemes, over Bluesky's limit of " +
+      BLUESKY_MAX_GRAPHEMES + ". Nothing was posted");
+  }
+
+  var ownerRead = await supabase
+    .from("users")
+    .select("role")
+    .eq("id", ownerId)
+    .maybeSingle();
+  if (ownerRead.error) {
+    throw ownerRead.error;
+  }
+  if (!ownerRead.data || ownerRead.data.role !== "admin") {
+    throw new Error("publish_social_post: " + SOCIAL_POST_OWNER_ONLY + " Nothing was posted");
+  }
+
+  var draftId = typeof payload.draft_id === "string" && UUID_RE.test(payload.draft_id) ? payload.draft_id : null;
+  if (!draftId) {
+    throw new Error("publish_social_post: the proposal names no draft. Nothing was posted");
+  }
+  var draftRead = await supabase
+    .from("social_post_drafts")
+    .select("id, user_id, platform, content, status, platform_post_uri, platform_post_cid")
+    .eq("id", draftId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (draftRead.error) {
+    throw new Error("publish_social_post: the draft could not be read (" + (draftRead.error.message || draftRead.error) + "). Nothing was posted");
+  }
+  var draft = draftRead.data;
+  if (!draft) {
+    throw new Error("publish_social_post: the draft is missing or not this owner's. Nothing was posted");
+  }
+  if (draft.platform !== "bluesky") {
+    throw new Error("publish_social_post: the draft is for " + JSON.stringify(draft.platform) + ", not Bluesky. Nothing was posted");
+  }
+  if (draft.content !== text) {
+    throw new Error("publish_social_post: the stored text differs from the draft's content. Nothing was posted");
+  }
+
+  var sourceTaskId = typeof payload.source_task_id === "string" && UUID_RE.test(payload.source_task_id)
+    ? payload.source_task_id : null;
+  if (!sourceTaskId) {
+    throw new Error("publish_social_post: the proposal names no source run, so its text cannot be checked against one. Nothing was posted");
+  }
+  var sourceRead = await supabase
+    .from("ai_tasks")
+    .select("id, task_type, status, output")
+    .eq("id", sourceTaskId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (sourceRead.error) {
+    throw new Error("publish_social_post: the source run could not be read (" + (sourceRead.error.message || sourceRead.error) + "). Nothing was posted");
+  }
+  var source = sourceRead.data;
+  if (!source || source.task_type !== "social/post" || source.status !== "completed" ||
+      !source.output || source.output.platform !== "bluesky") {
+    throw new Error("publish_social_post: the source run is missing, not this owner's, not a completed Bluesky social/post run. Nothing was posted");
+  }
+  if (source.output.post !== text) {
+    throw new Error("publish_social_post: the stored text differs from the post the source run drafted. Nothing was posted");
+  }
+
+  if (draft.status === "published" && draft.platform_post_uri) {
+    return { already_published: true, uri: draft.platform_post_uri, cid: draft.platform_post_cid || null };
+  }
+  if (draft.status !== "pending_approval") {
+    throw new Error("publish_social_post: the draft is " + JSON.stringify(draft.status) + ", not pending_approval. Nothing was posted");
+  }
+
+  // A new post, never a reply. Facets come from the exact text posted, which
+  // nothing shortens or rewrites, so their byte offsets point into it.
+  var record = { text: text, createdAt: nowIso() };
+  var facets = detectOutreachLinkFacets(text);
+  if (facets.length) {
+    record.facets = facets;
+  }
+
+  var outcome;
+  try {
+    outcome = await bskyGate.call(function (agent) { return agent.post(record); });
+  } catch (err) {
+    outcome = { ok: false, reason: "post_error", error: (err && err.message) || String(err) };
+  }
+
+  var posted = outcome.ok ? (outcome.value || {}) : null;
+  var uri = posted && typeof posted.uri === "string" && posted.uri ? posted.uri : null;
+  var cid = posted && typeof posted.cid === "string" && posted.cid ? posted.cid : null;
+
+  if (!uri) {
+    var why = outcome.ok
+      ? "Bluesky answered without a post uri, so whether the post went out cannot be confirmed."
+      : outcome.reason === "rate_limited"
+        ? "Bluesky rate limit: no Bluesky call until " + outcome.resumes_at + " (" + outcome.retry_after_seconds + "s)."
+        : "Bluesky did not take the post (" + outcome.reason + (outcome.error ? ": " + outcome.error : "") + ").";
+    var marked = await supabase
+      .from("social_post_drafts")
+      .update({ status: "publish_failed", publish_error: safeText(why, 1000), updated_at: nowIso() })
+      .eq("id", draft.id)
+      .eq("user_id", ownerId)
+      .eq("status", "pending_approval");
+    throw new Error("publish_social_post: " + why + " The draft is marked publish_failed" +
+      (marked.error ? " — except that marking it failed too (" + (marked.error.message || marked.error) + ")" : "") +
+      ". Nothing is retried automatically");
+  }
+
+  var publishedAt = nowIso();
+  var recorded = await supabase
+    .from("social_post_drafts")
+    .update({
+      status:            "published",
+      platform_post_uri: uri,
+      platform_post_cid: cid,
+      published_at:      publishedAt,
+      publish_error:     null,
+      updated_at:        publishedAt
+    })
+    .eq("id", draft.id)
+    .eq("user_id", ownerId)
+    .eq("status", "pending_approval")
+    .select("id")
+    .maybeSingle();
+  if (recorded.error || !recorded.data) {
+    throw new Error("publish_social_post: the post WAS published, at " + uri + " (cid " + cid + "), but the draft could not " +
+      "be marked published (" + (recorded.error ? (recorded.error.message || recorded.error) : "it was no longer pending_approval") +
+      "). Do not post it again");
+  }
+
+  return { uri: uri, cid: cid, published_at: publishedAt, draft_id: draft.id };
+}
 
 // ── Broker Agent tools ───────────────────────────────────────────────────────
 
@@ -30108,7 +30507,7 @@ var TOOL_INPUT_SPECS = {
   ],
   "social/post": [
     toolField("idea", "string", true, "What the post is about, up to 1000 characters."),
-    toolField("platform", "string", true, "Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin); anything else is a 400.")
+    toolField("platform", "string", true, "Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky); anything else is a 400.")
   ],
   "social/calendar": [
     toolField("goal", "string", true, "What the plan is for, up to 500 characters."),
@@ -30222,6 +30621,9 @@ var TOOL_INPUT_SPECS = {
     toolField("task_id", "string", true, "The id of a completed email/sequence run of yours; its stored steps are the steps filed. Unknown or not yours is a 404."),
     toolField("name", "string", true, "What to call the sequence, 1-100 characters."),
     toolField("brand", "string", false, "Enroll only contacts of this brand; must be a brand your contacts already have, otherwise a 400.")
+  ],
+  "social/propose-post": [
+    toolField("task_id", "string", true, "The id of a completed social/post run of yours for platform bluesky; its stored post is the text filed. Unknown or not yours is a 404.")
   ]
 };
 
@@ -30445,9 +30847,10 @@ function checkRoutesForShadowing() {
 /* Routes the catalogue admits that a chain may NOT run. Each one takes an
    action in the world or on live state — posting a generated article, writing a
    proposal set, fetching and reporting on a live site, sending outreach,
-   changing a lead's status, or filing an email sequence to be mailed to
-   contacts. A tool that only writes text for a person to read is
-   a safe thing to chain; a tool that acts is not, however good the plan looks.
+   changing a lead's status, filing an email sequence to be mailed to
+   contacts, or filing a post to be published on Bluesky. A tool that only
+   writes text for a person to read is a safe thing to chain; a tool that acts
+   is not, however good the plan looks.
    Refused by name so the reason is legible in the log. */
 var CHAIN_NON_DISPATCHABLE_TOOLS = [
   "store/generate-proposals",
@@ -30455,7 +30858,8 @@ var CHAIN_NON_DISPATCHABLE_TOOLS = [
   "seo/optimize",
   "sales/convert",
   "sales/lead-status",
-  "email/propose-sequence"
+  "email/propose-sequence",
+  "social/propose-post"
 ];
 
 /* The three limits. Each: absent or blank → the default; a whole number →
@@ -38841,6 +39245,15 @@ app.get("/api/social-drafts", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+/* ONLY THE SERVER MARKS A DRAFT FILED, PUBLISHED OR FAILED. Those three
+   statuses are written by POST /api/agents/social/propose-post and the
+   publish_social_post executor, and PUT refuses to set any of them. A draft
+   that is filed or published cannot be edited at all: what was approved is
+   what is posted, and what was posted is the record of it. Migration 136's
+   CHECK refuses "published" without a post uri as well, as a second lock. */
+const SOCIAL_DRAFT_SERVER_STATUSES = ["pending_approval", "published", "publish_failed"];
+const SOCIAL_DRAFT_LOCKED_STATUSES = ["pending_approval", "published"];
+
 app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
@@ -38848,11 +39261,41 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
     if (req.body.content       !== undefined) updates.content       = safeText(req.body.content, 10000) || null;
     if (req.body.status        !== undefined) updates.status        = safeText(req.body.status, 40)     || "pending";
     if (req.body.scheduled_for !== undefined) updates.scheduled_for = req.body.scheduled_for            || null;
+    if (updates.status !== undefined && SOCIAL_DRAFT_SERVER_STATUSES.indexOf(updates.status) !== -1) {
+      return res.status(400).json({
+        error: "status " + JSON.stringify(updates.status) + " is set only by the server, when a draft is filed for approval or published."
+      });
+    }
+
+    const current = await supabase
+      .from("social_post_drafts")
+      .select("id, status")
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (current.error) {
+      console.error("[social-drafts PUT] Supabase error:", {
+        code: current.error.code, message: current.error.message,
+        details: current.error.details, hint: current.error.hint
+      });
+      return res.status(500).json({ error: "Save failed" });
+    }
+    if (!current.data) {
+      return res.status(404).json({ error: "Draft not found" });
+    }
+    if (SOCIAL_DRAFT_LOCKED_STATUSES.indexOf(current.data.status) !== -1) {
+      return res.status(400).json({
+        error: "This draft is " + current.data.status + ", so it cannot be edited: what was filed is what is posted."
+      });
+    }
+
+    // Conditional on the status just read, so a draft filed in between is not edited.
     const { data, error } = await supabase
       .from("social_post_drafts")
       .update(updates)
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
+      .eq("status", current.data.status)
       .select("*").single();
     if (error) {
       console.error("[social-drafts PUT] Supabase error:", {

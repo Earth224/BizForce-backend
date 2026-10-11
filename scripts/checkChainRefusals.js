@@ -14,12 +14,13 @@
 
    WHAT THIS PROVES
 
-     1. BLOCKED TOOLS. Each of the six CHAIN_NON_DISPATCHABLE_TOOLS —
+     1. BLOCKED TOOLS. Each of the seven CHAIN_NON_DISPATCHABLE_TOOLS —
         store/generate-proposals, seo/generate-post, seo/optimize,
-        sales/convert, sales/lead-status, email/propose-sequence — is mounted, and a dispatch to it is
+        sales/convert, sales/lead-status, email/propose-sequence,
+        social/propose-post — is mounted, and a dispatch to it is
         refused tool_takes_external_action, with a body that satisfies its
         spec, from an entitled account. The handler never runs. The list in
-        server.js is exactly those six.
+        server.js is exactly those seven.
      2. ANOTHER USER'S PLAN. POST /api/assignments/dispatch, given an
         executive/plan row that belongs to someone else, refuses plan_not_found
         and runs nothing. The same assignment in the caller's own plan runs, so
@@ -47,7 +48,7 @@
    production. The model is stubbed; no request leaves the machine.
 
    MUTATE=blocked     the CHAIN_NON_DISPATCHABLE_TOOLS test in dispatchToolCall
-                      is disabled at compile time. All six must go red (the
+                      is disabled at compile time. All seven must go red (the
                       tripwires fire); 2 and 3 must stay green.
    MUTATE=cross-user  the dispatch route's .eq("user_id", userId) scope is
                       removed at compile time. 2 must go red; 1 and 3 green.
@@ -82,7 +83,8 @@ const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
 
 const BLOCKED = ["store/generate-proposals", "seo/generate-post", "seo/optimize", "sales/convert", "sales/lead-status",
-  "email/propose-sequence"];   // File an email sequence for approval
+  "email/propose-sequence",     // File an email sequence for approval
+  "social/propose-post"];       // Publish approved posts to Bluesky
 
 /* ── the mutations, at compile ──────────────────────────────────────────── */
 const MUTATION_EDITS = {
@@ -91,7 +93,7 @@ const MUTATION_EDITS = {
        line pins this anchor to the dispatcher's own test. */
     from: "  // 4. the target must be a real, dispatchable tool\n  if (CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {\n",
     to:   "  // 4. the target must be a real, dispatchable tool\n  if (false && CHAIN_NON_DISPATCHABLE_TOOLS.indexOf(key) !== -1) {\n",
-    say:  "the CHAIN_NON_DISPATCHABLE_TOOLS test is disabled — all six blocked tools must reach their tripwires."
+    say:  "the CHAIN_NON_DISPATCHABLE_TOOLS test is disabled — all seven blocked tools must reach their tripwires."
   },
   "cross-user": {
     from: "        .eq(\"id\", executiveTaskId)\n        .eq(\"user_id\", userId)\n",
@@ -274,12 +276,12 @@ async function recordActorRowsSince(actorGuard, actorId, sinceIso) {
   const sinceRun = new Date(Date.now() - 2000).toISOString();
 
   try {
-    /* ── 1. the six blocked tools ─────────────────────────────────────── */
-    console.log("\n══ 1. the six tools a chain may not run ══");
+    /* ── 1. the seven blocked tools ───────────────────────────────────── */
+    console.log("\n══ 1. the seven tools a chain may not run ══");
     const src = require("fs").readFileSync(SERVER_PATH, "utf8").replace(/\r\n/g, "\n");
     const listMatch = /var CHAIN_NON_DISPATCHABLE_TOOLS = \[([^\]]*)\]/.exec(src);
     const listed = listMatch ? (listMatch[1].match(/"[^"]+"/g) || []).map(function (s) { return s.slice(1, -1); }) : [];
-    check("CHAIN_NON_DISPATCHABLE_TOOLS in server.js is exactly the six",
+    check("CHAIN_NON_DISPATCHABLE_TOOLS in server.js is exactly the seven",
       JSON.stringify(listed.slice().sort()) === JSON.stringify(BLOCKED.slice().sort()), JSON.stringify(listed));
 
     const mounted = installTripwires();
