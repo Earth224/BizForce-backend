@@ -287,6 +287,12 @@ async function subjectCounts(userId) {
 
 function idSet(rows) { return (rows || []).map(function (r) { return r.id; }).sort(); }
 function sameSet(a, b) { return a.length === b.length && a.every(function (v, i) { return v === b[i]; }); }
+// A failed score is not a score: drop rows carrying the scoring-failed reason,
+// as the lead routes' leadHasRealScore does.
+function withoutFailedScores(direct) {
+  if (direct.error) return direct;
+  return { data: (direct.data || []).filter(function (row) { return row.intent_reason !== "scoring failed after 3 attempts"; }), error: null };
+}
 function leadLine(l) {
   return JSON.stringify({ id: l.id, source: l.source, intent_score: l.intent_score, status: l.status,
     author_handle: l.author_handle, sales_status: l.sales_status });
@@ -351,8 +357,10 @@ function leadLine(l) {
   {
     const r = await runRoute(LEAD_ROUTES[0], owner);
     const leads = (r.sent && r.sent.body && r.sent.body.leads) || [];
-    const direct = await supabase.from("bsky_leads").select("id").eq("status", "scored")
-      .order("intent_score", { ascending: false }).limit(100);
+    // A failed score is not a score: the route's own filters (non-null score,
+    // nulls last, no row carrying the scoring-failed reason).
+    const direct = withoutFailedScores(await supabase.from("bsky_leads").select("id, intent_reason").eq("status", "scored")
+      .not("intent_score", "is", null).order("intent_score", { ascending: false, nullsFirst: false }).limit(100));
     check("the owner gets 200", !!r.sent && r.sent.status === 200, r.sent && (r.sent.status + " " + JSON.stringify(r.sent.body).slice(0, 200)));
     check("the owner gets rows", leads.length > 0, leads.length + " rows");
     check("the route read bsky_leads", r.dbCalls.some(function (c) { return c.table === "bsky_leads"; }),
@@ -368,8 +376,9 @@ function leadLine(l) {
   {
     const r = await runRoute(LEAD_ROUTES[1], owner);
     const leads = (r.sent && r.sent.body && r.sent.body.leads) || [];
-    const direct = await supabase.from("bsky_leads").select("id").eq("status", "scored")
-      .order("intent_score", { ascending: false }).limit(200);
+    // The same mirror of the route's filters as GET /api/leads above.
+    const direct = withoutFailedScores(await supabase.from("bsky_leads").select("id, intent_reason").eq("status", "scored")
+      .not("intent_score", "is", null).order("intent_score", { ascending: false, nullsFirst: false }).limit(200));
     check("the owner gets 200", !!r.sent && r.sent.status === 200, r.sent && (r.sent.status + " " + JSON.stringify(r.sent.body).slice(0, 200)));
     check("the owner gets rows", leads.length > 0, leads.length + " rows");
     check("exactly the rows the same query returns directly (" + (direct.data || []).length + ")",

@@ -40799,6 +40799,30 @@ app.get("/api/sms/campaigns/:id/enrollments", requireAuth, async function (req, 
   }
 });
 
+/* A SCORE IS A NUMBER A MODEL GAVE. A lead has one only when its status is
+   "scored" and its intent_score is an integer. A lead whose scoring failed
+   three times is status "score_failed" with intent_score null (leadRadar.js),
+   and rows written before that status existed carry status "scored", this
+   reason, and a 0 no model gave. Neither is ever shown, sorted, counted or
+   acted on as a score: every bsky_leads read below filters on status "scored"
+   and a non-null score, orders by score with nulls LAST (Postgres puts them
+   first in a descending sort unless told otherwise), and passes its rows
+   through leadHasRealScore before showing or acting on any of them. */
+var LEAD_SCORE_FAILED_REASON = "scoring failed after 3 attempts";
+
+function leadHasRealScore(lead) {
+  return !!lead && lead.status === "scored" && Number.isInteger(lead.intent_score) &&
+    lead.intent_reason !== LEAD_SCORE_FAILED_REASON;
+}
+
+// For a list that shows a lead whatever its score (the pipeline): a lead
+// without a real score keeps its row but loses the number, and says why.
+function leadScoreForDisplay(lead) {
+  if (!lead || leadHasRealScore(lead)) return lead;
+  var failed = lead.status === "score_failed" || lead.intent_reason === LEAD_SCORE_FAILED_REASON;
+  return Object.assign({}, lead, { intent_score: null, score_label: failed ? "scoring failed" : "not scored" });
+}
+
 app.get("/api/leads", requireAuth, async function (req, res, next) {
   try {
     /* The same restriction POST /api/agents/sales/convert applies, for the
@@ -40818,7 +40842,8 @@ app.get("/api/leads", requireAuth, async function (req, res, next) {
       .from("bsky_leads")
       .select("*")
       .eq("status", "scored")
-      .order("intent_score", { ascending: false })
+      .not("intent_score", "is", null)
+      .order("intent_score", { ascending: false, nullsFirst: false })
       .limit(100);
 
     if (error) {
@@ -40826,7 +40851,7 @@ app.get("/api/leads", requireAuth, async function (req, res, next) {
       return res.status(500).json({ error: error.message });
     }
 
-    return res.json({ leads: data || [] });
+    return res.json({ leads: (data || []).filter(leadHasRealScore) });
   } catch (err) {
     console.error("[/api/leads] Error:", err.message || err);
     next(err);
@@ -41239,7 +41264,8 @@ app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) 
       .from("bsky_leads")
       .select("*")
       .eq("status", "scored")
-      .order("intent_score", { ascending: false })
+      .not("intent_score", "is", null)
+      .order("intent_score", { ascending: false, nullsFirst: false })
       .limit(200);
 
     if (Number.isFinite(minScore)) {
@@ -41257,7 +41283,7 @@ app.get("/api/agents/sales/leads", requireAuth, async function (req, res, next) 
       throw leadsResult.error;
     }
 
-    var enrichedLeads = await annotateLeadsWithSalesPipeline(userId, leadsResult.data || []);
+    var enrichedLeads = await annotateLeadsWithSalesPipeline(userId, (leadsResult.data || []).filter(leadHasRealScore));
 
     if (excludeContacted) {
       enrichedLeads = enrichedLeads.filter(function (lead) {
@@ -42955,6 +42981,7 @@ async function runSalesAutoConvert() {
           .from("bsky_leads")
           .select("*")
           .eq("status", "scored")
+          .not("intent_score", "is", null)
           .gte("intent_score", OUTREACH_MIN_INTENT)
           .in("source", OUTREACH_SENDABLE_SOURCES)
           /* Unknown age is not fresh. The gte alone would already exclude
@@ -43015,7 +43042,7 @@ async function runSalesAutoConvert() {
         // rows: the pass only ever works 5. The fallback page is far wider
         // because the exclusions still have to come out of it here.
         var leadsResult = await leadsQuery
-          .order("intent_score", { ascending: false })
+          .order("intent_score", { ascending: false, nullsFirst: false })
           .limit(inlineExclusion || excludedUris.length === 0 ? 50 : 500);
 
         if (leadsResult.error) {
@@ -43026,7 +43053,10 @@ async function runSalesAutoConvert() {
         // Retained unconditionally. It is the actual filter on the fallback
         // path, and on the inline path it is a cheap no-op that keeps the two
         // paths returning the same thing.
+        // leadHasRealScore as well as the query's filters: a lead is never
+        // drafted for on a score no model gave.
         var freshLeads = (leadsResult.data || [])
+          .filter(leadHasRealScore)
           .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
           .slice(0, 5);
 
@@ -43194,6 +43224,16 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       var requestedLead = singleResult.data;
       var refusals = [];
 
+      // A lead whose scoring failed has no score, so nothing has judged it.
+      if (!leadHasRealScore(requestedLead)) {
+        refusals.push({
+          code:   "not_scored",
+          detail: requestedLead.status === "score_failed" || requestedLead.intent_reason === LEAD_SCORE_FAILED_REASON
+            ? "Scoring this lead failed, so it has no score and nothing has judged its intent."
+            : "This lead has not been scored, so nothing has judged its intent."
+        });
+      }
+
       /* Freshness, evaluated to the same verdict PostgREST would reach:
          post_created_at not null AND >= the cutoff. An unparseable timestamp
          cannot be compared, so it joins null on the ineligible side rather
@@ -43331,7 +43371,8 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         .eq("outreach_safe", true)
         .not("reply_invited", "is", null)
         .eq("reply_invited", true)
-        .order("intent_score", { ascending: false })
+        .not("intent_score", "is", null)
+        .order("intent_score", { ascending: false, nullsFirst: false })
         .limit(40);
 
       var segMinScore = Number(segment.min_score);
@@ -43344,6 +43385,7 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
         throw segResult.error;
       }
       targetLeads = (segResult.data || [])
+        .filter(leadHasRealScore)
         .filter(function (lead) { return excludedUris.indexOf(lead.post_uri) === -1; })
         .slice(0, 10);
     } else {
@@ -43545,7 +43587,7 @@ app.get("/api/agents/sales/pipeline", requireAuth, async function (req, res, nex
         status: row.status,
         last_draft: row.last_draft,
         updated_at: row.updated_at,
-        lead: leadsByUri[row.lead_post_uri] || null
+        lead: leadScoreForDisplay(leadsByUri[row.lead_post_uri] || null)
       });
     });
 

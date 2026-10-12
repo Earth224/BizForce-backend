@@ -603,6 +603,12 @@ function bizforceScoringPrompt(lang, source, discovery, lead) {
    deliberate "NOT_INVITED" and logged as the contract violation it is. */
 const SCORER_INVITATION_VALUES = ["INVITED", "NOT_INVITED"];
 
+/* The reason a lead whose scoring failed three times carries, with status
+   "score_failed" and intent_score null. server.js holds the same string as
+   LEAD_SCORE_FAILED_REASON to recognise rows written before that status
+   existed, which carry this reason with a 0 no model gave. */
+const LEAD_SCORE_FAILED_REASON = "scoring failed after 3 attempts";
+
 async function scoreNewLeads() {
   try {
     // Ordered by score_attempts first so a lead that has failed twice does not
@@ -739,6 +745,7 @@ async function scoreNewLeads() {
     // failing, which is exactly the condition this counter should surface.
     var scoredCount   = 0;
     var deferredCount = 0;
+    var failedCount   = 0;
 
     for (var i = 0; i < leads.length; i++) {
       var lead = leads[i];
@@ -999,20 +1006,25 @@ async function scoreNewLeads() {
           updatePayload = { score_attempts: attempts };
           console.log("[LeadRadar] lead " + lead.id + " left new for retry, attempt " + attempts + " of 3");
         } else {
-          // outreach_safe and reply_invited are deliberately NOT written here.
-          // This lead reached "scored" without any model ever having read it,
-          // so there is no suitability or invitation judgement to record — and
-          // leaving both columns null is
-          // what keeps it out of the outreach query, which treats null as
-          // ineligible. Writing false would say "screened and refused", which
-          // is a different and untrue statement.
+          /* A FAILED SCORE IS NOT A SCORE. No model ever read this lead, so it
+             gets no number: intent_score null and its own status,
+             "score_failed", which the scorer's status = 'new' query never picks
+             up again. This used to write intent_score 0 with status "scored",
+             and a 0 nobody gave sorted, counted and filtered exactly like a
+             real low score — 1,589 rows carried it. The reason string stays, so
+             the row says why it has no score.
+
+             outreach_safe and reply_invited are deliberately NOT written here
+             either: there is no suitability or invitation judgement to record,
+             and leaving both null keeps the row out of every outreach query.
+             Writing false would say "screened and refused", which is untrue. */
           updatePayload = {
             score_attempts: attempts,
-            intent_score:   0,
-            intent_reason:  "scoring failed after 3 attempts",
-            status:         "scored"
+            intent_score:   null,
+            intent_reason:  LEAD_SCORE_FAILED_REASON,
+            status:         "score_failed"
           };
-          console.log("[LeadRadar] lead " + lead.id + " gave up after " + attempts + " attempts, marked scored with a failure reason");
+          console.log("[LeadRadar] lead " + lead.id + " gave up after " + attempts + " attempts, marked score_failed with no score");
         }
       }
 
@@ -1025,16 +1037,20 @@ async function scoreNewLeads() {
         console.error("[LeadRadar] Failed to update lead " + lead.id + ":", updateErr.message);
       } else if (updatePayload.status === "scored") {
         scoredCount++;
+      } else if (updatePayload.status === "score_failed") {
+        failedCount++;
       } else {
         deferredCount++;
       }
     }
 
-    console.log("[LeadRadar] scored " + scoredCount + " leads, deferred " + deferredCount + " for retry");
+    console.log("[LeadRadar] scored " + scoredCount + " leads, deferred " + deferredCount + " for retry, " +
+      failedCount + " failed for good (score_failed, no score)");
 
   } catch (err) {
     console.error("[LeadRadar] scoreNewLeads error:", err.message || err);
   }
 }
 
-module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, bskyGate, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS };
+module.exports = { runLeadRadarOnce, startLeadRadar, scoreNewLeads, bskyAgent: agent, bskyGate, ensureBskyLogin, isBizforceLead, BIZFORCE_KEYWORDS,
+  LEAD_SCORE_FAILED_REASON };
