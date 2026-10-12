@@ -152,7 +152,9 @@ const EXPECTED_GATED = [
   // File an email sequence for approval
   "post /api/agents/email/propose-sequence",
   // Publish approved posts to Bluesky
-  "post /api/agents/social/propose-post"
+  "post /api/agents/social/propose-post",
+  // Read the radar as demand evidence
+  "post /api/agents/rd/demand-signals"
 ];
 
 const EXPECTED_ADMIN = [

@@ -27882,6 +27882,449 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
     }
   });
 
+/* ── Demand signals: the radar's captured posts, read as evidence ──────────────
+   POST /api/agents/rd/demand-signals reads bsky_leads — public posts the lead
+   radars captured because they matched a search phrase — and reports what they
+   say about demand for one theme. OWNER ONLY: every row in that table is the
+   owner's, captured by the owner's keyword lists (see LEAD_RADAR_UNAVAILABLE).
+
+   TWO VOICES, KEPT APART. MEASURED is counted in code: rows in the window, by
+   keyword, source and month, dated and undated, and the scorer's real intent
+   scores bucketed. Any count below 5 is shown as "<5", never as the number, so
+   no figure can single out one author. THEMES come from a model reading a
+   small, cleaned sample: handles, @mentions, URLs, email addresses and
+   phone-like numbers are removed and each post is cut to 600 characters BEFORE
+   anything is sent. The server drops a theme that cites no keyword in scope or
+   claims more support than the sample has, and drops any theme that repeats
+   six or more consecutive words of a sampled post (privacy_drops), because a
+   repeated run of words is a quotation of a person.
+
+   NO ROW EVER LEAVES. The response carries counts, keywords and themes only —
+   never post text, a handle, a DID, a post address, an intent reason, a
+   suitability judgement or a suggested product for any row. The run is
+   persisted as that same body.
+
+   THE WINDOW IS THE AUTHOR'S DATE. window_days is applied to post_created_at,
+   when the post was written. A row without one is counted as undated and is
+   in no month, no window and no sample: it is never given a date it does not
+   have. */
+
+/* Theme → the stored matched_keyword values it reads. Every keyword the radars
+   have written or search today (leadRadar.js KEYWORDS and BIZFORCE_KEYWORDS,
+   mastodonRadar.js HASHTAGS, youtubeRadar.js KEYWORDS, and the earlier lists
+   still present in stored rows) sits in exactly one theme. "all" reads every
+   row, whatever its keyword. */
+var DEMAND_THEME_KEYWORDS = {
+  manifestation: [
+    "am i manifesting wrong", "anyone had luck manifesting", "does manifestation actually work",
+    "does manifestation work", "how do i actually manifest", "how to manifest", "how to manifest faster",
+    "is law of assumption real", "law of assumption", "law of attraction", "lawofassumption",
+    "lawofattraction", "living in the end", "manifestation", "manifestation isn't working for me",
+    "manifestation method", "manifestation not working", "manifesting", "neville goddard",
+    "neville goddard method", "nevillegoddard", "revision method neville", "sats manifestation",
+    "struggling with law of assumption", "what helped you manifest", "why isn't my manifestation working"
+  ],
+  quantum_jumping: [
+    "anyone tried quantum jumping", "does quantum jumping actually work", "how to quantum jump",
+    "quantum jumping", "quantum jumping method"
+  ],
+  supplements: [
+    "anyone had luck with ashwagandha", "anyone recommend an energy supplement", "anyone tried tongkat ali",
+    "aphrodisiac", "biohacking", "does tongkat ali actually work", "herbal aphrodisiac", "herbalism",
+    "natural energy supplement", "supplement recommendations for fatigue", "tongkat ali reviews",
+    "what supplements actually work"
+  ],
+  libido: [
+    "get my sex drive back", "help with low libido", "how to increase libido naturally", "libido",
+    "low libido", "low libido help", "male vitality", "malehealth", "natural male vitality",
+    "struggling with low libido", "testosterone", "virility", "what helped your low libido",
+    "what worked for low libido", "why is my libido low"
+  ],
+  energy: [
+    "always tired no energy", "anyone else always tired", "anything to eat for energy",
+    "boost energy naturally", "boost my energy naturally", "cant focus tired all day",
+    "how to boost energy naturally", "natural remedy for energy", "recommendations for low energy",
+    "why am i always tired"
+  ],
+  bizforce: [
+    "ad account disabled", "can't advertise supplements", "meta rejected my ad", "my account got flagged selling",
+    "payment processor dropped me", "shadowbanned my business", "stripe froze my account"
+  ]
+};
+var DEMAND_THEMES = Object.keys(DEMAND_THEME_KEYWORDS).concat(["all"]);
+
+var DEMAND_SMALL_COUNT = 5;
+var DEMAND_POST_CHARS = 600;
+var DEMAND_QUOTE_WORDS = 6;
+var DEMAND_SCORE_BUCKETS = ["0-9", "10-19", "20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89", "90-100"];
+
+var DEMAND_NOT_MEASURED = [
+  "Who the authors are: no person, account or profile is read, counted as a person, or reported",
+  "Whether the sample represents everyone who feels this way: it is drawn only from posts the radar captured",
+  "Posts the radar never searched for: anything outside its keyword and hashtag lists, and every network it does not read",
+  "Anything before collection began: the radars capture forward from when they started, so earlier demand is absent, not low"
+];
+
+// A count, or "<5" when it is below 5: never a figure that can single out one author.
+function demandCount(n) {
+  return n < DEMAND_SMALL_COUNT ? "<" + DEMAND_SMALL_COUNT : n;
+}
+
+/* The text a model may see. Handles and @mentions, URLs and bare domains, email
+   addresses and phone-like numbers are replaced; what is left is cut to 600
+   characters. Emails go first, so the @ inside one is not read as a mention,
+   and any @ that survives is removed. */
+function demandCleanText(text) {
+  var t = String(text == null ? "" : text);
+  t = t.replace(/(^|[^@\w.])[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "$1[email]");
+  t = t.replace(/@[\w.-]+(?:@[\w.-]+)?/g, "[someone]");
+  t = t.replace(/\bhttps?:\/\/\S+/gi, "[link]");
+  t = t.replace(/\bwww\.\S+/gi, "[link]");
+  t = t.replace(/\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b(?:\/\S*)?/gi, "[link]");
+  t = t.replace(/\+?\d[\d\s().-]{6,}\d/g, "[number]");
+  t = t.replace(/@/g, "");
+  t = t.replace(/\s+/g, " ").trim();
+  var chars = Array.from(t);
+  return chars.length > DEMAND_POST_CHARS ? chars.slice(0, DEMAND_POST_CHARS).join("") : t;
+}
+
+// The words of a text, lowercased, for comparing runs of words.
+function demandWords(text) {
+  return String(text || "").toLowerCase().split(/[^\p{L}\p{N}']+/u).filter(Boolean);
+}
+
+// Every run of DEMAND_QUOTE_WORDS consecutive words in the sample, as a set.
+function demandQuoteRuns(posts) {
+  var runs = {};
+  posts.forEach(function (p) {
+    var w = demandWords(p.text);
+    for (var i = 0; i + DEMAND_QUOTE_WORDS <= w.length; i++) runs[w.slice(i, i + DEMAND_QUOTE_WORDS).join(" ")] = true;
+  });
+  return runs;
+}
+
+function demandRepeatsSample(text, runs) {
+  var w = demandWords(text);
+  for (var i = 0; i + DEMAND_QUOTE_WORDS <= w.length; i++) {
+    if (runs[w.slice(i, i + DEMAND_QUOTE_WORDS).join(" ")]) return true;
+  }
+  return false;
+}
+
+// A small seeded generator, so the same seed draws the same sample.
+function demandSeed(text) {
+  var h = 2166136261;
+  String(text).split("").forEach(function (c) { h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0; });
+  return h >>> 0;
+}
+function demandRandom(seed) {
+  var a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    var t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Up to `size` rows with text, spread across keywords: each keyword's rows in
+   id order, shuffled by the seed, then taken one keyword at a time in keyword
+   order until the sample is full. The same rows and the same seed always give
+   the same sample. */
+function demandSample(rows, size, seed) {
+  var rand = demandRandom(seed);
+  var groups = {};
+  rows.forEach(function (r) {
+    if (typeof r.post_text !== "string" || !r.post_text.trim()) return;
+    var k = String(r.matched_keyword);
+    (groups[k] = groups[k] || []).push(r);
+  });
+  var keys = Object.keys(groups).sort();
+  keys.forEach(function (k) {
+    var g = groups[k].sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
+    for (var i = g.length - 1; i > 0; i--) {
+      var j = Math.floor(rand() * (i + 1));
+      var tmp = g[i]; g[i] = g[j]; g[j] = tmp;
+    }
+  });
+  var picked = [];
+  for (var round = 0; picked.length < size; round++) {
+    var added = false;
+    for (var n = 0; n < keys.length && picked.length < size; n++) {
+      if (round < groups[keys[n]].length) { picked.push(groups[keys[n]][round]); added = true; }
+    }
+    if (!added) break;
+  }
+  return picked.map(function (r, i) {
+    return { ref: "S" + (i + 1), keyword: String(r.matched_keyword), text: demandCleanText(r.post_text) };
+  });
+}
+
+/* MEASURED, from the rows in the window. Only counts and keywords: no row
+   field is copied out. A real intent score is the scorer's own (status
+   "scored", an integer, not the failure reason — leadHasRealScore). */
+function demandMeasure(rows, undated, datedBefore, theme, windowDays, windowStart) {
+  var byKeyword = {}, bySource = {}, byMonth = {}, buckets = {};
+  var real = 0, unscored = 0, withText = 0;
+  DEMAND_SCORE_BUCKETS.forEach(function (b) { buckets[b] = 0; });
+  rows.forEach(function (r) {
+    var k = String(r.matched_keyword);
+    byKeyword[k] = (byKeyword[k] || 0) + 1;
+    var src = String(r.source || "bluesky");
+    bySource[src] = (bySource[src] || 0) + 1;
+    var month = String(r.post_created_at).slice(0, 7);
+    byMonth[month] = (byMonth[month] || 0) + 1;
+    if (typeof r.post_text === "string" && r.post_text.trim()) withText++;
+    if (leadHasRealScore(r)) {
+      real++;
+      var s = r.intent_score;
+      buckets[s >= 90 ? "90-100" : (Math.max(0, Math.floor(s / 10)) * 10) + "-" + (Math.max(0, Math.floor(s / 10)) * 10 + 9)]++;
+    } else {
+      unscored++;
+    }
+  });
+  var bucketCounts = {};
+  DEMAND_SCORE_BUCKETS.forEach(function (b) { bucketCounts[b] = demandCount(buckets[b]); });
+  return {
+    theme: theme,
+    keywords_in_theme: theme === "all" ? "every stored keyword" : DEMAND_THEME_KEYWORDS[theme].slice(),
+    window_days: windowDays,
+    window_start: windowStart,
+    rows_in_window: demandCount(rows.length),
+    rows_with_text: demandCount(withText),
+    undated_rows: demandCount(undated),
+    dated_before_window: demandCount(datedBefore),
+    by_keyword: Object.keys(byKeyword).sort(function (a, b) { return byKeyword[b] - byKeyword[a] || (a < b ? -1 : 1); })
+      .map(function (k) { return { keyword: k, rows: demandCount(byKeyword[k]) }; }),
+    by_source: Object.keys(bySource).sort().map(function (s) { return { source: s, rows: demandCount(bySource[s]) }; }),
+    by_month: Object.keys(byMonth).sort().map(function (m) { return { month: m, rows: demandCount(byMonth[m]) }; }),
+    intent_scores: {
+      real_scores: demandCount(real),
+      without_a_real_score: demandCount(unscored),
+      buckets: bucketCounts,
+      note: "Only the scorer's real scores: status scored with an integer score. A failed scoring and a row never scored have no score and are counted apart."
+    },
+    small_counts: "Any count below " + DEMAND_SMALL_COUNT + " is shown as <" + DEMAND_SMALL_COUNT + ", never as the number.",
+    undated_note: "Undated rows have no post_created_at. They are counted here and nowhere else: in no month, no window and no sample."
+  };
+}
+
+/* Themes, from lines of the form
+     THEME: <label> | WANT: <what people want or object to> | KEYWORDS: <kw>; <kw> | SUPPORT: <n>
+   A theme survives only if it cites a keyword in scope and claims support from
+   1 to the sample size; a theme repeating six consecutive words of a sampled
+   post is a quotation and is removed as a privacy drop. */
+function parseDemandThemes(text, keywordsInScope, sampleCount, quoteRuns) {
+  var themes = [], dropped = 0, privacy = 0;
+  String(text || "").split(/\r?\n/).forEach(function (line) {
+    var m = /^\s*THEME:\s*(.+?)\s*\|\s*WANT:\s*(.+?)\s*\|\s*KEYWORDS:\s*(.+?)\s*\|\s*SUPPORT:\s*(\d+)\s*$/.exec(line);
+    if (!m) return;
+    var cited = m[3].split(";").map(function (k) { return k.trim().toLowerCase(); })
+      .filter(function (k) { return keywordsInScope.indexOf(k) !== -1; });
+    var support = Number(m[4]);
+    if (!cited.length || !Number.isInteger(support) || support < 1 || support > sampleCount) { dropped++; return; }
+    if (demandRepeatsSample(m[1] + " " + m[2], quoteRuns)) { privacy++; return; }
+    themes.push({ label: m[1], what_people_want: m[2], keywords: cited, supporting_posts: support });
+  });
+  return { themes: themes, dropped: dropped, privacy: privacy };
+}
+
+// The model's whole input: the measured object and the cleaned sample, nothing else.
+function demandSignalsPrompt(measured, sample, keywordsInScope) {
+  return "You are the BizForce R&D agent, reading what people wrote publicly about one theme, as evidence of " +
+    "demand. Everything you may use is below: MEASURED, counted by code, and SAMPLE, " + sample.length +
+    " short posts with names, handles, links and numbers already removed.\n\n" +
+    "RULES:\n" +
+    "- Report THEMES: what people want, ask for, struggle with or object to. 3 to 8 themes.\n" +
+    "- Never quote a post. Never repeat any phrase of six or more words from a post: say it in your own words.\n" +
+    "- Never name, describe or single out any person or account, and never guess who wrote anything.\n" +
+    "- Never diagnose anyone or say what condition anyone has.\n" +
+    "- Each theme cites the keywords it draws on, from KEYWORDS IN SCOPE only, and SUPPORT: how many of the " +
+    sample.length + " sample posts support it.\n" +
+    "- Do not state a number that is not in MEASURED or a count of sample posts.\n\n" +
+    "FORMAT: one theme per line, exactly like this, and nothing else:\n" +
+    "THEME: <a plain label> | WANT: <what people want or object to, in one or two sentences> | KEYWORDS: <keyword>; <keyword> | SUPPORT: <number of sample posts>\n\n" +
+    "KEYWORDS IN SCOPE: " + keywordsInScope.join("; ") + "\n\n" +
+    "MEASURED:\n" + JSON.stringify(measured, null, 1) + "\n\n" +
+    "SAMPLE:\n" + sample.map(function (p) { return p.ref + " [" + p.keyword + "] " + p.text; }).join("\n");
+}
+
+/* The rows a theme reads: dated rows in the window, paged, with only the
+   columns the measurement and the sample need; and two counts beside them. */
+var DEMAND_PAGE = 1000;
+async function loadDemandRows(theme, windowStart) {
+  function scoped(q) {
+    return theme === "all" ? q : q.in("matched_keyword", DEMAND_THEME_KEYWORDS[theme]);
+  }
+  var rows = [];
+  for (var from = 0; ; from += DEMAND_PAGE) {
+    var page = await scoped(supabase
+      .from("bsky_leads")
+      .select("id, matched_keyword, source, post_created_at, status, intent_score, intent_reason, post_text"))
+      .not("post_created_at", "is", null)
+      .gte("post_created_at", windowStart)
+      .order("id", { ascending: true })
+      .range(from, from + DEMAND_PAGE - 1);
+    if (page.error) throw page.error;
+    var got = page.data || [];
+    rows = rows.concat(got);
+    if (got.length < DEMAND_PAGE) break;
+  }
+  var undated = await scoped(supabase.from("bsky_leads").select("id", { count: "exact", head: true }))
+    .is("post_created_at", null);
+  if (undated.error) throw undated.error;
+  var before = await scoped(supabase.from("bsky_leads").select("id", { count: "exact", head: true }))
+    .lt("post_created_at", windowStart);
+  if (before.error) throw before.error;
+  return { rows: rows, undated: undated.count || 0, datedBefore: before.count || 0 };
+}
+
+var DEMAND_OWNER_ONLY =
+  "Demand signals read the lead radar's captured posts, which belong to the owner account's keyword lists, " +
+  "so this tool is limited to the owner account.";
+
+// An integer in [min, max], the default when absent, or null when present and invalid.
+function demandIntParam(value, min, max, dflt) {
+  if (value === undefined || value === null || value === "") return dflt;
+  var n = Number(value);
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+}
+
+app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+
+      if (req.user.role !== "admin") {
+        return res.status(403).json({ error: DEMAND_OWNER_ONLY });
+      }
+
+      var theme = String(safeText(req.body.theme, 40) || "").toLowerCase().trim();
+      if (DEMAND_THEMES.indexOf(theme) === -1) {
+        return res.status(400).json({ error: "theme must be one of: " + DEMAND_THEMES.join(", ") + ".", valid_themes: DEMAND_THEMES });
+      }
+      var windowDays = demandIntParam(req.body.window_days, 7, 365, 90);
+      if (windowDays === null) {
+        return res.status(400).json({ error: "window_days, when given, must be a whole number from 7 to 365." });
+      }
+      var sampleSize = demandIntParam(req.body.sample_size, 10, 80, 40);
+      if (sampleSize === null) {
+        return res.status(400).json({ error: "sample_size, when given, must be a whole number from 10 to 80." });
+      }
+
+      run = await startToolRun(req, {
+        agentType: "rd",
+        taskType: "rd/demand-signals",
+        title: "R&D · Demand signals: " + theme + ", " + windowDays + " days"
+      });
+
+      var windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+      var loaded = await loadDemandRows(theme, windowStart);
+      var measured = demandMeasure(loaded.rows, loaded.undated, loaded.datedBefore, theme, windowDays, windowStart);
+
+      var seed = demandSeed(run.taskId || "");
+      var sample = demandSample(loaded.rows, sampleSize, seed);
+      var keywordsInScope = Object.keys(loaded.rows.reduce(function (acc, r) { acc[String(r.matched_keyword).toLowerCase()] = true; return acc; }, {})).sort();
+      measured.sample = {
+        posts: demandCount(sample.length),
+        requested: sampleSize,
+        seed: seed,
+        keywords_represented: demandCount(Object.keys(sample.reduce(function (acc, p) { acc[p.keyword] = true; return acc; }, {})).length),
+        cleaning: "Handles, @mentions, links, email addresses and phone-like numbers removed; each post cut to " + DEMAND_POST_CHARS + " characters, before the model saw it."
+      };
+
+      var themes = null, explanationError = null, pointsDropped = 0, privacyDrops = 0, modelCallMade = false;
+      var completionExtra = null;
+      if (!sample.length) {
+        explanationError = "No post in this theme and window has text, so there was nothing to read. Everything measured above stands.";
+      } else {
+        try {
+          var quoteRuns = demandQuoteRuns(sample);
+          var parsed = { themes: [], dropped: 0, privacy: 0 };
+          modelCallMade = true;
+          var attempt = await toolGenerateWithOneRetry({
+            label: "rd/demand-signals",
+            prompt: demandSignalsPrompt(measured, sample, keywordsInScope),
+            maxTokens: 2000,
+            ledger: {
+              user_id: req.user.id,
+              agent_type: "rd",
+              route: "POST /api/agents/rd/demand-signals"
+            },
+            correction: toolLineShapeCorrection({
+              unit: "theme",
+              lineFormat: "THEME: <label> | WANT: <what people want or object to> | KEYWORDS: <keyword>; <keyword> | SUPPORT: <number>",
+              example: "THEME: Doubt that it works | WANT: People want proof before trying again. | KEYWORDS: does manifestation work | SUPPORT: 6",
+              extra: "- Every keyword after KEYWORDS must be one listed in KEYWORDS IN SCOPE.\n- Never quote a post."
+            }),
+            parse: function (text) {
+              parsed = parseDemandThemes(text, keywordsInScope, sample.length, quoteRuns);
+              return parsed.themes.length + parsed.dropped + parsed.privacy;
+            }
+          });
+          if (attempt.count > 0) {
+            themes = parsed.themes;
+            pointsDropped = parsed.dropped;
+            privacyDrops = parsed.privacy;
+            completionExtra = attempt.completionExtra;
+          } else {
+            explanationError = "The model's reply could not be read as themes, even after one retry, so there are no themes. " +
+              "Everything measured above stands.";
+          }
+        } catch (modelErr) {
+          console.error("[rd/demand-signals] The explanation failed; the measured counts are returned without it:", modelErr && modelErr.message);
+          explanationError = "The themes could not be generated (" + ((modelErr && modelErr.message) || String(modelErr)) +
+            "). Everything measured above stands.";
+        }
+      }
+
+      var responseBody = {
+        success: true,
+        theme: theme,
+        measured: measured,
+        themes: themes,
+        explanation_error: explanationError,
+        points_dropped: pointsDropped,
+        privacy_drops: privacyDrops,
+        not_measured: DEMAND_NOT_MEASURED,
+        provenance: toolProvenance(
+          [
+            "Rows in the window, by keyword, source and month, from the radar's stored posts",
+            "Dated and undated rows, counted apart",
+            "The scorer's real intent scores, bucketed",
+            "Which themes were dropped, and which repeated a sampled post"
+          ],
+          themes ? ["The themes: what people want or object to, and how many sample posts support each"] : [],
+          "Only posts the lead radars captured were read, and only their counts are reported. The model saw " +
+          "the counts and a cleaned sample of at most " + sampleSize + " posts, never a handle, link, address " +
+          "or any field that identifies a person, and nothing it says names or quotes anyone.",
+          {
+            model_call_made: modelCallMade,
+            lead_posts_read: true,
+            raw_post_text_sent_to_model: false,
+            individual_rows_returned: false,
+            web_search_performed: false
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody, completionExtra);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[rd/demand-signals] Error:", error && error.message);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
+
 // ── Community Agent tools ────────────────────────────────────────────────────
 
 /* Onboarding timings come back as NUMBERS, the same decision the email sequence
@@ -30535,6 +30978,11 @@ var TOOL_INPUT_SPECS = {
     toolField("competitors", "string_array", true, "Competitor names as an array (or a comma-separated string); at least one, at most 10 used."),
     toolField("dimensions", "string", false, "What to compare on, up to 500 characters."),
     toolField("your_product", "string", false, "What you sell, up to 500 characters.", ["own_product"])
+  ],
+  "rd/demand-signals": [
+    toolField("theme", "string", true, "One of manifestation, quantum_jumping, supplements, libido, energy, bizforce, all; anything else is a 400."),
+    toolField("window_days", "number", false, "Days back from today, by when each post was written, 7-365; otherwise 90."),
+    toolField("sample_size", "number", false, "How many cleaned posts the model reads, 10-80; otherwise 40.")
   ],
   "community/onboarding": [
     toolField("community_type", "string", true, "Kind of community, up to 300 characters.", ["community"]),
