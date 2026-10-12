@@ -7,6 +7,11 @@
    that nothing derives. Frontend c3ba607 corrected them; this keeps them
    correct the next time an agent is added or removed.
 
+   TWELVE SITES, NOT THIRTEEN. dashboard.html's topbar pill typed "18" as its
+   fallback until GET /api/agents answered. It no longer types a count: it
+   shows "—" until the request answers and "?" if it fails, which
+   checkCommandCenterPage asserts. Its anchor is gone from this list.
+
    HOW EACH SITE IS FOUND. By the text around the number, never by line: the
    lines moved once already (dashboard.html's pill was at 138 in the audit and
    175 when it was fixed). Each anchor is a regular expression with one
@@ -19,7 +24,7 @@
 
    WHAT THIS PROVES
      1. AGENT_SYSTEM_PROMPTS is found in server.js and its keys are counted.
-     2. Each of the thirteen sites is found exactly once by its anchor.
+     2. Each of the twelve sites is found exactly once by its anchor.
      3. Each site's count equals the key count.
 
    MUTATE=digit-count  rewrites index.html's "18 Agents" pill to one fewer, in
@@ -28,7 +33,7 @@
                        one fewer, as a word, in memory. That site must go red
                        and only that site.
    MUTATE=extra-agent  adds a 19th key to the extracted AGENT_SYSTEM_PROMPTS.
-                       All thirteen must go red.
+                       All twelve must go red.
    Nothing is written to either repo.
 
    BIZFORCE_FRONTEND_DIR overrides the frontend location (default: the
@@ -85,7 +90,6 @@ const SITES = [
   { file: "app.html",   what: "subscription line",      re: new RegExp("One subscription covers all " + N + " AI business agents\\. Lead Radar isn") },
   { file: "app.html",   what: "fine print",             re: new RegExp("PR, and R&amp;D — " + N + " specialists in all") },
   { file: "billing.html", what: "plan feature list",    re: new RegExp("<li>All " + N + " AI Business Agents \\(SEO, Sales, Content") },
-  { file: "dashboard.html", what: "topbar pill fallback", re: new RegExp('<span class="topbar-agents-num">' + N + "</span>") },
   { file: "scripts/termaximus-guide.js", what: "ai-agents tip, directory", re: new RegExp("The full directory of all " + N + " AI agents") },
   { file: "scripts/termaximus-guide.js", what: "ai-agents tip, shortlist", re: new RegExp("with " + N + " to choose from, a shortlist") }
 ];
@@ -105,7 +109,7 @@ console.log("    server.js:" + declLine + " — " + EXPECTED + " keys: " + keys.
 check("1. AGENT_SYSTEM_PROMPTS has keys", EXPECTED > 0, EXPECTED);
 
 /* ── 2 & 3. every typed count ─────────────────────────────────────────────── */
-console.log("\n══ 2 & 3. the thirteen typed counts, expected " + EXPECTED + " ══");
+console.log("\n══ 2 & 3. the twelve typed counts, expected" + EXPECTED + " ══");
 const cache = {};
 function read(file) {
   if (cache[file] === undefined) {

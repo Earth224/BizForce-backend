@@ -55,8 +55,8 @@ const MUTATIONS = {
   "restore-5s-timer": [[DASH, "    delete store.sprints;\n    delete store.kpis;\n",
     "    delete store.sprints;\n    delete store.kpis;\n    setInterval(tickExecutiveRuntimeScheduler, 5000);\n"]],
   // a call to a removed function is left behind
-  "call-removed-function": [[DASH, "        saveExecutiveAssignmentMemories(created, item);\n",
-    "        saveExecutiveAssignmentMemories(created, item);\n        createExecutiveSprintFromAssignments(item, sprintId);\n"]],
+  "call-removed-function": [[DASH, "    recordExecutiveRunToStore(item, sprintId, created);\n",
+    "    recordExecutiveRunToStore(item, sprintId, created);\n    createExecutiveSprintFromAssignments(item, sprintId);\n"]],
   // content.html reads the leftover store again
   "content-reads-store": [[CONTENT, "    function refreshPage() {\n",
     "    function refreshPage() {\n      var memory = JSON.parse(localStorage.getItem(\"bf_executive_memory\") || \"null\");\n"]]
@@ -195,19 +195,21 @@ const declared = (codes) => {
 
   /* ── 4. what live code uses is still there ────────────────────────────── */
   console.log("\n══ 4. what live code uses stays ══");
-  const KEPT = ["saveAgentMemory", "loadExecutiveMemory", "saveExecutiveMemory", "initializeExecutiveMemory", "loadExecutiveProject",
-    "normalizeAgentMessagingName", "sendAgentMessage", "broadcastAgentMessage", "getAgentInbox", "ensureExecutiveAutonomyEngineStore",
-    "getExecutiveAutonomyEngineMemory", "getExecutiveAutonomyEngineSummary", "getLiveSeoBusinessProfileContext", "getAgentBusinessContext",
-    "processExecutiveAssignmentsFromReport", "saveExecutiveAssignmentMemories", "recordExecutiveRunToStore", "updateExecutiveAgentStats"];
+  /* Fourteen names left this list with frontend "A command center built on
+     what really happened", which removed them as local-only code; the
+     memory, messaging and autonomy stores they served are gone, and
+     checkCommandCenterPage asserts none of them is declared or referenced. */
+  const KEPT = ["loadExecutiveMemory", "saveExecutiveMemory", "processExecutiveAssignmentsFromReport", "recordExecutiveRunToStore"];
   const missing = KEPT.filter(n => !now.has(n));
   check("every function live code still calls is still declared (" + KEPT.length + ")", missing.length === 0, missing.join(", "));
   const proc = (FILES[DASH].match(/function processExecutiveAssignmentsFromReport\([\s\S]*?\n\}\n/) || [""])[0];
-  check("the real executive task still saves its assignment memories and records its run",
-    proc.indexOf("saveExecutiveAssignmentMemories(created, item);") !== -1 && proc.indexOf("recordExecutiveRunToStore(item, sprintId, created);") !== -1, proc.length);
+  check("the real executive task still records its run",
+    proc.indexOf("recordExecutiveRunToStore(item, sprintId, created);") !== -1, proc.length);
   check("…and creates no sprint", !/createExecutiveSprint/.test(proc));
-  const statsFn = (FILES[DASH].match(/function updateExecutiveAgentStats\([\s\S]*?\n\}\n/) || [""])[0];
-  check("the executive stats carry no sprint KPI and clear any left behind",
-    /delete stats\.efficiencyScore;/.test(statsFn) && !/stats\.efficiencyScore =/.test(statsFn) && !/stats\.sprintsRun =/.test(statsFn));
+  const persistFn = (FILES[DASH].match(/function persistExecutiveAgentResult\([\s\S]*?\n\}\n/) || [""])[0];
+  check("the executive store keeps no stats (no sprint KPI, no confidence) and clears any left behind",
+    !now.has("updateExecutiveAgentStats") && persistFn.indexOf("delete store.stats;") !== -1 &&
+    persistFn.indexOf("delete store.recentRuns;") !== -1 && persistFn.indexOf("confidence =") === -1, persistFn.length);
 
   /* ── 5. content.html ──────────────────────────────────────────────────── */
   console.log("\n══ 5. agents/content.html ══");
