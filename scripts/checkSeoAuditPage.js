@@ -67,7 +67,10 @@ const MUTATIONS = {
   // a null explanation renders as nothing
   "blank-on-null-explanation": [["if (!Array.isArray(data.explanation)) {", "if (!Array.isArray(data.explanation)) { return \"\";"]],
   // not measured is collapsed
-  "collapse-not-measured": [["'<ul class=\"ap-seo-nm-list\">'", "'<details><ul class=\"ap-seo-nm-list\">'"]],
+  // (Anchored on the audit's own label: the demand report, added in frontend
+  // 3bbd299, uses the same list markup, and the bare line matched twice.)
+  "collapse-not-measured": [["Not measured by this audit</div>' +\n      (items.length\n        ? '<ul class=\"ap-seo-nm-list\">'",
+    "Not measured by this audit</div>' +\n      (items.length\n        ? '<details><ul class=\"ap-seo-nm-list\">'"]],
   // the client-rendered banner moves below the flags
   "banner-below-flags": [["      seoAuditShellBanner(m),\n      seoAuditUnreadPage(m),\n      seoAuditFlags(data.flags),",
     "      seoAuditUnreadPage(m),\n      seoAuditFlags(data.flags),\n      seoAuditShellBanner(m),"]],
