@@ -31,7 +31,7 @@ const PLATFORM_KNOWLEDGE = {
     { key: "content",    name: "Content Agent",    description: "Publish-ready SEO articles and content plans; the primary generator feeding the Content Library (blog and SMS content)." },
     { key: "ads",        name: "Ads Agent",        description: "Compliant ad campaigns: audience targeting, creative angles, copy, budget logic, and testing plans." },
     { key: "reputation", name: "Reputation Agent", description: "Review generation systems, response templates, and brand trust/authority plans." },
-    { key: "analytics",  name: "Analytics Agent",  description: "KPI analysis, traffic and conversion review, dashboards, and growth-opportunity identification." },
+    { key: "analytics",  name: "Analytics Agent",  description: "KPI and funnel review on figures you supply, reporting frameworks, and growth-opportunity identification. Reads no website analytics, traffic or revenue data." },
     { key: "email",      name: "Email Agent",      description: "Email sequences, subject lines, nurture/retention/winback flows, and promotional campaigns." },
     { key: "community",  name: "Community Agent",  description: "Community growth plans, engagement systems, referral loops, and moderation strategy." },
     { key: "influencer", name: "Influencer Agent", description: "Creator outreach, partnership offers, campaign plans, and ROI forecasting for influencer marketing." },

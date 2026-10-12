@@ -38,38 +38,25 @@
 --    fail, but it is still a change to live structure rather than a record of
 --    it.
 --
--- RLS is enabled AND ONE POLICY EXISTS: "authenticated can read leads", for
--- select, to authenticated, using (true). Transcribed below with the rest.
+-- RLS is enabled AND THERE IS NO POLICY. Production was read on 2026-10-11
+-- through pg_policies: row level security on, zero policies on bsky_leads.
 --
--- What that policy does today: nothing. server.js and the three radar modules
--- connect with the service-role key, which bypasses RLS entirely, so every read
--- and write the application performs is unaffected by it in either direction.
+-- CORRECTED. This header used to say that one policy existed, "authenticated
+-- can read leads" (for select, to authenticated, using (true)), and the file
+-- created it when it was missing. Production has no such policy, so that block
+-- did not transcribe anything: run against any database it would have granted
+-- every authenticated caller a read of every row, an access production does not
+-- have. It is removed below. A transcription must never create access the live
+-- table lacks.
 --
--- What it grants: unrestricted read of every row in this table, to any holder of
--- a Supabase-issued JWT, through PostgREST. `using (true)` has no predicate to
--- narrow it — not by owner, not by source, not by status. Every row, to every
--- authenticated caller.
+-- What RLS with no policy means: every role that does not bypass RLS reads and
+-- writes nothing in this table. server.js and the three radar modules connect
+-- with the service-role key, which bypasses RLS entirely, so the application is
+-- unaffected; nothing else can read a row.
 --
--- Why that is not currently reachable: this project does not use Supabase auth.
--- It signs its own tokens with JWT_SECRET (jwt.sign in createToken, verified
--- against the same secret in requireAuth), and there is no Supabase client
--- anywhere in the frontend — not one file references it. So no token that
--- PostgREST would accept as `authenticated` exists to be held, and the grant sits
--- unexercised.
---
--- Why it still matters: it makes the multi-tenancy problem described in the
--- table comment concrete rather than theoretical. That comment says every row is
--- visible to every operator through GET /api/leads. This policy says the same
--- thing one layer lower, and it is already written — introducing a frontend
--- Supabase client, or migrating to Supabase auth, activates it without anyone
--- editing a policy or reviewing this decision. The grant would not be a new
--- choice at that point; it would be an old one taking effect.
---
--- Why it is transcribed rather than narrowed here: narrowing or dropping it is a
--- change to live behaviour, and this file is a transcription. It belongs in its
--- own migration, alongside the decision about what should replace it — which
--- cannot be answered until this table has an owner column to scope by, since
--- there is nothing in a row today that identifies whose lead it is.
+-- If a read policy is ever wanted, it is a decision of its own, in its own
+-- migration, and it waits on an owner column to scope it by: there is nothing
+-- in a row today that identifies whose lead it is.
 
 create table if not exists public.bsky_leads (
   id                uuid        not null default gen_random_uuid(),
@@ -139,29 +126,12 @@ create index if not exists bsky_leads_source_idx
 -- enabled succeeds and changes nothing, so no guard is needed around this.
 alter table public.bsky_leads enable row level security;
 
--- create policy has no if-not-exists form, so this is guarded on pg_policy the
--- same way the unique constraint above is guarded on pg_constraint. Not
--- drop-then-create: dropping a policy on a live table leaves a window, however
--- brief, in which RLS is enabled with nothing permitting the read, and a
--- transcription must not be able to change behaviour even for an instant.
---
--- Recorded exactly as live, permissive and unqualified. See the header for what
--- this grants and why it is transcribed rather than narrowed.
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_policy
-    where polname = 'authenticated can read leads'
-      and polrelid = 'public.bsky_leads'::regclass
-  ) then
-    create policy "authenticated can read leads"
-      on public.bsky_leads
-      for select
-      to authenticated
-      using (true);
-  end if;
-end $$;
+-- NO POLICY IS CREATED HERE, because production has none (pg_policies,
+-- 2026-10-11). A guarded block used to create "authenticated can read leads"
+-- (for select, to authenticated, using (true)) wherever it was missing, which
+-- on production meant everywhere: it would have granted a read of every row to
+-- any authenticated caller, which is not how the live table stands. It was
+-- removed because this file records the live table and must not add access to it.
 
 -- ── Column comments ─────────────────────────────────────────────────────────
 --

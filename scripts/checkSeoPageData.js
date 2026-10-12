@@ -60,8 +60,9 @@ const MUTATIONS = {
   "decode-attr": [["attrs[name] = decodeHTMLAttribute(value);", "attrs[name] = value;"]],
   // (3) attribute values are decoded a second time, as text
   "decode-twice": [["alt: hasAlt ? seoCollapse(a.alt) : null,", "alt: hasAlt ? seoText(a.alt) : null,"],
-                   ["  function metaContent(name) {\n    for (var i = 0; i < metas.length; i++) {\n      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n        return metas[i].content !== undefined ? seoCollapse(metas[i].content)",
-                    "  function metaContent(name) {\n    for (var i = 0; i < metas.length; i++) {\n      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n        return metas[i].content !== undefined ? seoText(metas[i].content)"]],
+                   // (Stop promising measurements nobody takes: the meta reader is seoMetaContent now)
+                   ["function seoMetaContent(metas, name) {\n  for (var i = 0; i < metas.length; i++) {\n    if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n      return metas[i].content !== undefined ? seoCollapse(metas[i].content)",
+                    "function seoMetaContent(metas, name) {\n  for (var i = 0; i < metas.length; i++) {\n    if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {\n      return metas[i].content !== undefined ? seoText(metas[i].content)"]],
   // (4) the first <title> anywhere is the title again
   "first-title": [["var m = (head && head[1].match(titleRe)) || doc.match(titleRe);", "var m = raw.match(titleRe);"]],
   // (4) an absent title reads "" again
@@ -119,10 +120,18 @@ if (MUTATE) {
   console.log("\n!! MUTATION: " + MUTATE);
 }
 const beforeSrc = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8").replace(/\r\n/g, "\n");
-const NOW = load(nowSrc, ["safeText", "seoTagAttributes", "seoTags", "seoCollapse", "seoText", "seoDocumentTitle", "extractSeoPageData", "describeSeoImageAlt"], ["SEO_TAG_ATTRS"], "server.js");
+// Stop promising measurements nobody takes: seoMetaContent is the one meta reader now.
+const NOW = load(nowSrc, ["safeText", "seoTagAttributes", "seoTags", "seoCollapse", "seoText", "seoDocumentTitle", "seoMetaContent", "extractSeoPageData", "describeSeoImageAlt"], ["SEO_TAG_ATTRS"], "server.js");
 const OLD = load(beforeSrc, ["safeText", "extractSeoPageData"], [], "server.js@" + BEFORE);
-function N(html) { return JSON.parse(JSON.stringify(NOW.extract(html))); }
-function O(html) { return JSON.parse(JSON.stringify(OLD.extract(html))); }
+/* PRE_READER is the last commit with two meta readers. Every page this check
+   reads is recorded, and section 7 runs PRE_READER's extractSeoPageData on each
+   one: the output must be exactly what it was. */
+const PRE_READER = "9d5c968";
+const preSrc = execSync("git show " + PRE_READER + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8").replace(/\r\n/g, "\n");
+const PRE = load(preSrc, ["safeText", "seoTagAttributes", "seoTags", "seoCollapse", "seoText", "seoDocumentTitle", "extractSeoPageData", "describeSeoImageAlt"], ["SEO_TAG_ATTRS"], "server.js@" + PRE_READER);
+const PAGES = [];
+function N(html) { PAGES.push(html); return JSON.parse(JSON.stringify(NOW.extract(html))); }
+function O(html) { PAGES.push(html); return JSON.parse(JSON.stringify(OLD.extract(html))); }
 
 /* ── (1) alt="" vs no alt vs alt="Logo" ─────────────────────────────────── */
 console.log("\n══ 1. an empty alt and a missing alt are opposite findings ══");
@@ -271,6 +280,22 @@ console.log("\n══ 6. every reader of the output reads the new shape ══")
   check("6. the optimize route states each image through describeSeoImageAlt", /pageData\.imageAlts\.map\(function \(img, i\) \{\s*return \(i \+ 1\) \+ "\. " \+ describeSeoImageAlt\(img\);/.test(route));
   check("6. the optimize route reads img.alt nowhere else", (route.match(/img\.alt/g) || []).length === 0);
   check("6. a null title reads as MISSING in the prompt", /"Title tag: " \+ \(pageData\.title \|\| "MISSING"\)/.test(route));
+}
+
+/* ── the shared meta reader changed no output ───────────────────────────── */
+console.log("\n══ 7. one meta reader, the same output on every page ══");
+{
+  const meta = (tags) => "<html><head><title>T</title>" + tags + "</head><body><p>x</p></body></html>";
+  ["", "<meta name=\"description\" content=\"\">", "<meta name=\"description\">", "<meta NAME=\" Keywords \" content=\" a,  b \">",
+   "<meta name=\"description\" content=\"One\"><meta name=\"description\" content=\"Two\">", "<meta name=\"description\" content=\"Fish &amp; chips\">"]
+    .forEach(function (tags) { PAGES.push(meta(tags)); });
+  const pages = Array.from(new Set(PAGES.filter(function (p) { return typeof p === "string"; })));
+  const differ = pages.filter(function (html) {
+    return JSON.stringify(NOW.extract(html)) !== JSON.stringify(PRE.extract(html));
+  });
+  check("7. extractSeoPageData returns exactly what " + PRE_READER + "'s did, on all " + pages.length + " pages this check reads", pages.length > 20 && differ.length === 0,
+    differ.length + " differ, e.g. " + JSON.stringify(String(differ[0] || "").slice(0, 120)));
+  same("7. a missing meta description still reads \"\"", NOW.extract(meta("")).metaDescription, "");
 }
 
 console.log("\n" + passes + " passed, " + failures + " failed");

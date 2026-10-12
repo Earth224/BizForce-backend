@@ -61,6 +61,11 @@ const BASELINE = "1c7c5dd";
    swap, so the exception cannot pass vacuously. */
 const ETSY_ROSTER_BEFORE = "Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis.";
 const ETSY_ROSTER_NOW = "Etsy listing copy, tag-length keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace.";
+/* AND THE ANALYTICS LINE (Stop promising measurements nobody takes): it
+   promised "traffic and conversion review", which nothing here reads. Swapped
+   the same way, on the same terms: the old line must be there to swap. */
+const ANALYTICS_ROSTER_BEFORE = "KPI analysis, traffic and conversion review, dashboards, and growth-opportunity identification.";
+const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, reporting frameworks, and growth-opportunity identification. Reads no website analytics, traffic or revenue data.";
 const MUTATIONS = ["nocap", "silentcut", "midword", "oracle", "leadnotes", "peragent", "limit", "self", "notrunc", "unwired"];
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
@@ -195,12 +200,13 @@ async function pages(table, cols, filter) {
     withNotes.slice(iNotes).indexOf("\n\n") > 0 && withNotes.endsWith(brain0.buildAgentSystemPrompt("A", {}, {}, []).split("\n\n").slice(-1)[0]));
   function baselinePrompt(a) {
     const p = brain0.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]);
-    return p.split(ETSY_ROSTER_BEFORE).length === 2 ? p.replace(ETSY_ROSTER_BEFORE, ETSY_ROSTER_NOW) : null;
+    if (p.split(ETSY_ROSTER_BEFORE).length !== 2 || p.split(ANALYTICS_ROSTER_BEFORE).length !== 2) return null;
+    return p.replace(ETSY_ROSTER_BEFORE, ETSY_ROSTER_NOW).replace(ANALYTICS_ROSTER_BEFORE, ANALYTICS_ROSTER_NOW);
   }
   const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => baselinePrompt(a) !== null &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === baselinePrompt(a) &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === baselinePrompt(a));
-  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the corrected Etsy roster line", same);
+  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the corrected Etsy and Analytics roster lines", same);
 
   console.log("\n══ 5. only the typed-task path reads them ══");
   const handler = defs(SERVER, ["handleAiTaskRequest"]);

@@ -60,7 +60,10 @@ const MUTATIONS = {
   "h1-on-shell": [["    if (m.client_rendering.appears_client_rendered) {\n",
     "    if (m.client_rendering.appears_client_rendered) {\n      if (m.h1.count !== 1) raise(\"F8\", \"A page should have exactly one H1.\", m.h1.count + \" H1 element(s).\");\n"]],
   // a model that throws fails the audit
-  "fail-on-throw": [["      } catch (modelErr) {\n", "      } catch (modelErr) {\n        throw modelErr;\n"]],
+  // (Anchored on the audit's own log line: rd/demand-signals, added in 05e3069,
+  // has a catch (modelErr) of its own, and the bare line matched twice.)
+  "fail-on-throw": [["      } catch (modelErr) {\n        console.error(\"[seo/audit] The explanation failed;",
+    "      } catch (modelErr) {\n        throw modelErr;\n        console.error(\"[seo/audit] The explanation failed;"]],
   // not_measured is left out of the response
   "omit-not-measured": [["        not_measured: SEO_AUDIT_NOT_MEASURED,\n", ""]],
   // a sitemapindex is reported as not listing the page
@@ -403,8 +406,44 @@ const GOOD = "POINT: Keep the title as it is. | CITES: title\nPOINT: Shorten the
   check("13. TOOL_INPUT_SPECS has seo/audit with one required field url (alias website)", specs);
   const nonDispatch = /var CHAIN_NON_DISPATCHABLE_TOOLS = \[([^\]]*)\]/.exec(SRC);
   check("13. seo/audit is NOT in CHAIN_NON_DISPATCHABLE_TOOLS", nonDispatch && nonDispatch[1].indexOf("seo/audit") === -1);
-  const before = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
-  same("13. extractSeoPageData is unchanged from " + BEFORE, s.definitionOf(SRC, "extractSeoPageData") === s.definitionOf(before, "extractSeoPageData"), true);
+  /* Stop promising measurements nobody takes: the two meta readers became one
+     (seoMetaContent), so extractSeoPageData's SOURCE changed on purpose. What
+     must not change is what it and seoAuditPageMeasure RETURN. Both are run,
+     old and new, on every page in this check's fixture web plus the meta edge
+     cases, and must agree exactly: extractSeoPageData against BEFORE, and
+     seoAuditPageMeasure against PRE_READER, the last commit with two readers. */
+  const PRE_READER = "9d5c968";
+  const gitSrc = (rev) => execSync("git show " + rev + ":server.js", { cwd: REPO, maxBuffer: 1 << 26 }).toString("utf8").replace(/\r\n/g, "\n");
+  function readers(src, label, root) {
+    const ctx = { decodeHTML: decodeHTML, decodeHTMLAttribute: decodeHTMLAttribute, URL: URL };
+    vm.createContext(ctx);
+    vm.runInContext(closure(src, root), ctx, { filename: label });
+    return ctx;
+  }
+  const BOTH = "this.extract = extractSeoPageData; this.measure = seoAuditPageMeasure;";
+  const nowR = readers(SRC, "server.js", BOTH), preR = readers(gitSrc(PRE_READER), "server.js@" + PRE_READER, BOTH);
+  // seoAuditPageMeasure did not exist yet at BEFORE.
+  const beforeR = readers(gitSrc(BEFORE), "server.js@" + BEFORE, "this.extract = extractSeoPageData;");
+  const pages = [];
+  Object.keys(SITES).forEach(host => Object.keys(SITES[host]).forEach(p => {
+    const r = SITES[host][p];
+    if (/html/.test(String(r[1]["Content-Type"] || "")) && r[2]) pages.push(["https://" + host + p, r[2]]);
+  }));
+  const meta = (tags) => "<!doctype html><html><head><title>T</title>" + tags + "</head><body><h1>H</h1></body></html>";
+  [["absent", ""], ["empty content", "<meta name=\"description\" content=\"\">"], ["no content attribute", "<meta name=\"description\">"],
+   ["upper-case NAME, spaced", "<meta NAME=\" Description \" content=\"  Spaced   out  \">"], ["two, first wins", "<meta name=\"description\" content=\"One\"><meta name=\"description\" content=\"Two\">"],
+   ["entities", "<meta name=\"description\" content=\"Fish &amp; chips &quot;fresh&quot;\">"], ["robots and viewport", "<meta name=\"robots\" content=\"noindex\"><meta name=\"viewport\" content=\"width=device-width\">"],
+   ["empty robots", "<meta name=\"robots\" content=\"\"><meta name=\"viewport\">"]].forEach(([label, tags]) => pages.push(["https://meta.test/" + encodeURIComponent(label), meta(tags)]));
+  pages.push(["https://meta.test/empty-doc", ""]);
+  const stable = (f, html, url) => { try { return JSON.stringify(f(html, url)); } catch (e) { return "threw " + e.message; } };
+  const extractDiffers = pages.filter(([url, html]) => stable(nowR.extract, html) !== stable(beforeR.extract, html)).map(p => p[0]);
+  const measureDiffers = pages.filter(([url, html]) => stable(nowR.measure, html, url) !== stable(preR.measure, html, url)).map(p => p[0]);
+  check("13. extractSeoPageData returns exactly what " + BEFORE + "'s did, on all " + pages.length + " test pages", pages.length > 25 && extractDiffers.length === 0, extractDiffers.join(", "));
+  check("13. seoAuditPageMeasure returns exactly what " + PRE_READER + "'s did, on all " + pages.length + " test pages", measureDiffers.length === 0, measureDiffers.join(", "));
+  check("13. absent and empty stay apart: a missing description measures null, an empty one \"\"",
+    nowR.measure(meta(""), "https://meta.test/").meta_description === null &&
+    JSON.stringify(nowR.measure(meta("<meta name=\"description\" content=\"\">"), "https://meta.test/").meta_description) === JSON.stringify({ value: "", length: 0 }));
+  check("13. one meta reader: seoAuditPageMeasure defines none of its own", !/function metaNamed\(/.test(SRC) && /function seoMetaContent\(metas, name\)/.test(SRC));
   check("13. the removed /api/seo/audit route is still absent", SRC.indexOf("app.post(\"/api/seo/audit\"") === -1);
 
   server.close();

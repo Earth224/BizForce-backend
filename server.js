@@ -14521,7 +14521,7 @@ async function countTasksByAgent(userId) {
    twin email_campaign was written in the same commit with the working text, and
    nothing has ever offered the longer name.
 
-   Twenty-seven accepted values still have no instruction of their own. They run
+   Twenty-three accepted values still have no instruction of their own. They run
    general's instruction with their own name in the prompt; the startup check
    names every one, and writing those instructions is the work that remains. */
 var allowedTaskTypes = ["general", "executive_plan", "agent_coordination", "sales_funnel", "content_plan", "social_content", "social_calendar", "ad_campaign", "reputation_plan", "analytics_report", "email_campaign", "community_growth", "influencer_outreach", "operations_workflow", "store_plan", "etsy_store_plan", "publicist_pitch", "broker_opportunity", "crm_followup", "security_review", "finance_plan", "legal_template", "research_report", "deal_pipeline", "partnership_strategy", "negotiation_brief", "due_diligence", "term_sheet", "community_plan", "engagement_strategy", "referral_loop", "retention_system", "moderation_plan", "email_sequence", "winback_flow", "nurture_campaign", "subject_lines", "campaign_plan", "partnership_offer", "creator_list", "roi_forecast", "operations_sop", "workflow_plan", "automation_plan", "checklist_build", "efficiency_audit", "press_release", "media_outreach", "pr_campaign", "brand_narrative", "media_pitch", "market_research", "competitive_intel", "trend_analysis", "innovation_brief", "executive_briefing", "reputation_audit", "review_strategy", "brand_trust", "crisis_response", "sentiment_report", "store_audit", "inventory_plan", "omnichannel_strategy", "conversion_audit", "product_launch", "etsy_listing", "shop_audit", "keyword_research", "pricing_strategy", "competitor_analysis", "sms_campaign", "vertical_positioning", "channel_research", "objection_handling", "audience_growth", "platform_playbook", "social_campaign", "blog_post", "repurpose_plan", "social_media_drafts", "video_script", "content_calendar", "funnel_analysis", "growth_analysis", "kpi_review", "revenue_forecast", "lead_gen", "offer_build", "outreach_script", "local_seo"];
@@ -14561,25 +14561,25 @@ var taskInstructions = {
   campaign_plan: "Build a campaign plan: campaign goal, audience and partner selection criteria, creative brief, usage rights, performance KPIs, budget and payment structure, and post-campaign reporting format.",
   partnership_offer: "Draft a creator partnership offer: value proposition, deliverables, compensation (flat fee + performance bonus structure), exclusivity terms, and content approval process.",
   creator_list: "Generate a creator list strategy: ideal creator archetypes, platform focus, discovery methods, outreach prioritization, and a scoring rubric to evaluate fit.",
-  roi_forecast: "Build an influencer ROI forecast: estimated reach, engagement rate assumptions, conversion rate, projected revenue, cost per acquisition, and break-even analysis.",
+  roi_forecast: "Build an influencer ROI model the owner can fill in: the inputs that drive the return (reach, engagement, click-through, conversion, order value and cost), the formula that combines them, a break-even calculation, and how to measure each input after a campaign runs. This platform reads no creator, audience, engagement or sales data, so state no reach, rate, revenue or cost per acquisition as a figure; use only numbers the user supplies, with the arithmetic shown.",
   operations_sop: "Write a detailed SOP for the requested process: purpose, scope, step-by-step procedure, roles and responsibilities, tools used, quality checkpoints, and exception handling.",
   workflow_plan: "Build a workflow plan: process map with stages, handoff points, estimated time per step, automation opportunities, bottleneck risks, and KPIs to track efficiency.",
   automation_plan: "Create an automation plan: identify 5 high-impact processes to automate, recommended tools, implementation priority, estimated time savings, and integration steps.",
   checklist_build: "Build a detailed operational checklist for the requested process: pre-execution checks, execution steps, quality verification points, and completion sign-off criteria.",
-  efficiency_audit: "Conduct an operations efficiency audit: identify 5 bottlenecks or waste areas, root cause for each, recommended fix, implementation difficulty, and expected impact.",
+  efficiency_audit: "Review the efficiency of the operations the user describes: up to 5 bottlenecks or waste areas visible in that description, the likely root cause of each, a recommended fix, its implementation difficulty, and how the owner would measure whether it worked. This platform reads no operations, systems or time data from the business, so it measures nothing: work only from what the user tells you and attribute every finding to that description.",
   press_release: "Write a professional press release: headline, dateline, lead paragraph (5 Ws), body with quotes, boilerplate, and media contact block — ready for distribution.",
   media_outreach: "Build a media outreach plan: target publications and journalists (by beat), personalized pitch angles for each, pitch email template, follow-up sequence, and tracking method.",
   pr_campaign: "Create a PR campaign: news hook, story angles, target media list (type/tier), press materials checklist, launch timeline, and success metrics.",
   brand_narrative: "Craft a brand narrative: origin story, mission statement, brand values, hero customer story, key messages by audience, and an elevator pitch in 3 lengths (30s, 60s, 3min).",
   media_pitch: "Write 3 media pitch variations for different journalist personas: a news hook pitch, a trend story pitch, and a human interest pitch — each under 200 words with a subject line.",
-  market_research: "Conduct a market research brief: market size estimate, key segments, growth trends, customer pain points, unmet needs, and 3 market entry or expansion opportunities.",
+  market_research: "Write a market research brief from the business profile and the user's request: the segments worth looking at, the customer pain points and unmet needs to test, the questions that would size the opportunity, and 3 entry or expansion options with what each depends on. This platform reads no market data, so give no market size, growth rate or market share as a finding; where one matters, say which source would give it. For counts of what people in the lead radar's niches are actually posting about, point the owner to the R&D agent's Demand Signals tool (rd/demand-signals), owner account only.",
   /* Neutral already — shared by the R&D and Vertical Marketing agents and
      written for neither. The second sentence is the one that matters: this
      asks for five competitors' PRICING and their RECENT MOVES, and the system
      holds neither. top_competitors supplies the names and nothing else, so
      every figure after that is training recall with no date on it. */
   competitive_intel: "Build a competitive intelligence report: top 5 competitors, their positioning, pricing, strengths, weaknesses, recent moves, and strategic gaps the business can exploit. Any figure not supplied in the business profile — a price, a market share, a funding round — is recalled from training rather than observed, so attribute it that way and never state it as current.",
-  trend_analysis: "Produce a trend analysis: 5 relevant industry or market trends, evidence for each, business impact (opportunity/threat), recommended response, and 12-month outlook.",
+  trend_analysis: "Produce a trend analysis: 5 industry or market trends worth watching for this business, what would show that each one is real, its likely impact (opportunity or threat), a recommended response, and a 12-month watch list. This platform reads no trend, search or market data, so present each trend as recalled from training and undated, never as observed or current. For counts of what is actually being posted in the lead radar's niches, month by month, point the owner to the R&D agent's Demand Signals tool (rd/demand-signals), owner account only.",
   innovation_brief: "Write an innovation brief: problem to solve, customer insight driving it, 3 product or service concepts, feasibility assessment, potential business model, and next validation step.",
   executive_briefing: "Create an executive briefing: situation summary, key data points, decision options with pros/cons, recommended action, risk factors, and resource requirements — fit for a leadership presentation.",
   /* Same shape as sentiment_report: scores about the outside world, no feed
@@ -14592,10 +14592,17 @@ var taskInstructions = {
      sentiment score, and a user who reads "72% positive" has no way to see it
      came from nowhere. */
   sentiment_report: "Produce a sentiment report: overall brand sentiment score, positive/negative/neutral breakdown, key themes driving each, competitor sentiment comparison, and recommended messaging shifts. This platform holds no review data, no social listening and no sentiment feed, so give the scoring framework and how to populate it rather than a score, and never state a number as this brand's measured sentiment.",
-  store_audit: "Conduct a store audit: homepage effectiveness, product page quality, checkout friction points, mobile experience, trust signals, load speed, and a prioritized fix list.",
+  /* These twelve promised what nothing here takes: a store fetch, page speed,
+     search volume and competition, a market size, live traffic, a lift or a
+     revenue projection. Each now asks only for what the model can do from the
+     user's own input and profile, says what is not read, and names the real
+     tool where one exists (store_audit, conversion_audit, analytics_report,
+     the four analytics types below it, keyword_research, market_research,
+     trend_analysis, roi_forecast and efficiency_audit). */
+  store_audit: "Write a store audit checklist for the owner to run on their own store: the homepage, product pages, checkout, mobile layout and trust signals, with what to look at in each, what good looks like, and how to fix what falls short, then a prioritized fix list built from anything the user has described. This platform does not fetch or open the store and measures nothing about it: not its speed, its checkout or its mobile layout, so every item is something for the owner to check rather than an assessment you have made. For one page's served HTML measured by code (title, meta description, headings, links, robots.txt and sitemap), point the owner to the SEO agent's Audit tool (seo/audit).",
   inventory_plan: "Build an inventory plan: demand forecasting method, reorder point calculation, safety stock formula, supplier diversity strategy, and seasonal adjustment guidelines.",
   omnichannel_strategy: "Create an omnichannel retail strategy: channel mix (online/offline/marketplace), inventory sync approach, customer experience consistency plan, and channel-specific marketing tactics.",
-  conversion_audit: "Audit conversion rate: identify 5 drop-off points in the funnel, root cause analysis, A/B test recommendations for each, priority order, and expected lift estimates.",
+  conversion_audit: "Write a conversion review plan for the funnel the user describes: the likely drop-off points for a funnel of that shape, what would explain each, how to confirm it, an A/B test for each, and the order to run them in. This platform reads no analytics, traffic, checkout or conversion data, so name no conversion rate and no lift; any figure must come from the user. To measure a real funnel stage by stage from counts the owner enters, point them to the Analytics agent's Funnel tool (analytics/funnel).",
   product_launch: "Build a product launch plan: launch timeline, pre-launch buzz tactics, launch day actions, email/social/ad coordination, influencer seeding, and post-launch review criteria.",
   etsy_listing: "Optimize an Etsy listing: SEO-rich title (140 chars), 13 keyword tags, description structure (hook + features + story + CTA), pricing guidance, photo requirements, and shipping strategy.",
   /* Etsy-named and UNSHARED, so it keeps its channel. What it cannot keep is
@@ -14605,7 +14612,7 @@ var taskInstructions = {
      used to carry — title-versus-tags placement — survive in etsy_listing,
      which still names the 140-character title and the 13 tags, so nothing is
      lost to the Etsy agent by making this one channel-neutral. */
-  keyword_research: "Produce a keyword research report: 20 high-intent keywords with low competition, long-tail phrase variations, seasonal opportunities, and guidance on where each one belongs — titles, tags, headings or body copy, whichever the user's channel uses.",
+  keyword_research: "Produce keyword research from the user's offer, audience and wording: 20 keyword candidates written the way a buyer would search, grouped by intent, long-tail variations, seasonal angles worth testing, and where each one belongs (titles, tags, headings or body copy, whichever the user's channel uses). This platform reads no search engine or marketplace data, so it knows no search volume, competition, difficulty or ranking for any keyword: present every keyword as a candidate to check in a keyword tool, never as measured. What the lead radar has actually captured for its own keywords is in the R&D agent's Demand Signals tool (rd/demand-signals), owner account only.",
   /* The only one of the four where half the figures are real: inventory_items
      carries unit_cost and unit_price, and profile_products carries price. The
      competitor half is what has no source. */
@@ -14617,7 +14624,14 @@ var taskInstructions = {
      Neutral now: the same work, described without naming a channel. */
   competitor_analysis: "Analyze the competitors named in the business profile: how each positions itself, how it presents and prices what it sells, the social proof it displays, what appears to sell best for it, and the gaps the user can exploit to differentiate. Any figure not supplied in the business profile — a price, a review count, a ranking — is recalled from training rather than observed, so attribute it that way and never state it as current.",
   reputation_plan: "Build a reputation management plan: monitoring setup, review response templates, proactive reputation tactics, and a 90-day brand trust improvement roadmap.",
-  analytics_report: "Produce an analytics report framework: key metrics dashboard, traffic analysis, conversion funnel, revenue attribution, and monthly reporting cadence with action triggers.",
+  analytics_report: "Design an analytics reporting framework for this business: which metrics to track and why, where each one comes from in the tools the owner already uses, how to read them together, a monthly reporting cadence, and the action each threshold should trigger. This platform reads no website analytics, traffic, sales or revenue data, so report no figure; leave every value for the owner to fill in. To measure figures the owner has, point them to the Analytics agent's Funnel tool (analytics/funnel) and KPI Review tool (analytics/kpi-review).",
+  /* The Analytics agent's other four types had no instruction of their own and
+     ran general's. Each says what the platform does not read and names the
+     tool that measures what the owner enters. */
+  kpi_review: "Help the owner review their KPIs: which ones matter for this business and why, how to read a change in each, what usually explains a move up or down, and what to check first. This platform reads no KPI data (no traffic, sales, revenue or conversion figures), so use only figures the user gives in the request and state none of your own. For a review measured by code against figures the owner enters, point them to the Analytics agent's KPI Review tool (analytics/kpi-review).",
+  growth_analysis: "Lay out how to analyse this business's growth: the growth levers that fit its model, the question each one answers, which figures the owner needs to answer it and where those figures live, and how to decide where to focus. This platform reads no traffic, sales, revenue or customer data, so state no growth rate and no trend as found; use only figures the user supplies. For counts measured by code, point the owner to the Analytics agent's Funnel tool (analytics/funnel) and KPI Review tool (analytics/kpi-review).",
+  funnel_analysis: "Help the owner analyse their funnel: map its stages from what the user describes, name the likely leak at each stage and what would cause it, say what to measure to confirm it, and suggest the fix to test first. This platform reads no traffic, checkout or conversion data, so state no drop-off rate of your own; use only counts the user gives. For a stage-by-stage measurement of the owner's own counts, point them to the Analytics agent's Funnel tool (analytics/funnel).",
+  revenue_forecast: "Build a revenue forecasting method the owner can fill in: the drivers that set revenue in this business model, the formula that combines them, which inputs the owner must supply and where to find them, and how to set a cautious, a likely and a strong case from those inputs. This platform reads no sales, revenue or pipeline data, so produce no revenue figure; any number must come from the user, with the arithmetic shown. For the owner's own figures compared period over period, point them to the Analytics agent's KPI Review tool (analytics/kpi-review).",
   community_growth: "Build a community growth strategy: acquisition channels, onboarding flow, engagement programming, and member retention systems.",
   operations_workflow: "Design an operations workflow: process documentation, team roles, handoff procedures, quality controls, and efficiency metrics.",
   store_plan: "Create a comprehensive store strategy: product selection, pricing, marketing mix, customer acquisition, and scaling roadmap.",
@@ -21032,6 +21046,19 @@ function seoDocumentTitle(raw) {
   return m ? seoText(m[1]) : null;
 }
 
+/* The content of the first <meta name=...> with this name, collapsed; "" when
+   the tag is there with no content; null when there is no such tag. The one
+   meta reader: extractSeoPageData reads an absent tag as "", and
+   seoAuditPageMeasure keeps the null so the audit can tell absent from empty. */
+function seoMetaContent(metas, name) {
+  for (var i = 0; i < metas.length; i++) {
+    if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {
+      return metas[i].content !== undefined ? seoCollapse(metas[i].content) : "";
+    }
+  }
+  return null;
+}
+
 function extractSeoPageData(html) {
   var raw = String(html || "");
 
@@ -21039,12 +21066,8 @@ function extractSeoPageData(html) {
 
   var metas = seoTags(raw, "meta");
   function metaContent(name) {
-    for (var i = 0; i < metas.length; i++) {
-      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {
-        return metas[i].content !== undefined ? seoCollapse(metas[i].content) : "";
-      }
-    }
-    return "";
+    var value = seoMetaContent(metas, name);
+    return value === null ? "" : value;
   }
 
   var metaDescription = metaContent("description");
@@ -21545,18 +21568,10 @@ function seoAuditPageMeasure(html, finalUrl) {
   var raw = String(html);
   var finalHost = (function () { try { return new URL(finalUrl).host; } catch (e) { return null; } })();
 
+  // seoMetaContent's null is kept: a missing tag and an empty one are reported apart.
   var metas = seoTags(raw, "meta");
-  function metaNamed(name) {
-    for (var i = 0; i < metas.length; i++) {
-      if (metas[i].name !== undefined && metas[i].name.trim().toLowerCase() === name) {
-        return metas[i].content !== undefined ? seoCollapse(metas[i].content) : "";
-      }
-    }
-    return null;
-  }
-
-  var description = metaNamed("description");
-  var viewport = metaNamed("viewport");
+  var description = seoMetaContent(metas, "description");
+  var viewport = seoMetaContent(metas, "viewport");
   var htmlTag = seoTags(raw, "html")[0] || {};
   var lang = htmlTag.lang !== undefined ? htmlTag.lang.trim() : null;
 
@@ -21634,7 +21649,7 @@ function seoAuditPageMeasure(html, finalUrl) {
     title: data.title === null ? null : { value: data.title, length: seoAuditCharLength(data.title) },
     meta_description: description === null ? null : { value: description, length: seoAuditCharLength(description) },
     canonical: canonical,
-    meta_robots: seoAuditDirectives(metaNamed("robots")),
+    meta_robots: seoAuditDirectives(seoMetaContent(metas, "robots")),
     lang: { present: !!lang, value: lang },
     viewport: { present: viewport !== null, value: viewport },
     h1: { count: data.headings.h1.length, values: data.headings.h1 },
@@ -26379,11 +26394,11 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
           hashtag_practical_max: spec.hashtag_practical,
           note: spec.note,
           practical_caveat: "The truncation point and the practical hashtag number are approximations " +
-            "that move with the client and the layout. The character maximum is the enforced one."
+            "that move with the client and the layout. The " + (spec.unit === "graphemes" ? "grapheme" : "character") + " maximum is the enforced one."
         },
         provenance: toolProvenance(
           [
-            "The post's character count against " + spec.label + "'s enforced maximum",
+            "The post's " + (spec.unit === "graphemes" ? "grapheme" : "character") + " count against " + spec.label + "'s enforced maximum",
             "How much sits past the truncation point, and what is visible before it",
             "The hashtag count, the unique hashtags, and whether that is within the platform maximum " +
               "and the practical number",
