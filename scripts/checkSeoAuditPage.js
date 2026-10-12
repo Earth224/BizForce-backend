@@ -61,8 +61,9 @@ const MUTATIONS = {
   "sitemap-not-checked-as-no": [["renderScalarish(value) + '</div></div>';\n  }\n\n  function seoAuditGroup",
     "renderScalarish(value === \"not checked\" ? false : value) + '</div></div>';\n  }\n\n  function seoAuditGroup"]],
   // the renderer is keyed by the bare id, taking over content's audit too
-  "bare-audit-key": [["var TOOL_WHOLE_RENDERERS = { \"seo/audit\": renderSeoAudit };",
-    "var TOOL_WHOLE_RENDERERS = { \"audit\": renderSeoAudit, \"seo/audit\": renderSeoAudit };"]],
+  // (Demand signals on the R&D page: rd/demand-signals is registered beside it)
+  "bare-audit-key": [["var TOOL_WHOLE_RENDERERS = { \"seo/audit\": renderSeoAudit, \"rd/demand-signals\": renderDemandSignals };",
+    "var TOOL_WHOLE_RENDERERS = { \"audit\": renderSeoAudit, \"seo/audit\": renderSeoAudit, \"rd/demand-signals\": renderDemandSignals };"]],
   // a null explanation renders as nothing
   "blank-on-null-explanation": [["if (!Array.isArray(data.explanation)) {", "if (!Array.isArray(data.explanation)) { return \"\";"]],
   // not measured is collapsed
@@ -378,7 +379,11 @@ const count = (h, needle) => h.split(needle).length - 1;
     try { cfg = pageConfig(p); } catch (e) { check(path.relative(FRONTEND, p) + " config parses", false, e.message); return; }
     if (!cfg) return;
     const rel = path.relative(FRONTEND, p).replace(/\\/g, "/");
-    const o = load(OLD_SRC, cfg), n = load(NEW_SRC, cfg);
+    /* Demand signals on the R&D page: an owner-only tool (adminOnly) is drawn
+       later, after /api/auth/me, and has its own renderer — checked by
+       checkDemandSignalsPage. Every other tool is compared as before. */
+    const shared = Object.assign({}, cfg, { tools: (cfg.tools || []).filter(t => !t.adminOnly) });
+    const o = load(OLD_SRC, shared), n = load(NEW_SRC, shared);
     const newTools = n.ap.TOOLS.filter(t => !(cfg.agentType === "seo" && t.id === "audit"));
     if (rel !== "agents/seo.html") check(rel + ": tools markup identical", o.ap.toolsMarkup() === n.ap.toolsMarkup());
     newTools.forEach(t => {
@@ -399,8 +404,9 @@ const count = (h, needle) => h.split(needle).length - 1;
   });
   const seoOld = load(OLD_SRC, SEO_CFG);
   const oldStyle = seoOld.style, newStyle = seo.style;
-  const removed = newStyle.replace(/\.ap-seo-[^}]*\}/g, "");
-  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-* rules were added", !/\.ap-seo-/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
+  // Demand signals on the R&D page added .ap-ds-* rules beside the .ap-seo-* ones.
+  const removed = newStyle.replace(/\.ap-(?:seo|ds)-[^}]*\}/g, "");
+  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-* and .ap-ds-* rules were added", !/\.ap-(?:seo|ds)-/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
   console.log("    (" + pages.length + " agent pages, " + toolCount + " other tools, " + compared + " renders compared)");
 
   console.log("\n" + (fails ? "CHECKS FAILED: " + fails + " of " + (passes + fails) : "ALL " + passes + " CHECKS PASSED"));
