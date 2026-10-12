@@ -476,8 +476,12 @@ function runViewer(search, serve, extra) {
   check("a missing id: \"" + NOT_FOUND + "\" (the route answered 404)", text(pg.shown("runView")).indexOf(NOT_FOUND) !== -1 && pg.calls.length === 1);
   pg = await runViewer("?id=" + T(6), (url) => srv.serve(url));
   check("another account's run: the same, and none of it shown", text(pg.shown("runView")).indexOf(NOT_FOUND) !== -1 && pg.shown("runView").indexOf("Another account") === -1);
+  // The route checks the shape itself now ("One honest way to run the checks"): the same 404, no read.
+  const readsBefore = srv.db.log.length;
   const malformed = await srv.call("get /api/ai/tasks/:id", OWNER, { id: "not-a-uuid" });
-  check("the route itself answers a malformed id with a 500 (it does not check the shape)", malformed.code === 500);
+  check("the route itself answers a malformed id with the same 404 as a missing one, and reads nothing",
+    malformed.code === 404 && JSON.stringify(malformed.body) === JSON.stringify({ error: "Task not found" }) && srv.db.log.length === readsBefore,
+    malformed.code + " " + JSON.stringify(malformed.body));
   for (const q of ["?id=not-a-uuid", "?id=", "", "?id=" + T(1) + "x", "?id=%3Cscript%3E"]) {
     pg = await runViewer(q, (url) => srv.serve(url));
     check("malformed or missing id " + JSON.stringify(q) + ": \"" + NOT_FOUND + "\", and no request made",

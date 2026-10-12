@@ -215,9 +215,10 @@ CREATE TRIGGER contacts_set_updated_at
 -- or hide them from the service role too. Ownership for those rows is not
 -- expressible in SQL today; it is enforced in the route handlers, the same
 -- posture 059 and 066 record. If a frontend Supabase client is ever introduced,
--- both tables need a deliberate policy design — and 068 is the cautionary case,
--- where a permissive `using (true)` policy sits on bsky_leads waiting to be
--- activated by exactly that change.
+-- both tables need a deliberate policy design. (This comment once cited a
+-- permissive `using (true)` policy on bsky_leads as the cautionary case. Production
+-- has no such policy: pg_policies on 2026-10-11 showed RLS on and zero policies on
+-- bsky_leads, the same posture 068 records.)
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.consent_events ENABLE ROW LEVEL SECURITY;
 

@@ -16049,6 +16049,12 @@ app.delete("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
 });
 app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   try {
+    // Not a uuid, so no task has it: the same 404 as a missing one, without
+    // sending Postgres a value it would refuse (that refusal used to be a 500).
+    if (!isValidUuid(req.params.id)) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
     var result = await supabase
       .from("ai_tasks")
       .select("*")

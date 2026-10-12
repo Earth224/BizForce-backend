@@ -187,8 +187,9 @@ create index if not exists icp_profiles_user_active_idx
 -- service-role key, which bypasses RLS entirely, so this changes nothing about
 -- how the platform behaves today. What it does is close the default — a table
 -- with RLS enabled and no policy returns an empty result to anon and
--- authenticated rather than every row, which is the opposite of what
--- bsky_leads' single `using (true)` policy does.
+-- authenticated rather than every row. bsky_leads has the same posture: this
+-- comment once said it carried a single `using (true)` policy, but pg_policies on
+-- 2026-10-11 showed RLS on and zero policies there, as 068 records.
 --
 -- Enabled-with-no-policies is a deliberate posture, not an unfinished one. If
 -- these tables are ever reached with a user-scoped key, the correct answer is
