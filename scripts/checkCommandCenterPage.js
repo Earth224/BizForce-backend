@@ -468,8 +468,10 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
     plText.indexOf("Another account's goal") === -1 && plans.every(p => plText.indexOf(new Date(p.created_at).toLocaleString()) !== -1), plText.slice(0, 400));
   check("plans: each assignment's agent, tool, task and priority",
     p1.assignments.every(a => plText.indexOf("#" + a.id + " " + a.agent + " · " + a.tool + " · " + a.priority) !== -1 && plText.indexOf(a.task) !== -1), plText.slice(0, 600));
-  check("plans: the ran assignment shows its run's status and links where a viewer exists",
-    plText.indexOf("Ran — the run is completed") !== -1 && pg.panel("ccPlans").indexOf('<a href="email-agent.html">see it in Task History</a>') !== -1, plText);
+  // The run opens on run.html (frontend "Every run can be opened, and agent pages read only the server").
+  check("plans: the ran assignment shows its run's status and links to the run on run.html",
+    plText.indexOf("Ran — the run is completed") !== -1 && pg.panel("ccPlans").indexOf('<a href="run.html?id=' + T(13) + '">open the run</a>') !== -1 &&
+    pg.panel("ccPlans").indexOf("Task History") === -1, plText);
   check("plans: a refusal in plain words (not runnable; chaining switched off), a failure, and not dispatched",
     plText.indexOf("Refused — the plan marks this assignment as not runnable (assignment_not_dispatchable)") !== -1 &&
     plText.indexOf("Refused — agent chaining is switched off on the server (ENABLE_AGENT_CHAINING), so no tool may be dispatched (chaining_disabled)") !== -1 &&
