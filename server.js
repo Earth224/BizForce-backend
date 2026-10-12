@@ -31757,16 +31757,62 @@ async function dispatchToolCall(options) {
    Writes nothing to agent_collaborations or agent_assignments. The dispatched
    tool persists its own ai_tasks row through startToolRun, and that row — with
    its task_type, output and the chain id on every model_calls entry — is the
-   record of what ran. */
-function dispatchRefusal(res, reason, detail) {
+   record of what ran.
+
+   EVERY DISPATCH OF A REAL PLAN IS RECORDED (migration 137). Once the plan row
+   is read back as the caller's own executive/plan, the request writes exactly
+   one executive_dispatches row, whatever happens next: 'ran' with the tool's
+   task_id and the chain id, 'refused' with the reason and detail, 'failed' when
+   the tool threw or answered with an error. That row is the only link from a
+   plan's assignment to what it produced; the tool's ai_tasks row carries none.
+   A plan that is not found, or a task that is not a plan, records nothing:
+   there is no plan of the caller's to attach a row to. The row is written with
+   the caller's id and the plan id read back under that id, so it can never
+   name another user's plan. A failed write changes nothing in the answer but
+   recorded:false, and is logged. */
+function dispatchRefusal(res, reason, detail, recorded) {
   return res.json({
     ok: false,
     status: null,
     refused_reason: reason,
     detail: detail || null,
     chain_id: null,
-    result: null
+    result: null,
+    recorded: recorded === true
   });
+}
+
+/* Writes one executive_dispatches row. True when it was written; a failure is
+   logged and answered false, never thrown, so the dispatch's answer stands. */
+async function recordExecutiveDispatch(entry) {
+  try {
+    var write = await supabase
+      .from("executive_dispatches")
+      .insert({
+        user_id: entry.userId,
+        plan_task_id: entry.planTaskId,
+        assignment_id: entry.assignmentId,
+        agent_type: entry.agentType || null,
+        tool: entry.tool || null,
+        outcome: entry.outcome,
+        refused_reason: entry.refusedReason || null,
+        detail: entry.detail || null,
+        tool_task_id: isValidUuid(entry.toolTaskId) ? entry.toolTaskId : null,
+        chain_id: entry.chainId || null
+      });
+    if (write.error) {
+      console.error("[assignments/dispatch] DISPATCH NOT RECORDED — the executive_dispatches insert failed for user " +
+        entry.userId + ", plan " + entry.planTaskId + ", assignment " + entry.assignmentId + " (" + entry.outcome + "): " +
+        (write.error.message || JSON.stringify(write.error)));
+      return false;
+    }
+    return true;
+  } catch (recordErr) {
+    console.error("[assignments/dispatch] DISPATCH NOT RECORDED — the executive_dispatches insert threw for user " +
+      entry.userId + ", plan " + entry.planTaskId + ", assignment " + entry.assignmentId + " (" + entry.outcome + "): " +
+      ((recordErr && recordErr.message) || recordErr));
+    return false;
+  }
 }
 
 app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, aiLimiter,
@@ -31809,8 +31855,25 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
           "Task " + executiveTaskId + " is a " + JSON.stringify(row.task_type || null) +
           " task, not an executive/plan; only a plan's assignments can be dispatched.");
       }
+
+      /* From here the caller named a real plan of their own, so every answer
+         below is recorded. row.id was read back under .eq("user_id", userId). */
+      var refuseRecorded = async function (reason, detail, assigned) {
+        var recorded = await recordExecutiveDispatch({
+          userId: userId,
+          planTaskId: row.id,
+          assignmentId: assignmentId,
+          agentType: assigned && assigned.agent,
+          tool: assigned && assigned.tool,
+          outcome: "refused",
+          refusedReason: reason,
+          detail: detail
+        });
+        return dispatchRefusal(res, reason, detail, recorded);
+      };
+
       if (!row.output || typeof row.output !== "object") {
-        return dispatchRefusal(res, "plan_has_no_output",
+        return refuseRecorded("plan_has_no_output",
           "Task " + executiveTaskId + " has no stored output" +
           (row.status && row.status !== "completed" ? " (its status is " + JSON.stringify(row.status) + ")" : "") +
           "; there is nothing to dispatch from.");
@@ -31819,7 +31882,7 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
       var assignments = Array.isArray(row.output.assignments) ? row.output.assignments : [];
       var assignment = assignments.filter(function (a) { return a && Number(a.id) === assignmentId; })[0];
       if (!assignment) {
-        return dispatchRefusal(res, "assignment_not_in_plan",
+        return refuseRecorded("assignment_not_in_plan",
           "Plan " + executiveTaskId + " has no assignment with id " + assignmentId +
           " (it has: " + (assignments.map(function (a) { return a && a.id; }).filter(function (v) { return v != null; }).join(", ") || "none") + ").");
       }
@@ -31841,19 +31904,51 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
         if (!assignment.tool) {
           why.push("no tool is named");
         }
-        return dispatchRefusal(res, "assignment_not_dispatchable",
-          "Assignment " + assignmentId + " is not dispatchable" + (why.length ? " — " + why.join("; ") : "") + ".");
+        return refuseRecorded("assignment_not_dispatchable",
+          "Assignment " + assignmentId + " is not dispatchable" + (why.length ? " — " + why.join("; ") : "") + ".",
+          assignment);
       }
 
       var chainId = crypto.randomUUID();
 
-      var dispatched = await dispatchToolCall({
+      var dispatched;
+      try {
+        dispatched = await dispatchToolCall({
+          userId: userId,
+          agentType: assignment.agent,
+          tool: assignment.tool,
+          // The stored, validated body. Never anything from this request.
+          body: (assignment.inputs && typeof assignment.inputs === "object") ? assignment.inputs : {},
+          chain: { id: chainId, depth: 0, callsSoFar: 0 }
+        });
+      } catch (dispatchErr) {
+        await recordExecutiveDispatch({
+          userId: userId, planTaskId: row.id, assignmentId: assignmentId,
+          agentType: assignment.agent, tool: assignment.tool,
+          outcome: "failed",
+          detail: (dispatchErr && dispatchErr.message) || String(dispatchErr),
+          chainId: chainId
+        });
+        throw dispatchErr;
+      }
+
+      /* What happened, as the dispatcher reported it. ok: the tool ran and
+         answered 2xx. A null status is the dispatcher's own refusal, made before
+         the tool was reached. Anything else reached the tool and did not succeed:
+         it threw (handler_error) or answered with an error status. */
+      var toolBody = (dispatched.body && typeof dispatched.body === "object") ? dispatched.body : null;
+      var outcome = dispatched.ok === true ? "ran" : (dispatched.status === null || dispatched.status === undefined) ? "refused" : "failed";
+      var recorded = await recordExecutiveDispatch({
         userId: userId,
+        planTaskId: row.id,
+        assignmentId: assignmentId,
         agentType: assignment.agent,
         tool: assignment.tool,
-        // The stored, validated body. Never anything from this request.
-        body: (assignment.inputs && typeof assignment.inputs === "object") ? assignment.inputs : {},
-        chain: { id: chainId, depth: 0, callsSoFar: 0 }
+        outcome: outcome,
+        refusedReason: outcome === "ran" ? null : (dispatched.refused_reason || null),
+        detail: outcome === "ran" ? null : (dispatched.detail || (toolBody && typeof toolBody.error === "string" ? toolBody.error : null)),
+        toolTaskId: toolBody ? toolBody.task_id : null,
+        chainId: chainId
       });
 
       return res.json({
@@ -31863,13 +31958,363 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
         detail: dispatched.detail || null,
         chain_id: chainId,
         // The tool's own response body, untouched — it already carries task_id and persisted.
-        result: dispatched.body
+        result: dispatched.body,
+        recorded: recorded
       });
     } catch (error) {
       console.error("[assignments/dispatch] Error:", error);
       next(error);
     }
   });
+
+/* ── GET /api/command-center ─────────────────────────────────────────────────
+   The Executive Command Center, read from rows and nothing else. No model call;
+   every figure is a row read back or a count of rows.
+
+   LOGIN ONLY, NEVER A SUBSCRIPTION GATE. A lapsed owner must still see what is
+   waiting on them: a pending proposal, a failed run, a sequence still sending.
+   Every read is scoped to the caller.
+
+   INDEPENDENT SECTIONS. Each section is { ok: true, data } or
+   { ok: false, error }. A read that fails fails its own section and no other,
+   and a failed section never answers as an empty list or a zero.
+
+   platform — the jobs and the radar heartbeat — is the deployment's, not the
+   account's, so it is present only when the caller's users.role is 'admin'. */
+var COMMAND_CENTER_PAGE = 1000;
+var COMMAND_CENTER_LIST_LIMIT = 100;
+var COMMAND_CENTER_PLAN_COUNT = 5;
+
+async function commandCenterSection(name, read) {
+  try {
+    return { ok: true, data: await read() };
+  } catch (error) {
+    var message = (error && error.message) || String(error);
+    console.error("[command-center] the " + name + " section could not be read: " + message);
+    return { ok: false, error: message };
+  }
+}
+
+// The answer of a read, or a throw naming it. A failed read is never data.
+function commandCenterRead(result, what) {
+  if (result.error) {
+    throw new Error(what + ": " + (result.error.message || JSON.stringify(result.error)));
+  }
+  return result;
+}
+
+/* Every row a query matches, in pages, checked against the exact count so a
+   truncated read is an error rather than a smaller number. buildQuery must
+   select with { count: "exact" } and order by a stable key. */
+async function commandCenterAllRows(buildQuery, what) {
+  var rows = [];
+  var total = null;
+  for (var from = 0; ; from += COMMAND_CENTER_PAGE) {
+    var page = commandCenterRead(await buildQuery().range(from, from + COMMAND_CENTER_PAGE - 1), what);
+    if (total === null) total = page.count;
+    var got = page.data || [];
+    rows = rows.concat(got);
+    if (got.length < COMMAND_CENTER_PAGE) break;
+  }
+  if (typeof total !== "number" || rows.length !== total) {
+    throw new Error(what + ": read " + rows.length + " rows but the exact count is " + JSON.stringify(total));
+  }
+  return rows;
+}
+
+function commandCenterSince(days, now) {
+  return new Date(now.getTime() - days * 86400000).toISOString();
+}
+
+async function commandCenterNeedsYou(userId, now) {
+  var proposals = commandCenterRead(await supabase
+    .from("agent_proposals")
+    .select("id, title, agent_type, created_at", { count: "exact" })
+    .eq("user_id", userId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(COMMAND_CENTER_LIST_LIMIT), "pending proposals");
+
+  var since = commandCenterSince(7, now);
+  var failed = commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, agent_type, task_type, created_at", { count: "exact" })
+    .eq("user_id", userId)
+    .eq("status", "failed")
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(COMMAND_CENTER_LIST_LIMIT), "failed runs");
+
+  // The same booleans GET /api/email/sequences reports, never a value read from
+  // the environment; blocked_by names each one that stops the sender.
+  var cap = emailMarketingDailyCap();
+  var sender = {
+    enabled: emailSequencesEnabled(),
+    postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+    webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
+    daily_cap: typeof cap === "number" ? cap : null
+  };
+  var blockedBy = [];
+  if (!sender.enabled) blockedBy.push("enabled");
+  if (!sender.postal_address_set) blockedBy.push("postal_address_set");
+  if (!sender.webhook_secret_set) blockedBy.push("webhook_secret_set");
+  if (sender.daily_cap === null) blockedBy.push("daily_cap");
+  sender.blocked_by = blockedBy;
+
+  return {
+    pending_proposals: { count: proposals.count, rows: proposals.data || [] },
+    failed_runs_7d: { since: since, count: failed.count, rows: failed.data || [] },
+    email_sender: sender
+  };
+}
+
+async function commandCenterPlans(userId) {
+  var plans = commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, status, output, created_at")
+    .eq("user_id", userId)
+    .eq("task_type", "executive/plan")
+    .order("created_at", { ascending: false })
+    .limit(COMMAND_CENTER_PLAN_COUNT), "executive plans").data || [];
+
+  var planIds = plans.map(function (p) { return p.id; });
+  var dispatches = !planIds.length ? [] : await commandCenterAllRows(function () {
+    return supabase
+      .from("executive_dispatches")
+      .select("id, plan_task_id, assignment_id, outcome, refused_reason, tool_task_id, created_at", { count: "exact" })
+      .eq("user_id", userId)
+      .in("plan_task_id", planIds)
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true });
+  }, "dispatches");
+
+  // Newest first, so the first row seen for an assignment is its latest.
+  var latest = {};
+  dispatches.forEach(function (d) {
+    var key = d.plan_task_id + "#" + d.assignment_id;
+    if (!latest[key]) latest[key] = d;
+  });
+
+  var toolTaskIds = [];
+  Object.keys(latest).forEach(function (k) {
+    var id = latest[k].tool_task_id;
+    if (id && toolTaskIds.indexOf(id) === -1) toolTaskIds.push(id);
+  });
+  var toolStatus = {};
+  if (toolTaskIds.length) {
+    var tools = commandCenterRead(await supabase
+      .from("ai_tasks")
+      .select("id, status")
+      .eq("user_id", userId)
+      .in("id", toolTaskIds), "dispatched runs");
+    (tools.data || []).forEach(function (t) { toolStatus[t.id] = t.status; });
+  }
+
+  return plans.map(function (plan) {
+    var output = (plan.output && typeof plan.output === "object") ? plan.output : {};
+    var assignments = Array.isArray(output.assignments) ? output.assignments : [];
+    return {
+      id: plan.id,
+      goal: typeof output.goal === "string" ? output.goal : null,
+      status: plan.status,
+      created_at: plan.created_at,
+      assignments: assignments.filter(function (a) { return a && typeof a === "object"; }).map(function (a) {
+        var d = latest[plan.id + "#" + Number(a.id)];
+        return {
+          id: a.id,
+          agent: a.agent || null,
+          tool: a.tool || null,
+          task: a.task || null,
+          priority: a.priority || null,
+          is_dispatchable: a.is_dispatchable === true,
+          problems: Array.isArray(a.problems) ? a.problems : [],
+          latest_dispatch: !d ? "not dispatched" : {
+            outcome: d.outcome,
+            refused_reason: d.refused_reason,
+            tool_task_id: d.tool_task_id,
+            // null when the run has been deleted or is not this caller's.
+            tool_task_status: d.tool_task_id ? (toolStatus[d.tool_task_id] || null) : null,
+            created_at: d.created_at
+          }
+        };
+      })
+    };
+  });
+}
+
+/* Sales dry runs are counted apart: there are thousands of them, each a
+   rehearsal that sent nothing, and they would bury every real run. agent_type
+   and status are NOT NULL on ai_tasks, so the neq pair excludes exactly the
+   sales dry runs and nothing else. */
+async function commandCenterActivity(userId, now) {
+  var since = commandCenterSince(30, now);
+  var rows = await commandCenterAllRows(function () {
+    return supabase
+      .from("ai_tasks")
+      .select("id, agent_type, status", { count: "exact" })
+      .eq("user_id", userId)
+      .gte("created_at", since)
+      .or("agent_type.neq.sales,status.neq.dry_run")
+      .order("id", { ascending: true });
+  }, "runs in the last 30 days");
+
+  var byAgent = {};
+  rows.forEach(function (r) {
+    byAgent[r.agent_type] = byAgent[r.agent_type] || {};
+    byAgent[r.agent_type][r.status] = (byAgent[r.agent_type][r.status] || 0) + 1;
+  });
+
+  var dryRuns = commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .gte("created_at", since)
+    .eq("agent_type", "sales")
+    .eq("status", "dry_run"), "sales dry runs");
+  if (typeof dryRuns.count !== "number") {
+    throw new Error("sales dry runs: the count did not come back");
+  }
+
+  var newest = commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, agent_type, task_type, status, created_at")
+    .eq("user_id", userId)
+    .or("agent_type.neq.sales,status.neq.dry_run")
+    .order("created_at", { ascending: false })
+    .limit(10), "newest runs");
+
+  return {
+    since: since,
+    total: rows.length,
+    by_agent_type: byAgent,
+    sales_dry_runs: dryRuns.count,
+    newest_runs: newest.data || []
+  };
+}
+
+async function commandCenterAutopilot(userId) {
+  var autonomy = commandCenterRead(await supabase
+    .from("agent_autonomy")
+    .select("agent_type, enabled, updated_at")
+    .eq("user_id", userId)
+    .order("agent_type", { ascending: true }), "agent autonomy");
+  var schedules = commandCenterRead(await supabase
+    .from("agent_schedules")
+    .select(AGENT_SCHEDULE_FIELDS)
+    .eq("user_id", userId)
+    .order("agent_type", { ascending: true }), "agent schedules");
+  return { autonomy: autonomy.data || [], schedules: schedules.data || [] };
+}
+
+async function commandCenterOutbound(userId, now) {
+  var sequences = commandCenterRead(await supabase
+    .from("email_sequences")
+    .select("id, name, status, created_at")
+    .eq("owner_id", userId)
+    .order("created_at", { ascending: false }), "email sequences").data || [];
+  var enrollments = await emailSequenceEnrollmentRows(
+    sequences.map(function (seq) { return seq.id; }), "sequence_id, status");
+  var tally = {};
+  sequences.forEach(function (seq) { tally[seq.id] = {}; });
+  enrollments.forEach(function (row) {
+    var t = tally[row.sequence_id];
+    if (t) t[row.status] = (t[row.status] || 0) + 1;
+  });
+
+  var drafts = await commandCenterAllRows(function () {
+    return supabase
+      .from("social_post_drafts")
+      .select("id, status", { count: "exact" })
+      .eq("user_id", userId)
+      .order("id", { ascending: true });
+  }, "social drafts");
+  var draftsByStatus = {};
+  drafts.forEach(function (d) { draftsByStatus[d.status] = (draftsByStatus[d.status] || 0) + 1; });
+
+  var since = commandCenterSince(30, now);
+  var published = commandCenterRead(await supabase
+    .from("content_library")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("status", "published")
+    .gte("published_at", since), "published content");
+  if (typeof published.count !== "number") {
+    throw new Error("published content: the count did not come back");
+  }
+
+  return {
+    email_sequences: sequences.map(function (seq) {
+      return { id: seq.id, name: seq.name, status: seq.status, enrollments: tally[seq.id] };
+    }),
+    social_drafts_by_status: draftsByStatus,
+    content_published_30d: { since: since, count: published.count }
+  };
+}
+
+async function commandCenterSpend(userId, now) {
+  var spend = await modelSpendThisMonth(userId, now);
+  if (spend.error) {
+    throw new Error("model spend: " + spend.error);
+  }
+  return {
+    usd: spend.usd,
+    ledger_rows: spend.rows,
+    unpriced_models: spend.unpriced,
+    since: spend.month.since,
+    resets_at: spend.month.resets_at,
+    monthly_cap_usd: modelSpendMonthlyLimit(),
+    prices_source: MODEL_PRICES_SOURCE,
+    note: "Priced from model_calls input and output tokens. Prompt-cache tokens are billed but not recorded, " +
+      "so this figure understates the true cost. Rows funded by the account's own key are not counted."
+  };
+}
+
+async function commandCenterPlatform() {
+  var jobs = commandCenterRead(await supabase
+    .from("job_runs")
+    .select("job_name, last_run_on, finished_at, last_error")
+    .order("job_name", { ascending: true }), "job runs");
+  var radar = commandCenterRead(await supabase
+    .from("radar_status")
+    .select("*")
+    .order("source", { ascending: true }), "radar status");
+  return { job_runs: jobs.data || [], radar_status: radar.data || [] };
+}
+
+app.get("/api/command-center", requireAuth, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var now = new Date();
+    var reads = [
+      commandCenterSection("needs_you", function () { return commandCenterNeedsYou(userId, now); }),
+      commandCenterSection("plans", function () { return commandCenterPlans(userId); }),
+      commandCenterSection("activity", function () { return commandCenterActivity(userId, now); }),
+      commandCenterSection("autopilot", function () { return commandCenterAutopilot(userId); }),
+      commandCenterSection("outbound", function () { return commandCenterOutbound(userId, now); }),
+      commandCenterSection("spend", function () { return commandCenterSpend(userId, now); })
+    ];
+    var isAdmin = req.user.role === "admin";
+    if (isAdmin) {
+      reads.push(commandCenterSection("platform", function () { return commandCenterPlatform(); }));
+    }
+    var sections = await Promise.all(reads);
+    var body = {
+      generated_at: now.toISOString(),
+      needs_you: sections[0],
+      plans: sections[1],
+      activity: sections[2],
+      autopilot: sections[3],
+      outbound: sections[4],
+      spend: sections[5]
+    };
+    if (isAdmin) {
+      body.platform = sections[6];
+    }
+    return res.json(body);
+  } catch (error) {
+    next(error);
+  }
+});
 
 /* Orders the assignments by their dependencies, and names any cycle.
 

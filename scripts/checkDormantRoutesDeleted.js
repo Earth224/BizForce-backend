@@ -87,7 +87,8 @@ const ADDED = [
   ["get", "/api/email/sequences/:id"],             // Let the owner see and stop every sequence
   ["post", "/api/email/sequences/:id/status"],    // Let the owner see and stop every sequence
   ["post", "/api/agents/social/propose-post"],    // Publish approved posts to Bluesky
-  ["post", "/api/agents/rd/demand-signals"]       // Read the radar as demand evidence
+  ["post", "/api/agents/rd/demand-signals"],      // Read the radar as demand evidence
+  ["get", "/api/command-center"]                  // Record every dispatch, and read the command center from facts (total 302 -> 303)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
