@@ -13,7 +13,10 @@
    WHAT THIS PROVES
      1. Each of the twelve: an instruction of its own, none of the five removed
         phrases, its own "not read" statement, and the real tool named where
-        one exists. Every other instruction is exactly as it was at 9d5c968.
+        one exists. Every other instruction is exactly as it was at 9d5c968,
+        but for four that differ only by their opening, swapped by name in
+        RENAMED_SINCE_PRE (the Etsy agent renamed to the Storefront Agent, Oct
+        13 2026); any further change to one of those four fails.
      2. The Analytics roster line no longer promises traffic and conversion
         review and says what it does not read.
      3. social/post: the caveat and the provenance line say "grapheme" on a
@@ -53,7 +56,9 @@ const MUTATIONS = {
     "alter table public.bsky_leads enable row level security;\n\ndo $$\nbegin\n  if not exists (select 1 from pg_policy where polname = 'authenticated can read leads' and polrelid = 'public.bsky_leads'::regclass) then\n    create policy \"authenticated can read leads\" on public.bsky_leads for select to authenticated using (true);\n  end if;\nend $$;\n"]],
   // the caveat says character on Bluesky
   "character-for-bluesky": [[SERVER, "\"that move with the client and the layout. The \" + (spec.unit === \"graphemes\" ? \"grapheme\" : \"character\") + \" maximum is the enforced one.\"",
-    "\"that move with the client and the layout. The character maximum is the enforced one.\""]]
+    "\"that move with the client and the layout. The character maximum is the enforced one.\""]],
+  // a renamed instruction changes beyond its swapped opening
+  "renamed-further-change": [[SERVER, "and a 30-day improvement plan.", "and a 60-day improvement plan."]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -87,6 +92,17 @@ function instructions(src) {
 }
 const NOW_T = instructions(SRC), PRE_T = instructions(PRE_SRC);
 
+/* The Etsy agent was renamed to the Storefront Agent (Oct 13 2026): these four
+   instructions differ from PRE only by their opening, named here as [before,
+   after]. Nothing else in them may change. */
+const RENAMED_SINCE_PRE = {
+  etsy_listing:     ["Optimize an Etsy listing: SEO-rich title (140 chars), 13 keyword tags,",
+                     "Optimize a store or marketplace listing: a search-rich title and keyword tags within the limits the seller says their platform sets,"],
+  shop_audit:       ["Conduct an Etsy shop audit:", "Conduct an online shop audit:"],
+  pricing_strategy: ["Build an Etsy pricing strategy:", "Build a pricing strategy:"],
+  etsy_store_plan:  ["Build an Etsy shop strategy:", "Build an online shop strategy:"]
+};
+
 const REMOVED = ["load speed", "low competition", "market size estimate", "expected lift estimates", "projected revenue"];
 const TWELVE = {
   store_audit:      { notRead: "This platform does not fetch or open the store and measures nothing about it", tool: "seo/audit" },
@@ -116,9 +132,17 @@ const TWELVE = {
   }
   const everyText = Object.values(NOW_T).join(" ").toLowerCase();
   check("no instruction anywhere carries a removed phrase", REMOVED.every(p => everyText.indexOf(p) === -1), REMOVED.filter(p => everyText.indexOf(p) !== -1).join(", "));
-  const others = Object.keys(PRE_T).filter(k => !Object.prototype.hasOwnProperty.call(TWELVE, k));
+  const others = Object.keys(PRE_T).filter(k => !Object.prototype.hasOwnProperty.call(TWELVE, k) && !Object.prototype.hasOwnProperty.call(RENAMED_SINCE_PRE, k));
   const changed = others.filter(k => NOW_T[k] !== PRE_T[k]);
   check("every other instruction is exactly as it was at " + PRE + " (" + others.length + ")", changed.length === 0, changed.join(", "));
+  for (const [k, [before, after]] of Object.entries(RENAMED_SINCE_PRE)) {
+    const pre = PRE_T[k];
+    const once = typeof pre === "string" && pre.split(before).length === 2;
+    const i = once ? pre.indexOf(before) : -1;
+    const expected = once ? pre.slice(0, i) + after + pre.slice(i + before.length) : null;
+    check(k + ": at " + PRE + " it holds the old opening exactly once, and now differs only by the Storefront swap",
+      once && NOW_T[k] === expected, once ? String(NOW_T[k]).slice(0, 160) : "old opening found " + (typeof pre === "string" ? pre.split(before).length - 1 : "no instruction") + " times");
+  }
   const added = Object.keys(NOW_T).filter(k => !Object.prototype.hasOwnProperty.call(PRE_T, k)).sort();
   check("the only new instructions are the four analytics types", JSON.stringify(added) === JSON.stringify(["funnel_analysis", "growth_analysis", "kpi_review", "revenue_forecast"]), JSON.stringify(added));
   const allowed = JSON.parse(SRC.match(/var allowedTaskTypes = (\[[^\]]*\]);/)[1]);

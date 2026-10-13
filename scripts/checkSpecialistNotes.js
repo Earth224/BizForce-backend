@@ -56,11 +56,14 @@ const BASELINE = "1c7c5dd";
 /* THE ONE ROSTER LINE THAT HAS CHANGED SINCE BASELINE. The assembled prompt
    carries the agent roster, and the Etsy agent's description was corrected
    after BASELINE: it promised competitor shop analysis, which nothing here can
-   do. Section 4 swaps exactly this description in BASELINE's prompt and still
-   demands every other byte be identical — and that the old line was there to
-   swap, so the exception cannot pass vacuously. */
-const ETSY_ROSTER_BEFORE = "Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis.";
-const ETSY_ROSTER_NOW = "Etsy listing copy, tag-length keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace.";
+   do. Later the agent was renamed the Storefront Agent (key still etsy), and
+   the roster line renders as "- <name> (<key>): <description>", so the name
+   changed too. Section 4 swaps exactly this whole line, name and description,
+   in BASELINE's prompt and still demands every other byte be identical — and
+   that the old line was there to swap, so the exception cannot pass
+   vacuously. */
+const ETSY_ROSTER_BEFORE = "- Etsy Agent (etsy): Etsy listing optimization, keyword research, pricing strategy, and competitor shop analysis.";
+const ETSY_ROSTER_NOW = "- Storefront Agent (etsy): Listing copy for any online store, keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace.";
 /* AND THE ANALYTICS LINE (Stop promising measurements nobody takes): it
    promised "traffic and conversion review", which nothing here reads. Swapped
    the same way, on the same terms: the old line must be there to swap. */
@@ -206,7 +209,7 @@ async function pages(table, cols, filter) {
   const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => baselinePrompt(a) !== null &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === baselinePrompt(a) &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === baselinePrompt(a));
-  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the corrected Etsy and Analytics roster lines", same);
+  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the renamed Storefront (etsy) and corrected Analytics roster lines", same);
 
   console.log("\n══ 5. only the typed-task path reads them ══");
   const handler = defs(SERVER, ["handleAiTaskRequest"]);

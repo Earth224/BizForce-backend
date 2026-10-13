@@ -7,8 +7,8 @@ const assert = require("assert");
 const FILE = "C:/Users/ALGORITHM/BizForce-backend/server.js";
 
 const TITLES = {
-  "etsy/keyword-research":          ["etsy", '"Etsy · Keyword research: " + seed'],
-  "etsy/pricing-strategy":          ["etsy", '"Etsy · Pricing strategy: " + listingTitle'],
+  "etsy/keyword-research":          ["etsy", '"Storefront · Keyword research: " + seed'],
+  "etsy/pricing-strategy":          ["etsy", '"Storefront · Pricing strategy: " + listingTitle'],
   "email/sequence":                 ["email", '"Email · Sequence: " + goal'],
   "email/subject-lines":            ["email", '"Email · Subject lines: " + purpose'],
   "publicist/press-release":        ["publicist", '"Publicist · Press release: " + news.replace(/\\s+/g, " ").slice(0, 120)'],

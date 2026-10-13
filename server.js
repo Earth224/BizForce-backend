@@ -390,7 +390,7 @@ const AGENT_SYSTEM_PROMPTS = {
   operations: "You are the BizForce AI Operations Agent. Build SOPs, workflows, automation systems, checklists, fulfillment systems, and internal business processes.",
   executive: "You are the BizForce AI Executive Coordinator Agent. Coordinate all other agents, create strategic execution plans, prioritize work, assign tasks, identify bottlenecks, and turn user goals into organized business action plans.",
   social: "You are the BizForce AI Social Agent. Build social media campaigns, content calendars, engagement strategies, audience growth systems, platform-specific playbooks, and brand presence across all social channels.",
-  etsy: "You are the BizForce AI Etsy Agent. Write Etsy listing copy — titles within 140 characters, up to 13 tags of 20 characters or fewer, and descriptions — suggest keyword candidates sized to fit a tag, and work out pricing from prices and costs the seller supplies. You read no marketplace: no Etsy pages, search volume, sales or competitor shops.",
+  etsy: "You are the BizForce AI Storefront Agent. Write listing copy for the seller's online store or marketplace — titles, tags and descriptions within the limits the seller says their platform sets — suggest keyword candidates, and work out pricing from prices and costs the seller supplies. You read no marketplace: no store pages, search volume, sales or competitor shops.",
   store: "You are the BizForce AI Store Agent. Manage multi-store commerce strategy, optimize inventory, analyze omnichannel sales performance, improve conversion rates, and drive retail and e-commerce growth.",
   broker: "You are the BizForce AI Broker Agent. Identify deal flow opportunities, structure partnership agreements, manage negotiations, build pipeline, due diligence checklists, and execute brokerage strategy.",
   publicist: "You are the BizForce AI Publicist Agent. Write press releases, manage media outreach, build PR campaigns, secure media coverage, craft brand narratives, and grow brand visibility and reputation.",
@@ -426,7 +426,7 @@ const AGENT_DISPLAY_NAMES = {
   operations: "Operations Agent",
   executive:  "Executive Agent",
   social:     "Social Agent",
-  etsy:       "Etsy Agent",
+  etsy:       "Storefront Agent",
   store:      "Store Agent",
   broker:     "Broker Agent",
   publicist:  "Publicist Agent",
@@ -573,7 +573,7 @@ var agentBrains = {
   publicist: "You are the BizForce AI Publicist Agent. Write press releases, craft media pitches, build PR campaigns, shape brand narratives, and identify media outreach opportunities to earn coverage and grow visibility.",
   broker: "You are the BizForce AI Broker Agent. Identify deal flow, structure partnership opportunities, build negotiation briefs, outline due diligence checklists, and draft term sheet frameworks for business deals.",
   rd: "You are the BizForce AI R&D Agent. Conduct market research, competitive intelligence analysis, trend forecasting, innovation briefs, and executive-ready briefings to guide strategic business decisions.",
-  etsy: "You are the BizForce AI Etsy Agent. You write Etsy listing copy — titles within 140 characters, up to 13 tags of 20 characters or fewer, and descriptions — suggest keyword candidates sized to fit a tag, and do pricing arithmetic on prices and costs the seller supplies. You read no marketplace: you have no access to Etsy pages, search volume, sales, rankings or competitor shops. Work only from the business profile and what the seller gives you; when a request needs that data, say it cannot be read here and ask the seller to supply it.",
+  etsy: "You are the BizForce AI Storefront Agent. You write listing copy for the seller's online store or marketplace — titles, tags and descriptions within the limits the seller says their platform sets — suggest keyword candidates, and do pricing arithmetic on prices and costs the seller supplies. You read no marketplace: you have no access to store pages, search volume, sales, rankings or competitor shops. Work only from the business profile and what the seller gives you; when a request needs that data, say it cannot be read here and ask the seller to supply it.",
   social: "You are the BizForce AI Social Media Agent. Create platform-specific content plans, engagement strategies, posting schedules, and viral content frameworks for social media growth.",
   vertical_marketing: "You are the BizForce AI Vertical Marketing Agent. Produce marketing for one industry vertical: positioning and language specific to that trade, the channels its buyers use, and the objections it raises."
 };
@@ -14604,10 +14604,10 @@ var taskInstructions = {
   omnichannel_strategy: "Create an omnichannel retail strategy: channel mix (online/offline/marketplace), inventory sync approach, customer experience consistency plan, and channel-specific marketing tactics.",
   conversion_audit: "Write a conversion review plan for the funnel the user describes: the likely drop-off points for a funnel of that shape, what would explain each, how to confirm it, an A/B test for each, and the order to run them in. This platform reads no analytics, traffic, checkout or conversion data, so name no conversion rate and no lift; any figure must come from the user. To measure a real funnel stage by stage from counts the owner enters, point them to the Analytics agent's Funnel tool (analytics/funnel).",
   product_launch: "Build a product launch plan: launch timeline, pre-launch buzz tactics, launch day actions, email/social/ad coordination, influencer seeding, and post-launch review criteria.",
-  etsy_listing: "Optimize an Etsy listing: SEO-rich title (140 chars), 13 keyword tags, description structure (hook + features + story + CTA), pricing guidance, photo requirements, and shipping strategy.",
+  etsy_listing: "Optimize a store or marketplace listing: a search-rich title and keyword tags within the limits the seller says their platform sets, description structure (hook + features + story + CTA), pricing guidance, photo requirements, and shipping strategy.",
   /* Etsy-named and UNSHARED, so it keeps its channel. What it cannot keep is
      the pretence of having looked at the shop. */
-  shop_audit: "Conduct an Etsy shop audit: shop score assessment, listing quality review, keyword coverage gaps, pricing competitiveness, photo quality, shop sections, and a 30-day improvement plan. This platform cannot see the shop or the marketplace around it, so shop score, pricing competitiveness and photo quality are a checklist for the user to run rather than an assessment you have already made.",
+  shop_audit: "Conduct an online shop audit: shop score assessment, listing quality review, keyword coverage gaps, pricing competitiveness, photo quality, shop sections, and a 30-day improvement plan. This platform cannot see the shop or the marketplace around it, so shop score, pricing competitiveness and photo quality are a checklist for the user to run rather than an assessment you have already made.",
   /* Also shared by the Etsy and SEO agents. The Etsy-specific mechanics it
      used to carry — title-versus-tags placement — survive in etsy_listing,
      which still names the 140-character title and the 13 tags, so nothing is
@@ -14616,7 +14616,7 @@ var taskInstructions = {
   /* The only one of the four where half the figures are real: inventory_items
      carries unit_cost and unit_price, and profile_products carries price. The
      competitor half is what has no source. */
-  pricing_strategy: "Build an Etsy pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan. This platform holds the user's own costs and prices but sees no competitor's, so present any competitive price range as recalled from training and undated rather than as the current market.",
+  pricing_strategy: "Build a pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan. This platform holds the user's own costs and prices but sees no competitor's, so present any competitive price range as recalled from training and undated rather than as the current market.",
   /* Offered by BOTH the Etsy agent and the SEO agent, and taskInstructions is
      keyed on task type alone, so one wording has to serve both. It said
      "Etsy competitors ... competing shops ... listing strategies ... review
@@ -14635,7 +14635,7 @@ var taskInstructions = {
   community_growth: "Build a community growth strategy: acquisition channels, onboarding flow, engagement programming, and member retention systems.",
   operations_workflow: "Design an operations workflow: process documentation, team roles, handoff procedures, quality controls, and efficiency metrics.",
   store_plan: "Create a comprehensive store strategy: product selection, pricing, marketing mix, customer acquisition, and scaling roadmap.",
-  etsy_store_plan: "Build an Etsy shop strategy: niche selection, product line planning, SEO approach, listing optimization, and growth tactics.",
+  etsy_store_plan: "Build an online shop strategy: niche selection, product line planning, SEO approach, listing optimization, and growth tactics.",
   publicist_pitch: "Craft media pitches and PR materials: press releases, journalist outreach, story angles, and media relationship building.",
   broker_opportunity: "Identify and structure business opportunities: deal sourcing, partnership frameworks, negotiation preparation, and deal closing strategy.",
   research_report: "Conduct business research and analysis: market intelligence, competitive landscape, trend identification, and strategic recommendations."
@@ -22518,10 +22518,10 @@ function etsyProvenance(measured, inferred) {
   return toolProvenance(
     measured,
     inferred,
-    "BizForce reads no Etsy API and has no access to Etsy search-volume data. " +
+    "BizForce reads no marketplace API and has no search-volume data. " +
     "Anything describing demand, popularity or competition here is the model's " +
     "general knowledge of the marketplace, not a measurement. Treat it as a " +
-    "starting hypothesis to test in your own Etsy stats, not as data.",
+    "starting hypothesis to test in your own shop stats, not as data.",
     { marketplace_api_used: false, search_volume_data: false }
   );
 }
@@ -22600,7 +22600,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
       var run = await startToolRun(req, {
         agentType: "etsy",
         taskType: "etsy/keyword-research",
-        title: "Etsy · Keyword research: " + seed
+        title: "Storefront · Keyword research: " + seed
       });
 
       var profileResult = await supabase
@@ -22617,7 +22617,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         "Etsy matches multi-word tags as phrases, so long-tail buyer phrasing outperforms single broad words.";
 
       var instruction =
-        "Suggest 24 Etsy keyword candidates for the seed term below.\n\n" +
+        "Suggest 24 keyword candidates for the seed term below.\n\n" +
         "OUTPUT FORMAT — one candidate per line, exactly three fields separated by | and nothing else:\n" +
         "keyword | intent | rationale\n" +
         "where intent is one of: buyer, browser, gift, niche.\n" +
@@ -22792,7 +22792,7 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
       var run = await startToolRun(req, {
         agentType: "etsy",
         taskType: "etsy/pricing-strategy",
-        title: "Etsy · Pricing strategy: " + listingTitle
+        title: "Storefront · Pricing strategy: " + listingTitle
       });
 
       var comparables = rawComparables.map(function (row) {
@@ -22849,7 +22849,7 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
           unit_cost: round2(unitCost),
           gross_per_sale: round2(gross),
           gross_margin_percent: currentPrice > 0 ? Math.round((gross / currentPrice) * 100) : null,
-          note: "Before Etsy's listing, transaction, payment-processing and any offsite-ads fees, " +
+          note: "Before your platform's listing, transaction and payment-processing fees, " +
             "which are not modelled here because they depend on your shop's settings and location."
         };
       }
@@ -22862,9 +22862,9 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
       var businessProfile = profileResult.data || {};
 
       var etsyBrain =
-        "You are the BizForce AI Etsy Agent, advising on pricing for a handmade or small-batch " +
-        "marketplace listing. You understand Etsy buyer psychology, perceived value in handmade " +
-        "categories, and that Etsy takes listing, transaction and payment-processing fees.";
+        "You are the BizForce AI Storefront Agent, advising on pricing for an online store or " +
+        "marketplace listing. You understand buyer psychology and perceived value, and that " +
+        "marketplaces and payment processors take fees.";
 
       var measuredBlock =
         "THE SELLER'S LISTING:\n" +
@@ -22892,13 +22892,13 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
         "seller and not verified, and say what would make them a weak basis for a decision " +
         "(too few, not actually comparable, unknown recency).\n" +
         "(3) PRICE OPTIONS — two or three concrete price points with the reasoning for each, including " +
-        "what each signals to an Etsy buyer.\n" +
-        "(4) WHAT TO TEST AND HOW YOU WOULD KNOW — what the seller should watch in their own Etsy " +
+        "what each signals to a buyer.\n" +
+        "(4) WHAT TO TEST AND HOW YOU WOULD KNOW — what the seller should watch in their own shop " +
         "stats to find out whether a change worked.\n\n" +
         "HARD RULES:\n" +
-        "- You have NO Etsy search-volume, sales-volume, or competitor data beyond the list above. " +
+        "- You have NO search-volume, sales-volume, or competitor data beyond the list above. " +
         "Do not state or imply any market figure you were not given.\n" +
-        "- Do not describe the supplied comparables as 'the market' or 'competitors on Etsy' — they are " +
+        "- Do not describe the supplied comparables as 'the market' or 'competitors on the marketplace' — they are " +
         "a handful of listings someone typed in.\n" +
         "- If too few comparables were supplied to reason from, say so plainly instead of proceeding.";
 
@@ -22927,7 +22927,7 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
           your_position: position,
           margin: margin,
           note: "Computed from the numbers supplied in this request. 'Median' and 'mean' describe the " +
-            "comparables you provided — not Etsy, and not your category."
+            "comparables you provided — not the marketplace, and not your category."
         },
         rationale: rationale,
         provenance: etsyProvenance(
@@ -22945,10 +22945,10 @@ app.post("/api/agents/etsy/pricing-strategy", requireAuth, requireActiveSubscrip
         limitations: {
           comparables_were_supplied_not_fetched: true,
           comparables_verified: false,
-          etsy_fees_modelled: false,
+          marketplace_fees_modelled: false,
           sales_volume_data: false,
-          detail: "BizForce cannot read Etsy listing pages (they are served behind bot protection that " +
-            "refuses server-side requests), so it cannot find or check comparable listings. Everything " +
+          detail: "BizForce reads no marketplace listing pages, so it cannot find or check comparable " +
+            "listings. Everything " +
             "above rests on the " + comparables.length + " comparable(s) supplied in this request."
         }
       };
