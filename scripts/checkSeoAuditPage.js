@@ -32,7 +32,9 @@
      R. Every other tool on every agent page renders byte-identically to
         BEFORE (the frontend commit before 1d04b0c), and BEFORE's styles are
         unchanged with only .ap-seo-* rules added. A deliberate change to the
-        shared renderer will fail R: move BEFORE forward when that happens.
+        shared renderer will fail R: move BEFORE forward when that happens,
+        or name it as [before, after] in RENDERER_CHANGES_SINCE_BEFORE, which
+        is applied to BEFORE's source (the Storefront null rendering is).
      And "No flags raised" appears only for the real empty arrays.
 
    MUTATE=<name> edits agent-profile.js IN MEMORY (the file on disk is never
@@ -82,7 +84,9 @@ const MUTATIONS = {
   "chip-goes-nowhere": [["var target = root.querySelector('[data-seo-flag=\"' + id + '\"]') ||", "var target = null &&"]],
   // one character in the shared generic renderer
   "touch-generic": [["'<div class=\"ap-zone-label\">Written by the model</div>' + parts.join(\"\") + '</div>';",
-    "'<div class=\"ap-zone-label\">Written by the model.</div>' + parts.join(\"\") + '</div>';"]]
+    "'<div class=\"ap-zone-label\">Written by the model.</div>' + parts.join(\"\") + '</div>';"]],
+  // the named null rendering changes beyond what RENDERER_CHANGES_SINCE_BEFORE names
+  "renderer-unnamed-change": [['      : "—";\n  }', '      : "-";\n  }']]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -97,7 +101,52 @@ if (MUTATE) {
   }
   console.log("\n!! MUTATION: " + MUTATE + " (agent-profile.js, in memory)");
 }
-const OLD_SRC = execSync("git show " + BEFORE + ":scripts/agent-profile.js", { cwd: FRONTEND, maxBuffer: 64 << 20 }).toString("utf8");
+const OLD_SRC_AT_BEFORE = execSync("git show " + BEFORE + ":scripts/agent-profile.js", { cwd: FRONTEND, maxBuffer: 64 << 20 }).toString("utf8").replace(/\r\n/g, "\n");
+
+/* THE ONE DELIBERATE SHARED-RENDERER CHANGE SINCE BEFORE (frontend "The
+   Storefront Agent's page says what it is and measures what you enter", Oct 13
+   2026). A null inside an object used to print as the bare word "null"; it now
+   prints "—", or "not measured — no limit entered" on a key that reports a
+   limit check, and a null measured cell on such a key says the same. The
+   keyword tool's suggested_tag_set_reason sits with the limits and standing
+   statements, and .ap-not-measured is styled. Each [before, after] is applied
+   to BEFORE's source and must match there exactly once; R and the style check
+   then still demand byte-identity with that, so any other change to the shared
+   renderer still fails. */
+const RENDERER_CHANGES_SINCE_BEFORE = [
+  ['    ".ap-m-val.bad{color:#fca5a5}.ap-m-val.good{color:#86efac}",\n',
+   '    ".ap-m-val.bad{color:#fca5a5}.ap-m-val.good{color:#86efac}",\n    ".ap-not-measured{color:#8892b8;font-style:italic}",\n'],
+  ['    "suggested_tag_set_note", "rules_checked"];', '    "suggested_tag_set_note", "suggested_tag_set_reason", "rules_checked"];'],
+  ['  // A compact, depth-limited rendering of whatever a value happens to be.\n',
+   '  /* A NULL ON A LIMIT CHECK IS A CHECK NOT MADE. A key that reports a limit\n' +
+   '     being met or broken (fits…, within…, over…, exceeds…, ready…, …_ready,\n' +
+   '     too_long…) is null when no limit was entered to check against, and it\n' +
+   '     reads as exactly that — never as "No", 0 or the broken-limit colour, and\n' +
+   '     never as the bare word "null". Read from the key\'s own wording, like the\n' +
+   '     colouring in renderMeasured. Any other null is the ordinary "—". */\n' +
+   '  var LIMIT_CHECK_KEY = /^(within|fits|over|exceeds|headline_within|ready)|_ready$|too_long/;\n' +
+   '  function renderNullFor(key) {\n' +
+   '    return LIMIT_CHECK_KEY.test(String(key || ""))\n' +
+   '      ? \'<span class="ap-not-measured">not measured — no limit entered</span>\'\n' +
+   '      : "—";\n' +
+   '  }\n\n' +
+   '  // A compact, depth-limited rendering of whatever a value happens to be.\n'],
+  ['      var v = obj[k];\n      if (isPlainObject(v) || Array.isArray(v)) {',
+   '      var v = obj[k];\n      if (v === null || v === undefined) {\n' +
+   '        return "<strong>" + esc(humanise(k)) + ":</strong> " + renderNullFor(k);\n      }\n' +
+   '      if (isPlainObject(v) || Array.isArray(v)) {'],
+  ["        '<div class=\"ap-m-val' + cls + '\">' + renderScalarish(value) + '</div></div>');",
+   "        '<div class=\"ap-m-val' + cls + '\">' + (value === null ? renderNullFor(key) : renderScalarish(value)) + '</div></div>');"]
+];
+const OLD_SRC = RENDERER_CHANGES_SINCE_BEFORE.reduce(function (src, pair, i) {
+  const hits = src.split(pair[0]).length - 1;
+  if (hits !== 1) {
+    console.log("    FAIL  renderer change #" + (i + 1) + " since " + BEFORE + " must match BEFORE's source exactly once; found " + hits + ": " + JSON.stringify(pair[0].slice(0, 80)));
+    process.exit(1);
+  }
+  const at = src.indexOf(pair[0]);
+  return src.slice(0, at) + pair[1] + src.slice(at + pair[0].length);
+}, OLD_SRC_AT_BEFORE);
 
 let passes = 0, fails = 0;
 function check(label, ok, detail) {
