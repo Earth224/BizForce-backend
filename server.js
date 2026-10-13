@@ -22042,12 +22042,33 @@ app.post("/api/agents/seo/audit", requireAuth, requireActiveSubscription, aiLimi
 // in the environment and nothing here calls api.etsy.com — so wiring that up is
 // a credentials-and-onboarding change, not something to fake in the meantime.
 
-// Etsy's real listing constraints. These are the craft: a generic agent writing
-// "a good title" knows none of them, and a title one character over or a
-// fourteenth tag is simply rejected by Etsy.
-var ETSY_MAX_TITLE_LENGTH = 140;
-var ETSY_MAX_TAGS         = 13;
-var ETSY_MAX_TAG_LENGTH   = 20;
+// No platform's listing limits are built in. The keyword tool used to measure
+// against Etsy's (140-character titles, 13 tags, 20-character tags); it now
+// measures only against the tag count and tag length the seller enters for
+// their own platform (readSellerTagLimit, below), and claims no fit otherwise.
+
+/* A tag limit the seller states for their own platform: a whole number from 1
+   to `max`, or not supplied. Absent, null and "" are not supplied. Anything else
+   is refused by name with the value received — 0, a negative, a fraction, a
+   number out of range, a boolean, an array, an object, and any other string.
+   Strings are not accepted even as digits: agent-profile.js sends a number
+   field as a JSON number and leaves a blank one out. A value the seller typed
+   is never dropped or coerced. */
+var SELLER_LIMITS_NOTE = "Limits are as you entered them; BizForce did not check them against your platform.";
+
+function readSellerTagLimit(body, name, max) {
+  var value = body && Object.prototype.hasOwnProperty.call(body, name) ? body[name] : undefined;
+  if (value === undefined || value === null || value === "") return { supplied: false, value: null };
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max) {
+    return { supplied: true, value: value };
+  }
+  var shown;
+  try { shown = JSON.stringify(value); } catch (e) { shown = String(value); }
+  return {
+    error: name + " must be a whole number from 1 to " + max + ", or left blank if you don't know it. " +
+      "Received: " + String(shown).slice(0, 100) + "."
+  };
+}
 
 /* Says, in the response body rather than only in prose the caller may not read,
    where every number came from. Carried as structured fields so a UI can render
@@ -22534,14 +22555,19 @@ function etsyProvenance(measured, inferred) {
    characters produces a number that is usually right, which is worse than one
    that is always right, because the failures are invisible and land as listings
    Etsy rejects. So the model proposes the keywords and this function measures
-   them. */
-function etsyMeasureKeyword(keyword) {
+   them.
+
+   Fit is measured only against a tag length the seller entered. With none,
+   fits_tag and over_tag_limit_by are null — unknown — never false or 0, which
+   would be a claim about a limit nobody stated. */
+function etsyMeasureKeyword(keyword, maxTagLength) {
   var text = String(keyword || "").trim();
+  var limited = typeof maxTagLength === "number";
   return {
     keyword: text,
     length: text.length,
-    fits_tag: text.length > 0 && text.length <= ETSY_MAX_TAG_LENGTH,
-    over_tag_limit_by: text.length > ETSY_MAX_TAG_LENGTH ? text.length - ETSY_MAX_TAG_LENGTH : 0,
+    fits_tag: limited ? (text.length > 0 && text.length <= maxTagLength) : null,
+    over_tag_limit_by: limited ? (text.length > maxTagLength ? text.length - maxTagLength : 0) : null,
     word_count: text ? text.split(/\s+/).length : 0
   };
 }
@@ -22575,13 +22601,14 @@ function parseEtsyKeywordLines(text) {
 }
 
 /* ── POST /api/agents/etsy/keyword-research ──────────────────────────────────
-   A seed term in, Etsy-shaped keyword suggestions out. Needs no page fetch,
-   which is why it exists while the listing tools do not.
+   A seed term in, keyword suggestions out. Needs no page fetch, which is why it
+   exists while the listing tools do not.
 
-   Every suggestion comes back with its character budget measured, so the caller
-   can see at a glance which ones are usable as tags at all — the single most
-   common way an Etsy keyword list is useless in practice is that half of it does
-   not fit in a tag. */
+   Every suggestion comes back with its length measured and, when the seller
+   entered their platform's tag length (max_tag_length), whether it fits — the
+   single most common way a keyword list is useless in practice is that half of
+   it does not fit in a tag. With max_tags as well, the first that fit form a
+   suggested tag set. No platform's limits are assumed when none are entered. */
 app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
@@ -22594,6 +22621,13 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
           error: "A seed term is required — the word or phrase you would start from, for example \"soy candle\"."
         });
       }
+
+      // The seller's own platform limits, if they gave them. Refused by name
+      // before anything is recorded or spent.
+      var maxTags = readSellerTagLimit(req.body, "max_tags", 100);
+      if (maxTags.error) return res.status(400).json({ error: maxTags.error });
+      var maxTagLength = readSellerTagLimit(req.body, "max_tag_length", 200);
+      if (maxTagLength.error) return res.status(400).json({ error: maxTagLength.error });
 
       // After validation, before anything is spent: a 400 records nothing, and a
       // run that cannot be recorded throws here rather than running unrecorded.
@@ -22610,11 +22644,27 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         .single();
       var businessProfile = profileResult.data || {};
 
+      /* Limits only as the seller stated them; with none, no platform is assumed. */
+      var statedLimits =
+        maxTags.supplied && maxTagLength.supplied
+          ? " The seller says their platform allows at most " + maxTags.value + " tags of up to " +
+            maxTagLength.value + " characters each."
+          : maxTags.supplied
+            ? " The seller says their platform allows at most " + maxTags.value + " tags."
+            : maxTagLength.supplied
+              ? " The seller says their platform allows tags of up to " + maxTagLength.value + " characters each."
+              : "";
+
       var etsyBrain =
-        "You are the BizForce AI Etsy Agent. You know Etsy's search mechanics and its hard listing " +
-        "constraints: titles are capped at " + ETSY_MAX_TITLE_LENGTH + " characters, a listing carries " +
-        "at most " + ETSY_MAX_TAGS + " tags, and each tag is capped at " + ETSY_MAX_TAG_LENGTH + " characters. " +
-        "Etsy matches multi-word tags as phrases, so long-tail buyer phrasing outperforms single broad words.";
+        "You are the BizForce AI Storefront Agent. You suggest search keyword candidates for a listing " +
+        "on the seller's online store or marketplace." + statedLimits;
+
+      var lengthRule = maxTagLength.supplied
+        ? "- Aim for at least 14 candidates that are " + maxTagLength.value + " characters or fewer so they " +
+          "can be used as tags directly. Longer ones are still welcome as title phrases; mark their intent normally.\n"
+        : maxTags.supplied
+          ? "- The seller has not given a tag length. Do not assume any particular platform's tag length.\n"
+          : "- The seller has not given their platform's limits. Do not assume any particular platform's limits on tag count or tag length.\n";
 
       var instruction =
         "Suggest 24 keyword candidates for the seed term below.\n\n" +
@@ -22624,8 +22674,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
         "No preamble, no headings, no numbering, no closing summary.\n\n" +
         "RULES:\n" +
         "- Favour long-tail buyer phrasing over single broad words.\n" +
-        "- Aim for at least 14 candidates that are " + ETSY_MAX_TAG_LENGTH + " characters or fewer so they " +
-        "can be used as tags directly. Longer ones are still welcome as title phrases; mark their intent normally.\n" +
+        lengthRule +
         "- Do NOT invent search volumes, competition scores, or any numeric metric. You have no such data. " +
         "The rationale must be qualitative reasoning about buyer language, not a fabricated statistic.\n" +
         "- Do not repeat the seed term verbatim as a candidate.";
@@ -22667,7 +22716,7 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
   
         /* Measured here, not requested from the model. */
         keywords = parsed.map(function (row) {
-          return Object.assign(etsyMeasureKeyword(row.keyword), {
+          return Object.assign(etsyMeasureKeyword(row.keyword, maxTagLength.value), {
             intent: row.intent,
             rationale: row.rationale
           });
@@ -22692,47 +22741,66 @@ app.post("/api/agents/etsy/keyword-research", requireAuth, requireActiveSubscrip
           error: "The keyword list could not be read back from the model, so nothing is being reported. " +
             "No keywords were found is NOT the same as none exist — this is a formatting failure, not a result.",
           raw_output: raw,
-          provenance: etsyProvenance([], [])
+          provenance: Object.assign(etsyProvenance([], []), { limits_note: SELLER_LIMITS_NOTE })
         });
+      }
+
+      var measured = [
+        "Character length of every suggested keyword"
+      ];
+      if (maxTagLength.supplied) {
+        measured.push("Whether each fits the " + maxTagLength.value + "-character tag length you entered");
+        measured.push("Word counts and the tag-ready totals below");
+      } else {
+        measured.push("Word counts");
       }
 
       var responseBody = {
         success: true,
         seed: seed,
         constraints: {
-          max_title_length: ETSY_MAX_TITLE_LENGTH,
-          max_tags: ETSY_MAX_TAGS,
-          max_tag_length: ETSY_MAX_TAG_LENGTH
+          max_tags: maxTags.value,
+          max_tag_length: maxTagLength.value,
+          source: "seller_supplied",
+          verified_against_platform: false
         },
         keywords: keywords,
-        /* The first 13 tag-ready candidates, which is exactly what fits on one
-           listing. Presented as a starting set to edit, not as a ranking: there
-           is no volume data here to rank by, and ordering them by a number that
-           does not exist is the failure this whole response shape guards
-           against. Order is the model's suggestion order, stated as such. */
-        suggested_tag_set: tagReady.slice(0, ETSY_MAX_TAGS).map(function (k) { return k.keyword; }),
+        /* The first max_tags candidates that fit the seller's tag length, built
+           only when both limits were entered. Presented as a starting set to
+           edit, not as a ranking: there is no volume data here to rank by, and
+           ordering them by a number that does not exist is the failure this
+           whole response shape guards against. Order is the model's suggestion
+           order, stated as such. */
+        suggested_tag_set: null,
         counts: {
           suggested: keywords.length,
-          tag_ready: tagReady.length,
-          too_long_for_a_tag: keywords.length - tagReady.length
+          tag_ready: maxTagLength.supplied ? tagReady.length : null,
+          too_long_for_a_tag: maxTagLength.supplied ? keywords.length - tagReady.length : null
         },
-        provenance: etsyProvenance(
-          [
-            "Character length of every suggested keyword",
-            "Whether each fits Etsy's " + ETSY_MAX_TAG_LENGTH + "-character tag limit",
-            "Word counts and the tag-ready totals below"
-          ],
+        provenance: Object.assign(etsyProvenance(
+          measured,
           [
             "The keyword suggestions themselves",
             "The buyer-intent label on each",
             "The rationale text",
             "Any sense of which terms are worth targeting"
           ]
-        ),
-        suggested_tag_set_note:
-          "These are the first " + ETSY_MAX_TAGS + " suggestions that fit the tag limit, in the order the " +
-          "model proposed them. They are NOT ranked by search volume — no volume data was read."
+        ), { limits_note: SELLER_LIMITS_NOTE })
       };
+      if (maxTags.supplied && maxTagLength.supplied) {
+        responseBody.suggested_tag_set = tagReady.slice(0, maxTags.value).map(function (k) { return k.keyword; });
+        responseBody.suggested_tag_set_note =
+          "These are the first " + maxTags.value + " suggestions that fit the " + maxTagLength.value +
+          "-character tag length you entered, in the order the model proposed them. They are NOT ranked by " +
+          "search volume — no volume data was read.";
+      } else {
+        var notEntered = [];
+        if (!maxTags.supplied) notEntered.push("max_tags");
+        if (!maxTagLength.supplied) notEntered.push("max_tag_length");
+        responseBody.suggested_tag_set_reason =
+          "No tag set was built because you did not enter " + notEntered.join(" or ") +
+          ". Enter both your platform's tag count and tag length to get one.";
+      }
 
       // Persisted as the body exactly as sent, minus the two bookkeeping keys
       // added below. `persisted` is false only when the run happened and the
@@ -30907,7 +30975,9 @@ function toolField(name, type, required, description, aliases) {
 var TOOL_INPUT_SPECS = {
   "etsy/keyword-research": [
     toolField("seed", "string", true, "The seed term to research, up to 120 characters.", ["keyword", "term"]),
-    toolField("context", "string", false, "Product description or context, up to 1000 characters.", ["product_description"])
+    toolField("context", "string", false, "Product description or context, up to 1000 characters.", ["product_description"]),
+    toolField("max_tags", "number", false, "How many tags your platform allows per listing, 1–100. Leave blank if you don't know."),
+    toolField("max_tag_length", "number", false, "Your platform's maximum characters per tag, 1–200. Leave blank if you don't know.")
   ],
   "etsy/pricing-strategy": [
     toolField("listing_title", "string", true, "Title of the listing being priced, up to 200 characters.", ["title"]),
