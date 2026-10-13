@@ -44986,8 +44986,16 @@ async function reminderTick() {
   }
 }
 
-setInterval(reminderTick, 60000);
-reminderTick();
+/* ONLY WHEN THIS FILE IS THE PROGRAM, like the Lead Radar. A reminder pass
+   sends real push notifications and marks the events sent; the checks load
+   server.js to test it, and each load used to run a pass against live data.
+   Production runs `node server.js` (package.json "start"), where this holds. */
+if (require.main === module) {
+  setInterval(reminderTick, 60000);
+  reminderTick();
+} else {
+  console.log("[startup] reminder scheduler not started: server.js was loaded by another script (a check), not run as the program.");
+}
 
 // Sales Agent auto-conversion timer — Option A: wired directly here in
 // server.js, completely independent of leadRadar.js's radarTick/5-minute
