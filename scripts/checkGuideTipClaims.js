@@ -3,7 +3,8 @@
    checkGuideTipClaims — every Termaximus tip that claimed to watch, monitor,
    track, alert, run in real time, or pointed at a panel or section, says
    only what is true; and no tip anywhere in the guide names a removed report
-   section, a goals field that does not exist, or a live view nothing drives.
+   section, a goals field that does not exist, a live view nothing drives, an
+   automatic behaviour nothing performs, or a BFC amount nothing pays.
 
    Frontend "Every Termaximus tip that claims to watch something has been
    checked" verified nine tips in scripts/termaximus-guide.js against the
@@ -52,6 +53,25 @@
    digital-cards "live-previewed" and business-id "live-rendered" (no timer or
    stream drives either).
 
+   Frontend "The guide and pages stop claiming data, payouts and controls
+   that don't exist" then fixed the Oct 14 audit's groups 6–10:
+
+     6  data no agent reads: seo 111, analytics 139 and 141, email 152 and
+        154, store 159–161, influencer 201 and 203; the email, store,
+        publicist, community and sales subtitles; seo.html's "Google SEO
+        Report" (the route fetches the site itself); agent-profile.js's
+        Autonomous mode, which no longer says the agent acts on what it finds;
+     7  the wallet: tips 66–69 and certifications 75, and wallet.html's hero —
+        BFC is credited only for a first certification pass while subscribed
+        and as a one-time 1,000 BFC welcome bonus; the history is the latest 50;
+     8  controls: marketplace 62 (nothing sends a status), certifications 76
+        (Try Again / Start Assessment), lead-radar 147 (no sort control; Copy
+        writes to the clipboard only);
+     9  the directory: ai-agents 29 and 31 and its hero (descriptions are
+        seeded empty);
+    10  the dashboard: tips 17 (the Business Profile, not Business Identity),
+        18 (Recent Activity is gone) and 19 (Agent Hub shows all 18).
+
    NAMED BEFORE → AFTER (assertions changed on purpose by that commit):
      L  "the tip says the radar searches fixed buyer-intent phrases and
         hashtags on Bluesky, Mastodon and YouTube" → "the tip says it searches
@@ -84,9 +104,15 @@
      A. The Oct 14 audit's groups 1–5 and the four guard catches: each old
         untrue wording is gone, each new wording is there, and every label,
         field, link or behaviour it names exists.
+     B. The Oct 14 audit's groups 6–10, tips and page copy, with A's four
+        assertions each: new wording there, old wording gone from the whole
+        entry or page, everything named exists, no watching or automatic claim.
      G. Guide-wide, over EVERY tip: no removed REPORT_SECTIONS title (read
-        from git) is named, no Market/Research/Shop Goals, and no "live",
-        "real-time" or "auto-refresh" except an allowlisted, asserted use.
+        from git) is named, no Market/Research/Shop Goals, no "live",
+        "real-time" or "auto-refresh" and no "automatically", "instantly" or
+        "auto-" except an allowlisted use whose mechanism is asserted (G3), and
+        no BFC amount that is not a constant or label in server.js or
+        wallet.html (G4).
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
@@ -146,7 +172,46 @@ const MUTATIONS = {
   "warnings-panel-elsewhere": [[GUIDE, '"Sequence your requests — document a workflow before you automate it;',
     '"Check the Warnings panel, then sequence your requests — document a workflow before you automate it;']],
   // Mastodon capture loses its switch: the "only when switched on" wording would be false
-  "mastodon-ungated": [["leadRadar.js", 'if (process.env.ENABLE_MASTODON_RADAR === "true") {', "if (true) {"]]
+  "mastodon-ungated": [["leadRadar.js", 'if (process.env.ENABLE_MASTODON_RADAR === "true") {', "if (true) {"]],
+  // ── groups 6–10 ──
+  // wallet tip 68 states the invented payouts again
+  "restore-wallet-68-amounts": [[GUIDE,
+    "your first pass of each certification pays 100 BFC while you're subscribed, and a one-time 1,000 BFC welcome bonus lands when your subscription goes active. Running agent tasks and posting listings pay nothing.",
+    "certifications (+100), agent tasks (+50), marketplace listings (+25), and the welcome bonus (+200) are all real, stackable ways to build balance."]],
+  // wallet tip 67 says credits accumulate automatically again
+  "restore-credits-automatic": [[GUIDE,
+    "the one action here is Send BFC, which sends credits to another member by their user ID; using the platform earns nothing by itself.",
+    "it's a read-only ledger; credits accumulate automatically as you use the platform."]],
+  // store tip 159 claims to manage inventory across every channel again
+  "restore-store-159": [[GUIDE,
+    "This agent writes commerce plans — store audits, inventory plans, omnichannel strategy, conversion audits, and product launch plans — from your Business Profile and what you tell it; it connects to no store or channel.",
+    "This agent manages multi-store commerce intelligence — inventory, product performance, and omnichannel strategy across every channel you sell on."]],
+  // the SEO report is called a Google report again
+  "restore-google-seo-report": [[SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', '<h3 class="seo-opt-report-title">Google SEO Report</h3>']],
+  // the directory promises a customisable team again
+  "restore-ai-agents-338": [["ai-agents.html", "Eighteen AI business specialists — open any one to go to its own page.",
+    "Build your own customizable team of AI business specialists."]],
+  // "automatically" in a tip no per-tip check covers: only the widened G3 can catch it
+  "automatic-in-business-chat": [[GUIDE, "and it remembers the conversation across sessions", "and it automatically remembers the conversation across sessions"]],
+  // an invented BFC amount in a tip no per-tip check covers: only G4 can catch it
+  "invented-bfc-amount": [[GUIDE, "a complete listing gets found faster than a bare one.", "a complete listing earns +500 BFC and gets found faster than a bare one."]],
+  // the server starts paying for agent tasks: "running agent tasks … pay nothing" would be false
+  "task-pays-bfc": [[SERVER, "const WELCOME_BONUS_BFC = 1000;",
+    "const WELCOME_BONUS_BFC = 1000;\nasync function payForTask(userId) { await creditWallet(userId, 50, \"Agent task\"); }"]],
+  // the wallet reads its whole history: "your latest 50 transactions" would be false
+  "history-unlimited": [[SERVER, ".select(\"id, type, amount, description, created_at\")\n      .eq(\"user_id\", req.user.id)\n      .order(\"created_at\", { ascending: false })\n      .limit(50);",
+    ".select(\"id, type, amount, description, created_at\")\n      .eq(\"user_id\", req.user.id)\n      .order(\"created_at\", { ascending: false });"]],
+  // the marketplace edit sends a status: "nothing sends a status" would be false
+  "marketplace-sends-status": [["marketplace.html", "tags: tagsRaw, media: listingMedia };", "tags: tagsRaw, media: listingMedia, status: \"paused\" };"]],
+  // the Autonomous mode copy claims the agent acts on what it finds again
+  "restore-act-on-findings": [[AP, "' carry out its scheduled runs below in the ',\n                  'background, without you launching them. Off means it ',",
+    "' start its own tasks in the background ',\n                  'without you launching them, and act on what it finds. Off means it ',"]],
+  // certifications tip 76 names Retake Assessment for a failed attempt again
+  "restore-retake-76": [[GUIDE, "If you don't pass the first time, press Try Again on the result screen, or Start Assessment on the card later — there's no penalty for trying again.",
+    "Use Retake Assessment if you don't pass the first time — there's no penalty for trying again."]],
+  // the dashboard tip points at the removed Recent Activity feed again
+  "restore-recent-activity": [[GUIDE, "Use the Active Queue card and its View Queue button to see your active assignments",
+    "Use the Active Queue card and Recent Activity feed to see what's actually running"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -431,6 +496,151 @@ check("A. 5 content.html #connectIntro: the static text says connecting is off a
   /Connecting social accounts is turned off for now/.test(STATIC_INTRO) && /Approved drafts are saved, not published\./.test(STATIC_INTRO) &&
   STATIC_INTRO === DYNAMIC_INTRO && /\.catch\(function \(\) \{\}\);\n  \}\n\n  loadConnectedAccounts\(\);/.test(FILES[CONTENT]), STATIC_INTRO);
 
+/* ── B. the Oct 14 audit, groups 6–10 ──────────────────────────────────── */
+console.log("\n══ B. audit groups 6–10 — invented data, payouts and controls ══");
+// The same four assertions as A, per rewrite. Pages these checks read that A does not are guide keys, read above.
+const DASHBOARD = "dashboard.html", HUB = "agents-hub.html", DIRECTORY = "ai-agents.html", MARKET = "marketplace.html",
+  WALLET = "wallet.html", CERTS = "certifications.html";
+const hqTips = tipsFor("dashboard.html"), dirTips = tipsFor("ai-agents.html"), mkTips = tipsFor("marketplace.html");
+const walTips = tipsFor("wallet.html"), certTips = tipsFor("certifications.html");
+const SV = FILES[SERVER];
+// The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
+// bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
+const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
+const WELCOME = () => /\nconst WELCOME_BONUS_BFC = 1000;/.test(SV) && /\.eq\("description", WELCOME_BONUS_DESCRIPTION\)/.test(SV) &&
+  /await creditWallet\(userId, WELCOME_BONUS_BFC, WELCOME_BONUS_DESCRIPTION\);/.test(SV) &&
+  /The welcome bonus, now that the subscription row says active\.[\s\S]{0,400}?await grantWelcomeBonusOnce\(userId\);/.test(SV);
+const ONLY_TWO_CREDITS = () => (SV.match(/creditWallet\(/g) || []).length === 3 && (SV.match(/async function creditWallet\(/g) || []).length === 1 &&
+  (SV.match(/rpc\("bfc_credit"/g) || []).length === 1;
+const HISTORY_50 = () => /\.from\("wallet_transactions"\)\s*\.select\("id, type, amount, description, created_at"\)\s*\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(50\);/.test(SV) &&
+  /var txns = data\.transactions \|\| \[\];[\s\S]{0,200}?txns\.forEach\(function\(t\) \{\s*if \(t\.type === "credit" \|\| t\.type === "reward"\) earned \+= t\.amount;\s*else if \(t\.type === "debit"\) spent \+= t\.amount;/.test(FILES[WALLET]);
+const SEND_BFC = () => /<button type="button" id="send-btn" class="send-btn">Send BFC<\/button>/.test(FILES[WALLET]) &&
+  /placeholder="Recipient user ID"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/wallet\/transfer"/.test(FILES[WALLET]) &&
+  /app\.post\("\/api\/wallet\/transfer", requireAuth, requireActiveSubscription,[\s\S]{0,600}?rpc\("bfc_transfer"/.test(SV);
+const taskPrompt = key => (new RegExp("\\n  " + key + ": \"([^\"\\n]*)\"").exec(SV) || ["", ""])[1];
+const AP_FILE = FILES[AP];
+const B = [
+  // group 10 — dashboard
+  ["10 dashboard 17", hqTips, "edit it here under Expand Profile or on the Content Agent's Edit Profile", /Business Identity page|keep both current/,
+    () => /var nameField = document\.getElementById\("business_name"\);[\s\S]{0,300}?var goalField = document\.getElementById\("primary_goal"\);/.test(FILES[DASHBOARD]) &&
+      /id="businessProfileSummaryIndustry"/.test(FILES[DASHBOARD]) && /id="businessProfileSummaryGoal"/.test(FILES[DASHBOARD]) &&
+      /<span class="bf-profile-expand-label">Expand Profile<\/span>/.test(FILES[DASHBOARD]) &&
+      (FILES[DASHBOARD].match(/fetch\(API_URL \+ "\/api\/business-profile"/g) || []).length === 2 &&
+      /id="editProfileBtn"[^>]*>Edit Profile<\/button>/.test(FILES[CONTENT]) && /fetch\(BP_API \+ "\/api\/business-profile"/.test(FILES[CONTENT]) &&
+      /fetch\(API_URL \+ "\/api\/profile\/me"/.test(FILES[BIZID]) && !/business-profile/.test(FILES[BIZID])],
+  ["10 dashboard 18", hqTips, "the Active Queue card and its View Queue button", /Recent Activity/,
+    () => /<h3>Active Queue<\/h3>\s*<p class="bf-summary-status" id="activeQueueSummaryStatus">No active assignments<\/p>\s*<button type="button" id="viewQueueBtn" class="bf-btn bf-btn-ghost">View Queue<\/button>/.test(FILES[DASHBOARD]) &&
+      !/>[^<>]*Recent Activity[^<>]*</.test(FILES[DASHBOARD]) && !/id="recentActivity/i.test(FILES[DASHBOARD])],
+  ["10 dashboard 19", hqTips, "Agent Hub and Full Directory each list all 18 agents", /curated set/,
+    () => /onclick="window\.location\.href='agents-hub\.html';">Agent Hub<\/button>/.test(FILES[DASHBOARD]) &&
+      /onclick="window\.location\.href='ai-agents\.html';">Full Directory<\/button>/.test(FILES[DASHBOARD]) &&
+      (FILES[HUB].match(/class="agent-card/g) || []).length === 18 && /agents\.forEach\(function \(agent\) \{/.test(FILES[DIRECTORY])],
+  // group 9 — the directory: ai_agents.description is seeded empty, so a card shows a name and a link
+  ["9 ai-agents 29", dirTips, "each card shows the agent's name and an Open Agent button to its own page", /one-line description|specializes in|descriptions are specific/,
+    () => /display_name: agentDisplayName\(type\),\s*description: "",/.test(SV) && /name\.textContent = agent\.display_name \|\| "";/.test(FILES[DIRECTORY]) &&
+      /var href = agent\.page_url \|\| "agents-hub\.html";/.test(FILES[DIRECTORY]) && /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
+  ["9 ai-agents 31", dirTips, "find it by name and press Open Agent", /which agent fits a task — the descriptions/,
+    () => /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
+  // group 8 — controls that do not exist under that name
+  ["8 marketplace 62", mkTips, "with Edit and Delete buttons", /manage status|Active\/Paused\/Sold/,
+    () => /'<button type="button" class="btn-sm btn-edit"' \+ idAttr \+ '>Edit<\/button>'/.test(FILES[MARKET]) &&
+      /'<button type="button" class="btn-sm btn-delete"' \+ idAttr \+ '>Delete<\/button>'/.test(FILES[MARKET]) &&
+      /var statusHtml = isOwn \? '<span class="status-badge status-'/.test(FILES[MARKET]) &&
+      /var body = \{ title, description: desc, category, price_bfc: price, price_usd: priceUsd, tags: tagsRaw, media: listingMedia \};/.test(FILES[MARKET]) &&
+      !/\bstatus\s*:\s*"(active|paused|sold)"|body\.status\b/.test(FILES[MARKET])],
+  ["8 certifications 76", certTips, "press Try Again on the result screen, or Start Assessment on the card", /Retake Assessment/,
+    () => /<button class="result-retry-btn" id="resultRetryBtn">Try Again<\/button>/.test(FILES[CERTS]) &&
+      /if \(earned\) \{\s*html \+= '<button class="cert-btn cert-btn-retry"[^\n]*>Retake Assessment<\/button>';\s*\} else \{\s*html \+= '<button class="cert-btn cert-btn-start"[^\n]*>Start Assessment<\/button>';/.test(FILES[CERTS]) &&
+      /if \(!passed\) \{\s*saving\.catch\(function\(\)\{\}\);\s*showResult\(pct, false\);/.test(FILES[CERTS]) &&
+      !/cooldown|max_?attempts|attempt_?limit|lockout/i.test(SV.slice(SV.indexOf('app.post("/api/certifications/award"'), SV.indexOf("async function creditWallet(")))],
+  ["8 lead-radar 147", lrTips, "Copy it to your clipboard and post it on Bluesky yourself", /Sort by score|Copy it straight to Bluesky/,
+    () => /leads\.sort\(function \(a, b\) \{ return \(b\.intent_score \|\| 0\) - \(a\.intent_score \|\| 0\); \}\);/.test(FILES[RADAR_PAGE]) &&
+      !/<select|>[^<>\n]*\bSort\b[^<>\n]*</i.test(FILES[RADAR_PAGE]) &&
+      /return \(l\.intent_score \|\| 0\) >= 60;/.test(FILES[RADAR_PAGE]) && /label: "High-Intent"/.test(FILES[RADAR_PAGE]) &&
+      /function copyReply\(idx\) \{[\s\S]{0,200}?navigator\.clipboard\.writeText\(text\)/.test(FILES[RADAR_PAGE]) && />Draft Engagement<\/button>/.test(FILES[RADAR_PAGE]) &&
+      !/bsky\.social|createRecord|app\.bsky/.test(FILES[RADAR_PAGE])],
+  // group 7 — wallet and certification payouts
+  ["7 wallet 66", walTips, "The history shows your latest 50 transactions", /full Transaction History/,
+    () => HISTORY_50() && ["Available Balance", "Total Earned", "Total Spent"].every(l => FILES[WALLET].indexOf(">" + l + "<") !== -1) && /\n    Transaction History\n/.test(FILES[WALLET])],
+  ["7 wallet 67", walTips, "the one action here is Send BFC", /accumulate automatically|read-only ledger/, () => SEND_BFC() && ONLY_TWO_CREDITS()],
+  ["7 wallet 68", walTips, "a one-time 1,000 BFC welcome bonus lands when your subscription goes active", /\+50|\+25|\+200|agent tasks \(|stackable/,
+    () => CERT_CREDIT.test(SV) && WELCOME() && ONLY_TWO_CREDITS() && /How to Earn BFC/.test(FILES[WALLET])],
+  ["7 wallet 69", walTips, "not how much you use the platform", /rewards real engagement|how actively you're using/,
+    () => ONLY_TWO_CREDITS() && ["bfc_transfer", "bfc_buy_listing", "bfc_donate"].every(r => SV.indexOf('rpc("' + r + '"') !== -1)],
+  ["7 certifications 75", certTips, "Your first pass of each certification pays 100 BFC to your Wallet while you're subscribed", /Passing pays out BFC/,
+    () => CERT_CREDIT.test(SV) && /AN EARNED RECORD IS NEVER WRITTEN AGAIN/.test(SV)],
+  // group 6 — data no agent reads
+  ["6 seo 111", seoTips, "keyword research, content plans, local SEO plans, and page audits", /rankings|forecasts/,
+    () => ["Keyword Research", "Content Plan", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n)) && /knows no search volume, competition, difficulty or ranking/.test(taskPrompt("keyword_research"))],
+  ["6 analytics 139", anaTips, "the context every analytics task is written from", /thin forecasts|Accuracy depends/,
+    () => ["Industry", "Website", "Competitors"].every(f => PROFILE_FIELDS.indexOf(f) !== -1) &&
+      ["\"Industry: \"", "\"Website: \"", "\"Competitors: \""].every(l => FILES[BRAIN].indexOf(l) !== -1) &&
+      /var profileResult = await supabase\s*\.from\("business_profiles"\)/.test(SV) && /buildAgentSystemPrompt\(agentBrain, businessProfile,/.test(SV)],
+  ["6 analytics 141", anaTips, "enter each metric's Now and Before figures and it works out the change", /trend lines actually mean|on a schedule/,
+    () => /"name": "current",\s*"label": "Now",/.test(FILES[ANALYTICS]) && /"name": "previous",\s*"label": "Before",/.test(FILES[ANALYTICS]) &&
+      /var change = hasPrevious \? current - previous : null;/.test(SV)],
+  ["6 email 152", emTips, "it writes the copy and reads no delivery data", /deliverability/i,
+    () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n)) && /no open-rate, click-rate or /.test(SV)],
+  ["6 email 154", emTips, "notes which to A/B test first, and the test itself runs in your own email platform", /lives and dies/,
+    () => offers(EMAIL, "Subject Line Testing") && /Note which to A\/B test first\./.test(taskPrompt("subject_lines"))],
+  ["6 store 159", stTips, "it connects to no store or channel", /manages multi-store|across every channel|commerce intelligence/,
+    () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) &&
+      /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/shopify|woocommerce|bigcommerce/i.test(FILES[STORE])],
+  ["6 store 160", stTips, "are written from that context, not from your store's own data", /compare you against/,
+    () => /reads no analytics, traffic, checkout or conversion data/.test(taskPrompt("conversion_audit"))],
+  ["6 store 161", stTips, "it plans your channel mix, inventory sync approach, and a consistent customer experience", /coordinating across stores|edge is/,
+    () => /channel mix/.test(taskPrompt("omnichannel_strategy")) && /inventory sync approach/.test(taskPrompt("omnichannel_strategy")) && /customer experience consistency/.test(taskPrompt("omnichannel_strategy"))],
+  ["6 influencer 201", infTips, "drafts the work of creator partnerships", /end to end|forecasting ROI/,
+    () => ["Influencer Outreach", "Campaign Plan", "Partnership Offer", "ROI Forecast"].every(n => offers(INFLUENCER, n)) && /^Build an influencer ROI model the owner can fill in/.test(taskPrompt("roi_forecast"))],
+  ["6 influencer 203", infTips, "builds the return model and break-even from figures you supply", /expected return/,
+    () => /a break-even calculation/.test(taskPrompt("roi_forecast")) && /use only numbers the user supplies/.test(taskPrompt("roi_forecast"))]
+];
+const NO_CLAIM = t => !WATCHING.test(t) && !/\bautomatic(ally)?\b|\binstant(ly)?\b|\bauto-/i.test(t);
+B.forEach(([id, tips, fragment, old, proof]) => {
+  const t = tipWith(tips, fragment);
+  check("B. " + id + ": the new wording is there", !!t, fragment);
+  check("B. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
+  check("B. " + id + ": what it names exists and what it says happens", !!t && proof());
+  check("B. " + id + ": no watching or automatic claim", !!t && NO_CLAIM(t), t);
+});
+
+console.log("\n── B. page copy ──");
+// Each agent's static subtitle stands alone (ai_agents.description is empty): it names only task types the page offers.
+const subtitle = f => (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[f]) || ["", ""])[1];
+const OPTIMIZE = SV.slice(SV.indexOf('app.post("/api/agents/seo/optimize"'), SV.indexOf("\napp.", SV.indexOf('app.post("/api/agents/seo/optimize"') + 10));
+const BCOPY = [
+  // [id, file, the new text as it stands in the file, old untrue wording (absent from the page's visible text), proof]
+  ["6 email-agent.html subtitle", EMAIL, '<p class="agent-subtitle">Email campaigns, sequences, win-back and nurture flows, and subject lines.</p>', /deliverability/i,
+    () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n))],
+  ["6 store-agent.html subtitle", STORE, '<p class="agent-subtitle">Store audits, inventory plans, omnichannel strategy, and launch plans.</p>', /Multi-store|sales intelligence/i,
+    () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Product Launch Plan"].every(n => offers(STORE, n))],
+  ["6 publicist-agent.html subtitle", PUBLICIST, '<p class="agent-subtitle">Press releases, media pitches, PR campaigns, and brand narrative.</p>', /visibility intelligence/i,
+    () => ["Press Release", "Media Pitch", "PR Campaign", "Brand Narrative"].every(n => offers(PUBLICIST, n))],
+  ["6 community-agent.html subtitle", COMMUNITY, '<p class="agent-subtitle">Community growth plans, engagement strategy, referral loops, and retention systems.</p>', /Community health|growth intelligence/i,
+    () => ["Community Growth Plan", "Engagement Strategy", "Referral Loop", "Retention System"].every(n => offers(COMMUNITY, n))],
+  ["6 sales.html subtitle", SALES, '<p class="agent-subtitle">Funnels, outreach scripts, and offers from your business profile, plus the leads Lead Radar captures.</p>', /revenue intelligence/i,
+    () => ["Sales Funnel", "Outreach Script", "Offer Builder"].every(n => offers(SALES, n)) && />Leads from Lead Radar<\/h2>/.test(FILES[SALES])],
+  // the optimize route fetches the site itself (guardedFetch) and reads nothing from Google
+  ["6 seo.html report heading", SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', /Google SEO Report/,
+    () => /guardedFetch/.test(OPTIMIZE) && /EXTRACTED ON-PAGE DATA \(fetched live from the URL above\)/.test(OPTIMIZE) && !/googleapis|google\.com|search ?console|serpapi|pagespeed/i.test(OPTIMIZE)],
+  // a scheduled run goes through handleAiTaskRequest like a pressed one, only with autonomy on; nothing acts on its result
+  ["6 agent-profile.js Autonomous mode", AP, "'Lets the ' + esc(AGENT_LABEL) + ' carry out its scheduled runs below in the ',\n                  'background, without you launching them. Off means it ',", /act on what it finds/,
+    () => /'<div class="ap-sched-title">Scheduled runs<\/div>',/.test(AP_FILE) && /function runScheduledAgentTask\(schedule\) \{[\s\S]{0,1200}?handleAiTaskRequest\(req, res, next\)/.test(SV) &&
+      /var skippedNoAutonomy\s+= 0;/.test(SV) && /if \(process\.env\.ENABLE_AGENT_SCHEDULES === "true"\) \{\s*cron\.schedule\("0 \* \* \* \*", function \(\) \{\s*agentScheduleTick\(\)/.test(SV)],
+  ["7 wallet.html hero", WALLET, '<p class="hero-sub">Earn BFC by passing certifications while subscribed, plus a one-time welcome bonus when your subscription goes active.</p>',
+    /platform milestones/i, () => CERT_CREDIT.test(SV) && WELCOME() && ONLY_TWO_CREDITS()],
+  ["9 ai-agents.html description", DIRECTORY, "        Eighteen AI business specialists — open any one to go to its own page.\n", /customizable|Build your own/i,
+    () => /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY]) && /var href = agent\.page_url \|\| "agents-hub\.html";/.test(FILES[DIRECTORY])]
+];
+BCOPY.forEach(([id, file, text, old, proof]) => {
+  // agent-profile.js builds its copy in strings, so its whole source is the text checked
+  const visible = file === AP ? FILES[file] : (FILES[file].match(/>[^<>]*</g) || []).join(" ");
+  check("B. " + id + ": the new wording is there", FILES[file].indexOf(text) !== -1, text);
+  check("B. " + id + ": the old untrue wording is gone from the page", !old.test(visible), (visible.match(old) || [""])[0]);
+  check("B. " + id + ": what it names exists and what it says happens", proof());
+  check("B. " + id + ": no watching or automatic claim", NO_CLAIM(text), text);
+});
+
 /* ── G. guide-wide guards, over EVERY tip ───────────────────────────────── */
 console.log("\n══ G. guide-wide guards ══");
 const ALL = [];
@@ -509,5 +719,31 @@ check("G3. the only \"live\" copy left on analytics-dashboard, sales and lead-ra
   LIVE_COPY(SALES).indexOf(">Live Activity<") !== -1 && !/>[^<>\n]*\breal-?time\b/i.test(FILES[CONTENT]),
   [DASH, SALES, RADAR_PAGE].map(f => LIVE_COPY(f).join(",")).join(" / "));
 
+// G3, widened: "automatically", "instantly" and "auto-" claims, over every tip. Each allowed use is listed with the
+// mechanism that makes it true, asserted in code; any other use fails. None is allowed today.
+const AUTO = /\bautomatic(ally)?\b|\binstant(ly)?\b|\bauto-/i;
+const AUTO_ALLOWED = [];
+const autoHits = ALL.filter(x => AUTO.test(x.t) && !AUTO_ALLOWED.some(a => a.key === x.key && x.t.indexOf(a.phrase) !== -1 &&
+  !AUTO.test(x.t.split(a.phrase).join("")) && a.proof()));
+check("G3. no tip says automatically, instantly or auto- unless allowlisted with its mechanism",
+  autoHits.length === 0, autoHits.map(x => x.key + "#" + x.i + ": " + x.t.slice(0, 90)).join(" | "));
+check("G3. the automatic-claim allowlist is not stale: each allowed phrase is still in its tip and its mechanism holds",
+  AUTO_ALLOWED.every(a => tipsFor(a.key).some(t => t.indexOf(a.phrase) !== -1) && a.proof()));
+
+// G4. No tip states a BFC amount that is not a constant or a label in server.js or wallet.html. An amount is a number
+// written with a plus sign ("+50") or followed by BFC ("1,000 BFC"), in any tip.
+const num = s => Number(String(s).replace(/,/g, ""));
+const BFC_KNOWN = [];
+[[SV, /await creditWallet\([^,]+,\s*(\d+),/g], [SV, /\nconst WELCOME_BONUS_BFC = (\d+);/g], [FILES[WALLET], /<strong>\+([\d,]+) BFC/g]].forEach(([text, re]) => {
+  let m; while ((m = re.exec(text))) if (BFC_KNOWN.indexOf(num(m[1])) === -1) BFC_KNOWN.push(num(m[1]));
+});
+check("G4. the BFC amounts were read from the code: the certification credit, the welcome bonus and the wallet's labels (100 and 1000)",
+  BFC_KNOWN.slice().sort((a, b) => a - b).join(",") === "100,1000", BFC_KNOWN.join(","));
+const amountsIn = t => (t.match(/\+\s?\d[\d,]*|\b\d[\d,]*\s*BFC\b/g) || []).map(a => num(a.replace(/[+\sA-Z]/g, "")));
+const bfcHits = ALL.filter(x => amountsIn(x.t).some(a => BFC_KNOWN.indexOf(a) === -1));
+check("G4. no tip states a BFC amount that is not a constant or label in server.js or wallet.html",
+  bfcHits.length === 0, bfcHits.map(x => x.key + "#" + x.i + " " + amountsIn(x.t).join(",")).join(" | "));
+check("G4. the amount reader finds the wallet tip's 100 and 1,000 (so a passing G4 read something)",
+  walTips.some(t => amountsIn(t).join(",") === "100,1000"));
 console.log("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (passes + failures) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
 process.exit(failures ? 1 : 0);
