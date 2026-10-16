@@ -4,7 +4,9 @@
    track, alert, run in real time, or pointed at a panel or section, says
    only what is true; and no tip anywhere in the guide names a removed report
    section, a goals field that does not exist, a live view nothing drives, an
-   automatic behaviour nothing performs, or a BFC amount nothing pays.
+   automatic behaviour nothing performs, or a BFC amount nothing pays; every
+   agent page has its own entry, and the home page's agent cards say what
+   their pages say.
 
    Frontend "Every Termaximus tip that claims to watch something has been
    checked" verified nine tips in scripts/termaximus-guide.js against the
@@ -72,6 +74,29 @@
     10  the dashboard: tips 17 (the Business Profile, not Business Identity),
         18 (Recent Activity is gone) and 19 (Agent Hub shows all 18).
 
+   Frontend "The guide's last untrue tips are fixed and every agent has its
+   own guide" then finished the audit:
+
+    11  one-off tips: analytics-dashboard 38 (0 means none yet; "—" means
+        loading or unreadable), business-id 89 (the card is drawn only for its
+        owner), business-chat 92 and 95 (one thread; answers read the last 20
+        messages), card-view 98 (the QR codes hold a vCard; ?token= opens the
+        page), sales 118 and 122 (a task reads no pipeline), content 129 (the
+        library is articles and SMS campaigns), lead-radar 148 (a count of
+        leads, not intent), broker 175 (a framework, not an execution
+        document), rd 218 and 219, oracle 225 (.docx only) and 226 (the
+        numbers are fixed by birth name and date), and the Oracle's insight;
+        the app.html entry, which could never display (the guide returns
+        early there), is removed;
+        index.html's agent card subtitles now equal their pages' (sales,
+        email, community, store, publicist, vertical marketing), and
+        wallet.html's earn cards say first pass while subscribed, and paid
+        when the subscription goes active;
+        oracle.html's picker offers only what POST /api/oracle accepts (.doc
+        and image/* removed: the server takes .docx and four image types);
+        new entries for ads-agent, executive-agent, vertical-marketing-agent
+        and agents/sms.html, each tip proved against its page and routes.
+
    NAMED BEFORE → AFTER (assertions changed on purpose by that commit):
      L  "the tip says the radar searches fixed buyer-intent phrases and
         hashtags on Bluesky, Mastodon and YouTube" → "the tip says it searches
@@ -80,6 +105,12 @@
         was proven by the lists existing, not by the searches running.
      M  restore-lead-radar-tip's anchor is the new tip text (same mutation:
         the Business Profile claim comes back).
+     G3 LIVE_ALLOWED held one phrase, app.html's "history live under one
+        account"; that entry is gone, so the allowlist is empty (and stays
+        checked for staleness).
+     M  automatic-in-business-chat → automatic-in-agents-hub: business-chat
+        tip 92 now has its own per-tip checks, so the G3-only mutation moved to
+        a tip no per-tip check covers.
 
    Tips and AGENT_PROFILE_CONFIG are read the way checkReputationTips.js reads
    them (regex extraction, evaluated in vm); page markup and server code are
@@ -113,6 +144,13 @@
         "auto-" except an allowlisted use whose mechanism is asserted (G3), and
         no BFC amount that is not a constant or label in server.js or
         wallet.html (G4).
+     C. The audit's group 11, block B's leftovers and the four new entries,
+        with the same four assertions per tip and per copy line; and the
+        Oracle's picker and the server's allowed upload types agree both ways.
+    G5. Every registered agent page (AGENT_SYSTEM_PROMPTS through
+        AGENT_PAGE_URLS) and agents/sms.html loads the guide and has its own
+        entry, and no entry is for a page where the guide never displays.
+    G6. Every index.html agent card subtitle equals its page's subtitle.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
@@ -192,7 +230,7 @@ const MUTATIONS = {
   "restore-ai-agents-338": [["ai-agents.html", "Eighteen AI business specialists — open any one to go to its own page.",
     "Build your own customizable team of AI business specialists."]],
   // "automatically" in a tip no per-tip check covers: only the widened G3 can catch it
-  "automatic-in-business-chat": [[GUIDE, "and it remembers the conversation across sessions", "and it automatically remembers the conversation across sessions"]],
+  "automatic-in-agents-hub": [[GUIDE, "each card opens that agent's dedicated workspace", "each card automatically opens that agent's dedicated workspace"]],
   // an invented BFC amount in a tip no per-tip check covers: only G4 can catch it
   "invented-bfc-amount": [[GUIDE, "a complete listing gets found faster than a bare one.", "a complete listing earns +500 BFC and gets found faster than a bare one."]],
   // the server starts paying for agent tasks: "running agent tasks … pay nothing" would be false
@@ -211,7 +249,32 @@ const MUTATIONS = {
     "Use Retake Assessment if you don't pass the first time — there's no penalty for trying again."]],
   // the dashboard tip points at the removed Recent Activity feed again
   "restore-recent-activity": [[GUIDE, "Use the Active Queue card and its View Queue button to see your active assignments",
-    "Use the Active Queue card and Recent Activity feed to see what's actually running"]]
+    "Use the Active Queue card and Recent Activity feed to see what's actually running"]],
+  // ── group 11, the leftovers, G5 and G6 ──
+  // oracle tip 226 says the numbers sharpen with time again
+  "restore-226-sharpen": [[GUIDE, "Your Life Path, Expression, Soul Urge, and Birthday numbers are fixed by your birth name and date and do not change with time; your current location, your path and your story can, and the Oracle reads them with every question.", "Your Life Path, Expression, Soul Urge, and Birthday numbers only sharpen with time, and the Oracle's counsel sharpens with them."]],
+  // sales tip 118 claims pipeline intelligence from your business data again
+  "restore-sales-118": [[GUIDE, "\"This agent writes sales material — funnels, lead generation, outreach scripts, offers, and objection handling — from your Business Profile and what you tell it; its tasks read none of the leads or pipeline on this page.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
+  // the Oracle's picker offers .doc again, which the server refuses
+  "restore-picker-doc": [["oracle.html", "accept=\".pdf,.docx,", "accept=\".pdf,.doc,.docx,"]],
+  // the picker offers every image type again; the server takes four
+  "picker-image-wildcard": [["oracle.html", ".csv,.png,.jpg,.jpeg,.webp,.gif\"", ".csv,image/*\""]],
+  // the server starts taking .doc: the picker would no longer offer all it accepts, and 225 would be false
+  "server-accepts-doc": [[SERVER, "  \"text/plain\": true,   // .txt\n", "  \"application/msword\": true,\n  \"text/plain\": true,   // .txt\n"]],
+  // index.html's sales card gets its old subtitle back (G6)
+  "restore-index-sales-subtitle": [["index.html", "<p>Funnels, outreach scripts, and offers from your business profile, plus the leads Lead Radar captures.</p>", "<p>Pipeline, leads, and revenue intelligence from your business profile.</p>"]],
+  // an agent page's subtitle changes and the home page card does not (G6, from the page side)
+  "page-subtitle-drifts": [["vertical-marketing-agent.html", "<p class=\"agent-subtitle\">Marketing built for one industry vertical — its language, its channels, its objections.</p>", "<p class=\"agent-subtitle\">Marketing built for one industry: its positioning, language, channels, and objections.</p>"]],
+  // the ads-agent entry is deleted (G5)
+  "delete-ads-entry": [[GUIDE, "    \"ads-agent.html\": [\n      \"This agent writes ad campaigns and ad copy from your Business Profile and what you tell it; it connects to no ad account and reads no ad results, so nothing here buys, runs or measures an ad.\",\n      \"Ad Copy writes for a Google Responsive Search Ad or a Meta feed ad and measures every asset against that platform's limits — Google's 30-character headlines and 90-character descriptions are hard limits, rejected at upload if longer; Meta's are the points where the feed cuts text short.\",\n      \"Ad Copy also runs what it writes through the policy scan, so wording that gets ads rejected is flagged in the same result.\",\n      \"Policy Check scans copy you paste for wording that gets ads rejected — cure claims, before-and-after results, guaranteed results, addressing a personal attribute — and for FDA disease claims; a clean scan is not approval, and with Suggest rewrites unchecked it makes no model call at all.\",\n      \"Use Ad Campaign for a whole plan — audience, offer, hooks, creative angles, copy, budget guidance, and a testing plan — then write each ad's assets in Ad Copy.\"\n    ],\n", ""]],
+  // an app.html entry comes back, on a page where the guide returns early (G5)
+  "readd-app-entry": [[GUIDE, "    \"seo.html\": [\n", "    \"app.html\": [\n      \"The front door — sign in or create an account here.\"\n    ],\n    \"seo.html\": [\n"]],
+  // the wallet's certification card promises BFC for any pass again
+  "restore-wallet-cert-card": [["wallet.html", "Paid for your first pass of each certification, while you're subscribed</div>", "Pass any certification quiz to earn BFC rewards</div>"]],
+  // the drip engine leaves dry-run mode: the sms tips would be false
+  "drip-engine-sends": [[SERVER, "    var DRY_RUN = true;\n", "    var DRY_RUN = false;\n"]],
+  // direct SMS sending opens: sms tip 5 would be false
+  "direct-sms-opens": [[SERVER, "\nconst SMS_DIRECT_SEND_ENABLED = false;", "\nconst SMS_DIRECT_SEND_ENABLED = true;"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -229,6 +292,16 @@ function readFrontend(f) {
 // Every page the guide has an entry for, for the guide-wide guards (read before any mutation, so a mutation can target one).
 const GUIDE_KEYS = (FILES[GUIDE].match(/\n    "([a-z0-9-]+\.html)": \[/g) || []).map(m => /"([^"]+)"/.exec(m)[1]);
 GUIDE_KEYS.forEach(k => { if (!FILES[fileOfKey(k)]) readFrontend(fileOfKey(k)); });
+// Every page in the frontend, for G5 (which pages load the guide) and the business-id check; index.html among them, for G6.
+const HTML_PAGES = [];
+(function walk(dir) {
+  fs.readdirSync(path.join(FRONTEND, dir), { withFileTypes: true }).forEach(d => {
+    const rel = dir ? dir + "/" + d.name : d.name;
+    if (d.isDirectory()) { if (!/^(\.|node_modules$)/.test(d.name)) walk(rel); }
+    else if (/\.html$/i.test(d.name)) HTML_PAGES.push(rel);
+  });
+})("");
+HTML_PAGES.forEach(f => { if (!FILES[f]) readFrontend(f); });
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
@@ -641,6 +714,202 @@ BCOPY.forEach(([id, file, text, old, proof]) => {
   check("B. " + id + ": no watching or automatic claim", NO_CLAIM(text), text);
 });
 
+/* ── C. the Oct 14 audit, group 11, block B's leftovers, and the four new entries ── */
+console.log("\n══ C. audit group 11, the leftovers, the Oracle's picker, and four new entries ══");
+// The same four assertions as A and B. For a new tip there is no old wording, so the second assertion is that the
+// entry makes none of the claims its page cannot back.
+const ORACLE = "oracle.html", INDEX = "index.html", CHAT = "business-chat.html", CARDVIEW = "card-view.html", ADS = "ads-agent.html", EXEC = "executive-agent.html",
+  VERT = "vertical-marketing-agent.html", SMS = "agents/sms.html";
+const chatTips = tipsFor("business-chat.html"), cvTips = tipsFor("card-view.html"), orTips = tipsFor("oracle.html");
+const adsTips = tipsFor("ads-agent.html"), exTips = tipsFor("executive-agent.html"), vmTips = tipsFor("vertical-marketing-agent.html"), smsTips = tipsFor("sms.html");
+// A server slice: from a start marker to the first end marker after it ("" when the start is missing).
+function svSlice(start, end) {
+  const i = SV.indexOf(start); if (i === -1) return "";
+  const j = SV.indexOf(end, i + start.length); return SV.slice(i, j === -1 ? SV.length : j);
+}
+const TASK_ROUTE = svSlice("async function handleAiTaskRequest(", "\napp."), LIVE_STATS = svSlice("async function getLiveStats(", "\n}\n"),
+  TASK_COUNTS = svSlice("async function countTasksByAgent(", "\n}\n"), NOTES = svSlice("async function fetchSpecialistNotes(", "\n}\n");
+const CHAT_POST = svSlice('app.post("/api/business-chat"', "\napp."), CHAT_GET = svSlice('app.get("/api/business-chat"', "\n});\n");
+const ORACLE_POST = svSlice('app.post("/api/oracle",', "\napp.");
+const EXEC_PLAN = svSlice('app.post("/api/agents/executive/plan"', "\napp."), DISPATCH = svSlice('app.post("/api/assignments/dispatch"', "\napp.");
+const ADS_COPY = svSlice('app.post("/api/agents/ads/copy"', "\napp."), ADS_POLICY = svSlice('app.post("/api/agents/ads/policy-check"', "\napp.");
+const VERT_POS = svSlice('app.post("/api/agents/vertical_marketing/positioning"', "\napp."), VERT_OBJ = svSlice('app.post("/api/agents/vertical_marketing/objections"', "\napp.");
+const ENGINE = svSlice("async function runDripEngine(userId) {", "\nasync function runDripForAllUsers()"), ENROLL = svSlice('app.post("/api/sms/campaigns/:id/enroll"', "\napp.");
+const tablesRead = text => (text.match(/\.from\("(\w+)"\)/g) || []).map(m => /"(\w+)"/.exec(m)[1]).filter((t, i, a) => a.indexOf(t) === i).sort();
+// What any agent task's prompt is built from: the Business Profile, counts, earlier runs and notes, and the request.
+// No table that holds a lead or the pipeline is read.
+const TASK_TABLES = tablesRead(TASK_ROUTE + LIVE_STATS + TASK_COUNTS + NOTES).join(",");
+const NO_PIPELINE = () => TASK_TABLES === "agent_memory,ai_tasks,business_profiles,content_library,sms_campaigns,sms_subscribers,social_post_drafts" &&
+  /buildAgentSystemPrompt\(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain, specialistNotes\);/.test(TASK_ROUTE) &&
+  /"\\n\\nUSER REQUEST:\\n" \+ userPrompt;/.test(TASK_ROUTE) && />Leads from Lead Radar<\/h2>/.test(FILES[SALES]);
+const DOCX_ONLY = () => /"application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document": true, \/\/ \.docx/.test(SV) && !/application\/msword/.test(SV);
+const C = [
+  // group 11 — one-off tips
+  ["11 analytics-dashboard 38", dashTips, "If a tile shows 0, there's nothing of that kind on your account yet", /hasn't loaded or hasn't been generated/,
+    () => (FILES[DASH].match(/<span class="stat-number" id="stat\w+">—<\/span>/g) || []).length >= 6 &&
+      /\.textContent\s+= s\.tasksRun\s+!= null \? s\.tasksRun\s+: "—";/.test(FILES[DASH]) &&
+      (LIVE_STATS.match(/return result\.count \|\| 0;/g) || []).length === 2 && /Could not load analytics data\./.test(FILES[DASH])],
+  ["11 business-id 89", idTips, "the card is drawn only on this page, for you — nothing on the platform shows it to other members", /first impression other members/,
+    () => /function renderCard\(p\) \{/.test(FILES[BIZID]) && /fetch\(API_URL \+ "\/api\/profile\/me", \{\s*headers: \{ "Authorization": "Bearer " \+ token \}/.test(FILES[BIZID]) &&
+      /app\.get\("\/api\/profile\/me", requireAuth,/.test(SV) && HTML_PAGES.filter(f => f !== BIZID && /id-card-watermark|BizForce AI Member/.test(FILES[f])).length === 0],
+  ["11 business-chat 92", chatTips, "each answer is written from the last 20 messages of it", /remembers the conversation across sessions/,
+    () => /role: "user",[\s\S]*?\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(20\);[\s\S]*?role: "assistant",/.test(CHAT_POST)],
+  ["11 business-chat 95", chatTips, "There is one thread, not a list of past threads", /Revisit past threads/,
+    () => /\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: true \}\);/.test(CHAT_GET) && !/\.limit\(/.test(CHAT_GET) &&
+      !/thread_id|conversation_id/.test(CHAT_POST + CHAT_GET) && /data\.messages\.forEach\(function\(msg\) \{\s*addMessage\(msg\.role, msg\.content\);/.test(FILES[CHAT])],
+  ["11 card-view 98", cvTips, "the card's QR codes hold a vCard contact, not a link to this page", /via a shared link or QR code/,
+    () => [FILES[CARDVIEW], FILES[CARDS]].every(p => /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), vcard \|\| "BizForce AI"/.test(p) &&
+      /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), vcard \|\| "BizForce AI"/.test(p) && /"BEGIN:VCARD"/.test(p)) &&
+      /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) && /"https:\/\/bizforceai\.net\/card-view\.html\?token=" \+ st/.test(FILES[CARDS])],
+  ["11 sales 118", salesTips, "its tasks read none of the leads or pipeline on this page", /revenue intelligence|from your business data/,
+    () => NO_PIPELINE() && ["Sales Funnel", "Lead Generation", "Outreach Script", "Offer Builder", "Objection Handling"].every(n => offers(SALES, n))],
+  ["11 sales 122", salesTips, "a task's prompt carries no pipeline data", /stale pipeline data/, NO_PIPELINE],
+  ["11 content 129", conTips, "its saved articles and SMS campaigns", /delete drafts so your queue/,
+    () => /fetch\(CL_API \+ "\/api\/content-library\?type=blog"/.test(FILES[CONTENT]) && /fetch\(CL_API \+ "\/api\/content-library\?type=sms"/.test(FILES[CONTENT]) &&
+      ["data-expand=", "data-copy=", 'class=\\"cl-delete-btn\\"'].every(a => FILES[CONTENT].indexOf(a) !== -1) &&
+      /fetch\(API \+ "\/api\/social-drafts"/.test(FILES[CONTENT]) && />Content Library<\/h2>/.test(FILES[CONTENT])],
+  ["11 lead-radar 148", lrTips, "Product Breakdown counts leads, it does not measure intent", /pulling the most buying intent/,
+    () => /productCounts\[p\] = \(productCounts\[p\] \|\| 0\) \+ 1;/.test(FILES[RADAR_PAGE]) &&
+      /<span class=\\"chart-title\\">Product Breakdown<\/span>/.test(FILES[RADAR_PAGE]) && /<span class=\\"chart-title\\">Score Distribution<\/span>/.test(FILES[RADAR_PAGE])],
+  ["11 broker 175", brTips, "they give you a checklist and a framework to take to a lawyer, not execution documents", /real execution documents/,
+    () => ["Due Diligence Checklist", "Term Sheet Draft", "Term Sheet Framework"].every(n => offers(BROKER, n)) &&
+      /A framework, not a legal document\./.test(FILES[BROKER]) && /"THIS IS A FRAMEWORK, NOT A LEGAL DOCUMENT, AND NO LAWYER HAS SEEN IT\./.test(SV) &&
+      /Take this to a lawyer before/.test(SV) && /^Draft a term sheet framework/.test(taskPrompt("term_sheet")) && /^Build a due diligence checklist/.test(taskPrompt("due_diligence"))],
+  ["11 rd 218", rdTips, "screen ideas by feasibility before you invest", /feasibility and impact/,
+    () => offers(RD, "Innovation Brief") && /feasibility assessment/.test(taskPrompt("innovation_brief")) && !/impact/i.test(taskPrompt("innovation_brief"))],
+  ["11 rd 219", rdTips, "the only earlier runs it sees are excerpts of your last 5 R&D runs", /summarize everything else/,
+    () => offers(RD, "Executive Briefing") && (SV.match(/executive_briefing/g) || []).length === 2 &&
+      /\.from\("ai_tasks"\)\s*\.select\("agent_type, prompt, result, status, created_at"\)\s*\.eq\("user_id", userId\)\s*\.eq\("agent_type", agentType\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(5\);/.test(TASK_ROUTE) &&
+      /excerptWithMarker\(task\.result, PRIOR_TASK_RESULT_CAP\)/.test(TASK_ROUTE)],
+  ["11 oracle 225", orTips, "PDFs, Word files (.docx only), plain text", /Word files(?! \(\.docx only\))/, DOCX_ONLY],
+  ["11 oracle 226", orTips, "are fixed by your birth name and date and do not change with time", /sharpen with time/,
+    () => /calculateLifePath\(oracleSync\.birth_date\)/.test(ORACLE_POST) && /calculateNameNumber\(oracleSync\.birth_name, false\)/.test(ORACLE_POST) &&
+      /calculateNameNumber\(oracleSync\.birth_name, true\)/.test(ORACLE_POST) && /extractBirthday\(oracleSync\.birth_date\)/.test(ORACLE_POST) &&
+      /"Current Location: " \+ \(oracleSync\.current_location/.test(ORACLE_POST) && /"Path & Focus: "\s+\+ \(oracleSync\.path_focus/.test(ORACLE_POST) &&
+      /oracleSync\.life_details/.test(ORACLE_POST)]
+];
+// The four new entries. Each row's second field is what the whole entry must never claim.
+const ADS_FALSE = /\b(manages?|optimi[sz]es?|launch(es)?|publish(es)?|runs?) (your )?(ads?|ad account|campaigns?|budget)\b|\bROAS\b|ad performance|connects? to your/i;
+const EXEC_FALSE = /\b(assigns?|dispatch(es)?|launch(es)?|runs?) (the )?(tasks?|work|agents?|assignments?) (for you|on its own|itself)|coordinates all (the )?other agents/i;
+const VERT_FALSE = /\bresearch(es|ed)? (the|your|this) (industry|market|vertical|trade)|real (market|industry) data|verified (terms|terminology)/i;
+const SMS_FALSE = /\bsends? (your )?(texts?|messages?|SMS) (to|on)\b|automated drip|\bdelivers?\b|reach(es)? (your )?customers/i;
+const ADS_ROUTES = () => (SV.match(/app\.post\("\/api\/agents\/ads\//g) || []).length === 2 && !/graph\.facebook\.com|googleads\.googleapis|adwords/i.test(SV);
+const DRY = () => (SV.match(/var DRY_RUN = true;/g) || []).length === 1 && /var DRY_RUN = true;/.test(ENGINE);
+const CN = [
+  ["ads 1", adsTips, "it connects to no ad account and reads no ad results", ADS_FALSE,
+    () => ADS_ROUTES() && offers(ADS, "Ad Campaign") && offers(ADS, "Ad Copy") && /buildAgentSystemPrompt\(adsBrain, businessProfile, \{\}, \[\]\)/.test(ADS_COPY)],
+  ["ads 2", adsTips, "measures every asset against that platform's limits", ADS_FALSE,
+    () => /HEADLINE:\s+\{ max: 30, kind: "hard",[\s\S]{0,200}?DESCRIPTION: \{ max: 90, kind: "hard",/.test(SV) &&
+      /PRIMARY_TEXT: \{ max: 125, kind: "truncation",/.test(SV) && /function measureAdAsset\(assetType, text, spec\)/.test(SV) &&
+      /"label": "Google Responsive Search Ad \(30 \/ 90, enforced\)"/.test(FILES[ADS]) && /"label": "Meta feed ad \(125 primary text, truncated\)"/.test(FILES[ADS])],
+  ["ads 3", adsTips, "Ad Copy also runs what it writes through the policy scan", ADS_FALSE,
+    () => /var policyFindings = scanAdPolicy\(assets\.map\(function \(a\) \{ return a\.text; \}\)\.join\("\\n"\)\);/.test(ADS_COPY)],
+  ["ads 4", adsTips, "a clean scan is not approval, and with Suggest rewrites unchecked it makes no model call at all", ADS_FALSE,
+    () => ["cure_or_treat_claims", "before_and_after", "guaranteed_results", "personal_attributes", "fda_disease_claims"].every(id => SV.indexOf('id: "' + id + '"') !== -1) &&
+      /var wantRewrites = req\.body\.suggest_rewrites !== false;/.test(ADS_POLICY) && /if \(findings\.length && wantRewrites\) \{/.test(ADS_POLICY) &&
+      /"A CLEAN SCAN IS NOT APPROVAL FROM ANYBODY\./.test(SV) && /"label": "Suggest rewrites"/.test(FILES[ADS]) && offers(ADS, "Policy Check")],
+  ["ads 5", adsTips, "Use Ad Campaign for a whole plan", ADS_FALSE,
+    () => /audience, offer, hooks, creative angles, copy, budget guidance, testing plan/.test(taskPrompt("ad_campaign")) && offers(ADS, "Ad Campaign")],
+  ["executive 1", exTips, "it runs none of them itself", EXEC_FALSE,
+    () => !!EXEC_PLAN && !/dispatchToolCall\(|handleAiTaskRequest\(/.test(EXEC_PLAN) && /'">Run this assignment<\/button>'/.test(AP_FILE) &&
+      /return fetch\(API_URL \+ "\/api\/assignments\/dispatch", \{/.test(AP_FILE)],
+  ["executive 2", exTips, "is checked against the tools that really exist", EXEC_FALSE,
+    () => /is_dispatchable: !!toolExists && problems\.length === 0 && inputCheck\.missing\.length === 0/.test(EXEC_PLAN) && /<span>Not runnable<\/span>/.test(AP_FILE) &&
+      offers(EXEC, "Executive Plan") && configOf(EXEC).tools[0].fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints"],
+  ["executive 3", exTips, "Begin with the Start here list", EXEC_FALSE,
+    () => /'<div class="ap-zone-label">Start here<\/div>'/.test(AP_FILE) && /'<div class="ap-zone-label">Order<\/div>'/.test(AP_FILE) &&
+      /Nothing can start yet — every assignment waits on another\./.test(AP_FILE) && /function orderExecutiveAssignments\(assignments\)/.test(SV) && /can_start_now: ordering\.waves\.length \? ordering\.waves\[0\] : \[\],/.test(EXEC_PLAN)],
+  ["executive 4", exTips, "Assignments marked your own work are yours to do", EXEC_FALSE,
+    () => /'<span class="ap-asg-yours">your own work<\/span>'/.test(AP_FILE) && /if \(a\.is_dispatchable !== true\) return planNotRunnableLine\(a\);/.test(AP_FILE) &&
+      /YOU is not dispatchable and has no route/.test(SV)],
+  ["executive 5", exTips, "only the Executive Plan tool's assignments can be run", EXEC_FALSE,
+    () => /if \(row\.task_type !== "executive\/plan"\) \{\s*return dispatchRefusal\(res, "not_an_executive_plan",/.test(DISPATCH) && /taskType: "executive\/plan",/.test(EXEC_PLAN) &&
+      ["Executive Command Plan", "Agent Coordination", "Executive Briefing", "KPI Review"].every(n => offers(EXEC, n))],
+  ["vertical 1", vmTips, "nothing about the industry is researched", VERT_FALSE,
+    () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
+      (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 2],
+  ["vertical 2", vmTips, "Vertical Positioning takes the industry", VERT_FALSE,
+    () => /labels: \["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"\]/.test(VERT_POS) &&
+      configOf(VERT).tools[0].label === "Vertical Positioning" && configOf(VERT).tools[0].fields.map(f => f.name + (f.required ? "*" : "")).join("|") === "industry*|offering|audience"],
+  ["vertical 3", vmTips, "Objection Handling takes the industry and the offer", VERT_FALSE,
+    () => /\["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"\]/.test(VERT_OBJ) && /\["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"\]/.test(VERT_OBJ) &&
+      /An industry is required — the vertical whose objections you want\./.test(VERT_OBJ) && /An offer is required — what is being sold to that industry\./.test(VERT_OBJ) && offers(VERT, "Objection Handling")],
+  ["vertical 4", vmTips, "the model's own estimate of how well it knows the trade, not a measurement", VERT_FALSE,
+    () => /treat the confidence level below as the model's own estimate of its recall/.test(SV) && /Have a practitioner read this before/.test(SV)],
+  ["vertical 5", vmTips, "Vertical Campaign Plan, for one, runs the creator-partnership campaign instruction", VERT_FALSE,
+    () => /\{ value: "campaign_plan",\s+label: "Vertical Campaign Plan" \}/.test(FILES[VERT]) && /partner selection criteria/.test(taskPrompt("campaign_plan")) && /usage rights/.test(taskPrompt("campaign_plan"))],
+  ["sms 1", smsTips, "This page is not an agent", SMS_FALSE,
+    () => !/agents\/sms\.html/.test(svSlice("const AGENT_PAGE_URLS = {", "\n};")) && !/AGENT_PROFILE_CONFIG/.test(FILES[SMS]) &&
+      ['id="sms-add-btn" class="sms-add-btn">Add<', 'id="sms-bulk-btn" class="sms-add-btn">Import<', 'id="sms-camp-create-btn" class="sms-add-btn">Create<',
+       'id="sms-msg-add-btn" class="sms-add-btn">Add Message<', 'id="enroll-all-btn" class="sms-ghost-btn">Enroll All Subscribers<'].every(b => FILES[SMS].indexOf(b) !== -1)],
+  ["sms 2", smsTips, "the first message's delay is not used", SMS_FALSE,
+    () => /var delayHours = \(msgs\[newStep\]\.delay_hours != null \? msgs\[newStep\]\.delay_hours : 0\);\s*var nextDate = new Date\(Date\.now\(\) \+ delayHours \* 60 \* 60 \* 1000\);/.test(ENGINE) &&
+      /if \(enrollment\.next_send_at && new Date\(enrollment\.next_send_at\) > new Date\(\)\) \{/.test(ENGINE) && !!ENROLL && !/next_send_at/.test(ENROLL) &&
+      /<span class="sms-msg-field-label">Delay \(hours\)<\/span>/.test(FILES[SMS])],
+  ["sms 3", smsTips, "The drip engine is fixed in dry-run mode", SMS_FALSE,
+    () => DRY() && /status:\s+DRY_RUN \? "dry_run" : "sent",/.test(ENGINE) && /twilio_sid:\s+null,/.test(ENGINE) && !/twilio\.|messages\.create|api\.twilio/i.test(ENGINE) &&
+      /id="run-engine-btn" class="sms-ghost-btn">Run Drip Engine \(Dry Run\)</.test(FILES[SMS]) && /"Sent: "\s+\+ \(r\.sent/.test(FILES[SMS]) && />Send Log</.test(FILES[SMS])],
+  ["sms 4", smsTips, "A dry run moves no enrollment forward", SMS_FALSE,
+    () => DRY() && /if \(DRY_RUN\) \{[\s\S]{0,600}?summary\.sent\+\+;\s*continue;\s*\}\s*var \{ error: advanceErr \} = await supabase\s*\.from\("sms_campaign_enrollments"\)\s*\.update\(\{ current_step: newStep, next_send_at: nextSendAt \}\)/.test(ENGINE)],
+  ["sms 5", smsTips, "direct SMS sending is shut on this platform", SMS_FALSE,
+    () => /\nconst SMS_DIRECT_SEND_ENABLED = false;/.test(SV) && /if \(!SMS_DIRECT_SEND_ENABLED\) \{\s*return res\.status\(503\)/.test(SV) &&
+      /subscriber\.consent_status !== "opted_in"/.test(ENGINE) && !/\/api\/sms\/send["']/.test(FILES[SMS])]
+];
+C.forEach(([id, tips, fragment, old, proof]) => {
+  const t = tipWith(tips, fragment);
+  check("C. " + id + ": the new wording is there", !!t, fragment);
+  check("C. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
+  check("C. " + id + ": what it names exists and what it says happens", !!t && proof());
+  check("C. " + id + ": no watching or automatic claim", !!t && NO_CLAIM(t), t);
+});
+check("C. the four new entries have 4–5 tips each", [adsTips, exTips, vmTips, smsTips].every(t => t.length >= 4 && t.length <= 5),
+  [adsTips, exTips, vmTips, smsTips].map(t => t.length).join(","));
+CN.forEach(([id, tips, fragment, never, proof]) => {
+  const t = tipWith(tips, fragment);
+  check("C. new " + id + ": the new wording is there", !!t, fragment);
+  check("C. new " + id + ": the entry makes none of the claims its page cannot back", tips.length > 0 && tips.every(x => !never.test(x)), tips.filter(x => never.test(x)).join(" | "));
+  check("C. new " + id + ": what it names exists and what it says happens", !!t && proof());
+  check("C. new " + id + ": no watching or automatic claim", !!t && NO_CLAIM(t), t);
+});
+check("C. every tip of the four new entries is covered by a row above", [["ads", adsTips], ["executive", exTips], ["vertical", vmTips], ["sms", smsTips]].every(([p, tips]) =>
+  tips.every(t => CN.some(r => r[0].indexOf(p + " ") === 0 && t.indexOf(r[2]) !== -1))));
+
+console.log("\n── C. page copy ──");
+const INSIGHT_ORACLE = (/var PAGE_INSIGHT = \{\s*"oracle\.html":\s*"((?:[^"\\]|\\.)*)"/.exec(FILES[GUIDE]) || ["", ""])[1];
+const visibleOf = f => (FILES[f].match(/>[^<>]*</g) || []).join(" ");
+const CCOPY = [
+  // [id, the text checked, the new text as it stands, old untrue wording (absent from that text), proof]
+  ["11 oracle insight: no comparable platform", () => INSIGHT_ORACLE, "a numerology-grounded advisory layer. For businesses", /no comparable platform offers/, () => true],
+  ["11 oracle insight: Word files", () => INSIGHT_ORACLE, "contracts, PDFs, Word (.docx) files, images", /Word files/, DOCX_ONLY],
+  ["B-left wallet.html certification card", () => visibleOf(WALLET), "<strong>+100 BFC per cert</strong>Paid for your first pass of each certification, while you're subscribed</div>",
+    /Pass any certification quiz/, () => CERT_CREDIT.test(SV)],
+  ["B-left wallet.html welcome card", () => visibleOf(WALLET), "<strong>+1,000 BFC bonus</strong>One-time welcome bonus, paid when your subscription goes active</div>",
+    /welcome credit for new members/, () => WELCOME() && ONLY_TWO_CREDITS()]
+];
+CCOPY.forEach(([id, where, text, old, proof]) => {
+  const src = id.indexOf("wallet") !== -1 ? FILES[WALLET] : where();
+  check("C. " + id + ": the new wording is there", src.indexOf(text) !== -1, text);
+  check("C. " + id + ": the old untrue wording is gone", !old.test(where()), (where().match(old) || [""])[0]);
+  check("C. " + id + ": what it names exists and what it says happens", proof());
+  check("C. " + id + ": no watching or automatic claim", NO_CLAIM(text), text);
+});
+
+// The Oracle's file picker offers only what POST /api/oracle accepts, and accepts everything it offers. multer's
+// fileFilter refuses any other MIME type with "Unsupported file type". An accept entry is a MIME type, a wildcard
+// ("image/*") or an extension, read by its standard type; a wildcard counts as refused unless the server lists it.
+const ACCEPT = (/<input type="file" id="attachFileInput" multiple accept="([^"]*)"/.exec(FILES[ORACLE]) || ["", ""])[1].split(",").map(x => x.trim()).filter(Boolean);
+const SERVER_MIME = ((/var ORACLE_UPLOAD_ALLOWED_MIME = \{([\s\S]*?)\};/.exec(SV) || ["", ""])[1].match(/"([^"]+)": true/g) || []).map(m => /"([^"]+)"/.exec(m)[1]);
+const EXT_MIME = { ".pdf": "application/pdf", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
+const offeredMime = a => a.indexOf("/") !== -1 ? a : (EXT_MIME[a.toLowerCase()] || "unknown:" + a);
+const refusedOffers = ACCEPT.filter(a => SERVER_MIME.indexOf(offeredMime(a)) === -1);
+check("C. the Oracle's server refuses any type it does not list (\"Unsupported file type\"), and lists 9",
+  /if \(ORACLE_UPLOAD_ALLOWED_MIME\[file\.mimetype\]\) \{\s*cb\(null, true\);\s*\} else \{\s*cb\(new Error\("Unsupported file type: " \+ file\.mimetype\)\);/.test(SV) && SERVER_MIME.length === 9, SERVER_MIME.join(","));
+check("C. nothing the Oracle's file picker offers is refused by the server", ACCEPT.length > 0 && refusedOffers.length === 0, refusedOffers.join(","));
+check("C. everything the server accepts is offered by the picker", SERVER_MIME.every(m => ACCEPT.some(a => offeredMime(a) === m)),
+  SERVER_MIME.filter(m => !ACCEPT.some(a => offeredMime(a) === m)).join(","));
+check("C. no text on oracle.html offers .doc", !/\.doc\b/.test(FILES[ORACLE]), (FILES[ORACLE].match(/.{0,40}\.doc\b.{0,20}/) || [""])[0]);
+
 /* ── G. guide-wide guards, over EVERY tip ───────────────────────────────── */
 console.log("\n══ G. guide-wide guards ══");
 const ALL = [];
@@ -698,10 +967,8 @@ check("G2. no tip names Market Goals, Research Goals or Shop Goals", ALL.every(x
 // G3. "live", "real-time", "auto-refresh": only where a timer or stream drives the thing named. Each allowed use is
 // listed with its reason and asserted; any other use fails.
 const LIVE = /\blive\b|\blive-|real-?time|auto-?refresh/i;
-const LIVE_ALLOWED = [
-  // the verb: "your data and agent history live under one account" says where data is kept, not that a view updates
-  { key: "app.html", phrase: "history live under one account", proof: () => true }
-];
+// Its one entry was app.html's "history live under one account"; that entry is gone (the guide never displays there).
+const LIVE_ALLOWED = [];
 const liveHits = ALL.filter(x => LIVE.test(x.t) && !LIVE_ALLOWED.some(a => a.key === x.key && x.t.indexOf(a.phrase) !== -1 &&
   !LIVE.test(x.t.split(a.phrase).join("")) && a.proof()));
 check("G3. no tip says live, real-time or auto-refresh unless allowlisted with its mechanism",
@@ -745,5 +1012,47 @@ check("G4. no tip states a BFC amount that is not a constant or label in server.
   bfcHits.length === 0, bfcHits.map(x => x.key + "#" + x.i + " " + amountsIn(x.t).join(",")).join(" | "));
 check("G4. the amount reader finds the wallet tip's 100 and 1,000 (so a passing G4 read something)",
   walTips.some(t => amountsIn(t).join(",") === "100,1000"));
+// G5. Every page that loads the guide AND is a registered agent page (the 18 AGENT_SYSTEM_PROMPTS keys, through
+// AGENT_PAGE_URLS), plus agents/sms.html, has its own entry; and no entry, in PAGE_GUIDANCE or PAGE_INSIGHT, is for a
+// page where the guide never displays — one that does not load it, or one the guide's own early return skips. The
+// keys are read from the guide as it stands after any mutation, not from GUIDE_KEYS above.
+const objectPairs = name => {
+  const out = {}; svSlice("\nconst " + name + " = {", "\n};").split("\n").forEach(l => { const m = /^\s*(\w+):\s*"([^"]+)"/.exec(l); if (m) out[m[1]] = m[2]; });
+  return out;
+};
+const PROMPT_KEYS = Object.keys(objectPairs("AGENT_SYSTEM_PROMPTS")), PAGE_URLS = objectPairs("AGENT_PAGE_URLS"), DISPLAY = objectPairs("AGENT_DISPLAY_NAMES");
+check("G5. the registry was read: 18 agent types, each with a page URL and a display name, and no other URL",
+  PROMPT_KEYS.length === 18 && PROMPT_KEYS.every(k => PAGE_URLS[k] && DISPLAY[k]) && Object.keys(PAGE_URLS).length === 18,
+  PROMPT_KEYS.length + " types, " + Object.keys(PAGE_URLS).length + " URLs");
+const GUIDE_TAG = /<script src="\/scripts\/termaximus-guide\.js"><\/script>/;
+const EARLY = (/var _tmxLogin = [^;\n]*?\|\| (\/[^\n]*?\/)\.test\(_tmxPath\);/.exec(FILES[GUIDE]) || ["", ""])[1];
+const EARLY_RE = EARLY ? vm.runInNewContext(EARLY) : null;
+const guideShows = f => !!FILES[f] && GUIDE_TAG.test(FILES[f]) && !!EARLY_RE && !EARLY_RE.test("/" + f.toLowerCase());
+check("G5. the guide's early return was read: it never displays on app.html, and does on every agent page",
+  !!EARLY_RE && EARLY_RE.test("/app.html") && !EARLY_RE.test("/ads-agent.html"), EARLY);
+const NEED = Object.keys(PAGE_URLS).map(k => PAGE_URLS[k]).concat(SMS);
+const KEYS_NOW = (FILES[GUIDE].match(/\n    "([a-z0-9-]+\.html)": \[/g) || []).map(m => /"([^"]+)"/.exec(m)[1]);
+const INSIGHT_KEYS = ((/var PAGE_INSIGHT = \{([\s\S]*?)\n  \};/.exec(FILES[GUIDE]) || ["", ""])[1].match(/\n    "([a-z0-9-]+\.html)":/g) || []).map(m => /"([^"]+)"/.exec(m)[1]);
+check("G5. all 18 agent pages and agents/sms.html load the guide, and it displays on each",
+  NEED.length === 19 && NEED.every(guideShows), NEED.filter(f => !guideShows(f)).join(", "));
+const noEntry = NEED.filter(f => !KEYS_NOW.some(k => fileOfKey(k) === f));
+check("G5. every agent page, and agents/sms.html, has its own guide entry", noEntry.length === 0, noEntry.join(", "));
+const neverShown = KEYS_NOW.concat(INSIGHT_KEYS).filter(k => !guideShows(fileOfKey(k)));
+check("G5. no guide entry exists for a page where the guide never displays", KEYS_NOW.length > 0 && neverShown.length === 0, neverShown.join(", "));
+
+// G6. Every agent card on index.html carries the subtitle that agent's own page carries, so the two cannot drift. A
+// card is matched to its agent by its heading and AGENT_DISPLAY_NAMES (the hub's names).
+const CARDS_IDX = [];
+{
+  const grid = (/<section class="section" id="agents">[\s\S]*?<div class="agent-grid">([\s\S]*?)\n    <\/div>\n  <\/section>/.exec(FILES[INDEX]) || ["", ""])[1];
+  const re = /<div class="bf-card">\s*<h3>([^<]+)<\/h3>\s*<p>([^<]*)<\/p>\s*<\/div>/g; let m;
+  while ((m = re.exec(grid))) CARDS_IDX.push({ name: m[1].replace(/&amp;/g, "&"), sub: m[2] });
+}
+const typeOfName = n => PROMPT_KEYS.filter(k => DISPLAY[k] === n)[0];
+check("G6. index.html's agent grid was read: 18 cards, one per agent type",
+  CARDS_IDX.length === 18 && PROMPT_KEYS.every(k => CARDS_IDX.filter(c => typeOfName(c.name) === k).length === 1), CARDS_IDX.map(c => c.name).join(", "));
+const drift = CARDS_IDX.filter(c => { const k = typeOfName(c.name); return !k || !subtitle(PAGE_URLS[k]) || subtitle(PAGE_URLS[k]) !== c.sub; });
+check("G6. every index.html agent card subtitle equals that agent page's own subtitle", CARDS_IDX.length > 0 && drift.length === 0,
+  drift.map(c => c.name + ': "' + c.sub + '" ≠ "' + (typeOfName(c.name) ? subtitle(PAGE_URLS[typeOfName(c.name)]) : "?") + '"').join(" | "));
 console.log("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (passes + failures) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
 process.exit(failures ? 1 : 0);
