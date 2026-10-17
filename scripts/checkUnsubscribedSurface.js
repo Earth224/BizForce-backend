@@ -156,7 +156,9 @@ const EXPECTED_GATED = [
   // Read the radar as demand evidence
   "post /api/agents/rd/demand-signals",
   // The Store agent's Stock & Margin, measured from the caller's own inventory
-  "post /api/agents/store/stock-margin"
+  "post /api/agents/store/stock-margin",
+  // Claims Scan runs both claim rulebooks over everything you publish
+  "post /api/agents/vertical_marketing/claims-scan"
 ];
 
 const EXPECTED_ADMIN = [

@@ -16396,6 +16396,15 @@ var ORACLE_RECORDS_LIMITS = { runs: 10, proposals: 500, pending: 5, agents: 50, 
    value at cost over the items that have a cost, and how many with a reorder
    point are at or below it. An empty read is "0 items"; a failed read never
    reaches here, because section() turns it into "could not be read just now". */
+/* The latest Claims Scan, for the Agent records block: its date and counts
+   only. No matched text, no context and no source row leaves the stored body. */
+function oracleClaimsScanLines(row) {
+  var m = (row && row.output && row.output.measured) || {};
+  var n = function (v) { return typeof v === "number" ? String(v) : "not recorded"; };
+  return ["- " + oracleRecordDate(row && row.created_at) + ": " + n(m.items_scanned_total) + " item(s) scanned, " +
+    n(m.findings_total) + " finding(s), " + n(m.items_missing_disclaimer) + " item(s) missing the disclaimer"];
+}
+
 function oracleStoreStockLines(rows, limit) {
   var count = rows.length >= limit ? "at least " + rows.length + " (read capped at " + limit + ")" : String(rows.length);
   if (!rows.length) return ["- 0 items entered on the Inventory page"];
@@ -16586,6 +16595,18 @@ async function buildOracleAgentRecords(userId, onFailure) {
       .eq("status", "active")
       .limit(L.inventory));
     return oracleStoreStockLines(rows, L.inventory);
+  });
+
+  await section("Latest Claims Scan (counts only)", async function () {
+    var rows = must(await supabase
+      .from("ai_tasks")
+      .select("created_at, output")
+      .eq("user_id", userId)
+      .eq("task_type", "vertical_marketing/claims-scan")
+      .not("output", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1));
+    return rows.length ? oracleClaimsScanLines(rows[0]) : [];
   });
 
   await section("Latest self-review", async function () {
@@ -30715,6 +30736,300 @@ app.post("/api/agents/vertical_marketing/objections", requireAuth, requireActive
       }));
     } catch (error) {
       console.error("[vertical/objections] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
+
+/* ── Vertical Marketing: Claims Scan ───────────────────────────────────────────
+   POST /api/agents/vertical_marketing/claims-scan runs the two claim rulebooks
+   this server already has over copy the user pastes and, when asked, over every
+   piece of copy they have stored here. No model is called on any path, and no
+   claim pattern is written or copied for it:
+     - "FDA/FTC supplement rules" are COMPLIANCE_PROFILES[profile].banned, the
+       patterns the SEO writer's compliance rail rejects drafts with, each run
+       with the global flag so every occurrence is found, not just the first;
+     - "ad-platform rules" are AD_POLICY_RULES through scanAdPolicy, exactly as
+       POST /api/agents/ads/policy-check runs them (fda_disease_claims, the FDA
+       group, lives in that rulebook and is reported under its own name).
+   The profile's required disclaimer is blanked to spaces of the same length
+   before either scan, so positions stay true and the one sentence where "treat,
+   cure, or prevent any disease" is mandatory never counts as a claim — the
+   same exemption findComplianceViolations makes.
+
+   ONE SPAN, ONE FINDING. When rules from both rulebooks (or two rules from one)
+   match exactly the same text at the same position, it is one finding listing
+   every rulebook and rule that matched it. Spans that merely overlap stay
+   separate, because each is the exact text its rule matched.
+
+   A CLEAN RESULT IS "NO RULE MATCHED", never a verdict. Over-flagging is the
+   deliberate trade, as on the policy check: the scan shows the text and its
+   position, and a person decides. */
+var CLAIMS_SCAN_TEXT_MAX = 6000;            // the cap POST /api/agents/ads/policy-check reads copy with
+var CLAIMS_SCAN_ROWS_PER_TABLE = 200;
+var CLAIMS_SCAN_FINDINGS_LISTED = 300;
+var CLAIMS_SCAN_SUPPLEMENT_RULEBOOK = "FDA/FTC supplement rules";
+var CLAIMS_SCAN_AD_RULEBOOK = "ad-platform rules";
+// Each table's owner column and the fields that hold copy. Read with owner = the caller and nothing else.
+var CLAIMS_SCAN_SOURCES = [
+  { table: "content_library",      owner: "user_id",   fields: ["title", "body"] },
+  { table: "marketplace_listings", owner: "seller_id", fields: ["title", "description", "tags"] },
+  { table: "profile_products",     owner: "user_id",   fields: ["name", "description"] },
+  { table: "social_post_drafts",   owner: "user_id",   fields: ["content"] }
+];
+var CLAIMS_SCAN_NOT_MEASURED = [
+  "Approval by the FDA, the FTC, any ad platform or any payment processor: no authority was asked, and none reviews by this list",
+  "Copy that is not on this platform unless you paste it: your Shopify, WordPress or other store pages are not read",
+  "Images, and labels or packaging photographed as images: only text is scanned",
+  "Whether a flagged phrase is a real problem: the rules over-match on purpose, so a person decides on each one"
+];
+
+function claimsScanContext(text, start, length) {
+  var from = Math.max(0, start - 30);
+  var to = Math.min(text.length, start + length + 30);
+  return (from > 0 ? "…" : "") + text.slice(from, to).replace(/\s+/g, " ").trim() + (to < text.length ? "…" : "");
+}
+
+// Every finding in one piece of copy, under both rulebooks, one per exact span.
+function claimsScanText(profile, text) {
+  var source = String(text == null ? "" : text);
+  var scanned = source.split(COMPLIANCE_DISCLAIMER).join(new Array(COMPLIANCE_DISCLAIMER.length + 1).join(" "));
+  var bySpan = {};
+
+  function add(rulebook, authority, rule, ruleId, position, matched) {
+    var key = position + ":" + matched.length;
+    var finding = bySpan[key];
+    if (!finding) {
+      finding = bySpan[key] = {
+        matched_text: matched,
+        position: position,
+        context: claimsScanContext(scanned, position, matched.length),
+        rulebooks: [],
+        rules: []
+      };
+    }
+    if (finding.rulebooks.indexOf(rulebook) === -1) finding.rulebooks.push(rulebook);
+    if (!finding.rules.some(function (r) { return r.rulebook === rulebook && r.rule === rule; })) {
+      finding.rules.push(ruleId ? { rulebook: rulebook, authority: authority, rule_id: ruleId, rule: rule } : { rulebook: rulebook, authority: authority, rule: rule });
+    }
+  }
+
+  (profile.banned || []).forEach(function (entry) {
+    var global = new RegExp(entry.pattern.source, entry.pattern.flags.indexOf("g") === -1 ? entry.pattern.flags + "g" : entry.pattern.flags);
+    var m;
+    while ((m = global.exec(scanned)) !== null) {
+      if (m[0].length === 0) { global.lastIndex += 1; continue; }
+      add(CLAIMS_SCAN_SUPPLEMENT_RULEBOOK, "FDA/FTC", entry.rule, null, m.index, m[0]);
+    }
+  });
+
+  scanAdPolicy(scanned).forEach(function (group) {
+    // fda_disease_claims is the FDA's test kept in the policy-check rulebook; every other group is ad-platform policy.
+    var authority = group.rule_id === "fda_disease_claims" ? "FDA" : "ad platforms";
+    group.matches.forEach(function (match) {
+      add(CLAIMS_SCAN_AD_RULEBOOK, authority, group.rule, group.rule_id, match.position, match.matched_text);
+    });
+  });
+
+  return Object.keys(bySpan).map(function (k) { return bySpan[k]; })
+    .sort(function (a, b) { return a.position - b.position || b.matched_text.length - a.matched_text.length; });
+}
+
+// The caller's stored copy: at most CLAIMS_SCAN_ROWS_PER_TABLE rows per table, newest first. A failed read throws.
+async function loadClaimsScanItems(userId) {
+  var items = [], scanned = {}, overCap = {}, overCapReason = null;
+  for (var i = 0; i < CLAIMS_SCAN_SOURCES.length; i++) {
+    var src = CLAIMS_SCAN_SOURCES[i];
+    var query = supabase.from(src.table).select("id, " + src.fields.join(", "), { count: "exact" });
+    query = query.eq(src.owner, userId);
+    var read = await query.order("created_at", { ascending: false }).limit(CLAIMS_SCAN_ROWS_PER_TABLE);
+    if (read.error) throw read.error;
+    var rows = read.data || [];
+    scanned[src.table] = rows.length;
+    if (typeof read.count === "number") {
+      overCap[src.table] = Math.max(0, read.count - rows.length);
+    } else {
+      overCap[src.table] = null;
+      overCapReason = "the row count did not come back, so whether more rows exist is unknown";
+    }
+    rows.forEach(function (row) {
+      items.push({
+        source: { table: src.table, row_id: row.id },
+        fields: src.fields.map(function (f) {
+          var v = row[f];
+          return { field: f, text: Array.isArray(v) ? v.join(", ") : (v == null ? "" : String(v)) };
+        })
+      });
+    });
+  }
+  return { items: items, scanned: scanned, overCap: overCap, overCapReason: overCapReason };
+}
+
+function measureClaimsScan(profileName, items, scanned, overCap, overCapReason) {
+  var profile = COMPLIANCE_PROFILES[profileName];
+  var findings = [], perRulebook = {}, perRule = {}, both = 0;
+  var withFindings = 0, missingDisclaimer = [];
+  perRulebook[CLAIMS_SCAN_SUPPLEMENT_RULEBOOK] = 0;
+  perRulebook[CLAIMS_SCAN_AD_RULEBOOK] = 0;
+
+  items.forEach(function (item) {
+    var found = 0;
+    item.fields.forEach(function (f) {
+      claimsScanText(profile, f.text).forEach(function (finding) {
+        found++;
+        finding.source = item.source === "pasted text" ? "pasted text" : Object.assign({}, item.source, { field: f.field });
+        finding.rulebooks.forEach(function (b) { perRulebook[b]++; });
+        if (finding.rulebooks.length > 1) both++;
+        finding.rules.forEach(function (r) {
+          var key = r.rulebook + "||" + r.rule;
+          (perRule[key] = perRule[key] || { rulebook: r.rulebook, rule: r.rule, findings: 0 }).findings++;
+        });
+        findings.push(finding);
+      });
+    });
+    if (found) withFindings++;
+    var whole = item.fields.map(function (f) { return f.text; }).join("\n");
+    if (profile.requiredText && !complianceRequiredTextPresent(profile, whole)) {
+      missingDisclaimer.push(item.source === "pasted text" ? "pasted text" : item.source.table + " " + item.source.row_id);
+    }
+  });
+
+  var measured = {
+    profile: profileName,
+    profile_label: profile.label,
+    items_scanned: scanned,
+    items_scanned_total: items.length,
+    items_with_findings: withFindings,
+    items_clean: items.length - withFindings,
+    findings_total: findings.length,
+    findings_per_rulebook: perRulebook,
+    findings_matched_by_both_rulebooks: both,
+    findings_per_rule: Object.keys(perRule).map(function (k) { return perRule[k]; })
+      .sort(function (a, b) { return b.findings - a.findings; }),
+    items_missing_disclaimer: missingDisclaimer.length,
+    items_missing_disclaimer_named: missingDisclaimer,
+    findings: findings.slice(0, CLAIMS_SCAN_FINDINGS_LISTED)
+  };
+  if (overCap) {
+    measured.items_not_scanned_over_cap = overCap;
+    if (overCapReason) measured.items_not_scanned_over_cap_reason = overCapReason;
+  }
+  if (findings.length > CLAIMS_SCAN_FINDINGS_LISTED) measured.findings_not_listed = findings.length - CLAIMS_SCAN_FINDINGS_LISTED;
+
+  var notes = [];
+  if (!findings.length) {
+    notes.push("No rule matched in " + items.length + " item(s). That is not approval: see the statement below.");
+  } else {
+    notes.push(findings.length + " finding(s) in " + withFindings + " of " + items.length + " item(s): " +
+      perRulebook[CLAIMS_SCAN_SUPPLEMENT_RULEBOOK] + " under the " + CLAIMS_SCAN_SUPPLEMENT_RULEBOOK + ", " +
+      perRulebook[CLAIMS_SCAN_AD_RULEBOOK] + " under the " + CLAIMS_SCAN_AD_RULEBOOK + " (" + both + " matched by both).");
+  }
+  if (missingDisclaimer.length) {
+    notes.push(missingDisclaimer.length + " item(s) do not carry the disclaimer this profile requires, word for word.");
+  }
+  if (overCap) {
+    var capped = Object.keys(overCap).filter(function (t) { return overCap[t] > 0; });
+    if (capped.length) {
+      notes.push("Only the newest " + CLAIMS_SCAN_ROWS_PER_TABLE + " rows per table were scanned; not scanned: " +
+        capped.map(function (t) { return t + " " + overCap[t]; }).join(", ") + ".");
+    }
+  }
+  measured.note = notes.join(" ");
+  return measured;
+}
+
+app.post("/api/agents/vertical_marketing/claims-scan", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var body = req.body || {};
+
+      var profileName = typeof body.profile === "string" && Object.prototype.hasOwnProperty.call(COMPLIANCE_PROFILES, body.profile) ? body.profile : null;
+      if (!profileName) {
+        return res.status(400).json({
+          error: "profile must be one of: " + COMPLIANCE_PROFILE_NAMES.join(", ") + ".",
+          field: "profile",
+          valid_profiles: COMPLIANCE_PROFILE_NAMES
+        });
+      }
+      if (body.scan_stored !== undefined && body.scan_stored !== null && typeof body.scan_stored !== "boolean") {
+        return res.status(400).json({ error: "scan_stored, when given, must be true or false (not a string).", field: "scan_stored" });
+      }
+      if (body.text !== undefined && body.text !== null && typeof body.text !== "string") {
+        return res.status(400).json({ error: "text, when given, must be the copy as a string.", field: "text" });
+      }
+      var text = typeof body.text === "string" ? body.text : "";
+      if (text.length > CLAIMS_SCAN_TEXT_MAX) {
+        return res.status(400).json({
+          error: "text is " + text.length + " characters; at most " + CLAIMS_SCAN_TEXT_MAX + " are scanned at once, and none is cut silently.",
+          field: "text"
+        });
+      }
+      var scanStored = body.scan_stored === true;
+      if (!text.trim() && !scanStored) {
+        return res.status(400).json({ error: "Paste copy into text, or set scan_stored to true: at least one is required.", field: "text" });
+      }
+
+      run = await startToolRun(req, {
+        agentType: "vertical_marketing",
+        taskType: "vertical_marketing/claims-scan",
+        title: "Vertical Marketing · Claims Scan: " + (text.trim() ? text.replace(/\s+/g, " ").trim().slice(0, 100) : "everything stored")
+      });
+
+      var items = [], scanned = {}, overCap = null, overCapReason = null;
+      if (text.trim()) {
+        items.push({ source: "pasted text", fields: [{ field: "text", text: text }] });
+        scanned.pasted_text = 1;
+      }
+      if (scanStored) {
+        var stored = await loadClaimsScanItems(userId);
+        items = items.concat(stored.items);
+        Object.keys(stored.scanned).forEach(function (t) { scanned[t] = stored.scanned[t]; });
+        overCap = stored.overCap;
+        overCapReason = stored.overCapReason;
+      }
+
+      var responseBody = {
+        success: true,
+        measured: measureClaimsScan(profileName, items, scanned, overCap, overCapReason),
+        limitations: {
+          not_measured: CLAIMS_SCAN_NOT_MEASURED,
+          detail: "Both rulebooks are lists of wording that draws enforcement or rejection. They over-match on purpose: " +
+            "a flagged phrase is something to look at, and a person decides. Stored copy is read for your account only, " +
+            "at most " + CLAIMS_SCAN_ROWS_PER_TABLE + " rows per table."
+        },
+        clean_scan_is_not_approval: true,
+        statement: AD_POLICY_NOT_APPROVAL,
+        provenance: toolProvenance(
+          [
+            "Every match of the " + CLAIMS_SCAN_SUPPLEMENT_RULEBOOK + " and the " + CLAIMS_SCAN_AD_RULEBOOK + ", with its exact text, position and source",
+            "One finding per exact span, listing every rulebook and rule that matched it",
+            "Items scanned per source, items with findings and items clean, and findings per rulebook and per rule",
+            "Items without the disclaimer the profile requires, word for word"
+          ],
+          [],
+          "Source: the copy you pasted" + (scanStored ? " and the copy stored on your account" : "") + ". Model called: no. " +
+          "The same copy always gives the same findings.",
+          {
+            model_call_made: false,
+            stored_copy_read: scanStored,
+            off_platform_pages_read: false,
+            images_read: false
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[vertical_marketing/claims-scan] Error:", error && error.message);
       if (run) {
         await run.fail(error);
       }

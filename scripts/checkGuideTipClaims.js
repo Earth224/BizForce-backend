@@ -183,6 +183,18 @@
         accept attribute → image/* is appended to the accept list the script
         sets. Same intent, new place for the list.
 
+   NAMED BEFORE → AFTER (Claims Scan on the Vertical Marketing page, Oct 16
+   2026, assertions changed on purpose):
+     C  "new vertical 1" proved "nothing about the industry is researched" in
+        part by counting exactly 2 vertical_marketing routes → 3, the third
+        being claims-scan, which reads only the caller's own copy and fetches
+        nothing.
+     C  "the four new entries have 4–5 tips each" → ads, executive and sms
+        stay at 4–5; the vertical entry has exactly 6, the sixth being the
+        Claims Scan tip.
+     C  new row "vertical 6" proves the Claims Scan tip, so "every tip of the
+        four new entries is covered by a row above" still holds.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
    whose search text does not match exactly once is an ERROR.
@@ -784,6 +796,7 @@ const ORACLE_POST = svSlice('app.post("/api/oracle",', "\napp.");
 const EXEC_PLAN = svSlice('app.post("/api/agents/executive/plan"', "\napp."), DISPATCH = svSlice('app.post("/api/assignments/dispatch"', "\napp.");
 const ADS_COPY = svSlice('app.post("/api/agents/ads/copy"', "\napp."), ADS_POLICY = svSlice('app.post("/api/agents/ads/policy-check"', "\napp.");
 const VERT_POS = svSlice('app.post("/api/agents/vertical_marketing/positioning"', "\napp."), VERT_OBJ = svSlice('app.post("/api/agents/vertical_marketing/objections"', "\napp.");
+const VERT_CLAIMS = svSlice('app.post("/api/agents/vertical_marketing/claims-scan"', "\n// ── Content Agent tools");
 const ENGINE = svSlice("async function runDripEngine(userId) {", "\nasync function runDripForAllUsers()"), ENROLL = svSlice('app.post("/api/sms/campaigns/:id/enroll"', "\napp.");
 const tablesRead = text => (text.match(/\.from\("(\w+)"\)/g) || []).map(m => /"(\w+)"/.exec(m)[1]).filter((t, i, a) => a.indexOf(t) === i).sort();
 // What any agent task's prompt is built from: the Business Profile, counts, earlier runs and notes, and the request.
@@ -877,7 +890,7 @@ const CN = [
       ["Executive Command Plan", "Agent Coordination", "Executive Briefing", "KPI Review"].every(n => offers(EXEC, n))],
   ["vertical 1", vmTips, "nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
-      (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 2],
+      (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],
   ["vertical 2", vmTips, "Vertical Positioning takes the industry", VERT_FALSE,
     () => /labels: \["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"\]/.test(VERT_POS) &&
       configOf(VERT).tools[0].label === "Vertical Positioning" && configOf(VERT).tools[0].fields.map(f => f.name + (f.required ? "*" : "")).join("|") === "industry*|offering|audience"],
@@ -888,6 +901,11 @@ const CN = [
     () => /treat the confidence level below as the model's own estimate of its recall/.test(SV) && /Have a practitioner read this before/.test(SV)],
   ["vertical 5", vmTips, "Vertical Campaign Plan, for one, runs the creator-partnership campaign instruction", VERT_FALSE,
     () => /\{ value: "campaign_plan",\s+label: "Vertical Campaign Plan" \}/.test(FILES[VERT]) && /partner selection criteria/.test(taskPrompt("campaign_plan")) && /usage rights/.test(taskPrompt("campaign_plan"))],
+  ["vertical 6", vmTips, "Claims Scan runs the supplement claim rules and the ad-policy rules over copy you paste", VERT_FALSE,
+    () => !!VERT_CLAIMS && !/callAnthropicText\(|toolGenerateWithOneRetry\(/.test(VERT_CLAIMS) && /model_call_made: false,/.test(VERT_CLAIMS) &&
+      /statement: AD_POLICY_NOT_APPROVAL,/.test(VERT_CLAIMS) && /function claimsScanText\(profile, text\)/.test(SV) && /scanAdPolicy\(scanned\)/.test(SV) &&
+      /complianceRequiredTextPresent\(profile, whole\)/.test(SV) && offers(VERT, "Claims Scan") &&
+      /"checkboxLabel": "Also scan everything I've stored on BizForce"/.test(FILES[VERT])],
   ["sms 1", smsTips, "This page is not an agent", SMS_FALSE,
     () => !/agents\/sms\.html/.test(svSlice("const AGENT_PAGE_URLS = {", "\n};")) && !/AGENT_PROFILE_CONFIG/.test(FILES[SMS]) &&
       ['id="sms-add-btn" class="sms-add-btn">Add<', 'id="sms-bulk-btn" class="sms-add-btn">Import<', 'id="sms-camp-create-btn" class="sms-add-btn">Create<',
@@ -912,7 +930,7 @@ C.forEach(([id, tips, fragment, old, proof]) => {
   check("C. " + id + ": what it names exists and what it says happens", !!t && proof());
   check("C. " + id + ": no watching or automatic claim", !!t && NO_CLAIM(t), t);
 });
-check("C. the four new entries have 4–5 tips each", [adsTips, exTips, vmTips, smsTips].every(t => t.length >= 4 && t.length <= 5),
+check("C. the four new entries have 4–5 tips each, and the vertical entry exactly 6 with Claims Scan", [adsTips, exTips, smsTips].every(t => t.length >= 4 && t.length <= 5) && vmTips.length === 6,
   [adsTips, exTips, vmTips, smsTips].map(t => t.length).join(","));
 CN.forEach(([id, tips, fragment, never, proof]) => {
   const t = tipWith(tips, fragment);
