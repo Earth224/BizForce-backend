@@ -634,6 +634,10 @@ const COMPLIANCE_PROFILES = {
     // definition. A profile with nothing to require simply omits this field.
     requiredText: COMPLIANCE_DISCLAIMER,
 
+    // The SEO rail also runs the policy-check rulebook's fda_disease_claims
+    // group under this profile, less caution-only sentences: see scanFdaRail.
+    fdaDiseaseClaims: true,
+
     prompt:
       "This product is a dietary supplement or a topical cosmetic. It is NOT a drug, and nothing you write may " +
       "describe it as one.\n\n" +
@@ -647,6 +651,9 @@ const COMPLIANCE_PROFILES = {
       "Do not name such a drug even to say the product is unlike it.\n" +
       "- Name a medical condition as something this product addresses, helps with, is for, or is used for. Do not " +
       "name the condition at all.\n" +
+      "- Name a clinical marker as something this product affects. Blood sugar, blood glucose, blood pressure, " +
+      "cholesterol, LDL, HDL, triglycerides, A1c, thyroid levels and bone density count as conditions here. A caution " +
+      "such as 'If you take blood pressure medication, consult your doctor before use.' is allowed as its own sentence.\n" +
       "- Claim approval, registration, endorsement or evaluation by the FDA or any government agency.\n" +
       "- Guarantee a result, promise a specific outcome, or state that any result is typical.\n" +
       "- Claim the product has no side effects, is completely safe, is risk-free, or is safe for everyone.\n" +
@@ -10048,7 +10055,8 @@ const PROPOSAL_EXECUTORS = {
 
       const complianceProfile = COMPLIANCE_PROFILES[complianceProfileName];
       const complianceText = [title, metaDescription || "", body].join("\n\n");
-      const violations = findComplianceViolations(complianceProfile, complianceText, 5);
+      const violations = findComplianceViolations(complianceProfile, complianceText, 5)
+        .concat(fdaRailViolations(complianceProfile, complianceText));
 
       if (violations.length) {
         throw new Error(
@@ -12565,7 +12573,10 @@ app.post("/api/agents/seo/generate-post", requireAuth, requireActiveSubscription
           body
         ].join("\n\n");
 
-        const violations = findComplianceViolations(complianceProfile, complianceText, 5);
+        // The profile's own patterns, then the FDA group's disease-claim matches
+        // outside a caution-only sentence (scanFdaRail). Either refuses alike.
+        const violations = findComplianceViolations(complianceProfile, complianceText, 5)
+          .concat(fdaRailViolations(complianceProfile, complianceText));
 
         if (violations.length) {
           // One line per rejection, machine-greppable, so a pattern that keeps
@@ -25739,6 +25750,121 @@ function scanAdPolicy(copy) {
   return findings;
 }
 
+/* ── The SEO writer's FDA rail, and the one sentence it lets through ────────────
+   The supplement profile forbids naming a condition; fda_disease_claims, above,
+   is the group that knows a clinical marker is one ("helps with blood sugar").
+   The SEO rail runs that group too, through scanAdPolicy, with no pattern of its
+   own. Its bare markers also fire on the safety line a responsible article
+   carries ("If you take blood pressure medication, consult your doctor before
+   use."), and refusing that would teach the writer to drop the caution.
+
+   SO ONE SHAPE IS EXEMPT, AND ONLY AS A WHOLE SENTENCE. A match is dropped when
+   the sentence it sits in is, from its first character to its full stop, one of
+   the templates below, with at most 60 characters naming what is cautioned
+   about. A caution trigger anywhere in a sentence is NOT enough: measured
+   against real claim wording, that rule let "If you have high blood pressure,
+   this formula is for you." through, and five like it. Anything added to a
+   caution sentence breaks the template, so the sentence is scanned as usual.
+
+   NEVER EXEMPT, whatever the sentence: a permissive verb + marker, "relief
+   from", "drug-free …", "protects against …" and "prevents …". If a never-exempt
+   pattern matches anywhere in the sentence, nothing in it is dropped. The five
+   are picked out of the group by how their source begins; if any is missing,
+   nothing is exempt at all, so a reworded pattern fails closed. */
+var FDA_RAIL_RULE_ID = "fda_disease_claims";
+var CAUTION_ONLY_SENTENCES = [
+  /^(if you (take|are taking|have|have been diagnosed with) [^,.;:!?]{1,60}, )?(consult|talk to|ask|check with) (your|a) (doctor|physician|pharmacist|healthcare (provider|professional))( before (use|using|taking)( this( product)?)?| first)?\.$/i,
+  /^(not (recommended|intended|suitable) for|do not use if|don't use if) [^,.;:!?]{1,60}\.$/i,
+  /^(if you (take|are taking|have|have been diagnosed with) [^,.;:!?]{1,60}, )?seek medical advice( before (use|using|taking)( this( product)?)?| first)?\.$/i
+];
+var FDA_NEVER_EXEMPT_STARTS = ["\\b(help|helps|", "\\brelief from\\b", "\\bdrug[\\s-]?free ", "\\b(protects?|", "\\b(prevents?|"];
+
+// True when the whole sentence, start to full stop, is one of the caution templates.
+function isCautionOnlySentence(sentence) {
+  var s = String(sentence == null ? "" : sentence).replace(/\s+/g, " ").trim();
+  return CAUTION_ONLY_SENTENCES.some(function (t) { return t.test(s); });
+}
+
+/* The sentences of a piece of copy, with offsets into it. A sentence ends at a
+   full stop, ! or ? followed by whitespace or the end of the text, and at every
+   line break. Block markup (p, br, li, headings, div, blockquote, table cells
+   and the like) counts as a line break; inline markup (strong, em, a, span) as
+   a space, so a sentence with a bold word is still one sentence. Anything the
+   splitter does not split on only makes a sentence longer, and a longer
+   sentence never fits a template, so an odd case is refused, never exempt. */
+function splitComplianceSentences(text) {
+  var source = String(text == null ? "" : text);
+  var flat = source.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, function (tag, name) {
+    var block = /^(p|br|li|ul|ol|h[1-6]|div|blockquote|section|article|header|footer|table|tr|td|th|hr|pre|dl|dt|dd)$/i.test(name);
+    return (block ? "\n" : " ") + new Array(tag.length).join(" ");
+  });
+  var sentences = [], start = 0;
+  for (var i = 0; i <= flat.length; i++) {
+    var c = flat.charAt(i), end = -1, next = start;
+    if (i === flat.length || c === "\n" || c === "\r") { end = i; next = i + 1; }
+    else if ((c === "." || c === "!" || c === "?") && (i + 1 === flat.length || /\s/.test(flat.charAt(i + 1)))) { end = i + 1; next = i + 1; }
+    if (end === -1) continue;
+    var said = flat.slice(start, end).replace(/\s+/g, " ").trim();
+    if (said) sentences.push({ start: start, end: end, text: said });
+    start = next;
+  }
+  return sentences;
+}
+
+function complianceSentenceAt(sentences, position) {
+  for (var i = 0; i < sentences.length; i++) {
+    if (position >= sentences[i].start && position < sentences[i].end) return sentences[i];
+  }
+  return null;
+}
+
+// The group's never-exempt patterns, or null (nothing exempt) when any of the five is not found exactly once.
+function fdaNeverExemptPatterns() {
+  var group = AD_POLICY_RULES.filter(function (r) { return r.id === FDA_RAIL_RULE_ID; })[0];
+  if (!group) return null;
+  var picked = FDA_NEVER_EXEMPT_STARTS.map(function (start) {
+    var hits = group.patterns.filter(function (p) { return p.source.indexOf(start) === 0; });
+    return hits.length === 1 ? hits[0] : null;
+  });
+  return picked.every(Boolean) ? picked : null;
+}
+
+/* Every fda_disease_claims match in one piece of copy, split into the ones the
+   rail refuses and the ones in a caution-only sentence. The required disclaimer
+   is blanked to spaces of its own length first, as the rail and Claims Scan do,
+   so positions stay true. */
+function scanFdaRail(text) {
+  var source = String(text == null ? "" : text);
+  var scanned = source.split(COMPLIANCE_DISCLAIMER).join(new Array(COMPLIANCE_DISCLAIMER.length + 1).join(" "));
+  var group = scanAdPolicy(scanned).filter(function (g) { return g.rule_id === FDA_RAIL_RULE_ID; })[0];
+  var out = { refused: [], cautions: [] };
+  if (!group) return out;
+  var never = fdaNeverExemptPatterns();
+  var sentences = splitComplianceSentences(scanned);
+  group.matches.forEach(function (m) {
+    var sentence = complianceSentenceAt(sentences, m.position);
+    var caution = !!never && !!sentence && isCautionOnlySentence(sentence.text) &&
+      !never.some(function (p) { return p.test(sentence.text); });
+    if (caution) out.cautions.push({ matched_text: m.matched_text, position: m.position, sentence: sentence.text });
+    else out.refused.push(m);
+  });
+  return out;
+}
+
+// What the SEO rail adds to a profile's violations: [{ rule, matched }], in the shape findComplianceViolations returns.
+function fdaRailViolations(profile, text) {
+  if (!profile || !profile.fdaDiseaseClaims) return [];
+  var seen = {};
+  return scanFdaRail(text).refused.filter(function (m) {
+    var key = m.matched_text.toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  }).slice(0, 5).map(function (m) {
+    return { rule: FDA_RAIL_RULE_ID, matched: String(m.matched_text).trim().slice(0, 120) };
+  });
+}
+
 /* The sentence that must survive into every policy response. Kept as one
    constant so the wording cannot drift between the two routes that say it. */
 /* Updated when the FDA rule group was added, because the statement has to say
@@ -30792,11 +30918,16 @@ function claimsScanContext(text, start, length) {
   return (from > 0 ? "…" : "") + text.slice(from, to).replace(/\s+/g, " ").trim() + (to < text.length ? "…" : "");
 }
 
-// Every finding in one piece of copy, under both rulebooks, one per exact span.
-function claimsScanText(profile, text) {
+/* Every finding in one piece of copy, under both rulebooks, one per exact span.
+   An fda_disease_claims match in a caution-only sentence, the one shape the SEO
+   writer's rail lets through (scanFdaRail), is not a finding: it goes to
+   `cautions`, when given, with its text, position and sentence. */
+function claimsScanText(profile, text, cautions) {
   var source = String(text == null ? "" : text);
   var scanned = source.split(COMPLIANCE_DISCLAIMER).join(new Array(COMPLIANCE_DISCLAIMER.length + 1).join(" "));
   var bySpan = {};
+  var cautionSpans = {};
+  scanFdaRail(scanned).cautions.forEach(function (c) { cautionSpans[c.position + ":" + c.matched_text.length] = c; });
 
   function add(rulebook, authority, rule, ruleId, position, matched) {
     var key = position + ":" + matched.length;
@@ -30829,6 +30960,11 @@ function claimsScanText(profile, text) {
     // fda_disease_claims is the FDA's test kept in the policy-check rulebook; every other group is ad-platform policy.
     var authority = group.rule_id === "fda_disease_claims" ? "FDA" : "ad platforms";
     group.matches.forEach(function (match) {
+      var caution = group.rule_id === FDA_RAIL_RULE_ID ? cautionSpans[match.position + ":" + match.matched_text.length] : null;
+      if (caution) {
+        if (cautions) cautions.push({ matched_text: caution.matched_text, position: caution.position, sentence: caution.sentence });
+        return;
+      }
       add(CLAIMS_SCAN_AD_RULEBOOK, authority, group.rule, group.rule_id, match.position, match.matched_text);
     });
   });
@@ -30870,14 +31006,15 @@ async function loadClaimsScanItems(userId) {
 function measureClaimsScan(profileName, items, scanned, overCap, overCapReason) {
   var profile = COMPLIANCE_PROFILES[profileName];
   var findings = [], perRulebook = {}, perRule = {}, both = 0;
-  var withFindings = 0, missingDisclaimer = [];
+  var withFindings = 0, missingDisclaimer = [], cautionSentences = [];
   perRulebook[CLAIMS_SCAN_SUPPLEMENT_RULEBOOK] = 0;
   perRulebook[CLAIMS_SCAN_AD_RULEBOOK] = 0;
 
   items.forEach(function (item) {
     var found = 0;
     item.fields.forEach(function (f) {
-      claimsScanText(profile, f.text).forEach(function (finding) {
+      var cautions = [];
+      claimsScanText(profile, f.text, cautions).forEach(function (finding) {
         found++;
         finding.source = item.source === "pasted text" ? "pasted text" : Object.assign({}, item.source, { field: f.field });
         finding.rulebooks.forEach(function (b) { perRulebook[b]++; });
@@ -30887,6 +31024,10 @@ function measureClaimsScan(profileName, items, scanned, overCap, overCapReason) 
           (perRule[key] = perRule[key] || { rulebook: r.rulebook, rule: r.rule, findings: 0 }).findings++;
         });
         findings.push(finding);
+      });
+      cautions.forEach(function (c) {
+        c.source = item.source === "pasted text" ? "pasted text" : Object.assign({}, item.source, { field: f.field });
+        cautionSentences.push(c);
       });
     });
     if (found) withFindings++;
@@ -30910,7 +31051,8 @@ function measureClaimsScan(profileName, items, scanned, overCap, overCapReason) 
       .sort(function (a, b) { return b.findings - a.findings; }),
     items_missing_disclaimer: missingDisclaimer.length,
     items_missing_disclaimer_named: missingDisclaimer,
-    findings: findings.slice(0, CLAIMS_SCAN_FINDINGS_LISTED)
+    findings: findings.slice(0, CLAIMS_SCAN_FINDINGS_LISTED),
+    caution_sentences: cautionSentences.slice(0, CLAIMS_SCAN_FINDINGS_LISTED)
   };
   if (overCap) {
     measured.items_not_scanned_over_cap = overCap;
@@ -30925,6 +31067,11 @@ function measureClaimsScan(profileName, items, scanned, overCap, overCapReason) 
     notes.push(findings.length + " finding(s) in " + withFindings + " of " + items.length + " item(s): " +
       perRulebook[CLAIMS_SCAN_SUPPLEMENT_RULEBOOK] + " under the " + CLAIMS_SCAN_SUPPLEMENT_RULEBOOK + ", " +
       perRulebook[CLAIMS_SCAN_AD_RULEBOOK] + " under the " + CLAIMS_SCAN_AD_RULEBOOK + " (" + both + " matched by both).");
+  }
+  if (cautionSentences.length) {
+    notes.push(cautionSentences.length + " FDA disease-claim match(es) sit in a sentence that is only a caution, such as " +
+      "\"If you take blood pressure medication, consult your doctor before use.\": listed under caution_sentences and not " +
+      "counted as findings, because the SEO writer allows those sentences.");
   }
   if (missingDisclaimer.length) {
     notes.push(missingDisclaimer.length + " item(s) do not carry the disclaimer this profile requires, word for word.");

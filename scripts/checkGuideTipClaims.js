@@ -195,6 +195,12 @@
      C  new row "vertical 6" proves the Claims Scan tip, so "every tip of the
         four new entries is covered by a row above" still holds.
 
+   NAMED BEFORE → AFTER (SEO writer clinical-marker rail, Oct 17 2026,
+   assertion changed on purpose):
+     C  row "vertical 6" pinned claimsScanText(profile, text) →
+        claimsScanText(profile, text, cautions); the third parameter collects
+        caution-only FDA matches. Nothing else in the row changed.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
    whose search text does not match exactly once is an ERROR.
@@ -903,7 +909,7 @@ const CN = [
     () => /\{ value: "campaign_plan",\s+label: "Vertical Campaign Plan" \}/.test(FILES[VERT]) && /partner selection criteria/.test(taskPrompt("campaign_plan")) && /usage rights/.test(taskPrompt("campaign_plan"))],
   ["vertical 6", vmTips, "Claims Scan runs the supplement claim rules and the ad-policy rules over copy you paste", VERT_FALSE,
     () => !!VERT_CLAIMS && !/callAnthropicText\(|toolGenerateWithOneRetry\(/.test(VERT_CLAIMS) && /model_call_made: false,/.test(VERT_CLAIMS) &&
-      /statement: AD_POLICY_NOT_APPROVAL,/.test(VERT_CLAIMS) && /function claimsScanText\(profile, text\)/.test(SV) && /scanAdPolicy\(scanned\)/.test(SV) &&
+      /statement: AD_POLICY_NOT_APPROVAL,/.test(VERT_CLAIMS) && /function claimsScanText\(profile, text, cautions\)/.test(SV) && /scanAdPolicy\(scanned\)/.test(SV) &&
       /complianceRequiredTextPresent\(profile, whole\)/.test(SV) && offers(VERT, "Claims Scan") &&
       /"checkboxLabel": "Also scan everything I've stored on BizForce"/.test(FILES[VERT])],
   ["sms 1", smsTips, "This page is not an agent", SMS_FALSE,

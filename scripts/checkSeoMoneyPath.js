@@ -149,6 +149,25 @@
         take the clause out before comparing an own-page prompt with their
         older commits.
 
+   NAMED BEFORE → AFTER ("The SEO writer refuses clinical-marker claims and
+   keeps caution sentences", Oct 17 2026, an assertion changed on purpose):
+     6  "external, auto compliance" compared the prompt with BASELINE once the
+        no-invented-facts block was out → also with the supplement profile's
+        new clinical-marker line out (MARKER_LINE). That line is the only new
+        text; scripts/checkSeoFdaRail.js holds it to its own terms (section H)
+        and the FDA group the rail now runs (sections C–F).
+    14  "with a profile" held each prompt to d5b077c with only the product-type
+        line added ("exact") → the same, once MARKER_LINE is out of the new
+        prompt; d5b077c predates that line. "placed" is unchanged: the line
+        sits in the compliance section, before the facts block.
+    16  "external, mrearthrose.com with its profile" was byte-identical to
+        PREV16 once section 21's clause was out → also once MARKER_LINE is out.
+    21  "own page, supplement site_context and a profile" ("exact") and
+        "external, mrearthrose.com with its profile" were byte-identical to
+        PREV21 apart from the clause → the same, once MARKER_LINE is out.
+        The rows without a profile carry no marker line, so unMarker leaves
+        them as they were.
+
    MUTATIONS — each must turn the named section red:
      MUTATE=allowlist    any root-relative path is accepted               → 1
      MUTATE=silent       an off-allowlist path is dropped, not refused     → 1
@@ -424,6 +443,11 @@ const FACTS = liftValue(SERVER, "SEO_NO_INVENTED_FACTS");
    Section 14 holds the line to its own terms. */
 const PRODUCT_TYPE = liftValue(SERVER, "SEO_CATEGORY_AS_PRODUCT_TYPE");
 function unFacts(p) { return p == null ? p : p.split(PRODUCT_TYPE).join("").split(FACTS).join(""); }
+/* The supplement profile's clinical-marker line (see NAMED BEFORE → AFTER), taken out where a prompt with a profile is held to an older commit's (sections 6, 14, 16, 21). */
+const MARKER_LINE = "- Name a clinical marker as something this product affects. Blood sugar, blood glucose, blood pressure, cholesterol, LDL, HDL, " +
+  "triglycerides, A1c, thyroid levels and bone density count as conditions here. A caution such as 'If you take blood pressure medication, " +
+  "consult your doctor before use.' is allowed as its own sentence.\n";
+function unMarker(p) { return p == null ? p : p.split(MARKER_LINE).join(""); }
 /* The commit before the product-type line existed, for section 14's "nothing
    else changed". Pinned, not HEAD. */
 const PREV = "d5b077c";
@@ -713,7 +737,7 @@ async function visit(h, body) {
   for (const [label, body, text, opts] of CASES) {
     const a = await generate(SERVER, body, text, opts), b0 = await generate(SERVER0, body, text, opts);
     check("6. generate · " + label + " — status, response and rows identical, and the prompt once the no-invented-facts block is out (" + a.status + ")",
-      unFacts(a.prompt) === b0.prompt && a.status === b0.status && JSON.stringify(a.body) === JSON.stringify(b0.body) && JSON.stringify(a.writes) === JSON.stringify(b0.writes) && a.nextErr === b0.nextErr,
+      unMarker(unFacts(a.prompt)) === b0.prompt && a.status === b0.status && JSON.stringify(a.body) === JSON.stringify(b0.body) && JSON.stringify(a.writes) === JSON.stringify(b0.writes) && a.nextErr === b0.nextErr,
       a.status + " vs " + b0.status + (a.prompt !== b0.prompt ? " (prompt differs)" : ""));
   }
   const internalProp = (await generate(SERVER0, {}, article(["/listing/wool-hat", "/blog/" + HANDLE + "/older-post"]))).writes[0].payload.payload;
@@ -861,7 +885,7 @@ async function visit(h, body) {
     const placed = p.split(PRODUCT_TYPE).length === 2 && at > p.indexOf("MANDATORY CONTENT RULES") && p.indexOf("MANDATORY CONTENT RULES") !== -1 &&
       at === p.indexOf(FACTS) + FACTS.length && at < p.indexOf("Write ONE complete blog post");
     const factsEnd = (b.prompt || "").indexOf(FACTS) + FACTS.length;
-    const exact = b.prompt != null && p === b.prompt.slice(0, factsEnd) + PRODUCT_TYPE + b.prompt.slice(factsEnd);
+    const exact = b.prompt != null && unMarker(p) === b.prompt.slice(0, factsEnd) + PRODUCT_TYPE + b.prompt.slice(factsEnd);
     check("14. with a profile · " + label + " — the line is there once, after the compliance section and the facts block, ahead of the brief, and nothing else changed against " + PREV + " but section 21's clause",
       placed && exact, "placed=" + placed + " exact=" + exact);
   }
@@ -989,7 +1013,7 @@ async function visit(h, body) {
   for (const [label, body, text] of UNCHANGED16) {
     const a = await generate(SERVER, body, text), b = await generate(SERVER_PREV16, body, text);
     check("16. " + label + " — no line, and the prompt is byte-identical to " + PREV16 + " once section 21's clause is out",
-      a.prompt != null && unHosted(a.prompt) === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
+      a.prompt != null && unMarker(unHosted(a.prompt)) === b.prompt && a.prompt.indexOf("CONTENT ADVICE FOR HEALTH-ADJACENT SELLERS") === -1, a.status + " vs " + b.status);
   }
 
   console.log("\n══ 17. two narrowings ══");
@@ -1207,7 +1231,7 @@ async function visit(h, body) {
     const a = await generate(SERVER, body, article([OWN])), b = await generate(SERVER_PREV21, body, article([OWN]));
     const p = a.prompt || "", q = b.prompt || "", cut = q.indexOf(DISCLOSED) + DISCLOSED.length;
     const placed = p.split(HOSTED).length === 2 && p.indexOf(HOSTED) === p.indexOf(DISCLOSED) + DISCLOSED.length && p.indexOf(HOSTED) < p.indexOf("Write ONE complete blog post");
-    const exact = q.split(DISCLOSED).length === 2 && p === q.slice(0, cut) + HOSTED + q.slice(cut);
+    const exact = q.split(DISCLOSED).length === 2 && unMarker(p) === q.slice(0, cut) + HOSTED + q.slice(cut);
     check("21. " + label + " — the clause is there once, right after the disclosure, ahead of the brief, and nothing else changed against " + PREV21,
       a.prompt != null && placed && exact, a.status + " placed=" + placed + " exact=" + exact);
   }
@@ -1219,7 +1243,7 @@ async function visit(h, body) {
   for (const [label, body, text] of OTHER21) {
     const a = await generate(SERVER, body, text), b = await generate(SERVER_PREV21, body, text);
     check("21. " + label + " — no clause, and the prompt is byte-identical to " + PREV21,
-      a.prompt != null && a.prompt === b.prompt && a.prompt.indexOf("owns outright") === -1, a.status + " vs " + b.status);
+      a.prompt != null && unMarker(a.prompt) === b.prompt && a.prompt.indexOf("owns outright") === -1, a.status + " vs " + b.status);
   }
 
   console.log("\n══ cleanup ══");
