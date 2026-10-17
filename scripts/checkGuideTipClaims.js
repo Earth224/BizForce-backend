@@ -151,6 +151,37 @@
         AGENT_PAGE_URLS) and agents/sms.html loads the guide and has its own
         entry, and no entry is for a page where the guide never displays.
     G6. Every index.html agent card subtitle equals its page's subtitle.
+     D. Block C's leftovers. The sms, ads and executive subtitles name only
+        what their pages offer (A's four assertions each), dashboard.html's
+        SMS Drip card says what agents/sms.html says, and the vertical
+        marketing config comment is true of allowedTaskTypes and
+        taskInstructions. The Oracle's uploads are RUN, not read:
+        oracle.html's ORACLE_UPLOAD_TYPES is the one list, and the picker's
+        accept list and the filter on every picked or dropped file are built
+        from it (the attach block runs in a stub DOM: a dropped .doc is never
+        attached and never sent, and the refusal names the file and the
+        accepted types); the server's fileFilter runs through a stub multer,
+        its tables equal that list, it takes .csv as application/vnd.ms-excel
+        and .md with an empty MIME, refuses .doc, .svg and a .csv labelled
+        image/png, and over a grid of names and labels takes nothing outside
+        the nine types and no alias but the ones the rule names for .csv and
+        .md. That rule is POST /api/oracle's alone (oracleChatUpload): the
+        shared oracleUpload the marketplace, BizBook, cover, cover-wrap and
+        editor routes use still decides by MIME type alone.
+
+   NAMED BEFORE → AFTER (block D, assertions changed on purpose):
+     C  "the Oracle's server refuses any type it does not list, and lists 9"
+        read the fileFilter's source (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype])
+        → removed; D runs the filter instead (9 types, 10 extensions, grid).
+     C  "nothing the picker offers is refused by the server" and "everything
+        the server accepts is offered by the picker" read oracle.html's static
+        accept="..." attribute → removed with the attribute; D reads the
+        accept list the page's script sets from ORACLE_UPLOAD_TYPES and checks
+        the picker, the drop filter and the server against each other.
+     M  restore-picker-doc: anchor accept=".pdf,.docx, → a .doc entry is put
+        back into ORACLE_UPLOAD_TYPES. picker-image-wildcard: anchor the
+        accept attribute → image/* is appended to the accept list the script
+        sets. Same intent, new place for the list.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
@@ -256,9 +287,9 @@ const MUTATIONS = {
   // sales tip 118 claims pipeline intelligence from your business data again
   "restore-sales-118": [[GUIDE, "\"This agent writes sales material — funnels, lead generation, outreach scripts, offers, and objection handling — from your Business Profile and what you tell it; its tasks read none of the leads or pipeline on this page.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
   // the Oracle's picker offers .doc again, which the server refuses
-  "restore-picker-doc": [["oracle.html", "accept=\".pdf,.docx,", "accept=\".pdf,.doc,.docx,"]],
+  "restore-picker-doc": [["oracle.html", "      { ext: \".docx\", mime:", "      { ext: \".doc\",  mime: \"application/msword\" },\n      { ext: \".docx\", mime:"]],
   // the picker offers every image type again; the server takes four
-  "picker-image-wildcard": [["oracle.html", ".csv,.png,.jpg,.jpeg,.webp,.gif\"", ".csv,image/*\""]],
+  "picker-image-wildcard": [["oracle.html", "attachFileInput.accept = ORACLE_UPLOAD_EXTS.join(\",\");", "attachFileInput.accept = ORACLE_UPLOAD_EXTS.join(\",\") + \",image/*\";"]],
   // the server starts taking .doc: the picker would no longer offer all it accepts, and 225 would be false
   "server-accepts-doc": [[SERVER, "  \"text/plain\": true,   // .txt\n", "  \"application/msword\": true,\n  \"text/plain\": true,   // .txt\n"]],
   // index.html's sales card gets its old subtitle back (G6)
@@ -274,7 +305,26 @@ const MUTATIONS = {
   // the drip engine leaves dry-run mode: the sms tips would be false
   "drip-engine-sends": [[SERVER, "    var DRY_RUN = true;\n", "    var DRY_RUN = false;\n"]],
   // direct SMS sending opens: sms tip 5 would be false
-  "direct-sms-opens": [[SERVER, "\nconst SMS_DIRECT_SEND_ENABLED = false;", "\nconst SMS_DIRECT_SEND_ENABLED = true;"]]
+  "direct-sms-opens": [[SERVER, "\nconst SMS_DIRECT_SEND_ENABLED = false;", "\nconst SMS_DIRECT_SEND_ENABLED = true;"]],
+  // ── D, block C's leftovers ──
+  // agents/sms.html's subtitle claims to reach customers with automated drip campaigns again
+  "restore-sms-subtitle": [["agents/sms.html", "<p class=\"agent-subtitle\">SMS subscribers and consent, drip campaigns built message by message, enrollment, and a dry-run log of what would go out — no text is sent.</p>",
+    "<p class=\"agent-subtitle\">Reach customers directly with targeted SMS sequences, subscriber management, and automated drip campaigns.</p>"]],
+  // a dropped (or picked) file is attached whatever its type, so a .doc is sent
+  "remove-drop-filter": [["oracle.html", "        if (oracleTakesFile(fileList[i])) attachedFiles.push(fileList[i]);\n        else refused.push(fileList[i].name || \"file\");\n",
+    "        attachedFiles.push(fileList[i]);\n"]],
+  // the server stops taking a .csv that Windows labels as Excel's
+  "server-refuses-excel-csv": [[SERVER, "  \".csv\": [\"application/vnd.ms-excel\", \"text/plain\",", "  \".csv\": [\"text/plain\","]],
+  // the server is widened to take .doc, by extension and by type
+  "server-widens-to-doc": [[SERVER, "  \".docx\": \"application/vnd", "  \".doc\": \"application/msword\",\n  \".docx\": \"application/vnd"],
+    [SERVER, "  \"text/plain\": true,   // .txt\n", "  \"application/msword\": true,\n  \"text/plain\": true,   // .txt\n"]],
+  // POST /api/oracle goes back to the shared MIME-only multer: the browser's label decides again
+  "oracle-route-on-shared-filter": [[SERVER, "requireActiveSubscription, oracleChatUpload.array(\"files\", 8), async", "requireActiveSubscription, oracleUpload.array(\"files\", 8), async"]],
+  // the shared multer takes the extension rule too, narrowing the marketplace, BizBook, cover and editor uploads
+  "shared-filter-by-extension": [[SERVER, "  fileFilter: function (req, file, cb) {\n    if (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype]) {\n", "  fileFilter: function (req, file, cb) {\n    if (oracleUploadType(file)) {\n"]],
+  // the vertical marketing comment says the three types do not exist again
+  "vertical-comment-false-again": [["vertical-marketing-agent.html", "     allowedTaskTypes also lists vertical_positioning, channel_research and\n",
+    "     Three task types this agent genuinely wants do NOT exist server-side:\n     vertical_positioning, channel_research and\n"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -894,21 +944,176 @@ CCOPY.forEach(([id, where, text, old, proof]) => {
   check("C. " + id + ": no watching or automatic claim", NO_CLAIM(text), text);
 });
 
-// The Oracle's file picker offers only what POST /api/oracle accepts, and accepts everything it offers. multer's
-// fileFilter refuses any other MIME type with "Unsupported file type". An accept entry is a MIME type, a wildcard
-// ("image/*") or an extension, read by its standard type; a wildcard counts as refused unless the server lists it.
-const ACCEPT = (/<input type="file" id="attachFileInput" multiple accept="([^"]*)"/.exec(FILES[ORACLE]) || ["", ""])[1].split(",").map(x => x.trim()).filter(Boolean);
-const SERVER_MIME = ((/var ORACLE_UPLOAD_ALLOWED_MIME = \{([\s\S]*?)\};/.exec(SV) || ["", ""])[1].match(/"([^"]+)": true/g) || []).map(m => /"([^"]+)"/.exec(m)[1]);
-const EXT_MIME = { ".pdf": "application/pdf", ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
-const offeredMime = a => a.indexOf("/") !== -1 ? a : (EXT_MIME[a.toLowerCase()] || "unknown:" + a);
-const refusedOffers = ACCEPT.filter(a => SERVER_MIME.indexOf(offeredMime(a)) === -1);
-check("C. the Oracle's server refuses any type it does not list (\"Unsupported file type\"), and lists 9",
-  /if \(ORACLE_UPLOAD_ALLOWED_MIME\[file\.mimetype\]\) \{\s*cb\(null, true\);\s*\} else \{\s*cb\(new Error\("Unsupported file type: " \+ file\.mimetype\)\);/.test(SV) && SERVER_MIME.length === 9, SERVER_MIME.join(","));
-check("C. nothing the Oracle's file picker offers is refused by the server", ACCEPT.length > 0 && refusedOffers.length === 0, refusedOffers.join(","));
-check("C. everything the server accepts is offered by the picker", SERVER_MIME.every(m => ACCEPT.some(a => offeredMime(a) === m)),
-  SERVER_MIME.filter(m => !ACCEPT.some(a => offeredMime(a) === m)).join(","));
 check("C. no text on oracle.html offers .doc", !/\.doc\b/.test(FILES[ORACLE]), (FILES[ORACLE].match(/.{0,40}\.doc\b.{0,20}/) || [""])[0]);
+
+/* ── D. Block C's leftovers: three subtitles, the Oracle's uploads, and a stale comment ── */
+console.log("\n══ D. three subtitles, the Oracle's uploads, and the vertical marketing comment ══");
+// The three subtitles, with A's four assertions each. "old" is tested against the page's visible text.
+const ALLOWED_TYPES = vm.runInNewContext((/\nvar allowedTaskTypes = (\[[^\]]*\]);/.exec(SV) || ["", "[]"])[1]);
+const SMS_SUB = "SMS subscribers and consent, drip campaigns built message by message, enrollment, and a dry-run log of what would go out — no text is sent.";
+const D = [
+  ["agents/sms.html subtitle", SMS, '<p class="agent-subtitle">' + SMS_SUB + "</p>", /Reach customers|targeted SMS sequences|automated drip/i,
+    () => /id="sms-add-btn"/.test(FILES[SMS]) && /id="sms-bulk-btn"/.test(FILES[SMS]) && /<select id="sms-add-consent">/.test(FILES[SMS]) &&
+      /id="sms-camp-create-btn"/.test(FILES[SMS]) && /id="sms-msg-add-btn"/.test(FILES[SMS]) && /id="enroll-all-btn"/.test(FILES[SMS]) && !!ENROLL &&
+      />Run Drip Engine \(Dry Run\)<\/button>/.test(FILES[SMS]) && DRY() && /status:\s+DRY_RUN \? "dry_run" : "sent",/.test(ENGINE) &&
+      /\nconst SMS_DIRECT_SEND_ENABLED = false;/.test(SV)],
+  ["ads-agent.html subtitle", ADS, '<p class="agent-subtitle">Ad campaigns, audience growth, ad copy, and policy checks.</p>', /performance intelligence|paid traffic/i,
+    () => ["Ad Campaign", "Audience Growth", "Ad Copy", "Policy Check"].every(n => offers(ADS, n)) && !!ADS_COPY && !!ADS_POLICY &&
+      ["ad_campaign", "audience_growth"].every(t => ALLOWED_TYPES.indexOf(t) !== -1)],
+  ["executive-agent.html subtitle", EXEC, '<p class="agent-subtitle">Executive plans of assignments for the other agents, plus coordination, briefings, and KPI reviews.</p>',
+    /oversight intelligence|Cross-agent coordination, reporting/i,
+    () => ["Executive Plan", "Agent Coordination", "Executive Briefing", "KPI Review"].every(n => offers(EXEC, n)) && !!EXEC_PLAN &&
+      ["executive_plan", "agent_coordination", "executive_briefing", "kpi_review"].every(t => ALLOWED_TYPES.indexOf(t) !== -1)]
+];
+D.forEach(([id, file, text, old, proof]) => {
+  const visible = (FILES[file].match(/>[^<>]*</g) || []).join(" ");
+  check("D. " + id + ": the new wording is there", FILES[file].indexOf(text) !== -1, text);
+  check("D. " + id + ": the old untrue wording is gone from the page", !old.test(visible), (visible.match(old) || [""])[0]);
+  check("D. " + id + ": what it names is offered by the page and its routes", proof());
+  check("D. " + id + ": no watching or automatic claim", NO_CLAIM(text), text);
+});
+// agents/sms.html has no index.html card (G6 covers ads and executive); its card is on dashboard.html.
+const SMS_CARD = (/<div class="bf-feature-card card bf-card" data-card="sms-drip"[^>]*>[\s\S]*?<h3>SMS Drip<\/h3>\s*<p>([^<]*)<\/p>/.exec(FILES["dashboard.html"]) || ["", ""])[1];
+check("D. dashboard.html's SMS Drip card says what agents/sms.html's subtitle says", !!SMS_CARD && SMS_CARD === subtitle(SMS), SMS_CARD);
+check("D. no page anywhere still carries the three old subtitles",
+  HTML_PAGES.filter(f => !/^oracle\.backup/.test(f) && /Reach customers directly with targeted SMS|advertising performance intelligence|executive oversight intelligence/.test(FILES[f])).length === 0,
+  HTML_PAGES.filter(f => /Reach customers directly with targeted SMS|advertising performance intelligence|executive oversight intelligence/.test(FILES[f])).join(", "));
+
+// vertical-marketing-agent.html's config comment: true of allowedTaskTypes and taskInstructions.
+const VERT_COMMENT = (/\n  \/\* Every value below[\s\S]*?\*\//.exec(FILES[VERT]) || [""])[0];
+const VERT_CFG = configOf(VERT);
+check("D. the vertical marketing comment says the three types are listed but have no instruction of their own",
+  /allowedTaskTypes also lists vertical_positioning, channel_research and\s+objection_handling, but none of the three has an instruction of its own in\s+taskInstructions/.test(VERT_COMMENT), VERT_COMMENT.slice(0, 200));
+check("D. the vertical marketing comment no longer says they do not exist, or points at a stale line number",
+  !!VERT_COMMENT && !/do NOT exist|no vertical or industry|server\.js:\d/.test(VERT_COMMENT), (VERT_COMMENT.match(/do NOT exist|server\.js:\d+/) || [""])[0]);
+check("D. what the comment says is so: all three listed, none in taskInstructions, every dropdown value listed, the two named stand-ins have instructions, both tools have routes",
+  ["vertical_positioning", "channel_research", "objection_handling"].every(t => ALLOWED_TYPES.indexOf(t) !== -1 && taskPrompt(t) === "") &&
+    VERT_CFG.taskTypes.length > 0 && VERT_CFG.taskTypes.every(t => ALLOWED_TYPES.indexOf(t.value) !== -1) &&
+    ["brand_narrative", "content_plan"].every(t => VERT_CFG.taskTypes.some(x => x.value === t) && taskPrompt(t) !== "") &&
+    /var taskInstruction = taskInstructions\[taskType\] \|\| taskInstructions\["general"\];/.test(SV) &&
+    ["positioning", "objections"].every(id => (VERT_CFG.tools || []).some(t => t.id === id)) && !!VERT_POS && !!VERT_OBJ);
+
+// The Oracle's uploads. oracle.html's ORACLE_UPLOAD_TYPES is the ONE list: the picker's accept list and the filter on
+// every picked or dropped file are built from it, and the server's tables must equal it. Both sides are RUN: the page's
+// attach block in a stub DOM, the server's fileFilter through a stub multer.
+const ORACLE_TYPES = vm.runInNewContext((/\n    var ORACLE_UPLOAD_TYPES = (\[[\s\S]*?\n    \]);/.exec(FILES[ORACLE]) || ["", "[]"])[1]);
+const TYPE_EXTS = ORACLE_TYPES.map(t => t.ext), TYPE_MIMES = ORACLE_TYPES.map(t => t.mime).filter((m, i, a) => a.indexOf(m) === i);
+check("D. oracle.html's ORACLE_UPLOAD_TYPES was read: 10 extensions, 9 types", TYPE_EXTS.length === 10 && TYPE_MIMES.length === 9, TYPE_EXTS.join(","));
+const ATTACH_SRC = (() => {
+  const t = FILES[ORACLE], i = t.indexOf("    /* ── File attach"), j = t.indexOf("    function setLoading(", i);
+  return i === -1 || j === -1 ? "" : t.slice(i, j);
+})();
+// One run of the attach block: picked or dropped files go in, then a message is sent; returns what the request carried.
+function oracleAttachRun(how, names) {
+  const el = id => ({ id, textContent: "", innerHTML: "", value: "", accept: "", disabled: false, files: null, listeners: {},
+    classList: { add() {}, remove() {}, toggle() {} }, addEventListener(t, f) { this.listeners[t] = f; },
+    appendChild() {}, setAttribute() {}, click() {}, remove() {}, scrollTop: 0, scrollHeight: 0 });
+  const els = {}, sent = [];
+  const ctx = {
+    document: { getElementById: id => els[id] || (els[id] = el(id)), createElement: () => el("") },
+    messageArea: el("messageArea"), chatInput: el("chatInput"), sendBtn: el("sendBtn"), token: "t", API_URL: "https://api.test",
+    chatHistory: [], appendMsg() {}, setLoading() {}, String, Math,
+    FormData: function () { this.parts = []; this.append = (k, v) => { this.parts.push([k, v]); }; },
+    fetch: (url, opts) => { sent.push({ url, parts: opts.body.parts }); return new Promise(() => {}); }
+  };
+  try { vm.runInNewContext(ATTACH_SRC, ctx); } catch (e) { return { error: e.message }; }
+  const files = names.map(n => ({ name: n }));
+  try {
+    if (how === "drop") ctx.messageArea.listeners.drop({ preventDefault() {}, dataTransfer: { files } });
+    else { els.attachFileInput.files = files; els.attachFileInput.listeners.change(); }
+    ctx.chatInput.value = "read these";
+    ctx.sendMessage();
+  } catch (e) { return { error: e.message }; }
+  const req = sent[0] || { url: "", parts: [] };
+  return { accept: els.attachFileInput.accept, notice: els.attachNotice ? els.attachNotice.textContent : "",
+    url: req.url, sentFiles: req.parts.filter(p => p[0] === "files").map(p => p[1].name) };
+}
+const OTHER_EXTS = [".doc", ".svg", ".exe", ".html", ".zip", ".csv.exe", ""];
+const dropTakes = ext => { const r = oracleAttachRun("drop", ["file" + ext]); return !r.error && r.sentFiles.length === 1; };
+const DROP1 = oracleAttachRun("drop", ["notes.doc", "Brief.PDF"]);
+check("D. oracle.html's file input carries no accept list of its own; the page sets it from ORACLE_UPLOAD_TYPES",
+  /<input type="file" id="attachFileInput" multiple style="display:none;" \/>/.test(FILES[ORACLE]) && !/id="attachFileInput"[^>]*accept=/.test(FILES[ORACLE]) &&
+  !DROP1.error && DROP1.accept === TYPE_EXTS.join(","), DROP1.error || DROP1.accept);
+check("D. a dropped .doc is not sent; the .pdf dropped with it is", !DROP1.error && DROP1.url === "https://api.test/api/oracle" &&
+  JSON.stringify(DROP1.sentFiles) === '["Brief.PDF"]', DROP1.error || JSON.stringify(DROP1));
+check("D. the refusal is a plain message naming the file and every accepted type",
+  !DROP1.error && /^Not attached: notes\.doc\. The Oracle accepts /.test(DROP1.notice) && TYPE_EXTS.every(x => DROP1.notice.indexOf(x) !== -1), DROP1.notice);
+const PICK1 = oracleAttachRun("pick", ["notes.doc", "data.csv"]);
+check("D. the picker's files pass the same filter: a picked .doc is not sent, a .csv is",
+  !PICK1.error && JSON.stringify(PICK1.sentFiles) === '["data.csv"]' && /notes\.doc/.test(PICK1.notice), PICK1.error || JSON.stringify(PICK1));
+const dropWrong = TYPE_EXTS.filter(x => !dropTakes(x) || !dropTakes(x.toUpperCase())).concat(OTHER_EXTS.filter(dropTakes));
+check("D. the drop filter takes exactly the list's extensions (any case) and nothing else", dropWrong.length === 0, dropWrong.join(","));
+
+// The server: its tables and its fileFilter, run through a stub multer.
+const UPLOAD_SRC = svSlice("var ORACLE_UPLOAD_ALLOWED_MIME = {", "\n// Extracts plain text");
+const SVU = { multer: Object.assign(o => o, { memoryStorage: () => ({}) }) };
+let svuError = "";
+try { vm.runInNewContext(UPLOAD_SRC, SVU); } catch (e) { svuError = e.message; }
+// POST /api/oracle has its own multer, oracleChatUpload; the shared oracleUpload (marketplace, BizBook, covers, editor) keeps its MIME-only filter.
+const FILTER = SVU.oracleChatUpload && SVU.oracleChatUpload.fileFilter;
+const SHARED_FILTER = SVU.oracleUpload && SVU.oracleUpload.fileFilter;
+function serverTakes(name, mime) {
+  if (!FILTER) return { ok: false, err: "no filter" };
+  const file = { originalname: name, mimetype: mime }; let out = { ok: false, err: "no callback" };
+  FILTER({}, file, (err, ok) => { out = err ? { ok: false, err: err.message } : { ok: !!ok, as: file.mimetype }; });
+  return out;
+}
+const SV_ALLOWED = Object.keys(SVU.ORACLE_UPLOAD_ALLOWED_MIME || {}).filter(k => SVU.ORACLE_UPLOAD_ALLOWED_MIME[k] === true);
+const SV_EXT = SVU.ORACLE_UPLOAD_EXT_MIME || {};
+check("D. the server's upload rule was read and runs: 9 allowed types, 10 extensions, each extension's type among the nine",
+  !svuError && !!FILTER && SV_ALLOWED.length === 9 && Object.keys(SV_EXT).length === 10 && Object.keys(SV_EXT).every(x => SV_ALLOWED.indexOf(SV_EXT[x]) !== -1),
+  svuError || SV_ALLOWED.join(","));
+check("D. the server's extension table equals ORACLE_UPLOAD_TYPES pair for pair, and its allowed types are exactly the list's types",
+  JSON.stringify(Object.keys(SV_EXT).sort().map(x => x + "=" + SV_EXT[x])) === JSON.stringify(ORACLE_TYPES.map(t => t.ext + "=" + t.mime).sort()) &&
+  JSON.stringify(SV_ALLOWED.slice().sort()) === JSON.stringify(TYPE_MIMES.slice().sort()));
+const refusedByServer = ORACLE_TYPES.filter(t => { const r = serverTakes("file" + t.ext, t.mime); return !r.ok || r.as !== t.mime; });
+check("D. the server takes every file the picker and the drop filter take, labelled with its own type", refusedByServer.length === 0,
+  refusedByServer.map(t => t.ext).join(","));
+// The standard label of each other extension, for the three-way agreement.
+const OTHER_LABEL = { ".doc": "application/msword", ".svg": "image/svg+xml", ".exe": "application/x-msdownload", ".html": "text/html",
+  ".zip": "application/zip", ".csv.exe": "application/x-msdownload", "": "application/octet-stream" };
+const disagree = ORACLE_TYPES.map(t => [t.ext, t.mime]).concat(OTHER_EXTS.map(x => [x, OTHER_LABEL[x]]))
+  .filter(([x, m]) => dropTakes(x) !== serverTakes("file" + x, m).ok || dropTakes(x) !== (TYPE_EXTS.indexOf(x) !== -1));
+check("D. the picker, the drop filter and the server agree on every extension, listed or not", disagree.length === 0, disagree.map(d => d[0] || "(none)").join(","));
+const XLS = serverTakes("Q3 numbers.csv", "application/vnd.ms-excel"), MD0 = serverTakes("notes.md", "");
+check("D. the server accepts .csv sent as application/vnd.ms-excel, and parses it as text/csv", XLS.ok && XLS.as === "text/csv", JSON.stringify(XLS));
+check("D. the server accepts .md with an empty MIME, and parses it as text/markdown", MD0.ok && MD0.as === "text/markdown", JSON.stringify(MD0));
+const ALIASES_OK = [["a.csv", "text/plain"], ["a.csv", "application/octet-stream"], ["a.csv", ""], ["a.md", "text/x-markdown"], ["a.md", "text/plain"],
+  ["a.md", "application/octet-stream"], ["A.CSV", "application/vnd.ms-excel"]].filter(([n, m]) => { const r = serverTakes(n, m); return !r.ok || r.as !== (/\.csv$/i.test(n) ? "text/csv" : "text/markdown"); });
+check("D. every other alias the rule names for .csv and .md is accepted", ALIASES_OK.length === 0, ALIASES_OK.map(a => a.join(" as ")).join(", "));
+const STILL_REFUSED = [["a.doc", "application/msword"], ["a.doc", "text/plain"], ["a.doc", "application/octet-stream"], ["a.svg", "image/svg+xml"],
+  ["a.svg", "image/png"], ["a.csv", "image/png"], ["a.md", "image/png"], ["a.txt", "application/octet-stream"], ["a.pdf", ""]]
+  .filter(([n, m]) => { const r = serverTakes(n, m); return r.ok || !/^Unsupported file type: /.test(r.err || ""); });
+check("D. the server still refuses .doc, .svg and a .csv labelled image/png (and gives no other extension an alias)", STILL_REFUSED.length === 0,
+  STILL_REFUSED.map(a => a.join(" as ")).join(", "));
+// Never wider than the nine: over a grid of names and labels, an accepted file is always labelled one of the nine, a name
+// with an extension outside the table is never accepted, and only .csv and .md take a label that is not their own.
+const GRID_MIMES = SV_ALLOWED.concat(["application/msword", "image/svg+xml", "application/vnd.ms-excel", "text/x-markdown", "application/octet-stream", "",
+  "text/html", "application/zip", "application/x-msdownload", "constructor", "toString"]);
+const GRID_NAMES = TYPE_EXTS.concat(OTHER_EXTS).map(x => "file" + x).concat(["constructor", ".constructor", "a.constructor", "a.__proto__"]);
+// The aliases as the rule is written (the report quotes it); the server may take no other label for a listed extension.
+const RULE_ALIASES = { ".csv": ["application/vnd.ms-excel", "text/plain", "application/octet-stream", ""], ".md": ["text/x-markdown", "text/plain", "application/octet-stream", ""] };
+const wide = [];
+GRID_NAMES.forEach(n => GRID_MIMES.forEach(m => {
+  const r = serverTakes(n, m); if (!r.ok) return;
+  const dot = n.lastIndexOf("."), x = dot === -1 ? "" : n.slice(dot).toLowerCase();
+  const fine = SV_ALLOWED.indexOf(r.as) !== -1 && (x === "" ? m === r.as : (SV_EXT[x] === r.as && (m === r.as || (RULE_ALIASES[x] || []).indexOf(m) !== -1)));
+  if (!fine) wide.push(n + " as " + JSON.stringify(m) + " -> " + r.as);
+}));
+check("D. over " + GRID_NAMES.length * GRID_MIMES.length + " name/label pairs the server accepts nothing outside the nine types and no alias but .csv's and .md's",
+  GRID_NAMES.length * GRID_MIMES.length > 300 && wide.length === 0, wide.join(" | "));
+check("D. POST /api/oracle uploads through oracleChatUpload, and no other route does",
+  (SV.match(/oracleChatUpload\.(array|single|fields)\(/g) || []).length === 1 &&
+  /app\.post\("\/api\/oracle", requireAuth, requireActiveSubscription, oracleChatUpload\.array\("files", 8\), async function/.test(SV));
+const sharedTakes = (name, mime) => { let ok = null; if (SHARED_FILTER) SHARED_FILTER({}, { originalname: name, mimetype: mime }, (err, y) => { ok = !err && !!y; }); return ok; };
+const sharedWrong = SV_ALLOWED.map(m => ["x.bin", m, true]).concat([["cover.jfif", "image/jpeg", true], ["a.png", "image/jpeg", true], ["blob", "image/png", true],
+  ["a.csv", "application/vnd.ms-excel", false], ["a.md", "", false], ["a.doc", "application/msword", false], ["a.svg", "image/svg+xml", false]])
+  .filter(([n, m, want]) => sharedTakes(n, m) !== want);
+check("D. the shared oracleUpload the other five routes use still decides by MIME type alone, exactly as before", !!SHARED_FILTER && sharedWrong.length === 0,
+  sharedWrong.map(a => a[0] + " as " + a[1]).join(", "));
+check("D. size, storage and the parser are unchanged: 20MB, 8 files, memory storage, parsed by type, in both multers",
+  (UPLOAD_SRC.match(/storage: multer\.memoryStorage\(\),\s*limits: \{\s*fileSize: 20 \* 1024 \* 1024, \/\/ 20MB per file\s*files: 8\s*\},/g) || []).length === 2 &&
+  /if \(file\.mimetype === "text\/plain" \|\| file\.mimetype === "text\/markdown" \|\| file\.mimetype === "text\/csv"\) \{/.test(SV));
 
 /* ── G. guide-wide guards, over EVERY tip ───────────────────────────────── */
 console.log("\n══ G. guide-wide guards ══");

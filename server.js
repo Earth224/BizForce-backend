@@ -16318,6 +16318,54 @@ var ORACLE_UPLOAD_ALLOWED_MIME = {
   "image/gif": true
 };
 
+/* Each extension taken, and the one type it is. The same ten pairs as
+   oracle.html's ORACLE_UPLOAD_TYPES, which builds the picker's accept list and
+   the drop filter (scripts/checkGuideTipClaims.js holds the two equal). */
+var ORACLE_UPLOAD_EXT_MIME = {
+  ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif"
+};
+
+/* The other labels a browser gives a valid .csv or .md: Windows labels a .csv
+   by the program that opens it (Excel: application/vnd.ms-excel), and .md
+   often has no registered type at all, so it arrives as text/plain,
+   application/octet-stream or nothing. No other extension has an alias. */
+var ORACLE_UPLOAD_MIME_ALIASES = {
+  ".csv": ["application/vnd.ms-excel", "text/plain", "application/octet-stream", ""],
+  ".md": ["text/x-markdown", "text/plain", "application/octet-stream", ""]
+};
+
+/* The acceptance rule, deciding by the file's extension AND its MIME type:
+   - a name ending in one of the ten extensions above is accepted only when its
+     MIME type is that extension's type or, for .csv and .md, one of their
+     aliases; it is then labelled with that extension's type, so it is parsed
+     as what it is (a .csv sent as application/vnd.ms-excel is read as text/csv);
+   - a name ending in any other extension is refused, whatever its label;
+   - a name with no extension is decided by its MIME type alone, as before.
+   Returns the type to label the file with, always one of the nine in
+   ORACLE_UPLOAD_ALLOWED_MIME, or null to refuse it. */
+function oracleUploadType(file) {
+  var name = String(file.originalname || "").toLowerCase();
+  var mime = String(file.mimetype || "");
+  var dot = name.lastIndexOf(".");
+  if (dot === -1) return ORACLE_UPLOAD_ALLOWED_MIME[mime] === true ? mime : null;
+  var ext = name.slice(dot);
+  var type = Object.prototype.hasOwnProperty.call(ORACLE_UPLOAD_EXT_MIME, ext) ? ORACLE_UPLOAD_EXT_MIME[ext] : null;
+  if (!type) return null;
+  if (mime === type || (ORACLE_UPLOAD_MIME_ALIASES[ext] || []).indexOf(mime) !== -1) return type;
+  return null;
+}
+
+/* Shared by the marketplace, BizBook, cover, cover-wrap and editor uploads,
+   which decide by MIME type alone, as they always have. */
 var oracleUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -16326,6 +16374,25 @@ var oracleUpload = multer({
   },
   fileFilter: function (req, file, cb) {
     if (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype]) {
+      cb(null, true);
+    } else {
+      cb(new Error("Unsupported file type: " + file.mimetype));
+    }
+  }
+});
+
+/* POST /api/oracle only: the same size and storage, deciding by
+   oracleUploadType, so the browser's label cannot refuse a valid file. */
+var oracleChatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024, // 20MB per file
+    files: 8
+  },
+  fileFilter: function (req, file, cb) {
+    var type = oracleUploadType(file);
+    if (type) {
+      file.mimetype = type;
       cb(null, true);
     } else {
       cb(new Error("Unsupported file type: " + file.mimetype));
@@ -16364,14 +16431,14 @@ function buildOracleImageBlock(file) {
   };
 }
 
-/* requireActiveSubscription BEFORE oracleUpload, which is not the usual
+/* requireActiveSubscription BEFORE oracleChatUpload, which is not the usual
    ordering and is deliberate: multer buffers the upload into memory as it runs,
    so gating after it would let an unentitled caller push eight 20MB files into
    the process before being told no. The gate is also what stops this route
    spending the platform's Anthropic key for an account that is not paying —
    there is no free tier. An admin (users.role = 'admin') passes it via
    getUserPlan's exemption, so the owner keeps his own Oracle. */
-app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.array("files", 8), async function (req, res, next) {
+app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatUpload.array("files", 8), async function (req, res, next) {
   try {
     var message = safeText(req.body.message, 4000);
     if (!message) {

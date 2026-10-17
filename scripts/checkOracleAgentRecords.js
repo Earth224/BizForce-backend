@@ -122,7 +122,7 @@ function closure(root) {
   }
   return [...have.values()].sort((x, y) => SRC.indexOf(x) - SRC.indexOf(y)).join("\n\n") + "\n\n" + root;
 }
-const SIG = 'app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleUpload.array("files", 8), async function (req, res, next) {';
+const SIG = 'app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatUpload.array("files", 8), async function (req, res, next) {';
 const routeStart = SRC.indexOf(SIG);
 if (routeStart < 0) { console.log("    FAIL  POST /api/oracle not found"); process.exit(1); }
 const ROUTE = SRC.slice(routeStart, s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("async function (req, res, next)", routeStart))) + 2);
