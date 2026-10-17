@@ -88,7 +88,8 @@ const ADDED = [
   ["post", "/api/email/sequences/:id/status"],    // Let the owner see and stop every sequence
   ["post", "/api/agents/social/propose-post"],    // Publish approved posts to Bluesky
   ["post", "/api/agents/rd/demand-signals"],      // Read the radar as demand evidence
-  ["get", "/api/command-center"]                  // Record every dispatch, and read the command center from facts (total 302 -> 303)
+  ["get", "/api/command-center"],                 // Record every dispatch, and read the command center from facts (total 302 -> 303)
+  ["post", "/api/agents/store/stock-margin"]      // The Store agent measures stock value, margin and reorder needs from your own inventory (total 303 -> 304)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

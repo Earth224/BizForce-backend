@@ -154,7 +154,9 @@ const EXPECTED_GATED = [
   // Publish approved posts to Bluesky
   "post /api/agents/social/propose-post",
   // Read the radar as demand evidence
-  "post /api/agents/rd/demand-signals"
+  "post /api/agents/rd/demand-signals",
+  // The Store agent's Stock & Margin, measured from the caller's own inventory
+  "post /api/agents/store/stock-margin"
 ];
 
 const EXPECTED_ADMIN = [

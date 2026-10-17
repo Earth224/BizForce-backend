@@ -16,7 +16,9 @@
         one exists. Every other instruction is exactly as it was at 9d5c968,
         but for four that differ only by their opening, swapped by name in
         RENAMED_SINCE_PRE (the Etsy agent renamed to the Storefront Agent, Oct
-        13 2026); any further change to one of those four fails.
+        13 2026); pricing_strategy also carries one named change,
+        CHANGED_SINCE_PRE (it no longer claims to hold the user's costs, Oct
+        16 2026); any further change to one of those four fails.
      2. The Analytics roster line no longer promises traffic and conversion
         review and says what it does not read.
      3. social/post: the caveat and the provenance line say "grapheme" on a
@@ -103,6 +105,17 @@ const RENAMED_SINCE_PRE = {
   etsy_store_plan:  ["Build an Etsy shop strategy:", "Build an online shop strategy:"]
 };
 
+/* NAMED BEFORE → AFTER, applied after the opening swap above. Nothing else in
+   these may change.
+   pricing_strategy (Stock & Margin block, Oct 16 2026): it said "This platform
+   holds the user's own costs and prices", but the task never reads
+   inventory_items; it now says it works from the request and the Business
+   Profile, and marks a missing figure [FIGURE NEEDED]. */
+const CHANGED_SINCE_PRE = {
+  pricing_strategy: ["This platform holds the user's own costs and prices but sees no competitor's, so present",
+                     "Work only from the costs and prices given in the request and the Business Profile: this task reads no inventory, catalogue or sales records and sees no competitor's prices, so mark a cost or price the user has not given as [FIGURE NEEDED], and present"]
+};
+
 const REMOVED = ["load speed", "low competition", "market size estimate", "expected lift estimates", "projected revenue"];
 const TWELVE = {
   store_audit:      { notRead: "This platform does not fetch or open the store and measures nothing about it", tool: "seo/audit" },
@@ -139,8 +152,10 @@ const TWELVE = {
     const pre = PRE_T[k];
     const once = typeof pre === "string" && pre.split(before).length === 2;
     const i = once ? pre.indexOf(before) : -1;
-    const expected = once ? pre.slice(0, i) + after + pre.slice(i + before.length) : null;
-    check(k + ": at " + PRE + " it holds the old opening exactly once, and now differs only by the Storefront swap",
+    let expected = once ? pre.slice(0, i) + after + pre.slice(i + before.length) : null;
+    const named = CHANGED_SINCE_PRE[k];
+    if (named && expected !== null) expected = expected.split(named[0]).length === 2 ? expected.replace(named[0], () => named[1]) : null;
+    check(k + ": at " + PRE + " it holds the old opening exactly once, and now differs only by the Storefront swap" + (named ? " and its named change" : ""),
       once && NOW_T[k] === expected, once ? String(NOW_T[k]).slice(0, 160) : "old opening found " + (typeof pre === "string" ? pre.split(before).length - 1 : "no instruction") + " times");
   }
   const added = Object.keys(NOW_T).filter(k => !Object.prototype.hasOwnProperty.call(PRE_T, k)).sort();

@@ -11064,6 +11064,295 @@ app.post("/api/agents/store/generate-proposals", requireAuth, requireActiveSubsc
   }
 });
 
+/* ── Store Agent: Stock & Margin ───────────────────────────────────────────────
+   POST /api/agents/store/stock-margin measures the caller's OWN inventory: the
+   items and movements entered on the Inventory page (inventory.html), read
+   with user_id = the caller and nothing else. Every figure is arithmetic in
+   this function. There is no model call on any path, so there is no reply to
+   parse and no 502: a failed read throws and is a 500, never a 0.
+
+   A MISSING FIGURE IS NEVER 0. An item without a unit cost is left out of the
+   value at cost and counted as missing one; a null in the response always has
+   a sibling "<key>_reason" saying why. A real 0 (no out movements in the
+   window, nothing on the shelf) is reported as 0.
+
+   DAYS OF COVER needs STORE_STOCK_MIN_OUT_MOVEMENTS 'out' movements in the
+   window: one or two sales are not a rate. The daily rate is the window's
+   units out divided by its length in days, so an item added part-way through
+   the window reads slower than it sells.
+
+   COUNT DISCREPANCIES come from 'adjust' rows. record_inventory_movement (092)
+   stores the absolute difference between the count and the system figure in
+   quantity, not its sign, so a discrepancy is reported as units corrected,
+   never as a shortage or a surplus. */
+var STORE_STOCK_DEFAULT_WINDOW_DAYS = 30;
+var STORE_STOCK_MIN_OUT_MOVEMENTS = 3;
+var STORE_STOCK_ITEM_LIMIT = 5000;
+var STORE_STOCK_MOVEMENT_LIMIT = 50000;
+var STORE_STOCK_ID_CHUNK = 200;
+var STORE_STOCK_PAGE = "the Inventory page (Dashboard → Inventory)";
+var STORE_STOCK_NOT_MEASURED = [
+  "Sales revenue: nothing on this platform records a sale, so an 'out' movement is units that left the shelf, not money received",
+  "Supplier lead times: no delivery dates are recorded, so days of cover is not a reorder date",
+  "Demand forecasting: the out rate is the window's average, not a prediction of the next one",
+  "Anything you did not enter on the Inventory page: stock held elsewhere, other channels' sales, fees, shipping and tax"
+];
+
+// window_days: absent → the default; anything else must already be a whole number in range. "30" and true are refused, not coerced.
+function storeStockWindowDays(value) {
+  if (value === undefined || value === null) return STORE_STOCK_DEFAULT_WINDOW_DAYS;
+  return typeof value === "number" && Number.isInteger(value) && value >= 7 && value <= 365 ? value : null;
+}
+
+// A stored money or count figure, or null when there is none. Never 0 for a blank.
+function storeStockFigure(value) {
+  if (value === null || value === undefined || value === "") return null;
+  var n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function storeStockCents(amount) {
+  return Math.round(amount * 100);
+}
+
+/* The measurement itself, given the caller's items and the movements on them.
+   Pure: no read, no clock but the windowDays it is told. */
+function measureStockAndMargin(items, movements, windowDays) {
+  var active = items.filter(function (it) { return it.status !== "archived"; });
+  var archived = items.length - active.length;
+  var byItem = {};
+  movements.forEach(function (m) { (byItem[m.item_id] = byItem[m.item_id] || []).push(m); });
+
+  var missingCost = 0, missingPrice = 0, missingReorder = 0;
+  var costCents = 0, costItems = 0, priceCents = 0, priceItems = 0, negativeOnHand = 0;
+  var low = [], discrepancies = [], outMovements = 0, unitsOut = 0, withCover = 0;
+
+  var detail = active.map(function (it) {
+    var onHand = storeStockFigure(it.quantity_on_hand);
+    var cost = storeStockFigure(it.unit_cost);
+    var price = storeStockFigure(it.unit_price);
+    var reorder = storeStockFigure(it.reorder_point);
+    var row = { name: it.name };
+    if (it.sku) row.sku = it.sku;
+    row.unit = it.unit || "unit"; row.on_hand = onHand; row.unit_cost = cost; row.unit_price = price;
+
+    if (cost === null) { missingCost++; row.unit_cost_reason = "no unit cost entered"; }
+    if (price === null) { missingPrice++; row.unit_price_reason = "no unit price entered"; }
+    if (reorder === null) missingReorder++;
+
+    if (onHand !== null && onHand < 0) negativeOnHand++;
+    if (onHand !== null && onHand >= 0) {
+      if (cost !== null) { costCents += storeStockCents(cost) * onHand; costItems++; }
+      if (price !== null) { priceCents += storeStockCents(price) * onHand; priceItems++; }
+    }
+
+    if (cost !== null && price !== null) {
+      row.unit_margin = (storeStockCents(price) - storeStockCents(cost)) / 100;
+      if (price > 0) row.margin_percent = Math.round(((price - cost) / price) * 1000) / 10;
+      else { row.margin_percent = null; row.margin_percent_reason = "the unit price is 0, so a margin percentage has nothing to divide by"; }
+    } else {
+      row.unit_margin = null;
+      row.unit_margin_reason = cost === null && price === null ? "no unit cost or unit price entered" : cost === null ? "no unit cost entered" : "no unit price entered";
+      row.margin_percent = null;
+      row.margin_percent_reason = row.unit_margin_reason;
+    }
+
+    row.reorder_point = reorder;
+    if (reorder === null) {
+      row.reorder_point_reason = "no reorder point entered";
+      row.at_or_below_reorder_point = null;
+      row.at_or_below_reorder_point_reason = "no reorder point entered";
+    } else {
+      row.at_or_below_reorder_point = onHand !== null && onHand <= reorder;
+      if (row.at_or_below_reorder_point) low.push(it.name);
+    }
+
+    var mine = byItem[it.id] || [];
+    var outs = mine.filter(function (m) { return m.direction === "out"; });
+    var out = outs.reduce(function (sum, m) { return sum + (storeStockFigure(m.quantity) || 0); }, 0);
+    outMovements += outs.length;
+    unitsOut += out;
+    row.out_movements_in_window = outs.length;
+    row.units_out_in_window = out;
+
+    if (outs.length < STORE_STOCK_MIN_OUT_MOVEMENTS) {
+      var why = outs.length + " 'out' movement(s) in the last " + windowDays + " days; " + STORE_STOCK_MIN_OUT_MOVEMENTS + " are needed for a rate";
+      row.daily_out_rate = null; row.daily_out_rate_reason = why;
+      row.days_of_cover = null; row.days_of_cover_reason = why;
+    } else {
+      var rate = out / windowDays;
+      row.daily_out_rate = Math.round(rate * 100) / 100;
+      if (onHand === null || onHand < 0) {
+        row.days_of_cover = null;
+        row.days_of_cover_reason = "the quantity on hand is below zero, so there is nothing to cover with";
+      } else {
+        row.days_of_cover = Math.round((onHand / rate) * 10) / 10;
+        withCover++;
+      }
+    }
+
+    var counts = mine.filter(function (m) { return m.direction === "adjust" && m.counted_quantity !== null && m.counted_quantity !== undefined; });
+    if (counts.length) {
+      var disagreed = counts.filter(function (m) { return (storeStockFigure(m.quantity) || 0) > 0; });
+      if (disagreed.length) {
+        discrepancies.push({
+          name: it.name,
+          counts_in_window: counts.length,
+          counts_that_disagreed: disagreed.length,
+          units_corrected: disagreed.reduce(function (sum, m) { return sum + storeStockFigure(m.quantity); }, 0)
+        });
+      }
+    }
+    return row;
+  });
+
+  var measured = {
+    window_days: windowDays,
+    items: active.length,
+    archived_items_not_measured: archived,
+    items_missing_unit_cost: missingCost,
+    items_missing_unit_price: missingPrice,
+    items_missing_reorder_point: missingReorder,
+    items_with_negative_on_hand: negativeOnHand,
+    stock_value_at_cost: costItems ? costCents / 100 : null,
+    stock_value_at_cost_items: costItems,
+    stock_value_at_price: priceItems ? priceCents / 100 : null,
+    stock_value_at_price_items: priceItems,
+    items_at_or_below_reorder_point: low.length,
+    items_at_or_below_reorder_point_named: low,
+    items_with_a_reorder_point: active.length - missingReorder,
+    out_movements_in_window: outMovements,
+    units_out_in_window: unitsOut,
+    items_with_days_of_cover: withCover,
+    count_discrepancies: discrepancies,
+    stock: detail
+  };
+  if (!costItems) measured.stock_value_at_cost_reason = "no item with a quantity at or above zero has a unit cost entered";
+  if (!priceItems) measured.stock_value_at_price_reason = "no item with a quantity at or above zero has a unit price entered";
+
+  var notes = [];
+  notes.push(active.length + " item(s) measured over the last " + windowDays + " days.");
+  if (missingCost || missingPrice) {
+    notes.push("Left out of the stock value, not counted as 0: " + missingCost + " item(s) with no unit cost, " + missingPrice + " with no unit price.");
+  }
+  if (negativeOnHand) notes.push(negativeOnHand + " item(s) show less than zero on hand and are left out of both values.");
+  notes.push(low.length ? "At or below the reorder point: " + low.join(", ") + "." : "No item with a reorder point is at or below it.");
+  if (missingReorder) notes.push(missingReorder + " item(s) have no reorder point, so they are not checked against one.");
+  if (archived) notes.push(archived + " archived item(s) were not measured.");
+  measured.note = notes.join(" ");
+  return measured;
+}
+
+/* The caller's items, then the movements on those items in the window. Both
+   reads throw on error: a failed read is never an empty inventory. */
+async function loadStockAndMargin(userId, windowStart) {
+  var itemsRead = await supabase
+    .from("inventory_items")
+    .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true })
+    .limit(STORE_STOCK_ITEM_LIMIT);
+  if (itemsRead.error) throw itemsRead.error;
+  var items = itemsRead.data || [];
+
+  var ids = items.filter(function (it) { return it.status !== "archived"; }).map(function (it) { return it.id; });
+  var movements = [];
+  for (var i = 0; i < ids.length; i += STORE_STOCK_ID_CHUNK) {
+    var read = await supabase
+      .from("inventory_movements")
+      .select("item_id, direction, quantity, counted_quantity, occurred_at")
+      .in("item_id", ids.slice(i, i + STORE_STOCK_ID_CHUNK))
+      .gte("occurred_at", windowStart)
+      .limit(STORE_STOCK_MOVEMENT_LIMIT);
+    if (read.error) throw read.error;
+    movements = movements.concat(read.data || []);
+  }
+  return { items: items, movements: movements, itemsCapped: items.length >= STORE_STOCK_ITEM_LIMIT };
+}
+
+app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var body = req.body || {};
+      var windowDays = storeStockWindowDays(body.window_days);
+      if (windowDays === null) {
+        return res.status(400).json({
+          error: "window_days, when given, must be a whole number from 7 to 365, sent as a number. Leave it out for " + STORE_STOCK_DEFAULT_WINDOW_DAYS + ".",
+          field: "window_days"
+        });
+      }
+
+      run = await startToolRun(req, {
+        agentType: "store",
+        taskType: "store/stock-margin",
+        title: "Store · Stock & Margin: " + windowDays + " days"
+      });
+
+      var windowStart = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+      var loaded = await loadStockAndMargin(userId, windowStart);
+
+      var measured;
+      if (!loaded.items.length) {
+        measured = {
+          window_days: windowDays,
+          items: 0,
+          note: "You have no inventory items yet, so there is nothing to measure. Add your items, with their unit cost, " +
+            "unit price and reorder point, on " + STORE_STOCK_PAGE + ", and record stock going out there; this tool reads only what you enter."
+        };
+      } else {
+        measured = measureStockAndMargin(loaded.items, loaded.movements, windowDays);
+        if (loaded.itemsCapped) {
+          measured.items_read_capped_at = STORE_STOCK_ITEM_LIMIT;
+          measured.note += " Only your first " + STORE_STOCK_ITEM_LIMIT + " items were read.";
+        }
+      }
+
+      var responseBody = {
+        success: true,
+        measured: measured,
+        limitations: {
+          not_measured: STORE_STOCK_NOT_MEASURED,
+          detail: "Every figure is computed from the items and movements you entered on " + STORE_STOCK_PAGE +
+            ", for your account only. A cost, price or reorder point you did not enter is left out and counted, never taken as 0."
+        },
+        provenance: toolProvenance(
+          [
+            "Items, and how many have no unit cost, no unit price or no reorder point",
+            "Stock value at cost and at price: quantity on hand × the unit figure, over the items that have one",
+            "Unit margin and margin % for each item with both a cost and a price",
+            "Items at or below their reorder point, by name",
+            "Units out in the window, the daily out rate and days of cover (at least " + STORE_STOCK_MIN_OUT_MOVEMENTS + " 'out' movements)",
+            "Count corrections from your stock counts"
+          ],
+          [],
+          "Source: your own inventory entries. Model called: no. The same entries always give the same figures; " +
+          "nothing here is a forecast, and no sales, supplier or channel data exists on this platform to read.",
+          {
+            model_call_made: false,
+            own_inventory_read: true,
+            sales_data_read: false,
+            other_accounts_read: false
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[store/stock-margin] Error:", error && error.message);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
+
 // The SEO writer used to answer in JSON, which meant embedding a whole HTML
 // article inside a JSON string value. Every quote in every href had to be
 // escaped and every newline in the markup had to be encoded, and one missed
@@ -14613,10 +14902,12 @@ var taskInstructions = {
      which still names the 140-character title and the 13 tags, so nothing is
      lost to the Etsy agent by making this one channel-neutral. */
   keyword_research: "Produce keyword research from the user's offer, audience and wording: 20 keyword candidates written the way a buyer would search, grouped by intent, long-tail variations, seasonal angles worth testing, and where each one belongs (titles, tags, headings or body copy, whichever the user's channel uses). This platform reads no search engine or marketplace data, so it knows no search volume, competition, difficulty or ranking for any keyword: present every keyword as a candidate to check in a keyword tool, never as measured. What the lead radar has actually captured for its own keywords is in the R&D agent's Demand Signals tool (rd/demand-signals), owner account only.",
-  /* The only one of the four where half the figures are real: inventory_items
-     carries unit_cost and unit_price, and profile_products carries price. The
-     competitor half is what has no source. */
-  pricing_strategy: "Build a pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan. This platform holds the user's own costs and prices but sees no competitor's, so present any competitive price range as recalled from training and undated rather than as the current market.",
+  /* Works from the figures in the request and the Business Profile only. The
+     task reads no inventory_items, profile_products or sales rows, so it may not
+     claim to hold the user's costs: the measured costs and margins are the Store
+     agent's Stock & Margin tool (store/stock-margin). The competitor half has no
+     source at all. */
+  pricing_strategy: "Build a pricing strategy: cost breakdown, competitive price range, value-based pricing rationale, bundle opportunities, sale/coupon strategy, and price testing plan. Work only from the costs and prices given in the request and the Business Profile: this task reads no inventory, catalogue or sales records and sees no competitor's prices, so mark a cost or price the user has not given as [FIGURE NEEDED], and present any competitive price range as recalled from training and undated rather than as the current market.",
   /* Offered by BOTH the Etsy agent and the SEO agent, and taskInstructions is
      keyed on task type alone, so one wording has to serve both. It said
      "Etsy competitors ... competing shops ... listing strategies ... review
@@ -16099,7 +16390,27 @@ var ORACLE_RECORDS_HEADER =
   "Anything not listed here is unknown to you — not zero, and not none.";
 var ORACLE_RECORDS_TRUNCATED =
   "[Cut at " + ORACLE_RECORDS_CAP.toLocaleString("en-US") + " characters: records past this point were left out and are unknown to you.]";
-var ORACLE_RECORDS_LIMITS = { runs: 10, proposals: 500, pending: 5, agents: 50, sequences: 10, enrollments: 5000, content: 3, slugs: 1000 };
+var ORACLE_RECORDS_LIMITS = { runs: 10, proposals: 500, pending: 5, agents: 50, sequences: 10, enrollments: 5000, content: 3, slugs: 1000, inventory: 5000 };
+
+/* Store stock, for the Agent records block: the caller's active items, their
+   value at cost over the items that have a cost, and how many with a reorder
+   point are at or below it. An empty read is "0 items"; a failed read never
+   reaches here, because section() turns it into "could not be read just now". */
+function oracleStoreStockLines(rows, limit) {
+  var count = rows.length >= limit ? "at least " + rows.length + " (read capped at " + limit + ")" : String(rows.length);
+  if (!rows.length) return ["- 0 items entered on the Inventory page"];
+  var costed = rows.filter(function (r) { return storeStockFigure(r.unit_cost) !== null && storeStockFigure(r.quantity_on_hand) >= 0; });
+  var cents = costed.reduce(function (sum, r) { return sum + storeStockCents(storeStockFigure(r.unit_cost)) * storeStockFigure(r.quantity_on_hand); }, 0);
+  var withPoint = rows.filter(function (r) { return storeStockFigure(r.reorder_point) !== null; });
+  var low = withPoint.filter(function (r) { return storeStockFigure(r.quantity_on_hand) <= storeStockFigure(r.reorder_point); });
+  return [
+    "- " + count + " active item(s)",
+    "- stock value at cost: " + (costed.length
+      ? (cents / 100).toFixed(2) + " (in the currency the items were entered in), over the " + costed.length + " item(s) with a unit cost; " + (rows.length - costed.length) + " left out"
+      : "not measured — no item has a unit cost and a quantity at or above zero"),
+    "- at or below their reorder point: " + low.length + " of the " + withPoint.length + " item(s) that have one"
+  ];
+}
 
 function oracleRecordDate(value) {
   var s = String(value || "");
@@ -16265,6 +16576,16 @@ async function buildOracleAgentRecords(userId, onFailure) {
     var spend = await modelSpendThisMonth(userId);
     if (spend.error) throw new Error(spend.error);
     return ["- $" + spend.usd.toFixed(2) + " across " + spend.rows + " call(s) since " + spend.month.since];
+  });
+
+  await section("Store stock (active items on the Inventory page)", async function () {
+    var rows = must(await supabase
+      .from("inventory_items")
+      .select("quantity_on_hand, unit_cost, reorder_point")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .limit(L.inventory));
+    return oracleStoreStockLines(rows, L.inventory);
   });
 
   await section("Latest self-review", async function () {
