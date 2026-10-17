@@ -19,6 +19,16 @@
         13 2026); pricing_strategy also carries one named change,
         CHANGED_SINCE_PRE (it no longer claims to hold the user's costs, Oct
         16 2026); any further change to one of those four fails.
+     1b. Five more (Oct 17 2026), the FIVE below: deal_pipeline, competitive_intel,
+        media_outreach, workflow_plan, automation_plan. Each: an instruction
+        of its own, none of its old promises ("estimated value", competitors'
+        "pricing … recent moves" asked for outright, "publications and
+        journalists", "estimated time per step", "estimated time savings"),
+        its own "not read" statement and what it does instead (a figure the
+        user supplies or [FIGURE NEEDED] / [NOT SUPPLIED], no named journalist
+        or outlet). They leave the byte-identical comparison only through
+        NAMED BEFORE → AFTER pairs in CHANGED_FIVE, applied to 9d5c968's text;
+        any change beyond those pairs fails.
      2. The Analytics roster line no longer promises traffic and conversion
         review and says what it does not read.
      3. social/post: the caveat and the provenance line say "grapheme" on a
@@ -60,7 +70,15 @@ const MUTATIONS = {
   "character-for-bluesky": [[SERVER, "\"that move with the client and the layout. The \" + (spec.unit === \"graphemes\" ? \"grapheme\" : \"character\") + \" maximum is the enforced one.\"",
     "\"that move with the client and the layout. The character maximum is the enforced one.\""]],
   // a renamed instruction changes beyond its swapped opening
-  "renamed-further-change": [[SERVER, "and a 30-day improvement plan.", "and a 60-day improvement plan."]]
+  "renamed-further-change": [[SERVER, "and a 30-day improvement plan.", "and a 60-day improvement plan."]],
+  // deal_pipeline promises an estimated value again
+  "restore-estimated-value": [[SERVER, "deal value as the user states it ([FIGURE NEEDED] where the user has not given one)", "estimated value"]],
+  // media_outreach asks for named journalists again
+  "restore-named-journalists": [[SERVER, "the kinds of publication and outlet worth pitching (by beat) and how to find the right journalist or editor at each",
+    "target publications and journalists (by beat)"]],
+  // automation_plan promises estimated time savings again
+  "restore-time-savings": [[SERVER, "the time each would save worked out from the hours the user reports ([FIGURE NEEDED] where the user has not given them)",
+    "estimated time savings"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -132,6 +150,42 @@ const TWELVE = {
   efficiency_audit: { notRead: "This platform reads no operations, systems or time data", tool: null }
 };
 
+/* NAMED BEFORE → AFTER (Oct 17 2026, "Five task instructions stop promising
+   figures nothing measures"): each pair is [text at 9d5c968, text now], and
+   each "before" occurs exactly once in that instruction at 9d5c968. Nothing
+   else in these five may change. */
+const CHANGED_FIVE = {
+  deal_pipeline: [
+    ["estimated value, and first outreach step.", "deal value as the user states it ([FIGURE NEEDED] where the user has not given one), and first outreach step."],
+    ["every estimated value is a guess with no source behind it", "no deal value is estimated here"]],
+  competitive_intel: [
+    ["their positioning, pricing, strengths, weaknesses, recent moves, and strategic gaps the business can exploit. Any figure not supplied in the business profile — a price, a market share,",
+     "their positioning, strengths, weaknesses, their pricing and recent moves only as the request or the Business Profile gives them ([NOT SUPPLIED] where neither does), and strategic gaps the business can exploit. This platform reads no competitor's prices, website or announcements, so state no competitor's price or recent move that the request or the Business Profile does not give. Any other figure not supplied in the business profile — a market share,"]],
+  media_outreach: [
+    ["target publications and journalists (by beat), personalized pitch angles for each,",
+     "the kinds of publication and outlet worth pitching (by beat) and how to find the right journalist or editor at each, a pitch angle for each kind,"],
+    ["tracking method.", "tracking method. This platform holds no media list or journalist directory and cannot search for one, so name no journalist, editor or publication: describe each target by its kind and beat, and say how the user finds and checks the person to pitch."]],
+  workflow_plan: [
+    ["estimated time per step,", "the time each step takes as the user reports it ([FIGURE NEEDED] where the user has not given it),"],
+    ["KPIs to track efficiency.", "KPIs to track efficiency. This platform reads no operations, systems or time data from the business, so estimate no step's time: use only times the user supplies."]],
+  automation_plan: [
+    ["estimated time savings,", "the time each would save worked out from the hours the user reports ([FIGURE NEEDED] where the user has not given them),"],
+    ["integration steps.", "integration steps. This platform reads no operations, systems or time data from the business, so estimate no time saving: any saving must come from the user's own figures, with the arithmetic shown."]]
+};
+const FIVE = {
+  deal_pipeline:     { removed: ["estimated value"], notRead: "This platform holds no directory of other businesses",
+                       does: ["deal value as the user states it", "[FIGURE NEEDED]", "no deal value is estimated here"] },
+  competitive_intel: { removed: ["positioning, pricing", "recent moves, and", "a price, a market share"], notRead: "This platform reads no competitor's prices, website or announcements",
+                       does: ["only as the request or the Business Profile gives them", "[NOT SUPPLIED]"] },
+  media_outreach:    { removed: ["publications and journalists", "personalized pitch angles"], notRead: "This platform holds no media list or journalist directory",
+                       does: ["name no journalist, editor or publication", "how to find the right journalist or editor"] },
+  workflow_plan:     { removed: ["estimated time"], notRead: "This platform reads no operations, systems or time data",
+                       does: ["as the user reports it", "[FIGURE NEEDED]", "use only times the user supplies"] },
+  automation_plan:   { removed: ["estimated time"], notRead: "This platform reads no operations, systems or time data",
+                       does: ["from the hours the user reports", "[FIGURE NEEDED]", "with the arithmetic shown"] }
+};
+const FIVE_REMOVED = ["estimated value", "estimated time", "publications and journalists", "positioning, pricing", "recent moves, and"];
+
 (async function main() {
   /* ── 1. the twelve ────────────────────────────────────────────────────── */
   console.log("\n══ 1. the twelve instructions ══");
@@ -145,7 +199,28 @@ const TWELVE = {
   }
   const everyText = Object.values(NOW_T).join(" ").toLowerCase();
   check("no instruction anywhere carries a removed phrase", REMOVED.every(p => everyText.indexOf(p) === -1), REMOVED.filter(p => everyText.indexOf(p) !== -1).join(", "));
-  const others = Object.keys(PRE_T).filter(k => !Object.prototype.hasOwnProperty.call(TWELVE, k) && !Object.prototype.hasOwnProperty.call(RENAMED_SINCE_PRE, k));
+  console.log("\n══ 1b. the five instructions ══");
+  for (const [type, want] of Object.entries(FIVE)) {
+    const text = String(NOW_T[type]);
+    check(type + ": has an instruction of its own", typeof NOW_T[type] === "string" && text.length > 100, typeof NOW_T[type]);
+    const found = want.removed.filter(p => text.toLowerCase().indexOf(p.toLowerCase()) !== -1);
+    check(type + ": none of its old promises", found.length === 0, found.join(", "));
+    check(type + ": says what is not read", text.indexOf(want.notRead) !== -1, text.slice(0, 160));
+    const missing = want.does.filter(p => text.indexOf(p) === -1);
+    check(type + ": says what it does instead (" + want.does.join(" · ") + ")", missing.length === 0, missing.join(", "));
+    const pre = PRE_T[type];
+    let expected = typeof pre === "string" ? pre : null;
+    const bad = [];
+    for (const [before, after] of CHANGED_FIVE[type]) {
+      if (expected === null || expected.split(before).length !== 2) { bad.push(before.slice(0, 40)); expected = null; continue; }
+      expected = expected.replace(before, () => after);
+    }
+    check(type + ": at " + PRE + " each named \"before\" occurs once, and now it differs only by its named changes", expected !== null && NOW_T[type] === expected,
+      bad.length ? "not found once: " + bad.join(" | ") : text.slice(0, 200));
+  }
+  check("no instruction anywhere carries one of the five's old promises", FIVE_REMOVED.every(p => everyText.indexOf(p) === -1), FIVE_REMOVED.filter(p => everyText.indexOf(p) !== -1).join(", "));
+  const others = Object.keys(PRE_T).filter(k => !Object.prototype.hasOwnProperty.call(TWELVE, k) && !Object.prototype.hasOwnProperty.call(RENAMED_SINCE_PRE, k) &&
+    !Object.prototype.hasOwnProperty.call(FIVE, k));
   const changed = others.filter(k => NOW_T[k] !== PRE_T[k]);
   check("every other instruction is exactly as it was at " + PRE + " (" + others.length + ")", changed.length === 0, changed.join(", "));
   for (const [k, [before, after]] of Object.entries(RENAMED_SINCE_PRE)) {
