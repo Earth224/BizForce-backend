@@ -25997,7 +25997,8 @@ app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription,
       var findings = scanAdPolicy(copy);
       var totalMatches = findings.reduce(function (sum, f) { return sum + f.match_count; }, 0);
 
-      var rewrites = "";
+      // The model is called only for rewrites of copy that matched a rule; the scan itself never calls one.
+      var rewrites = "", modelCallMade = false;
       if (findings.length && wantRewrites) {
         var businessProfile = await loadProfileForTool(userId);
 
@@ -26036,6 +26037,7 @@ app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription,
           "\n\nTASK INSTRUCTIONS:\n" + instruction +
           buildLanguageInstruction(languageTag, true);
 
+        modelCallMade = true;
         var generation = await callAnthropicText(prompt, 2000, req.user.id, undefined, {
           user_id: req.user.id,
           agent_type: "ads",
@@ -26078,6 +26080,7 @@ app.post("/api/agents/ads/policy-check", requireAuth, requireActiveSubscription,
           "The scan itself is deterministic — the same copy always produces the same findings, and " +
           "no model judged it. What the scan cannot do is approve anything. " + AD_POLICY_NOT_APPROVAL,
           {
+            model_call_made: modelCallMade,
             ad_platform_contacted: false,
             policy_approval_obtained: false,
             scan_is_deterministic: true,

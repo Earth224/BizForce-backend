@@ -35,6 +35,12 @@
         shared renderer will fail R: move BEFORE forward when that happens,
         or name it as [before, after] in RENDERER_CHANGES_SINCE_BEFORE, which
         is applied to BEFORE's source (the Storefront null rendering is).
+     S. No recollection notice on a tool that never called a model: content/audit
+        and store/stock-margin results (their flags read from their routes in
+        server.js, stock-margin measured by the real measureStockAndMargin) and an
+        ads/policy-check with no rewrites show none; a model tool still does, with
+        the notice byte-identical to BEFORE's. A per-item boolean renders Yes / No,
+        and a null still renders "—" with its reason, never No.
      And "No flags raised" appears only for the real empty arrays.
 
    MUTATE=<name> edits agent-profile.js IN MEMORY (the file on disk is never
@@ -85,6 +91,11 @@ const MUTATIONS = {
   // one character in the shared generic renderer
   "touch-generic": [["'<div class=\"ap-zone-label\">Written by the model</div>' + parts.join(\"\") + '</div>';",
     "'<div class=\"ap-zone-label\">Written by the model.</div>' + parts.join(\"\") + '</div>';"]],
+  // the recollection notice shows whether or not a model was called
+  "notice-regardless-of-model": [["    if (prov.model_call_made === false || !inferred.length) return \"\";\n", ""]],
+  // a null per-item value renders as No
+  "null-as-no": [["      if (v === null || v === undefined) {\n        return \"<strong>\" + esc(humanise(k)) + \":</strong> \" + renderNullFor(k);\n      }\n",
+    "      if (v === null || v === undefined) v = false;\n"]],
   // the named null rendering changes beyond what RENDERER_CHANGES_SINCE_BEFORE names
   "renderer-unnamed-change": [['      : "—";\n  }', '      : "-";\n  }']]
 };
@@ -136,7 +147,27 @@ const RENDERER_CHANGES_SINCE_BEFORE = [
    '        return "<strong>" + esc(humanise(k)) + ":</strong> " + renderNullFor(k);\n      }\n' +
    '      if (isPlainObject(v) || Array.isArray(v)) {'],
   ["        '<div class=\"ap-m-val' + cls + '\">' + renderScalarish(value) + '</div></div>');",
-   "        '<div class=\"ap-m-val' + cls + '\">' + (value === null ? renderNullFor(key) : renderScalarish(value)) + '</div></div>');"]
+   "        '<div class=\"ap-m-val' + cls + '\">' + (value === null ? renderNullFor(key) : renderScalarish(value)) + '</div></div>');"],
+  /* NAMED (frontend "No banner about a model on tools that never call one", Oct
+     16 2026). BEFORE → AFTER: (1) the "Nothing was looked up" notice is drawn
+     only when provenance.inferred_by_model is non-empty and model_call_made is
+     not false; (2) a per-item boolean inside an object reads Yes / No instead
+     of the literal true / false. Section S proves both against real results. */
+  ['  function renderNothingRead(prov) {\n    if (!isPlainObject(prov)) return "";\n',
+   '  function renderNothingRead(prov) {\n    if (!isPlainObject(prov)) return "";\n\n' +
+   '    /* ONLY WHEN A MODEL WROTE PART OF THIS RESPONSE. The notice says what follows\n' +
+   '       is the model\'s recollection, which is false of a tool that never called one\n' +
+   '       (content/audit, store/stock-margin, a policy check with no rewrites). Read\n' +
+   '       from provenance.inferred_by_model, which every tool\'s provenance carries:\n' +
+   '       empty means nothing here was written by a model. model_call_made: false,\n' +
+   '       where a route states it, also rules the notice out. */\n' +
+   '    var inferred = Array.isArray(prov.inferred_by_model) ? prov.inferred_by_model : [];\n' +
+   '    if (prov.model_call_made === false || !inferred.length) return "";\n'],
+  ['        return "<strong>" + esc(humanise(k)) + ":</strong> " + renderScalarish(v);\n      }\n      return "<strong>" + esc(humanise(k)) + ":</strong> " + esc(String(v === "" ? "—" : v));',
+   '        return "<strong>" + esc(humanise(k)) + ":</strong> " + renderScalarish(v);\n      }\n' +
+   '      // A per-item yes/no reads as Yes or No, not true/false. A null never gets here: it is "—" above.\n' +
+   '      if (typeof v === "boolean") {\n        return "<strong>" + esc(humanise(k)) + ":</strong> " + (v ? "Yes" : "No");\n      }\n' +
+   '      return "<strong>" + esc(humanise(k)) + ":</strong> " + esc(String(v === "" ? "—" : v));']
 ];
 const OLD_SRC = RENDERER_CHANGES_SINCE_BEFORE.reduce(function (src, pair, i) {
   const hits = src.split(pair[0]).length - 1;
@@ -171,7 +202,7 @@ function closure(src, root) {
 }
 const bctx = { console, URL, decodeHTML, decodeHTMLAttribute };
 vm.createContext(bctx);
-vm.runInContext(closure(SRC, "this.api = { measureSeoAudit: measureSeoAudit, seoAuditFlags: seoAuditFlags, NOT_MEASURED: SEO_AUDIT_NOT_MEASURED, toolProvenance: toolProvenance };"), bctx);
+vm.runInContext(closure(SRC, "this.api = { measureSeoAudit: measureSeoAudit, seoAuditFlags: seoAuditFlags, NOT_MEASURED: SEO_AUDIT_NOT_MEASURED, toolProvenance: toolProvenance, measureStockAndMargin: measureStockAndMargin };"), bctx);
 const B = bctx.api;
 const plain = v => JSON.parse(JSON.stringify(v));
 
@@ -414,6 +445,75 @@ const count = (h, needle) => h.split(needle).length - 1;
 
   check("across every fixture, 'No flags raised' appeared only for the real empty arrays (B and C-clean)",
     [hA, hC, hD, hE, hF].every(h => count(h, NO_FLAGS) === 0) && count(hB, NO_FLAGS) === 1 && count(hCn, NO_FLAGS) === 1);
+
+  /* S. no recollection notice on a tool that never called a model; per-item yes/no */
+  console.log("\n══ S. no model, no recollection notice; per-item Yes / No ══");
+  const NOTICE = "Nothing was looked up.";
+  // The flags each no-model route really sends, read from its own source in server.js.
+  function routeFlags(route, anchor) {
+    const at = SRC.indexOf('app.post("' + route + '"');
+    const body = at === -1 ? "" : SRC.slice(at, s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("async function (req, res, next)", at))));
+    const m = new RegExp("\\{\\s*\\n\\s*" + anchor + "[\\s\\S]*?\\}").exec(body);
+    if (!m) return null;
+    const fctx = { modelCallMade: false }; vm.createContext(fctx);
+    return vm.runInContext("(" + m[0] + ")", fctx);
+  }
+  const auditFlags = routeFlags("/api/agents/content/audit", "model_call_made: false,");
+  const stockFlags = routeFlags("/api/agents/store/stock-margin", "model_call_made: false,");
+  const policyFlags = routeFlags("/api/agents/ads/policy-check", "model_call_made: modelCallMade,");
+  check("S. the flags were read from the three routes, and each says model_call_made: false when no model ran",
+    !!auditFlags && !!stockFlags && !!policyFlags && [auditFlags, stockFlags, policyFlags].every(f => f.model_call_made === false),
+    JSON.stringify([auditFlags, stockFlags, policyFlags]));
+  const notReadCount = f => Object.keys(f || {}).filter(k => f[k] === false && /(_read|_performed|_contacted|_checked|_reviewed)$/.test(k)).length;
+  check("S. content/audit's flags hold three not-read flags, the shape that drew the notice", notReadCount(auditFlags) === 3, notReadCount(auditFlags));
+  const genericTool = { id: "audit", fields: [{ name: "article" }, { name: "keyword" }] };
+  const auditResult = { success: true, keyword: "k", measured: { word_count: 120, note: "n" },
+    provenance: plain(B.toolProvenance(["Word count"], [], "No model call at all.", auditFlags)), task_id: "t", persisted: true };
+  // Rendered on the Content agent's own page: on the SEO page "audit" is the SEO audit's whole renderer.
+  const auditHtml = content.ap.renderToolResult(content.ap.TOOLS.find(t => t.id === "audit") || genericTool, auditResult);
+  check("S. content/audit's result shows no recollection notice", auditHtml.indexOf(NOTICE) === -1 && auditHtml.indexOf("recollection") === -1, auditHtml.slice(0, 200));
+  check("S. content/audit's result still renders its measured panel and provenance", /Measured by the server/.test(auditHtml) && /Where this came from/.test(auditHtml));
+
+  const STORE_CFG = pageConfig(FRONTEND + "/store-agent.html");
+  const store = load(NEW_SRC, STORE_CFG);
+  const stockTool = store.ap.TOOLS.find(t => t.id === "stock-margin");
+  const day0 = Date.now();
+  const stockItems = [
+    { id: "i1", name: "Widget", unit: "unit", quantity_on_hand: 10, unit_cost: 2.5, unit_price: 6, reorder_point: 12, status: "active" },
+    { id: "i2", name: "Gizmo", unit: "unit", quantity_on_hand: 20, unit_cost: 1, unit_price: 3, reorder_point: 5, status: "active" },
+    { id: "i3", name: "Gadget", unit: "unit", quantity_on_hand: 4, unit_cost: null, unit_price: 9.99, reorder_point: null, status: "active" }
+  ];
+  const stockMeasured = plain(B.measureStockAndMargin(stockItems, [], 30));
+  const stockResult = { success: true, measured: stockMeasured, limitations: { not_measured: ["Sales revenue"], detail: "d" },
+    provenance: plain(B.toolProvenance(["Items"], [], "Source: your own inventory entries. Model called: no.", stockFlags)), task_id: "t", persisted: true };
+  const stockHtml = stockTool ? store.ap.renderToolResult(stockTool, stockResult) : "";
+  check("S. store-agent.html declares Stock & Margin, rendered by the shared renderer", !!stockTool && stockHtml.length > 0);
+  check("S. stock-margin's result (real measureStockAndMargin) shows no recollection notice", stockHtml.indexOf(NOTICE) === -1 && stockHtml.indexOf("recollection") === -1);
+  check("S. at_or_below_reorder_point true renders Yes", /At or below reorder point:<\/strong> Yes/.test(stockHtml), (stockHtml.match(/At or below reorder point:<\/strong>[^<&]*/g) || []).join(" | "));
+  check("S. at_or_below_reorder_point false renders No", /At or below reorder point:<\/strong> No/.test(stockHtml));
+  check("S. no per-item value renders as the literal true or false", !/:<\/strong> (true|false)\b/.test(stockHtml), (stockHtml.match(/:<\/strong> (true|false)\b/g) || []).join(","));
+  check("S. a null still renders as — with its reason beside it, never No",
+    /At or below reorder point:<\/strong> — &middot; <strong>At or below reorder point reason:<\/strong> no reorder point entered/.test(stockHtml) &&
+    (stockHtml.match(/At or below reorder point:<\/strong> No/g) || []).length === 1,
+    (stockHtml.match(/At or below reorder point[^&]*/g) || []).join(" | "));
+
+  const policyResult = { success: true, copy_length: 10, findings: [], suggested_rewrites: null, measured: { rules_checked: 5, rules_triggered: 0, note: "n" },
+    provenance: plain(B.toolProvenance(["Every match"], [], "Deterministic.", Object.assign({}, policyFlags, { web_read: false, data_checked: false, x_reviewed: false }))) };
+  check("S. a no-model response shows no notice even with three not-read flags (ads/policy-check flags plus three)",
+    seo.ap.renderToolResult({ id: "policy-check", fields: [{ name: "copy" }] }, policyResult).indexOf(NOTICE) === -1);
+
+  // A model tool keeps the notice, with exactly the text it had at BEFORE.
+  const modelResult = { success: true, outline: "An outline.", measured: { sections: 4, note: "n" },
+    provenance: plain(B.toolProvenance(["Section count"], ["The outline"], "The model wrote the outline.",
+      { serp_read: false, competing_pages_read: false, search_volume_checked: false })), task_id: "t", persisted: true };
+  const outlineTool = { id: "outline", fields: [{ name: "keyword" }] };
+  const newModelHtml = seo.ap.renderToolResult(outlineTool, modelResult);
+  const oldModelHtml = load(OLD_SRC_AT_BEFORE, SEO_CFG).ap.renderToolResult(outlineTool, modelResult);
+  const noticeOf = h => { const i = h.indexOf('<div class="ap-nothing-read">'); return i === -1 ? "" : h.slice(i, h.indexOf("</div></div>", i) + 12); };
+  check("S. a model tool's result still shows the notice", newModelHtml.indexOf(NOTICE) !== -1);
+  check("S. and its notice is byte-identical to " + BEFORE + "'s", noticeOf(newModelHtml) !== "" && noticeOf(newModelHtml) === noticeOf(oldModelHtml), noticeOf(newModelHtml).slice(0, 200));
+  check("S. a model tool that wrote nothing this time (inferred_by_model empty) shows no notice",
+    seo.ap.renderToolResult(outlineTool, Object.assign({}, modelResult, { provenance: Object.assign({}, modelResult.provenance, { inferred_by_model: [] }) })).indexOf(NOTICE) === -1);
 
   /* R. regressions: every other tool on every page renders exactly as at BEFORE */
   console.log("\n══ R. every other tool, every page, against " + BEFORE + " ══");
