@@ -16416,6 +16416,24 @@ function oracleClaimsScanLines(row) {
     n(m.findings_total) + " finding(s), " + n(m.items_missing_disclaimer) + " item(s) missing the disclaimer"];
 }
 
+/* The latest Audience Ledger run, as stored: per brand, its contact and
+   consent counts and nothing else. A figure the run could not measure is said
+   to be so, never shown as 0. The brand labels are CAPTURE_BRANDS or "other"
+   (audienceBrandLabel), so nothing a visitor typed reaches the prompt. */
+function oracleAudienceLedgerLines(row) {
+  var m = (row && row.output && row.output.measured) || {};
+  var n = function (v) { return typeof v === "number" ? String(v) : "not measured"; };
+  var brands = Array.isArray(m.brands) ? m.brands : [];
+  var lines = ["- " + oracleRecordDate(row && row.created_at) + ": " + brands.length + " brand(s)" +
+    (typeof m.window_days === "number" ? ", window " + m.window_days + " days" : "")];
+  brands.forEach(function (b) {
+    lines.push("- " + audienceBrandLabel(b && b.brand) + ": " + n(b.contacts) + " contact(s); " + n(b.captures) + " capture(s), " +
+      n(b.captures_with_email_consent) + " with email consent, " + n(b.captures_with_sms_consent) + " with SMS consent; " +
+      n(b.contacts_with_email_without_recorded_email_consent) + " contact(s) with an email but no recorded email consent");
+  });
+  return lines;
+}
+
 function oracleStoreStockLines(rows, limit) {
   var count = rows.length >= limit ? "at least " + rows.length + " (read capped at " + limit + ")" : String(rows.length);
   if (!rows.length) return ["- 0 items entered on the Inventory page"];
@@ -16631,6 +16649,18 @@ async function buildOracleAgentRecords(userId, onFailure) {
     var r = rows[0];
     return ["- " + oracleRecordDate(r.created_at) + (r.period_type ? " (" + r.period_type + ")" : "") + ": " +
       (r.narrative ? oracleRecordText(r.narrative, 300) : "no narrative stored")];
+  });
+
+  await section("Latest Audience Ledger (counts only)", async function () {
+    var rows = must(await supabase
+      .from("ai_tasks")
+      .select("created_at, output")
+      .eq("user_id", userId)
+      .eq("task_type", "community/audience")
+      .not("output", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1));
+    return rows.length ? oracleAudienceLedgerLines(rows[0]) : [];
   });
 
   var text = ORACLE_RECORDS_HEADER + "\n" + sections.join("\n");
@@ -28953,6 +28983,363 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
   });
 
 // ── Community Agent tools ────────────────────────────────────────────────────
+
+/* ── Community Agent: Audience Ledger ─────────────────────────────────────────
+   POST /api/agents/community/audience counts each brand's audience from the
+   caller's OWN sign-up records, in code. There is no model call on any path.
+     lead_captures       owner_id = the caller (POST /api/capture writes these)
+     contacts            owner_id = the caller (POST /api/contacts/capture, the
+                         capture's contact sync, SMS inbound, registration)
+     consent_events      only for the caller's own contact ids
+     sms_subscribers     user_id = the caller (the SMS page, the capture sync)
+     email_sequences     owner_id = the caller, then those sequences' enrollments
+
+   NULL-OWNER ROWS ARE NEVER READ, for any account. Every write path sets
+   owner_id: lead_captures.owner_id is NOT NULL (028), and contacts.owner_id is
+   nullable only so a deleted account's contacts outlive it (ON DELETE SET
+   NULL, 069). Production held no NULL-owner row in either table when this was
+   built (Oct 17 2026), so there is nothing unassigned to attribute.
+
+   THE OUTPUT IS COUNTS ONLY. A contact id is read to join its consent events
+   and enrollments, and an email only to ask whether one is present; neither
+   leaves this code. A brand outside CAPTURE_BRANDS (contacts.brand is free
+   text from a public form) is counted under "other", never echoed.
+
+   A FAILED READ IS NULL WITH ITS REASON, NEVER 0. Each table's figures stand
+   alone, so one table failing nulls only the figures it feeds. A real 0, rows
+   read and none matching, is 0.
+
+   The account holder's own contact row (source "registration", written by
+   findOrCreateUserContact) is the user, not their audience: it is counted
+   apart and left out of every other figure. */
+var AUDIENCE_DEFAULT_WINDOW_DAYS = 365;
+var AUDIENCE_PAGE = 1000;
+var AUDIENCE_MAX_ROWS = 50000;
+var AUDIENCE_ID_CHUNK = 200;
+var AUDIENCE_OWN_ACCOUNT_SOURCE = "registration";
+var AUDIENCE_OTHER_BRAND = "other";
+var AUDIENCE_CONSENTED = ["granted", "confirmed"];
+var AUDIENCE_ENROLLMENT_STATUSES = ["active", "completed", "stopped"];
+var AUDIENCE_NOT_MEASURED = [
+  "Opens, reads or clicks: nothing here records whether anyone read or clicked a message",
+  "Anyone outside your own captures: only people recorded on your own account are counted",
+  "Audiences on other platforms: followers, members or subscribers elsewhere are not read",
+  "Purchases: no sale is recorded against a contact on this platform"
+];
+
+// window_days: absent → the default; anything else must already be a whole number in range. "30" and true are refused, not coerced.
+function audienceWindowDays(value) {
+  if (value === undefined || value === null) return AUDIENCE_DEFAULT_WINDOW_DAYS;
+  return typeof value === "number" && Number.isInteger(value) && value >= 7 && value <= 730 ? value : null;
+}
+
+function audienceBrandLabel(brand) {
+  return CAPTURE_BRANDS.indexOf(brand) !== -1 ? brand : AUDIENCE_OTHER_BRAND;
+}
+
+// Every page of a read, in id order; a failed page throws, so a partial read is never taken for the whole.
+async function audienceReadAll(build) {
+  var rows = [];
+  for (var from = 0; from < AUDIENCE_MAX_ROWS; from += AUDIENCE_PAGE) {
+    var read = await build().order("id", { ascending: true }).range(from, from + AUDIENCE_PAGE - 1);
+    if (read.error) throw read.error;
+    var page = read.data || [];
+    rows = rows.concat(page);
+    if (page.length < AUDIENCE_PAGE) return { rows: rows, capped: false };
+  }
+  return { rows: rows, capped: true };
+}
+
+// One table's read: its rows, or null with the reason. Never an empty list for a failure.
+async function audienceRead(table, read) {
+  try {
+    return { rows: await read(), reason: null };
+  } catch (err) {
+    console.error("[community/audience] " + table + " read failed: " + (err && err.message));
+    return { rows: null, reason: table + " could not be read just now" };
+  }
+}
+
+/* The caller's rows, table by table. Only owner-scoped filters: no read here
+   asks for owner_id IS NULL or for another account's rows. */
+async function loadAudience(userId) {
+  var loaded = { capped: [] };
+  function all(table, build) {
+    return audienceRead(table, async function () {
+      var got = await audienceReadAll(build);
+      if (got.capped) loaded.capped.push(table);
+      return got.rows;
+    });
+  }
+  loaded.captures = await all("lead_captures", function () {
+    return supabase.from("lead_captures").select("id, brand, email_consent, sms_consent, created_at").eq("owner_id", userId);
+  });
+  loaded.contacts = await all("contacts", function () {
+    return supabase.from("contacts").select("id, brand, email, source").eq("owner_id", userId);
+  });
+  if (loaded.contacts.rows) {
+    var ids = loaded.contacts.rows.map(function (c) { return c.id; });
+    loaded.consent = await audienceRead("consent_events", async function () {
+      var events = [];
+      for (var i = 0; i < ids.length; i += AUDIENCE_ID_CHUNK) {
+        var chunk = ids.slice(i, i + AUDIENCE_ID_CHUNK);
+        var got = await audienceReadAll(function () {
+          return supabase.from("consent_events").select("id, contact_id, action, occurred_at").eq("channel", "email").in("contact_id", chunk);
+        });
+        if (got.capped) loaded.capped.push("consent_events");
+        events = events.concat(got.rows);
+      }
+      return events;
+    });
+  } else {
+    loaded.consent = { rows: null, reason: "contacts could not be read just now, so their consent events were not read" };
+  }
+  loaded.sms = await all("sms_subscribers", function () {
+    return supabase.from("sms_subscribers").select("id, consent_status").eq("user_id", userId);
+  });
+  loaded.enrollments = await audienceRead("email_sequences", async function () {
+    var seq = await audienceReadAll(function () {
+      return supabase.from("email_sequences").select("id").eq("owner_id", userId);
+    });
+    var seqIds = seq.rows.map(function (s) { return s.id; });
+    var rows = [];
+    for (var i = 0; i < seqIds.length; i += AUDIENCE_ID_CHUNK) {
+      var chunk = seqIds.slice(i, i + AUDIENCE_ID_CHUNK);
+      var got = await audienceReadAll(function () {
+        return supabase.from("email_sequence_enrollments").select("id, contact_id, status").in("sequence_id", chunk);
+      });
+      if (got.capped) loaded.capped.push("email_sequence_enrollments");
+      rows = rows.concat(got.rows);
+    }
+    return rows;
+  });
+  return loaded;
+}
+
+// The calendar months (UTC) from the window's first day to today, oldest first.
+function audienceMonths(startMs, nowMs) {
+  var months = [];
+  var d = new Date(startMs), end = new Date(nowMs);
+  var y = d.getUTCFullYear(), m = d.getUTCMonth();
+  while (y < end.getUTCFullYear() || (y === end.getUTCFullYear() && m <= end.getUTCMonth())) {
+    months.push(y + "-" + (m < 9 ? "0" : "") + (m + 1));
+    m++; if (m === 12) { m = 0; y++; }
+  }
+  return months;
+}
+
+/* The measurement, given what loadAudience read. Pure: no read, and no clock
+   but the nowMs it is told. Counts only. */
+function measureAudience(loaded, windowDays, nowMs) {
+  var startMs = nowMs - windowDays * 24 * 60 * 60 * 1000;
+  var startIso = new Date(startMs).toISOString();
+  var months = audienceMonths(startMs, nowMs);
+  var captures = loaded.captures.rows, contacts = loaded.contacts.rows, consent = loaded.consent.rows;
+  var sms = loaded.sms.rows, enrollments = loaded.enrollments.rows;
+
+  var own = contacts ? contacts.filter(function (c) { return c.source === AUDIENCE_OWN_ACCOUNT_SOURCE; }).length : null;
+  var audience = contacts ? contacts.filter(function (c) { return c.source !== AUDIENCE_OWN_ACCOUNT_SOURCE; }) : null;
+  var contactBrand = {};
+  (contacts || []).forEach(function (c) { contactBrand[c.id] = audienceBrandLabel(c.brand); });
+
+  var brands = {};
+  (captures || []).forEach(function (r) { brands[audienceBrandLabel(r.brand)] = true; });
+  (audience || []).forEach(function (r) { brands[audienceBrandLabel(r.brand)] = true; });
+  if (contacts) (enrollments || []).forEach(function (e) { brands[contactBrand[e.contact_id] || AUDIENCE_OTHER_BRAND] = true; });
+
+  var latest = {};
+  (consent || []).forEach(function (e) {
+    var prev = latest[e.contact_id];
+    if (!prev || String(e.occurred_at) > String(prev.occurred_at)) latest[e.contact_id] = e;
+  });
+
+  var list = Object.keys(brands).sort().map(function (brand) {
+    var row = { brand: brand };
+    if (audience) {
+      var mine = audience.filter(function (c) { return audienceBrandLabel(c.brand) === brand; });
+      row.contacts = mine.length;
+      if (consent) {
+        row.contacts_with_email_without_recorded_email_consent = mine.filter(function (c) {
+          var last = latest[c.id];
+          return !!c.email && !(last && AUDIENCE_CONSENTED.indexOf(last.action) !== -1);
+        }).length;
+      } else {
+        row.contacts_with_email_without_recorded_email_consent = null;
+        row.contacts_with_email_without_recorded_email_consent_reason = loaded.consent.reason;
+      }
+    } else {
+      row.contacts = null; row.contacts_reason = loaded.contacts.reason;
+      row.contacts_with_email_without_recorded_email_consent = null;
+      row.contacts_with_email_without_recorded_email_consent_reason = loaded.contacts.reason;
+    }
+    if (captures) {
+      var caught = captures.filter(function (r) { return audienceBrandLabel(r.brand) === brand; });
+      row.captures = caught.length;
+      row.captures_with_email_consent = caught.filter(function (r) { return r.email_consent === true; }).length;
+      row.captures_with_sms_consent = caught.filter(function (r) { return r.sms_consent === true; }).length;
+      var byMonth = {};
+      months.forEach(function (k) { byMonth[k] = 0; });
+      caught.forEach(function (r) {
+        var at = String(r.created_at || "");
+        if (at >= startIso && Object.prototype.hasOwnProperty.call(byMonth, at.slice(0, 7))) byMonth[at.slice(0, 7)]++;
+      });
+      row.new_captures_by_month = months.map(function (k) { return { month: k, captures: byMonth[k] }; });
+    } else {
+      ["captures", "captures_with_email_consent", "captures_with_sms_consent", "new_captures_by_month"].forEach(function (k) {
+        row[k] = null; row[k + "_reason"] = loaded.captures.reason;
+      });
+    }
+    if (enrollments && contacts) {
+      var counts = {};
+      AUDIENCE_ENROLLMENT_STATUSES.forEach(function (st) { counts[st] = 0; });
+      enrollments.forEach(function (e) {
+        if ((contactBrand[e.contact_id] || AUDIENCE_OTHER_BRAND) === brand) counts[e.status] = (counts[e.status] || 0) + 1;
+      });
+      row.email_enrollments_by_status = counts;
+    } else {
+      row.email_enrollments_by_status = null;
+      row.email_enrollments_by_status_reason = !enrollments ? loaded.enrollments.reason
+        : "contacts could not be read just now, so enrollments cannot be put under a brand";
+    }
+    return row;
+  });
+
+  var measured = { window_days: windowDays, window_start: startIso.slice(0, 10), brands: list };
+  if (sms) {
+    var bySms = {};
+    sms.forEach(function (r) { var k = String(r.consent_status || "not recorded"); bySms[k] = (bySms[k] || 0) + 1; });
+    measured.sms_subscribers = sms.length;
+    measured.sms_subscribers_by_consent_status = bySms;
+  } else {
+    measured.sms_subscribers = null; measured.sms_subscribers_reason = loaded.sms.reason;
+    measured.sms_subscribers_by_consent_status = null; measured.sms_subscribers_by_consent_status_reason = loaded.sms.reason;
+  }
+  measured.sms_subscribers_scope = "the whole account: sms_subscribers records no brand, so SMS subscribers are not split by brand";
+  if (enrollments) {
+    var allCounts = {};
+    AUDIENCE_ENROLLMENT_STATUSES.forEach(function (st) { allCounts[st] = 0; });
+    enrollments.forEach(function (e) { allCounts[e.status] = (allCounts[e.status] || 0) + 1; });
+    measured.email_enrollments_by_status_all_brands = allCounts;
+  } else {
+    measured.email_enrollments_by_status_all_brands = null;
+    measured.email_enrollments_by_status_all_brands_reason = loaded.enrollments.reason;
+  }
+  measured.own_account_contact_rows_not_counted = own;
+  if (own === null) measured.own_account_contact_rows_not_counted_reason = loaded.contacts.reason;
+  if (loaded.capped.length) measured.reads_capped_at = { rows: AUDIENCE_MAX_ROWS, tables: loaded.capped };
+
+  var failed = [loaded.captures, loaded.contacts, loaded.consent, loaded.sms, loaded.enrollments]
+    .filter(function (t) { return t.reason; }).map(function (t) { return t.reason; });
+  var notes = [list.length + " brand(s) counted. Contacts and captures are all-time; new captures by month cover the last " + windowDays + " days, and a 0 month is a month with none recorded."];
+  if (own) notes.push(own + " contact row(s) are your own account (from registering), not your audience, and are left out.");
+  if (failed.length) notes.push("Not measured, shown as null rather than 0: " + failed.join("; ") + ".");
+  if (loaded.capped.length) notes.push("Only the first " + AUDIENCE_MAX_ROWS + " rows of " + loaded.capped.join(", ") + " were read.");
+  measured.note = notes.join(" ");
+  return measured;
+}
+
+function audienceIsEmpty(loaded) {
+  return [loaded.captures, loaded.contacts, loaded.consent, loaded.sms, loaded.enrollments].every(function (t) { return t.rows !== null; }) &&
+    !loaded.captures.rows.length && !loaded.sms.rows.length && !loaded.enrollments.rows.length &&
+    loaded.contacts.rows.every(function (c) { return c.source === AUDIENCE_OWN_ACCOUNT_SOURCE; });
+}
+
+// Where sign-ups come from, as recon found the capture paths (Oct 17 2026).
+function audienceEmptyNote(userId) {
+  return userId === CAPTURE_OWNER_ID
+    ? "No sign-ups are recorded for your account yet. They arrive from the public sign-up forms on the four brand sites " +
+      "(mrearthrose, swordvitality, blacksuncircle, bizforce), which post to /api/capture; the email sign-up form, which posts to " +
+      "/api/contacts/capture; people who text your SMS number; and subscribers you add or import on the SMS page. Engine and " +
+      "landing visits record an arrival, not a person, and are not counted."
+    : "No sign-ups are recorded for your account yet. The public sign-up forms on the brand sites and the email sign-up form " +
+      "record their sign-ups on the platform's own account, not on yours; what reaches this ledger on your account is the SMS " +
+      "subscribers you add or import on the SMS page.";
+}
+
+app.post("/api/agents/community/audience", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var body = req.body || {};
+      var windowDays = audienceWindowDays(body.window_days);
+      if (windowDays === null) {
+        return res.status(400).json({
+          error: "window_days, when given, must be a whole number from 7 to 730, sent as a number. Leave it out for " + AUDIENCE_DEFAULT_WINDOW_DAYS + ".",
+          field: "window_days"
+        });
+      }
+
+      var loaded = await loadAudience(userId);
+      var nowMs = Date.now();
+      var measured = audienceIsEmpty(loaded)
+        ? { window_days: windowDays, brands: [], note: audienceEmptyNote(userId) }
+        : measureAudience(loaded, windowDays, nowMs);
+
+      var brand = body.brand;
+      if (brand !== undefined && brand !== null && brand !== "") {
+        var valid = measured.brands.map(function (b) { return b.brand; });
+        if (typeof brand !== "string" || valid.indexOf(brand) === -1) {
+          return res.status(400).json({
+            error: "brand must be one of the brands you have sign-up records for: " + (valid.length ? valid.join(", ") : "none yet") + ". Leave it out for all of them.",
+            field: "brand",
+            valid_brands: valid
+          });
+        }
+        measured.brands = measured.brands.filter(function (b) { return b.brand === brand; });
+        measured.brand_filter = brand;
+      }
+
+      run = await startToolRun(req, {
+        agentType: "community",
+        taskType: "community/audience",
+        title: "Community · Audience Ledger: " + windowDays + " days" + (measured.brand_filter ? " · " + measured.brand_filter : "")
+      });
+
+      var responseBody = {
+        success: true,
+        measured: measured,
+        limitations: {
+          not_measured: AUDIENCE_NOT_MEASURED,
+          detail: "Every figure is a count of your own account's sign-up records: captures, contacts, consent events, SMS " +
+            "subscribers and email sequence enrollments. No email, name, phone number or record id is shown, and a table that " +
+            "could not be read is null with its reason, never 0."
+        },
+        provenance: toolProvenance(
+          [
+            "Contacts per brand, leaving out your own account's registration row",
+            "Captures per brand, and how many gave email consent and SMS consent",
+            "New captures per calendar month in the window, with 0 for a month that had none",
+            "Contacts with an email whose latest email consent event is not a grant or a confirmation",
+            "SMS subscribers by consent status, for the whole account",
+            "Email sequence enrollments by status, under the brand of the contact enrolled"
+          ],
+          [],
+          "Source: your own sign-up records. Model called: no. The same records always give the same counts; " +
+          "nothing here is an estimate, and no opens, clicks, purchases or other platforms' audiences are read.",
+          {
+            model_call_made: false,
+            own_records_read: true,
+            unassigned_rows_read: false,
+            other_accounts_read: false
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[community/audience] Error:", error && error.message);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
 
 /* Onboarding timings come back as NUMBERS, the same decision the email sequence
    and the social calendar make and for the same reason: a sequence is a schedule.

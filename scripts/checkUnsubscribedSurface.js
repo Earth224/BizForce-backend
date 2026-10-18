@@ -158,7 +158,9 @@ const EXPECTED_GATED = [
   // The Store agent's Stock & Margin, measured from the caller's own inventory
   "post /api/agents/store/stock-margin",
   // Claims Scan runs both claim rulebooks over everything you publish
-  "post /api/agents/vertical_marketing/claims-scan"
+  "post /api/agents/vertical_marketing/claims-scan",
+  // The Community agent's Audience Ledger, counted from the caller's own sign-ups
+  "post /api/agents/community/audience"
 ];
 
 const EXPECTED_ADMIN = [

@@ -201,6 +201,14 @@
         claimsScanText(profile, text, cautions); the third parameter collects
         caution-only FDA matches. Nothing else in the row changed.
 
+   NAMED BEFORE → AFTER (Audience Ledger on the Community page, Oct 17 2026,
+   assertion changed on purpose):
+     R7 the community Last-run tip had to say "nothing here measures
+        engagement or growth" → "nothing here measures engagement, and
+        Audience Ledger counts sign-ups rather than activity". The ledger
+        counts new sign-ups by month, so "nothing measures growth" stopped
+        being true; it still reads no engagement.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
    whose search text does not match exactly once is an ERROR.
@@ -536,7 +544,7 @@ const comTips = tipsFor("community-agent.html");
 check("R7. community: \"Watch the Engagement and Growth Plans sections\" is gone", comTips.every(t => !/Engagement and Growth Plans sections/.test(t)), JSON.stringify(comTips));
 [[BROKER, brTips, "R5", "the agent keeps no record of where your deals stand"],
  [PUBLICIST, pubTips, "R6", "nothing here measures coverage"],
- [COMMUNITY, comTips, "R7", "nothing here measures engagement or growth"]].forEach(([file, tips, id, says]) => {
+ [COMMUNITY, comTips, "R7", "nothing here measures engagement, and Audience Ledger counts sign-ups rather than activity"]].forEach(([file, tips, id, says]) => {
   const t = tipWith(tips, "Last run link");
   check(id + ". " + file + ": the new tip points to the Last run link, which the page offers and links to run.html", !!t && lastRunOffered(file), t);
   check(id + ". " + file + ": the new tip says what is not measured, and uses no watching word", t.indexOf(says) !== -1 && !WATCHING.test(t), t);
