@@ -16434,6 +16434,23 @@ function oracleAudienceLedgerLines(row) {
   return lines;
 }
 
+/* The latest Arrivals Ledger run, as stored: its window, how many posts carry
+   a tracked link, the arrivals attributed to them, and up to three of those
+   posts with their arrivals, then the note that an arrival is not a person. A
+   figure the run could not measure is said to be so, never shown as 0. */
+function oracleArrivalsLedgerLines(row) {
+  var m = (row && row.output && row.output.measured) || {};
+  var t = m.totals || {};
+  var n = function (v) { return typeof v === "number" ? String(v) : "not measured"; };
+  var lines = ["- " + oracleRecordDate(row && row.created_at) + ": window " + n(m.weeks) + " week(s); tracked posts: " +
+    n(t.posts_with_tracked_link) + "; attributed arrivals: " + n(t.arrivals_attributed) + "; in the window: " + n(t.arrivals_in_window)];
+  (Array.isArray(m.posts_tracked) ? m.posts_tracked : []).slice(0, 3).forEach(function (p) {
+    lines.push("- \"" + oracleRecordText(p && p.title, 80) + "\": arrivals " + n(p && p.arrivals_total));
+  });
+  lines.push("- " + ARRIVALS_NOTE_SHORT);
+  return lines;
+}
+
 function oracleStoreStockLines(rows, limit) {
   var count = rows.length >= limit ? "at least " + rows.length + " (read capped at " + limit + ")" : String(rows.length);
   if (!rows.length) return ["- 0 items entered on the Inventory page"];
@@ -16595,19 +16612,27 @@ async function buildOracleAgentRecords(userId, onFailure) {
   await section("Arrivals from this account's published posts", async function () {
     var posts = must(await supabase
       .from("content_library")
-      .select("slug")
+      .select("slug, body")
       .eq("user_id", userId)
       .not("slug", "is", null)
       .limit(L.slugs));
     if (!posts.length) return [];
-    var refs = posts.map(function (p) { return blogRefToken(userId, p.slug); });
+    /* Only a post whose stored body carries its ref has a tracked link, so only
+       those are counted, as arrivals and as posts. A slug alone is not one:
+       publish_blog_post adds the ref only to a money_path post. */
+    var refs = posts.map(function (p) { return blogRefToken(userId, p.slug); }).filter(function (ref, i) {
+      return String(posts[i].body == null ? "" : posts[i].body).indexOf("?ref=" + ref) !== -1;
+    });
+    if (!refs.length) {
+      return ["- none of this account's " + posts.length + " post(s) carries a tracked link, so arrivals cannot be counted"];
+    }
     var visits = await supabase
       .from("engine_visits")
       .select("id", { count: "exact", head: true })
       .in("ref", refs);
     if (visits.error) throw visits.error;
     if (typeof visits.count !== "number") throw new Error("the arrivals count was not returned");
-    return ["- " + visits.count + " arrival(s) through the tracked links of " + posts.length + " post(s); Lead Radar arrivals are not attributable per account and are not counted here"];
+    return ["- " + visits.count + " arrival(s) through the tracked links of " + refs.length + " post(s); Lead Radar arrivals are not attributable per account and are not counted here"];
   });
 
   await section("Model spend this calendar month (platform-funded calls at list prices; calls on the account's own key are not counted)", async function () {
@@ -16661,6 +16686,18 @@ async function buildOracleAgentRecords(userId, onFailure) {
       .order("created_at", { ascending: false })
       .limit(1));
     return rows.length ? oracleAudienceLedgerLines(rows[0]) : [];
+  });
+
+  await section("Latest Arrivals Ledger (counts only)", async function () {
+    var rows = must(await supabase
+      .from("ai_tasks")
+      .select("created_at, output")
+      .eq("user_id", userId)
+      .eq("task_type", "analytics/arrivals")
+      .not("output", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1));
+    return rows.length ? oracleArrivalsLedgerLines(rows[0]) : [];
   });
 
   var text = ORACLE_RECORDS_HEADER + "\n" + sections.join("\n");
@@ -30352,6 +30389,289 @@ app.post("/api/agents/analytics/kpi-review", requireAuth, requireActiveSubscript
       }));
     } catch (error) {
       console.error("[analytics/kpi-review] Error:", error);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
+
+/* ── Analytics Agent: Arrivals Ledger ─────────────────────────────────────────
+   POST /api/agents/analytics/arrivals counts the arrivals at bizforceai.net
+   that came through the caller's OWN tracked links, in code. There is no model
+   call on any path.
+     content_library   user_id = the caller, with a slug. Each post's ref is
+                       recomputed (blogRefToken); the post has a tracked link
+                       only if its stored body carries "?ref=" + that ref,
+                       which publish_blog_post writes for a money_path post.
+     outreach_sends    user_id = the caller. Each ref is recomputed from
+                       lead_post_uri (outreachRefToken); the URI never leaves
+                       this code.
+     engine_visits     ref and created_at, only for those refs, in batches.
+
+   engine_visits has no owner column: an arrival belongs to an account only
+   through a ref that resolves to that account's own row. A post without a
+   tracked link has no arrivals to count, so it is a count only, never a 0.
+   arrivals_attributed is null, with the reason, for an account with no
+   tracked link at all.
+
+   THE OWNER ACCOUNT ALONE also gets arrivals_unmatched: arrivals whose ref
+   resolves to no account's post or outreach send (anyone can post a
+   well-formed ref). Working it out reads every account's slugs and lead URIs,
+   so it is never computed, nor its key returned, for anyone else.
+
+   A FAILED READ IS NULL WITH ITS REASON, NEVER 0. Weeks are ISO weeks,
+   starting Monday 00:00 UTC, read from created_at (the live table has no
+   arrived_on column, though migration 128 declares one); every week in the
+   window is listed, and a week with none is a real 0. */
+var ARRIVALS_DEFAULT_WEEKS = 12;
+var ARRIVALS_REF_CHUNK = 200;
+var ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
+var ARRIVALS_NOTE =
+  "An arrival is one request from the landing page. It records no person, so one arrival cannot be told apart from your own " +
+  "test click, a repeat visit, or anyone posting the ref by hand. These are arrivals, not visitors.";
+var ARRIVALS_NOTE_SHORT =
+  "An arrival is one landing-page request, not a person: it cannot be told apart from a test click, a repeat visit or a ref posted by hand.";
+var ARRIVALS_NO_TRACKED_LINK = "none of your posts carries a tracked link, so arrivals cannot be counted";
+var ARRIVALS_UNTRACKED_LABEL = "arrivals cannot be counted";
+var ARRIVALS_NOT_MEASURED = [
+  "Reach, impressions, likes, reposts or clicks on Bluesky: nothing here reads Bluesky",
+  "Article views: an article page records nothing when it is read",
+  "Which channel brought a reader: a ref names the post or the reply, not where its reader came from",
+  "Unique people: an arrival records no person, so a repeat visit is counted again",
+  "Conversions: no row links an arrival to a capture, subscription or sale"
+];
+
+// weeks: absent → the default; anything else must already be a whole number in range. "12" and true are refused, not coerced.
+function arrivalsWeeks(value) {
+  if (value === undefined || value === null) return ARRIVALS_DEFAULT_WEEKS;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 52 ? value : null;
+}
+
+// The Monday 00:00 UTC that starts the ISO week holding ms.
+function arrivalsWeekStart(ms) {
+  var d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - ((d.getUTCDay() + 6) % 7) * ARRIVALS_DAY_MS;
+}
+
+// The window's weeks as their Monday dates, oldest first; the last is the week holding nowMs.
+function arrivalsWindowWeeks(weeks, nowMs) {
+  var last = arrivalsWeekStart(nowMs);
+  var list = [];
+  for (var i = weeks - 1; i >= 0; i--) list.push(new Date(last - i * 7 * ARRIVALS_DAY_MS).toISOString().slice(0, 10));
+  return list;
+}
+
+// One table's read: its rows, or null with the reason. Never an empty list for a failure.
+async function arrivalsRead(table, read) {
+  try {
+    return { rows: await read(), reason: null };
+  } catch (err) {
+    console.error("[analytics/arrivals] " + table + " read failed: " + (err && err.message));
+    return { rows: null, reason: table + " " + ORACLE_RECORDS_UNREADABLE };
+  }
+}
+
+// Every page of a read; a read cut at the row cap throws, because a partial read would be taken for the whole.
+async function arrivalsReadAll(table, build) {
+  var got = await audienceReadAll(build);
+  if (got.capped) throw new Error(table + " holds more than " + AUDIENCE_MAX_ROWS + " rows");
+  return got.rows;
+}
+
+/* The caller's rows. Only caller-scoped filters, except the owner's unmatched
+   count, which is the one read of every account's refs. */
+async function loadArrivals(userId, isOwner) {
+  var loaded = {};
+  loaded.posts = await arrivalsRead("content_library", async function () {
+    var rows = await arrivalsReadAll("content_library", function () {
+      return supabase.from("content_library").select("id, title, slug, status, body, created_at").eq("user_id", userId).not("slug", "is", null);
+    });
+    // The body is read only to ask whether it carries the ref; it goes no further.
+    return rows.map(function (p) {
+      var ref = blogRefToken(userId, p.slug);
+      return { id: p.id, title: p.title, slug: p.slug, status: p.status, created_at: p.created_at, ref: ref,
+        tracked: String(p.body == null ? "" : p.body).indexOf("?ref=" + ref) !== -1 };
+    });
+  });
+  loaded.sends = await arrivalsRead("outreach_sends", async function () {
+    var rows = await arrivalsReadAll("outreach_sends", function () {
+      return supabase.from("outreach_sends").select("id, lead_post_uri").eq("user_id", userId);
+    });
+    var seen = {};
+    return rows.map(function (r) { return outreachRefToken({ post_uri: r.lead_post_uri }); })
+      .filter(function (ref) { if (seen[ref]) return false; seen[ref] = true; return true; });
+  });
+  var refs = (loaded.posts.rows || []).filter(function (p) { return p.tracked; }).map(function (p) { return p.ref; })
+    .concat(loaded.sends.rows || []);
+  loaded.visits = await arrivalsRead("engine_visits", async function () {
+    var visits = [];
+    for (var i = 0; i < refs.length; i += ARRIVALS_REF_CHUNK) {
+      var chunk = refs.slice(i, i + ARRIVALS_REF_CHUNK);
+      visits = visits.concat(await arrivalsReadAll("engine_visits", function () {
+        return supabase.from("engine_visits").select("ref, created_at").in("ref", chunk);
+      }));
+    }
+    return visits;
+  });
+  if (isOwner) {
+    loaded.unmatched = await arrivalsRead("the unmatched arrivals", async function () {
+      var known = {};
+      (await arrivalsReadAll("content_library", function () {
+        return supabase.from("content_library").select("id, user_id, slug").not("slug", "is", null);
+      })).forEach(function (p) { known[blogRefToken(p.user_id, p.slug)] = true; });
+      (await arrivalsReadAll("outreach_sends", function () {
+        return supabase.from("outreach_sends").select("id, lead_post_uri");
+      })).forEach(function (r) { known[outreachRefToken({ post_uri: r.lead_post_uri })] = true; });
+      return (await arrivalsReadAll("engine_visits", function () {
+        return supabase.from("engine_visits").select("id, ref");
+      })).filter(function (v) { return !known[v.ref]; }).length;
+    });
+  }
+  return loaded;
+}
+
+/* The measurement, given what loadArrivals read. Pure: no read, and no clock
+   but the nowMs it is told. Counts and refs only. */
+function measureArrivals(loaded, weeks, nowMs, isOwner) {
+  var weekList = arrivalsWindowWeeks(weeks, nowMs);
+  var posts = loaded.posts.rows, sends = loaded.sends.rows, visits = loaded.visits.rows;
+  var byRef = {};
+  (visits || []).forEach(function (v) { (byRef[v.ref] = byRef[v.ref] || []).push(Date.parse(v.created_at)); });
+
+  function counted(ref) {
+    if (!visits) {
+      return { arrivals_total: null, arrivals_total_reason: loaded.visits.reason,
+        arrivals_by_week: null, arrivals_by_week_reason: loaded.visits.reason };
+    }
+    var weekly = {};
+    weekList.forEach(function (k) { weekly[k] = 0; });
+    (byRef[ref] || []).forEach(function (ms) {
+      var k = Number.isFinite(ms) ? new Date(arrivalsWeekStart(ms)).toISOString().slice(0, 10) : null;
+      if (k && Object.prototype.hasOwnProperty.call(weekly, k)) weekly[k]++;
+    });
+    return { arrivals_total: (byRef[ref] || []).length,
+      arrivals_by_week: weekList.map(function (k) { return { week_start: k, arrivals: weekly[k] }; }) };
+  }
+  function inWindow(row) { return row.arrivals_by_week.reduce(function (n, w) { return n + w.arrivals; }, 0); }
+  function busiest(a, b) { return (b.arrivals_total || 0) - (a.arrivals_total || 0); }
+
+  var measured = { weeks: weeks, window_start: weekList[0] };
+  var tracked = null;
+  if (posts) {
+    tracked = posts.filter(function (p) { return p.tracked; })
+      .sort(function (a, b) { return String(b.created_at || "") < String(a.created_at || "") ? -1 : String(b.created_at || "") > String(a.created_at || "") ? 1 : 0; })
+      .map(function (p) {
+        return Object.assign({ content_id: p.id, title: p.title, slug: p.slug, status: p.status, ref: p.ref }, counted(p.ref));
+      }).sort(busiest);
+    measured.posts_tracked = tracked;
+    measured.posts_without_tracked_link = { count: posts.length - tracked.length, label: ARRIVALS_UNTRACKED_LABEL };
+  } else {
+    measured.posts_tracked = null; measured.posts_tracked_reason = loaded.posts.reason;
+    measured.posts_without_tracked_link = { count: null, count_reason: loaded.posts.reason, label: ARRIVALS_UNTRACKED_LABEL };
+  }
+  var outreach = null;
+  if (sends) {
+    outreach = sends.map(function (ref) { return Object.assign({ ref: ref }, counted(ref)); }).sort(busiest);
+    measured.outreach = outreach;
+  } else {
+    measured.outreach = null; measured.outreach_reason = loaded.sends.reason;
+  }
+
+  var totals = {};
+  totals.posts_read = posts ? posts.length : null;
+  totals.posts_with_tracked_link = tracked ? tracked.length : null;
+  totals.outreach_refs = outreach ? outreach.length : null;
+  if (!posts) { totals.posts_read_reason = loaded.posts.reason; totals.posts_with_tracked_link_reason = loaded.posts.reason; }
+  if (!outreach) totals.outreach_refs_reason = loaded.sends.reason;
+  var why = !posts ? loaded.posts.reason + ", so arrivals cannot be attributed"
+    : !outreach ? loaded.sends.reason + ", so arrivals cannot be attributed"
+    : !tracked.length && !outreach.length ? ARRIVALS_NO_TRACKED_LINK
+    : !visits ? loaded.visits.reason
+    : null;
+  if (why) {
+    totals.arrivals_attributed = null; totals.arrivals_attributed_reason = why;
+    totals.arrivals_in_window = null; totals.arrivals_in_window_reason = why;
+  } else {
+    var mine = tracked.concat(outreach);
+    totals.arrivals_attributed = mine.reduce(function (n, r) { return n + r.arrivals_total; }, 0);
+    totals.arrivals_in_window = mine.reduce(function (n, r) { return n + inWindow(r); }, 0);
+  }
+  if (isOwner) {
+    totals.arrivals_unmatched = loaded.unmatched.rows;
+    if (loaded.unmatched.rows === null) totals.arrivals_unmatched_reason = loaded.unmatched.reason;
+  }
+  measured.totals = totals;
+  if (outreach && outreach.length) {
+    measured.outreach_note = "outreach_sends does not record whether a reply carried the link: only a reply offering BizForce does, " +
+      "and only when the link fits in 300 characters, so an outreach ref with 0 arrivals may be a reply that never linked here.";
+  }
+  var failed = [loaded.posts, loaded.sends, loaded.visits].concat(isOwner ? [loaded.unmatched] : [])
+    .filter(function (t) { return t.reason; }).map(function (t) { return t.reason; });
+  if (failed.length) measured.not_read = failed;
+  measured.note = ARRIVALS_NOTE;
+  return measured;
+}
+
+app.post("/api/agents/analytics/arrivals", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var body = req.body || {};
+      var weeks = arrivalsWeeks(body.weeks);
+      if (weeks === null) {
+        return res.status(400).json({
+          error: "weeks, when given, must be a whole number from 1 to 52, sent as a number. Leave it out for " + ARRIVALS_DEFAULT_WEEKS + ".",
+          field: "weeks"
+        });
+      }
+
+      // After validation, before anything is read: a 400 records nothing.
+      run = await startToolRun(req, {
+        agentType: "analytics",
+        taskType: "analytics/arrivals",
+        title: "Analytics · Arrivals Ledger: " + weeks + " week(s)"
+      });
+
+      var isOwner = userId === OWNER_ACCOUNT_ID;
+      var loaded = await loadArrivals(userId, isOwner);
+      var measured = measureArrivals(loaded, weeks, Date.now(), isOwner);
+
+      var responseBody = {
+        success: true,
+        measured: measured,
+        limitations: {
+          not_measured: ARRIVALS_NOT_MEASURED,
+          detail: "Every figure is a count of arrivals through your own tracked links: a published post whose money link carries " +
+            "its ref, or a Lead Radar reply you sent. A post without a tracked link is counted, never given 0 arrivals; a table " +
+            "that could not be read is null with its reason, never 0."
+        },
+        provenance: toolProvenance(
+          [
+            "Each of your posts' refs, recomputed from your account and the post's slug, and whether the stored post carries it",
+            "Each of your Lead Radar sends' refs, recomputed from the post replied to",
+            "Arrivals through each ref, all-time and per ISO week (Monday, UTC), with 0 for a week that had none"
+          ].concat(isOwner ? ["Arrivals whose ref matches no account's post or send (owner account only)"] : []),
+          [],
+          "Source: your own posts, your own Lead Radar sends, and the arrivals recorded through their links. Model called: no. " +
+          "The same records always give the same counts; nothing here is an estimate.",
+          {
+            model_call_made: false,
+            own_records_read: true,
+            other_accounts_read: isOwner
+          }
+        )
+      };
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[analytics/arrivals] Error:", error && error.message);
       if (run) {
         await run.fail(error);
       }

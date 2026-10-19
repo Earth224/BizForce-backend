@@ -160,7 +160,9 @@ const EXPECTED_GATED = [
   // Claims Scan runs both claim rulebooks over everything you publish
   "post /api/agents/vertical_marketing/claims-scan",
   // The Community agent's Audience Ledger, counted from the caller's own sign-ups
-  "post /api/agents/community/audience"
+  "post /api/agents/community/audience",
+  // The Analytics agent's Arrivals Ledger, counted through the caller's own tracked links
+  "post /api/agents/analytics/arrivals"
 ];
 
 const EXPECTED_ADMIN = [

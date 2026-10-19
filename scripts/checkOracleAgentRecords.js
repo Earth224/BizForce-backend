@@ -32,6 +32,16 @@
      G. Order: the memories, then the records, then NO_INVENTION_RULE, which
         stays the last block of the shared brain.
 
+   NAMED BEFORE → AFTER (Arrivals Ledger, Oct 18 2026, assertion changed on
+   purpose):
+     A arrivals: "of M post(s)" counted every slugged post; it now counts only
+        posts whose stored body carries their ref, and only their arrivals.
+        The fixture gains bodies carrying the refs and a third slugged post
+        whose body carries none (Autumn notes), so the old count reads
+        "of 3 post(s)" and the new one "of 2 post(s)". The text the check pins
+        is unchanged, "3 arrival(s) through the tracked links of 2 post(s)";
+        what it now proves is that the untracked post is left out.
+
    MUTATE=<name> edits server.js or config/brain.js IN MEMORY (nothing on disk
    is touched). MUTATE=all runs each in its own process; an unmatched search
    text is an ERROR, never a catch (scripts/_shared.js).
@@ -56,6 +66,9 @@ const MUTATIONS = {
   // the records go after NO_INVENTION_RULE
   "records-after-rule": [[BRAIN, "  (Array.isArray(extraBlocks) ? extraBlocks : []).forEach(function (block) {", "  blocks.push(NO_INVENTION_RULE);\n  (Array.isArray(extraBlocks) ? extraBlocks : []).forEach(function (block) {"],
     [BRAIN, "    if (typeof block === \"string\" && block.trim()) blocks.push(block.trim());\n  });\n  blocks.push(NO_INVENTION_RULE);", "    if (typeof block === \"string\" && block.trim()) blocks.push(block.trim());\n  });"]],
+  // the arrivals section counts every slugged post again, tracked or not
+  "old-denominator": [[SERVER, "\" arrival(s) through the tracked links of \" + refs.length + \" post(s);",
+    "\" arrival(s) through the tracked links of \" + posts.length + \" post(s);"]],
   // the 4,000-character cap is gone
   "no-cap": [[SERVER, "  if (text.length <= ORACLE_RECORDS_CAP) return text;", "  return text;"]]
 };
@@ -247,6 +260,7 @@ function world(opts) {
       { user_id: OWNER, title: "Spring tonics", status: "published", slug: "spring-tonics", created_at: day(3) },
       { user_id: OWNER, title: "Winter roots", status: "published", slug: "winter-roots", created_at: day(30) },
       { user_id: OWNER, title: "Draft idea", status: "draft", slug: null, created_at: day(1) },
+      { user_id: OWNER, title: "Autumn notes", status: "draft", slug: "autumn-notes", body: "<p>No tracked link here.</p>", created_at: day(2) },
       { user_id: OTHER, title: MARK + " post", status: "published", slug: "spring-tonics", created_at: day(0) }
     ],
     engine_visits: [],
@@ -322,6 +336,8 @@ const UNREAD = "could not be read just now";
   const probe = await ask(world());
   check("the model was called once with a system prompt (stubbed)", !!probe.captured && probe.system.length > 1000, probe.error && probe.error.message);
   const ref = (slug) => probe.api.blogRefToken(OWNER, slug);
+  // The two published posts carry their refs, as publish_blog_post writes a money_path post; Autumn notes carries none.
+  seedA.content_library.forEach(r => { if (r.user_id === OWNER && (r.slug === "spring-tonics" || r.slug === "winter-roots")) r.body = '<a href="/suppressed.html?ref=' + ref(r.slug) + '">x</a>'; });
   seedA.engine_visits = [{ id: 1, ref: ref("spring-tonics"), landing_path: "/x" }, { id: 2, ref: ref("spring-tonics"), landing_path: "/x" },
     { id: 3, ref: ref("winter-roots"), landing_path: "/y" }, { id: 4, ref: probe.api.blogRefToken(OTHER, "spring-tonics"), landing_path: "/z" }];
   const A = await ask(seedA);
@@ -345,7 +361,8 @@ const UNREAD = "could not be read just now";
   const pub = sectionOf(block, "Published content");
   check("published content: the count and newest titles with dates", /- 2 published/.test(pub) && pub.indexOf("\"Spring tonics\" (" + day(3).slice(0, 10) + ")") !== -1 && !/Draft idea/.test(pub), pub);
   const arr = sectionOf(block, "Arrivals from this account's published posts");
-  check("arrivals: only visits through this account's posts' refs (3, not 4)", /- 3 arrival\(s\) through the tracked links of 2 post\(s\)/.test(arr), arr);
+  check("arrivals: only visits through this account's posts' refs (3, not 4), and only posts whose body carries the ref (2 of the 3 slugged)",
+    /- 3 arrival\(s\) through the tracked links of 2 post\(s\)/.test(arr) && posts.length === 3, arr);
   const spend = sectionOf(block, "Model spend this calendar month");
   const expectUsd = seedA.model_calls.filter(r => r.user_id === OWNER).reduce((n, r) => n + A.api.modelCallCostUsd(r).usd, 0);
   check("model spend: this month's, this account's, priced as the code prices it ($" + expectUsd.toFixed(2) + ")",
