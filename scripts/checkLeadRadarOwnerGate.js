@@ -126,20 +126,24 @@ require.cache[SUPABASE_PATH].exports = wrappedSupabase;
 
 /* ── the mutation, applied at compile ─────────────────────────────────────
    The guard is inline in the handler, so there is no layer to splice out.
-   Instead server.js is rewritten as Node compiles it: the first
-   `req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID` in the file is the GET
-   /api/leads guard (the other three compare a local `userId`), and it becomes
-   `false`. Exactly one replacement is required, or the mutation is refused —
-   a mutation that silently hit nothing would leave a green run claiming to
-   have been tested red. */
+   Instead server.js is rewritten as Node compiles it: the
+   `req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID` guard followed by the
+   "[/api/leads] REFUSING" warning is the GET /api/leads guard (the other
+   three compare a local `userId`), and it becomes `false`. Exactly one
+   replacement is required, or the mutation is refused — a mutation that
+   silently hit nothing would leave a green run claiming to have been tested
+   red. Re-anchored (YouTube quota build, Oct 2026): GET
+   /api/leads/youtube-signals carries the same guard line, so the line alone
+   now matches twice; the warning that follows names the route. */
 const SERVER_PATH = path.join(REPO, "server.js");
-const NEEDLE = "if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {";
+// The guard line, then (LF or CRLF, as the file on disk has it) the GET /api/leads warning.
+const NEEDLE = /if \(req\.user\.id !== OUTREACH_CREDENTIAL_OWNER_ID\) \{(\r?\n\s*console\.warn\("\[\/api\/leads\] REFUSING user ")/;
 let mutationApplied = false;
 if (MUTATING) {
   const realCompile = Module.prototype._compile;
   Module.prototype._compile = function (content, filename) {
     if (path.resolve(filename) === path.resolve(SERVER_PATH)) {
-      content = MUT.replaceOnce(content, NEEDLE, "if (false) {", "unguard-leads");
+      content = MUT.replaceRegexOnce(content, NEEDLE, "if (false) {$1", "unguard-leads");
       mutationApplied = true;
       console.log("\n!! MUTATION: the owner guard on GET /api/leads is now `if (false)` — that route's refusal checks below must fail.");
     }

@@ -55,6 +55,7 @@ const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
 const { youtubeRetentionEnabled, youtubeRetentionTick, YOUTUBE_RETENTION_JOB_NAME, YOUTUBE_RETENTION_MAX_PER_TICK } = require("./lib/youtubeRetention");
+const { youtubeCaps, youtubeUnitsToday } = require("./lib/youtubeQuota");
 const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine, UNREACHABLE_MESSAGE: GUARDED_FETCH_UNREACHABLE } = require("./lib/guardedFetch");
 const webpush = require("web-push");
 const cron = require("node-cron");
@@ -16741,6 +16742,20 @@ async function buildOracleAgentRecords(userId, onFailure) {
       .limit(1));
     return rows.length ? oracleSocialSearchLines(rows[0]) : [];
   });
+
+  /* YouTube API spend today, for the owner only: the radar runs on the owner's
+     key. A ledger that cannot be read (the table not applied yet included) is
+     reported through section() as unreadable, never as 0. */
+  if (userId === OUTREACH_CREDENTIAL_OWNER_ID) {
+    await section("YouTube API spend today (UTC)", async function () {
+      var used = await youtubeUnitsToday(supabase);
+      var caps = youtubeCaps(process.env);
+      if (caps.error) {
+        return ["- " + used.total + " units used (radar " + used.radar + "); " + caps.error + ", so every YouTube call is refused"];
+      }
+      return ["- " + used.total + " of " + caps.daily + " units used (radar " + used.radar + ")"];
+    });
+  }
 
   var text = ORACLE_RECORDS_HEADER + "\n" + sections.join("\n");
   if (text.length <= ORACLE_RECORDS_CAP) return text;
@@ -43926,6 +43941,53 @@ app.get("/api/leads", requireAuth, async function (req, res, next) {
     return res.json({ leads: (data || []).filter(leadHasRealScore) });
   } catch (err) {
     console.error("[/api/leads] Error:", err.message || err);
+    next(err);
+  }
+});
+
+/* GET /api/leads/youtube-signals — YouTube finds, shown apart.
+
+   youtubeRadar.js writes rows with source 'youtube' and status 'signal': never
+   scored (youtube is not in SCORABLE_SOURCES) and never sendable (not in
+   OUTREACH_SENDABLE_SOURCES), so GET /api/leads, which lists scored rows, never
+   shows them. This lists them on their own, for Lead Radar's separate YouTube
+   section: the newest YOUTUBE_SIGNALS_LIMIT, four fields each, never merged
+   with Bluesky or Mastodon rows. Each row is kept for at most 30 days
+   (lib/youtubeRetention.js).
+
+   OWNER ONLY, on the same gate and in the same position as GET /api/leads: a
+   refused request reads nothing. capture_on says whether ENABLE_YOUTUBE_RADAR
+   is exactly "true", so the page can say why the list is empty. */
+var YOUTUBE_SIGNALS_LIMIT = 50;
+app.get("/api/leads/youtube-signals", requireAuth, async function (req, res, next) {
+  try {
+    if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {
+      console.warn("[/api/leads/youtube-signals] REFUSING user " + req.user.id +
+        " — Lead Radar is limited to the credential owner " + OUTREACH_CREDENTIAL_OWNER_ID +
+        ". bsky_leads has no owner column, so every row is theirs. No rows were read.");
+      return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
+    }
+
+    var result = await supabase
+      .from("bsky_leads")
+      .select("post_uri, matched_keyword, post_created_at, post_text")
+      .eq("source", "youtube")
+      .eq("status", "signal")
+      .order("created_at", { ascending: false })
+      .limit(YOUTUBE_SIGNALS_LIMIT);
+
+    if (result.error) {
+      console.error("[/api/leads/youtube-signals] Supabase error:", result.error.message);
+      return res.status(500).json({ error: result.error.message });
+    }
+
+    return res.json({
+      finds: result.data || [],
+      capture_on: process.env.ENABLE_YOUTUBE_RADAR === "true",
+      kept_days: 30
+    });
+  } catch (err) {
+    console.error("[/api/leads/youtube-signals] Error:", err.message || err);
     next(err);
   }
 });

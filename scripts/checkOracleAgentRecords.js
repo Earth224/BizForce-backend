@@ -31,6 +31,11 @@
         real empty (no profile row, no sync row) still reads as empty.
      G. Order: the memories, then the records, then NO_INVENTION_RULE, which
         stays the last block of the shared brain.
+     H. YouTube API spend today, for the owner account only (the radar runs
+        on its key): "N of CAP units used (radar R)" summed from today's
+        youtube_api_calls rows; a ledger that cannot be read (the table not
+        applied yet included) says "could not be read just now", never 0;
+        an unusable cap is named; any other account has no such section.
 
    NAMED BEFORE → AFTER (Arrivals Ledger, Oct 18 2026, assertion changed on
    purpose):
@@ -69,6 +74,9 @@ const MUTATIONS = {
   // the arrivals section counts every slugged post again, tracked or not
   "old-denominator": [[SERVER, "\" arrival(s) through the tracked links of \" + refs.length + \" post(s);",
     "\" arrival(s) through the tracked links of \" + posts.length + \" post(s);"]],
+  // the YouTube spend line is shown to every account, not only the owner
+  "youtube-spend-for-everyone": [[SERVER, "  if (userId === OUTREACH_CREDENTIAL_OWNER_ID) {\n    await section(\"YouTube API spend today (UTC)\"",
+    "  if (true) {\n    await section(\"YouTube API spend today (UTC)\""]],
   // the 4,000-character cap is gone
   "no-cap": [[SERVER, "  if (text.length <= ORACLE_RECORDS_CAP) return text;", "  return text;"]]
 };
@@ -303,12 +311,13 @@ async function ask(seed, opts) {
     decodeHTML: rq("entities").decodeHTML, decodeHTMLAttribute: rq("entities").decodeHTMLAttribute,
     DateTime: rq("luxon").DateTime, encrypt: rq("./lib/apiKeyCrypto").encrypt, decrypt: rq("./lib/apiKeyCrypto").decrypt,
     OWNER_ACCOUNT_ID: rq("./lib/ownerAccount").OWNER_ACCOUNT_ID, computeSynastryAspects: rq("./lib/synastry").computeSynastryAspects,
+    youtubeCaps: rq("./lib/youtubeQuota").youtubeCaps, youtubeUnitsToday: rq("./lib/youtubeQuota").youtubeUnitsToday,
     app: { post(p) { handlers[p] = arguments[arguments.length - 1]; }, get() {}, use() {} }
   };
   vm.createContext(ctx);
   vm.runInContext(LIFTED, ctx);
   (o.override || []).forEach(code => vm.runInContext(code, ctx));
-  const req = { user: { id: OWNER, role: "admin" }, body: { message: "What did my agents do?" }, files: [], headers: {} };
+  const req = { user: { id: o.userId || OWNER, role: "admin" }, body: { message: "What did my agents do?" }, files: [], headers: {} };
   const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
   let error = null;
   await ctx.app && handlers["/api/oracle"](req, res, (e) => { error = e; });
@@ -471,6 +480,31 @@ const UNREAD = "could not be read just now";
     A.system.indexOf(BRAIN_MOD.NO_INVENTION_RULE + "\n\nSEEKER PROFILE:") !== -1 && A.system.lastIndexOf("AGENT RECORDS (") < iRule);
   const plain = BRAIN_MOD.buildAgentSystemPrompt("Agent prompt.", {}, {}, [], []);
   check("another agent's prompt is unchanged: no records, the rule still last", plain.indexOf("AGENT RECORDS") === -1 && plain.endsWith(BRAIN_MOD.NO_INVENTION_RULE));
+
+  /* ── H. YouTube API spend today, owner only ────────────────────────────── */
+  console.log("\n══ H. YouTube API spend today ══");
+  const YT_OWNER = require(path.join(REPO, "lib", "ownerAccount.js")).OWNER_ACCOUNT_ID;
+  const utcToday = new Date().toISOString().slice(0, 10);
+  const ytLedger = [
+    { id: 1, created_on: utcToday, caller: "radar", units: 100 }, { id: 2, created_on: utcToday, caller: "radar", units: 1 },
+    { id: 3, created_on: utcToday, caller: "social_search", units: 100 }, { id: 4, created_on: "2000-01-01", caller: "radar", units: 4000 }
+  ];
+  const ytTitle = "YouTube API spend today (UTC)";
+  const H1 = await ask(Object.assign(world(), { youtube_api_calls: ytLedger }), { userId: YT_OWNER });
+  check("H. the owner sees today's spend: 201 of 5000 units used (radar 101); yesterday's rows are not counted",
+    sectionOf(recordsOf(H1.system), ytTitle) === ytTitle + ":\n- 201 of 5000 units used (radar 101)", sectionOf(recordsOf(H1.system), ytTitle));
+  const H2 = await ask(Object.assign(world(), { youtube_api_calls: ytLedger }), { userId: YT_OWNER, env: { YOUTUBE_DAILY_UNIT_CAP: "800" } });
+  check("H. the cap comes from YOUTUBE_DAILY_UNIT_CAP", /- 201 of 800 units used \(radar 101\)/.test(recordsOf(H2.system)), sectionOf(recordsOf(H2.system), ytTitle));
+  const H3 = await ask(Object.assign(world(), { youtube_api_calls: ytLedger }), { userId: YT_OWNER, env: { YOUTUBE_RADAR_DAILY_UNITS: "2.5" } });
+  check("H. an unusable cap is named, and every call said to be refused",
+    /- 201 units used \(radar 101\); YOUTUBE_RADAR_DAILY_UNITS is set but is not a positive whole number, so every YouTube call is refused/.test(recordsOf(H3.system)), sectionOf(recordsOf(H3.system), ytTitle));
+  const H4 = await ask(world(), { userId: YT_OWNER, fail: q => q.table === "youtube_api_calls" ? { message: "relation \"public.youtube_api_calls\" does not exist" } : null });
+  check("H. the ledger missing: the section says it could not be read, never 0, and the failure is logged",
+    recordsOf(H4.system).indexOf(ytTitle + ": " + UNREAD + ".") !== -1 && !/units used/.test(recordsOf(H4.system)) &&
+    H4.logs.some(l => /YouTube API spend today/.test(l)), sectionOf(recordsOf(H4.system), ytTitle));
+  const H5 = await ask(Object.assign(world(), { youtube_api_calls: ytLedger }));
+  check("H. any other account has no YouTube spend section, and its records never read the ledger",
+    recordsOf(H5.system).indexOf(ytTitle) === -1 && !H5.db.log.some(q => q.table === "youtube_api_calls"), recordsOf(H5.system).slice(-200));
 
   check("zero model calls left the process (the model was a stub)", true);
   console.log("");

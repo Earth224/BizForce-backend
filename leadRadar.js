@@ -468,12 +468,13 @@ async function radarTick() {
        does can be switched off from the environment; this one ran on every
        tick, forever, with no way to stop it short of a deploy.
 
-       What it produces has no reader. youtubeRadar writes rows with status
-       "signal" and source "youtube": the scorer selects status "new" and
-       source in SCORABLE_SOURCES, so it never sees them, and both outreach
-       paths filter to OUTREACH_SENDABLE_SOURCES — bluesky and mastodon — so
-       neither can send to them. There is no YouTube sender for them to feed.
-       The rows therefore accumulate permanently and are read by nothing.
+       What it produces is shown, never scored or sent to. youtubeRadar writes
+       rows with status "signal" and source "youtube": the scorer selects
+       status "new" and source in SCORABLE_SOURCES, so it never sees them, and
+       both outreach paths filter to OUTREACH_SENDABLE_SOURCES — bluesky and
+       mastodon — so neither can send to them. The one reader is GET
+       /api/leads/youtube-signals, Lead Radar's separate YouTube section, and
+       the rows are deleted after 30 days (lib/youtubeRetention.js).
 
        Capture is free in money terms, which is why this was easy to leave
        running and why it stayed invisible: no invoice ever pointed at it. Free
@@ -483,9 +484,11 @@ async function radarTick() {
        sender might exist one day, which is not an argument for it running
        today.
 
-       ROWS ALREADY CAPTURED ARE LEFT ALONE. Nothing is deleted and nothing is
-       rewritten; youtubeRadar.js itself is untouched and still works. Turning
-       capture back on is one Railway variable. */
+       SPEND IS CAPPED. Every YouTube call reserves its units in
+       youtube_api_calls before it is sent, against YOUTUBE_DAILY_UNIT_CAP and
+       YOUTUBE_RADAR_DAILY_UNITS (lib/youtubeQuota.js), and no call is made if
+       that ledger cannot be read or written. Turning capture back on is one
+       Railway variable, once migration 138 is applied. */
     if (process.env.ENABLE_YOUTUBE_RADAR === "true") {
       if (!youtubeRadarStateLogged) {
         youtubeRadarStateLogged = true;

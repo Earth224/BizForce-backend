@@ -1,5 +1,6 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
+const { YOUTUBE_API_UNITS, youtubeCaps, youtubeUnitsToday, reserveYoutubeUnits } = require("./lib/youtubeQuota");
 
 const SUPABASE_URL         = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -47,9 +48,14 @@ const KEYWORDS = [
 // a tick shared with Bluesky and Mastodon, neither of which has a quota
 // problem. YouTube therefore throttles itself rather than slowing the tick.
 //
-// Quota arithmetic: 8 keywords at 100 units per search.list is 800 units per
-// full pass; 8 passes a day is 6,400 units, inside the 10,000/day free quota
-// with headroom for commentThreads.list at 1 unit each and for manual testing.
+// Quota: every call reserves its units in youtube_api_calls before it is sent
+// (lib/youtubeQuota.js), and before each search.list the pass checks that the
+// search and every comment call it can lead to still fit both caps:
+// YOUTUBE_DAILY_UNIT_CAP (default 5000, the whole key, all callers, per UTC
+// day) and YOUTUBE_RADAR_DAILY_UNITS (default 2500, the radar's share). A full
+// pass is at most 8 × (100 + 4 × 1) = 832 units, so at the defaults the radar
+// runs about three full passes a day and then stops until the UTC day turns.
+// The 3-hour interval still spaces the passes; the caps are what bound spend.
 const MIN_RUN_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
 // Deliberately in-process: it resets on redeploy, which costs at most one
@@ -57,10 +63,15 @@ const MIN_RUN_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 hours
 // problem this size.
 let lastRunStartedAt = 0;
 
+// Videos per search, and so the most comment calls one search can lead to.
+var SEARCH_MAX_RESULTS = 4;
+// A search's worst case in units: the search and one comment call per video.
+var SEARCH_WORST_CASE_UNITS = YOUTUBE_API_UNITS["search.list"] + SEARCH_MAX_RESULTS * YOUTUBE_API_UNITS["commentThreads.list"];
+
 async function fetchSearchResults(keyword) {
   var url = "https://www.googleapis.com/youtube/v3/search" +
     "?part=snippet&q=" + encodeURIComponent(keyword) +
-    "&type=video&order=date&maxResults=4&key=" + YOUTUBE_API_KEY;
+    "&type=video&order=date&maxResults=" + SEARCH_MAX_RESULTS + "&key=" + YOUTUBE_API_KEY;
   var response = await fetch(url);
   if (!response.ok) {
     let errBody = "";
@@ -114,11 +125,51 @@ async function runYoutubeRadarOnce() {
     return;
   }
 
+  /* FAIL CLOSED: an unusable cap means no YouTube call this pass. Logged once:
+     a pass happens at most once every MIN_RUN_INTERVAL_MS. */
+  var caps = youtubeCaps(process.env);
+  if (caps.error) {
+    console.error("[YoutubeRadar] No YouTube call this pass: " + caps.error + ".");
+    return;
+  }
+
+  // Reserve a call's units BEFORE it is sent. false (logged once) ends the pass.
+  var stopPass = false;
+  async function reserve(method) {
+    try {
+      await reserveYoutubeUnits(supabase, { caller: "radar", method: method });
+      return true;
+    } catch (ledgerErr) {
+      console.error("[YoutubeRadar] No YouTube call this pass: " + (ledgerErr.message || ledgerErr) + ".");
+      stopPass = true;
+      return false;
+    }
+  }
+
   try {
     var keywords = KEYWORDS;
 
     for (var i = 0; i < keywords.length; i++) {
+      if (stopPass) break;
       var keyword = keywords[i];
+
+      /* Both caps, read fresh from the ledger before each search: the search
+         and every comment call it can lead to must fit. A ledger that cannot
+         be read means no call. */
+      var used;
+      try {
+        used = await youtubeUnitsToday(supabase);
+      } catch (readErr) {
+        console.error("[YoutubeRadar] No YouTube call this pass: " + (readErr.message || readErr) + ".");
+        break;
+      }
+      if (used.total + SEARCH_WORST_CASE_UNITS > caps.daily || used.radar + SEARCH_WORST_CASE_UNITS > caps.radar) {
+        console.log("[YoutubeRadar] Pass stopped before '" + keyword + "': " + used.total + " of " + caps.daily +
+          " units used today (radar " + used.radar + " of " + caps.radar + "), and the next search can cost " + SEARCH_WORST_CASE_UNITS + ".");
+        break;
+      }
+      if (!(await reserve("search.list"))) break;
+
       try {
         var searchData = await fetchSearchResults(keyword);
         var videoItems = (searchData && searchData.items) || [];
@@ -130,8 +181,9 @@ async function runYoutubeRadarOnce() {
 
         var rows = [];
 
-        for (var v = 0; v < videoIds.length; v++) {
+        for (var v = 0; v < videoIds.length && v < SEARCH_MAX_RESULTS; v++) {
           var videoId = videoIds[v];
+          if (!(await reserve("commentThreads.list"))) break;
           try {
             var commentsData = await fetchCommentThreads(videoId);
             if (!commentsData) continue; // comments disabled — skip quietly
@@ -203,4 +255,4 @@ async function runYoutubeRadarOnce() {
   }
 }
 
-module.exports = { runYoutubeRadarOnce };
+module.exports = { runYoutubeRadarOnce, KEYWORDS };

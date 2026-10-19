@@ -93,7 +93,8 @@ const ADDED = [
   ["post", "/api/agents/vertical_marketing/claims-scan"], // Claims Scan runs both claim rulebooks over everything you publish (total 304 -> 305)
   ["post", "/api/agents/community/audience"],     // The Community agent counts each brand's audience from your own sign-ups (total 305 -> 306)
   ["post", "/api/agents/analytics/arrivals"],     // The Analytics agent counts arrivals per article from your own tracked links (total 306 -> 307)
-  ["post", "/api/agents/seo/social-search"]       // The SEO agent measures copy for YouTube, TikTok and Instagram search (total 307 -> 308)
+  ["post", "/api/agents/seo/social-search"],      // The SEO agent measures copy for YouTube, TikTok and Instagram search (total 307 -> 308)
+  ["get", "/api/leads/youtube-signals"]          // Every YouTube API unit is reserved against a daily cap before it is spent: YouTube finds shown apart (total 308 -> 309)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -209,6 +209,24 @@
         counts new sign-ups by month, so "nothing measures growth" stopped
         being true; it still reads no engagement.
 
+   NAMED BEFORE → AFTER (YouTube quota build, Oct 2026, assertions changed on
+   purpose):
+     L  the Lead Radar tip had to say "…and YouTube capture is switched off.
+        YouTube finds are kept for at most 30 days…" → "Mastodon and YouTube
+        searches run only when switched on. YouTube finds are listed in their
+        own section below the scored list: not scored, not replyable from
+        here, and kept for at most 30 days; a Sales pipeline entry built on
+        one is removed with it". YouTube capture is now spend-capped
+        (lib/youtubeQuota.js) and meant to be switched back on, so "is
+        switched off" and "not currently captured" would turn false the day
+        the owner sets ENABLE_YOUTUBE_RADAR. The subtitle now says "YouTube
+        capture also runs only when switched on; its finds are listed apart,
+        never scored, and kept for at most 30 days", and the Sales Pipeline
+        note "…and YouTube capture runs only when switched on". New evidence:
+        the section, its route and the absence of any Draft button in it.
+        restore-lead-radar-tip and restore-radar-146-unconditional are
+        re-anchored on the new tip text.
+
    NAMED BEFORE → AFTER (YouTube retention build, Oct 2026, assertions changed
    on purpose):
      L  the Lead Radar tip had to say "Older scored YouTube finds can appear
@@ -267,7 +285,7 @@ const fileOfKey = k => IN_AGENTS.indexOf(k) !== -1 ? "agents/" + k : k;
 const MUTATIONS = {
   // Lead Radar's tip claims the Business Profile again
   "restore-lead-radar-tip": [[GUIDE,
-    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off. YouTube finds are kept for at most 30 days, and a Sales pipeline entry built on one is removed with it. It does not read your Business Profile, so editing your profile does not change what it finds."',
+    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. It does not read your Business Profile, so editing your profile does not change what it finds."',
     '"It tracks against your Business Profile\'s Competitors and Industry — keep those current so the radar is watching the conversations that actually matter to you."']],
   // the broker tip points at the removed Pipeline report section again
   "restore-broker-pipeline-section": [[GUIDE,
@@ -292,7 +310,7 @@ const MUTATIONS = {
     '<p class="agent-subtitle">Your real-time business intelligence.</p>']],
   // line 146 claims Mastodon and YouTube unconditionally again
   "restore-radar-146-unconditional": [[GUIDE,
-    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off. YouTube finds are kept for at most 30 days, and a Sales pipeline entry built on one is removed with it. It does not read",
+    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. It does not read",
     "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code; it does not read"]],
   // the retention job stops deleting the pipeline rows built on a YouTube find: the tip's new sentence would be false
   "retention-keeps-pipeline": [[RETENTION, "      .from(\"sales_lead_pipeline\")\n      .delete()\n", "      .from(\"sales_lead_pipeline\")\n      .select(\"id\")\n"]],
@@ -527,9 +545,11 @@ check("L. the tip says it searches a fixed set of buyer-intent phrases on Bluesk
   /fixed set of buyer-intent phrases on Bluesky, set in the radar's own code/.test(lrTip) && !/on Bluesky, Mastodon and YouTube/.test(lrTip), lrTip);
 // NAMED BEFORE → AFTER: was "…and YouTube finds are not shown here", which was false; then (Social Search build)
 // "Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown", until the retention job.
-check("L. the tip says Mastodon and YouTube searches run only when switched on, YouTube capture is off, YouTube finds are kept for at most 30 days and a pipeline entry on one is removed with it",
-  /Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off\./.test(lrTip) &&
-  /YouTube finds are kept for at most 30 days, and a Sales pipeline entry built on one is removed with it\./.test(lrTip) &&
+// NAMED BEFORE → AFTER (YouTube quota build): was "…and YouTube capture is switched off. YouTube finds are kept for at
+// most 30 days, and a Sales pipeline entry built on one is removed with it."
+check("L. the tip says Mastodon and YouTube searches run only when switched on, and YouTube finds have their own section: not scored, not replyable, kept at most 30 days, a pipeline entry removed with one",
+  /Mastodon and YouTube searches run only when switched on\. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it\./.test(lrTip) &&
+  !/YouTube capture is switched off/.test(lrTip) &&
   !/Older scored YouTube finds can appear/.test(lrTip) && !/YouTube finds are not shown here/.test(lrTip), lrTip);
 check("L. the tip says it does not read your Business Profile", /does not read your Business Profile/.test(lrTip));
 check("L. no Lead Radar tip makes a Business Profile claim: the profile is named only in that denial",
@@ -576,10 +596,19 @@ check("L. YouTube finds are kept for at most 30 days: the retention job deletes 
 check("L. a Sales pipeline entry built on a YouTube find is removed with it: the job deletes sales_lead_pipeline rows on the batch's leads before the leads",
   /\.from\("sales_lead_pipeline"\)\n      \.delete\(\)\n      \.in\("lead_post_uri", deletableUris\)/.test(RET) &&
   RET.indexOf(".from(\"sales_lead_pipeline\")") < RET.indexOf("// (b) THE LEADS."));
-check("L. the subtitle and the Sales Pipeline say the same: kept for at most 30 days, not currently captured, a pipeline entry removed with it",
-  /YouTube finds are kept for at most 30 days and are not currently captured\./.test(radarSub0()) &&
-  /<p class="sales-pipeline-note">YouTube finds are kept for at most 30 days and are not currently captured\. A pipeline entry built on a YouTube find is removed with it\.<\/p>/.test(FILES[SALES]),
-  radarSub0());
+// NAMED BEFORE → AFTER (YouTube quota build): both said "…and are not currently captured".
+check("L. the subtitle and the Sales Pipeline say the same: capture only when switched on, kept for at most 30 days, a pipeline entry removed with it",
+  /YouTube capture also runs only when switched on; its finds are listed apart, never scored, and kept for at most 30 days\./.test(radarSub0()) &&
+  /<p class="sales-pipeline-note">YouTube finds are kept for at most 30 days, and YouTube capture runs only when switched on\. A pipeline entry built on a YouTube find is removed with it\.<\/p>/.test(FILES[SALES]) &&
+  !/not currently captured/.test(radarSub0() + FILES[SALES]), radarSub0());
+// The section the tip and the subtitle name: its own route, its own list, no Draft button.
+const ytSection = (/<section class="yt-section" id="ytSection"[^>]*>[\s\S]*?<\/section>/.exec(FILES[RADAR_PAGE]) || [""])[0];
+const ytBuilder = (/function buildYoutubeFind\(find\) \{[\s\S]*?\n    \}\n/.exec(FILES[RADAR_PAGE]) || [""])[0];
+check("L. lead-radar.html has the YouTube section, titled as the tip says, outside #leadsList, fed by /api/leads/youtube-signals",
+  /<h2 class="yt-title">YouTube finds — not scored, cannot be replied to from here, kept 30 days<\/h2>/.test(ytSection) &&
+  ytSection.indexOf('id="leadsList"') === -1 && /fetch\(API \+ "\/api\/leads\/youtube-signals"/.test(FILES[RADAR_PAGE]) &&
+  /app\.get\("\/api\/leads\/youtube-signals", requireAuth,/.test(FILES[SERVER]), ytSection.slice(0, 200));
+check("L. a YouTube find has no Draft button, no score and no reply control", ytBuilder.length > 0 && !/draft|score|reply|copy-btn/i.test(ytBuilder), ytBuilder.slice(0, 300));
 const radarSub = (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
 const UNCONDITIONAL = /Mastodon &amp; YouTube every|Bluesky, Mastodon(,| and| &amp;) YouTube|(?:and|,) scored by intent|scores them,|\bscans? Mastodon|\bscans? YouTube/i;
 check("L. the subtitle says Bluesky every 5 minutes and that Mastodon capture and intent scoring run only when switched on",

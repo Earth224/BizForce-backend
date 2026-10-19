@@ -252,6 +252,8 @@ function context(seed, opts) {
     process: { env: Object.assign({ ENABLE_EMAIL_SEQUENCES: "false" }, o.env || {}) },
     console: { log: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) },
     getUserPlan: async () => (o.plan || { active: true, plan: "pro", subscription: { status: "active" }, config: {}, exempt: false, access_reason: "subscribed" }),
+    // The lifted Agent records name the owner account (its YouTube spend line is owner only).
+    OWNER_ACCOUNT_ID: rq("./lib/ownerAccount").OWNER_ACCOUNT_ID,
     app: { post(p) { handlers[p] = [].slice.call(arguments, 1); }, get() {}, use() {} }
   };
   MODEL_ENTRY.forEach(n => { ctx[n] = record(n); });
