@@ -16392,8 +16392,9 @@ app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
 
    ARRIVALS are counted only where they can be attributed: a blog post's money
    link carries blogRefToken(user_id, slug), so recomputing it over this
-   account's slugs joins engine_visits back to the account. A Lead Radar ref is
-   not tied to an account here and is not counted. */
+   account's slugs joins engine_visits back to the account. This section counts
+   posts only: a Lead Radar ref is attributed through outreach_sends.user_id,
+   in the Arrivals Ledger, and is not counted here. */
 var ORACLE_RECORDS_CAP = 4000;
 var ORACLE_RECORDS_UNREADABLE = "could not be read just now";
 var ORACLE_RECORDS_HEADER =
@@ -16448,6 +16449,34 @@ function oracleArrivalsLedgerLines(row) {
     lines.push("- \"" + oracleRecordText(p && p.title, 80) + "\": arrivals " + n(p && p.arrivals_total));
   });
   lines.push("- " + ARRIVALS_NOTE_SHORT);
+  return lines;
+}
+
+/* The latest Social Search run, as stored: the platform, where the phrase was
+   found as yes or no, its first position against the cut, which lengths are
+   within their limits, and the hashtag count against the practical number.
+   Never the draft's text, its hashtags or the phrase itself. */
+function oracleSocialSearchLines(row) {
+  var m = (row && row.output && row.output.measured) || {};
+  var f = m.found || {};
+  var yn = function (v) { return v === true ? "yes" : v === false ? "no" : "not measured"; };
+  var n = function (v) { return typeof v === "number" ? String(v) : "not measured"; };
+  var label = SOCIAL_SEARCH_LIMITS[m.platform] ? SOCIAL_SEARCH_LIMITS[m.platform].label : "not recorded";
+  var lines = ["- " + oracleRecordDate(row && row.created_at) + ": " + label + "; phrase in the title: " +
+    (m.platform === "youtube" ? yn(f.title) : "no title on this platform") + "; before the cut: " + yn(f.before_cut) +
+    "; in the body: " + yn(f.body) + "; in hashtags: " + yn(f.hashtags) + (m.platform === "youtube" ? "; in tags: " + yn(f.tags) : "")];
+  var fields = m.platform === "youtube" ? ["title", "description"] : ["caption"];
+  fields.forEach(function (k) {
+    var t = m[k];
+    if (!t || typeof t !== "object") return;
+    lines.push("- " + k + ": first position " + (typeof t.phrase_first_index === "number" ? t.phrase_first_index : "none (not found)") +
+      " against the cut at " + n(t.cut_at) + (t.cut_is_approximate ? " (approximate)" : "") + "; within its limit: " + yn(t.within_limit));
+  });
+  if (m.platform === "youtube" && m.tags && typeof m.tags === "object") lines.push("- tags: within the " + SOCIAL_SEARCH_LIMITS.youtube.tags_max_total + " for the list: " + yn(m.tags.within_limit));
+  var h = m.platform === "youtube" ? m.description_hashtags : m.hashtags;
+  if (h && typeof h === "object") {
+    lines.push("- hashtags: " + n(h.count) + " against a practical " + n(m.platform === "youtube" ? h.shown_by_title_max : h.practical));
+  }
   return lines;
 }
 
@@ -16632,7 +16661,7 @@ async function buildOracleAgentRecords(userId, onFailure) {
       .in("ref", refs);
     if (visits.error) throw visits.error;
     if (typeof visits.count !== "number") throw new Error("the arrivals count was not returned");
-    return ["- " + visits.count + " arrival(s) through the tracked links of " + refs.length + " post(s); Lead Radar arrivals are not attributable per account and are not counted here"];
+    return ["- " + visits.count + " arrival(s) through the tracked links of " + refs.length + " post(s); Lead Radar arrivals are counted per account in the Arrivals Ledger, through this account's own outreach sends, and are not counted here"];
   });
 
   await section("Model spend this calendar month (platform-funded calls at list prices; calls on the account's own key are not counted)", async function () {
@@ -16698,6 +16727,18 @@ async function buildOracleAgentRecords(userId, onFailure) {
       .order("created_at", { ascending: false })
       .limit(1));
     return rows.length ? oracleArrivalsLedgerLines(rows[0]) : [];
+  });
+
+  await section("Latest Social Search (counts only)", async function () {
+    var rows = must(await supabase
+      .from("ai_tasks")
+      .select("created_at, output")
+      .eq("user_id", userId)
+      .eq("task_type", "seo/social-search")
+      .not("output", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1));
+    return rows.length ? oracleSocialSearchLines(rows[0]) : [];
   });
 
   var text = ORACLE_RECORDS_HEADER + "\n" + sections.join("\n");
@@ -26814,7 +26855,8 @@ var SOCIAL_PLATFORMS = {
     truncates_at: 125,
     hashtag_max: 30, hashtag_practical: 5,
     note: "2,200 characters is enforced. The caption is cut at roughly 125 characters behind " +
-          "\"more\", so the opening line carries the post. 30 hashtags is the enforced maximum."
+          "\"more\", so the opening line carries the post. The hashtag limit varies by account: 30 on " +
+          "older accounts, and reported as 5 on newer ones."
   },
   linkedin: {
     label: "LinkedIn",
@@ -26882,9 +26924,14 @@ var BLUESKY_UNCOUNTABLE = {
 /* Hashtags counted in code. The pattern deliberately requires a letter after the
    hash so that "#1 bestseller" is not counted as a hashtag — it is not one, and
    counting it would inflate the number and fire the practical-limit warning on a
-   post that has no hashtags at all. */
+   post that has no hashtags at all.
+
+   A LETTER IN ANY SCRIPT. The pattern was ASCII-only, so #café was counted as
+   #caf and #日本 not at all. \p{L} is any letter, \p{M} the combining marks
+   some scripts write letters with, \p{N} any digit. On ASCII text the counts
+   are unchanged (checkSocialSearch proves it on social/post's fixtures). */
 function countHashtags(text) {
-  var matches = String(text || "").match(/#[A-Za-z][A-Za-z0-9_]*/g) || [];
+  var matches = String(text || "").match(/#\p{L}[\p{L}\p{M}\p{N}_]*/gu) || [];
   var seen = {};
   var unique = [];
   matches.forEach(function (tag) {
@@ -27654,6 +27701,471 @@ async function executePublishSocialPost(proposal) {
 
   return { uri: uri, cid: cid, published_at: publishedAt, draft_id: draft.id };
 }
+
+// ── SEO Agent: Social Search ────────────────────────────────────────────────
+
+/* POST /api/agents/seo/social-search measures a draft for YouTube, TikTok or
+   Instagram against the phrase it is meant to be found by, in code: where the
+   phrase appears, whether its first occurrence is visible before the cut,
+   every length against its limit, and the hashtag or tag counts.
+
+   NOTHING IS SEARCHED. No platform's search data is read and no platform API
+   is called — not YouTube's either, whose key this process holds for the radar.
+   So nothing here knows search volume, ranking, competition or reach, and the
+   response says so. The model is called only when suggest_rewrites is true,
+   and then only to suggest rewrites, each of which is measured again in code.
+
+   It sits here, after the Social Agent's SOCIAL_PLATFORMS, because two of its
+   values are read from that table and it must already exist. */
+
+/* Every value carries its source. Characters are Unicode code points (an emoji
+   counts once); a YouTube description is measured in UTF-8 bytes, because that
+   is the unit its limit is set in. */
+var SOCIAL_SEARCH_LIMITS = {
+  youtube: {
+    label: "YouTube",
+    // YouTube Data API, videos resource, snippet.title: at most 100 characters (checked Oct 2026).
+    title_max: 100,
+    // APPROXIMATE: about 70 characters of a title show in search results before it is cut. YouTube publishes no fixed number.
+    title_visible_approx: 70,
+    // YouTube Data API, videos resource, snippet.description: at most 5000 BYTES (checked Oct 2026), measured as UTF-8 bytes.
+    description_max_bytes: 5000,
+    // APPROXIMATE: about 150 characters of a description show before "more". YouTube publishes no fixed number.
+    description_visible_approx: 150,
+    // YouTube Data API, videos resource, snippet.tags[]: 500 characters for the whole list, separators included (checked Oct 2026).
+    // Counted here as every tag's characters plus one comma between each pair of tags.
+    tags_max_total: 500,
+    // YouTube Help, article 6390658: the first 3 hashtags in a description may show by the title.
+    description_hashtags_shown_by_title: 3,
+    // YouTube Help, article 6390658: with more than 60 hashtags, every hashtag on the video is ignored.
+    description_hashtags_ignored_over: 60
+  },
+  tiktok: {
+    label: "TikTok",
+    // TikTok Content Posting API: a caption of at most 2200 characters. The in-app limit can be higher; this is the one a caption posted through the API must meet.
+    caption_max: 2200,
+    // SOCIAL_PLATFORMS.tiktok.truncates_at: roughly 100 characters show over the video before the caption is cut.
+    truncates_at: SOCIAL_PLATFORMS.tiktok.truncates_at,
+    // SOCIAL_PLATFORMS.tiktok.hashtag_practical: past about 5, hashtags stop helping (a judgement, labelled as one there).
+    hashtag_practical: SOCIAL_PLATFORMS.tiktok.hashtag_practical
+  },
+  instagram: {
+    label: "Instagram",
+    // Instagram's caption limit, 2200 characters, as SOCIAL_PLATFORMS.instagram.max states it.
+    caption_max: 2200,
+    // The caption is cut at roughly 125 characters behind "more", as SOCIAL_PLATFORMS.instagram.truncates_at states it.
+    truncates_at: 125,
+    // Newer accounts: 5, reported rolling out since Dec 2025 by third-party trackers. UNVERIFIED with Meta.
+    hashtag_max_newer_accounts: 5,
+    // Legacy accounts: 30, SOCIAL_PLATFORMS.instagram.hashtag_max.
+    hashtag_max_legacy: 30,
+    // SOCIAL_PLATFORMS.instagram.hashtag_practical: past about 5, hashtags stop helping (a judgement).
+    hashtag_practical: SOCIAL_PLATFORMS.instagram.hashtag_practical
+  }
+};
+
+// The same sources, as the response states them beside the limits.
+var SOCIAL_SEARCH_LIMIT_SOURCES = {
+  youtube: [
+    "Title: at most 100 characters (YouTube Data API, videos resource, checked Oct 2026).",
+    "Description: at most 5000 bytes, measured as UTF-8 (YouTube Data API, videos resource, checked Oct 2026).",
+    "Tags: 500 characters for the whole list, counted as every tag's characters plus one comma between each pair (YouTube Data API, videos resource, checked Oct 2026).",
+    "Description hashtags: the first 3 may show by the title; more than 60 and every hashtag is ignored (YouTube Help, 6390658).",
+    "APPROXIMATE: about 70 characters of a title and about 150 of a description show before the cut. YouTube publishes no fixed numbers."
+  ],
+  tiktok: [
+    "Caption: at most 2200 characters, the TikTok Content Posting API limit. The in-app limit can be higher.",
+    "About 100 characters show over the video before the caption is cut, and past about 5 hashtags they stop helping (BizForce's social limits)."
+  ],
+  instagram: [
+    "Caption: at most 2200 characters, cut at roughly 125 behind \"more\".",
+    "Hashtags: the limit varies by account. 30 on older accounts; reported as 5 on newer ones by third-party trackers since Dec 2025, unverified with Meta."
+  ]
+};
+
+var SOCIAL_SEARCH_PLATFORM_FIELDS = { youtube: ["title", "description", "tags"], tiktok: ["caption"], instagram: ["caption"] };
+var SOCIAL_SEARCH_DRAFT_FIELDS = ["title", "description", "tags", "caption"];
+var SOCIAL_SEARCH_INPUT_CAPS = { title: 1000, description: 20000, caption: 10000, tag: 500, tags: 200 };
+var SOCIAL_SEARCH_NOT_MEASURED = [
+  "Search volume: nothing here knows how many people search for the phrase",
+  "Ranking: nothing here knows where the post would appear in any search",
+  "Competition: nothing here knows how many other posts use the phrase",
+  "Reach: nothing here knows how many people would see the post",
+  "Any platform's search data: no YouTube, TikTok or Instagram search was run or read"
+];
+var SOCIAL_SEARCH_INSTAGRAM_VARIES =
+  "Instagram's hashtag limit varies by account: 30 on older accounts, and reported as 5 on newer ones " +
+  "(third-party trackers since Dec 2025, unverified with Meta). Check the limit your own account is given.";
+
+/* A promise about outcomes, which no rewrite may carry: nothing here measures
+   views, rank or reach, so a rewrite that claims them is dropped whole. */
+var SOCIAL_SEARCH_OUTCOME_CLAIMS = /\b(?:more|higher|better|boosts?|boosted|increases?|increased|grows?|growth|gets?|drives?)\s+(?:\w+\s+){0,2}(?:views|viewers|rankings?|rank|reach|impressions|followers|engagement|clicks|traffic)\b|\brank(?:s|ed|ing)?\s+(?:higher|first|top|#?1)\b|\bgo(?:es)? viral\b|\bthe algorithm\b/i;
+
+function socialSearchChars(text) { return Array.from(String(text == null ? "" : text)).length; }
+function socialSearchStripped(text) { return String(text == null ? "" : text).toLowerCase().replace(/\s+/g, ""); }
+
+/* Every occurrence of the phrase: case-insensitive, any run of whitespace
+   between its words, start and end in code points. */
+function socialSearchOccurrences(text, phrase) {
+  var words = String(phrase).trim().split(/\s+/).map(function (w) { return w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); });
+  var re = new RegExp(words.join("\\s+"), "giu");
+  var s = String(text == null ? "" : text), out = [], m;
+  while ((m = re.exec(s))) {
+    var start = socialSearchChars(s.slice(0, m.index));
+    out.push({ start: start, end: start + socialSearchChars(m[0]) });
+    if (!m[0].length) re.lastIndex++;
+  }
+  return out;
+}
+
+/* One text field against its limit and its cut. unit "bytes" measures the
+   limit in UTF-8 bytes and still reports the length in characters. An
+   occurrence is before the cut only if the whole phrase ends at or before it. */
+function socialSearchTextField(text, limit, unit, cut, cutApproximate, phrase) {
+  var s = String(text);
+  var chars = socialSearchChars(s);
+  var size = unit === "bytes" ? Buffer.byteLength(s, "utf8") : chars;
+  var occ = socialSearchOccurrences(s, phrase);
+  var out = { length: chars };
+  if (unit === "bytes") { out.bytes = size; out.limit_bytes = limit; } else { out.limit = limit; }
+  out.within_limit = size <= limit;
+  out.over_by = Math.max(0, size - limit);
+  out.cut_at = cut;
+  out.cut_is_approximate = cutApproximate;
+  out.hidden_by_truncation = Math.max(0, chars - cut);
+  out.phrase_occurrences = occ.length;
+  if (occ.length) {
+    out.phrase_first_index = occ[0].start;
+    out.phrase_first_before_cut = occ[0].end <= cut;
+  } else {
+    out.phrase_first_index = null; out.phrase_first_index_reason = "the phrase does not appear here";
+    out.phrase_first_before_cut = null; out.phrase_first_before_cut_reason = "the phrase does not appear here";
+  }
+  out.phrase_before_cut = occ.some(function (o) { return o.end <= cut; });
+  out.phrase_after_cut = occ.some(function (o) { return o.end > cut; });
+  return out;
+}
+
+// Hashtags in a caption or description, and those that hold the phrase with its spaces removed (#tongkatali holds "tongkat ali").
+function socialSearchHashtags(text, phrase) {
+  var tags = countHashtags(text);
+  var wanted = socialSearchStripped(phrase);
+  var matching = tags.unique.filter(function (t) { return socialSearchStripped(t.slice(1)).indexOf(wanted) !== -1; });
+  return { count: tags.total, unique_count: tags.unique_count, phrase_in_hashtags: matching.length > 0, matching_hashtags: matching };
+}
+
+/* The measurement, given a validated draft. Pure: no read, no clock, no call. */
+function measureSocialSearch(platform, phrase, draft) {
+  var L = SOCIAL_SEARCH_LIMITS[platform];
+  var m = { platform: platform, character_unit: "Unicode code points (an emoji counts once)" };
+  var findings = [];
+  function finding(id, field, text) { findings.push({ id: id, field: field, finding: text }); }
+  var found = {};
+  var tagsHold = false;
+
+  if (platform === "youtube") {
+    var notGiven = function (f) { return "no " + f + " was given"; };
+    if (draft.title !== undefined) {
+      m.title = socialSearchTextField(draft.title, L.title_max, "characters", L.title_visible_approx, true, phrase);
+      found.title = m.title.phrase_occurrences > 0;
+      if (!m.title.within_limit) finding("title_over_limit", "title", "The title is " + m.title.over_by + " character(s) over YouTube's " + L.title_max + ".");
+      if (!found.title) finding("phrase_not_in_title", "title", "The phrase is not in the title.");
+      else if (!m.title.phrase_first_before_cut) finding("phrase_after_title_cut", "title", "The phrase first ends past about " + L.title_visible_approx + " characters, where a title is usually cut in search results (approximate).");
+    } else {
+      m.title = null; m.title_reason = notGiven("title");
+      found.title = null; found.title_reason = notGiven("title");
+    }
+    if (draft.description !== undefined) {
+      m.description = socialSearchTextField(draft.description, L.description_max_bytes, "bytes", L.description_visible_approx, true, phrase);
+      found.before_cut = m.description.phrase_before_cut;
+      found.body = m.description.phrase_after_cut;
+      if (!m.description.within_limit) finding("description_over_limit", "description", "The description is " + m.description.over_by + " byte(s) over YouTube's " + L.description_max_bytes + ".");
+      if (!found.before_cut) finding("phrase_not_before_description_cut", "description", "The phrase is not in the first " + L.description_visible_approx + " or so characters of the description, which show before \"more\" (approximate).");
+      var dh = socialSearchHashtags(draft.description, phrase);
+      m.description_hashtags = {
+        count: dh.count, unique_count: dh.unique_count,
+        shown_by_title_max: L.description_hashtags_shown_by_title,
+        within_shown_by_title: dh.count <= L.description_hashtags_shown_by_title,
+        ignored_over: L.description_hashtags_ignored_over,
+        all_ignored: dh.count > L.description_hashtags_ignored_over,
+        phrase_in_hashtags: dh.phrase_in_hashtags, matching_hashtags: dh.matching_hashtags
+      };
+      found.hashtags = dh.phrase_in_hashtags;
+      if (m.description_hashtags.all_ignored) finding("description_hashtags_all_ignored", "description", "More than " + L.description_hashtags_ignored_over + " hashtags: YouTube ignores every hashtag on the video.");
+      else if (!m.description_hashtags.within_shown_by_title) finding("hashtags_over_practical", "description", "Only the first " + L.description_hashtags_shown_by_title + " description hashtags may show by the title.");
+    } else {
+      ["description", "description_hashtags"].forEach(function (k) { m[k] = null; m[k + "_reason"] = notGiven("description"); });
+      ["before_cut", "body", "hashtags"].forEach(function (k) { found[k] = null; found[k + "_reason"] = notGiven("description"); });
+    }
+    if (draft.tags !== undefined) {
+      var total = draft.tags.reduce(function (n, t) { return n + socialSearchChars(t); }, 0) + Math.max(0, draft.tags.length - 1);
+      var wantedNorm = String(phrase).trim().toLowerCase().replace(/\s+/g, " ");
+      var wantedStripped = socialSearchStripped(phrase);
+      tagsHold = draft.tags.some(function (t) {
+        return String(t).toLowerCase().replace(/\s+/g, " ").indexOf(wantedNorm) !== -1 || socialSearchStripped(t).indexOf(wantedStripped) !== -1;
+      });
+      m.tags = {
+        count: draft.tags.length,
+        total_characters: total,
+        counted_as: "every tag's characters plus one comma between each pair of tags",
+        limit: L.tags_max_total,
+        within_limit: total <= L.tags_max_total,
+        over_by: Math.max(0, total - L.tags_max_total),
+        phrase_in_tags: tagsHold
+      };
+      found.tags = tagsHold;
+      if (!m.tags.within_limit) finding("tags_over_limit", "tags", "The tags are " + m.tags.over_by + " character(s) over YouTube's " + L.tags_max_total + " for the whole list.");
+    } else {
+      m.tags = null; m.tags_reason = notGiven("tags");
+      found.tags = null; found.tags_reason = notGiven("tags");
+    }
+  } else {
+    m.caption = socialSearchTextField(draft.caption, L.caption_max, "characters", L.truncates_at, false, phrase);
+    found.before_cut = m.caption.phrase_before_cut;
+    found.body = m.caption.phrase_after_cut;
+    if (!m.caption.within_limit) finding("caption_over_limit", "caption", "The caption is " + m.caption.over_by + " character(s) over " + L.label + "'s " + L.caption_max + ".");
+    if (!found.before_cut) finding("phrase_not_before_cut", "caption", "The phrase is not in the first " + L.truncates_at + " characters, which show before the caption is cut.");
+    var ch = socialSearchHashtags(draft.caption, phrase);
+    m.hashtags = { count: ch.count, unique_count: ch.unique_count, practical: L.hashtag_practical, within_practical: ch.count <= L.hashtag_practical };
+    if (platform === "instagram") {
+      m.hashtags.max_newer_accounts = L.hashtag_max_newer_accounts;
+      m.hashtags.within_newer_account_limit = ch.count <= L.hashtag_max_newer_accounts;
+      m.hashtags.max_legacy = L.hashtag_max_legacy;
+      m.hashtags.within_legacy_limit = ch.count <= L.hashtag_max_legacy;
+      m.hashtags.limit_varies_by_account = SOCIAL_SEARCH_INSTAGRAM_VARIES;
+      if (!m.hashtags.within_legacy_limit) finding("hashtags_over_legacy_limit", "caption", "More than " + L.hashtag_max_legacy + " hashtags: over the limit on every account.");
+      else if (!m.hashtags.within_newer_account_limit) finding("hashtags_over_newer_account_limit", "caption", "More than " + L.hashtag_max_newer_accounts + " hashtags: over the limit reported for newer accounts, within the legacy " + L.hashtag_max_legacy + ".");
+    } else {
+      m.hashtags.max = null; m.hashtags.max_reason = "TikTok publishes no hashtag maximum that this tool checks against";
+      if (!m.hashtags.within_practical) finding("hashtags_over_practical", "caption", "More than " + L.hashtag_practical + " hashtags, past the point where they stop helping (a judgement).");
+    }
+    m.hashtags.phrase_in_hashtags = ch.phrase_in_hashtags;
+    m.hashtags.matching_hashtags = ch.matching_hashtags;
+    found.hashtags = ch.phrase_in_hashtags;
+  }
+
+  var anywhere = Object.keys(found).some(function (k) { return found[k] === true; });
+  if (!anywhere) finding("phrase_not_found", null, "The phrase appears nowhere in the draft.");
+  m.found = found;
+  m.findings = findings;
+  m.note = findings.length
+    ? findings.length + " finding(s), each measured in code against the limits below. Nothing here measures search volume, ranking or reach."
+    : "Nothing to fix against these limits. That is a measurement of the draft, not a prediction of how it will be found.";
+  return m;
+}
+
+// The body, validated: { platform, phrase, draft, rewrites } or { field, error }. Nothing is coerced.
+function socialSearchInput(body) {
+  var b = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  var platform = b.platform;
+  if (typeof platform !== "string" || !Object.prototype.hasOwnProperty.call(SOCIAL_SEARCH_LIMITS, platform)) {
+    return { field: "platform", error: "platform is required and must be one of: " + Object.keys(SOCIAL_SEARCH_LIMITS).join(", ") + ". It is never assumed." };
+  }
+  var phrase = typeof b.target_phrase === "string" ? b.target_phrase.trim() : null;
+  if (phrase === null || socialSearchChars(phrase) < 2 || socialSearchChars(phrase) > 100) {
+    return { field: "target_phrase", error: "target_phrase is required: the phrase the post should be found by, 2 to 100 characters." };
+  }
+  if (b.suggest_rewrites !== undefined && typeof b.suggest_rewrites !== "boolean") {
+    return { field: "suggest_rewrites", error: "suggest_rewrites, when given, must be true or false, sent as a boolean." };
+  }
+  var allowed = SOCIAL_SEARCH_PLATFORM_FIELDS[platform];
+  for (var i = 0; i < SOCIAL_SEARCH_DRAFT_FIELDS.length; i++) {
+    var f = SOCIAL_SEARCH_DRAFT_FIELDS[i];
+    if (b[f] !== undefined && allowed.indexOf(f) === -1) {
+      return { field: f, error: f + " is not part of a " + SOCIAL_SEARCH_LIMITS[platform].label + " draft, which takes " + allowed.join(", ") + "." };
+    }
+  }
+  var draft = {};
+  function text(f, cap, required) {
+    if (b[f] === undefined) return required ? f + " is required for " + SOCIAL_SEARCH_LIMITS[platform].label + "." : null;
+    if (typeof b[f] !== "string" || !b[f].trim()) return f + ", when given, must be text that is not empty.";
+    if (socialSearchChars(b[f]) > cap) return f + " is longer than " + cap + " characters, too long to measure here.";
+    draft[f] = b[f];
+    return null;
+  }
+  var err;
+  if (platform === "youtube") {
+    if ((err = text("title", SOCIAL_SEARCH_INPUT_CAPS.title, false))) return { field: "title", error: err };
+    if ((err = text("description", SOCIAL_SEARCH_INPUT_CAPS.description, false))) return { field: "description", error: err };
+    if (b.tags !== undefined) {
+      if (!Array.isArray(b.tags) || !b.tags.length || b.tags.length > SOCIAL_SEARCH_INPUT_CAPS.tags ||
+          !b.tags.every(function (t) { return typeof t === "string" && t.trim() && socialSearchChars(t) <= SOCIAL_SEARCH_INPUT_CAPS.tag; })) {
+        return { field: "tags", error: "tags, when given, must be an array of 1 to " + SOCIAL_SEARCH_INPUT_CAPS.tags + " tags, each text that is not empty." };
+      }
+      draft.tags = b.tags.slice();
+    }
+    if (draft.title === undefined && draft.description === undefined && draft.tags === undefined) {
+      return { field: "title", error: "A YouTube draft needs at least one of title, description or tags." };
+    }
+  } else if ((err = text("caption", SOCIAL_SEARCH_INPUT_CAPS.caption, true))) {
+    return { field: "caption", error: err };
+  }
+  return { platform: platform, phrase: phrase, draft: draft, rewrites: b.suggest_rewrites === true };
+}
+
+/* The model's rewrites, one block per field. Only the platform's own fields
+   are kept; tags come back comma-separated and are split here. */
+function parseSocialSearchRewrites(raw, platform) {
+  var allowed = SOCIAL_SEARCH_PLATFORM_FIELDS[platform];
+  var kept = [], unreadable = 0;
+  String(raw || "").split(/\n\s*---+\s*\n/).forEach(function (block) {
+    if (!block.trim()) return;
+    var field = (block.match(/^\s*FIELD\s*:\s*([a-z_]+)\s*$/im) || [])[1];
+    var rewrite = (block.match(/^\s*REWRITE\s*:\s*([\s\S]*?)(?=^\s*NOTE\s*:|$(?![\s\S]))/im) || [])[1];
+    var note = (block.match(/^\s*NOTE\s*:\s*(.+)$/im) || [])[1];
+    field = field ? field.toLowerCase() : "";
+    rewrite = rewrite ? rewrite.trim() : "";
+    if (allowed.indexOf(field) === -1 || !rewrite) { unreadable++; return; }
+    kept.push({ field: field, rewrite: rewrite, note: note ? note.trim() : null });
+  });
+  return { rewrites: kept, unreadable: unreadable };
+}
+
+/* Each rewrite measured again in code, in place of the field it rewrites, and
+   reported against every original finding. A rewrite carrying a benchmark or
+   an outcome claim is dropped whole, with what it claimed. */
+function remeasureSocialSearchRewrites(parsed, platform, phrase, draft, original) {
+  var ids = original.findings.map(function (f) { return f.id; });
+  var out = [], dropped = [];
+  parsed.rewrites.forEach(function (r) {
+    var said = r.rewrite + "\n" + (r.note || "");
+    var claims = scanBenchmarkClaims(said).map(function (c) { return c.problem; });
+    if (SOCIAL_SEARCH_OUTCOME_CLAIMS.test(said)) claims.push("a claim about views, rank or reach, which nothing here measures");
+    if (claims.length) { dropped.push({ field: r.field, problems: claims }); return; }
+    var next = Object.assign({}, draft);
+    next[r.field] = r.field === "tags"
+      ? r.rewrite.split(",").map(function (t) { return t.trim(); }).filter(Boolean)
+      : r.rewrite;
+    var again = measureSocialSearch(platform, phrase, next);
+    var nowIds = again.findings.map(function (f) { return f.id; });
+    out.push({
+      field: r.field,
+      rewrite: next[r.field],
+      note: r.note,
+      suggested_by_model: true,
+      remeasured: {
+        findings: ids.map(function (id) { return { id: id, fixed: nowIds.indexOf(id) === -1 }; }),
+        new_findings: nowIds.filter(function (id) { return ids.indexOf(id) === -1; })
+      }
+    });
+  });
+  return { rewrites: out, dropped: dropped };
+}
+
+app.post("/api/agents/seo/social-search", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    var run = null;
+    try {
+      var userId = req.user.id;
+      var input = socialSearchInput(req.body);
+      if (input.error) {
+        return res.status(400).json({ error: input.error, field: input.field });
+      }
+      var platform = input.platform, phrase = input.phrase, draft = input.draft;
+      var label = SOCIAL_SEARCH_LIMITS[platform].label;
+
+      // After validation, before anything is spent: a 400 records nothing.
+      run = await startToolRun(req, {
+        agentType: "seo",
+        taskType: "seo/social-search",
+        title: "SEO · Social search: " + label
+      });
+
+      var measured = measureSocialSearch(platform, phrase, draft);
+
+      var modelCallMade = false;
+      var rewritesBlock = {};
+      if (input.rewrites) {
+        if (!measured.findings.length) {
+          rewritesBlock.suggested_rewrites = [];
+          rewritesBlock.suggested_rewrites_note = "Nothing was found to fix, so no rewrite was asked for.";
+        } else {
+          var businessProfile = await loadProfileForTool(userId);
+          var seoBrain =
+            "You are the BizForce AI SEO Agent, rewriting a social post so the phrase it should be found by is placed " +
+            "where the platform shows it. You know nothing about search volume, ranking or reach, and you say nothing about them.";
+          var findingsBlock = measured.findings.map(function (f) { return "- " + f.id + (f.field ? " (" + f.field + ")" : "") + ": " + f.finding; }).join("\n");
+          var draftBlock = SOCIAL_SEARCH_PLATFORM_FIELDS[platform].filter(function (f) { return draft[f] !== undefined; }).map(function (f) {
+            return f.toUpperCase() + ":\n" + (f === "tags" ? draft.tags.join(", ") : draft[f]);
+          }).join("\n\n");
+          var instruction =
+            "Suggest a rewrite for each field that a finding names. OUTPUT FORMAT, one block per field, blocks separated by a line containing only ---\n" +
+            "FIELD: <one of " + SOCIAL_SEARCH_PLATFORM_FIELDS[platform].join(", ") + ">\n" +
+            "REWRITE: <the whole rewritten field" + (platform === "youtube" ? "; tags as one comma-separated line" : "") + ">\n" +
+            "NOTE: <one line on what changed>\n\n" +
+            "RULES:\n" +
+            "- Keep the phrase exactly as given: " + JSON.stringify(phrase) + ".\n" +
+            "- Stay inside every limit the findings name.\n" +
+            "- Do not claim or predict views, ranking, reach, impressions, followers, clicks or going viral. Nothing measures them.\n" +
+            "- Invent no figures, reviews or results.";
+          var languageTag = await resolvePreferredLanguage(userId);
+          var prompt =
+            buildAgentSystemPrompt(seoBrain, businessProfile, {}, []) +
+            "\n\nPLATFORM: " + label + "\nTARGET PHRASE: " + phrase + "\n\nTHE DRAFT:\n" + draftBlock +
+            "\n\nFINDINGS (measured in code, not by you; do not dispute them):\n" + findingsBlock +
+            "\n\nTASK INSTRUCTIONS:\n" + instruction +
+            buildLanguageInstruction(languageTag, true);
+          modelCallMade = true;
+          try {
+            var generation = await callAnthropicText(prompt, 1500, userId, undefined, {
+              user_id: userId,
+              agent_type: "seo",
+              route: "POST /api/agents/seo/social-search"
+            });
+            var parsed = parseSocialSearchRewrites(generation && generation.text, platform);
+            var checked = remeasureSocialSearchRewrites(parsed, platform, phrase, draft, measured);
+            rewritesBlock.suggested_rewrites = checked.rewrites;
+            measured.rewrites_dropped = checked.dropped.length;
+            measured.rewrites_dropped_for = checked.dropped;
+            measured.rewrite_blocks_unreadable = parsed.unreadable;
+          } catch (modelErr) {
+            console.error("[seo/social-search] rewrites failed: " + (modelErr && modelErr.message));
+            rewritesBlock.suggested_rewrites = null;
+            rewritesBlock.suggested_rewrites_reason = "The model could not be reached, so no rewrite was suggested. The measurement above stands.";
+          }
+        }
+      }
+
+      var limits = Object.assign({}, SOCIAL_SEARCH_LIMITS[platform], { sources: SOCIAL_SEARCH_LIMIT_SOURCES[platform] });
+      var responseBody = Object.assign({ success: true, measured: measured }, rewritesBlock, {
+        limits: limits,
+        limitations: {
+          not_measured: SOCIAL_SEARCH_NOT_MEASURED,
+          detail: "Every figure is measured in code from the draft you entered, against the limits listed with their sources. " +
+            "No platform was searched or contacted."
+        },
+        provenance: toolProvenance(
+          [
+            "Where the phrase appears: " + (platform === "youtube" ? "title, description before and after the cut, description hashtags and tags" : "caption before and after the cut, and hashtags"),
+            "The first occurrence's position against the cut",
+            "Every length against its limit" + (platform === "youtube" ? ", the description in UTF-8 bytes" : ""),
+            "Hashtag" + (platform === "youtube" ? " and tag" : "") + " counts against the maximum and practical numbers"
+          ].concat(modelCallMade ? ["Each suggested rewrite, measured again in place of the field it rewrites"] : []),
+          modelCallMade ? ["The suggested rewrites and their notes"] : [],
+          "Source: the draft you entered, measured against published limits. Model called: " + (modelCallMade ? "yes, for suggested rewrites only" : "no") +
+          ". No search data was read and no platform API was called.",
+          {
+            model_call_made: modelCallMade,
+            youtube_api_called: false,
+            search_data_read: false
+          }
+        )
+      });
+
+      var persisted = await run.complete(responseBody);
+
+      return res.json(Object.assign({}, responseBody, {
+        task_id: run.taskId,
+        persisted: persisted
+      }));
+    } catch (error) {
+      console.error("[seo/social-search] Error:", error && error.message);
+      if (run) {
+        await run.fail(error);
+      }
+      next(error);
+    }
+  });
 
 // ── Broker Agent tools ───────────────────────────────────────────────────────
 
@@ -30434,6 +30946,9 @@ var ARRIVALS_NOTE_SHORT =
   "An arrival is one landing-page request, not a person: it cannot be told apart from a test click, a repeat visit or a ref posted by hand.";
 var ARRIVALS_NO_TRACKED_LINK = "none of your posts carries a tracked link, so arrivals cannot be counted";
 var ARRIVALS_UNTRACKED_LABEL = "arrivals cannot be counted";
+// A standing statement about outreach_sends, so it sits with the limitations rather than among the measured cells.
+var ARRIVALS_OUTREACH_NOTE = "outreach_sends does not record whether a reply carried the link: only a reply offering BizForce does, " +
+  "and only when the link fits in 300 characters, so an outreach ref with 0 arrivals may be a reply that never linked here.";
 var ARRIVALS_NOT_MEASURED = [
   "Reach, impressions, likes, reposts or clicks on Bluesky: nothing here reads Bluesky",
   "Article views: an article page records nothing when it is read",
@@ -30602,10 +31117,6 @@ function measureArrivals(loaded, weeks, nowMs, isOwner) {
     if (loaded.unmatched.rows === null) totals.arrivals_unmatched_reason = loaded.unmatched.reason;
   }
   measured.totals = totals;
-  if (outreach && outreach.length) {
-    measured.outreach_note = "outreach_sends does not record whether a reply carried the link: only a reply offering BizForce does, " +
-      "and only when the link fits in 300 characters, so an outreach ref with 0 arrivals may be a reply that never linked here.";
-  }
   var failed = [loaded.posts, loaded.sends, loaded.visits].concat(isOwner ? [loaded.unmatched] : [])
     .filter(function (t) { return t.reason; }).map(function (t) { return t.reason; });
   if (failed.length) measured.not_read = failed;
@@ -30663,6 +31174,9 @@ app.post("/api/agents/analytics/arrivals", requireAuth, requireActiveSubscriptio
           }
         )
       };
+
+      // Only when there is an outreach ref for it to be about.
+      if (measured.outreach && measured.outreach.length) responseBody.outreach_note = ARRIVALS_OUTREACH_NOTE;
 
       var persisted = await run.complete(responseBody);
 

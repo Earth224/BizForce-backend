@@ -42,6 +42,18 @@
         the notice byte-identical to BEFORE's. A per-item boolean renders Yes / No,
         and a null still renders "—" with its reason, never No.
      And "No flags raised" appears only for the real empty arrays.
+     T. Social Search's form: the platform select starts on "Choose…" with no
+        platform picked, each platform's fields are drawn hidden, only the
+        chosen platform's fields are sent, tags go as an array, and a missing
+        platform is refused before anything is sent. An outreach_note renders
+        in the reference zone, not as a measured cell.
+
+   NAMED BEFORE → AFTER (Social Search build, Oct 2026, assertions changed on
+   purpose): section 0 said "seo.html declares exactly one tool, id audit";
+   it now declares two, audit and social-search, and audit is still found
+   by its id. RENDERER_CHANGES_SINCE_BEFORE names TOOL_REF_KEYS gaining
+   "outreach_note" (the Arrivals Ledger's standing statement about
+   outreach_sends, moved out of measured).
 
    MUTATE=<name> edits agent-profile.js IN MEMORY (the file on disk is never
    touched). MUTATE=all runs each in its own process and passes only if every
@@ -96,6 +108,8 @@ const MUTATIONS = {
   // a null per-item value renders as No
   "null-as-no": [["      if (v === null || v === undefined) {\n        return \"<strong>\" + esc(humanise(k)) + \":</strong> \" + renderNullFor(k);\n      }\n",
     "      if (v === null || v === undefined) v = false;\n"]],
+  // a field hidden for the chosen platform is sent anyway
+  "hidden-field-sent": [["      if (field.showWhen && !toolFieldShown(tool, field)) return;\n", ""]],
   // the named null rendering changes beyond what RENDERER_CHANGES_SINCE_BEFORE names
   "renderer-unnamed-change": [['      : "—";\n  }', '      : "-";\n  }']]
 };
@@ -125,9 +139,15 @@ const OLD_SRC_AT_BEFORE = execSync("git show " + BEFORE + ":scripts/agent-profil
    then still demand byte-identity with that, so any other change to the shared
    renderer still fails. */
 const RENDERER_CHANGES_SINCE_BEFORE = [
+  /* NAMED (Social Search build, Oct 2026). TOOL_REF_KEYS gains "outreach_note": the
+     Arrivals Ledger's note about outreach_sends is a standing statement, now a
+     top-level key, so it renders in the reference zone. Applied after the
+     suggested_tag_set_reason entry below, which this one reads. */
   ['    ".ap-m-val.bad{color:#fca5a5}.ap-m-val.good{color:#86efac}",\n',
    '    ".ap-m-val.bad{color:#fca5a5}.ap-m-val.good{color:#86efac}",\n    ".ap-not-measured{color:#8892b8;font-style:italic}",\n'],
   ['    "suggested_tag_set_note", "rules_checked"];', '    "suggested_tag_set_note", "suggested_tag_set_reason", "rules_checked"];'],
+  ['    "suggested_tag_set_note", "suggested_tag_set_reason", "rules_checked"];',
+   '    "suggested_tag_set_note", "suggested_tag_set_reason", "rules_checked", "outreach_note"];'],
   ['  // A compact, depth-limited rendering of whatever a value happens to be.\n',
    '  /* A NULL ON A LIMIT CHECK IS A CHECK NOT MADE. A key that reports a limit\n' +
    '     being met or broken (fits…, within…, over…, exceeds…, ready…, …_ready,\n' +
@@ -285,7 +305,9 @@ const count = (h, needle) => h.split(needle).length - 1;
 
 (async function main() {
   console.log("\n══ 0. the page config ══");
-  check("seo.html declares exactly one tool, id audit", seo.ap.TOOLS.length === 1 && !!tool, JSON.stringify(seo.ap.TOOLS.map(t => t.id)));
+  // NAMED BEFORE → AFTER: was "declares exactly one tool, id audit".
+  check("seo.html declares two tools, audit and social-search", JSON.stringify(seo.ap.TOOLS.map(t => t.id)) === JSON.stringify(["audit", "social-search"]) && !!tool,
+    JSON.stringify(seo.ap.TOOLS.map(t => t.id)));
   check("its one field is url, required, type text", tool && tool.fields.length === 1 && tool.fields[0].name === "url" && tool.fields[0].required === true && tool.fields[0].type === "text");
   const markup = seo.ap.toolsMarkup();
   check("the tools section renders the url input and run button", /id="apTool_audit_f_url"/.test(markup) && /data-tool-run="audit"/.test(markup));
@@ -560,6 +582,44 @@ const count = (h, needle) => h.split(needle).length - 1;
   const removed = newStyle.replace(/\.ap-(?:seo|ds)-[^}]*\}/g, "");
   check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-* and .ap-ds-* rules were added", !/\.ap-(?:seo|ds)-/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
   console.log("    (" + pages.length + " agent pages, " + toolCount + " other tools, " + compared + " renders compared)");
+
+
+  /* T. Social Search's form */
+  console.log("\n══ T. Social Search's form ══");
+  const ssMarkup = seo.ap.toolsMarkup();
+  check("T. the platform select starts on \"Choose…\", with no platform picked for the user",
+    /<select class="ap-select" id="apTool_social_search_f_platform"><option value="">Choose…<\/option><option value="youtube">/.test(ssMarkup));
+  check("T. title, description, tags and caption are each drawn hidden in their own wrapper",
+    ["title", "description", "tags", "caption"].every(f => ssMarkup.indexOf('<div class="ap-tool-field" id="apTool_social_search_w_' + f + '" hidden>') !== -1));
+  check("T. the audit tool's form is unchanged: no wrapper id, no hidden attribute", /<div class="ap-tool-field"><label class="ap-tool-label" for="apTool_audit_f_url">/.test(ssMarkup));
+  async function ssRun(values) {
+    let sent = null;
+    const env = load(NEW_SRC, SEO_CFG, (url, init) => { sent = { url, init }; return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ success: true, measured: {} }) }); });
+    const t = env.ap.TOOLS.find(x => x.id === "social-search");
+    Object.keys(values).forEach(k => { env.document.getElementById(env.ap.toolDomId("social-search", "f_" + k)).value = values[k]; });
+    env.ap.runTool(t);
+    for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+    return { sent, body: sent ? JSON.parse(sent.init.body) : null, msg: env.document.getElementById(env.ap.toolDomId("social-search", "msg")).textContent };
+  }
+  const ytRun = await ssRun({ platform: "youtube", target_phrase: "tongkat ali", title: "Does tongkat ali work?", tags: " tongkat ali, supplements ,, review ", caption: "never sent" });
+  check("T. YouTube: POSTs to /api/agents/seo/social-search with the YouTube fields only, tags as a trimmed array, suggest_rewrites false",
+    ytRun.sent && ytRun.sent.url.endsWith("/api/agents/seo/social-search") &&
+    JSON.stringify(ytRun.body) === JSON.stringify({ platform: "youtube", target_phrase: "tongkat ali", title: "Does tongkat ali work?", tags: ["tongkat ali", "supplements", "review"], suggest_rewrites: false }),
+    ytRun.body && JSON.stringify(ytRun.body));
+  const igRun = await ssRun({ platform: "instagram", target_phrase: "tongkat ali", caption: "My routine #TongkatAli", title: "never sent", tags: "never, sent" });
+  check("T. Instagram: the caption is sent, and the YouTube fields are not", JSON.stringify(igRun.body) === JSON.stringify({ platform: "instagram", target_phrase: "tongkat ali", caption: "My routine #TongkatAli", suggest_rewrites: false }),
+    igRun.body && JSON.stringify(igRun.body));
+  const noPlat = await ssRun({ target_phrase: "tongkat ali", caption: "x" });
+  check("T. no platform chosen: nothing is sent, and the message names Platform", noPlat.sent === null && /Platform/.test(noPlat.msg), noPlat.msg);
+  const noCap = await ssRun({ platform: "tiktok", target_phrase: "tongkat ali" });
+  check("T. TikTok with no caption: refused before sending, naming Caption", noCap.sent === null && /Caption/.test(noCap.msg), noCap.msg);
+  const refHtml = seo.ap.renderToolResult({ id: "arrivals", fields: [{ name: "weeks" }] },
+    { success: true, measured: { weeks: 12 }, outreach_note: "A standing note about outreach_sends.", limitations: { not_measured: ["Reach"] }, provenance: { measured_from: ["x"], inferred_by_model: [] } });
+  const refAt = refHtml.indexOf('<div class="ap-ref">'), noteAt = refHtml.indexOf("A standing note about outreach_sends.");
+  const measAt = refHtml.indexOf('<div class="ap-measured">'), measEnd = refHtml.indexOf("</div></div>", measAt);
+  check("T. an outreach_note renders in the reference zone, labelled, and not as a measured cell",
+    refAt !== -1 && noteAt > refAt && /<strong>Outreach note:<\/strong>/.test(refHtml) && !(noteAt > measAt && noteAt < measEnd) &&
+    refHtml.split("A standing note about outreach_sends.").length === 2, refHtml.slice(0, 400));
 
   console.log("\n" + (fails ? "CHECKS FAILED: " + fails + " of " + (passes + fails) : "ALL " + passes + " CHECKS PASSED"));
   process.exit(fails ? 1 : 0);

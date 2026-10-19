@@ -162,7 +162,9 @@ const EXPECTED_GATED = [
   // The Community agent's Audience Ledger, counted from the caller's own sign-ups
   "post /api/agents/community/audience",
   // The Analytics agent's Arrivals Ledger, counted through the caller's own tracked links
-  "post /api/agents/analytics/arrivals"
+  "post /api/agents/analytics/arrivals",
+  // The SEO agent's Social Search, measured from the caller's own draft
+  "post /api/agents/seo/social-search"
 ];
 
 const EXPECTED_ADMIN = [

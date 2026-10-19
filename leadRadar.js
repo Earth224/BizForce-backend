@@ -53,8 +53,9 @@ const CAPTURE_WINDOW_DAYS = 7;
 
    This bounds SCORING ONLY. Capture is deliberately wider — youtubeRadar keeps
    running and keeps writing rows, because an unreplyable lead is still market
-   signal worth having in the table. Those rows stay at status 'new' and simply
-   never get picked up by the scorer. */
+   signal worth having in the table. youtubeRadar writes its rows with status
+   'signal', not 'new', so the scorer, which selects status 'new' from these
+   sources, never picks them up and they never sit in its queue. */
 const SCORABLE_SOURCES = ["bluesky", "mastodon"];
 
 /* Search phrases, not topics. This distinction is the whole list.

@@ -48,6 +48,14 @@
         "could not be read just now" for a failed read. The existing arrivals
         section counts only posts whose body carries the ref (2, not 3).
 
+   NAMED BEFORE → AFTER (Social Search build, Oct 2026, assertion changed on
+   purpose): the outreach note moved from measured.outreach_note to the
+   response's own outreach_note, which the page's shared renderer lists in
+   TOOL_REF_KEYS. Inside measured it rendered as one narrow measured cell; it
+   is a standing statement about outreach_sends, not a measurement. The
+   section that pins it now reads r.body.outreach_note and asserts it is gone
+   from measured.
+
    MUTATE=<name> edits server.js IN MEMORY (nothing on disk is touched).
    MUTATE=all runs each in its own process; an unmatched search text is an
    ERROR, never a catch (scripts/_shared.js).
@@ -415,7 +423,10 @@ const NO_LINK = "none of your posts carries a tracked link, so arrivals cannot b
     JSON.stringify(m.posts_without_tracked_link) === JSON.stringify({ count: 1, label: "arrivals cannot be counted" }), JSON.stringify(m.posts_without_tracked_link));
   check("C. a post with no slug is not read as a post", t.posts_read === 3);
   check("the fixed note is present, exactly", m.note === NOTE, m.note);
-  check("the outreach note says a 0 for an outreach ref may be a reply that never linked here", /may be a reply that never linked here/.test(m.outreach_note || ""));
+  // NAMED BEFORE → AFTER (Social Search build, Oct 2026): was measured.outreach_note; now the response's own outreach_note, shown in the reference zone.
+  check("the outreach note says a 0 for an outreach ref may be a reply that never linked here, beside the limitations rather than among the measured cells",
+    /may be a reply that never linked here/.test(r.body.outreach_note || "") && !("outreach_note" in m));
+  check("an account with no outreach refs gets no outreach note", !("outreach_note" in ((await post({}, { user: SUB })).body || {})));
   check("E. the owner gets arrivals_unmatched: 3 (two bl-0000000000, one lr-ffffffffff; the untracked post's arrival is matched)",
     t.arrivals_unmatched === 3, t.arrivals_unmatched);
 

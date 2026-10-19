@@ -209,6 +209,22 @@
         counts new sign-ups by month, so "nothing measures growth" stopped
         being true; it still reads no engagement.
 
+   NAMED BEFORE → AFTER (Social Search build, Oct 2026, assertions changed on
+   purpose):
+     L  the Lead Radar tip had to say "YouTube finds are not shown here" →
+        "YouTube capture is switched off. Older scored YouTube finds can
+        appear in the list; new YouTube finds are not scored or shown". The
+        old sentence was false: GET /api/leads filters on status only, and
+        674 YouTube rows scored before SCORABLE_SOURCES left youtube out are
+        status "scored" (9 of the top 100 on Oct 18 2026). The check that
+        read "YouTube rows are not shown" now proves the new sentence: no
+        source filter on /api/leads, new rows written as "signal", youtube
+        not in SCORABLE_SOURCES. "Switched off" is the Railway setting,
+        which no check can read; what is proved is that capture is off
+        unless ENABLE_YOUTUBE_RADAR is exactly "true".
+     M  restore-lead-radar-tip and restore-radar-146-unconditional are
+        anchored on the new tip text (the same mutations).
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
    whose search text does not match exactly once is an ERROR.
@@ -235,7 +251,7 @@ const fileOfKey = k => IN_AGENTS.indexOf(k) !== -1 ? "agents/" + k : k;
 const MUTATIONS = {
   // Lead Radar's tip claims the Business Profile again
   "restore-lead-radar-tip": [[GUIDE,
-    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on, and YouTube finds are not shown here. It does not read your Business Profile, so editing your profile does not change what it finds."',
+    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off. Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown. It does not read your Business Profile, so editing your profile does not change what it finds."',
     '"It tracks against your Business Profile\'s Competitors and Industry — keep those current so the radar is watching the conversations that actually matter to you."']],
   // the broker tip points at the removed Pipeline report section again
   "restore-broker-pipeline-section": [[GUIDE,
@@ -260,7 +276,7 @@ const MUTATIONS = {
     '<p class="agent-subtitle">Your real-time business intelligence.</p>']],
   // line 146 claims Mastodon and YouTube unconditionally again
   "restore-radar-146-unconditional": [[GUIDE,
-    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on, and YouTube finds are not shown here. It does not read",
+    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off. Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown. It does not read",
     "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code; it does not read"]],
   // a removed section ("Warnings", analytics) is named in another page's tip that no per-tip check covers:
   // only the guide-wide guard G1 can catch it
@@ -490,8 +506,10 @@ check("L. the old \"tracks against your Business Profile's Competitors and Indus
 // NAMED BEFORE → AFTER: was "…phrases and hashtags on Bluesky, Mastodon and YouTube".
 check("L. the tip says it searches a fixed set of buyer-intent phrases on Bluesky (named after: was \"on Bluesky, Mastodon and YouTube\")",
   /fixed set of buyer-intent phrases on Bluesky, set in the radar's own code/.test(lrTip) && !/on Bluesky, Mastodon and YouTube/.test(lrTip), lrTip);
-check("L. the tip says Mastodon and YouTube searches run only when switched on, and YouTube finds are not shown here",
-  /Mastodon and YouTube searches run only when switched on/.test(lrTip) && /YouTube finds are not shown here/.test(lrTip), lrTip);
+// NAMED BEFORE → AFTER: was "…and YouTube finds are not shown here", which was false.
+check("L. the tip says Mastodon and YouTube searches run only when switched on, YouTube capture is off, older scored YouTube finds can appear and new ones are not scored or shown",
+  /Mastodon and YouTube searches run only when switched on, and YouTube capture is switched off\./.test(lrTip) &&
+  /Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown\./.test(lrTip) && !/YouTube finds are not shown here/.test(lrTip), lrTip);
 check("L. the tip says it does not read your Business Profile", /does not read your Business Profile/.test(lrTip));
 check("L. no Lead Radar tip makes a Business Profile claim: the profile is named only in that denial",
   lrTips.every(t => t.replace(/does not read your Business Profile/g, "").search(/Business Profile|\bprofile's\b|Competitors|Industry/) === -1 ||
@@ -522,8 +540,13 @@ check("L. Mastodon capture is gated by ENABLE_MASTODON_RADAR", gated("ENABLE_MAS
 check("L. YouTube capture is gated by ENABLE_YOUTUBE_RADAR", gated("ENABLE_YOUTUBE_RADAR", "runYoutubeRadarOnce") || gated("ENABLE_YOUTUBE_RADAR", "YoutubeRadar"),
   (/if \(process\.env\.ENABLE_YOUTUBE_RADAR === "true"\) \{[\s\S]{0,600}/.exec(tick) || [""])[0].slice(0, 200));
 check("L. intent scoring is gated by ENABLE_LEAD_SCORING", gated("ENABLE_LEAD_SCORING", "scoreNewLeads()"));
-check("L. YouTube rows are not shown on the page: /api/leads lists only status \"scored\" rows, and YouTube rows are written as \"signal\"",
-  /status:\s+"signal"/.test(FILES["youtubeRadar.js"]) && /app\.get\("\/api\/leads", [\s\S]{0,2000}?\.eq\("status", "scored"\)/.test(FILES[SERVER]));
+// NAMED BEFORE → AFTER: was "YouTube rows are not shown on the page"; older scored ones are.
+const LEADS_ROUTE = (function (sv) { const i = sv.indexOf('app.get("/api/leads", '); return i === -1 ? "" : sv.slice(i, sv.indexOf("\n});\n", i)); })(FILES[SERVER]);
+check("L. new YouTube finds are not shown: they are written as \"signal\", /api/leads lists only status \"scored\", and youtube is not a scored source",
+  /status:\s+"signal"/.test(FILES["youtubeRadar.js"]) && /\.eq\("status", "scored"\)/.test(LEADS_ROUTE) &&
+  /const SCORABLE_SOURCES = \["bluesky", "mastodon"\];/.test(LR));
+check("L. older scored YouTube finds can appear: /api/leads filters on status and score, never on source",
+  LEADS_ROUTE.length > 0 && !/\.(eq|in|neq)\("source"/.test(LEADS_ROUTE) && /\.from\("bsky_leads"\)/.test(LEADS_ROUTE), LEADS_ROUTE.slice(0, 200));
 const radarSub = (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
 const UNCONDITIONAL = /Mastodon &amp; YouTube every|Bluesky, Mastodon(,| and| &amp;) YouTube|(?:and|,) scored by intent|scores them,|\bscans? Mastodon|\bscans? YouTube/i;
 check("L. the subtitle says Bluesky every 5 minutes and that Mastodon capture and intent scoring run only when switched on",
