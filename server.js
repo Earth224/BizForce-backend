@@ -56,6 +56,7 @@ const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
 const { youtubeRetentionEnabled, youtubeRetentionTick, YOUTUBE_RETENTION_JOB_NAME, YOUTUBE_RETENTION_MAX_PER_TICK } = require("./lib/youtubeRetention");
 const { youtubeCaps, youtubeUnitsToday } = require("./lib/youtubeQuota");
+const { isUsefulYoutubeComment } = require("./lib/youtubeFilter");
 const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine, UNREACHABLE_MESSAGE: GUARDED_FETCH_UNREACHABLE } = require("./lib/guardedFetch");
 const webpush = require("web-push");
 const cron = require("node-cron");
@@ -43957,8 +43958,17 @@ app.get("/api/leads", requireAuth, async function (req, res, next) {
 
    OWNER ONLY, on the same gate and in the same position as GET /api/leads: a
    refused request reads nothing. capture_on says whether ENABLE_YOUTUBE_RADAR
-   is exactly "true", so the page can say why the list is empty. */
+   is exactly "true", so the page can say why the list is empty.
+
+   FILTERED HERE TOO (lib/youtubeFilter.js, the same test the radar stores
+   by): rows captured before the filter existed are read and tested, newest
+   first, a page at a time, until YOUTUBE_SIGNALS_LIMIT are kept or the rows
+   run out (at most YOUTUBE_SIGNALS_MAX_READ). The limit counts KEPT rows, so
+   it is applied after the filter, never to the query. hidden_counts are the
+   rows read and not kept, by reason; rows_read is how many were tested. */
 var YOUTUBE_SIGNALS_LIMIT = 50;
+var YOUTUBE_SIGNALS_PAGE = 1000;
+var YOUTUBE_SIGNALS_MAX_READ = 5000;
 app.get("/api/leads/youtube-signals", requireAuth, async function (req, res, next) {
   try {
     if (req.user.id !== OUTREACH_CREDENTIAL_OWNER_ID) {
@@ -43968,21 +43978,38 @@ app.get("/api/leads/youtube-signals", requireAuth, async function (req, res, nex
       return res.status(403).json(LEAD_RADAR_UNAVAILABLE);
     }
 
-    var result = await supabase
-      .from("bsky_leads")
-      .select("post_uri, matched_keyword, post_created_at, post_text")
-      .eq("source", "youtube")
-      .eq("status", "signal")
-      .order("created_at", { ascending: false })
-      .limit(YOUTUBE_SIGNALS_LIMIT);
+    var finds = [];
+    var hidden = { link: 0, too_short: 0, off_topic: 0 };
+    var offset = 0;
+    var rowsRead = 0;
+    for (;;) {
+      var result = await supabase
+        .from("bsky_leads")
+        .select("post_uri, matched_keyword, post_created_at, post_text")
+        .eq("source", "youtube")
+        .eq("status", "signal")
+        .order("created_at", { ascending: false })
+        .range(offset, offset + YOUTUBE_SIGNALS_PAGE - 1);
 
-    if (result.error) {
-      console.error("[/api/leads/youtube-signals] Supabase error:", result.error.message);
-      return res.status(500).json({ error: result.error.message });
+      if (result.error) {
+        console.error("[/api/leads/youtube-signals] Supabase error:", result.error.message);
+        return res.status(500).json({ error: result.error.message });
+      }
+
+      var page = result.data || [];
+      offset += page.length;
+      for (var i = 0; i < page.length && finds.length < YOUTUBE_SIGNALS_LIMIT; i++) {
+        rowsRead++;
+        var verdict = isUsefulYoutubeComment(page[i].post_text, page[i].matched_keyword);
+        if (verdict.keep) finds.push(page[i]); else hidden[verdict.reason]++;
+      }
+      if (finds.length >= YOUTUBE_SIGNALS_LIMIT || page.length < YOUTUBE_SIGNALS_PAGE || offset >= YOUTUBE_SIGNALS_MAX_READ) break;
     }
 
     return res.json({
-      finds: result.data || [],
+      finds: finds,
+      hidden_counts: hidden,
+      rows_read: rowsRead,
       capture_on: process.env.ENABLE_YOUTUBE_RADAR === "true",
       kept_days: 30
     });

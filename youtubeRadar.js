@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { createClient } = require("@supabase/supabase-js");
 const { YOUTUBE_API_UNITS, youtubeCaps, youtubeUnitsToday, reserveYoutubeUnits } = require("./lib/youtubeQuota");
+const { isUsefulYoutubeComment } = require("./lib/youtubeFilter");
 
 const SUPABASE_URL         = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -177,9 +178,10 @@ async function runYoutubeRadarOnce() {
           .map(function (item) { return item.id && item.id.videoId; })
           .filter(Boolean);
 
-        if (!videoIds.length) continue;
-
         var rows = [];
+        // Every comment fetched, and why each one not stored was dropped (lib/youtubeFilter.js).
+        var fetched = 0;
+        var dropped = { link: 0, too_short: 0, off_topic: 0 };
 
         for (var v = 0; v < videoIds.length && v < SEARCH_MAX_RESULTS; v++) {
           var videoId = videoIds[v];
@@ -195,12 +197,20 @@ async function runYoutubeRadarOnce() {
               var commentSnippet = thread && thread.snippet;
               if (!thread || !commentSnippet) return;
 
+              /* Only comments worth reading are stored: no link, at least 6
+                 words, and a topic term of the keyword. The first failing
+                 test is the reason it is counted under. */
+              fetched++;
+              var commentText = commentSnippet.textOriginal || commentSnippet.textDisplay || null;
+              var verdict = isUsefulYoutubeComment(commentText, keyword);
+              if (!verdict.keep) { dropped[verdict.reason]++; return; }
+
               rows.push({
                 post_uri:        "https://www.youtube.com/watch?v=" + videoId + "&lc=" + thread.id,
                 post_cid:        null,
                 author_did:      null,
                 author_handle:   commentSnippet.authorDisplayName || null,
-                post_text:       commentSnippet.textOriginal || commentSnippet.textDisplay || null,
+                post_text:       commentText,
                 matched_keyword: keyword,
                 lang:            null,
                 source:          "youtube",
@@ -232,6 +242,10 @@ async function runYoutubeRadarOnce() {
             console.error("[YoutubeRadar] Error fetching comments for video '" + videoId + "':", videoErr.message || videoErr);
           }
         }
+
+        // fetched = kept + link + too_short + off_topic, every keyword, every pass.
+        console.log("[YoutubeRadar] " + keyword + ": fetched " + fetched + ", kept " + rows.length +
+          ", dropped " + (fetched - rows.length) + " (link " + dropped.link + ", too_short " + dropped.too_short + ", off_topic " + dropped.off_topic + ")");
 
         if (!rows.length) continue;
 

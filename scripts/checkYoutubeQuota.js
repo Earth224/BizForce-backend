@@ -36,6 +36,14 @@
         empty state says capture is off or nothing is found yet, whichever is
         true.
 
+   NAMED BEFORE → AFTER (YouTube filter build, Oct 2026, fixtures changed on
+   purpose): the spy's comment text was "a comment" and the route's rows were
+   "comment <n>". lib/youtubeFilter.js now drops both (too short, off topic)
+   at capture and at display, so the spy answers with an on-topic comment
+   that names the searched keyword, and the route's rows read "comment <n>:
+   I have been tired for weeks and nothing seems to help". F's text tests
+   match the new prefix. The filter itself is proved by checkYoutubeFilter.js.
+
    MUTATE=<name> edits youtubeRadar.js, lib/youtubeQuota.js, leadRadar.js or
    server.js IN MEMORY (nothing on disk is touched). MUTATE=all runs each in
    its own process and passes only if every one fails at least one check. A
@@ -102,6 +110,7 @@ function compile(file, src, requireMap) {
   return m.exports;
 }
 const Q = compile(QUOTA, FILES[QUOTA], {});
+const YF = compile("lib/youtubeFilter.js", fs.readFileSync(path.join(REPO, "lib", "youtubeFilter.js"), "utf8").replace(/\r\n/g, "\n"), {});
 
 /* ── the in-memory tables, and one event log for ledger writes and requests ── */
 let EVENTS = [];
@@ -159,7 +168,7 @@ function fakeDb(tables, opts) {
 let FETCHES = [];
 function installFetch(opts) {
   opts = opts || {};
-  let searches = 0;
+  let searches = 0, lastQuery = "";
   globalThis.fetch = async function (url) {
     const u = String(url);
     const method = u.indexOf("/youtube/v3/search?") !== -1 ? "search.list" : u.indexOf("/youtube/v3/commentThreads?") !== -1 ? "commentThreads.list" : "other";
@@ -167,12 +176,13 @@ function installFetch(opts) {
     FETCHES.push(method);
     if (method === "search.list") {
       searches++;
+      lastQuery = decodeURIComponent((/[?&]q=([^&]+)/.exec(u) || ["", ""])[1]);
       if (opts.failSearch && opts.failSearch(searches)) return { ok: false, status: 500, text: async () => "backend error", json: async () => ({}) };
       return { ok: true, status: 200, json: async () => ({ items: [0, 1, 2, 3].map(i => ({ id: { videoId: "vid" + searches + "x" + i } })) }) };
     }
     if (method === "commentThreads.list") {
       const vid = /videoId=([^&]+)/.exec(u)[1];
-      return { ok: true, status: 200, json: async () => ({ items: [{ snippet: { topLevelComment: { id: "c-" + vid, snippet: { authorDisplayName: "someone", textOriginal: "a comment", publishedAt: "2026-10-19T00:00:00Z" } } } }] }) };
+      return { ok: true, status: 200, json: async () => ({ items: [{ snippet: { topLevelComment: { id: "c-" + vid, snippet: { authorDisplayName: "someone", textOriginal: "Has anyone found that '" + lastQuery + "' has an answer after a month?", publishedAt: "2026-10-19T00:00:00Z" } } } }] }) };
     }
     return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
   };
@@ -191,7 +201,8 @@ async function pass(opts) {
   const radar = compile(RADAR, FILES[RADAR], {
     dotenv: { config() {} },
     "@supabase/supabase-js": { createClient: () => db.client },
-    "./lib/youtubeQuota": Q
+    "./lib/youtubeQuota": Q,
+    "./lib/youtubeFilter": YF
   });
   const logs = [], realLog = console.log, realErr = console.error;
   console.log = (...a) => { logs.push(a.join(" ")); };
@@ -295,13 +306,13 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
   const sig = "app.get(\"/api/leads/youtube-signals\", requireAuth, async function (req, res, next) {";
   const at = SRC.indexOf(sig);
   const ROUTE = at < 0 ? "" : SRC.slice(at, s.braceMatch(SRC, SRC.indexOf("{", at)) + 2);
-  const defs = ["LEAD_RADAR_UNAVAILABLE", "YOUTUBE_SIGNALS_LIMIT", "OUTREACH_CREDENTIAL_OWNER_ID"].map(n => s.definitionOf(SRC, n) || "");
+  const defs = ["LEAD_RADAR_UNAVAILABLE", "YOUTUBE_SIGNALS_LIMIT", "YOUTUBE_SIGNALS_PAGE", "YOUTUBE_SIGNALS_MAX_READ", "OUTREACH_CREDENTIAL_OWNER_ID"].map(n => s.definitionOf(SRC, n) || "");
   const OWNER = require(path.join(REPO, "lib", "ownerAccount.js")).OWNER_ACCOUNT_ID;
   const SUBSCRIBER = "53e6b330-0000-4000-8000-00000000abcd";
   function signalRows() {
     const rows = [];
     for (let i = 0; i < 60; i++) rows.push({ source: "youtube", status: "signal", post_uri: "https://www.youtube.com/watch?v=v" + i + "&lc=c" + i, matched_keyword: "why am i always tired",
-      post_created_at: "2026-10-01T00:00:00Z", post_text: "comment " + i, author_handle: "handle" + i, intent_score: null, created_at: new Date(Date.UTC(2026, 9, 1) + i * 60000).toISOString() });
+      post_created_at: "2026-10-01T00:00:00Z", post_text: "comment " + i + ": I have been tired for weeks and nothing seems to help", author_handle: "handle" + i, intent_score: null, created_at: new Date(Date.UTC(2026, 9, 1) + i * 60000).toISOString() });
     rows.push({ source: "youtube", status: "scored", post_uri: "https://www.youtube.com/watch?v=old", matched_keyword: "k", post_text: "scored youtube", created_at: "2026-10-30T00:00:00Z" });
     rows.push({ source: "bluesky", status: "signal", post_uri: "at://bsky/1", matched_keyword: "k", post_text: "bluesky signal", created_at: "2026-10-30T00:00:00Z" });
     rows.push({ source: "mastodon", status: "scored", post_uri: "https://masto/1", matched_keyword: "k", post_text: "mastodon", created_at: "2026-10-30T00:00:00Z" });
@@ -310,7 +321,7 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
   async function callRoute(userId, env) {
     const db = fakeDb({ bsky_leads: signalRows() });
     let handler = null;
-    const ctx = { supabase: db.client, OWNER_ACCOUNT_ID: OWNER, process: { env: env || {} }, console: { log() {}, error() {}, warn() {} }, requireAuth: function requireAuth() {},
+    const ctx = { supabase: db.client, OWNER_ACCOUNT_ID: OWNER, isUsefulYoutubeComment: YF.isUsefulYoutubeComment, process: { env: env || {} }, console: { log() {}, error() {}, warn() {} }, requireAuth: function requireAuth() {},
       app: { get(p) { if (p === "/api/leads/youtube-signals") handler = arguments[arguments.length - 1]; } } };
     vm.createContext(ctx);
     vm.runInContext(defs.join("\n") + "\n" + ROUTE, ctx);
@@ -325,10 +336,10 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
   const Fo = await callRoute(OWNER, { ENABLE_YOUTUBE_RADAR: "true" });
   const finds = (Fo.res.body && Fo.res.body.finds) || [];
   check("F. the owner gets only source youtube, status signal: the scored YouTube row, Bluesky and Mastodon are not among them",
-    Fo.res.code === 200 && finds.length > 0 && finds.every(f => /^comment \d+$/.test(f.post_text)), JSON.stringify(finds.slice(0, 2)));
+    Fo.res.code === 200 && finds.length > 0 && finds.every(f => /^comment \d+: I have been tired/.test(f.post_text)), JSON.stringify(finds.slice(0, 2)));
   check("F. four fields each: post_uri, matched_keyword, post_created_at, post_text (no handle, no score)",
     finds.every(f => JSON.stringify(Object.keys(f).sort()) === JSON.stringify(["matched_keyword", "post_created_at", "post_text", "post_uri"])), JSON.stringify(Object.keys(finds[0] || {})));
-  check("F. the newest 50, newest first", finds.length === 50 && finds[0].post_text === "comment 59" && finds[49].post_text === "comment 10", JSON.stringify([finds.length, finds[0] && finds[0].post_text]));
+  check("F. the newest 50, newest first", finds.length === 50 && /^comment 59:/.test(finds[0].post_text) && /^comment 10:/.test(finds[49].post_text), JSON.stringify([finds.length, finds[0] && finds[0].post_text]));
   check("F. the query itself filters source youtube and status signal", Fo.db.log.length === 1 &&
     ["source:youtube", "status:signal"].every(k => Fo.db.log[0].filters.some(f => f[1] + ":" + f[2] === k)), JSON.stringify(Fo.db.log[0] && Fo.db.log[0].filters));
   const Foff = await callRoute(OWNER, { ENABLE_YOUTUBE_RADAR: "True" });
@@ -343,7 +354,7 @@ const otherRows = (n, units) => Array.from({ length: n }, () => ({ caller: "soci
     /<h2 class="yt-title">YouTube finds — not scored, cannot be replied to from here, kept 30 days<\/h2>/.test(section), section.slice(0, 200));
   const script = (/<script>([\s\S]*?)<\/script>/.exec(PAGE) || ["", ""])[1];
   const fn = (name) => { const i = script.indexOf("    function " + name + "("); return i < 0 ? "" : script.slice(i, s.braceMatch(script, script.indexOf("{", i))); };
-  const pageCode = ["tok", "escHtml", "buildYoutubeFind", "loadYoutubeFinds"].map(fn).join("\n");
+  const pageCode = ["tok", "escHtml", "buildYoutubeFind", "youtubeHiddenLine", "loadYoutubeFinds"].map(fn).join("\n");
   function els() {
     const made = {};
     return { made, document: { getElementById(id) { return made[id] || (made[id] = { id, hidden: true, innerHTML: "" }); } } };

@@ -209,6 +209,16 @@
         counts new sign-ups by month, so "nothing measures growth" stopped
         being true; it still reads no engagement.
 
+   NAMED BEFORE → AFTER (YouTube filter build, Oct 2026, assertions changed on
+   purpose):
+     L  the Lead Radar tip gains "A YouTube comment is shown only if it has no
+        link, at least 6 words, and a word from the search it matched; the
+        section says how many were hidden and why." (lib/youtubeFilter.js, at
+        capture and at display). New evidence: the filter's own minimum, the
+        route's hidden_counts and the page's #ytHidden line.
+        restore-lead-radar-tip and restore-radar-146-unconditional are
+        re-anchored on the new tip text.
+
    NAMED BEFORE → AFTER (YouTube quota build, Oct 2026, assertions changed on
    purpose):
      L  the Lead Radar tip had to say "…and YouTube capture is switched off.
@@ -285,7 +295,7 @@ const fileOfKey = k => IN_AGENTS.indexOf(k) !== -1 ? "agents/" + k : k;
 const MUTATIONS = {
   // Lead Radar's tip claims the Business Profile again
   "restore-lead-radar-tip": [[GUIDE,
-    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. It does not read your Business Profile, so editing your profile does not change what it finds."',
+    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why. It does not read your Business Profile, so editing your profile does not change what it finds."',
     '"It tracks against your Business Profile\'s Competitors and Industry — keep those current so the radar is watching the conversations that actually matter to you."']],
   // the broker tip points at the removed Pipeline report section again
   "restore-broker-pipeline-section": [[GUIDE,
@@ -310,7 +320,7 @@ const MUTATIONS = {
     '<p class="agent-subtitle">Your real-time business intelligence.</p>']],
   // line 146 claims Mastodon and YouTube unconditionally again
   "restore-radar-146-unconditional": [[GUIDE,
-    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. It does not read",
+    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why. It does not read",
     "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code; it does not read"]],
   // the retention job stops deleting the pipeline rows built on a YouTube find: the tip's new sentence would be false
   "retention-keeps-pipeline": [[RETENTION, "      .from(\"sales_lead_pipeline\")\n      .delete()\n", "      .from(\"sales_lead_pipeline\")\n      .select(\"id\")\n"]],
@@ -609,6 +619,13 @@ check("L. lead-radar.html has the YouTube section, titled as the tip says, outsi
   ytSection.indexOf('id="leadsList"') === -1 && /fetch\(API \+ "\/api\/leads\/youtube-signals"/.test(FILES[RADAR_PAGE]) &&
   /app\.get\("\/api\/leads\/youtube-signals", requireAuth,/.test(FILES[SERVER]), ytSection.slice(0, 200));
 check("L. a YouTube find has no Draft button, no score and no reply control", ytBuilder.length > 0 && !/draft|score|reply|copy-btn/i.test(ytBuilder), ytBuilder.slice(0, 300));
+// NAMED BEFORE → AFTER (YouTube filter build): new. Each rule the tip names is the filter's, and the count it names is shown.
+const YT_FILTER = fs.readFileSync(path.join(REPO, "lib", "youtubeFilter.js"), "utf8");
+check("L. the tip states the three YouTube rules and the hidden count, and each is real: the filter's link test, its 6-word minimum, its topic test, used at capture and display, and the page's count line",
+  /A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why\./.test(lrTip) &&
+  /var YOUTUBE_MIN_WORDS = 6;/.test(YT_FILTER) && /reason: "link"/.test(YT_FILTER) && /reason: "off_topic"/.test(YT_FILTER) &&
+  /isUsefulYoutubeComment\(commentText, keyword\)/.test(FILES["youtubeRadar.js"]) && /isUsefulYoutubeComment\(page\[i\]\.post_text, page\[i\]\.matched_keyword\)/.test(FILES[SERVER]) &&
+  /id="ytHidden"/.test(ytSection) && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(FILES[RADAR_PAGE]), lrTip);
 const radarSub = (/<p class="agent-subtitle">([^<]*)<\/p>/.exec(FILES[RADAR_PAGE]) || ["", ""])[1];
 const UNCONDITIONAL = /Mastodon &amp; YouTube every|Bluesky, Mastodon(,| and| &amp;) YouTube|(?:and|,) scored by intent|scores them,|\bscans? Mastodon|\bscans? YouTube/i;
 check("L. the subtitle says Bluesky every 5 minutes and that Mastodon capture and intent scoring run only when switched on",
