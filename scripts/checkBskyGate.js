@@ -48,10 +48,13 @@ const s = MUT;
 
 const RADAR = "leadRadar.js", SERVER = "server.js", REPLIES = "scripts/checkOutreachReplies.js", GATE = "lib/bskyGate.js";
 const MUTATIONS = {
-  // a failed login is retried for every keyword again
+  // a failed login is retried for every keyword again: no per-tick login budget, and a failed
+  // call goes on to the next keyword instead of ending the tick. Re-anchored (YouTube retention
+  // build, Oct 2026) onto the tick.stop assignment the loop gained after 855f997: the old anchor
+  // expected `break;` straight after the log line and had matched nothing since.
   "login-per-keyword": [[RADAR, "        }, tickBudget);", "        });"],
-    [RADAR, "            (call.resumes_at ? \" (no Bluesky call until \" + call.resumes_at + \")\" : \"\") + \".\");\n          break;",
-      "            (call.resumes_at ? \" (no Bluesky call until \" + call.resumes_at + \")\" : \"\") + \".\");\n          continue;"]],
+    [RADAR, "              : { outcome: \"login_failed\", error: call.error || call.reason };\n          break;",
+      "              : { outcome: \"login_failed\", error: call.error || call.reason };\n          continue;"]],
   // the radar does not skip its tick during a back-off
   "radar-ignores-backoff": [[RADAR, "    if (bskyGate.backoffRemainingMs() > 0) {\n      if (radarBackoffLogged", "    if (false) {\n      if (radarBackoffLogged"]],
   // the sender does not check the back-off itself

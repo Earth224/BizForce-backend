@@ -131,13 +131,15 @@ function fakeDb(rows) {
       if (op === "not" && a === "is" && b === null) return r[col] != null;
       if (op === "gte") return r[col] != null && r[col] >= a;
       if (op === "lt") return r[col] != null && r[col] < a;
+      // loadDemandRows filters source neq youtube in every query (YouTube retention build, Oct 2026).
+      if (op === "neq") return r[col] !== a;
       return true;
     });
   }
   function from() {
     const q = { cols: null, head: false, filters: [] };
     const b = { select(cols, opts) { q.cols = cols; q.head = !!(opts && opts.head); return b; } };
-    ["in", "is", "not", "gte", "lt", "order", "range", "limit", "eq"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
+    ["in", "is", "not", "gte", "lt", "order", "range", "limit", "eq", "neq"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
     b.then = (res, rej) => {
       let hits = rows.filter(r => keep(q, r));
       if (q.head) return Promise.resolve({ data: null, count: hits.length, error: null }).then(res, rej);
@@ -304,7 +306,7 @@ const meAs = (role, publicUser) => () => ({ status: 200, body: { user: publicUse
 
   /* ── D. not measured, provenance ──────────────────────────────────────── */
   console.log("\n══ D. what is not measured ══");
-  check("not_measured: all four, always visible, never collapsed",
+  check("not_measured: every item (five since the YouTube retention build), always visible, never collapsed",
     real.body.not_measured.every(x => h.indexOf(escH(x)) !== -1) && h.indexOf("Not measured by this report") !== -1 && h.indexOf("<details") === -1);
   check("not_measured shown on the failure report too", failed.body.not_measured.every(x => hf.indexOf(escH(x)) !== -1));
   check("provenance in the dashed style", h.indexOf('class="ap-prov"') !== -1);

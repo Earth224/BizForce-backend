@@ -54,6 +54,7 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
+const { youtubeRetentionEnabled, youtubeRetentionTick, YOUTUBE_RETENTION_JOB_NAME, YOUTUBE_RETENTION_MAX_PER_TICK } = require("./lib/youtubeRetention");
 const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine, UNREACHABLE_MESSAGE: GUARDED_FETCH_UNREACHABLE } = require("./lib/guardedFetch");
 const webpush = require("web-push");
 const cron = require("node-cron");
@@ -29091,8 +29092,11 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
 /* ── Demand signals: the radar's captured posts, read as evidence ──────────────
    POST /api/agents/rd/demand-signals reads bsky_leads — public posts the lead
    radars captured because they matched a search phrase — and reports what they
-   say about demand for one theme. OWNER ONLY: every row in that table is the
-   owner's, captured by the owner's keyword lists (see LEAD_RADAR_UNAVAILABLE).
+   say about demand for one theme. NEVER A YOUTUBE ROW: every read filters out
+   source 'youtube' in the query (DEMAND_EXCLUDED_SOURCE), because YouTube's
+   API terms forbid combining its data with data from other sources. OWNER
+   ONLY: every row in that table is the owner's, captured by the owner's
+   keyword lists (see LEAD_RADAR_UNAVAILABLE).
 
    TWO VOICES, KEPT APART. MEASURED is counted in code: rows in the window, by
    keyword, source and month, dated and undated, and the scorer's real intent
@@ -29117,9 +29121,17 @@ app.post("/api/agents/rd/competitor-scan", requireAuth, requireActiveSubscriptio
 
 /* Theme → the stored matched_keyword values it reads. Every keyword the radars
    have written or search today (leadRadar.js KEYWORDS and BIZFORCE_KEYWORDS,
-   mastodonRadar.js HASHTAGS, youtubeRadar.js KEYWORDS, and the earlier lists
-   still present in stored rows) sits in exactly one theme. "all" reads every
-   row, whatever its keyword. */
+   mastodonRadar.js HASHTAGS, and the earlier lists still present in stored
+   rows) sits in exactly one theme. "all" reads every row, whatever its
+   keyword, YouTube's excepted.
+
+   NO YOUTUBE-ONLY KEYWORD. Seven keywords were only ever searched on YouTube
+   (youtubeRadar.js KEYWORDS today, and its list at 5746f53) and appear on no
+   Bluesky or Mastodon row: "boost energy naturally", "how to boost energy
+   naturally", "why am i always tired", "low libido help", "natural male
+   vitality", "how to increase libido naturally" and "tongkat ali reviews".
+   Demand Signals reads no YouTube row, so a theme listing them would name a
+   keyword it can never count; they are in no theme. */
 var DEMAND_THEME_KEYWORDS = {
   manifestation: [
     "am i manifesting wrong", "anyone had luck manifesting", "does manifestation actually work",
@@ -29137,20 +29149,17 @@ var DEMAND_THEME_KEYWORDS = {
   supplements: [
     "anyone had luck with ashwagandha", "anyone recommend an energy supplement", "anyone tried tongkat ali",
     "aphrodisiac", "biohacking", "does tongkat ali actually work", "herbal aphrodisiac", "herbalism",
-    "natural energy supplement", "supplement recommendations for fatigue", "tongkat ali reviews",
-    "what supplements actually work"
+    "natural energy supplement", "supplement recommendations for fatigue", "what supplements actually work"
   ],
   libido: [
-    "get my sex drive back", "help with low libido", "how to increase libido naturally", "libido",
-    "low libido", "low libido help", "male vitality", "malehealth", "natural male vitality",
-    "struggling with low libido", "testosterone", "virility", "what helped your low libido",
+    "get my sex drive back", "help with low libido", "libido", "low libido", "male vitality",
+    "malehealth", "struggling with low libido", "testosterone", "virility", "what helped your low libido",
     "what worked for low libido", "why is my libido low"
   ],
   energy: [
     "always tired no energy", "anyone else always tired", "anything to eat for energy",
-    "boost energy naturally", "boost my energy naturally", "cant focus tired all day",
-    "how to boost energy naturally", "natural remedy for energy", "recommendations for low energy",
-    "why am i always tired"
+    "boost my energy naturally", "cant focus tired all day", "natural remedy for energy",
+    "recommendations for low energy"
   ],
   bizforce: [
     "ad account disabled", "can't advertise supplements", "meta rejected my ad", "my account got flagged selling",
@@ -29168,8 +29177,12 @@ var DEMAND_NOT_MEASURED = [
   "Who the authors are: no person, account or profile is read, counted as a person, or reported",
   "Whether the sample represents everyone who feels this way: it is drawn only from posts the radar captured",
   "Posts the radar never searched for: anything outside its keyword and hashtag lists, and every network it does not read",
-  "Anything before collection began: the radars capture forward from when they started, so earlier demand is absent, not low"
+  "Anything before collection began: the radars capture forward from when they started, so earlier demand is absent, not low",
+  "YouTube: excluded. YouTube's API terms forbid combining YouTube data with data from other sources, so no YouTube comment is read, counted or sampled here"
 ];
+
+// The source Demand Signals never reads (see the header above).
+var DEMAND_EXCLUDED_SOURCE = "youtube";
 
 // A count, or "<5" when it is below 5: never a figure that can single out one author.
 function demandCount(n) {
@@ -29361,6 +29374,7 @@ function demandSignalsPrompt(measured, sample, keywordsInScope) {
 var DEMAND_PAGE = 1000;
 async function loadDemandRows(theme, windowStart) {
   function scoped(q) {
+    q = q.neq("source", DEMAND_EXCLUDED_SOURCE);
     return theme === "all" ? q : q.in("matched_keyword", DEMAND_THEME_KEYWORDS[theme]);
   }
   var rows = [];
@@ -49371,6 +49385,33 @@ app.listen(PORT, function () {
       EMAIL_SEQUENCE_JOB_PREFIX + "<hh>, ceiling " + JSON.stringify(emailSequenceMaxPerTick()) + " attempt(s) per tick.");
   } else {
     console.log("[startup] emailSequenceTick disabled (ENABLE_EMAIL_SEQUENCES not exactly \"true\")");
+  }
+
+  /* YouTube retention: YouTube data is kept for at most 30 days. ON BY DEFAULT.
+   *
+   * The only job here that runs unless told not to: only the exact value
+   * ENABLE_YOUTUBE_RETENTION="false" turns it off. It is how stored YouTube
+   * data stays within the YouTube API Services Developer Policies' 30-day
+   * rule, and compliance must not depend on someone remembering to set a
+   * variable (lib/youtubeRetention.js, youtubeRetentionEnabled).
+   *
+   * 09:00 UTC daily, the timezone stated, claimed through job_runs like the
+   * other daily passes. It deletes; it never calls a model.
+   *
+   * No boot-time run. A setTimeout firing after every deploy is precisely the
+   * repeat-firing the job_runs claim exists to prevent. */
+  if (youtubeRetentionEnabled(process.env)) {
+    cron.schedule("0 9 * * *", function () {
+      youtubeRetentionTick(supabase).catch(function (err) {
+        console.error("[YouTubeRetention] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] youtubeRetentionTick scheduled — 09:00 UTC daily, claimed through job_runs." +
+      YOUTUBE_RETENTION_JOB_NAME + ", ceiling " + YOUTUBE_RETENTION_MAX_PER_TICK + " lead(s) per tick.");
+  } else {
+    console.log("[startup] youtubeRetentionTick disabled (ENABLE_YOUTUBE_RETENTION is exactly \"false\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is

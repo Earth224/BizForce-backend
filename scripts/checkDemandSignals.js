@@ -29,7 +29,17 @@
      9. A model failure returns 200 with measured, themes null and
         explanation_error. A non-admin is refused 403 before anything is read.
     10. No row-level field anywhere in the response or the persisted body.
+    11. No YouTube row is read: every query filters source 'youtube' out in
+        the query itself, so a YouTube row is in no count, no month, no
+        sample and no prompt, and not_measured says why.
      And zero network.
+
+   NAMED BEFORE → AFTER (YouTube retention build, Oct 2026, assertions changed
+   on purpose): "not_measured names the four things" now names five, the
+   fifth being that YouTube is excluded because YouTube's API terms forbid
+   combining its data with other sources. The fixture gains three YouTube
+   rows (in the window, before it, and undated); every count asserted
+   elsewhere is unchanged, which is itself the proof they are not read.
 
    MUTATE=<name> edits the lifted source (server.js on disk is never touched).
    MUTATE=all runs each in its own process and passes only if every one fails
@@ -58,6 +68,8 @@ const MUTATIONS = {
   // a failed or missing score is bucketed as a score
   "include-failed-scores": [["    if (leadHasRealScore(r)) {\n      real++;", "    if (r.intent_score != null || r.status === \"score_failed\") {\n      real++;"]],
   // the response carries the sampled post text
+  // the source filter is gone, and YouTube rows are read again
+  "reads-youtube": [["    q = q.neq(\"source\", DEMAND_EXCLUDED_SOURCE);\n", ""]],
   "return-post-text": [["        not_measured: DEMAND_NOT_MEASURED,\n", "        not_measured: DEMAND_NOT_MEASURED,\n        sample_posts: loaded.rows.slice(0, 3).map(function (r) { return { post_text: r.post_text }; }),\n"]]
 };
 
@@ -140,6 +152,7 @@ function fakeDb(rows) {
       if (op === "not" && a === "is" && b === null) return r[col] != null;
       if (op === "gte") return r[col] != null && r[col] >= a;
       if (op === "lt") return r[col] != null && r[col] < a;
+      if (op === "neq") return r[col] !== a;
       return true;
     });
   }
@@ -156,7 +169,7 @@ function fakeDb(rows) {
     const q = { table, cols: null, head: false, filters: [] };
     log.push(q);
     const b = { select(cols, opts) { q.cols = cols; q.head = !!(opts && opts.head); return b; } };
-    ["in", "is", "not", "gte", "lt", "order", "range", "limit", "eq"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
+    ["in", "is", "not", "gte", "lt", "order", "range", "limit", "eq", "neq"].forEach(op => { b[op] = function () { q.filters.push([op].concat([].slice.call(arguments))); return b; }; });
     b.then = (res, rej) => answer(q).then(res, rej);
     return b;
   }
@@ -192,6 +205,10 @@ function world() {
   for (let i = 0; i < 8; i++) rows.push(row("how to manifest", { post_created_at: null }));
   for (let i = 0; i < 9; i++) rows.push(row("low libido", { intent_score: 40 }));
   rows.push(row("ad account disabled", { intent_score: 80 }));
+  // YouTube rows: in the window, before it, and undated. None may be read.
+  rows.push(row("how to manifest", { source: "youtube", intent_score: 72, post_text: "youtube comment in the window", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=1" }));
+  rows.push(row("how to manifest", { source: "youtube", post_created_at: ago(200), post_text: "youtube comment before the window", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=2" }));
+  rows.push(row("how to manifest", { source: "youtube", post_created_at: null, post_text: "youtube comment undated", post_uri: "https://www.youtube.com/watch?v=aaaaaaaaaaa&lc=3" }));
   return rows;
 }
 
@@ -376,7 +393,24 @@ function leaks(obj, rows) {
     if (bb) check(label + ": none in the persisted body either", leaks(bb.persisted[0], world()).length === 0, leaks(bb.persisted[0], world()).join("; "));
   }
   check("the response keys", JSON.stringify(Object.keys(r.body)) === JSON.stringify(["success", "theme", "measured", "themes", "explanation_error", "points_dropped", "privacy_drops", "not_measured", "provenance", "task_id", "persisted"]), JSON.stringify(Object.keys(r.body)));
-  check("not_measured names the four things", r.body.not_measured.length === 4 && /authors/.test(r.body.not_measured[0]) && /represents/.test(r.body.not_measured[1]) && /never searched/.test(r.body.not_measured[2]) && /before collection/.test(r.body.not_measured[3]));
+  // NAMED BEFORE → AFTER: was "not_measured names the four things", length 4.
+  check("not_measured names the five things, the fifth that YouTube is excluded and why", r.body.not_measured.length === 5 && /authors/.test(r.body.not_measured[0]) && /represents/.test(r.body.not_measured[1]) && /never searched/.test(r.body.not_measured[2]) && /before collection/.test(r.body.not_measured[3]) &&
+    /^YouTube: excluded\. YouTube's API terms forbid combining YouTube data with data from other sources/.test(r.body.not_measured[4]), JSON.stringify(r.body.not_measured[4]));
+
+  /* ── 11. no YouTube row ───────────────────────────────────────────────── */
+  console.log("\n══ 11. no YouTube row is read ══");
+  const allQueries = b0.db.log.concat(ball.db.log);
+  check("every bsky_leads query, the page and both counts, filters source neq youtube in the query (" + allQueries.length + " queries)",
+    allQueries.length >= 6 && allQueries.every(q => q.table === "bsky_leads" && q.filters.some(f => f[0] === "neq" && f[1] === "source" && f[2] === "youtube")),
+    JSON.stringify(allQueries.map(q => q.filters.filter(f => f[0] === "neq"))));
+  check("by_source names no youtube, for a theme and for all", !r.body.measured.by_source.some(x => x.source === "youtube") && !rall.body.measured.by_source.some(x => x.source === "youtube"),
+    JSON.stringify([r.body.measured.by_source, rall.body.measured.by_source]));
+  check("no YouTube comment reaches the model, for a theme or for all", [b0, ball].every(bb => bb.prompts.every(p => !/youtube comment/.test(p))));
+  check("the YouTube rows are in no count: the window still holds 35 rows, 8 undated, <5 before it",
+    m.rows_in_window === 35 && m.undated_rows === 8 && m.dated_before_window === "<5", JSON.stringify([m.rows_in_window, m.undated_rows, m.dated_before_window]));
+  const ytOnlyKeywords = ["boost energy naturally", "how to boost energy naturally", "why am i always tired", "low libido help",
+    "natural male vitality", "how to increase libido naturally", "tongkat ali reviews"];
+  check("no theme lists a keyword only ever searched on YouTube", ytOnlyKeywords.every(k => flat.indexOf(k) === -1), JSON.stringify(ytOnlyKeywords.filter(k => flat.indexOf(k) !== -1)));
 
   /* ── wiring ───────────────────────────────────────────────────────────── */
   check("TOOL_INPUT_SPECS has rd/demand-signals: theme required, window_days and sample_size optional",
