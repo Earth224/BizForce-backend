@@ -762,7 +762,10 @@ const COMPLIANCE_PROFILE_NAMES = Object.keys(COMPLIANCE_PROFILES);
    Adding a property is one line: its canonical host, and the profile name. */
 const COMPLIANCE_PROFILE_BY_HOST = {
   "swordvitality.com": "supplement_vitality",
-  "mrearthrose.com":   "supplement_vitality"
+  "mrearthrose.com":   "supplement_vitality",
+  // MrEarthRose's Netlify site, where its War Horse page lives. canonicalSiteHost
+  // strips a leading www., so this one entry covers www.mrearthrose.net too.
+  "mrearthrose.net":   "supplement_vitality"
 };
 
 // Collapses every run of whitespace to a single space so a sentence the model
@@ -41898,6 +41901,109 @@ app.get("/api/blog/:handle", async function (req, res, next) {
       posts: posts || []
     });
   } catch (error) { next(error); }
+});
+
+/* GET /api/sitemap/blog.xml — every SERVED blog post, as a sitemap.
+
+   bizforceai.net/sitemap-blog.xml is a Netlify 200 rewrite to this route, and
+   the frontend's sitemap.xml is an index naming it beside sitemap-pages.xml.
+
+   SERVED means what GET /api/blog/:handle/:slug serves, which is what
+   blogpost.html renders: type blog, status published, a slug, and an author
+   with a bf_profiles username. One condition more: no site. An external post
+   is a draft today, so the status filter already drops it; the site filter
+   says so in the query rather than leaving it to the executor's choice, so a
+   post written for another property can never be listed under this domain.
+
+   Each <loc> is exactly the canonical blogpost.html sets:
+   https://bizforceai.net/blog/ + encodeURIComponent(username as stored) + "/"
+   + encodeURIComponent(slug). The XML escape after it is defence in depth:
+   encodeURIComponent leaves no & < > in a path, so the escape changes nothing
+   today, but a URL built any other way would still come out well-formed.
+   <lastmod> is published_at, else created_at, as a date: content_library has
+   no updated_at column (migrations 025, 056, 058).
+
+   Public and read-only, under the global apiLimiter like every route. Cached
+   in memory for BLOG_SITEMAP_CACHE_MS (10 minutes): a crawler reading it
+   repeatedly costs one pair of reads per ten minutes, and a post published
+   now is listed within ten. A failed read is a 503, never an empty sitemap
+   that would tell a crawler every post is gone, and is not cached. */
+var BLOG_SITEMAP_ORIGIN = "https://bizforceai.net";
+var BLOG_SITEMAP_CACHE_MS = 10 * 60 * 1000;
+var BLOG_SITEMAP_PAGE = 1000;
+var BLOG_SITEMAP_MAX_URLS = 50000;   // the sitemap protocol's limit per file
+var blogSitemapCache = { xml: null, at: 0 };
+
+function blogSitemapXmlEscape(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+// blogpost.html's canonical, character for character.
+function blogSitemapLoc(handle, slug) {
+  return BLOG_SITEMAP_ORIGIN + "/blog/" + encodeURIComponent(handle) + "/" + encodeURIComponent(slug);
+}
+
+// rows: content_library rows; handles: { user_id: username }. A row whose author has no username is not served, so not listed.
+function buildBlogSitemapXml(rows, handles) {
+  var lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'];
+  (rows || []).forEach(function (row) {
+    var handle = handles[row.user_id];
+    if (!handle || !row.slug) return;
+    var when = String(row.published_at || row.created_at || "").slice(0, 10);
+    lines.push("  <url><loc>" + blogSitemapXmlEscape(blogSitemapLoc(handle, row.slug)) + "</loc>" +
+      (/^\d{4}-\d{2}-\d{2}$/.test(when) ? "<lastmod>" + when + "</lastmod>" : "") + "</url>");
+  });
+  lines.push("</urlset>");
+  return lines.join("\n") + "\n";
+}
+
+async function readServedBlogPosts() {
+  var rows = [];
+  for (var from = 0; rows.length < BLOG_SITEMAP_MAX_URLS; from += BLOG_SITEMAP_PAGE) {
+    var page = await supabase
+      .from("content_library")
+      .select("user_id, slug, published_at, created_at")
+      .eq("type", "blog")
+      .eq("status", "published")
+      .is("site", null)
+      .not("slug", "is", null)
+      .order("published_at", { ascending: false })
+      .range(from, from + BLOG_SITEMAP_PAGE - 1);
+    if (page.error) throw page.error;
+    rows = rows.concat(page.data || []);
+    if ((page.data || []).length < BLOG_SITEMAP_PAGE) break;
+  }
+  rows = rows.slice(0, BLOG_SITEMAP_MAX_URLS);
+
+  var userIds = [];
+  rows.forEach(function (r) { if (userIds.indexOf(r.user_id) === -1) userIds.push(r.user_id); });
+  var handles = {};
+  for (var i = 0; i < userIds.length; i += BLOG_SITEMAP_PAGE) {
+    var profiles = await supabase
+      .from("bf_profiles")
+      .select("user_id, username")
+      .in("user_id", userIds.slice(i, i + BLOG_SITEMAP_PAGE));
+    if (profiles.error) throw profiles.error;
+    (profiles.data || []).forEach(function (p) { if (p.username) handles[p.user_id] = p.username; });
+  }
+  return { rows: rows, handles: handles };
+}
+
+app.get("/api/sitemap/blog.xml", async function (req, res) {
+  try {
+    if (!blogSitemapCache.xml || Date.now() - blogSitemapCache.at > BLOG_SITEMAP_CACHE_MS) {
+      var served = await readServedBlogPosts();
+      blogSitemapCache = { xml: buildBlogSitemapXml(served.rows, served.handles), at: Date.now() };
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=600");
+    return res.status(200).send(blogSitemapCache.xml);
+  } catch (err) {
+    console.error("[sitemap/blog] could not be built:", (err && err.message) || err);
+    res.set("Retry-After", "600");
+    return res.status(503).type("text/plain").send("The blog sitemap could not be built just now.");
+  }
 });
 
 // Public single-listing read — the money-page target for blog posts. Active
