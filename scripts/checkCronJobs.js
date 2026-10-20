@@ -1,6 +1,6 @@
 "use strict";
 /* ══════════════════════════════════════════════════════════════════════════
-   checkCronJobs — the six wall-clock jobs fire when server.js says they fire,
+   checkCronJobs — the seven wall-clock jobs fire when server.js says they fire,
    across daylight-saving changes, and loading server.js as a check runs no
    job and no reminder pass.
 
@@ -15,6 +15,21 @@
    exactly the five" is now the six; and new loads prove that only
    ENABLE_YOUTUBE_RETENTION="false" removes the task ("False" does not).
    Still no job RUNS while server.js loads.
+
+   NAMED BEFORE → AFTER (owner alerts build, launch audit #6, Oct 2026). A
+   seventh call, the ops alert scan (every 30 minutes, UTC), is also ON BY
+   DEFAULT: only ENABLE_OPS_ALERTS="false" turns it off (lib/opsAlert.js says
+   why). So:
+     cron-count       BEFORE exactly six calls.          AFTER exactly seven.
+     gates-unset      BEFORE exactly the retention task. AFTER the retention
+                      task and the ops scan, nothing else.
+     retention-false  BEFORE no task at all.             AFTER only the ops
+                      scan; a new load with ENABLE_OPS_ALERTS="false" as well
+                      registers no task at all.
+     retention-False  BEFORE the retention task (1).     AFTER it and the ops
+                      scan (2).
+     gates-set        BEFORE exactly the six declared.   AFTER the seven.
+   New: ENABLE_OPS_ALERTS "False" (not exactly "false") keeps the scan.
 
    THE HOST IS UTC, as production's is (no TZ is set on the Railway service and
    the container's clock is UTC). Every schedule is proved there, across both
@@ -60,14 +75,15 @@
    server.js IS LOADED THE WAY A CHECK LOADS IT, in a child with every outbound
    connection (http, https, net, tls, fetch) blocked and recorded: with the five
    ENABLE_* gates unset, as the suite runs, it registers only the default-on
-   YouTube retention task; with ENABLE_YOUTUBE_RETENTION="false" as well, none;
-   with all five set, exactly the six the source declares; it runs none; and in neither case does it run a reminder pass. server.js IS ALSO RUN
+   YouTube retention task and the default-on ops alert scan; with both of their
+   variables exactly "false" as well, none;
+   with all five set, exactly the seven the source declares; it runs none; and in neither case does it run a reminder pass. server.js IS ALSO RUN
    AS THE PROGRAM (node -r <blocker> server.js, the on-disk file, network
    blocked, Bluesky blanked), where the reminder pass does start: that is the
    production path, package.json "start" being "node server.js".
 
    WHAT THIS PROVES
-     1. server.js has exactly six cron.schedule calls; each passes only
+     1. server.js has exactly seven cron.schedule calls; each passes only
         { timezone }, names a real IANA timezone, keeps no returned task, and
         sets none of scheduled, runOnInit or recoverMissedExecutions; nothing
         else calls cron.*.
@@ -77,8 +93,9 @@
         callback per simulated second), on a UTC host, across both changes; and
         a non-UTC job's minutes differ from the same expression read in UTC.
      4. Loading server.js as a check schedules none of the five opt-in jobs
-        unless its gate is set, schedules the retention job unless its variable
-        is exactly "false", registers exactly the declared six with the gates
+        unless its gate is set, schedules the retention job and the ops alert
+        scan unless each one's variable
+        is exactly "false", registers exactly the declared seven with the gates
         set, runs none, and runs no reminder pass. Running server.js as the program starts the
         reminder pass.
 
@@ -102,6 +119,8 @@ const MUTATE = process.env.MUTATE || "";
 const GATES = ["ENABLE_STORE_PROPOSAL_JOB", "ENABLE_SELF_REVIEW", "ENABLE_AGENT_SCHEDULES", "ENABLE_EMAIL_SEQUENCES", "ENABLE_NIGHTLY_BACKUP"];
 // On by default: only the exact value "false" turns it off (lib/youtubeRetention.js).
 const RETENTION_GATE = "ENABLE_YOUTUBE_RETENTION";
+// On by default too: only the exact value "false" turns it off (lib/opsAlert.js).
+const OPS_GATE = "ENABLE_OPS_ALERTS";
 
 const MUTATIONS = {
   // the self-review job loses its timezone and runs on the host's clock
@@ -320,18 +339,19 @@ const SRC_FILE = path.join(TMP, "server.src.js");
 fs.writeFileSync(LOAD_FILE, LOAD_CHILD);
 fs.writeFileSync(PROGRAM_FILE, PROGRAM_PRELOAD);
 fs.writeFileSync(SRC_FILE, SRC);
-function childEnv(gatesOn, retention) {
+function childEnv(gatesOn, retention, opsAlerts) {
   const env = Object.assign({}, process.env, { BLUESKY_IDENTIFIER: "", BLUESKY_APP_PASSWORD: "" });
   GATES.forEach(g => { if (gatesOn) env[g] = "true"; else delete env[g]; });
   if (retention === undefined) delete env[RETENTION_GATE]; else env[RETENTION_GATE] = retention;
+  if (opsAlerts === undefined) delete env[OPS_GATE]; else env[OPS_GATE] = opsAlerts;
   delete env.BACKUP_CRON; delete env.BACKUP_TIMEZONE;
   return env;
 }
 function parseChild(r) {
   try { return JSON.parse(r.stdout); } catch (e) { return { error: "child: " + (String(r.stdout) + String(r.stderr)).slice(0, 400) }; }
 }
-function loadServer(gatesOn, retention) {
-  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention), encoding: "utf8", timeout: 120000 }));
+function loadServer(gatesOn, retention, opsAlerts) {
+  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention, opsAlerts), encoding: "utf8", timeout: 120000 }));
 }
 function runServerAsProgram() {
   return parseChild(spawnSync(process.execPath, ["-r", PROGRAM_FILE, SERVER_PATH], { cwd: REPO, env: childEnv(false), encoding: "utf8", timeout: 120000 }));
@@ -344,8 +364,8 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     console.log("\n══ 1. the cron.schedule calls in server.js ══");
     calls.forEach(c => console.log("    server.js:" + c.line + "  " + JSON.stringify(c.expression.value) + " from " + c.expression.from +
       ", timezone " + JSON.stringify(c.timezone.value) + " from " + c.timezone.from));
-    // NAMED BEFORE → AFTER: was "exactly five"; the sixth is the YouTube retention job.
-    check("server.js has exactly six cron.schedule calls", calls.length === 6, calls.length);
+    // NAMED BEFORE → AFTER: was "exactly five"; the sixth is the YouTube retention job, the seventh the ops alert scan (cron-count).
+    check("server.js has exactly seven cron.schedule calls", calls.length === 7, calls.length);
     check("each expression resolves from the source", calls.every(c => typeof c.expression.value === "string"), JSON.stringify(calls.map(c => c.expression)));
     check("each passes exactly one option, a timezone, resolved from the source",
       calls.every(c => typeof c.timezone.value === "string" && c.timezone.value.length > 0), JSON.stringify(calls.map(c => [c.line, c.timezone.from])));
@@ -407,29 +427,41 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     const off = loadServer(false);
     const retentionCall = calls.find(c => c.expression.value === "0 9 * * *" && c.timezone.value === "UTC");
     const retentionDeclared = retentionCall ? convertExpression(retentionCall.expression.value) + " @ UTC" : null;
-    // NAMED BEFORE → AFTER: was "gates unset: registers no node-cron task" and "each of the five says it is disabled".
-    check("gates unset, as the suite runs: the server comes up and registers exactly one task, the YouTube retention job at 09:00 UTC (on by default)",
-      off.listened === true && !off.crashed && Array.isArray(off.tasks) && off.tasks.length === 1 && !!retentionDeclared &&
-      off.tasks[0].pattern + " @ " + off.tasks[0].timezone === retentionDeclared, JSON.stringify(off).slice(0, 400));
+    const opsCall = calls.find(c => c.expression.value === "*/30 * * * *" && c.timezone.value === "UTC");
+    const opsDeclared = opsCall ? convertExpression(opsCall.expression.value) + " @ UTC" : null;
+    const taskList = (r) => (r.tasks || []).map(x => x.pattern + " @ " + x.timezone).sort();
+    // NAMED BEFORE → AFTER: was "gates unset: registers no node-cron task" and "each of the five says it is disabled";
+    // then exactly the retention task; now the retention task and the ops alert scan (gates-unset).
+    check("gates unset, as the suite runs: the server comes up and registers exactly two tasks, the YouTube retention job at 09:00 UTC and the ops alert scan every 30 minutes UTC (both on by default)",
+      off.listened === true && !off.crashed && !!retentionDeclared && !!opsDeclared &&
+      JSON.stringify(taskList(off)) === JSON.stringify([retentionDeclared, opsDeclared].sort()), JSON.stringify(off).slice(0, 400));
     check("…each of the five opt-in jobs says it is disabled, and the retention job says it is scheduled",
       Array.isArray(off.gates) && off.gates.length === 6 && off.gates.filter(l => / disabled /.test(l)).length === 5 &&
       off.gates.some(l => /youtubeRetentionTick scheduled — 09:00 UTC daily/.test(l)), JSON.stringify(off.gates));
     const retentionOff = loadServer(false, "false");
-    check("ENABLE_YOUTUBE_RETENTION exactly \"false\": no task at all, and the retention job says it is disabled",
-      retentionOff.listened === true && !retentionOff.crashed && Array.isArray(retentionOff.tasks) && retentionOff.tasks.length === 0 &&
+    // NAMED BEFORE → AFTER: was "no task at all"; the ops alert scan has its own gate (retention-false).
+    check("ENABLE_YOUTUBE_RETENTION exactly \"false\": only the ops alert scan, and the retention job says it is disabled",
+      retentionOff.listened === true && !retentionOff.crashed && JSON.stringify(taskList(retentionOff)) === JSON.stringify([opsDeclared]) &&
       (retentionOff.gates || []).some(l => /youtubeRetentionTick disabled/.test(l)), JSON.stringify(retentionOff).slice(0, 400));
+    const bothOff = loadServer(false, "false", "false");
+    check("ENABLE_YOUTUBE_RETENTION and ENABLE_OPS_ALERTS both exactly \"false\": no task at all",
+      bothOff.listened === true && !bothOff.crashed && Array.isArray(bothOff.tasks) && bothOff.tasks.length === 0, JSON.stringify(bothOff).slice(0, 400));
+    const opsFalsey = loadServer(false, "false", "False");
+    check("ENABLE_OPS_ALERTS \"False\" (not exactly \"false\"): the ops alert scan is still registered",
+      opsFalsey.listened === true && JSON.stringify(taskList(opsFalsey)) === JSON.stringify([opsDeclared]), JSON.stringify(opsFalsey.tasks));
     const retentionFalsey = loadServer(false, "False");
-    check("ENABLE_YOUTUBE_RETENTION \"False\" (not exactly \"false\"): the retention task is still registered",
-      retentionFalsey.listened === true && (retentionFalsey.tasks || []).length === 1, JSON.stringify(retentionFalsey.tasks));
+    // NAMED BEFORE → AFTER: was 1 task; now it and the ops alert scan (retention-False).
+    check("ENABLE_YOUTUBE_RETENTION \"False\" (not exactly \"false\"): the retention task is still registered, beside the ops scan",
+      retentionFalsey.listened === true && JSON.stringify(taskList(retentionFalsey)) === JSON.stringify([retentionDeclared, opsDeclared].sort()), JSON.stringify(retentionFalsey.tasks));
     check("…and it runs no reminder pass (no calendar_events read, no pass logged; the guard says so)",
       off.listened === true && !reminderRead(off.attempts) && (off.reminderLogs || []).length === 1 && /reminder scheduler not started/.test(off.reminderLogs[0]),
       JSON.stringify({ attempts: off.attempts, reminderLogs: off.reminderLogs }));
     const on = loadServer(true);
     const declared = calls.map(c => (fieldsOf(c.expression.value) ? convertExpression(c.expression.value) : c.expression.value) + " @ " + c.timezone.value).sort();
     const registered = (on.tasks || []).map(t => t.pattern + " @ " + t.timezone).sort();
-    // NAMED BEFORE → AFTER: was "exactly the five declared schedules".
-    check("gates set: exactly the six declared schedules are registered, with their expressions and timezones",
-      on.listened === true && !on.crashed && registered.length === 6 && JSON.stringify(registered) === JSON.stringify(declared),
+    // NAMED BEFORE → AFTER: was "exactly the five declared schedules", then six; now seven (gates-set).
+    check("gates set: exactly the seven declared schedules are registered, with their expressions and timezones",
+      on.listened === true && !on.crashed && registered.length === 7 && JSON.stringify(registered) === JSON.stringify(declared),
       JSON.stringify(on.crashed || on.error || registered.map(r => r.slice(0, 40))) + " vs " + JSON.stringify(declared.map(r => r.slice(0, 40))));
     check("…none of them ran while server.js loaded, and still no reminder pass",
       on.listened === true && on.runs === 0 && off.runs === 0 && !reminderRead(on.attempts), JSON.stringify({ runs: on.runs, offRuns: off.runs, attempts: on.attempts }));

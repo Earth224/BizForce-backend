@@ -52,6 +52,7 @@ const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
+const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
 const { bfcTransferLimits, BFC_TRANSFER_DESCRIPTION } = require("./lib/bfcTransferLimits");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
@@ -179,10 +180,23 @@ function graphemesCounted() {
   }
 }
 
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    ok: true,
-    status: "healthy",
+/* /health PROVES THE DATABASE ANSWERS. One read of one row of job_runs (a
+   table of job names, no personal data) with a 2-second timeout
+   (lib/opsAlert.js probeDatabase): 200 with db "ok" when it answers, 503 with
+   db "down" when it errors or times out, so an uptime monitor sees a dead
+   database and not only a live process. The answer is a word, never the
+   error: this route is public and unauthenticated.
+
+   COST. At most one PostgREST round trip per 10 seconds however often it is
+   called: concurrent requests share one probe and a result is reused for 10
+   seconds. A monitor every 5 minutes is 288 single-row reads a day. Three
+   failed probes in a row email the owner (alert key health_db). */
+app.get("/health", async (req, res) => {
+  const probe = await opsAlerts.probeDatabase();
+  res.status(probe.ok ? 200 : 503).json({
+    ok: probe.ok,
+    status: probe.ok ? "healthy" : "unhealthy",
+    db: probe.ok ? "ok" : "down",
     // Railway injects this on every deploy. Explicitly null when absent —
     // local runs and any non-Railway host have no such variable, and a missing
     // key would read as "the field is gone" rather than "the build is unknown".
@@ -257,6 +271,12 @@ const supabase = createClient(
     }
   }
 );
+
+/* Owner alert emails (lib/opsAlert.js): the one instance, so dedupe and the
+   /health failure count are shared by every caller in this process. Required
+   inline so code lifted with this line (the Agent records harnesses) needs
+   only require and supabase. */
+const opsAlerts = require("./lib/opsAlert").createOpsAlerts({ supabase });
 
 const resolveAnthropicKey = require("./lib/resolveAnthropicKey")(supabase);
 
@@ -917,6 +937,9 @@ app.post(
         process.env.STRIPE_TEST_WEBHOOK_SECRET
       ]);
     } catch (error) {
+      // Counted, never alerted: a bad signature is a forged or misrouted
+      // request, not breakage, and anyone can send one.
+      opsAlerts.noteSignatureFailure();
       return res.status(400).send("Webhook Error: " + error.message);
     }
 
@@ -925,6 +948,9 @@ app.post(
       return res.json({ received: true });
     } catch (error) {
       console.error("Stripe webhook handler failed:", error);
+      // Not awaited: Stripe's answer never waits on an email, and the alert
+      // never rejects (lib/opsAlert.js).
+      opsAlerts.stripeWebhookFailed(event, error);
       return res.status(500).json({ error: "Webhook handler failed" });
     }
   }
@@ -16870,6 +16896,15 @@ async function buildOracleAgentRecords(userId, onFailure) {
         return ["- " + used.total + " units used (radar " + used.radar + "); " + caps.error + ", so every YouTube call is refused"];
       }
       return ["- " + used.total + " of " + caps.daily + " units used (radar " + used.radar + ")"];
+    });
+
+    /* Owner alerts that are open now (lib/opsAlert.js). Fail-loud: an
+       unreadable ops_alerts is reported through section() as unreadable,
+       never as "0 open". */
+    await section("Ops alerts", async function () {
+      var openOps = await opsAlerts.openAlerts();
+      return ["- Ops: " + openOps.length + " open alert" + (openOps.length === 1 ? "" : "s")].concat(
+        openOps.map(function (a) { return "- " + a.key + " since " + a.since; }));
     });
   }
 
@@ -49923,6 +49958,23 @@ app.listen(PORT, function () {
     console.log("[startup] youtubeRetentionTick disabled (ENABLE_YOUTUBE_RETENTION is exactly \"false\")");
   }
 
+  /* Owner alerts: every 30 minutes on the UTC clock, read job_runs for errors
+     and check the nightly backup is not stale (lib/opsAlert.js scanTick),
+     claimed through job_runs.ops_alert_scan. ON unless ENABLE_OPS_ALERTS is
+     exactly "false" (lib/opsAlert.js says why this gate is default-on).
+     No boot-time run, for the reason the retention job above gives. */
+  if (opsAlertsEnabled(process.env)) {
+    cron.schedule("*/30 * * * *", function () {
+      opsAlerts.scanTick();
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] ops alert scan scheduled — every 30 minutes UTC, claimed through job_runs." +
+      OPS_ALERT_SCAN_JOB_NAME + "; alerts go to OPS_ALERT_EMAIL, else BACKUP_EMAIL_TO.");
+  } else {
+    console.log("[startup] ops alerts disabled (ENABLE_OPS_ALERTS is exactly \"false\")");
+  }
+
   // Nightly backup. A wall-clock schedule for the same reason the pass above is
   // one: on Railway every deploy replaces the process, so an interval measures
   // time from the last deploy rather than from the clock, and a job that is meant
@@ -49936,12 +49988,20 @@ app.listen(PORT, function () {
   // its work twice; two backups on one day is a duplicate email, not damage, and
   // a claim that failed to release would silently stop the backups — which is the
   // failure this whole job is being built to prevent.
+  //
+  // Each run's outcome IS recorded (job_runs.nightly_backup, by
+  // opsAlerts.backupFinished), which is not a claim and cannot stop a backup:
+  // a failure emails the owner, and so does no success in 30 hours.
   if (process.env.ENABLE_NIGHTLY_BACKUP === "true") {
     var BACKUP_TIMEZONE = process.env.BACKUP_TIMEZONE || "America/Los_Angeles";
     var BACKUP_CRON = process.env.BACKUP_CRON || "0 8 * * *";
     cron.schedule(BACKUP_CRON, function () {
+      var backupStartedMs = Date.now();
       runNightlyBackup({ supabase }).catch(function (err) {
         console.error("[NightlyBackup][FAILED] Scheduled run error:", err.message || err);
+        return { sent: false, reason: "threw", error: err };
+      }).then(function (result) {
+        return opsAlerts.backupFinished(result, backupStartedMs);
       });
     }, {
       timezone: BACKUP_TIMEZONE
