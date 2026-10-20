@@ -2862,9 +2862,9 @@ async function getActiveSubscriptions(userId) {
 
 // Note the asymmetry between the fetch and the test: getActiveSubscriptions
 // pulls past_due because a past-due subscriber is still a customer worth
-// showing billing state to, but past_due does NOT entitle. That matches the
-// existing behaviour in getUserPlan, where the fetch list and the active list
-// deliberately differ.
+// showing billing state to, but past_due does NOT entitle here. getUserPlan
+// now gives past_due its grace (subscriptionEntitlement); this function has
+// no callers and still reads status alone.
 async function hasActivePlan(userId, plan) {
   const subscriptions = await getActiveSubscriptions(userId);
   const wanted = String(plan || "").toLowerCase();
@@ -2905,6 +2905,92 @@ const SUBSCRIPTION_GRACE_DAYS = (function () {
   return Math.min(90, Math.max(0, parsed));
 })();
 
+/* ── How long a past_due subscription keeps its access ───────────────────────
+
+   WHY A GRACE. Stripe marks a subscription past_due the moment a renewal
+   charge fails, and then retries the card for days (Smart Retries). Refusing
+   at that moment cut a paying customer off for one declined charge, while
+   Stripe was still collecting it. So past_due keeps entitling for
+   SUBSCRIPTION_PAST_DUE_GRACE_DAYS, counted from when the payment fell due,
+   and is refused after that exactly as before.
+
+   WHERE "BECAME PAST_DUE" COMES FROM. No column records it. subscriptions has
+   updated_at, but every webhook write rewrites it — each retry's
+   invoice.payment_failed stamps it again — so a grace counted from it would
+   restart on every retry. The moment is read off the billing period instead:
+
+     current_period_end at or before now   the row still holds the period the
+                                           failed renewal was meant to start,
+                                           so the payment fell due at its END.
+     current_period_end after now          Stripe has already moved the row on
+                                           to the new, unpaid period (it rolls
+                                           the period at renewal whether or not
+                                           the charge succeeds), so the payment
+                                           fell due at its START.
+     neither usable                        no reliable time: REFUSED, as every
+                                           past_due row was before this.
+
+   Counting from a period boundary can only start the grace EARLY, never late:
+   a charge that fails a little after the boundary has slightly less than the
+   full grace, and none has more.
+
+   Parsed the way SUBSCRIPTION_GRACE_DAYS is: absent or blank is the default, a
+   number is honoured, and it is clamped to 0..30. 0 refuses past_due at once,
+   which is the behaviour before this. */
+const PAST_DUE_GRACE_DEFAULT_DAYS = 14;
+const PAST_DUE_GRACE_MAX_DAYS = 30;
+
+function parsePastDueGraceDays(raw) {
+  if (raw == null || String(raw).trim() === "") return PAST_DUE_GRACE_DEFAULT_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return PAST_DUE_GRACE_DEFAULT_DAYS;
+  return Math.min(PAST_DUE_GRACE_MAX_DAYS, Math.max(0, parsed));
+}
+
+function pastDueTimeOf(value) {
+  if (value == null || String(value).trim() === "") return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/* When the failed payment fell due, and whether the grace still runs.
+   `within` is true only for a known start, a grace above 0, and a clock
+   strictly before start + grace. */
+function pastDueGraceState(subscription, graceDays, nowMs) {
+  const endMs = pastDueTimeOf(subscription ? subscription.current_period_end : null);
+  const startMs = pastDueTimeOf(subscription ? subscription.current_period_start : null);
+  let sinceMs = null;
+  let source = null;
+
+  if (endMs !== null && endMs <= nowMs) {
+    sinceMs = endMs;
+    source = "current_period_end";
+  } else if (startMs !== null && startMs <= nowMs) {
+    sinceMs = startMs;
+    source = "current_period_start";
+  }
+
+  if (sinceMs === null) {
+    return { within: false, since: null, since_source: null, grace_days: graceDays, grace_ends_at: null };
+  }
+
+  const endsMs = sinceMs + graceDays * 86400000;
+  return {
+    within: graceDays > 0 && nowMs < endsMs,
+    since: new Date(sinceMs).toISOString(),
+    since_source: source,
+    grace_days: graceDays,
+    grace_ends_at: new Date(endsMs).toISOString()
+  };
+}
+
+/* Days a past_due subscription keeps entitling while Stripe retries the card,
+   counted from when the failed payment fell due. pastDueGraceState says
+   where that moment is read from, and why not updated_at. Default 14, clamped
+   0..30, parsed the way SUBSCRIPTION_GRACE_DAYS is; 0 refuses past_due at
+   once, which is how every past_due row was treated before. */
+const SUBSCRIPTION_PAST_DUE_GRACE_DAYS = parsePastDueGraceDays(process.env.SUBSCRIPTION_PAST_DUE_GRACE_DAYS);
+
 /* Whether a subscription's period end PROVES it has expired.
 
    The asymmetry here is the whole point, and it is deliberate in one
@@ -2940,6 +3026,32 @@ function subscriptionExpiryState(subscription) {
     periodEnd: new Date(periodEndMs).toISOString(),
     reason: msPastGrace > 0 ? "past period end plus grace" : "within period or grace",
     msPastGrace
+  };
+}
+
+/* Whether one subscriptions row entitles right now, and why not when it does
+   not. getUserPlan and the checkout guard both ask this, so "has access" and
+   "would be charged a second time" can never disagree about the same row.
+
+   active and trialing entitle unless the period proves expiry, as before.
+   past_due entitles only inside its grace (pastDueGraceState); after it, or
+   with no reliable start, it is refused as it always was. Every other status
+   refuses. */
+function subscriptionEntitlement(subscription) {
+  const status = subscription ? subscription.status : null;
+  const statusEntitles = ["active", "trialing"].includes(status);
+  const expiry = subscriptionExpiryState(subscription);
+  const pastDue = status === "past_due"
+    ? pastDueGraceState(subscription, SUBSCRIPTION_PAST_DUE_GRACE_DAYS, Date.now())
+    : null;
+  const active = (statusEntitles && !expiry.proven) || (pastDue !== null && pastDue.within === true);
+
+  return {
+    active,
+    statusEntitles,
+    expiry,
+    pastDue,
+    inactive_reason: active ? null : (statusEntitles ? "expired" : (pastDue !== null ? "past_due" : "status"))
   };
 }
 
@@ -3065,9 +3177,23 @@ async function getUserPlan(userId, user) {
   }
 
   const plan = String(subscription.plan || "").toLowerCase();
-  const statusEntitles = ["active", "trialing"].includes(subscription.status);
-  const expiry = subscriptionExpiryState(subscription);
-  const active = statusEntitles && !expiry.proven;
+  const entitlement = subscriptionEntitlement(subscription);
+  const statusEntitles = entitlement.statusEntitles;
+  const expiry = entitlement.expiry;
+  const active = entitlement.active;
+
+  /* Logged on every refusal, like the expiry refusal below: a customer whose
+     card failed is about to be told so, and the log has to say which moment
+     the grace was counted from and when it ran out. */
+  if (entitlement.pastDue && !active) {
+    console.warn("[entitlement] PAST_DUE REFUSED — user " + userId + ", grace " +
+      SUBSCRIPTION_PAST_DUE_GRACE_DAYS + " day(s), " +
+      (entitlement.pastDue.since
+        ? "counted from " + entitlement.pastDue.since + " (" + entitlement.pastDue.since_source +
+          "), ended " + entitlement.pastDue.grace_ends_at
+        : "no usable current_period_end or current_period_start, so no grace can be counted") +
+      ". ACCESS DENIED until the payment goes through.");
+  }
 
   /* Logged on every refusal, not once per process. This is the first code that
      can take access away from someone who is paying, and a wrong revocation
@@ -3101,7 +3227,7 @@ async function getUserPlan(userId, user) {
     subscription,
     active,
     expired: expiry.proven,
-    inactive_reason: active ? null : (statusEntitles ? "expired" : "status"),
+    inactive_reason: entitlement.inactive_reason,
     /* Present and FALSE on every ordinary path, so `exempt` can be read as a
        boolean everywhere rather than being undefined for subscribers and true for
        admins — a field that is sometimes missing gets tested with a truthiness
@@ -3112,40 +3238,14 @@ async function getUserPlan(userId, user) {
   };
 }
 
-/* ── THE PRE-SESSION GRACE — TEMPORARY, AND HERE IS WHEN TO DELETE IT. ───────
-
-   Every access token already in the wild when this deploys was signed by the
-   old createToken and carries NO sid. Rejecting those would sign out every
-   logged-in user the moment this ships — which is precisely the bug this whole
-   workstream exists to fix, reintroduced by the fix. So a token with no sid is
-   accepted and checked exactly as it was before.
-
-   REMOVABLE AFTER 2026-09-15. Access tokens are signed with expiresIn "7d",
-   this deploys on 2026-09-08, so the last sid-less token expires seven days
-   later and jwt.verify rejects it on its own from then on. After that date
-   this branch can only ever be reached by a forged token, and it should be
-   deleted — leaving it in place indefinitely means anyone who can mint an
-   unsigned-session token bypasses revocation entirely.
-
-   Logged so the grace is visible rather than silent, and so its disappearance
-   from the logs is the evidence that it is safe to remove. Once per user per
-   process, not once per request: a busy account would otherwise write a line
-   on every call and bury the signal in the noise it creates. The Set is capped
-   because it would otherwise grow without bound in a long-lived process; past
-   the cap the grace is still granted, it simply stops re-logging. */
-var LEGACY_TOKEN_GRACE_LOGGED = new Set();
-var LEGACY_TOKEN_GRACE_LOG_CAP = 1000;
-
-function noteLegacyToken(userId) {
-  if (LEGACY_TOKEN_GRACE_LOGGED.has(userId)) return;
-  if (LEGACY_TOKEN_GRACE_LOGGED.size < LEGACY_TOKEN_GRACE_LOG_CAP) {
-    LEGACY_TOKEN_GRACE_LOGGED.add(userId);
-  }
-  console.log("[auth] Pre-session token accepted under grace for user " + userId +
-    " — signed before sessions existed, so it carries no sid and cannot be revoked. " +
-    "Expected to stop appearing after 2026-09-15, when the last 7-day token issued " +
-    "before this change has expired; the grace branch in requireAuth can be removed then.");
-}
+/* ── NO SESSION, NO ACCESS ───────────────────────────────────────────────────
+   A pre-session grace used to accept a verifying token with no sid, because
+   tokens signed before sessions existed (2026-09-08) carried none. It was
+   marked removable after 2026-09-15, when the last of them expired; from then
+   on only a forged token could reach it, and it bypassed revocation. It is
+   gone. Every token createToken signs carries the sid of the session
+   createSession just wrote (createSession throws rather than return none), so
+   a token without one is refused with 401 and the user signs in again. */
 
 /* Written back on use so an idle session can be told from a live one, but NOT
    on every request — that would be a write per read, and this runs on every
@@ -3200,41 +3300,43 @@ async function requireAuth(req, res, next) {
         .maybeSingle();
 
       if (sessionResult.error) {
-        /* FAILS OPEN, DELIBERATELY, AND ONLY HERE. A null result is an answer —
-           no such session — and is rejected below. An ERROR is not an answer:
-           the database was unreachable, or PostgREST has not picked up the
-           table. Rejecting on that would turn a transient fault into "every
-           user is signed out", the exact outage this workstream exists to
-           prevent, and it would do it to people holding perfectly valid
-           sessions. Falling through to the user-only check restores precisely
-           yesterday's behaviour — which shipped and was accepted — for as long
-           as the fault lasts. The cost is that a revoked session is honoured
-           during an outage; that is the trade, and it is logged so it cannot
-           happen quietly. */
+        /* FAILS CLOSED. An error is not an answer: the database was unreachable,
+           or PostgREST has not picked up the table. This used to fall through to
+           token-only auth, which honoured a revoked session for as long as the
+           fault lasted. Now the request is refused and nothing is treated as
+           valid; the message says to try again, because the session may well be
+           fine. Logged, so an outage that refuses everyone is visible. */
         console.error("[auth] Session lookup FAILED for sid " + decoded.sid + " (user " +
           decoded.id + "): " + (sessionResult.error.message || sessionResult.error) +
-          " — falling back to token-only auth for this request. Revocation is NOT " +
-          "being enforced while this persists.");
-      } else {
-        session = sessionResult.data;
-
-        if (!session) {
-          return res.status(401).json({ error: "Session not found" });
-        }
-        if (session.revoked_at) {
-          return res.status(401).json({ error: "Session revoked" });
-        }
-        if (Date.parse(session.expires_at) <= Date.now()) {
-          return res.status(401).json({ error: "Session expired" });
-        }
-
-        user = session.users || null;
+          " — request REFUSED (fail closed).");
+        return res.status(401).json({
+          error: "Session could not be checked",
+          message: "We could not check your sign-in just now, so this request was not run. Try again in a moment."
+        });
       }
+
+      session = sessionResult.data;
+
+      if (!session) {
+        return res.status(401).json({ error: "Session not found" });
+      }
+      if (session.revoked_at) {
+        return res.status(401).json({ error: "Session revoked" });
+      }
+      if (Date.parse(session.expires_at) <= Date.now()) {
+        return res.status(401).json({ error: "Session expired" });
+      }
+
+      user = session.users || null;
     } else {
-      noteLegacyToken(decoded.id);
+      /* No sid: signed before sessions existed, or not by createToken at all. */
+      return res.status(401).json({
+        error: "Session required",
+        message: "This sign-in can no longer be used. Sign in again."
+      });
     }
 
-    /* Reached on the grace path, and on the failed-lookup path above. */
+    /* The session row embeds its user; a missing embed is read directly. */
     if (!user) {
       user = await getUserById(decoded.id);
     }
@@ -3302,6 +3404,12 @@ const SUBSCRIPTION_REFUSAL_MESSAGES = {
 };
 const SUBSCRIPTION_REFUSAL_DEFAULT =
   "This needs an active subscription. Nothing was run and nothing was charged. Subscribe on Billing to continue.";
+/* A past_due row whose grace has run out. Not "subscribe": this person has a
+   subscription and only the card failed, and a second checkout would charge
+   them twice. Billing's "Manage / Cancel Subscription" opens the Stripe portal,
+   where the card is changed. */
+const SUBSCRIPTION_PAST_DUE_MESSAGE =
+  "Your last card payment failed and the grace period has ended, so this is paused. Nothing was run, nothing was charged and nothing you saved is lost. To update your card, open Billing and choose Manage / Cancel Subscription; access returns as soon as the payment goes through.";
 
 function subscriptionRequiredBody(planState, key) {
   return {
@@ -3310,7 +3418,9 @@ function subscriptionRequiredBody(planState, key) {
     // Which refusal it was, so a UI can tell "never subscribed" from "your row
     // went stale" instead of showing one message for both.
     reason: planState ? planState.inactive_reason : null,
-    message: SUBSCRIPTION_REFUSAL_MESSAGES[key] || SUBSCRIPTION_REFUSAL_DEFAULT,
+    message: (planState && planState.inactive_reason === "past_due")
+      ? SUBSCRIPTION_PAST_DUE_MESSAGE
+      : (SUBSCRIPTION_REFUSAL_MESSAGES[key] || SUBSCRIPTION_REFUSAL_DEFAULT),
     billing_url: BILLING_URL
   };
 }
@@ -37308,6 +37418,41 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
     }
 
     const entry = CHECKOUT_PRODUCTS[product];
+
+    /* NO SECOND SUBSCRIPTION. An account already holding this plan in a state
+       that entitles — active, trialing, or past_due inside its grace, by the
+       same subscriptionEntitlement getUserPlan uses — is refused before any
+       Stripe call, so a double click, a second tab or a stale Billing page
+       cannot start a second $199 a month. A row that does not entitle (lapsed,
+       expired, past its grace) does not block: that person has no access and
+       must be able to buy it. A lookup that fails refuses too: an unknown is
+       not proof there is nothing to charge twice. */
+    let heldSubscriptions;
+    try {
+      heldSubscriptions = await getActiveSubscriptions(req.user.id);
+    } catch (heldError) {
+      console.error("Stripe checkout refused: the subscription check failed for user " + req.user.id + ": " +
+        ((heldError && heldError.message) || heldError));
+      return res.status(503).json({
+        error: "subscription_check_failed",
+        message: "We could not check whether this account already has a subscription, so no checkout was started and nothing was charged. Try again in a minute.",
+        billing_url: BILLING_URL
+      });
+    }
+    const alreadyHeld = heldSubscriptions.find(function (held) {
+      return String(held.plan || "").toLowerCase() === entry.plan && subscriptionEntitlement(held).active;
+    });
+    if (alreadyHeld) {
+      return res.status(409).json({
+        error: "already_subscribed",
+        status: alreadyHeld.status,
+        message: alreadyHeld.status === "past_due"
+          ? "This account already has a subscription; only its last payment failed. A new checkout would charge you twice, so none was started. Update your card on Billing (Manage / Cancel Subscription) instead."
+          : "This account already has an active subscription, so no checkout was started and nothing was charged. Manage it on Billing.",
+        billing_url: BILLING_URL
+      });
+    }
+
     const priceId = process.env[entry.envVar];
 
     // The product exists in code but its price id has never been set. Refusing
@@ -49548,6 +49693,8 @@ app.listen(PORT, function () {
   console.log("[startup] SUBSCRIPTION_GRACE_DAYS=" + SUBSCRIPTION_GRACE_DAYS +
     " (days past current_period_end before a subscription stops entitling; " +
     "a null or unparseable period never revokes)");
+  console.log("[startup] SUBSCRIPTION_PAST_DUE_GRACE_DAYS=" + SUBSCRIPTION_PAST_DUE_GRACE_DAYS +
+    " (days a past_due subscription keeps entitling, from when the failed payment fell due)");
 
   /* Every route is mounted by the time this callback runs, so the router walk
      is complete. Logs and continues on a mismatch; a drifted spec must be seen,
