@@ -95,7 +95,8 @@ const ADDED = [
   ["post", "/api/agents/analytics/arrivals"],     // The Analytics agent counts arrivals per article from your own tracked links (total 306 -> 307)
   ["post", "/api/agents/seo/social-search"],      // The SEO agent measures copy for YouTube, TikTok and Instagram search (total 307 -> 308)
   ["get", "/api/leads/youtube-signals"],         // Every YouTube API unit is reserved against a daily cap before it is spent: YouTube finds shown apart (total 308 -> 309)
-  ["get", "/api/sitemap/blog.xml"]              // Published blog posts are listed in a sitemap (total 309 -> 310)
+  ["get", "/api/sitemap/blog.xml"],             // Published blog posts are listed in a sitemap (total 309 -> 310)
+  ["get", "/api/certifications/catalog"]        // BizCash is earned only by server-graded passes: the questions, without answers (total 310 -> 311)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

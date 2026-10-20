@@ -49,6 +49,11 @@
    not required, so no listener, cron or radar starts. The mutations are
    applied to that lifted source, never to the file.
 
+   SINCE THE SERVER GRADES (lib/certificationCatalog.js, checkBfcIntegrity),
+   each submission sends answers, and the handler is given a fixture
+   catalogue of "check-cert-…" ids — see fixtureCertification below. The pays-
+   once rules tested here are unchanged; only how a pass is arrived at is.
+
    MUTATE=credit-every-pass puts back `if (passed)` as the credit guard, which
    is the defect with the new write logic left around it.
    MUTATE=old-handler runs the whole pre-fix route from 8b5afc7.
@@ -193,6 +198,38 @@ const PLAN_ANSWERS = {
   throws:     async function () { throw new Error("check: plan lookup down"); }
 };
 
+/* THE CATALOGUE THE HANDLER SEES. Since the server grades (lib/
+   certificationCatalog.js), the route accepts only a cert_id in the catalogue
+   and decides passed and score from the answers. This check needs fresh
+   certifications on every run — the subject account must never already hold
+   the one being tested — so the handler is given a fixture catalogue: any
+   "check-cert-…" id is a ten-question certification whose correct option is
+   always 2, category "CHECK". Grading is the real gradeCertification, and the
+   real catalogue is never consulted, so no real certification is earned by
+   the subject account. */
+const CATALOG = require("../lib/certificationCatalog");
+const FIXTURE_QUESTIONS = 10, FIXTURE_ANSWER = 2;
+function fixtureCertification(certId) {
+  if (typeof certId !== "string" || certId.indexOf("check-cert-") !== 0) return null;
+  const questions = [];
+  for (let i = 0; i < FIXTURE_QUESTIONS; i++) questions.push({ q: "Fixture question " + (i + 1), opts: ["A", "B", "C", "D"], ans: FIXTURE_ANSWER });
+  return { id: certId, category: "CHECK", name: "Fixture " + certId, desc: "", difficulty: "Beginner", questions: questions };
+}
+
+/* Answers that score `score` — as near as ten questions allow — and the
+   passed that score gives. Each submission sends these answers to the current
+   route, and the same honest passed and score to the pre-fix route, which
+   still reads them; a requested pass that the answers would not earn is an
+   error in this script, not a result. */
+function answersFor(score, passed) {
+  const correct = Math.round(score / 100 * FIXTURE_QUESTIONS);
+  const answers = [];
+  for (let i = 0; i < FIXTURE_QUESTIONS; i++) answers.push(i < correct ? FIXTURE_ANSWER : 0);
+  const graded = CATALOG.gradeCertification(fixtureCertification("check-cert-x"), answers);
+  if (graded.passed !== passed) throw new Error("answersFor: score " + score + " grades as passed=" + graded.passed + ", not " + passed);
+  return { answers: answers, score: graded.score };
+}
+
 function buildHandler(which, plan) {
   let route = which === "old" ? routeSource(SRC_OLD) : routeSource(SRC_NOW);
 
@@ -213,6 +250,9 @@ function buildHandler(which, plan) {
     requireAuth: 0,
     getUserPlan: PLAN_ANSWERS[plan || "entitled"],
     BILLING_URL: "/billing.html",
+    CERTIFICATION_PASS_MARK: CATALOG.CERTIFICATION_PASS_MARK,
+    findCertification: fixtureCertification,
+    gradeCertification: CATALOG.gradeCertification,
     app: { post: function () { handler = arguments[arguments.length - 1]; } }
   };
   vm.createContext(ctx);
@@ -228,8 +268,9 @@ async function submit(handler, certId, passed, score) {
     json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; }
   };
   let nextErr = null;
+  const sent = answersFor(score, passed);
   await handler(
-    { user: { id: SUBJECT_USER_ID }, body: { cert_id: certId, category: "CHECK", score: score, passed: passed } },
+    { user: { id: SUBJECT_USER_ID }, body: { cert_id: certId, answers: sent.answers, category: "CHECK", score: sent.score, passed: passed } },
     res,
     function (e) { nextErr = e || new Error("next() called"); }
   );

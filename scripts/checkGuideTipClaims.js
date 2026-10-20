@@ -767,7 +767,8 @@ const HISTORY_50 = () => /\.from\("wallet_transactions"\)\s*\.select\("id, type,
   /var txns = data\.transactions \|\| \[\];[\s\S]{0,200}?txns\.forEach\(function\(t\) \{\s*if \(t\.type === "credit" \|\| t\.type === "reward"\) earned \+= t\.amount;\s*else if \(t\.type === "debit"\) spent \+= t\.amount;/.test(FILES[WALLET]);
 const SEND_BFC = () => /<button type="button" id="send-btn" class="send-btn">Send BFC<\/button>/.test(FILES[WALLET]) &&
   /placeholder="Recipient user ID"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/wallet\/transfer"/.test(FILES[WALLET]) &&
-  /app\.post\("\/api\/wallet\/transfer", requireAuth, requireActiveSubscription,[\s\S]{0,600}?rpc\("bfc_transfer"/.test(SV);
+  // Since the transfer limits (migration 139), the route calls bfc_send, which checks the limits and then calls bfc_transfer.
+  /app\.post\("\/api\/wallet\/transfer", requireAuth, requireActiveSubscription,[\s\S]{0,8000}?rpc\("bfc_send"/.test(SV);
 const taskPrompt = key => (new RegExp("\\n  " + key + ": \"([^\"\\n]*)\"").exec(SV) || ["", ""])[1];
 const AP_FILE = FILES[AP];
 const B = [
@@ -802,7 +803,8 @@ const B = [
   ["8 certifications 76", certTips, "press Try Again on the result screen, or Start Assessment on the card", /Retake Assessment/,
     () => /<button class="result-retry-btn" id="resultRetryBtn">Try Again<\/button>/.test(FILES[CERTS]) &&
       /if \(earned\) \{\s*html \+= '<button class="cert-btn cert-btn-retry"[^\n]*>Retake Assessment<\/button>';\s*\} else \{\s*html \+= '<button class="cert-btn cert-btn-start"[^\n]*>Start Assessment<\/button>';/.test(FILES[CERTS]) &&
-      /if \(!passed\) \{\s*saving\.catch\(function\(\)\{\}\);\s*showResult\(pct, false\);/.test(FILES[CERTS]) &&
+      // A fail shows the result screen, with Try Again on it. The server grades now, so it is the server's fail.
+      /if \(!result\.passed\) \{\s*render\(pct, false, null, res\.data\.already_earned === true \? "kept" : null\);/.test(FILES[CERTS]) &&
       !/cooldown|max_?attempts|attempt_?limit|lockout/i.test(SV.slice(SV.indexOf('app.post("/api/certifications/award"'), SV.indexOf("async function creditWallet(")))],
   ["8 lead-radar 147", lrTips, "Copy it to your clipboard and post it on Bluesky yourself", /Sort by score|Copy it straight to Bluesky/,
     () => /leads\.sort\(function \(a, b\) \{ return \(b\.intent_score \|\| 0\) - \(a\.intent_score \|\| 0\); \}\);/.test(FILES[RADAR_PAGE]) &&
@@ -817,7 +819,7 @@ const B = [
   ["7 wallet 68", walTips, "a one-time 1,000 BFC welcome bonus lands when your subscription goes active", /\+50|\+25|\+200|agent tasks \(|stackable/,
     () => CERT_CREDIT.test(SV) && WELCOME() && ONLY_TWO_CREDITS() && /How to Earn BFC/.test(FILES[WALLET])],
   ["7 wallet 69", walTips, "not how much you use the platform", /rewards real engagement|how actively you're using/,
-    () => ONLY_TWO_CREDITS() && ["bfc_transfer", "bfc_buy_listing", "bfc_donate"].every(r => SV.indexOf('rpc("' + r + '"') !== -1)],
+    () => ONLY_TWO_CREDITS() && ["bfc_send", "bfc_buy_listing", "bfc_donate"].every(r => SV.indexOf('rpc("' + r + '"') !== -1)],
   ["7 certifications 75", certTips, "Your first pass of each certification pays 100 BFC to your Wallet while you're subscribed", /Passing pays out BFC/,
     () => CERT_CREDIT.test(SV) && /AN EARNED RECORD IS NEVER WRITTEN AGAIN/.test(SV)],
   // group 6 — data no agent reads

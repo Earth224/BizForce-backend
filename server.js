@@ -52,6 +52,8 @@ const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { runNightlyBackup } = require("./lib/backup");
+const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
+const { bfcTransferLimits, BFC_TRANSFER_DESCRIPTION } = require("./lib/bfcTransferLimits");
 const { computePeriodBounds, generateSelfReview } = require("./lib/selfReview");
 const { computeSynastryAspects } = require("./lib/synastry");
 const { youtubeRetentionEnabled, youtubeRetentionTick, YOUTUBE_RETENTION_JOB_NAME, YOUTUBE_RETENTION_MAX_PER_TICK } = require("./lib/youtubeRetention");
@@ -37711,16 +37713,55 @@ app.get("/api/certifications/earned", requireAuth, async function (req, res, nex
   }
 });
 
+/* The questions, WITHOUT the answers. certifications.html builds its cards and
+   quizzes from this; the answer key never leaves the server
+   (lib/certificationCatalog.js). Sign-in only, like the page. */
+app.get("/api/certifications/catalog", requireAuth, function (req, res) {
+  return res.json({
+    pass_mark: CERTIFICATION_PASS_MARK,
+    certifications: publicCertificationCatalog()
+  });
+});
+
 app.post("/api/certifications/award", requireAuth, async function (req, res, next) {
   try {
-    const certId   = safeText(req.body.cert_id,  80);
-    const category = safeText(req.body.category, 40);
-    const score    = Math.max(0, Math.min(100, Math.round(Number(req.body.score) || 0)));
-    const passed   = Boolean(req.body.passed);
+    /* GRADED HERE, NOT IN THE BROWSER. This route used to take passed, score
+       and category from the body and believe them, and accept any cert_id, so
+       a subscriber could post cert_id "a1", "a2", … with passed: true and be
+       paid 100 BFC for each without limit (launch audit, 2026-10-19, #3).
 
-    if (!certId || !category) {
-      return res.status(400).json({ error: "cert_id and category are required" });
+       Now the body carries cert_id and answers, and nothing else is read.
+       req.body.passed, req.body.score and req.body.category are IGNORED on
+       purpose — not validated, not compared, not stored — because whatever
+       the browser says about its own result is exactly what cannot be
+       trusted. The cert_id must be in the catalogue (an unknown one is a 400
+       that names it and records nothing), the category is the catalogue's,
+       and score and passed are what gradeCertification makes of the answers.
+
+       So the most an account can earn here is the catalogue's size × 100
+       BFC: 12 × 100 = 1,200 today. */
+    const certId = safeText(req.body.cert_id, 80);
+
+    if (!certId) {
+      return res.status(400).json({ error: "cert_id is required" });
     }
+
+    const certDef = findCertification(certId);
+    if (!certDef) {
+      return res.status(400).json({
+        error: "Unknown certification \"" + certId + "\": it is not in the catalogue, so it cannot be graded or earned. Nothing was recorded.",
+        cert_id: certId
+      });
+    }
+
+    const graded = gradeCertification(certDef, req.body.answers);
+    if (!graded.ok) {
+      return res.status(400).json({ error: graded.error + " Nothing was recorded.", cert_id: certId });
+    }
+
+    const category = certDef.category;
+    const score    = graded.score;
+    const passed   = graded.passed;
 
     /* ONE CREDIT PER CERTIFICATION, NOT ONE PER PASS. This used to upsert the
        record and then credit 100 BFC whenever the submission passed, so
@@ -37827,7 +37868,11 @@ app.post("/api/certifications/award", requireAuth, async function (req, res, nex
       certification: data,
       success: true,
       already_earned: alreadyEarned,
-      credited: credited
+      credited: credited,
+      // The server's grading, which the page shows instead of its own. No
+      // per-question marks: those would hand out the answer key one retake
+      // at a time.
+      result: { score: score, passed: passed, correct: graded.correct, total: graded.total, pass_mark: CERTIFICATION_PASS_MARK }
     };
     if (creditWithheld) {
       certBody.credit_withheld = creditWithheld;
@@ -38056,28 +38101,150 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+const BFC_RECIPIENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The reasons bfc_send and bfc_transfer put before the colon in what they
+// raise (migration 139), and the status each one answers.
+const BFC_SEND_REFUSAL_STATUS = {
+  unknown_recipient:     404,
+  over_per_transfer_max: 400,
+  over_daily_cap:        400,
+  new_account_hold:      403,
+  limits_invalid:        503,
+  unknown_sender:        400
+};
+
+/* A transfer to another member, within limits (launch audit, 2026-10-19, #13).
+   Every refusal says what refused it, in `reason`, and that nothing was sent.
+
+   THE ROUTE CHECKS FIRST, bfc_send DECIDES. The route checks the recipient,
+   the per-transfer maximum, the new-account hold and the 24-hour cap itself,
+   so each refusal can say exactly which limit it hit and by how much. Then
+   bfc_send (migration 139) checks all of them again inside the database,
+   holding the sender's wallet row lock while it reads the 24-hour total, and
+   that is the check two transfers sent at once cannot both slip past. The
+   limits come from lib/bfcTransferLimits.js: env values, safe defaults, and
+   an unusable value stops every transfer rather than lifting a limit. */
 app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const recipientId = req.body.recipientId;
     const amount = req.body.amount;
 
     if (!recipientId || recipientId === req.user.id) {
-      return res.status(400).json({ error: "Invalid recipient" });
+      return res.status(400).json({ error: "Invalid recipient", reason: recipientId ? "self_transfer" : "missing_recipient" });
     }
 
     if (!Number.isInteger(amount) || amount <= 0) {
-      return res.status(400).json({ error: "amount must be a positive integer" });
+      return res.status(400).json({ error: "amount must be a positive integer", reason: "invalid_amount" });
     }
 
-    const { data, error } = await supabase.rpc("bfc_transfer", {
+    const limits = bfcTransferLimits(process.env);
+    if (limits.error) {
+      console.error("[POST /api/wallet/transfer] REFUSED — " + limits.error + ". Every transfer is refused until it is fixed.");
+      return res.status(503).json({
+        error: "Transfers are paused because a transfer limit is misconfigured on our side (" + limits.error + "). Nothing was sent.",
+        reason: "limits_misconfigured"
+      });
+    }
+
+    if (amount > limits.max) {
+      return res.status(400).json({
+        error: "One transfer can move at most " + limits.max.toLocaleString("en-US") + " BFC; this one asked for " +
+          amount.toLocaleString("en-US") + ". Nothing was sent.",
+        reason: "over_per_transfer_max",
+        limit: limits.max
+      });
+    }
+
+    const sender = await supabase.from("users").select("id, created_at").eq("id", req.user.id).maybeSingle();
+    if (sender.error) throw sender.error;
+    const openedMs = sender.data ? Date.parse(sender.data.created_at) : NaN;
+    const sendableFromMs = openedMs + limits.holdDays * 24 * 60 * 60 * 1000;
+    // NaN fails this test too, so an account whose age cannot be read is held.
+    if (!(Date.now() >= sendableFromMs)) {
+      return res.status(403).json({
+        error: "A new account can send BFC " + limits.holdDays + " days after it was opened" +
+          (Number.isFinite(sendableFromMs) ? "; yours can from " + new Date(sendableFromMs).toISOString().slice(0, 10) : "") +
+          ". Nothing was sent.",
+        reason: "new_account_hold",
+        hold_days: limits.holdDays
+      });
+    }
+
+    /* THE RECIPIENT MUST BE AN ACCOUNT. bfc_transfer used to upsert a wallet
+       for any id at all, so BFC sent to a mistyped id was gone. Checked here
+       and again in bfc_transfer itself (migration 139). */
+    let recipient = null;
+    if (typeof recipientId === "string" && BFC_RECIPIENT_UUID.test(recipientId)) {
+      const found = await supabase.from("users").select("id").eq("id", recipientId).maybeSingle();
+      if (found.error) throw found.error;
+      recipient = found.data;
+    }
+    if (!recipient) {
+      return res.status(404).json({
+        error: "No account has the user ID \"" + String(recipientId).slice(0, 80) + "\". Check it and try again. Nothing was sent.",
+        reason: "unknown_recipient"
+      });
+    }
+
+    const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const sentRows = await supabase
+      .from("wallet_transactions")
+      .select("amount")
+      .eq("user_id", req.user.id)
+      .eq("type", "debit")
+      .eq("description", BFC_TRANSFER_DESCRIPTION)
+      .gte("created_at", sinceIso);
+    if (sentRows.error) {
+      console.error("[POST /api/wallet/transfer] the 24-hour total for " + req.user.id + " could not be read: " + sentRows.error.message);
+      return res.status(503).json({
+        error: "Your transfers from the last 24 hours could not be read just now, so the daily cap cannot be checked. Nothing was sent.",
+        reason: "daily_total_unreadable"
+      });
+    }
+    const sentLast24h = (sentRows.data || []).reduce(function (sum, row) { return sum + (Number(row.amount) || 0); }, 0);
+    if (sentLast24h + amount > limits.dailyCap) {
+      return res.status(400).json({
+        error: "An account can send at most " + limits.dailyCap.toLocaleString("en-US") + " BFC in any 24 hours. You have sent " +
+          sentLast24h.toLocaleString("en-US") + ", so " + Math.max(0, limits.dailyCap - sentLast24h).toLocaleString("en-US") +
+          " more can go now. Nothing was sent.",
+        reason: "over_daily_cap",
+        limit: limits.dailyCap,
+        sent_last_24h: sentLast24h
+      });
+    }
+
+    const { data, error } = await supabase.rpc("bfc_send", {
       p_from: req.user.id,
-      p_to: recipientId,
+      p_to: recipient.id,
       p_amount: amount,
-      p_description: "Transfer"
+      p_max_per_transfer: limits.max,
+      p_daily_cap: limits.dailyCap,
+      p_hold_days: limits.holdDays
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message });
+      const message = String(error.message || "");
+      if (error.code === "PGRST202" || /Could not find the function public\.bfc_send/i.test(message)) {
+        console.error("[POST /api/wallet/transfer] bfc_send is missing — supabase/migrations/139_bfc_transfer_limits.sql has not been applied.");
+        return res.status(503).json({
+          error: "Transfers are unavailable until a database update (migration 139) is applied. Nothing was sent.",
+          reason: "migration_139_not_applied"
+        });
+      }
+      const reason = message.split(":")[0].trim();
+      if (Object.prototype.hasOwnProperty.call(BFC_SEND_REFUSAL_STATUS, reason)) {
+        // The reason goes in `reason`; the sentence after the colon is what a person reads.
+        const sentence = message.slice(reason.length + 1).trim();
+        return res.status(BFC_SEND_REFUSAL_STATUS[reason]).json({
+          error: sentence.charAt(0).toUpperCase() + sentence.slice(1) + ". Nothing was sent.",
+          reason: reason
+        });
+      }
+      return res.status(400).json({
+        error: message,
+        reason: message === "insufficient balance" ? "insufficient_balance" : "refused"
+      });
     }
 
     return res.json({ balance: data });
