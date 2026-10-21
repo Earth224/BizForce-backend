@@ -367,8 +367,14 @@ const MUTATIONS = {
   "restore-retake-76": [[GUIDE, "If you don't pass the first time, press Try Again on the result screen, or Start Assessment on the card later — there's no penalty for trying again.",
     "Use Retake Assessment if you don't pass the first time — there's no penalty for trying again."]],
   // the dashboard tip points at the removed Recent Activity feed again
-  "restore-recent-activity": [[GUIDE, "Use the Active Queue card and its View Queue button to see your active assignments",
+  "restore-recent-activity": [[GUIDE, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed",
     "Use the Active Queue card and Recent Activity feed to see what's actually running"]],
+  // the dashboard tip points at the removed Active Queue card again (launch audit #22a)
+  "restore-active-queue-tip": [[GUIDE, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed, Executive plans lists each plan's assignments with a Dispatch button, and Agent activity counts the runs your agents actually made.",
+    "Use the Active Queue card and its View Queue button to see your active assignments before you dig into any single tool."]],
+  // the Active Queue card comes back while the tip names the Command Center
+  "restore-active-queue-card": [["dashboard.html", "<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\"",
+    "<div id=\"activeQueueSummary\" class=\"bf-feature-card card bf-card\" data-card=\"active-queue\"><h3>Active Queue</h3></div>\n<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\""]],
   // ── group 11, the leftovers, G5 and G6 ──
   // oracle tip 226 says the numbers sharpen with time again
   "restore-226-sharpen": [[GUIDE, "Your Life Path, Expression, Soul Urge, and Birthday numbers are fixed by your birth name and date and do not change with time; your current location, your path and your story can, and the Oracle reads them with every question.", "Your Life Path, Expression, Soul Urge, and Birthday numbers only sharpen with time, and the Oracle's counsel sharpens with them."]],
@@ -699,16 +705,17 @@ const A = [
     () => /id="refreshBtn" onclick="loadLeads\(\)">Refresh</.test(FILES[RADAR_PAGE]) &&
       /l\.suggested_product && l\.suggested_product !== "none" && \(l\.intent_score \|\| 0\) >= 40/.test(FILES[RADAR_PAGE]) &&
       !/setInterval|EventSource|WebSocket/.test(FILES[RADAR_PAGE]) && gated("ENABLE_LEAD_SCORING", "scoreNewLeads()")],
-  // group 5 — social connect, publish and schedule are off
+  // group 5 — social connect, publish and schedule are off. The Zernio code behind SOCIAL_ACCOUNTS_SCOPED was deleted
+  // (launch audit #22c), so "off" is now: server.js names no zernio.com and reads no ZERNIO_ variable (socialShut).
   ["5 content 125", conTips, "approved drafts are saved, not published or scheduled", /approve and schedule/,
-    () => /status:\s*"not_published",\s*scheduled_for:\s*null,/.test(FILES[SERVER]) && /\nconst SOCIAL_ACCOUNTS_SCOPED = false;/.test(FILES[SERVER])],
+    () => /status:\s*"not_published",\s*scheduled_for:\s*null,/.test(FILES[SERVER]) && socialShut()],
   ["5 content 127", conTips, "approving saves it to the Approval Queue as an unpublished draft", /before it goes live/,
     () => /<h2 class="section-label">Generate SEO Article<\/h2>/.test(FILES[CONTENT]) && /<h2 class="section-label">Generate SMS Campaign<\/h2>/.test(FILES[CONTENT]) &&
       offers(CONTENT, "Social Media Drafts") && /<h2 class="ap-section-label">Approval Queue<\/h2>/.test(FILES[AP]) && /status:\s*"not_published"/.test(FILES[SERVER])],
   ["5 content 128", conTips, "cannot be connected on this platform at present", /Connect your social accounts|directly on this page so approved content has somewhere to go/,
-    () => /\nconst SOCIAL_ACCOUNTS_SCOPED = false;/.test(FILES[SERVER]) && /if \(!SOCIAL_ACCOUNTS_SCOPED\) \{\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
+    () => socialShut() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
   ["5 social 134", socTips, "posts cannot be scheduled and social accounts cannot be connected at present", /drafting and scheduling posts|account connections live/,
-    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && /\nconst SOCIAL_ACCOUNTS_SCOPED = false;/.test(FILES[SERVER])],
+    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut()],
   // guard catches outside the list
   ["G seo 113", seoTips, "and the Page Audit tool", /SEO Audit|Competitor Analysis/,
     () => ["Keyword Research", "Competitor Comparison", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n))],
@@ -747,6 +754,9 @@ check("A. 5 content.html #connectIntro: the static text says connecting is off a
   /Connecting social accounts is turned off for now/.test(STATIC_INTRO) && /Approved drafts are saved, not published\./.test(STATIC_INTRO) &&
   STATIC_INTRO === DYNAMIC_INTRO && /\.catch\(function \(\) \{\}\);\n  \}\n\n  loadConnectedAccounts\(\);/.test(FILES[CONTENT]), STATIC_INTRO);
 
+// Social publishing, listing and connecting are shut for good: no Zernio host, no Zernio key read (launch audit #22c).
+function socialShut() { return FILES[SERVER].indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(FILES[SERVER]); }
+
 /* ── B. the Oct 14 audit, groups 6–10 ──────────────────────────────────── */
 console.log("\n══ B. audit groups 6–10 — invented data, payouts and controls ══");
 // The same four assertions as A, per rewrite. Pages these checks read that A does not are guide keys, read above.
@@ -780,8 +790,15 @@ const B = [
       (FILES[DASHBOARD].match(/fetch\(API_URL \+ "\/api\/business-profile"/g) || []).length === 2 &&
       /id="editProfileBtn"[^>]*>Edit Profile<\/button>/.test(FILES[CONTENT]) && /fetch\(BP_API \+ "\/api\/business-profile"/.test(FILES[CONTENT]) &&
       /fetch\(API_URL \+ "\/api\/profile\/me"/.test(FILES[BIZID]) && !/business-profile/.test(FILES[BIZID])],
-  ["10 dashboard 18", hqTips, "the Active Queue card and its View Queue button", /Recent Activity/,
-    () => /<h3>Active Queue<\/h3>\s*<p class="bf-summary-status" id="activeQueueSummaryStatus">No active assignments<\/p>\s*<button type="button" id="viewQueueBtn" class="bf-btn bf-btn-ghost">View Queue<\/button>/.test(FILES[DASHBOARD]) &&
+  /* Launch audit #22a removed the Active Queue card and the Agent Work Queue it
+     scrolled to (a list kept only in this browser), so this tip now names the
+     Command Center's three panels, each read from GET /api/command-center. */
+  ["10 dashboard 18", hqTips, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed", /Recent Activity|Active Queue|View Queue|Work Queue/,
+    () => /<h3>Needs you<\/h3><div id="ccNeedsYou">/.test(FILES[DASHBOARD]) && /<h3>Executive plans<\/h3><div id="ccPlans">/.test(FILES[DASHBOARD]) &&
+      /<h3>Agent activity<\/h3><div id="ccActivity">/.test(FILES[DASHBOARD]) &&
+      /Proposals waiting for you/.test(FILES[DASHBOARD]) && /Runs that failed in the last 7 days/.test(FILES[DASHBOARD]) &&
+      /data-cc-dispatch="1"[^']*'[^>]*>Dispatch<\/button>/.test(FILES[DASHBOARD]) && /plural\(d\.total, "run", "runs"\)/.test(FILES[DASHBOARD]) &&
+      !/id="activeQueueSummary/.test(FILES[DASHBOARD]) && !/id="agentAssignmentsSection"/.test(FILES[DASHBOARD]) &&
       !/>[^<>]*Recent Activity[^<>]*</.test(FILES[DASHBOARD]) && !/id="recentActivity/i.test(FILES[DASHBOARD])],
   ["10 dashboard 19", hqTips, "Agent Hub and Full Directory each list all 18 agents", /curated set/,
     () => /onclick="window\.location\.href='agents-hub\.html';">Agent Hub<\/button>/.test(FILES[DASHBOARD]) &&

@@ -29,7 +29,7 @@
         that loads agent-profile.js loads bf-paywall.js before it, and the
         pages' own gated calls (seo, sales, content) take the same branch.
      E. #7 the dashboard's real plan-status code, lifted: an unentitled account
-        sees "Subscribe to start" in place of the three gated sections; an
+        sees "Subscribe to start" in place of the two gated sections; an
         entitled one, an unknown answer, or the seconds after a payment do
         not; past_due gets "Update your card". "Welcome back" only once the
         account is past its first day (users.created_at, from /api/auth/me).
@@ -412,14 +412,14 @@ function loadAgentPage(file, handlers) {
     vm.runInContext(DASH_CODE, ctx);
     await flush();
     const shown = id => document.getElementById(id).style.display;
-    return { panel: shown("subscribeStartPanel"), sections: ["aiTaskSection", "commandCenterSection", "agentAssignmentsSection"].map(shown),
+    return { panel: shown("subscribeStartPanel"), sections: ["aiTaskSection", "commandCenterSection"].map(shown),
       profile: shown("businessProfileSection"), title: els.get("subscribeStartTitle") ? els.get("subscribeStartTitle").textContent : "",
       welcome: document.getElementById("welcomeMsg").textContent };
   }
   const old = iso(NOW - 40 * DAY), fresh = iso(NOW - 2 * 3600000);
   let d = await dashboard({ user: { created_at: fresh }, subscription: null, access: { active: false, exempt: false, access_reason: null, inactive_reason: "no_subscription" } });
   check("E1. unentitled: the subscribe panel is shown", d.panel === "block", d.panel);
-  check("E2. ...and the three gated sections are hidden in its place", d.sections.every(x => x === "none"), JSON.stringify(d.sections));
+  check("E2. ...and the two gated sections are hidden in its place (the Agent Work Queue, the third, is gone)", d.sections.every(x => x === "none"), JSON.stringify(d.sections));
   check("E3. ...and the business profile, which works without a subscription, is not", d.profile !== "none");
   const markup = dashSrc.slice(dashSrc.indexOf('<div class="bf-start-panel" id="subscribeStartPanel"'), dashSrc.indexOf("</div>", dashSrc.indexOf('id="subscribeStartLink"')));
   check("E4. the panel reads 'Subscribe to start' and links to /billing.html, hidden until shown",

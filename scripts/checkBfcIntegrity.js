@@ -132,6 +132,8 @@ let AWARD = routeSource(SERVER, 'app.post("/api/certifications/award"');
 const CATALOG_ROUTE = routeSource(SERVER, 'app.get("/api/certifications/catalog"');
 let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"');
 const TRANSFER_CONSTS = blockSource(SERVER, "const BFC_RECIPIENT_UUID = ", "  unknown_sender:        400\n};\n");
+// The transfer's success answer carries bfcDisclaimer: BFC_NOTICE (launch audit #9; checkBfcNotice holds its text).
+const NOTICE_CONST = blockSource(SERVER, "const BFC_NOTICE = ", "its rules or availability may change.\";\n");
 const HELPERS = ["nowIso", "safeText", "creditWallet"].map(n => functionSource(SERVER, n)).join("\n\n");
 
 if (MUTATE === "trust-body-passed") {
@@ -333,7 +335,7 @@ function buildRoutes(client, env) {
     app: { get: capture("get"), post: capture("post") }
   };
   vm.createContext(ctx);
-  vm.runInContext([HELPERS, TRANSFER_CONSTS, CATALOG_ROUTE, AWARD, TRANSFER].join("\n\n"), ctx);
+  vm.runInContext([HELPERS, TRANSFER_CONSTS, NOTICE_CONST, CATALOG_ROUTE, AWARD, TRANSFER].join("\n\n"), ctx);
   return routes;
 }
 

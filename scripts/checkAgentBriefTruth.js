@@ -147,7 +147,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "invent", "tally", "owner", "zero",
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "socialcall", "socialstatus", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
   "widen", "flagship", "sellingpoint", "inslot", "economics", "econanchor",
@@ -169,6 +169,15 @@ function mutate(src, from, to, what) {
 }
 
 let SERVER = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+// #8 code (launch audit #22c): a publish reaches a social platform again
+if (MUTATE === "socialcall") {
+  SERVER = mutate(SERVER, "        status:         \"not_published\",\n",
+    "        status:         \"not_published\",\n        relay:          await fetch(\"https://zernio.com/api/v1/posts\"),\n", "socialcall");
+}
+// #8 code: a publish is saved as something other than not_published
+if (MUTATE === "socialstatus") {
+  SERVER = mutate(SERVER, "        status:         \"not_published\",\n", "        status:         \"scheduled\",\n", "socialstatus");
+}
 if (MUTATE === "tally") {
   SERVER = mutate(SERVER, `    countTasksByAgent(userId)\n  ]);`, `    supabase.from("ai_tasks").select("agent_type").eq("user_id", userId)\n  ]);`, "tally");
   SERVER = mutate(SERVER, `  } else {\n    byAgent = agentRowsResult.byAgent;\n  }`,
@@ -566,8 +575,9 @@ function runTask(agentType, stopReason, opts) {
   console.log("\n══ 8. social publishing — gated, so said to be unavailable, not left out ══");
   const social = systemLine("Social Publishing");
   console.log("    " + (social.slice(0, 110) || "(no Social Publishing line)"));
-  const socialGated = /^const SOCIAL_ACCOUNTS_SCOPED = false;$/m.test(SERVER) && /status:\s+"not_published"/.test(SERVER);
-  check("8. code: SOCIAL_ACCOUNTS_SCOPED is false and a publish is saved as not_published", socialGated);
+  // Launch audit #22c deleted the Zernio code behind SOCIAL_ACCOUNTS_SCOPED: nothing can reach a social platform now.
+  const socialGated = SERVER.indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(SERVER) && /status:\s+"not_published"/.test(SERVER);
+  check("8. code: no social platform is called and a publish is saved as not_published", socialGated);
   check("8. told: the feature is named, said to be unavailable, and drafts said to be saved unpublished",
     /currently unavailable/.test(social) && /marked not published; nothing is posted/.test(social), social.slice(0, 60) || "missing");
 

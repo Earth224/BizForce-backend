@@ -35,9 +35,9 @@
      7. No .bf-sim-banner, no Tier D tracker, no "Sample" note or stats grid
         on executive-agent.html, which links to the Command Center instead.
      8. None of the removed functions is declared or named anywhere in the
-        frontend; processExecutiveAssignmentsFromReport and the Agent Work
-        Queue remain; every inline script in both pages parses; the Command
-        Center sets no timer.
+        frontend; the Agent Work Queue and the browser-side parse that filled
+        it are gone (launch audit #22a); every inline script in both pages
+        parses; the Command Center sets no timer.
 
    MUTATE=<name> edits the frontend files IN MEMORY. MUTATE=all runs each in
    its own process and passes only if every one fails at least one check. A
@@ -68,7 +68,10 @@ const MUTATIONS = {
   // the typed agent count comes back
   "restore-18": [[DASH, "<span class=\"topbar-agents-num\">—</span>", "<span class=\"topbar-agents-num\">18</span>"]],
   // a failed section renders as an empty panel
-  "failed-section-empty": [[DASH, FAILED_PANEL, "            setPanel(PANELS[name], \"\");\n"]]
+  "failed-section-empty": [[DASH, FAILED_PANEL, "            setPanel(PANELS[name], \"\");\n"]],
+  // the Agent Work Queue comes back below the Command Center (launch audit #22a)
+  "work-queue-returns": [[DASH, "<section id=\"agentMemorySection\"",
+    "<section id=\"agentAssignmentsSection\" class=\"bf-section\"><div id=\"activeAssignmentsList\"></div></section>\n<section id=\"agentMemorySection\""]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -679,11 +682,15 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
     const where = Object.keys(FILES).filter(f => new RegExp("\\b" + name + "\\b").test(FILES[f]));
     check(name + " is declared, exported and named nowhere in the frontend", where.length === 0, where.join(", "));
   });
-  check("processExecutiveAssignmentsFromReport remains and still records its run",
-    /\nfunction processExecutiveAssignmentsFromReport\(item\) \{/.test(FILES[DASH]) && FILES[DASH].indexOf("recordExecutiveRunToStore(item, sprintId, created);") !== -1);
-  const ccAt = FILES[DASH].indexOf('<section id="commandCenterSection"'), queueAt = FILES[DASH].indexOf('<section id="agentAssignmentsSection"');
-  check("the Agent Work Queue remains, below the Command Center",
-    ccAt !== -1 && queueAt > ccAt && FILES[DASH].indexOf('id="activeAssignmentsList"') !== -1 && FILES[DASH].indexOf("function renderAssignmentDashboard(") !== -1);
+  /* Launch audit #22a replaced two pins here. "processExecutiveAssignmentsFromReport
+     remains and still records its run" and "the Agent Work Queue remains, below
+     the Command Center" held a list kept only in this browser's localStorage;
+     the queue and the parse that filled it are gone, and the Command Center is
+     where executive plans and their dispatch live. */
+  check("the Agent Work Queue and the browser-side parse that filled it are gone; the Command Center stays",
+    FILES[DASH].indexOf('<section id="commandCenterSection"') !== -1 &&
+    ["agentAssignmentsSection", "activeQueueSummary", "bizforce_agent_assignments", "processExecutiveAssignmentsFromReport",
+      "recordExecutiveRunToStore", "renderAssignmentDashboard"].every(n => FILES[DASH].indexOf(n) === -1));
   [DASH, EXEC].forEach(file => {
     const scripts = inlineScripts(FILES[file]);
     const bad = []; scripts.forEach((code, i) => { try { new vm.Script(code); } catch (e) { bad.push(i + ": " + e.message); } });

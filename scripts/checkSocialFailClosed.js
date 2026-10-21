@@ -1,43 +1,52 @@
 /* ══════════════════════════════════════════════════════════════════════════
    checkSocialFailClosed.js — social listing, publishing and connecting stay
-   shut until connected accounts are tied to the user who connected them.
+   shut, and nothing in server.js can reach a social platform.
 
-   THE DEFECT. Every Zernio call is made with the app's one API key, and
-   nothing records which user connected which account. GET
+   THE DEFECT. Every Zernio call was made with the app's one API key, and
+   nothing recorded which user connected which account. GET
    /api/social/accounts listed the whole workspace to any signed-in user, and
    POST /api/social-drafts published to the first account on the platform,
    whoever owned it. Zero rows had ever published when SOCIAL_ACCOUNTS_SCOPED
-   closed all three routes.
+   (a constant, false) closed all three routes. The code behind those gates
+   could never run, and setting ZERNIO_API_KEY did not open it, so launch
+   audit #22c deleted it; each route now does only what it did while closed.
 
    WHAT THIS PROVES
-     0. Statically: server.js reaches zernio.com in exactly three places, and
-        every route that can reach one checks SOCIAL_ACCOUNTS_SCOPED before
-        it. SOCIAL_ACCOUNTS_SCOPED is false.
+     0. Statically: server.js names zernio.com nowhere, reads no
+        ZERNIO_API_KEY or ZERNIO_PROFILE_ID, and declares none of the deleted
+        names (fetchZernioAccounts, getZernioAccountId, ZERNIO_PLATFORM_MAP,
+        SOCIAL_ACCOUNTS_SCOPED); none of the three routes calls fetch.
      1. GET /api/social/accounts returns { accounts: [] } with
         listing_status "unavailable_pending_per_user_scoping", and makes no
         outbound request.
-     2. POST /api/social-drafts makes no outbound request (so neither
-        getZernioAccountId nor the publish is reached) and answers
+     2. POST /api/social-drafts makes no outbound request and answers
         published: false.
      3. POST /api/social/connect/:platform answers 503 and makes no outbound
         request.
      4. The chosen behaviour for a draft: it is SAVED, as one
         social_post_drafts row with status "not_published", no
         zernio_post_id and no scheduled_for, owned by the caller.
+     5. The frontend says so: integrations.html marks Zernio and the six
+        social platforms "Removed", with no "Connecting was built" and no
+        connect button, and its guide tips no longer list Zernio among the
+        services that run on BizForce.
 
    HOW. Each route, and the helpers it closes over, is lifted out of
    server.js and run in a vm with a recording fetch and a recording fake
-   Supabase. ZERNIO_API_KEY is set inside the vm, so an open route WOULD
-   reach Zernio — that is what makes the mutations bite. Nothing is sent and
-   no database is touched.
+   Supabase. ZERNIO_API_KEY is set inside the vm, so code that read it and
+   called out would be seen. Nothing is sent and no database is touched.
 
-   MUTATE=open-accounts  removes the gate from GET /api/social/accounts.
-                         1 must go red.
-   MUTATE=open-publish   removes the gate from POST /api/social-drafts.
-                         2 and 4 must go red.
-   MUTATE=open-connect   removes the gate from the connect route.
-                         3 must go red.
-   The mutations are applied to the extracted source, never to server.js.
+   MUTATE=zernio-call-restored    the accounts route calls zernio.com again.
+                                  1 must go red.
+   MUTATE=publish-claims-published the draft is saved as "published".
+                                  4 must go red.
+   MUTATE=connect-returns-url     the connect route hands out a URL again.
+                                  3 must go red.
+   MUTATE=integrations-zernio-runs  the Zernio card says "Runs on BizForce".
+   MUTATE=integrations-connect-built a social card says connecting was built.
+                                  5 must go red for both.
+   The mutations are applied to the extracted source, never to server.js. A
+   search text that does not match exactly once is an ERROR, never a catch.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -46,7 +55,18 @@ const path = require("path");
 const { braceMatch } = require("./_shared");
 const REPO = path.join(__dirname, "..");
 
-const MUTATIONS = ["open-accounts", "open-publish", "open-connect"];
+const MUTATIONS = ["zernio-call-restored", "publish-claims-published", "connect-returns-url", "integrations-zernio-runs", "integrations-connect-built"];
+const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
+const INTEGRATIONS = "integrations.html", GUIDE = "scripts/termaximus-guide.js";
+/* Frontend mutations, applied in memory to the file named. */
+const FRONT_MUTANTS = {
+  // the Zernio card says it runs on BizForce again
+  "integrations-zernio-runs": [INTEGRATIONS, "BizForce posts nothing through it.</p>\n          <span class=\"int-status\">Removed</span>",
+    "BizForce posts nothing through it.</p>\n          <span class=\"int-status\">Runs on BizForce</span>"],
+  // a social card says connecting was built and is only paused
+  "integrations-connect-built": [INTEGRATIONS, "BizForce does not post to Facebook. Connecting an account was removed because it could not be tied to the person who connected it.</p>\n          <span class=\"int-status\">Removed</span>",
+    "Schedule posts and manage your Facebook business page.</p>\n          <span class=\"int-status\">Unavailable</span>\n          <div class=\"int-card-footer\">\n            <button class=\"int-connect-btn\" disabled>Unavailable</button>\n            <span class=\"int-note\">Connecting was built and is turned off for now, while each connected account is tied to the person who connected it.</span>\n          </div>"]
+};
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -78,62 +98,30 @@ function functionSource(name) {
   if (!m) throw new Error("function " + name + " was not found");
   return SRC.slice(m.index, braceMatch(SRC, SRC.indexOf(") {", m.index) + 2));
 }
-function statementSource(re, what) {
-  const m = re.exec(SRC);
-  if (!m) throw new Error(what + " was not found");
-  return m[0];
-}
-function mutate(src, from, to) {
-  return MUT.replaceOnce(src, from, to, MUTATE);
-}
+const uncommented = (text) => text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'])\/\/[^\n]*/g, "$1");
 
-const GATE = "if (!SOCIAL_ACCOUNTS_SCOPED) {";
 const R_ACCOUNTS = routeSource("get", "/api/social/accounts");
 const R_DRAFTS   = routeSource("post", "/api/social-drafts");
 const R_CONNECT  = routeSource("post", "/api/social/connect/:platform");
 
-/* ── 0. static: every way to Zernio, and the gate in front of it ─────────── */
-console.log("\n══ 0. every Zernio call site is behind the gate ══");
+/* ── 0. static: no way to a social platform is left ─────────────────────── */
+console.log("\n══ 0. server.js reaches no social platform ══");
 {
+  const CODE = uncommented(SRC);
   const hits = [];
   let i = -1;
   while ((i = SRC.indexOf("zernio.com", i + 1)) >= 0) hits.push(SRC.slice(0, i).split("\n").length);
-  check("0. server.js names zernio.com exactly three times", hits.length === 3, "lines " + hits.join(", "));
-
-  const scoped = statementSource(/^const SOCIAL_ACCOUNTS_SCOPED = (true|false);$/m, "SOCIAL_ACCOUNTS_SCOPED");
-  check("0. SOCIAL_ACCOUNTS_SCOPED is false", /= false;$/.test(scoped), scoped);
-
-  /* The helpers that call Zernio, and every place they are called from. A new
-     caller outside these three routes would be an ungated way in. */
-  const helperDefs = { fetchZernioAccounts: functionSource("fetchZernioAccounts"), getZernioAccountId: functionSource("getZernioAccountId") };
-  const callers = {};
-  Object.keys(helperDefs).forEach(function (name) {
-    const re = new RegExp("\\b" + name + "\\(", "g");
-    let m;
-    while ((m = re.exec(SRC))) {
-      if (SRC.slice(m.index - 9, m.index) === "function ") continue;
-      const line = SRC.slice(0, m.index).split("\n").length;
-      const where = [R_ACCOUNTS, R_DRAFTS, R_CONNECT].find(function (r) { return m.index > r.start && m.index < r.start + r.text.length; });
-      const inHelper = helperDefs.getZernioAccountId && SRC.indexOf(helperDefs.getZernioAccountId) < m.index && m.index < SRC.indexOf(helperDefs.getZernioAccountId) + helperDefs.getZernioAccountId.length;
-      callers[name + "@" + line] = where ? where.text.slice(0, where.text.indexOf("(")) + ' "' + where.text.split('"')[1] + '"' : (inHelper ? "getZernioAccountId" : "ELSEWHERE");
-    }
-  });
-  const outside = Object.keys(callers).filter(function (k) { return callers[k] === "ELSEWHERE"; });
-  check("0. the Zernio helpers are called only from the three routes (or each other)", outside.length === 0, JSON.stringify(callers));
-
-  [["GET /api/social/accounts", R_ACCOUNTS, "fetchZernioAccounts("],
-   ["POST /api/social-drafts", R_DRAFTS, "getZernioAccountId("],
-   ["POST /api/social-drafts", R_DRAFTS, "zernio.com"],
-   ["POST /api/social/connect/:platform", R_CONNECT, "zernio.com"]].forEach(function (t) {
-    const g = t[1].text.indexOf(GATE), c = t[1].text.indexOf(t[2]);
-    check("0. " + t[0] + ": the gate comes before " + t[2].replace("(", ""), g >= 0 && c > g && t[1].text.indexOf(GATE, g + 1) < 0, "gate@" + g + " call@" + c);
+  check("0. server.js names zernio.com nowhere", hits.length === 0, "lines " + hits.join(", "));
+  check("0. no code reads ZERNIO_API_KEY or ZERNIO_PROFILE_ID", !/process\.env\.ZERNIO_/.test(CODE), (CODE.match(/process\.env\.ZERNIO_\w+/g) || []).join(", "));
+  const gone = ["fetchZernioAccounts", "getZernioAccountId", "ZERNIO_PLATFORM_MAP", "SOCIAL_ACCOUNTS_SCOPED"].filter(function (n) { return new RegExp("\\b" + n + "\\b").test(CODE); });
+  check("0. the deleted names are declared and used nowhere in code", gone.length === 0, gone.join(", "));
+  [["GET /api/social/accounts", R_ACCOUNTS], ["POST /api/social-drafts", R_DRAFTS], ["POST /api/social/connect/:platform", R_CONNECT]].forEach(function (t) {
+    check("0. " + t[0] + " calls no fetch", !/\bfetch\(/.test(uncommented(t[1].text)));
   });
 }
 
 /* ── the vm ──────────────────────────────────────────────────────────────── */
-const HELPERS = [functionSource("nowIso"), functionSource("safeText"),
-  statementSource(/^var ZERNIO_PLATFORM_MAP = \{[\s\S]*?\n\};$/m, "ZERNIO_PLATFORM_MAP"),
-  functionSource("fetchZernioAccounts"), functionSource("getZernioAccountId")].join("\n\n");
+const HELPERS = [functionSource("nowIso"), functionSource("safeText")].join("\n\n");
 
 function fakeDb() {
   const inserts = [];
@@ -155,7 +143,7 @@ async function run(routeText, req) {
   let handler = null;
   const ctx = {
     console: { log: function () {}, warn: function () {}, error: function () {} },
-    process: { env: { ZERNIO_API_KEY: "check-key" } },   // an open route WOULD reach Zernio
+    process: { env: { ZERNIO_API_KEY: "check-key" } },   // code that read the key and called out would be seen
     requireAuth: function () {},
     supabase: db.client,
     JSON: JSON, Date: Date, String: String, Array: Array, Object: Object, encodeURIComponent: encodeURIComponent,
@@ -168,7 +156,7 @@ async function run(routeText, req) {
     app: { get: function () { handler = arguments[arguments.length - 1]; }, post: function () { handler = arguments[arguments.length - 1]; } }
   };
   vm.createContext(ctx);
-  vm.runInContext("const SOCIAL_ACCOUNTS_SCOPED = false;\n\n" + HELPERS + "\n\n" + routeText, ctx);
+  vm.runInContext(HELPERS + "\n\n" + routeText, ctx);
   if (!handler) throw new Error("handler not captured");
   const res = { statusCode: 200, body: undefined,
     status: function (c) { this.statusCode = c; return this; },
@@ -178,22 +166,32 @@ async function run(routeText, req) {
   return { status: res.statusCode, body: res.body, outbound: outbound, inserts: db.inserts, nextErr: nextErr };
 }
 
-function opened(route, name) { return MUTATE === name ? mutate(route.text, GATE, "if (false) {") : route.text; }
+const MUTANTS = {
+  "zernio-call-restored": [R_ACCOUNTS, "    return res.json({ accounts: [], listing_status:",
+    "    await fetch(\"https://zernio.com/api/v1/accounts\");\n    return res.json({ accounts: [], listing_status:"],
+  "publish-claims-published": [R_DRAFTS, "        status:         \"not_published\",", "        status:         \"published\","],
+  "connect-returns-url": [R_CONNECT, "    return res.status(503).json({ error: \"Social account connections are temporarily unavailable.\" });",
+    "    return res.json({ ok: true, url: \"https://zernio.example/oauth\" });"]
+};
+function source(route) {
+  const m = MUTANTS[MUTATE];
+  return m && m[0] === route ? MUT.replaceOnce(route.text, m[1], m[2], MUTATE) : route.text;
+}
 
 (async function () {
   if (MUTATE) console.log("\n>>> MUTATE=" + MUTATE);
 
   console.log("\n══ 1. GET /api/social/accounts ══");
-  const a = await run(opened(R_ACCOUNTS, "open-accounts"), {});
+  const a = await run(source(R_ACCOUNTS), {});
   console.log("    HTTP " + a.status + " " + JSON.stringify(a.body) + " | outbound: " + JSON.stringify(a.outbound));
   check("1. returns an empty account list", a.status === 200 && a.body && Array.isArray(a.body.accounts) && a.body.accounts.length === 0, JSON.stringify(a.body));
   check("1. says why: listing_status is unavailable_pending_per_user_scoping", a.body && a.body.listing_status === "unavailable_pending_per_user_scoping", a.body && a.body.listing_status);
-  check("1. never calls Zernio", a.outbound.length === 0, JSON.stringify(a.outbound));
+  check("1. never calls out", a.outbound.length === 0, JSON.stringify(a.outbound));
 
   console.log("\n══ 2 & 4. POST /api/social-drafts ══");
-  const d = await run(opened(R_DRAFTS, "open-publish"), { body: { platform: "instagram", content: "Check draft text", status: "pending", scheduled_for: "2026-10-01T09:00:00.000Z" } });
+  const d = await run(source(R_DRAFTS), { body: { platform: "instagram", content: "Check draft text", status: "pending", scheduled_for: "2026-10-01T09:00:00.000Z" } });
   console.log("    HTTP " + d.status + " " + JSON.stringify({ published: d.body && d.body.published, message: d.body && d.body.message, status: d.body && d.body.draft && d.body.draft.status }) + " | outbound: " + JSON.stringify(d.outbound));
-  check("2. does not call Zernio (no account lookup, no publish)", d.outbound.length === 0, JSON.stringify(d.outbound));
+  check("2. does not call out (no account lookup, no publish)", d.outbound.length === 0, JSON.stringify(d.outbound));
   check("2. answers published: false, with a message saying publishing is off", d.body && d.body.published === false && /not published/i.test(d.body.message || ""), JSON.stringify(d.body && { published: d.body.published, message: d.body.message }));
   const ins = d.inserts;
   const row = ins[0] && ins[0].payload;
@@ -204,12 +202,29 @@ function opened(route, name) { return MUTATE === name ? mutate(route.text, GATE,
   check("4. answers 201 with the saved draft", d.status === 201 && d.body && d.body.draft && d.body.draft.status === "not_published", d.status);
 
   console.log("\n══ 3. POST /api/social/connect/:platform ══");
-  const c = await run(opened(R_CONNECT, "open-connect"), { params: { platform: "facebook" } });
+  const c = await run(source(R_CONNECT), { params: { platform: "facebook" } });
   console.log("    HTTP " + c.status + " " + JSON.stringify(c.body) + " | outbound: " + JSON.stringify(c.outbound));
   check("3. answers 503 saying connections are temporarily unavailable", c.status === 503 && /temporarily unavailable/i.test((c.body && c.body.error) || ""), c.status + " " + JSON.stringify(c.body));
-  check("3. never calls Zernio", c.outbound.length === 0, JSON.stringify(c.outbound));
+  check("3. never calls out", c.outbound.length === 0, JSON.stringify(c.outbound));
   check("3. returns no connect URL", !(c.body && c.body.url), c.body && c.body.url);
+
+  /* ── 5. the integrations page says what is now true ─────────────────── */
+  console.log("\n══ 5. integrations.html and its tips ══");
+  const front = {};
+  [INTEGRATIONS, GUIDE].forEach(function (f) { front[f] = fs.readFileSync(path.join(FRONTEND, f), "utf8").replace(/\r\n/g, "\n"); });
+  if (FRONT_MUTANTS[MUTATE]) { const fm = FRONT_MUTANTS[MUTATE]; front[fm[0]] = MUT.replaceOnce(front[fm[0]], fm[1], fm[2], MUTATE); }
+  const cards = {};
+  (front[INTEGRATIONS].match(/<div class="int-card">[\s\S]*?<span class="int-status">[^<]*<\/span>/g) || []).forEach(function (card) {
+    cards[(/<p class="int-card-name">([^<]*)<\/p>/.exec(card) || ["", ""])[1]] = (/<span class="int-status">([^<]*)<\/span>/.exec(card) || ["", ""])[1];
+  });
+  const SOCIAL = ["Zernio", "Facebook", "Instagram", "TikTok", "X / Twitter", "YouTube", "LinkedIn"];
+  const wrong = SOCIAL.filter(function (n) { return cards[n] !== "Removed"; });
+  check("5. Zernio and the six social platforms are each marked Removed (" + SOCIAL.length + ")", wrong.length === 0, wrong.map(function (n) { return n + "=" + cards[n]; }).join(", "));
+  check("5. no card says connecting was built, and no connect button is left", !/Connecting was built/.test(front[INTEGRATIONS]) && !/int-connect-btn/.test(front[INTEGRATIONS]));
+  const tips = (/"integrations\.html": \[([\s\S]*?)\n    \]/.exec(front[GUIDE]) || ["", ""])[1];
+  check("5. the integrations tips no longer say Zernio runs on BizForce or that connecting was built",
+    tips.length > 0 && !/Zernio and email|connecting was built/.test(tips) && /Zernio and the six social platforms it posted to/.test(tips), tips.slice(0, 200));
 
   console.log("\n" + (failures ? failures + " FAILED" : "ALL PASS") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
   process.exit(failures ? 1 : 0);
-})().catch(function (e) { console.error(e); process.exit(1); });
+})().catch(function (e) { console.log("    FAIL  the harness stopped: " + ((e && e.message) || e)); console.error(e); process.exit(1); });

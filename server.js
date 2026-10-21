@@ -38168,6 +38168,13 @@ async function grantWelcomeBonusOnce(userId) {
   return { granted: true, amount: WELCOME_BONUS_BFC };
 }
 
+/* WHAT BFC IS, in one sentence that every wallet answer carries as
+   bfcDisclaimer (launch audit #9). The frontend shows the same sentence from
+   one file, scripts/bf-bfc-notice.js, on every page that shows a BFC balance
+   or a BFC action; scripts/checkBfcNotice.js holds the two identical. */
+const BFC_NOTICE = "BizCash (BFC) is an in-app credit for use on BizForceAI only. It has no cash value, cannot be bought, sold, " +
+  "exchanged or withdrawn for money, and its rules or availability may change.";
+
 app.get("/api/wallet", requireAuth, async function (req, res, next) {
   try {
     const walletResult = await supabase
@@ -38277,7 +38284,7 @@ app.get("/api/wallet", requireAuth, async function (req, res, next) {
       throw historyUnreadable;
     }
 
-    return res.json({ balance: wallet ? wallet.balance : 0, transactions: txns || [] });
+    return res.json({ balance: wallet ? wallet.balance : 0, transactions: txns || [], bfcDisclaimer: BFC_NOTICE });
   } catch (error) { next(error); }
 });
 
@@ -38427,7 +38434,7 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
       });
     }
 
-    return res.json({ balance: data });
+    return res.json({ balance: data, bfcDisclaimer: BFC_NOTICE });
   } catch (error) { next(error); }
 });
 
@@ -42604,173 +42611,56 @@ app.put("/api/business-profile", requireAuth, async function (req, res, next) {
 
 /* ── Social Post Drafts ── */
 
-/* SOCIAL IS CLOSED UNTIL ACCOUNTS HAVE OWNERS. Every Zernio call below is
-   made with the app's one API key, and nothing ties a connected account to
-   the user who connected it:
-     - fetchZernioAccounts lists the whole workspace (GET /v1/accounts, no
-       profile filter), so GET /api/social/accounts handed every tenant's
-       accounts to any signed-in user;
-     - getZernioAccountId took no user and returned the first account on the
-       platform, so a publish went to whoever connected first;
-     - no table records which user connected which account, and the connect
-       route cannot record it: it only returns an OAuth URL, with no callback
-       and no account id coming back.
-   Zero rows had ever published when this was closed. While this is false,
-   listing returns nothing, publishing saves the draft unpublished, and connect
-   answers 503 — none of them call Zernio. The code behind each gate is kept for
-   when ownership can be recorded; that needs Zernio API facts we do not have
-   yet (a profile-filtered listing, or a connect callback that returns the
-   account). scripts/checkSocialFailClosed.js holds all three shut. */
-const SOCIAL_ACCOUNTS_SCOPED = false;
-
-/* Fetches all connected Zernio accounts; returns raw array (empty on any error). */
-async function fetchZernioAccounts(logPrefix) {
-  var apiKey = (process.env.ZERNIO_API_KEY || "").trim();
-  if (!apiKey) return [];
-  try {
-    var r = await fetch("https://zernio.com/api/v1/accounts", {
-      headers: { "Authorization": "Bearer " + apiKey }
-    });
-    if (!r.ok) {
-      var body = await r.text().catch(function () { return ""; });
-      console.error("[" + logPrefix + "] Zernio accounts error " + r.status + ":", body.slice(0, 300));
-      return [];
-    }
-    var d = await r.json();
-    return Array.isArray(d.accounts) ? d.accounts : [];
-  } catch (e) {
-    console.error("[" + logPrefix + "] fetchZernioAccounts threw:", e.message);
-    return [];
-  }
-}
-
-/* Returns the Zernio account _id for a given platform slug, or null if not connected. */
-async function getZernioAccountId(platform) {
-  var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
-  var accounts = await fetchZernioAccounts("social/publish");
-  var match = accounts.find(function (a) { return a.platform === zernioPlatform; });
-  console.log("[social/publish] accounts:", accounts.length, "| looking for:", zernioPlatform, "| match:", match ? match._id : "none");
-  return match ? match._id : null;
-}
+/* SOCIAL PUBLISHING IS OFF. These routes used to reach Zernio with the app's
+   one API key, and nothing tied a connected account to the user who connected
+   it: listing handed every tenant's accounts to any signed-in user, and a
+   publish went to whoever connected first. Zero rows had ever published when
+   that was closed behind a constant set to false, and the code behind it could
+   never run (setting ZERNIO_API_KEY did not open it), so it was deleted
+   (launch audit #22c). Listing returns nothing, an approved draft is saved
+   unpublished, and connect answers 503. Nothing here reads ZERNIO_API_KEY or
+   calls any social platform. scripts/checkSocialFailClosed.js holds all three
+   shut. */
 
 app.post("/api/social-drafts", requireAuth, async function (req, res, next) {
   try {
     var platform = safeText(req.body.platform, 100)  || null;
     var content  = safeText(req.body.content, 10000) || null;
-    var schedFor = req.body.scheduled_for             || null;
-    var apiKey   = (process.env.ZERNIO_API_KEY || "").trim();
 
     console.log("[social/publish] Approve — user:", req.user.id, "platform:", platform);
 
-    /* SAVED, NOT PUBLISHED (see SOCIAL_ACCOUNTS_SCOPED). The draft is kept
-       rather than refused, so the approved text is not lost, and the row says
-       what happened: status "not_published", no zernio_post_id, and no
-       scheduled_for, because nothing will ever pick it up and send it. Neither
-       getZernioAccountId nor Zernio is reached. */
-    if (!SOCIAL_ACCOUNTS_SCOPED) {
-      const { data: saved, error: saveError } = await supabase
-        .from("social_post_drafts")
-        .insert({
-          user_id:        req.user.id,
-          platform:       platform,
-          content:        content,
-          status:         "not_published",
-          scheduled_for:  null,
-          zernio_post_id: null,
-          created_at:     nowIso(),
-          updated_at:     nowIso()
-        })
-        .select("*").single();
-
-      if (saveError) {
-        console.error("[social-drafts POST] Supabase error:", {
-          code: saveError.code, message: saveError.message,
-          details: saveError.details, hint: saveError.hint
-        });
-        return res.status(500).json({ error: "Save failed" });
-      }
-
-      console.log("[social/publish] Publishing disabled — draft " + saved.id + " saved as not_published for user " + req.user.id);
-      return res.status(201).json({
-        draft: saved,
-        published: false,
-        message: "Saved as a draft. It was not published: publishing to social accounts is turned off until each connected account is tied to the person who connected it."
-      });
-    }
-
-    if (!apiKey) {
-      return res.status(503).json({ error: "Publishing unavailable — ZERNIO_API_KEY not configured" });
-    }
-
-    // 1. Look up connected accountId for this platform
-    var accountId = await getZernioAccountId(platform);
-    if (!accountId) {
-      console.log("[social/publish] No connected account for platform:", platform);
-      return res.status(400).json({
-        error: "No connected " + (platform || "social") + " account — connect one first"
-      });
-    }
-    console.log("[social/publish] accountId:", accountId, "platform:", platform);
-
-    // 2. Build Zernio post payload
-    var zernioPlatform = ZERNIO_PLATFORM_MAP[platform] || platform;
-    var postPayload    = {
-      content:   content,
-      platforms: [{ platform: zernioPlatform, accountId: accountId }]
-    };
-    if (schedFor) {
-      postPayload.scheduledFor = schedFor;
-    } else {
-      postPayload.publishNow = true;
-    }
-    console.log("[social/publish] Posting to Zernio:", JSON.stringify(postPayload));
-
-    // 3. Publish via Zernio
-    var zernioRes  = await fetch("https://zernio.com/api/v1/posts", {
-      method:  "POST",
-      headers: { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" },
-      body:    JSON.stringify(postPayload)
-    });
-    var zernioText = await zernioRes.text();
-    console.log("[social/publish] Zernio response " + zernioRes.status + ":", zernioText.slice(0, 500));
-
-    if (!zernioRes.ok) {
-      return res.status(502).json({
-        error:   "Failed to publish to " + (platform || "social platform"),
-        details: zernioText.slice(0, 300)
-      });
-    }
-
-    var zernioData   = JSON.parse(zernioText);
-    var zernioPostId = (zernioData.post && zernioData.post._id) || null;
-    console.log("[social/publish] Published OK — Zernio post ID:", zernioPostId);
-
-    // 4. Persist draft with final status (do NOT mark published on Zernio error)
-    var finalStatus = schedFor ? "scheduled" : "published";
-    const { data, error } = await supabase
+    /* SAVED, NOT PUBLISHED. The draft is kept rather than refused, so the
+       approved text is not lost, and the row says what happened: status
+       "not_published", no zernio_post_id, and no scheduled_for, because
+       nothing will ever pick it up and send it. */
+    const { data: saved, error: saveError } = await supabase
       .from("social_post_drafts")
       .insert({
         user_id:        req.user.id,
         platform:       platform,
         content:        content,
-        status:         finalStatus,
-        scheduled_for:  schedFor,
-        zernio_post_id: zernioPostId,
+        status:         "not_published",
+        scheduled_for:  null,
+        zernio_post_id: null,
         created_at:     nowIso(),
         updated_at:     nowIso()
       })
       .select("*").single();
 
-    if (error) {
+    if (saveError) {
       console.error("[social-drafts POST] Supabase error:", {
-        code: error.code, message: error.message,
-        details: error.details, hint: error.hint
+        code: saveError.code, message: saveError.message,
+        details: saveError.details, hint: saveError.hint
       });
-      return res.status(500).json({
-        error:      "Save failed"
-      });
+      return res.status(500).json({ error: "Save failed" });
     }
-    return res.status(201).json({ draft: data });
+
+    console.log("[social/publish] Publishing disabled — draft " + saved.id + " saved as not_published for user " + req.user.id);
+    return res.status(201).json({
+      draft: saved,
+      published: false,
+      message: "Saved as a draft. It was not published: publishing to social accounts is turned off until each connected account is tied to the person who connected it."
+    });
   } catch (error) { next(error); }
 });
 
@@ -42854,90 +42744,19 @@ app.put("/api/social-drafts/:id", requireAuth, async function (req, res, next) {
 /* ── List connected social accounts ── */
 app.get("/api/social/accounts", requireAuth, async function (req, res, next) {
   try {
-    /* EMPTY, NOT EVERYONE'S (see SOCIAL_ACCOUNTS_SCOPED). fetchZernioAccounts
-       calls the workspace-wide GET /v1/accounts with no profile filter, and
-       nothing records which user connected what, so there is no list this
-       route can return that belongs only to the caller. listing_status tells
-       the page why the list is empty, so it can say so rather than showing
-       "no accounts connected". */
-    if (!SOCIAL_ACCOUNTS_SCOPED) {
-      return res.json({ accounts: [], listing_status: "unavailable_pending_per_user_scoping" });
-    }
-
-    var raw = await fetchZernioAccounts("social/accounts");
-    var reverseMap = {};
-    Object.keys(ZERNIO_PLATFORM_MAP).forEach(function (k) {
-      reverseMap[ZERNIO_PLATFORM_MAP[k]] = k;
-    });
-    var accounts = raw.map(function (a) {
-      return {
-        platform:  reverseMap[a.platform] || a.platform,
-        accountId: a._id,
-        name:      a.name || a.username || a.handle || a.displayName || a._id
-      };
-    });
-    console.log("[social/accounts] returning", accounts.length, "connected accounts");
-    return res.json({ accounts: accounts });
+    /* EMPTY, NOT EVERYONE'S. Nothing records which user connected which
+       account, so there is no list this route can return that belongs only to
+       the caller. listing_status tells the page why the list is empty, so it
+       can say so rather than showing "no accounts connected". */
+    return res.json({ accounts: [], listing_status: "unavailable_pending_per_user_scoping" });
   } catch (error) { next(error); }
 });
 
-/* ── Social Account Connect (Zernio OAuth) ── */
-/* Maps our platform slugs to Zernio's platform identifiers */
-var ZERNIO_PLATFORM_MAP = {
-  x:         "twitter",
-  instagram: "instagram",
-  facebook:  "facebook",
-  tiktok:    "tiktok",
-  youtube:   "youtube",
-  linkedin:  "linkedin"
-};
-
+/* ── Social account connect: unavailable ── */
 app.post("/api/social/connect/:platform", requireAuth, async function (req, res, next) {
   try {
-    var rawPlatform    = safeText(req.params.platform, 40) || "";
-    var zernioPlatform = ZERNIO_PLATFORM_MAP[rawPlatform] || rawPlatform;
-    var apiKey         = (process.env.ZERNIO_API_KEY || "").trim();
-
-    /* A GATE, NOT A DELETION (see SOCIAL_ACCOUNTS_SCOPED). A connect URL now
-       leads to an account nobody can list or publish to, and which — once the
-       gates open — would be visible to every tenant. */
-    if (!SOCIAL_ACCOUNTS_SCOPED) {
-      return res.status(503).json({ error: "Social account connections are temporarily unavailable." });
-    }
-
-    if (!apiKey) {
-      return res.status(503).json({ error: "Social connect unavailable — ZERNIO_API_KEY not configured" });
-    }
-
-    /* profileId scopes connected accounts within Zernio; fall back to authenticated user id */
-    var profileId = process.env.ZERNIO_PROFILE_ID || req.user.id;
-
-    console.log("[social/connect] User " + req.user.id + " → Zernio connect for platform: " + zernioPlatform);
-
-    var zernioRes = await fetch(
-      "https://zernio.com/api/v1/connect/" + encodeURIComponent(zernioPlatform) +
-        "?profileId=" + encodeURIComponent(profileId),
-      { headers: { "Authorization": "Bearer " + apiKey } }
-    );
-
-    if (!zernioRes.ok) {
-      var errBody = await zernioRes.json().catch(function () { return {}; });
-      console.error("[social/connect] Zernio error " + zernioRes.status + ":", errBody);
-      return res.status(502).json({
-        error: "Could not generate connect URL",
-        details: errBody.message || errBody.error || ("HTTP " + zernioRes.status)
-      });
-    }
-
-    var data       = await zernioRes.json();
-    var connectUrl = data.url || data.authUrl || data.connect_url || null;
-
-    if (!connectUrl) {
-      console.error("[social/connect] Zernio response missing URL field:", JSON.stringify(data));
-      return res.status(502).json({ error: "Zernio did not return a connect URL" });
-    }
-
-    return res.json({ ok: true, platform: rawPlatform, url: connectUrl });
+    /* A connect URL would lead to an account nobody can list or publish to. */
+    return res.status(503).json({ error: "Social account connections are temporarily unavailable." });
   } catch (error) { next(error); }
 });
 
