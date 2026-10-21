@@ -26,6 +26,15 @@
      7. each table is counted again in the target and compared with the
         manifest, and the setval lines for sequence-backed ids are printed.
    Exit 0 only when every table was restored with the manifest's count.
+
+   THE DRILL, start to finish:
+     a. node scripts/buildScratchSchema.js — writes every migration, in
+        number order, into one file (Downloads/bizforce-schema-all.sql) and
+        prints anything in them that would not run on a fresh database;
+     b. paste that one file into a NEW, EMPTY Supabase project's SQL editor
+        and run it;
+     c. run this script with --dry-run on the backup's part files, then again
+        with that scratch project's --target-url and --target-key.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
