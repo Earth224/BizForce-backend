@@ -27,6 +27,25 @@
    MUTATE=gate   removes the `entitlement.plan.active !== true` refusal from the
                  extracted pass, in memory. b and e must go red: an unentitled
                  account's schedule runs. Nothing is written to server.js.
+
+   PINS CHANGED BY MIGRATION 143 (schedule outcomes, pause), each named:
+     PIN a.write   BEFORE: the one write on s1 was exactly { last_run_on }.
+                   AFTER:  the one write on s1 is { last_run_on, last_run_status
+                           "succeeded", last_error null, last_task_id null,
+                           consecutive_failures 0, last_attempt_at NOW }: the
+                           runner records the outcome in the same write.
+     PIN stamps    BEFORE: `stamps` was every agent_schedules update.
+                   AFTER:  `stamps` is every update that sets last_run_on (the
+                           thing b, c, c2, d, e and g assert about), and
+                           `writes` is every update. A skip now writes its
+                           outcome, so "no update at all" is no longer the
+                           test for "not run"; "no last_run_on" is.
+     PIN context   BEFORE: the vm held the five extracted functions.
+                   AFTER:  it also holds AGENT_SCHEDULE_FAILURES_TO_PAUSE and
+                           AGENT_SCHEDULE_SKIP_TEXT, extracted the same way, and
+                           an opsAlerts stub. The new behaviour (outcomes,
+                           pause, lapse) is proved in checkScheduleControl.js.
+     NEW b/c/c2/g  each skip records its own status and words on its own row.
    ══════════════════════════════════════════════════════════════════════════ */
 const fs = require("fs");
 const vm = require("vm");
@@ -58,7 +77,13 @@ function extract(signature) {
   return src.slice(start, end);
 }
 
-let code = [
+function extractLine(prefix) {
+  const start = src.indexOf(prefix);
+  assert(start > 0, prefix + " not found");
+  return src.slice(start, src.indexOf("\n", start));
+}
+
+let code = [extractLine("var AGENT_SCHEDULE_FAILURES_TO_PAUSE = "), extract("var AGENT_SCHEDULE_SKIP_TEXT = {") + ";"].join("\n") + "\n\n" + [
   "function agentScheduleUtcDay(now) {",
   "function agentScheduleDaysInUtcMonth(now) {",
   "function agentScheduleEffectiveMonthDay(dayOfMonth, now) {",
@@ -81,13 +106,13 @@ function sched(id, userId, agent) {
 
 /* opts: { schedules, autonomy:[{user_id,agent_type}], plans:{userId: result|Error|null}, maxPerTick } */
 async function runTick(opts) {
-  const logs = [], runs = [], stamps = [], planCalls = [];
+  const logs = [], runs = [], writes = [], planCalls = [];
   const fakeSupabase = {
     from(name) {
       if (name === "agent_schedules") {
         return {
           select() { return { eq() { return { eq() { return { or: async () => ({ data: opts.schedules, error: null }) }; } }; } }; },
-          update(payload) { return { eq: async (col, val) => { stamps.push({ payload, where: [col, val] }); return { error: null }; } }; }
+          update(payload) { return { eq: async (col, val) => { writes.push({ payload, where: [col, val] }); return { error: null }; } }; }
         };
       }
       if (name === "agent_autonomy") {
@@ -107,12 +132,21 @@ async function runTick(opts) {
       if (r instanceof Error) throw r;
       return r;
     },
-    runScheduledAgentTask: async (schedule) => { runs.push(schedule.id); return { ok: true, status: 202, payload: {} }; }
+    runScheduledAgentTask: async (schedule) => { runs.push(schedule.id); return { ok: true, status: 202, payload: {} }; },
+    opsAlerts: { scheduleAutoPaused: async () => ({ sent: false, reason: "stub" }) }
   };
   vm.createContext(ctx);
   vm.runInContext(code + "\nthis.runAgentSchedulePass = runAgentSchedulePass;", ctx);
   const summary = await ctx.runAgentSchedulePass(NOW, opts.maxPerTick == null ? 25 : opts.maxPerTick);
-  return { logs, runs, stamps: JSON.parse(JSON.stringify(stamps)), planCalls, summary: JSON.parse(JSON.stringify(summary)) };
+  const all = JSON.parse(JSON.stringify(writes));
+  return { logs, runs, writes: all, stamps: all.filter(w => "last_run_on" in w.payload), planCalls, summary: JSON.parse(JSON.stringify(summary)) };
+}
+
+// The one outcome write on a schedule, or a failure naming what was there.
+function outcomeOf(r, id) {
+  const mine = r.writes.filter(w => w.where[1] === id);
+  assert.strictEqual(mine.length, 1, id + " writes: " + JSON.stringify(mine));
+  return mine[0].payload;
 }
 
 const ENTITLED = { plan: "all_access", active: true, inactive_reason: null, exempt: false };
@@ -130,7 +164,10 @@ async function t(name, fn) {
   await t("a) due, autonomy on, entitled: runs once, last_run_on written", async () => {
     const r = await runTick({ schedules: [sched("s1", "uA")], autonomy: [{ user_id: "uA", agent_type: "seo" }], plans: { uA: ENTITLED } });
     assert.deepStrictEqual(r.runs, ["s1"]);
-    assert.deepStrictEqual(r.stamps, [{ payload: { last_run_on: "2026-09-11" }, where: ["id", "s1"] }]);
+    // PIN a.write (was: [{ payload: { last_run_on: "2026-09-11" }, where: ["id", "s1"] }])
+    assert.deepStrictEqual(r.stamps, [{ payload: { last_run_on: "2026-09-11", last_run_status: "succeeded", last_error: null,
+      last_task_id: null, consecutive_failures: 0, last_attempt_at: NOW.toISOString() }, where: ["id", "s1"] }]);
+    assert.strictEqual(r.writes.length, 1);
     assert.strictEqual(r.summary.launched, 1);
     assert.strictEqual(r.summary.skippedNotEntitled, 0);
   });
@@ -144,6 +181,9 @@ async function t(name, fn) {
     assert(/uA/.test(skipLines[0][1]) && /content/.test(skipLines[0][1]) && /"status"/.test(skipLines[0][1]), skipLines[0][1]);
     assert.strictEqual(r.summary.skippedNotEntitled, 1);
     assert.strictEqual(r.summary.failed, 0);
+    // NEW b: the skip is recorded on its own row, in the card's words.
+    assert.deepStrictEqual(outcomeOf(r, "s1"), { last_run_status: "skipped_not_entitled", last_error: "skipped: subscription not active",
+      last_attempt_at: NOW.toISOString() });
   });
 
   await t("c) getUserPlan throws for A, B entitled: A not run/not stamped, B runs", async () => {
@@ -159,6 +199,9 @@ async function t(name, fn) {
     assert(/uA/.test(errLines[0][1]) && /seo/.test(errLines[0][1]) && /plan-db-down/.test(errLines[0][1]), errLines[0][1]);
     assert.strictEqual(r.summary.failed, 1);
     assert.strictEqual(r.summary.launched, 1);
+    // NEW c: A's skip is recorded as "could not check subscription".
+    assert.deepStrictEqual(outcomeOf(r, "sA"), { last_run_status: "skipped_entitlement_unknown",
+      last_error: "skipped: could not check subscription", last_attempt_at: NOW.toISOString() });
   });
 
   await t("c2) getUserPlan returns null: fails closed, not run, not stamped", async () => {
@@ -166,6 +209,8 @@ async function t(name, fn) {
     assert.deepStrictEqual(r.runs, []);
     assert.deepStrictEqual(r.stamps, []);
     assert(r.logs.some(l => /entitlement could not be determined/.test(l[1]) && /returned no result/.test(l[1])));
+    // NEW c2
+    assert.strictEqual(outcomeOf(r, "s1").last_run_status, "skipped_entitlement_unknown");
   });
 
   await t("d) admin exemption (active true): runs", async () => {
@@ -212,6 +257,9 @@ async function t(name, fn) {
     assert.deepStrictEqual(r.planCalls, []);
     assert.deepStrictEqual(r.stamps, []);
     assert.strictEqual(r.summary.skippedNoAutonomy, 1);
+    // NEW g
+    assert.deepStrictEqual(outcomeOf(r, "s1"), { last_run_status: "skipped_no_autonomy",
+      last_error: "skipped: Autonomous mode is off for this agent", last_attempt_at: NOW.toISOString() });
   });
 
   console.log("\n    extracted " + code.length + " chars");

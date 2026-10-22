@@ -100,7 +100,9 @@ const ADDED = [
   ["get", "/api/wallet/recipient"],             // BizCash is sent by username: who a username belongs to, for the confirm step (total 311 -> 312)
   ["get", "/api/your-data"],                    // Every member can see, download and delete their data: what is stored (total 312 -> 313)
   ["get", "/api/me/export"],                    // Every member can see, download and delete their data: the download (total 313 -> 314)
-  ["post", "/api/me/delete"]                    // Every member can see, download and delete their data: deleting the account (total 314 -> 315)
+  ["post", "/api/me/delete"],                   // Every member can see, download and delete their data: deleting the account (total 314 -> 315)
+  ["put", "/api/agent-schedules/:agent_type/pause"],  // Schedules can be paused without losing them (total 315 -> 316)
+  ["put", "/api/agent-schedules/:agent_type/resume"]  // Schedules can be paused without losing them: resume (total 316 -> 317)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

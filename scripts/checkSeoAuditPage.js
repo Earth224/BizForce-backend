@@ -187,7 +187,20 @@ const RENDERER_CHANGES_SINCE_BEFORE = [
    '        return "<strong>" + esc(humanise(k)) + ":</strong> " + renderScalarish(v);\n      }\n' +
    '      // A per-item yes/no reads as Yes or No, not true/false. A null never gets here: it is "—" above.\n' +
    '      if (typeof v === "boolean") {\n        return "<strong>" + esc(humanise(k)) + ":</strong> " + (v ? "Yes" : "No");\n      }\n' +
-   '      return "<strong>" + esc(humanise(k)) + ":</strong> " + esc(String(v === "" ? "—" : v));']
+   '      return "<strong>" + esc(humanise(k)) + ":</strong> " + esc(String(v === "" ? "—" : v));'],
+  /* NAMED (backend "Schedules report failures, can be paused, and stop cleanly
+     when a subscription lapses", Oct 22 2026). BEFORE → AFTER: three schedule
+     card rules follow .ap-sched-last — .ap-sched-last.failed, .ap-sched-last a
+     and .ap-sched-state (the paused / waiting line). Styles only; no renderer
+     changes. checkScheduleControl.js proves the card. */
+  ['    ".ap-sched-last{margin-top:8px;font-size:.75rem;color:#8892b8}",\n',
+   '    ".ap-sched-last{margin-top:8px;font-size:.75rem;color:#8892b8}",\n' +
+   '    ".ap-sched-last.failed{color:#f5b5b5}",\n' +
+   '    ".ap-sched-last a{color:#22d3ee}",\n' +
+   '    /* WAITING. Paused, or held for the subscription: the schedule exists and\n' +
+   '       is kept, and it is not going to run until the line says what changes. */\n' +
+   '    ".ap-sched-state{margin-top:10px;padding:9px 12px;border-radius:10px;font-size:.78rem;",\n' +
+   '      "line-height:1.55;color:#fde68a;background:rgba(250,204,21,.08);border:1px solid rgba(250,204,21,.35)}",\n']
 ];
 const OLD_SRC = RENDERER_CHANGES_SINCE_BEFORE.reduce(function (src, pair, i) {
   const hits = src.split(pair[0]).length - 1;

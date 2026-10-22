@@ -251,6 +251,11 @@ const EXPECTED_OWN = [
   "post /api/saved-prompts", "put /api/saved-prompts/:id", "delete /api/saved-prompts/:id",
   "post /api/routines", "put /api/routines/:id", "delete /api/routines/:id",
   "put /api/agent-autonomy", "put /api/agent-schedules", "delete /api/agent-schedules/:agent_type",
+  // NAMED (Oct 22 2026, schedule control; effectful login-only 120 -> 122): pause and resume
+  // change only the caller's own schedule's paused state. Deliberately ungated,
+  // like stopping a sequence: pausing never needs a subscription, and resuming a
+  // lapsed member's schedule runs nothing, because the runner checks entitlement.
+  "put /api/agent-schedules/:agent_type/pause", "put /api/agent-schedules/:agent_type/resume",
   "post /api/birth-records", "delete /api/birth-records/:id",
   "put /api/notifications/:id/read",
   "post /api/stripe/checkout", "post /api/billing/portal",

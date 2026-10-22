@@ -36548,7 +36548,8 @@ app.put("/api/agent-autonomy", requireAuth, async function (req, res, next) {
 // Unique on (user_id, agent_type), the same shape agent_autonomy uses, so one
 // schedule pairs with one consent row per user per agent.
 //
-// Nothing reads this table on a timer yet. These routes are the API only.
+// runAgentSchedulePass reads this table every hour (agentScheduleTick) and
+// writes each due schedule's outcome back onto its row (migration 143).
 
 // Exactly what a caller needs to render and edit a schedule. last_run_on is
 // included because it is the one piece of runner state worth showing — "this
@@ -36557,6 +36558,13 @@ app.put("/api/agent-autonomy", requireAuth, async function (req, res, next) {
 var AGENT_SCHEDULE_FIELDS =
   "agent_type, task_type, prompt, cadence, hour_utc, day_of_week, day_of_month, " +
   "enabled, last_run_on, created_at, updated_at";
+
+/* What the agent page's card adds: how the last due slot went, and whether the
+   schedule is paused (migration 143). Written by the runner, and by the pause
+   and resume routes below; read-only to the PUT. The Command Center keeps
+   AGENT_SCHEDULE_FIELDS. */
+var AGENT_SCHEDULE_CARD_FIELDS = AGENT_SCHEDULE_FIELDS +
+  ", paused, paused_reason, last_run_status, last_error, last_attempt_at, last_task_id, consecutive_failures";
 
 /* A second copy of migration 102's cadence CHECK, and the duplication is the
    point rather than an oversight. 064 refused to copy the agent roster into the
@@ -36595,7 +36603,7 @@ app.get("/api/agent-schedules", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("agent_schedules")
-      .select(AGENT_SCHEDULE_FIELDS)
+      .select(AGENT_SCHEDULE_CARD_FIELDS)
       .eq("user_id", req.user.id)
       .order("agent_type", { ascending: true });
 
@@ -36613,7 +36621,22 @@ app.get("/api/agent-schedules", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    return res.json({ schedules: data });
+    /* Whether the runner would run these for this account right now, from
+       getUserPlan, the function every gate and the runner use. The card says a
+       schedule is waiting for the subscription only when this is false. A plan
+       that cannot be read is null — the schedules above are still a true
+       answer, so the read is not failed for it, and the card claims nothing
+       about the subscription. */
+    var subscriptionActive = null;
+    try {
+      var schedulePlan = await getUserPlan(req.user.id, req.user);
+      if (schedulePlan) subscriptionActive = schedulePlan.active === true;
+    } catch (planErr) {
+      console.error("[agent-schedules] could not read the plan for " + req.user.id + ": " +
+        ((planErr && planErr.message) || planErr));
+    }
+
+    return res.json({ schedules: data, subscription_active: subscriptionActive });
   } catch (error) {
     next(error);
   }
@@ -36768,6 +36791,11 @@ app.put("/api/agent-schedules", requireAuth, async function (req, res, next) {
                        on update, so an edit does not silently re-enable a
                        schedule somebody had switched off.
 
+       Migration 143's columns are absent for the same reason: paused and
+       paused_reason belong to the pause and resume routes, so an edit does not
+       un-pause a schedule; the last_* columns and consecutive_failures belong
+       to the runner.
+
        updated_at IS set, and must be. This table has no trigger: migration 067
        attached agent_autonomy_set_updated_at to agent_autonomy only, and 102
        creates none, so the column would otherwise sit at created_at forever and
@@ -36786,7 +36814,7 @@ app.put("/api/agent-schedules", requireAuth, async function (req, res, next) {
         day_of_month: dayOfMonth,
         updated_at:   nowIso()
       }, { onConflict: "user_id,agent_type" })
-      .select(AGENT_SCHEDULE_FIELDS)
+      .select(AGENT_SCHEDULE_CARD_FIELDS)
       .single();
 
     if (error) {
@@ -36835,6 +36863,81 @@ app.delete("/api/agent-schedules/:agent_type", requireAuth, async function (req,
     }
 
     return res.json({ deleted: data[0].agent_type });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* PAUSE AND RESUME. Stopping a schedule used to mean deleting it, and the
+   instruction with it. These change only paused and paused_reason (and, on
+   Resume, the failure count), so the instruction, the cadence and the day and
+   hour come back exactly as they were. updated_at is not touched: it records
+   when the schedule's definition changed, and pausing does not change it.
+
+   Matched on user_id AND agent_type, as the DELETE is, with the same one 404
+   for "no such schedule", "no such agent" and "someone else's". Idempotent:
+   pausing a paused schedule or resuming a running one answers 200 with the
+   row as it stands. */
+app.put("/api/agent-schedules/:agent_type/pause", requireAuth, async function (req, res, next) {
+  try {
+    // Only a running schedule is changed, so a schedule the runner paused for
+    // failures keeps saying why if Pause is pressed again.
+    const paused = await supabase
+      .from("agent_schedules")
+      .update({ paused: true, paused_reason: "owner" })
+      .eq("user_id", req.user.id)
+      .eq("agent_type", req.params.agent_type)
+      .eq("paused", false)
+      .select(AGENT_SCHEDULE_CARD_FIELDS);
+
+    if (paused.error) {
+      throw paused.error;
+    }
+    if (paused.data && paused.data.length) {
+      return res.json({ schedule: paused.data[0] });
+    }
+
+    const current = await supabase
+      .from("agent_schedules")
+      .select(AGENT_SCHEDULE_CARD_FIELDS)
+      .eq("user_id", req.user.id)
+      .eq("agent_type", req.params.agent_type);
+
+    if (current.error) {
+      throw current.error;
+    }
+    if (!current.data || !current.data.length) {
+      return res.status(404).json({ error: "No schedule for that agent belongs to your account." });
+    }
+    return res.json({ schedule: current.data[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/agent-schedules/:agent_type/resume", requireAuth, async function (req, res, next) {
+  try {
+    /* consecutive_failures back to 0, so a schedule the runner paused gets
+       three fresh attempts rather than pausing again on its next failure.
+       Resuming does not run anything: the next run is the next matching slot,
+       never one for the slots it missed while paused. */
+    const { data, error } = await supabase
+      .from("agent_schedules")
+      .update({ paused: false, paused_reason: null, consecutive_failures: 0 })
+      .eq("user_id", req.user.id)
+      .eq("agent_type", req.params.agent_type)
+      .select(AGENT_SCHEDULE_CARD_FIELDS);
+
+    if (error) {
+      throw error;
+    }
+    if (!data || !data.length) {
+      return res.status(404).json({ error: "No schedule for that agent belongs to your account." });
+    }
+
+    // Closes the owner's alert if the runner had paused this one. Never rejects.
+    opsAlerts.scheduleResumed(req.user.id, req.params.agent_type);
+    return res.json({ schedule: data[0] });
   } catch (error) {
     next(error);
   }
@@ -43102,7 +43205,26 @@ async function runDripForAllUsers() {
     return true;
   });
 
+  /* ENTITLEMENT, as every other background path acting for a member has it:
+     getUserPlan through createPassEntitlementCache, `active === true` or
+     nothing, and a plan that cannot be read sends nothing (fail closed).
+     Nothing is deleted or unenrolled; the enrollment simply waits, and the
+     next tick after the subscription is active again picks it up. */
+  var dripEntitlement = createPassEntitlementCache();
+
   for (var i = 0; i < userIds.length; i++) {
+    var entitlement = await dripEntitlement(userIds[i]);
+    if (entitlement.error || !entitlement.plan) {
+      console.error("[dripForAllUsers] Skipped user " + userIds[i] + " — skipped: could not check subscription (" +
+        (entitlement.error ? ((entitlement.error && entitlement.error.message) || String(entitlement.error))
+          : "getUserPlan returned no result") + "). Nothing was sent.");
+      continue;
+    }
+    if (entitlement.plan.active !== true) {
+      console.log("[dripForAllUsers] Skipped user " + userIds[i] + " — skipped: subscription not active " +
+        "(inactive_reason " + JSON.stringify(entitlement.plan.inactive_reason || null) + "). Nothing was sent.");
+      continue;
+    }
     try {
       await runDripEngine(userIds[i]);
     } catch (err) {
@@ -47600,7 +47722,14 @@ function formatReminderBody(minutesBefore) {
    stale reminders on restart — anything older is treated as missed, not
    sent late. reminder_sent_at is stamped right after the send attempt
    (whether or not the user had any push subscriptions) so a user with no
-   device doesn't cause the same row to keep matching every tick. */
+   device doesn't cause the same row to keep matching every tick.
+
+   NO ENTITLEMENT CHECK, DELIBERATELY: the one background path acting for a
+   member that has none. It pushes a member's own calendar event to their own
+   device. It calls no model, sends nothing to anyone else and publishes
+   nothing, and the calendar it reads is requireAuth only, under the owner's
+   2026-10-05 rule that preparing does not need a subscription and publishing
+   does. scripts/checkScheduleControl.js lists it as this exception. */
 async function runDueReminders() {
   var nowIso = new Date().toISOString();
   var cutoffIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -48602,6 +48731,21 @@ var AGENT_SCHEDULE_JOB_PREFIX = "hourly_agent_schedules_h";
    salesAutoConvertTick running in a mode that still called the model. */
 var AGENT_SCHEDULE_DEFAULT_MAX_PER_TICK = 25;
 
+/* Failed runs in a row before the runner pauses a schedule itself. A run that
+   fails is retried only at its next slot, so three is three days of a daily
+   schedule failing, and pausing then says so on the card rather than leaving
+   it to fail daily forever. Skips do not count (see recordScheduleFailure). */
+var AGENT_SCHEDULE_FAILURES_TO_PAUSE = 3;
+
+/* The words a skip leaves in agent_schedules.last_error, shown on the card as
+   they stand. */
+var AGENT_SCHEDULE_SKIP_TEXT = {
+  skipped_not_entitled:        "skipped: subscription not active",
+  skipped_entitlement_unknown: "skipped: could not check subscription",
+  skipped_no_autonomy:         "skipped: Autonomous mode is off for this agent",
+  skipped_invalid:             "skipped: this schedule names an agent or task that is no longer offered"
+};
+
 // The UTC calendar day, and UTC is deliberate here where it was deliberately
 // WRONG for the self-review claim. That job fires at 07:00 Pacific, so its claim
 // day has to be Pacific or the boundary and the fire time drift apart. This job
@@ -48653,6 +48797,14 @@ function agentScheduleIsDue(row, now) {
   // about rows somebody has deliberately disabled.
   if (row.enabled !== true) return false;
 
+  // Paused by its owner, or by the runner after repeated failures. The row is
+  // kept exactly as it was; it is simply not due until Resume clears this. The
+  // ONE place the runner tests it, so there is one gate to prove.
+  if (row.paused === true) return false;
+
+  /* THE HOUR MUST BE THIS HOUR, and that is also why nothing ever catches up.
+     A slot that passed while a schedule was paused, or while its subscription
+     was inactive, is not owed: the next run is the next matching slot. */
   if (Number(row.hour_utc) !== now.getUTCHours()) return false;
 
   // Already run today. The guard against a double run within one day, separate
@@ -48839,6 +48991,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
   var skippedNoAutonomy   = 0;
   var skippedNotEntitled  = 0;
   var skippedInvalid      = 0;
+  var autoPaused          = 0;
   var firstFailure = null;
   var ceilingReached = false;
 
@@ -48849,6 +49002,67 @@ async function runAgentSchedulePass(now, maxPerTick) {
     }
     console.error("[AgentSchedules] " + schedule.agent_type + " for user " +
       schedule.user_id + " failed: " + detail);
+  }
+
+  /* ── THE OUTCOME, PER SCHEDULE ─────────────────────────────────────────
+     Every due schedule this pass reaches leaves one write on its own row
+     saying what happened, so the member reads it on the agent page instead
+     of it existing only in a log and in one hour's job_runs.last_error. One
+     update per schedule: the outcome and, on success, last_run_on together,
+     so the two cannot disagree. A write that fails is a failure of the hour,
+     reported like any other. Resolves true when the row was written. */
+  async function recordScheduleOutcome(schedule, patch) {
+    patch.last_attempt_at = now.toISOString();
+    var written;
+    try {
+      written = await supabase
+        .from("agent_schedules")
+        .update(patch)
+        .eq("id", schedule.id);
+    } catch (writeErr) {
+      written = { error: writeErr };
+    }
+    if (written.error) {
+      noteFailure(schedule, "the outcome (" + patch.last_run_status + ") could not be recorded: " +
+        ((written.error && written.error.message) || String(written.error)));
+      return false;
+    }
+    return true;
+  }
+
+  function recordScheduleSkip(schedule, status) {
+    return recordScheduleOutcome(schedule, { last_run_status: status, last_error: AGENT_SCHEDULE_SKIP_TEXT[status] });
+  }
+
+  /* A run that could not be started. Counts toward the pause; a skip never
+     does, because a lapsed or unreadable subscription is not the schedule
+     failing, and a schedule paused for it would not resume by itself when the
+     subscription came back. At AGENT_SCHEDULE_FAILURES_TO_PAUSE the same write
+     pauses it and the owner gets ONE ops alert: a paused schedule is not due
+     again, so it cannot fail again and cannot alert again until Resume. */
+  async function recordScheduleFailure(schedule, reason) {
+    noteFailure(schedule, "task was not queued: " + reason);
+    var failures = (Number(schedule.consecutive_failures) || 0) + 1;
+    var patch = {
+      last_run_status: "failed",
+      last_error: "The task could not be started: " + reason,
+      consecutive_failures: failures
+    };
+    var pausing = failures >= AGENT_SCHEDULE_FAILURES_TO_PAUSE;
+    if (pausing) {
+      patch.paused = true;
+      patch.paused_reason = "failures";
+    }
+    var recorded = await recordScheduleOutcome(schedule, patch);
+    if (pausing && recorded) {
+      autoPaused += 1;
+      console.error("[AgentSchedules] PAUSED " + schedule.agent_type + " for user " + schedule.user_id +
+        " after " + failures + " failed runs in a row. It stays paused until its owner presses Resume.");
+      // Never rejects (lib/opsAlert.js).
+      await opsAlerts.scheduleAutoPaused({
+        user_id: schedule.user_id, agent_type: schedule.agent_type, failures: failures, error: reason
+      });
+    }
   }
 
   /* ── THE ENTITLEMENT GATE ───────────────────────────────────────────────
@@ -48890,7 +49104,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
   var candidateResult = await supabase
     .from("agent_schedules")
     .select("id, user_id, agent_type, task_type, prompt, cadence, hour_utc, " +
-            "day_of_week, day_of_month, enabled, last_run_on")
+            "day_of_week, day_of_month, enabled, last_run_on, paused, consecutive_failures")
     .eq("enabled", true)
     .eq("hour_utc", hour)
     .or("last_run_on.is.null,last_run_on.neq." + today);
@@ -48912,7 +49126,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
       (hour < 10 ? "0" : "") + hour + ":00 UTC.");
     return {
       due: 0, launched: 0, failed: 0, skippedNoAutonomy: 0, skippedNotEntitled: 0, skippedInvalid: 0,
-      firstFailure: null, ceilingReached: false
+      autoPaused: 0, firstFailure: null, ceilingReached: false
     };
   }
 
@@ -48974,6 +49188,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
       console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " +
         schedule.user_id + " — autonomy is not enabled for that agent. The schedule " +
         "says when; autonomy says whether, and it is off.");
+      await recordScheduleSkip(schedule, "skipped_no_autonomy");
       continue;
     }
 
@@ -48989,6 +49204,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
       console.error("[AgentSchedules] Skipped schedule " + schedule.id + " — agent_type " +
         JSON.stringify(schedule.agent_type) + " is not a registered agent, and running it " +
         "would silently run the general agent instead, every time.");
+      await recordScheduleSkip(schedule, "skipped_invalid");
       continue;
     }
 
@@ -48997,6 +49213,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
       console.error("[AgentSchedules] Skipped schedule " + schedule.id + " — task_type " +
         JSON.stringify(schedule.task_type) + " is not recognised, and running it would " +
         "silently run the general instruction on every future tick.");
+      await recordScheduleSkip(schedule, "skipped_invalid");
       continue;
     }
 
@@ -49008,7 +49225,11 @@ async function runAgentSchedulePass(now, maxPerTick) {
 
        Neither skip below writes last_run_on. The schedule did not run, and the
        row must say so — stamping it would make a lapsed account's schedule look
-       like it ran and make a renewed one wait a day for no reason.
+       like it ran and make a renewed one wait a day for no reason. Each records
+       its skip on the row instead, which is what the card shows, and neither
+       touches consecutive_failures. Nothing is deleted or paused: when the
+       subscription is active again the schedule runs at its next slot, and only
+       that one, because due-ness requires the current hour.
 
        FAIL CLOSED on an error. A plan that could not be read is not a plan that
        entitles; running on a guess would spend money for an account nobody
@@ -49022,6 +49243,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
         (entitlement.error
           ? ((entitlement.error && entitlement.error.message) || String(entitlement.error))
           : "getUserPlan returned no result"));
+      await recordScheduleSkip(schedule, "skipped_entitlement_unknown");
       continue;
     }
 
@@ -49031,6 +49253,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
         schedule.user_id + " — no active subscription (inactive_reason " +
         JSON.stringify(entitlement.plan.inactive_reason || null) + "). A schedule does not " +
         "outlive the subscription that paid for it; not run, last_run_on not set.");
+      await recordScheduleSkip(schedule, "skipped_not_entitled");
       continue;
     }
 
@@ -49058,26 +49281,32 @@ async function runAgentSchedulePass(now, maxPerTick) {
         var why = outcome.error
           ? (outcome.error.message || String(outcome.error))
           : ((outcome.payload && outcome.payload.error) || ("HTTP " + outcome.status));
-        noteFailure(schedule, "task was not queued: " + why);
+        await recordScheduleFailure(schedule, why);
         continue;
       }
 
       /* last_run_on set only after the task is queued, and only on success, so a
          failure leaves it alone and the schedule is due again at its hour
          tomorrow. updated_at is deliberately NOT touched: that column records
-         when the schedule DEFINITION changed, and a run does not change it. */
-      var markResult = await supabase
-        .from("agent_schedules")
-        .update({ last_run_on: today })
-        .eq("id", schedule.id);
+         when the schedule DEFINITION changed, and a run does not change it.
+         The same write records the success and the task it queued, and clears
+         the failure count. */
+      var queuedTask = outcome.payload && outcome.payload.task;
+      var marked = await recordScheduleOutcome(schedule, {
+        last_run_on: today,
+        last_run_status: "succeeded",
+        last_error: null,
+        last_task_id: (queuedTask && queuedTask.id) || null,
+        consecutive_failures: 0
+      });
 
-      if (markResult.error) {
+      if (!marked) {
         /* The task IS queued and the money IS spent; only the bookkeeping
-           failed. Counted as a failure so the hour does not close clean, and
-           logged loudly, because the visible consequence is a second run at this
-           hour tomorrow looking like a duplicate for no apparent reason. */
-        noteFailure(schedule, "task was queued but last_run_on could not be set: " +
-          markResult.error.message);
+           failed (recordScheduleOutcome counted it). Logged loudly, because the
+           visible consequence is a second run at this hour tomorrow looking like
+           a duplicate for no apparent reason. */
+        console.error("[AgentSchedules] " + schedule.agent_type + " for user " + schedule.user_id +
+          ": task was queued but last_run_on could not be set.");
         launched += 1;
         continue;
       }
@@ -49090,7 +49319,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
          the hour's claim is already taken, and there is no retry until this hour
          comes round again — so letting one transient error abort the loop would
          deny every remaining user their run for a day. */
-      noteFailure(schedule, (scheduleErr && scheduleErr.message) || String(scheduleErr));
+      await recordScheduleFailure(schedule, (scheduleErr && scheduleErr.message) || String(scheduleErr));
     }
   }
 
@@ -49103,7 +49332,8 @@ async function runAgentSchedulePass(now, maxPerTick) {
   console.log("[AgentSchedules] Pass finished — " + launched + " launched, " + failed +
     " failed, " + skippedNoAutonomy + " skipped for autonomy being off, " +
     skippedNotEntitled + " skipped for no active subscription, " +
-    skippedInvalid + " skipped as unrunnable, out of " + due.length + " due.");
+    skippedInvalid + " skipped as unrunnable, " + autoPaused + " paused after repeated failures, out of " +
+    due.length + " due.");
 
   return {
     due: due.length,
@@ -49112,6 +49342,7 @@ async function runAgentSchedulePass(now, maxPerTick) {
     skippedNoAutonomy: skippedNoAutonomy,
     skippedNotEntitled: skippedNotEntitled,
     skippedInvalid: skippedInvalid,
+    autoPaused: autoPaused,
     firstFailure: firstFailure,
     ceilingReached: ceilingReached
   };
