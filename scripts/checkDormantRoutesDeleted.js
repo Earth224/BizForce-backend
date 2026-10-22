@@ -97,7 +97,10 @@ const ADDED = [
   ["get", "/api/leads/youtube-signals"],         // Every YouTube API unit is reserved against a daily cap before it is spent: YouTube finds shown apart (total 308 -> 309)
   ["get", "/api/sitemap/blog.xml"],             // Published blog posts are listed in a sitemap (total 309 -> 310)
   ["get", "/api/certifications/catalog"],       // BizCash is earned only by server-graded passes: the questions, without answers (total 310 -> 311)
-  ["get", "/api/wallet/recipient"]              // BizCash is sent by username: who a username belongs to, for the confirm step (total 311 -> 312)
+  ["get", "/api/wallet/recipient"],             // BizCash is sent by username: who a username belongs to, for the confirm step (total 311 -> 312)
+  ["get", "/api/your-data"],                    // Every member can see, download and delete their data: what is stored (total 312 -> 313)
+  ["get", "/api/me/export"],                    // Every member can see, download and delete their data: the download (total 313 -> 314)
+  ["post", "/api/me/delete"]                    // Every member can see, download and delete their data: deleting the account (total 314 -> 315)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

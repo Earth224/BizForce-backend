@@ -3375,6 +3375,12 @@ async function requireAuth(req, res, next) {
       return res.status(403).json({ error: "Account banned" });
     }
 
+    /* A deleted account (lib/yourData.js) is refused even if a session row
+       outlived the delete's last step. */
+    if (user.role === "deleted") {
+      return res.status(401).json({ error: "Account deleted" });
+    }
+
     touchSession(session);
 
     req.user = user;
@@ -5103,6 +5109,11 @@ app.post("/api/auth/login", authLimiter, async function (req, res, next) {
       return res.status(403).json({ error: "Account banned" });
     }
 
+    // A deleted account's email is replaced, so it is not found above; this is the second lock.
+    if (user.role === "deleted") {
+      return res.status(401).json({ error: "Invalid login" });
+    }
+
     const valid = await bcrypt.compare(password, user.password_hash);
 
     if (!valid) {
@@ -5179,6 +5190,80 @@ app.post("/api/auth/logout", requireAuth, async function (req, res) {
   }
 
   return res.json({ success: true });
+});
+
+/* ── Your data (your-data.html) ──────────────────────────────────────────────
+   What is stored about a member, the download of all of it, and deleting the
+   account. lib/yourData.js holds the one description all three read, and the
+   export and delete themselves; these routes only wire them to the request.
+   Neither the export nor the delete needs a subscription: a member's own data
+   is theirs whether or not they pay. */
+const yourData = require("./lib/yourData");
+
+app.get("/api/your-data", function (req, res) {
+  return res.json(yourData.describe());
+});
+
+/* Per account: the export reads every table, so a few a day. */
+const yourDataExportLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 3,
+  keyGenerator: function (req) { return "your-data-export:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Your data can be downloaded 3 times a day. Try again tomorrow.", reason: "rate_limited" }
+});
+
+/* One JSON file, written a page at a time as it is read. The log line says
+   who, how many rows and whether it was complete: never what was in it. */
+app.get("/api/me/export", requireAuth, yourDataExportLimiter, async function (req, res) {
+  const startedMs = Date.now();
+  res.status(200);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Disposition", "attachment; filename=\"bizforce-your-data-" + new Date().toISOString().slice(0, 10) + ".json\"");
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const manifest = await yourData.exportAccountData({
+      supabase: supabase,
+      userId: req.user.id,
+      write: function (text) { res.write(text); }
+    });
+    const rows = manifest.tables.reduce(function (n, t) { return n + t.rows; }, 0);
+    console.log("[your-data] export user=" + req.user.id + " tables=" + manifest.tables.length + " rows=" + rows +
+      " complete=" + manifest.complete + " ms=" + (Date.now() - startedMs));
+    if (!manifest.complete) {
+      console.error("[your-data] export INCOMPLETE for user " + req.user.id + ": " +
+        manifest.tables.filter(function (t) { return t.status === "unreadable"; }).map(function (t) { return t.table; }).join(", "));
+    }
+  } catch (error) {
+    // Headers are sent; the file is cut short, which a JSON parser refuses rather than misreads.
+    console.error("[your-data] export FAILED for user " + req.user.id + ": " + (error.message || error));
+  }
+  return res.end();
+});
+
+const yourDataDeleteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "your-data-delete:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Try again in an hour. Nothing was deleted.", reason: "rate_limited" }
+});
+
+app.post("/api/me/delete", requireAuth, yourDataDeleteLimiter, async function (req, res) {
+  const result = await yourData.deleteAccount({
+    supabase: supabase,
+    userId: req.user.id,
+    body: req.body || {},
+    comparePassword: function (plain, hash) { return bcrypt.compare(plain, hash || ""); },
+    activeSubscriptions: getActiveSubscriptions,
+    ownerAccountId: OWNER_ACCOUNT_ID
+  });
+  const line = "[your-data] delete user=" + req.user.id + " status=" + result.status + " reason=" + (result.body.reason || "deleted");
+  if (result.status >= 500) console.error(line + " failed=" + result.body.failed + " done=" + (result.body.done || []).length);
+  else console.log(line);
+  return res.status(result.status).json(result.body);
 });
 
 /* ── POST /api/auth/refresh ──────────────────────────────────────────────────
@@ -38426,9 +38511,11 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
        and again in bfc_transfer itself (migration 139). */
     let recipient = null;
     if (typeof recipientId === "string" && BFC_RECIPIENT_UUID.test(recipientId)) {
-      const found = await supabase.from("users").select("id").eq("id", recipientId).maybeSingle();
+      const found = await supabase.from("users").select("id, role").eq("id", recipientId).maybeSingle();
       if (found.error) throw found.error;
       recipient = found.data;
+      // A deleted account (lib/yourData.js) can hold nothing: its wallet was forfeited.
+      if (recipient && recipient.role === "deleted") recipient = null;
     }
     if (!recipient) {
       return res.status(404).json({
