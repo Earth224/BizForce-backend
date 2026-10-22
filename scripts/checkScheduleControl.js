@@ -605,7 +605,8 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       // the platform's own, for no member
       youtubeRetentionTick: { platform: "deletes YouTube lead rows older than 30 days, the platform's own radar data" },
       "opsAlerts.scanTick": { platform: "the owner's ops alert scan" },
-      runNightlyBackup:     { platform: "the nightly backup" }
+      runNightlyBackup:     { platform: "the nightly backup" },
+      pendingStorageDeletionTick: { platform: "removes files of accounts already deleted (lib/accountFiles.js); there is no member left to be entitled" }
     };
     const extra = [...scheduled].filter(n => !KNOWN[n]), missing = Object.keys(KNOWN).filter(n => !scheduled.has(n));
     check("S1. the scheduled jobs in server.js are exactly the " + Object.keys(KNOWN).length + " accounted for here (a new one must be classified)",

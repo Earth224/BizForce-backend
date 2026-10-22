@@ -32,7 +32,10 @@
         - sign-in fails (requireAuth and the login route, lifted from
           server.js);
         - the email can open a new account;
-        - a second delete changes nothing.
+        - a second delete changes nothing;
+        - the member's files are removed from (stubbed) Storage, the file of a
+          listing another member bought is kept, and the listing is kept off
+          sale (scripts/checkAccountFiles.js tests the files in depth).
      E. A failure part-way is reported with what was done and what failed. A
         retry finishes it.
      F. your-data.html, run against a fake page:
@@ -195,6 +198,35 @@ function makeDb(tables) {
       return { data: w.balance, error: null };
     }
   };
+  /* Storage, in memory: db.files[bucket] is a list of object keys. list()
+     answers like Supabase's: the folder's entries, folders with a null id. */
+  db.files = {};
+  db.removed = [];
+  db.client.storage = {
+    from(bucket) {
+      const keys = () => db.files[bucket] || (db.files[bucket] = []);
+      return {
+        async list(prefix, o) {
+          const pre = prefix ? prefix + "/" : "", seen = {}, out = [];
+          keys().filter(k => k.indexOf(pre) === 0).forEach(function (k) {
+            const rest = k.slice(pre.length), slash = rest.indexOf("/");
+            const name = slash === -1 ? rest : rest.slice(0, slash);
+            if (seen[name]) return;
+            seen[name] = true;
+            out.push({ name: name, id: slash === -1 ? "obj-" + k : null });
+          });
+          out.sort((x, y) => x.name < y.name ? -1 : 1);
+          return { data: out.slice((o && o.offset) || 0, ((o && o.offset) || 0) + ((o && o.limit) || 100)), error: null };
+        },
+        async remove(paths) {
+          const gone = paths.filter(k => keys().indexOf(k) !== -1);
+          db.files[bucket] = keys().filter(k => paths.indexOf(k) === -1);
+          gone.forEach(k => db.removed.push(bucket + "/" + k));
+          return { data: gone.map(k => ({ name: k })), error: null };
+        }
+      };
+    }
+  };
   db.rows = rowsOf;
   db.snapshot = function () { return JSON.stringify(db.tables, Object.keys(db.tables).sort().reduce((a, t) => a, undefined)); };
   return db;
@@ -320,8 +352,21 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
     put("bizdoc_signatures", { id: "sig-B-on-A-doc", document_id: "bizdoc_documents-A", signer_id: B, signer_name: "Bob B", signer_email: B_EMAIL, signature_data: "BOB-INK", ip_address: "10.9.9.8", user_agent: "BOB-UA" });
     put("bizdoc_signatures", { id: "sig-A-on-B-doc", document_id: "bizdoc_documents-B", signer_id: A, signer_name: "Alice A", signer_email: A_EMAIL, signature_data: "ALICE-INK" });
     put("bizdoc_signatures", { id: "sig-B-on-B-doc", document_id: "bizdoc_documents-B", signer_id: B, signer_name: "Bob B", signature_data: "BOB-INK-2" });
+    // listings: bob bought alice's guide (order-B-buys-from-A); her other listing sold nothing
+    const soldListing = t.marketplace_listings.find(l => l.id === "marketplace_listings-A");
+    soldListing.status = "active";
+    soldListing.digital_file_path = A + "/guide.pdf";
+    put("marketplace_listings", { id: "marketplace_listings-A-unsold", seller_id: A, status: "active", digital_file_path: A + "/unsold.zip", mark: "marketplace_listings-A-private" });
     return t;
   }
+  /* Storage: alice's files in each bucket, and bob's. */
+  function seedFiles(db) {
+    db.files["bf-books"] = [A + "/book.pdf", B + "/book.pdf"];
+    db.files["bf-digital-goods"] = [A + "/guide.pdf", A + "/unsold.zip", B + "/ebook.pdf"];
+    db.files["bf-public"] = ["avatars/" + A + "/me.png", "avatars/" + B + "/me.png"];
+    return db;
+  }
+  const STUB_ALERTS = { storageDeletionUnqueued: async () => ({ sent: false }) };
 
   // ── the reference: which rows are A's, computed here, independently ──
   function ownedBy(tables, entry, uid) {
@@ -362,7 +407,7 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
   async function doDelete(db, uid, body) {
     const lines = [];
     const handler = runRoute(handlerSource(SERVER, DELETE_SIG), { yourData: YD, supabase: db.client, console: quietConsole(lines), bcrypt: bcrypt,
-      getActiveSubscriptions: activeSubscriptionsFrom(db), OWNER_ACCOUNT_ID: "eeeeeeee-0000-4000-8000-00000000000e" });
+      getActiveSubscriptions: activeSubscriptionsFrom(db), OWNER_ACCOUNT_ID: "eeeeeeee-0000-4000-8000-00000000000e", opsAlerts: STUB_ALERTS });
     const res = fakeRes();
     await handler({ user: { id: uid }, body: body }, res);
     return { status: res.statusCode, body: res.body || {}, lines };
@@ -390,7 +435,8 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
   check("A2. every live table the migrations create (" + live.size + ") is in DATA or NOT_MEMBER_DATA", uncovered.length === 0, uncovered.join(", "));
   check("A3. and nothing in them names a table that does not exist", notLive.length === 0, notLive.join(", "));
   check("A4. no table is in both", YD.DATA.every(e => !YD.NOT_MEMBER_DATA[e.table]));
-  const delTables = YD.DATA.filter(e => e.onDelete === "delete").map(e => e.table);
+  // "sold" (marketplace_listings) deletes too: every listing but one another member bought.
+  const delTables = YD.DATA.filter(e => e.onDelete === "delete" || e.onDelete === "sold").map(e => e.table);
   const ordered = YD.DELETE_ORDER.concat(YD.FINAL_DELETES);
   check("A5. every table the delete deletes is in the delete order exactly once, and nothing else is",
     delTables.every(t => ordered.filter(x => x === t).length === 1) && ordered.every(t => delTables.indexOf(t) !== -1),
@@ -506,7 +552,7 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
   // ════ D. after the delete ════
   console.log("\n══ D. after the delete ══");
   {
-    const db = makeDb(seed());
+    const db = seedFiles(makeDb(seed()));
     const before = clone(db.tables);
     const r = await doDelete(db, A, { username: "alice", password: A_PASSWORD });
     check("D1. the delete succeeds", r.status === 200 && r.body.deleted === true, r.status + " " + JSON.stringify(r.body).slice(0, 300));
@@ -514,6 +560,10 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
     const leftover = YD.DATA.filter(e => e.onDelete === "delete").filter(e => ownedBy(before, e, A).some(row => (T[e.table] || []).some(x => JSON.stringify(x) === JSON.stringify(row))))
       .map(e => e.table);
     check("D2. every private row in the " + YD.DATA.filter(e => e.onDelete === "delete").length + " deleted tables is gone", leftover.length === 0, leftover.join(", "));
+    const soldL = (T.marketplace_listings || []).find(l => l.id === "marketplace_listings-A");
+    check("D2b. alice's listing bob bought is kept, off sale, for his download; her listing nobody bought is deleted",
+      !!soldL && soldL.status === "paused" && soldL.digital_file_path === A + "/guide.pdf" && !(T.marketplace_listings || []).some(l => l.id === "marketplace_listings-A-unsold") &&
+      (T.marketplace_listings || []).some(l => l.id === "marketplace_listings-B" && l.seller_id === B), JSON.stringify(soldL));
     // everything not A's is exactly as it was
     const aIds = new Set();
     YD.DATA.forEach(e => ownedBy(before, e, A).forEach(row => aIds.add(e.table + "|" + JSON.stringify(row))));
@@ -615,7 +665,12 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
     check("D31. the delete is logged with its outcome only", r.lines.some(l => /\[your-data\] delete user=\S+ status=200 reason=deleted/.test(l[1])) && r.lines.every(l => l[1].indexOf(A_PASSWORD) === -1 && l[1].indexOf(A_EMAIL) === -1));
     check("D32. transfers to a deleted account are refused (the recipient check drops it)", /const found = await supabase\.from\("users"\)\.select\("id, role"\)\.eq\("id", recipientId\)\.maybeSingle\(\);/.test(SERVER) &&
       /if \(recipient && recipient\.role === "deleted"\) recipient = null;/.test(SERVER));
-    check("D33. no storage file is touched (the page says uploaded files are not deleted)", !/\.storage\b/.test(LIB) && YD.DELETE_NOTES.some(n => /Files you uploaded .* are not deleted by this button/.test(n)));
+    const left = [].concat(...Object.keys(db.files).map(b => db.files[b].map(k => b + "/" + k))).sort();
+    check("D33. alice's files are deleted except the one bob bought; bob's are untouched; the answer counts them, and the delete note says so",
+      JSON.stringify(left) === JSON.stringify(["bf-books/" + B + "/book.pdf", "bf-digital-goods/" + A + "/guide.pdf", "bf-digital-goods/" + B + "/ebook.pdf", "bf-public/avatars/" + B + "/me.png"]) &&
+      JSON.stringify(r.body.files) === JSON.stringify({ deleted: 3, queued: 0, kept_for_buyers: 1, not_queued: 0 }) &&
+      YD.DELETE_NOTES.some(n => /^Your files are deleted .*, except files you sold, which stay available to the members who bought them\. If any could not be removed right away, they are removed automatically within a few days\.$/.test(n)) &&
+      !YD.DELETE_NOTES.some(n => /not deleted by this button/.test(n)), left.join(", ") + " " + JSON.stringify(r.body.files));
   }
 
   // ════ E. a failure part-way ════
@@ -699,6 +754,19 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
     check("F9. it is linked from settings (Account), the profile page and the footers",
       /id="panel-account"[\s\S]*href="your-data\.html"[\s\S]*id="signOutBtn"/.test(fe("settings.html")) && /<nav class="pf-nav">[\s\S]*?href="your-data\.html"[\s\S]*?<\/nav>/.test(fe("profile.html")) &&
       /<footer class="site-foot">[\s\S]*?href="your-data\.html"[\s\S]*?<\/footer>/.test(fe("index.html")) && /<footer class="site-foot">[\s\S]*?href="\/your-data\.html"[\s\S]*?<\/footer>/.test(fe("suppressed.html")));
+    {
+      const pg = runPage("token", async (url) => /\/api\/me\/delete$/.test(url)
+        ? { status: 200, json: async () => ({ deleted: true, done: [], files: { deleted: 3, queued: 2, kept_for_buyers: 1, not_queued: 0 } }) }
+        : { ok: true, json: async () => clone(described) });
+      for (let i = 0; i < 5; i++) await settle();
+      const holder = { children: [], appendChild(c) { this.children.push(c); return c; }, get textContent() { return this.children.map(c => c.textContent).join(" "); } };
+      pg.deleteForm.parentNode = holder;
+      pg.deleteForm.listeners.submit({ preventDefault() {} });
+      for (let i = 0; i < 8; i++) await settle();
+      const said = holder.textContent;
+      check("F11. after a delete the page says how many files were deleted, queued and kept for buyers",
+        /Your files: 3 files deleted; 2 files could not be removed right away and will be removed automatically within a few days; 1 file you sold stays available to the members who bought them\./.test(said), said.slice(0, 300));
+    }
     check("F10. it calls the three routes the server has", ["/api/your-data\"", "/api/me/export\"", "/api/me/delete\""].every(r => PAGE.indexOf(r) !== -1) &&
       [DESCRIBE_SIG, EXPORT_SIG, DELETE_SIG].every(s => SERVER.indexOf(s) !== -1));
   }

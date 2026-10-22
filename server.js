@@ -5199,6 +5199,14 @@ app.post("/api/auth/logout", requireAuth, async function (req, res) {
    Neither the export nor the delete needs a subscription: a member's own data
    is theirs whether or not they pay. */
 const yourData = require("./lib/yourData");
+const accountFiles = require("./lib/accountFiles");
+
+/* The daily retry of files a deleted account left in Storage
+   (lib/accountFiles.js, pending_storage_deletions). Claimed through
+   job_runs.pending_storage_deletions; never throws. */
+function pendingStorageDeletionTick() {
+  return accountFiles.runRetryJob({ supabase: supabase, storage: supabase.storage, alerts: opsAlerts, log: console });
+}
 
 app.get("/api/your-data", function (req, res) {
   return res.json(yourData.describe());
@@ -5258,11 +5266,19 @@ app.post("/api/me/delete", requireAuth, yourDataDeleteLimiter, async function (r
     body: req.body || {},
     comparePassword: function (plain, hash) { return bcrypt.compare(plain, hash || ""); },
     activeSubscriptions: getActiveSubscriptions,
-    ownerAccountId: OWNER_ACCOUNT_ID
+    ownerAccountId: OWNER_ACCOUNT_ID,
+    storage: supabase.storage,
+    publicUrlBase: process.env.SUPABASE_URL
   });
-  const line = "[your-data] delete user=" + req.user.id + " status=" + result.status + " reason=" + (result.body.reason || "deleted");
+  const files = result.body.files;
+  const line = "[your-data] delete user=" + req.user.id + " status=" + result.status + " reason=" + (result.body.reason || "deleted") +
+    (files ? " files deleted=" + files.deleted + " queued=" + files.queued + " kept_for_buyers=" + files.kept_for_buyers + " not_queued=" + files.not_queued : "");
   if (result.status >= 500) console.error(line + " failed=" + result.body.failed + " done=" + (result.body.done || []).length);
-  else console.log(line);
+  else if (files && files.not_queued) {
+    /* Neither removed nor queued: the paths are in this line, and the owner is told. */
+    console.error(line + " FILES NOT QUEUED: " + JSON.stringify(result.unqueued));
+    opsAlerts.storageDeletionUnqueued({ user_id: req.user.id, count: files.not_queued, error: (result.unqueued[0] || {}).queue_error });
+  } else console.log(line);
   return res.status(result.status).json(result.body);
 });
 
@@ -50175,6 +50191,24 @@ app.listen(PORT, function () {
       OPS_ALERT_SCAN_JOB_NAME + "; alerts go to OPS_ALERT_EMAIL, else BACKUP_EMAIL_TO.");
   } else {
     console.log("[startup] ops alerts disabled (ENABLE_OPS_ALERTS is exactly \"false\")");
+  }
+
+  /* Files a deleted account left in Storage: 04:15 UTC daily, claimed through
+     job_runs.pending_storage_deletions (lib/accountFiles.js). ON unless
+     ENABLE_STORAGE_DELETION_RETRY is exactly "false": the delete promises
+     these files go within a few days. No boot-time run, for the reason the
+     retention job above gives. */
+  if (process.env.ENABLE_STORAGE_DELETION_RETRY !== "false") {
+    cron.schedule("15 4 * * *", function () {
+      pendingStorageDeletionTick().catch(function (err) {
+        console.error("[account-files] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] pendingStorageDeletionTick scheduled — 04:15 UTC daily, claimed through job_runs." + accountFiles.RETRY_JOB_NAME + ".");
+  } else {
+    console.log("[startup] pendingStorageDeletionTick disabled (ENABLE_STORAGE_DELETION_RETRY is exactly \"false\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is
