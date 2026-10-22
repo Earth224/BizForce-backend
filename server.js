@@ -38301,6 +38301,57 @@ const BFC_SEND_REFUSAL_STATUS = {
   unknown_sender:        400
 };
 
+/* SENT BY USERNAME, NOT BY A HIDDEN USER ID. wallet.html asks for a member's
+   username (bf_profiles.username), shows who it belongs to, and sends only
+   after the person confirms that name. Stored usernames are lowercase
+   (normalizeUsername) and unique on lower(username) (migration 040), so the
+   match is case-insensitive; a leading @ is dropped. A string that could not
+   be a stored username is unknown without a read, and LIKE metacharacters are
+   escaped, so "a_b" cannot match "aXb". Returns the profile row or null. */
+const BFC_USERNAME = /^[a-z0-9_-]{1,40}$/i;
+const BFC_UNKNOWN_USERNAME = "No member with that username.";
+
+async function findMemberByUsername(raw) {
+  const handle = String(raw == null ? "" : raw).trim().replace(/^@/, "");
+  if (!BFC_USERNAME.test(handle)) return null;
+  const found = await supabase
+    .from("bf_profiles")
+    .select("user_id, username, display_name, avatar_url")
+    .ilike("username", escapeLikePattern(handle))
+    .maybeSingle();
+  if (found.error) throw found.error;
+  return found.data || null;
+}
+
+/* Per account, after requireAuth: a lookup is a question about other
+   members, and 30 in 10 minutes is plenty for a person and slow for a list. */
+const bfcRecipientLookupLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "bfc-recipient:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many username lookups. Try again in a few minutes. Nothing was sent.", reason: "rate_limited" }
+});
+
+/* Who a username belongs to, for the confirm step. The profile's public face
+   only — username, display name, and avatar when there is one. Never the user
+   id, the email or a balance: nothing the public profile page does not show. */
+app.get("/api/wallet/recipient", requireAuth, bfcRecipientLookupLimiter, async function (req, res, next) {
+  try {
+    const member = await findMemberByUsername(req.query.username);
+    if (!member) {
+      return res.status(404).json({ error: BFC_UNKNOWN_USERNAME, reason: "unknown_recipient" });
+    }
+    if (member.user_id === req.user.id) {
+      return res.status(400).json({ error: "That username is yours, and BFC cannot be sent to yourself.", reason: "self_transfer" });
+    }
+    const answer = { username: member.username, display_name: member.display_name || member.username };
+    if (member.avatar_url) answer.avatar_url = member.avatar_url;
+    return res.json(answer);
+  } catch (error) { next(error); }
+});
+
 /* A transfer to another member, within limits (launch audit, 2026-10-19, #13).
    Every refusal says what refused it, in `reason`, and that nothing was sent.
 
@@ -38314,7 +38365,19 @@ const BFC_SEND_REFUSAL_STATUS = {
    an unusable value stops every transfer rather than lifting a limit. */
 app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
-    const recipientId = req.body.recipientId;
+    /* BY USERNAME, the only way wallet.html sends. The username becomes the
+       account here, and from there every rule below applies exactly as it does
+       to an id. A body that names a username never falls back to recipientId;
+       an id alone is still accepted for any older caller. */
+    const byUsername = req.body.recipientUsername !== undefined && req.body.recipientUsername !== null;
+    let recipientId = req.body.recipientId;
+    if (byUsername) {
+      const member = await findMemberByUsername(req.body.recipientUsername);
+      if (!member) {
+        return res.status(404).json({ error: BFC_UNKNOWN_USERNAME + " Nothing was sent.", reason: "unknown_recipient" });
+      }
+      recipientId = member.user_id;
+    }
     const amount = req.body.amount;
 
     if (!recipientId || recipientId === req.user.id) {
@@ -38369,7 +38432,9 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
     }
     if (!recipient) {
       return res.status(404).json({
-        error: "No account has the user ID \"" + String(recipientId).slice(0, 80) + "\". Check it and try again. Nothing was sent.",
+        error: byUsername
+          ? BFC_UNKNOWN_USERNAME + " Nothing was sent."
+          : "No account has the user ID \"" + String(recipientId).slice(0, 80) + "\". Check it and try again. Nothing was sent.",
         reason: "unknown_recipient"
       });
     }

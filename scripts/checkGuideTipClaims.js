@@ -337,7 +337,7 @@ const MUTATIONS = {
     "certifications (+100), agent tasks (+50), marketplace listings (+25), and the welcome bonus (+200) are all real, stackable ways to build balance."]],
   // wallet tip 67 says credits accumulate automatically again
   "restore-credits-automatic": [[GUIDE,
-    "the one action here is Send BFC, which sends credits to another member by their user ID; using the platform earns nothing by itself.",
+    "the one action here is Send BFC, which sends credits to another member by their username after you confirm the name it finds; using the platform earns nothing by itself.",
     "it's a read-only ledger; credits accumulate automatically as you use the platform."]],
   // store tip 159 claims to manage inventory across every channel again
   "restore-store-159": [[GUIDE,
@@ -776,7 +776,9 @@ const ONLY_TWO_CREDITS = () => (SV.match(/creditWallet\(/g) || []).length === 3 
 const HISTORY_50 = () => /\.from\("wallet_transactions"\)\s*\.select\("id, type, amount, description, created_at"\)\s*\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(50\);/.test(SV) &&
   /var txns = data\.transactions \|\| \[\];[\s\S]{0,200}?txns\.forEach\(function\(t\) \{\s*if \(t\.type === "credit" \|\| t\.type === "reward"\) earned \+= t\.amount;\s*else if \(t\.type === "debit"\) spent \+= t\.amount;/.test(FILES[WALLET]);
 const SEND_BFC = () => /<button type="button" id="send-btn" class="send-btn">Send BFC<\/button>/.test(FILES[WALLET]) &&
-  /placeholder="Recipient user ID"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/wallet\/transfer"/.test(FILES[WALLET]) &&
+  // Since send-by-username: the page asks for a username and the transfer carries recipientUsername (checkBfcIntegrity H).
+  /placeholder="Recipient username"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/wallet\/transfer"/.test(FILES[WALLET]) &&
+  /recipientUsername: send\.username/.test(FILES[WALLET]) &&
   // Since the transfer limits (migration 139), the route calls bfc_send, which checks the limits and then calls bfc_transfer.
   /app\.post\("\/api\/wallet\/transfer", requireAuth, requireActiveSubscription,[\s\S]{0,8000}?rpc\("bfc_send"/.test(SV);
 const taskPrompt = key => (new RegExp("\\n  " + key + ": \"([^\"\\n]*)\"").exec(SV) || ["", ""])[1];

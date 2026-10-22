@@ -37,7 +37,19 @@
              24-hour cap, a new account and a self-transfer — never reaching
              the database for any of them.
         Every refusal says its reason and moves nothing, and no wallet is ever
-        created for an unknown id.
+        created for an unknown id. Both run twice more BY USERNAME (the only
+        way wallet.html sends): every limit, the hold and the self-transfer
+        refusal apply to a username exactly as to an id, an unknown username
+        is "No member with that username.", and no refusal names an id.
+     H. GET /api/wallet/recipient: a username (any case, with or without @)
+        answers the display name and avatar only — no id, email or balance,
+        no read of any table but bf_profiles; an unknown or malformed username
+        is refused without a match on a LIKE wildcard; one's own username is
+        refused; the route needs auth and is rate-limited per account.
+     J. wallet.html, its own script run in a vm: no recipient-id input and no
+        recipientId sent; Send BFC only looks up and asks "Send N BFC to
+        <name> (@username)?"; Cancel, or any edit after the lookup, sends
+        nothing; Confirm sends exactly { recipientUsername, amount }.
      F. Migration 139's SQL, by its text: bfc_transfer refuses an unknown
         recipient before any wallet write; bfc_send checks every limit, reads
         the 24-hour total under the sender's wallet lock, counts the same
@@ -67,6 +79,12 @@
      route-skips-max         the route's per-transfer maximum removed
      route-skips-hold        the route's new-account hold removed
      keep-latent-policies    the migration no longer drops user_wallets_update_own
+     lookup-returns-user-id  the username lookup answers the member's user_id too
+     username-skips-max      the per-transfer maximum is skipped on the username path
+     username-skips-hold     the new-account hold is skipped on the username path
+     username-skips-daily-cap  the 24-hour cap is skipped on the username path
+     username-like-unescaped the username is matched as a LIKE pattern, so _ is a wildcard
+     transfer-without-confirm  wallet.html sends the transfer as soon as the lookup answers
    ══════════════════════════════════════════════════════════════════════════ */
 
 "use strict";
@@ -81,7 +99,8 @@ const FRONTEND = path.join(REPO, "..", "BizForce-fronyend");
 
 const MUTATIONS = ["trust-body-passed", "skip-catalogue-check", "answers-leaked-in-get", "upsert-recipient-wallet",
   "route-trusts-recipient", "remove-daily-cap", "sql-remove-daily-cap", "route-skips-max", "route-skips-hold",
-  "keep-latent-policies"];
+  "keep-latent-policies", "lookup-returns-user-id", "username-skips-max", "username-skips-hold", "username-skips-daily-cap",
+  "username-like-unescaped", "transfer-without-confirm"];
 const MUTATE = process.env.MUTATE || "";
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
 if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
@@ -102,6 +121,7 @@ let CATALOG_SRC = lf(fs.readFileSync(path.join(REPO, "lib", "certificationCatalo
 const LIMITS_SRC = lf(fs.readFileSync(path.join(REPO, "lib", "bfcTransferLimits.js"), "utf8"));
 let SQL = lf(fs.readFileSync(path.join(REPO, "supabase", "migrations", "139_bfc_transfer_limits.sql"), "utf8"));
 const PAGE = lf(fs.readFileSync(path.join(FRONTEND, "certifications.html"), "utf8"));
+let WALLET_PAGE = lf(fs.readFileSync(path.join(FRONTEND, "wallet.html"), "utf8"));
 const PAGE_AT_A8B45FC = (function () {
   const { execFileSync } = require("child_process");
   return lf(execFileSync("git", ["show", "a8b45fc:certifications.html"], { cwd: FRONTEND, maxBuffer: 16 << 20 }).toString("utf8"));
@@ -134,7 +154,11 @@ let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"');
 const TRANSFER_CONSTS = blockSource(SERVER, "const BFC_RECIPIENT_UUID = ", "  unknown_sender:        400\n};\n");
 // The transfer's success answer carries bfcDisclaimer: BFC_NOTICE (launch audit #9; checkBfcNotice holds its text).
 const NOTICE_CONST = blockSource(SERVER, "const BFC_NOTICE = ", "its rules or availability may change.\";\n");
-const HELPERS = ["nowIso", "safeText", "creditWallet"].map(n => functionSource(SERVER, n)).join("\n\n");
+const HELPERS = ["nowIso", "safeText", "creditWallet", "escapeLikePattern"].map(n => functionSource(SERVER, n)).join("\n\n");
+// Send by username: the resolver and its constants, and the lookup route the confirm step reads.
+let USERNAME_BLOCK = blockSource(SERVER, "const BFC_USERNAME = ", "  return found.data || null;\n}\n");
+const LIMITER_BLOCK = blockSource(SERVER, "const bfcRecipientLookupLimiter = rateLimit({", "\n});\n");
+let LOOKUP = routeSource(SERVER, 'app.get("/api/wallet/recipient"');
 
 if (MUTATE === "trust-body-passed") {
   AWARD = MUT.replaceOnce(AWARD, "const passed   = graded.passed;", "const passed   = Boolean(req.body.passed);", MUTATE);
@@ -171,6 +195,25 @@ if (MUTATE === "route-skips-hold") {
 if (MUTATE === "keep-latent-policies") {
   SQL = MUT.replaceOnce(SQL, "drop policy if exists user_wallets_update_own on public.user_wallets;\n", "", MUTATE);
 }
+if (MUTATE === "lookup-returns-user-id") {
+  LOOKUP = MUT.replaceOnce(LOOKUP, "const answer = { username: member.username,", "const answer = { user_id: member.user_id, username: member.username,", MUTATE);
+}
+if (MUTATE === "username-skips-max") {
+  TRANSFER = MUT.replaceOnce(TRANSFER, "if (amount > limits.max) {", "if (!byUsername && amount > limits.max) {", MUTATE);
+}
+if (MUTATE === "username-skips-hold") {
+  TRANSFER = MUT.replaceOnce(TRANSFER, "if (!(Date.now() >= sendableFromMs)) {", "if (!byUsername && !(Date.now() >= sendableFromMs)) {", MUTATE);
+}
+if (MUTATE === "username-skips-daily-cap") {
+  TRANSFER = MUT.replaceOnce(TRANSFER, "if (sentLast24h + amount > limits.dailyCap) {", "if (!byUsername && sentLast24h + amount > limits.dailyCap) {", MUTATE);
+}
+if (MUTATE === "username-like-unescaped") {
+  USERNAME_BLOCK = MUT.replaceOnce(USERNAME_BLOCK, '.ilike("username", escapeLikePattern(handle))', '.ilike("username", handle)', MUTATE);
+}
+if (MUTATE === "transfer-without-confirm") {
+  WALLET_PAGE = MUT.replaceOnce(WALLET_PAGE, "      pendingSend = { username: res.data.username, amount: amount };\n",
+    "      pendingSend = { username: res.data.username, amount: amount };\n      sendConfirmBtn.click();\n", MUTATE);
+}
 
 function loadModule(src) {
   const mod = { exports: {} };
@@ -185,7 +228,30 @@ let idSeq = 1;
 const nextId = () => "row-" + (idSeq++);
 
 function makeDb() {
-  return { users: [], user_wallets: [], wallet_transactions: [], user_certifications: [] };
+  return { users: [], user_wallets: [], wallet_transactions: [], user_certifications: [], bf_profiles: [] };
+}
+
+/* ILIKE as Postgres reads it: % any run, _ any one character, the backslash
+   escapes the next character, and case is ignored. */
+function likeMatch(text, pattern) {
+  const BS = String.fromCharCode(92);
+  const toks = [];
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === BS && i + 1 < pattern.length) toks.push({ lit: pattern[++i].toLowerCase() });
+    else if (ch === "%") toks.push({ any: true });
+    else if (ch === "_") toks.push({ one: true });
+    else toks.push({ lit: ch.toLowerCase() });
+  }
+  const s = String(text).toLowerCase();
+  const m = (i, j) => {
+    if (j === toks.length) return i === s.length;
+    const t = toks[j];
+    if (t.any) return m(i, j + 1) || (i < s.length && m(i + 1, j));
+    if (i >= s.length) return false;
+    return (t.one || t.lit === s[i]) && m(i + 1, j + 1);
+  };
+  return m(0, 0);
 }
 
 class Query {
@@ -195,6 +261,7 @@ class Query {
   update(patch) { this.op = "update"; this.patch = patch; return this; }
   eq(col, val) { this.filters.push(r => r[col] === val); return this; }
   gte(col, val) { this.filters.push(r => r[col] >= val); return this; }
+  ilike(col, pattern) { this.filters.push(r => r[col] != null && likeMatch(r[col], pattern)); return this; }
   order() { return this; }
   limit() { return this; }
   run() {
@@ -323,7 +390,7 @@ function buildRoutes(client, env) {
     supabase: client,
     console: { log() {}, warn() {}, error() {} },
     process: { env: env || {} },
-    requireAuth: 0, requireActiveSubscription: 0,
+    requireAuth: 0, requireActiveSubscription: 0, bfcRecipientLookupLimiter: 0,
     getUserPlan: async function () { return { active: true, plan: "all_access", inactive_reason: null }; },
     BILLING_URL: "/billing.html",
     CERTIFICATION_PASS_MARK: CATALOG.CERTIFICATION_PASS_MARK,
@@ -335,18 +402,18 @@ function buildRoutes(client, env) {
     app: { get: capture("get"), post: capture("post") }
   };
   vm.createContext(ctx);
-  vm.runInContext([HELPERS, TRANSFER_CONSTS, NOTICE_CONST, CATALOG_ROUTE, AWARD, TRANSFER].join("\n\n"), ctx);
+  vm.runInContext([HELPERS, TRANSFER_CONSTS, USERNAME_BLOCK, NOTICE_CONST, CATALOG_ROUTE, AWARD, LOOKUP, TRANSFER].join("\n\n"), ctx);
   return routes;
 }
 
-async function call(handler, user, body) {
+async function call(handler, user, body, query) {
   const res = {
     statusCode: 200, body: undefined,
     status(c) { this.statusCode = c; return this; },
     json(b) { this.body = JSON.parse(JSON.stringify(b)); return this; }
   };
   let nextErr = null;
-  await handler({ user: user, body: body || {} }, res, e => { nextErr = e || new Error("next() called"); });
+  await handler({ user: user, body: body || {}, query: query || {} }, res, e => { nextErr = e || new Error("next() called"); });
   if (nextErr) { res.statusCode = 500; res.body = { error: String(nextErr.message || nextErr) }; }
   return res;
 }
@@ -500,20 +567,26 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
   }
 
   /* ── E. transfers ────────────────────────────────────────────────────────── */
-  for (const model of ["139", "089"]) {
+  for (const [model, byName] of [["139", false], ["139", true], ["089", false], ["089", true]]) {
     const routeAlone = model === "089";
-    console.log("\n══ E" + (routeAlone ? "2" : "1") + ". POST /api/wallet/transfer against " +
+    console.log("\n══ E" + (routeAlone ? "2" : "1") + ". POST /api/wallet/transfer " + (byName ? "BY USERNAME " : "by id ") + "against " +
       (routeAlone ? "TODAY's bfc_transfer (migration 089: no limits, upserts any recipient) — the route alone must refuse" : "migration 139's bfc_send") + " ══");
-    const tag = "E" + (routeAlone ? "2" : "1") + ". ";
+    const tag = "E" + (routeAlone ? "2" : "1") + (byName ? " by username" : "") + ". ";
     const db = makeDb();
     const client = makeClient(db, { bfc_credit: bfcCreditModel, bfc_send: routeAlone ? bfcSendModel089 : bfcSendModel139 });
-    const alice = { id: uuid(31) }, bob = { id: uuid(32) }, newbie = { id: uuid(33) }, ghost = uuid(99);
+    const alice = { id: uuid(31) }, bob = { id: uuid(32) }, newbie = { id: uuid(33) }, ghost = uuid(99), gone = uuid(98);
     db.users.push({ id: alice.id, created_at: daysAgo(30) }, { id: bob.id, created_at: daysAgo(30) }, { id: newbie.id, created_at: daysAgo(2) });
+    // Profiles as they are stored: lowercase. "gone" is a profile whose account no longer exists.
+    db.bf_profiles.push({ user_id: alice.id, username: "alice", display_name: "Alice A" }, { user_id: bob.id, username: "bob", display_name: "Bob B" },
+      { user_id: newbie.id, username: "newbie", display_name: null }, { user_id: gone, username: "gone", display_name: "Gone" });
     bfcCreditModel(db, { p_user_id: alice.id, p_amount: 5000, p_type: "reward", p_description: "fixture" });
     bfcCreditModel(db, { p_user_id: newbie.id, p_amount: 1000, p_type: "reward", p_description: "Welcome bonus" });
     invariant(db, tag + "the fixture");
     const routes = buildRoutes(client, {});
-    const send = (user, to, amount) => call(routes["post /api/wallet/transfer"], user, { recipientId: to, amount: amount });
+    // What a person types: any case, with or without the @.
+    const NAME_OF = { [alice.id]: "@Alice", [bob.id]: "BOB", [newbie.id]: "newbie", [ghost]: "ghost", "not-a-user": "not a user!", [gone]: "gone" };
+    const bodyFor = (to, amount) => byName ? { recipientUsername: NAME_OF[to] || ("name-for-" + to), amount: amount } : { recipientId: to, amount: amount };
+    const send = (user, to, amount) => call(routes["post /api/wallet/transfer"], user, bodyFor(to, amount));
 
     const refused = async function (label, user, to, amount, status, reason) {
       const before = JSON.stringify([db.user_wallets, db.wallet_transactions]);
@@ -525,6 +598,9 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
       check(tag + label + ": no balance, wallet or ledger row changed", JSON.stringify([db.user_wallets, db.wallet_transactions]) === before);
       check(tag + label + ": decided by the route, without reaching the database function", client.rpcCalls.length === rpcBefore,
         client.rpcCalls.slice(rpcBefore).join(","));
+      if (byName) {
+        check(tag + label + ": the refusal names no account id", !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i.test(JSON.stringify(r.body)), JSON.stringify(r.body));
+      }
       invariant(db, tag + label);
     };
 
@@ -535,9 +611,20 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
       db.wallet_transactions.filter(t => t.description === "Transfer").map(t => t.type + ":" + t.amount).join(",") === "debit:500,credit:500");
     invariant(db, tag + "a transfer");
 
-    await refused("to an unknown account id", alice, ghost, 10, 404, "unknown_recipient");
+    await refused(byName ? "to a username no member has" : "to an unknown account id", alice, ghost, 10, 404, "unknown_recipient");
     check(tag + "and no wallet was created for that id", !walletOf(db, ghost));
-    await refused("to an id that is not a uuid", alice, "not-a-user", 10, 404, "unknown_recipient");
+    await refused(byName ? "to a string that cannot be a username" : "to an id that is not a uuid", alice, "not-a-user", 10, 404, "unknown_recipient");
+    if (byName) {
+      const unknown = await send(alice, ghost, 10);
+      check(tag + "an unknown username is answered \"No member with that username.\"",
+        unknown.body.error === "No member with that username. Nothing was sent.", unknown.body.error);
+      await refused("to a profile whose account no longer exists", alice, gone, 10, 404, "unknown_recipient");
+      check(tag + "and that refusal is the same sentence, naming no id", (await send(alice, gone, 10)).body.error === "No member with that username. Nothing was sent.");
+      check(tag + "and no wallet was created for it", !walletOf(db, gone));
+      const both = await call(routes["post /api/wallet/transfer"], alice, { recipientUsername: "ghost", recipientId: bob.id, amount: 10 });
+      check(tag + "a body with an unknown username and a valid recipientId is refused; the id is never a fallback",
+        both.statusCode === 404 && both.body.reason === "unknown_recipient" && balanceOf(db, bob.id) === 500, both.statusCode + " " + JSON.stringify(both.body));
+    }
     await refused("over the per-transfer maximum (1,001)", alice, bob.id, 1001, 400, "over_per_transfer_max");
     await refused("from an account opened 2 days ago", newbie, bob.id, 10, 403, "new_account_hold");
     await refused("to oneself", alice, alice.id, 10, 400, "self_transfer");
@@ -557,7 +644,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     const badRoutes = buildRoutes(client, { BFC_TRANSFER_MAX: "abc" });
     const rpcBefore = client.rpcCalls.length;
     const before = JSON.stringify(db.user_wallets);
-    const bad = await call(badRoutes["post /api/wallet/transfer"], bob, { recipientId: alice.id, amount: 1 });
+    const bad = await call(badRoutes["post /api/wallet/transfer"], bob, bodyFor(alice.id, 1));
     check(tag + "an unusable BFC_TRANSFER_MAX refuses every transfer with a message naming it",
       bad.statusCode === 503 && bad.body.reason === "limits_misconfigured" && /BFC_TRANSFER_MAX/.test(bad.body.error) &&
       JSON.stringify(db.user_wallets) === before && client.rpcCalls.length === rpcBefore, bad.statusCode + " " + JSON.stringify(bad.body));
@@ -577,6 +664,7 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
 
       const carol = { id: uuid(34) };
       db.users.push({ id: carol.id, created_at: daysAgo(30) });
+      db.bf_profiles.push({ user_id: carol.id, username: "carol", display_name: "Carol C" });
       bfcCreditModel(db, { p_user_id: carol.id, p_amount: 50, p_type: "reward", p_description: "fixture" });
       const walletsBefore = JSON.stringify(db.user_wallets);
       const poor = await send(carol, alice.id, 100);
@@ -587,11 +675,67 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
       invariant(db, tag + "a balance check");
 
       const noFn = buildRoutes(makeClient(db, { bfc_credit: bfcCreditModel }), {});
-      const missing = await call(noFn["post /api/wallet/transfer"], bob, { recipientId: alice.id, amount: 1 });
+      const missing = await call(noFn["post /api/wallet/transfer"], bob, bodyFor(alice.id, 1));
       check(tag + "before migration 139 is applied, a transfer is a 503 naming it, and nothing moves",
         missing.statusCode === 503 && missing.body.reason === "migration_139_not_applied", JSON.stringify(missing.body));
       invariant(db, tag + "a missing bfc_send");
     }
+  }
+
+  /* ── H. the username lookup ──────────────────────────────────────────────── */
+  console.log("\n══ H. GET /api/wallet/recipient — who a username belongs to, and nothing more ══");
+  {
+    const db = makeDb();
+    const client = makeClient(db, {});
+    const me = { id: uuid(41) }, bob = uuid(42), plain = uuid(43);
+    db.users.push({ id: me.id, email: "me-private@example.com", created_at: daysAgo(30) },
+      { id: bob, email: "bob-private@example.com", created_at: daysAgo(30) }, { id: plain, email: "plain-private@example.com", created_at: daysAgo(30) });
+    db.user_wallets.push({ id: "w-bob", user_id: bob, balance: 4321 });
+    // The fake hands back every column it holds, so the route must pick what it answers.
+    db.bf_profiles.push({ user_id: me.id, username: "me", display_name: "Me" },
+      { id: "profile-row-bob", user_id: bob, username: "bob", display_name: "Bob Builder", avatar_url: "https://cdn.example.com/bob.png",
+        bio: "private bio", email: "bob-private@example.com", balance: 4321 },
+      { user_id: plain, username: "plain_name", display_name: null });
+    const routes = buildRoutes(client, {});
+    const lookup = username => call(routes["get /api/wallet/recipient"], me, {}, { username: username });
+
+    const found = await lookup("@BOB");
+    console.log("    \"@BOB\" → HTTP " + found.statusCode + " " + JSON.stringify(found.body));
+    check("H1. a username in any case, with its @, answers the member's username, display name and avatar",
+      found.statusCode === 200 && JSON.stringify(found.body) === JSON.stringify({ username: "bob", display_name: "Bob Builder", avatar_url: "https://cdn.example.com/bob.png" }),
+      found.statusCode + " " + JSON.stringify(found.body));
+    const served = JSON.stringify(found.body);
+    check("H2. and leaks no id, email or balance: no such key, and none of their values",
+      !/"(user_id|id|email|balance)"/.test(served) && served.indexOf(bob) === -1 && served.indexOf("bob-private") === -1 && served.indexOf("4321") === -1 &&
+      served.indexOf("profile-row-bob") === -1, served);
+    check("H3. it reads bf_profiles and no other table", client.reads.length > 0 && client.reads.every(r => r === "bf_profiles:select"), client.reads.join(","));
+
+    const bare = await lookup("plain_name");
+    check("H4. no display name falls back to the username, and no avatar is no avatar_url key",
+      bare.statusCode === 200 && JSON.stringify(bare.body) === JSON.stringify({ username: "plain_name", display_name: "plain_name" }), JSON.stringify(bare.body));
+
+    const unknown = await lookup("nobody");
+    check("H5. an unknown username is a 404: \"No member with that username.\"",
+      unknown.statusCode === 404 && unknown.body.error === "No member with that username." && unknown.body.reason === "unknown_recipient", JSON.stringify(unknown.body));
+    const wild = await lookup("b_b");
+    check("H6. _ is a letter, not a wildcard: \"b_b\" does not find \"bob\"", wild.statusCode === 404 && wild.body.reason === "unknown_recipient",
+      wild.statusCode + " " + JSON.stringify(wild.body));
+    for (const bad of ["%", "a b", "", "@", "x".repeat(41), null]) {
+      const readsBefore = client.reads.length;
+      const r = await lookup(bad);
+      check("H7. " + JSON.stringify(bad) + " cannot be a username: 404, and nothing is read", r.statusCode === 404 && r.body.reason === "unknown_recipient" &&
+        client.reads.length === readsBefore, r.statusCode + " " + client.reads.slice(readsBefore).join(","));
+    }
+    const self = await lookup("Me");
+    check("H8. one's own username is refused as a self-transfer", self.statusCode === 400 && self.body.reason === "self_transfer", JSON.stringify(self.body));
+
+    check("H9. the route needs a signed-in account and is rate-limited",
+      SERVER.indexOf('app.get("/api/wallet/recipient", requireAuth, bfcRecipientLookupLimiter, async function (req, res, next) {') !== -1);
+    check("H9. per account, 30 lookups in 10 minutes",
+      /windowMs: 10 \* 60 \* 1000,\n  max: 30,\n  keyGenerator: function \(req\) \{ return "bfc-recipient:" \+ \(req\.user && req\.user\.id\); \},/.test(LIMITER_BLOCK), LIMITER_BLOCK);
+    check("H10. the transfer resolves the username with the same function before any rule runs",
+      /const byUsername = [^\n]*\n    let recipientId = req\.body\.recipientId;\n    if \(byUsername\) \{\n      const member = await findMemberByUsername\(req\.body\.recipientUsername\);/.test(TRANSFER) &&
+      TRANSFER.indexOf("findMemberByUsername") < TRANSFER.indexOf("if (!recipientId || recipientId === req.user.id) {"));
   }
 
   /* ── F. migration 139, by its text ───────────────────────────────────────── */
@@ -707,6 +851,96 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     const error = await answerAndSubmit(reply(false, 400, { error: "Unknown certification \"sales-1\"" }));
     check("G9. a refusal shows no score and no verdict", error.headline === "Not Graded" && error.score === "—" && /Unknown certification/.test(error.sub),
       error.headline + " " + error.score + " " + error.sub);
+  }
+
+  /* ── J. wallet.html: a username, then a confirm step ─────────────────────── */
+  console.log("\n══ J. wallet.html sends by username, and only after Confirm ══");
+  {
+    const W = WALLET_PAGE;
+    check("J1. the recipient-id input is gone, and the page never sends recipientId",
+      W.indexOf('id="send-recipient"') === -1 && W.indexOf("user ID") === -1 && W.indexOf("recipientId") === -1);
+    check("J1. it asks for a username", W.indexOf('<input type="text" id="send-username" class="send-input" placeholder="Recipient username"') !== -1);
+    check("J1. the confirm text is set as text, never as HTML",
+      W.indexOf('sendConfirmText.textContent = "Send "') !== -1 && W.indexOf("sendConfirmText.innerHTML") === -1);
+
+    const script = (/<script>\n(var API_URL[\s\S]*?)<\/script>/.exec(W) || [])[1] || "";
+    const els = {};
+    const el = id => els[id] || (els[id] = {
+      id: id, textContent: "", innerHTML: "", className: "", value: "", hidden: false, disabled: false, style: {}, listeners: {},
+      attrs: {},
+      addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+      dispatch(type) { (this.listeners[type] || []).forEach(fn => fn({ type: type, target: this })); },
+      click() { this.dispatch("click"); },
+      removeAttribute(name) { delete this.attrs[name]; if (name === "src") this.src = undefined; },
+      setAttribute(name, v) { this.attrs[name] = v; }
+    });
+    // The page ships these hidden; the stub starts them the same way.
+    el("send-confirm").hidden = true; el("send-confirm-avatar").hidden = true;
+    const calls = [];
+    const reply = (status, body) => Promise.resolve({ ok: status >= 200 && status < 300, status: status, json: async () => body });
+    const ctx = {
+      document: { getElementById: el, querySelectorAll() { return []; }, addEventListener() {} },
+      window: {}, console: { log() {}, error() {} }, localStorage: { getItem() { return "t"; } },
+      encodeURIComponent: encodeURIComponent, Number: Number, String: String, JSON: JSON, Promise: Promise, Date: Date,
+      fetch: function (url, opts) {
+        calls.push({ url: url, opts: opts || {} });
+        if (/\/api\/wallet\/recipient\?username=/.test(url)) {
+          const name = decodeURIComponent(url.split("username=")[1]).toLowerCase();
+          return name === "bob"
+            ? reply(200, { username: "bob", display_name: "Bob <b>Builder</b>", avatar_url: "https://cdn.example.com/bob.png" })
+            : reply(404, { error: "No member with that username.", reason: "unknown_recipient" });
+        }
+        if (/\/api\/wallet\/transfer$/.test(url)) return reply(200, { balance: 75 });
+        return reply(200, { balance: 100, transactions: [] });
+      }
+    };
+    vm.createContext(ctx);
+    vm.runInContext(script, ctx);
+    const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(r => setImmediate(r)); };
+    await settle();
+    const transfers = () => calls.filter(c => /\/api\/wallet\/transfer$/.test(c.url));
+    const lookups = () => calls.filter(c => /\/api\/wallet\/recipient\?/.test(c.url));
+    const type = (id, v) => { el(id).value = v; el(id).dispatch("input"); };
+
+    type("send-username", "@Bob"); type("send-amount", "25");
+    el("send-btn").click(); await settle();
+    const text = el("send-confirm-text").textContent;
+    console.log("    Send BFC → lookups " + lookups().map(c => c.url.split("?")[1]).join(",") + ", transfers " + transfers().length + ", asks: \"" + text + "\"");
+    check("J2. Send BFC looks the username up and moves nothing", lookups().length === 1 && /username=Bob$/.test(lookups()[0].url) && transfers().length === 0,
+      lookups().length + " lookups, " + transfers().length + " transfers");
+    check("J2. it asks \"Send N BFC to <display name> (@username)?\" with Confirm and Cancel",
+      el("send-confirm").hidden === false && text === "Send 25 BFC to Bob <b>Builder</b> (@bob)?" && el("send-confirm-btn").listeners.click && el("send-cancel-btn").listeners.click, text);
+    check("J2. and says nothing has been sent yet", el("send-status").textContent === "Nothing has been sent yet.", el("send-status").textContent);
+    check("J2. the avatar the server gave is shown", el("send-confirm-avatar").hidden === false && el("send-confirm-avatar").src === "https://cdn.example.com/bob.png");
+
+    el("send-cancel-btn").click(); await settle();
+    el("send-confirm-btn").click(); await settle();
+    check("J3. Cancel closes the question and sends nothing, and a stray Confirm after it sends nothing",
+      el("send-confirm").hidden === true && transfers().length === 0 && el("send-status").textContent === "Cancelled. Nothing was sent.",
+      transfers().length + " transfers; " + el("send-status").textContent);
+
+    el("send-btn").click(); await settle();
+    type("send-amount", "999");
+    el("send-confirm-btn").click(); await settle();
+    check("J4. an edit after the lookup withdraws the question: Confirm then sends nothing",
+      el("send-confirm").hidden === true && transfers().length === 0, transfers().length + " transfers");
+
+    type("send-amount", "25");
+    el("send-btn").click(); await settle();
+    el("send-confirm-btn").click(); await settle();
+    const sent = transfers();
+    console.log("    Confirm → " + sent.length + " transfer(s): " + (sent[0] ? sent[0].opts.method + " " + sent[0].opts.body : "none"));
+    check("J5. Confirm sends one transfer: exactly { recipientUsername, amount } as confirmed",
+      sent.length === 1 && sent[0].opts.method === "POST" && sent[0].opts.body === JSON.stringify({ recipientUsername: "bob", amount: 25 }),
+      sent.map(c => c.opts.body).join(" | "));
+    check("J5. and says to whom", el("send-status").textContent === "Sent 25 BFC to @bob.", el("send-status").textContent);
+
+    type("send-username", "ghost"); type("send-amount", "5");
+    el("send-btn").click(); await settle();
+    el("send-confirm-btn").click(); await settle();
+    check("J6. an unknown username shows the server's sentence, asks nothing and sends nothing",
+      el("send-status").textContent === "No member with that username." && el("send-confirm").hidden === true && transfers().length === 1,
+      el("send-status").textContent + "; " + transfers().length + " transfers");
   }
 
   console.log("");
