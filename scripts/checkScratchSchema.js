@@ -9,8 +9,8 @@
      S1. The real build: one marker per migration file, in number order, each
          file's text verbatim and in that order, the header's count and last
          migration equal to an independent listing of supabase/migrations.
-     S2. The real findings: no BLOCKING, the one PRODUCTION DATA statement
-         (040's username backfill), nothing FIXED.
+     S2. The real findings: no BLOCKING, the two PRODUCTION DATA statements
+         (040's username backfill, 145's transfer backfill), nothing FIXED.
      S3. The rules bite, on fixtures: comments and $$ bodies are not judged;
          a table created twice, and a statement on a table no earlier
          migration created, are BLOCKING; UPDATE, INSERT ... SELECT and a
@@ -112,10 +112,16 @@ function analyze(list) { return B.analyzeMigrations(list.map(([name, sql]) => ({
   console.log("\n══ S2. the real findings ══");
   const blocking = kinds(built.findings, "BLOCKING"), prod = kinds(built.findings, "PRODUCTION DATA"), fixed = kinds(built.findings, "FIXED");
   check("S2. no BLOCKING finding: the file runs on a fresh database", blocking.length === 0, blocking.map(f => f.file + ":" + f.line + " " + f.text).join(" | "));
-  check("S2. one PRODUCTION DATA statement: 040's username backfill", prod.length === 1 && prod[0].file === "040_bf_profiles_username.sql" && /^changes existing rows/.test(prod[0].text),
-    prod.map(f => f.file + ":" + f.line).join(", "));
+  /* BEFORE (backend 48334d9): exactly one PRODUCTION DATA statement, 040's username backfill.
+     AFTER (migration 145): a second, 145's backfill of bfc_transfers from existing 'Transfer' ledger pairs (INSERT ... SELECT,
+     ON CONFLICT DO NOTHING). It reads production rows on purpose; on a scratch database it inserts nothing. */
+  check("S2. two PRODUCTION DATA statements: 040's username backfill and 145's transfer backfill",
+    prod.length === 2 && prod[0].file === "040_bf_profiles_username.sql" && /^changes existing rows/.test(prod[0].text) &&
+    prod[1].file === "145_bfc_transfers.sql" && /^INSERT \.\.\. SELECT copies existing rows/.test(prod[1].text),
+    prod.map(f => f.file + ":" + f.line + " " + f.text).join(", "));
   check("S2. nothing needed fixing", fixed.length === 0, fixed.map(f => f.file + " " + f.text).join(" | "));
-  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 1, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text));
+  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 2, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text) &&
+    /--   PRODUCTION DATA  145_bfc_transfers\.sql:\d+/.test(text));
 
   console.log("\n══ S3. the rules, on fixtures ══");
   const split = B.splitStatements("-- create table nope (id int);\ncreate table a (id int); /* drop table a; */\n" +

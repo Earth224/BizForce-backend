@@ -366,8 +366,10 @@ function reachability(html, externals) {
     bf_token: "the session token", bf_refresh: "the refresh token (removed at logout)", bf_user: "the signed-in profile row",
     tmx_presence_active: "Termaximus presence on/off, this browser's own choice",
     bizforce_ai_mailbox: "a cache of the AI Agent Tasks mailbox, refilled from GET /api/ai/tasks",
-    bf_agent_memories: "a cache of Agent Memory, refilled from GET /api/memory",
-    bf_offline_copy: "the offline-copy setting (scripts/bf-offline.js), removed at sign-out with the copy itself"
+    bf_agent_memories: "a cache of Agent Memory, refilled from GET /api/memory"
+    /* BEFORE (backend 48334d9): bf_offline_copy was listed, because logout() removed it by name.
+       AFTER: logout() calls scripts/bf-session.js clearDevice(), which clears it with every other
+       per-member key (checkOfflineMode IV), so the dashboard no longer names it. */
   };
   const dashCode = inlineScripts(FILES[DASH]).join("\n");
   const consts = {};

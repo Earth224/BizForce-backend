@@ -872,14 +872,17 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
       dispatch(type) { (this.listeners[type] || []).forEach(fn => fn({ type: type, target: this })); },
       click() { this.dispatch("click"); },
       removeAttribute(name) { delete this.attrs[name]; if (name === "src") this.src = undefined; },
-      setAttribute(name, v) { this.attrs[name] = v; }
+      setAttribute(name, v) { this.attrs[name] = v; },
+      // BEFORE (backend 48334d9): no appendChild. AFTER: the page's Trades section builds its year picker and rows with it.
+      appendChild(child) { (this.children = this.children || []).push(child); return child; }
     });
     // The page ships these hidden; the stub starts them the same way.
     el("send-confirm").hidden = true; el("send-confirm-avatar").hidden = true;
     const calls = [];
     const reply = (status, body) => Promise.resolve({ ok: status >= 200 && status < 300, status: status, json: async () => body });
     const ctx = {
-      document: { getElementById: el, querySelectorAll() { return []; }, addEventListener() {} },
+      // BEFORE: no createElement or body. AFTER: the Trades section (GET /api/me/trades) creates elements; this section reads none of them.
+      document: { getElementById: el, querySelectorAll() { return []; }, addEventListener() {}, createElement: tag => el("created-" + tag + "-" + Math.random()), body: el("body") },
       window: {}, console: { log() {}, error() {} }, localStorage: { getItem() { return "t"; } },
       encodeURIComponent: encodeURIComponent, Number: Number, String: String, JSON: JSON, Promise: Promise, Date: Date,
       fetch: function (url, opts) {

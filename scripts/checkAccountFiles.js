@@ -497,8 +497,10 @@ function makeStorage(files) {
       /create table if not exists public\.pending_storage_deletions \(/.test(mig) && /bucket text not null/.test(mig) && /path text not null/.test(mig) &&
       /attempts integer not null default 1/.test(mig) && /last_error text/.test(mig) && /created_at timestamptz not null default now\(\)/.test(mig) &&
       /unique \(bucket, path\)/.test(mig) && /alter table public\.pending_storage_deletions enable row level security;/.test(mig));
-    const latest = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(f => /^\d+_.*\.sql$/.test(f)).sort().pop();
-    check("IV5. it is the next migration number", latest === "144_pending_storage_deletions.sql", latest);
+    /* BEFORE (backend 995f425): "it is the next migration number", the newest file had to be 144_pending_storage_deletions.sql.
+       AFTER (migration 145, bfc_transfers): 144 is no longer the newest, so the pin is what mattered: no other migration shares 144. */
+    const same144 = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(f => /^144_.*\.sql$/.test(f));
+    check("IV5. it has its own migration number: 144 is pending_storage_deletions alone", same144.join() === "144_pending_storage_deletions.sql", same144.join());
     const backup = require(path.join(REPO, "lib", "backup.js"));
     check("IV6. the queue is classified: backed up, and not member data", backup.BACKUP_TABLES.indexOf("pending_storage_deletions") !== -1 && !!YD.NOT_MEMBER_DATA.pending_storage_deletions);
     const note = YD.DELETE_NOTES.find(n => /^Your files are deleted/.test(n)) || "";

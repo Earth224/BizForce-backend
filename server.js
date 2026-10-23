@@ -5200,6 +5200,7 @@ app.post("/api/auth/logout", requireAuth, async function (req, res) {
    is theirs whether or not they pay. */
 const yourData = require("./lib/yourData");
 const accountFiles = require("./lib/accountFiles");
+const tradeRecords = require("./lib/trades");
 
 /* The daily retry of files a deleted account left in Storage
    (lib/accountFiles.js, pending_storage_deletions). Claimed through
@@ -5248,6 +5249,63 @@ app.get("/api/me/export", requireAuth, yourDataExportLimiter, async function (re
     console.error("[your-data] export FAILED for user " + req.user.id + ": " + (error.message || error));
   }
   return res.end();
+});
+
+/* ── BizCash trade records (lib/trades.js) ─────────────────────────────────
+   Every member-to-member BizCash trade the member was part of, the BizCash
+   BizForce issued them (listed apart), and a check of both against the
+   wallet ledger. requireAuth and nothing more: a member's records stay
+   readable after a subscription lapses. BFC amounts only. */
+const tradesLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "trades:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests for your trade records. Try again in a few minutes.", reason: "rate_limited" }
+});
+const TRADES_UNREADABLE = "Your trade records could not be read just now. Nothing has changed in your wallet; try again shortly.";
+
+app.get("/api/me/trades", requireAuth, tradesLimiter, async function (req, res) {
+  const period = tradeRecords.periodFrom(req.query);
+  if (period.error) return res.status(400).json({ error: period.error });
+  try {
+    return res.json(await tradeRecords.listTrades(supabase, req.user.id, period));
+  } catch (error) {
+    console.error("[trades] list FAILED for user " + req.user.id + ": " + (error.message || error));
+    return res.status(503).json({ error: TRADES_UNREADABLE });
+  }
+});
+
+app.get("/api/me/trades.csv", requireAuth, tradesLimiter, async function (req, res) {
+  const period = tradeRecords.periodFrom(req.query);
+  if (period.error) return res.status(400).json({ error: period.error });
+  try {
+    const result = await tradeRecords.listTrades(supabase, req.user.id, period);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=\"bizforce-trades-" + (period.from || "start") + "-to-" + (period.to || new Date().toISOString().slice(0, 10)) + ".csv\"");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(tradeRecords.tradesCsv(result));
+  } catch (error) {
+    console.error("[trades] csv FAILED for user " + req.user.id + ": " + (error.message || error));
+    return res.status(503).json({ error: TRADES_UNREADABLE });
+  }
+});
+
+/* ?year=YYYY. Printable HTML by default; ?format=json for the same data. */
+app.get("/api/me/trade-statement", requireAuth, tradesLimiter, async function (req, res) {
+  const period = tradeRecords.yearPeriod(req.query.year);
+  if (period.error) return res.status(400).json({ error: period.error });
+  try {
+    const statement = tradeRecords.statementOf(await tradeRecords.listTrades(supabase, req.user.id, period), req.query.year);
+    res.setHeader("Cache-Control", "no-store");
+    if (req.query.format === "json") return res.json(statement);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(tradeRecords.statementHtml(statement));
+  } catch (error) {
+    console.error("[trades] statement FAILED for user " + req.user.id + ": " + (error.message || error));
+    return res.status(503).json({ error: TRADES_UNREADABLE });
+  }
 });
 
 const yourDataDeleteLimiter = rateLimit({

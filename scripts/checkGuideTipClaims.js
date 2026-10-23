@@ -336,8 +336,10 @@ const MUTATIONS = {
     "your first pass of each certification pays 100 BFC while you're subscribed, and a one-time 1,000 BFC welcome bonus lands when your subscription goes active. Running agent tasks and posting listings pay nothing.",
     "certifications (+100), agent tasks (+50), marketplace listings (+25), and the welcome bonus (+200) are all real, stackable ways to build balance."]],
   // wallet tip 67 says credits accumulate automatically again
+  /* BEFORE (frontend c57bad5): anchored on "the one action here is Send BFC, ... using the platform earns nothing by itself."
+     AFTER: the tip now also names Trades, so the anchor is the new sentence; the restored lie is the same. */
   "restore-credits-automatic": [[GUIDE,
-    "the one action here is Send BFC, which sends credits to another member by their username after you confirm the name it finds; using the platform earns nothing by itself.",
+    "the one way to move BFC here is Send BFC, which sends credits to another member by their username after you confirm the name it finds; Trades lists every trade you made with another member, with a CSV download and a yearly statement. Using the platform earns nothing by itself.",
     "it's a read-only ledger; credits accumulate automatically as you use the platform."]],
   // store tip 159 claims to manage inventory across every channel again
   "restore-store-159": [[GUIDE,
@@ -834,7 +836,11 @@ const B = [
   // group 7 — wallet and certification payouts
   ["7 wallet 66", walTips, "The history shows your latest 50 transactions", /full Transaction History/,
     () => HISTORY_50() && ["Available Balance", "Total Earned", "Total Spent"].every(l => FILES[WALLET].indexOf(">" + l + "<") !== -1) && /\n    Transaction History\n/.test(FILES[WALLET])],
-  ["7 wallet 67", walTips, "the one action here is Send BFC", /accumulate automatically|read-only ledger/, () => SEND_BFC() && ONLY_TWO_CREDITS()],
+  // BEFORE (frontend c57bad5): "the one action here is Send BFC", proof SEND_BFC() && ONLY_TWO_CREDITS().
+  // AFTER (Trades on the wallet): the page also lists trades, with a CSV and a yearly statement; Send BFC is still the one way to move BFC.
+  ["7 wallet 67", walTips, "the one way to move BFC here is Send BFC", /accumulate automatically|read-only ledger|the one action here/,
+    () => SEND_BFC() && ONLY_TWO_CREDITS() && /id="tradesCsvBtn"/.test(FILES[WALLET]) && /id="statementBtn"/.test(FILES[WALLET]) &&
+      /fetch\(API_URL \+ "\/api\/me\/trades\.csv"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/me\/trade-statement\?year="/.test(FILES[WALLET])],
   ["7 wallet 68", walTips, "a one-time 1,000 BFC welcome bonus lands when your subscription goes active", /\+50|\+25|\+200|agent tasks \(|stackable/,
     () => CERT_CREDIT.test(SV) && WELCOME() && ONLY_TWO_CREDITS() && /How to Earn BFC/.test(FILES[WALLET])],
   ["7 wallet 69", walTips, "not how much you use the platform", /rewards real engagement|how actively you're using/,

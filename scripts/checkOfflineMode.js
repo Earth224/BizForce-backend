@@ -26,9 +26,12 @@
           cannot submit, and a write is refused, never queued; without a copy,
           the page says plainly it needs a connection; a 401 or a 402 is never
           treated as offline; back online, the page reloads.
-     IV.  Every sign-out path deletes the copy and the setting: dashboard.html
-          and settings.html's Sign Out, bf-session.js's end of a session, the
-          account delete on your-data.html, and app.html opened with no session.
+     IV.  Every sign-out path clears every per-member key, the Termaximus
+          insight cache and the offline copy, through bf-session.js's one
+          clearDevice: dashboard.html and settings.html's Sign Out,
+          bf-session.js's end of a session, the account delete on
+          your-data.html, and app.html opened with no session. Every storage
+          key in the frontend is either on that list or kept for a reason.
      V.   Honest copy: lib/yourData.js's DEVICE_COPY says what bf-offline.js
           does, word for word; your-data.html shows it and works offline from
           its copy; the setting is on Settings (Account); the guide has its tip.
@@ -53,7 +56,6 @@ const MUTATE = process.env.MUTATE || "";
 const SW = "sw.js", OFF = "scripts/bf-offline.js", SESSION = "scripts/bf-session.js", DASH = "dashboard.html", SETTINGS = "settings.html",
   YOURDATA = "your-data.html", APP = "app.html", GUIDE = "scripts/termaximus-guide.js", TOML = "netlify.toml", WALLET = "wallet.html";
 
-const DASH_CLEAR = "    localStorage.removeItem(\"bf_offline_copy\");\n    try { if (window.indexedDB) window.indexedDB.deleteDatabase(\"bf-offline\"); } catch (e) {}\n";
 const MUTATIONS = {
   // the worker caches /api
   "sw-caches-api": [[SW, "if (url.pathname === \"/api\" || url.pathname.indexOf(\"/api/\") === 0) return \"pass\";",
@@ -71,12 +73,20 @@ const MUTATIONS = {
   // turning the setting off leaves the copy
   "off-keeps-copy": [[OFF, "    try { localStorage.removeItem(SETTING_KEY); } catch (e) { /* storage unavailable */ }\n    deleteCopy();\n",
     "    try { localStorage.removeItem(SETTING_KEY); } catch (e) { /* storage unavailable */ }\n"]],
-  // sign-out does not clear it, on each path
-  "dashboard-signout-keeps-copy": [[DASH, DASH_CLEAR, ""]],
-  "settings-signout-keeps-copy": [[SETTINGS, "        try { if (window.indexedDB) window.indexedDB.deleteDatabase(\"bf-offline\"); } catch (e) {}\n", ""]],
-  "session-end-keeps-copy": [[SESSION, "    try { if (window.indexedDB) window.indexedDB.deleteDatabase(\"bf-offline\"); } catch (e) { /* nothing to delete */ }\n", ""]],
-  "delete-keeps-copy": [[YOURDATA, "          try { localStorage.removeItem(\"bf_offline_copy\"); } catch (x) {}\n", ""]],
-  "app-keeps-copy": [[APP, "      if (window.indexedDB) window.indexedDB.deleteDatabase(\"bf-offline\");\n", ""]],
+  /* Sign-out does not clear, on each path.
+     BEFORE (frontend c57bad5): each path removed bf_offline_copy and deleted the database inline, and each mutation removed those lines.
+     AFTER: each path calls scripts/bf-session.js clearDevice(), and each mutation removes that call; two more break clearDevice itself. */
+  "dashboard-signout-keeps-copy": [[DASH, "    window.BFSession.clearDevice();\n    window.location.replace(\"/app.html\"", "    window.location.replace(\"/app.html\""]],
+  "settings-signout-keeps-copy": [[SETTINGS, "        window.BFSession.clearDevice();\n", ""]],
+  "session-end-keeps-copy": [[SESSION, "    clearDevice();\n\n    /* THE REASON TRAVELS IN THE URL", "\n    /* THE REASON TRAVELS IN THE URL"]],
+  "delete-keeps-copy": [[YOURDATA, "          if (window.BFSession) window.BFSession.clearDevice();\n", ""]],
+  "app-keeps-copy": [[APP, "if (!localStorage.getItem(\"bf_token\") && window.BFSession) window.BFSession.clearDevice();", "if (false) window.BFSession.clearDevice();"]],
+  // sign-out leaving bizforce_ai_mailbox
+  "signout-leaves-mailbox": [[SESSION, "    \"bizforce_ai_mailbox\", \"bf_agent_memories\",\n", "    \"bf_agent_memories\",\n"]],
+  // the Termaximus insights cached for the tab survive sign-out
+  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\"];", "  var PER_USER_SESSION_PREFIXES = [];"]],
+  // data-clear-only still runs the session guard (app.html would redirect to itself)
+  "clear-only-runs-guard": [[SESSION, "  if (thisScript && thisScript.hasAttribute && thisScript.hasAttribute(\"data-clear-only\")) return;\n", ""]],
   // a write button left enabled offline
   "write-button-enabled-offline": [[OFF, "var WRITE_CONTROLS = \"button, input[type=submit], input[type=button], input[type=image], input[type=reset]\";",
     "var WRITE_CONTROLS = \"input[type=submit], input[type=button], input[type=image], input[type=reset]\";"]],
@@ -201,6 +211,8 @@ function page(opts) {
     answer.catch(() => {});
     return answer;
   };
+  if (opts.before) opts.before(w);
+  (opts.pre || []).forEach(code => w.eval(code));
   w.eval(FILES[OFF]);
   if (opts.script) w.eval(opts.script);
   return { w, doc: w.document, idb, calls, reloads };
@@ -524,70 +536,147 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       wp.doc.getElementById("send-btn").disabled && wp.doc.getElementById("send-confirm-btn").disabled && open.length === 0, open.map(b => b.id || b.textContent).join(","));
   }
 
-  // ════ IV. every sign-out path deletes the copy ════
-  console.log("\n══ IV. sign-out deletes the copy and the setting ══");
+  // ════ IV. every sign-out path clears every per-member key ════
+  console.log("\n══ IV. sign-out clears every per-member key, cache and copy ══");
   {
+    /* Every storage key in the frontend, found by reading every page and script, must be on one of these lists.
+       BEFORE (frontend c57bad5): sign-out cleared bf_token, bf_refresh, bf_user and the offline copy only, inline on each path.
+       AFTER: one shared scripts/bf-session.js clearDevice() clears PER_USER on every path; KEPT stays, each for its reason. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions"];
+    const SESSION_PREFIX = "bf_tmx_insight:";
+    const KEPT = {
+      bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
+      tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
+      tmx_agent_language: "the language Termaximus speaks", oracle_corner_star_pos: "where an Oracle widget sits", bf_oracle_moon_pos: "where an Oracle widget sits",
+      bf_active_calendar: "which calendar is shown", bf_agent_order: "card order", bf_dashboard_order: "card order", bf_dashboard_custom: "card order",
+      bf_return_to: "the public page to return to after signing in; app.html must still find it"
+    };
+    // Calls whose key is a parameter, each read here as a helper over keys that are on the lists.
+    const DYNAMIC = { "scripts/bf-session.js": ["key"], "scripts/bf-dashboard-order.js": ["key"], "bizdoc.html": ["storageKey"], "scripts/termaximus-guide.js": ["insightCacheKey("] };
+    const found = {}, unknown = [];
+    (function walk(dir) {
+      fs.readdirSync(dir, { withFileTypes: true }).forEach(d => {
+        const p = path.join(dir, d.name);
+        if (d.isDirectory()) { if (!/^\.|node_modules/.test(d.name)) walk(p); return; }
+        if (!/\.(html|js)$/.test(d.name) || /^test-/.test(d.name)) return;
+        const rel = path.relative(FRONTEND, p).replace(/\\/g, "/");
+        const text = FILES[rel] !== undefined ? FILES[rel] : lf(fs.readFileSync(p, "utf8"));
+        for (const m of text.matchAll(/(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)\(\s*([^,)]+)/g)) {
+          const arg = m[1].trim(), lit = /^["']([^"']+)["']$/.exec(arg);
+          let key = lit ? lit[1] : null;
+          if (!key) { const c = new RegExp("(?:var|const|let)\\s+" + arg.replace(/[^\w$]/g, "") + "\\s*=\\s*\"([^\"]+)\"").exec(text); if (c) key = c[1]; }
+          if (key) found[key] = (found[key] || []).concat(rel);
+          else if (!(DYNAMIC[rel] || []).some(a => arg.indexOf(a) === 0)) unknown.push(rel + ": " + arg);
+        }
+      });
+    })(FRONTEND);
+    const unlisted = Object.keys(found).filter(k => PER_USER.indexOf(k) === -1 && !KEPT[k]);
+    check("IV0. every storage key in the frontend is either cleared at sign-out or kept for a stated reason (" + Object.keys(found).length + " keys)",
+      Object.keys(found).length >= 20 && unlisted.length === 0 && unknown.length === 0, unlisted.concat(unknown).join(", "));
+    check("IV0b. ... and the lists are not stale: every key on them is still used", PER_USER.concat(Object.keys(KEPT)).filter(k => !found[k]).length === 0,
+      PER_USER.concat(Object.keys(KEPT)).filter(k => !found[k]).join(","));
+    check("IV0c. the Termaximus insight cache (sessionStorage) is keyed by the prefix sign-out clears", /var INSIGHT_CACHE_PREFIX = "bf_tmx_insight:";/.test(FILES[GUIDE]));
+
+    // A browser with every key set, and a way to read what is left.
     function store(init) {
       const m = new Map(Object.entries(init));
-      return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
+      return { m, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k),
+        key: i => [...m.keys()][i] || null, get length() { return m.size; } };
     }
-    const signedIn = () => store({ bf_token: TOKEN, bf_refresh: "r1", bf_user: "{}", bf_offline_copy: "on" });
-    const cleared = (ls, idb) => ls.getItem("bf_offline_copy") === null && idb.log.deletes.indexOf("bf-offline") !== -1;
+    const full = token => { const o = {}; PER_USER.forEach(k => { o[k] = "x"; }); Object.keys(KEPT).forEach(k => { o[k] = "kept"; }); if (token) o.bf_token = TOKEN; else delete o.bf_token; return o; };
+    const sess = () => store({ [SESSION_PREFIX + "dashboard.html"]: "{\"text\":\"your insight\"}", "unrelated-tab-key": "stays" });
+    function verdict(ls, ss, idb) {
+      const left = PER_USER.filter(k => ls.getItem(k) !== null), lost = Object.keys(KEPT).filter(k => ls.getItem(k) !== "kept");
+      const ok = left.length === 0 && lost.length === 0 && ss.getItem(SESSION_PREFIX + "dashboard.html") === null && ss.getItem("unrelated-tab-key") === "stays" &&
+        idb.log.deletes.indexOf("bf-offline") !== -1;
+      return { ok, why: "left: " + left.join(",") + " / lost: " + lost.join(",") + " / insight " + ss.getItem(SESSION_PREFIX + "dashboard.html") + " / idb " + idb.log.deletes.join(",") };
+    }
+    // A vm "browser" with bf-session.js loaded, guard mode or data-clear-only.
+    function browser(ls, ss, idb, clearOnly, fetchImpl) {
+      const replaced = [];
+      const ctx = { localStorage: ls, sessionStorage: ss, API_URL: API, AbortController, setTimeout, clearTimeout, console, URL, Promise, Headers,
+        indexedDB: idb.api, location: { href: ORIGIN + "/page.html", replace: u => { replaced.push(u); } },
+        document: { currentScript: { hasAttribute: n => clearOnly && n === "data-clear-only" } }, fetch: fetchImpl || (async () => ({ ok: true, status: 200 })) };
+      ctx.window = ctx;
+      vm.createContext(ctx);
+      vm.runInContext(FILES[SESSION], ctx);
+      return { ctx, replaced };
+    }
     const inlineScripts = html => (html.match(/<script>([\s\S]*?)<\/script>/g) || []).map(t => t.slice(8, -9));
 
+    {
+      const stub = async () => ({ ok: true, status: 200 });
+      const b = browser(store({}), store({}), fakeIDB(), true, stub);
+      check("IV1. bf-session.js shares one clearDevice, listing exactly the per-member keys and the insight prefix",
+        !!b.ctx.BFSession && typeof b.ctx.BFSession.clearDevice === "function" && JSON.stringify(b.ctx.BFSession.PER_USER_LOCAL.slice().sort()) === JSON.stringify(PER_USER.slice().sort()) &&
+        JSON.stringify(b.ctx.BFSession.PER_USER_SESSION_PREFIXES) === JSON.stringify([SESSION_PREFIX]), b.ctx.BFSession && b.ctx.BFSession.PER_USER_LOCAL.join(","));
+      check("IV2. loaded data-clear-only with no session, it does nothing else: no redirect, no fetch wrapper", b.replaced.length === 0 && b.ctx.fetch === stub, b.replaced.join(","));
+    }
     // dashboard.html logout()
     {
-      const code = inlineScripts(FILES[DASH]).find(c => c.indexOf("async function logout()") !== -1);
-      const ls = signedIn(), idb = fakeIDB(); let went = null;
-      const ctx = { localStorage: ls, API_URL: API, AbortController, setTimeout, clearTimeout, console,
-        fetch: async () => ({ ok: true }), window: { indexedDB: idb.api, location: { replace: u => { went = u; } } } };
-      let ok = false;
-      try { vm.createContext(ctx); vm.runInContext(code, ctx); await vm.runInContext("logout()", ctx); ok = true; } catch (e) { went = String(e); }
-      check("IV1. dashboard.html Sign Out deletes the copy and the setting", ok && cleared(ls, idb) && ls.getItem("bf_token") === null && /app\.html/.test(went), went);
+      const ls = store(full(true)), ss = sess(), idb = fakeIDB();
+      let ok = false, why = "";
+      try {
+        const b = browser(ls, ss, idb, false);
+        const code = inlineScripts(FILES[DASH]).find(c => c.indexOf("async function logout()") !== -1);
+        vm.runInContext(code, b.ctx); await vm.runInContext("logout()", b.ctx);
+        ok = /app\.html/.test(b.replaced.join(","));
+      } catch (e) { why = String(e); }
+      const v = verdict(ls, ss, idb);
+      check("IV3. dashboard.html Sign Out clears every per-member key, the insight cache and the offline copy, and keeps the display choices", ok && v.ok, why || v.why);
     }
-    // settings.html Sign Out
+    // settings.html Sign Out (no connection)
     {
-      const at = FILES[SETTINGS].indexOf("document.getElementById(\"signOutBtn\").addEventListener(\"click\", async function () {");
-      const open = FILES[SETTINGS].indexOf("{", FILES[SETTINGS].indexOf("async function ()", at));
-      const fn = at === -1 ? "" : FILES[SETTINGS].slice(FILES[SETTINGS].indexOf("async function ()", at), s.braceMatch(FILES[SETTINGS], open));
-      const ls = signedIn(), idb = fakeIDB(); let went = null, ok = false;
-      const ctx = { localStorage: ls, API_URL: API, AbortController, setTimeout, clearTimeout, console,
-        fetch: async () => { throw new TypeError("Failed to fetch"); }, window: { indexedDB: idb.api, location: { replace: u => { went = u; } } } };
-      try { vm.createContext(ctx); vm.runInContext("var signingOut = false; var handler = " + fn + ";", ctx); await vm.runInContext("handler()", ctx); ok = true; } catch (e) { went = String(e); }
-      check("IV2. settings.html Sign Out deletes the copy and the setting (here with no connection)", ok && cleared(ls, idb) && /signout-offline/.test(went), went);
+      const ls = store(full(true)), ss = sess(), idb = fakeIDB();
+      let ok = false, why = "";
+      try {
+        const b = browser(ls, ss, idb, true, async () => { throw new TypeError("Failed to fetch"); });
+        const at = FILES[SETTINGS].indexOf("document.getElementById(\"signOutBtn\").addEventListener(\"click\", async function () {");
+        const open = FILES[SETTINGS].indexOf("{", FILES[SETTINGS].indexOf("async function ()", at));
+        const fn = FILES[SETTINGS].slice(FILES[SETTINGS].indexOf("async function ()", at), s.braceMatch(FILES[SETTINGS], open));
+        vm.runInContext("var signingOut = false; var handler = " + fn + ";", b.ctx); await vm.runInContext("handler()", b.ctx);
+        ok = /signout-offline/.test(b.replaced.join(","));
+      } catch (e) { why = String(e); }
+      const v = verdict(ls, ss, idb);
+      check("IV4. settings.html Sign Out does the same (here with no connection)", ok && v.ok, why || v.why);
+      check("IV5. settings.html loads bf-session.js data-clear-only, in the head, so its own no-renewal sign-out stands",
+        /<script src="\/scripts\/bf-session\.js" data-clear-only><\/script>\n  <script src="\/scripts\/bf-offline\.js"><\/script>\n<\/head>/.test(FILES[SETTINGS]));
     }
-    // bf-session.js: a session that cannot be renewed
+    // bf-session.js ending a session that cannot be renewed
     {
-      const ls = store({ bf_token: TOKEN, bf_user: "{}", bf_offline_copy: "on" }), idb = fakeIDB(); let went = null;
-      const win = { API_URL: API, location: { href: ORIGIN + "/dashboard.html", replace: u => { went = u; } }, indexedDB: idb.api,
-        fetch: async () => ({ status: 401, ok: false }) };
-      const ctx = { window: win, localStorage: ls, URL, console, Promise };
-      vm.createContext(ctx); vm.runInContext(FILES[SESSION], ctx);
-      await win.fetch(API + "/api/wallet", { headers: { Authorization: "Bearer " + TOKEN } }); await flush();
-      check("IV3. bf-session.js ending an expired session deletes the copy and the setting", cleared(ls, idb) && /session=expired/.test(String(went)), went);
+      const ls = store(full(true)), ss = sess(), idb = fakeIDB();
+      ls.removeItem("bf_refresh");
+      const b = browser(ls, ss, idb, false, async () => ({ status: 401, ok: false }));
+      await b.ctx.fetch(API + "/api/wallet", { headers: { Authorization: "Bearer " + TOKEN } }); await flush();
+      const v = verdict(ls, ss, idb);
+      check("IV6. bf-session.js ending an expired session does the same", v.ok && /session=expired/.test(b.replaced.join(",")), v.why);
     }
     // your-data.html account delete
     {
-      const ls0 = signedIn();
       const pg = page({ html: FILES[YOURDATA].replace(/<script[\s\S]*?<\/script>/g, ""), file: YOURDATA, on: true,
+        before: w => { const f = full(true); Object.keys(f).forEach(k => w.localStorage.setItem(k, f[k])); w.sessionStorage.setItem(SESSION_PREFIX + "dashboard.html", "x"); w.sessionStorage.setItem("unrelated-tab-key", "stays"); },
+        pre: [FILES[SESSION]],
         net: (url) => /\/api\/me\/delete$/.test(url) ? json({ deleted: true, done: [], files: { deleted: 0, queued: 0, kept_for_buyers: 0, not_queued: 0 } }) : json(YD.describe()),
         script: inlineScripts(FILES[YOURDATA]).pop() });
-      void ls0;
       await flush();
       pg.doc.getElementById("delUsername").value = "owner"; pg.doc.getElementById("delPassword").value = "pw";
       pg.doc.getElementById("deleteForm").dispatchEvent(new pg.w.Event("submit", { cancelable: true, bubbles: true }));
       await flush();
-      check("IV4. deleting the account on your-data.html deletes the copy and the setting", pg.w.localStorage.getItem("bf_token") === null && pg.w.localStorage.getItem("bf_offline_copy") === null &&
-        pg.idb.log.deletes.indexOf("bf-offline") !== -1, pg.w.localStorage.getItem("bf_offline_copy"));
+      const v = verdict(pg.w.localStorage, pg.w.sessionStorage, pg.idb);
+      check("IV7. deleting the account on your-data.html does the same", v.ok, v.why);
+      check("IV8. your-data.html loads bf-session.js for clearDevice even signed out (data-clear-only)",
+        FILES[YOURDATA].indexOf("document.write('<script src=\"/scripts/bf-session.js\"' + (localStorage.getItem(\"bf_token\") ? '' : ' data-clear-only') + '><\\/script>');") !== -1);
     }
-    // app.html with no session
+    // app.html, with no session and with one
     {
-      const code = inlineScripts(FILES[APP]).find(c => c.indexOf("bf-offline") !== -1) || "";
-      const run = ls => { const idb = fakeIDB(); vm.runInNewContext(code, { localStorage: ls, window: { indexedDB: idb.api } }); return idb; };
-      const out = store({ bf_offline_copy: "on" }), idbOut = run(out);
-      const inn = signedIn(), idbIn = run(inn);
-      check("IV5. app.html opened with no session deletes any copy and the setting, whichever way the session ended", code !== "" && cleared(out, idbOut));
-      check("IV6. ... and leaves a signed-in member's copy alone", inn.getItem("bf_offline_copy") === "on" && idbIn.log.deletes.length === 0);
+      const code = inlineScripts(FILES[APP]).find(c => c.indexOf("clearDevice") !== -1) || "";
+      const run = token => { const ls = store(full(token)), ss = sess(), idb = fakeIDB(); const b = browser(ls, ss, idb, true); vm.runInContext(code, b.ctx); return { ls, ss, idb, b }; };
+      const out = run(false), inn = run(true);
+      const v = verdict(out.ls, out.ss, out.idb);
+      check("IV9. app.html opened with no session clears every per-member key, whichever way the session ended, and does not redirect", code !== "" && v.ok && out.b.replaced.length === 0, v.why);
+      check("IV10. ... and leaves a signed-in member's keys alone", inn.ls.getItem("bf_token") === TOKEN && inn.ls.getItem("bizforce_ai_mailbox") === "x" && inn.idb.log.deletes.length === 0);
+      check("IV11. app.html loads bf-session.js data-clear-only, just before that script",
+        /<script src="\/scripts\/bf-session\.js" data-clear-only><\/script>\n<script>\n  \/\* No session on this browser/.test(FILES[APP]));
     }
   }
 
