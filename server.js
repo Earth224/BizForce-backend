@@ -2263,6 +2263,20 @@ async function sendEmail(options) {
   var template    = opts.template;
   var fromEmail   = "BizForce AI <hello@mail.bizforceai.net>";
 
+  /* EVERY TRANSACTIONAL EMAIL ENDS WITH WHERE TO WRITE (lib/legal.js
+     contactFooter: the contact address and the postal address): the
+     verification link, the password reset, the consent confirmation. Marketing
+     mail ("marketing:" templates, from sendMarketingEmail only) already
+     carries its own footer, with the unsubscribe link, and gets no second. */
+  if (String(template || "").indexOf("marketing:") !== 0) {
+    var contactFooter = require("./lib/legal").contactFooter();
+    if (typeof html === "string") {
+      var bodyEnd = html.lastIndexOf("</body>");
+      html = bodyEnd === -1 ? html + contactFooter.html : html.slice(0, bodyEnd) + contactFooter.html + html.slice(bodyEnd);
+    }
+    if (typeof text === "string") text = text + contactFooter.text;
+  }
+
   var sendRowId = null;
 
   try {
@@ -2532,8 +2546,10 @@ function emailUnsubscribeUrl(contactId) {
    through here.
 
    IT REFUSES BY THROWING, before anything is written or sent, in this order:
-     1. MAIL_POSTAL_ADDRESS unset or blank — commercial mail must carry a
-        physical postal address, so without one there is nothing lawful to send.
+     1. no postal address — commercial mail must carry a physical postal
+        address, so without one there is nothing lawful to send. It is
+        lib/legal.js POSTAL_ADDRESS, the one copy every page and email reads;
+        MAIL_POSTAL_ADDRESS is no longer read.
      2. the contact's latest email consent is not "confirmed": "not_confirmed"
         when it is a "granted" still waiting on the confirmation link,
         "no_consent" when it is revoked, absent, or could not be read.
@@ -2631,9 +2647,9 @@ async function sendMarketingEmail(options) {
   }
 
   // ── 1. The postal address ────────────────────────────────────────────────
-  var postal = String(process.env.MAIL_POSTAL_ADDRESS || "").trim();
+  var postal = String(require("./lib/legal").POSTAL_ADDRESS || "").trim();
   if (!postal) {
-    throw emailMarketingRefusal("no_postal_address", "MAIL_POSTAL_ADDRESS is not set, and marketing mail must carry a physical postal address.");
+    throw emailMarketingRefusal("no_postal_address", "lib/legal.js holds no POSTAL_ADDRESS, and marketing mail must carry a physical postal address.");
   }
 
   // ── 1b. Bounce and complaint reports can be received ─────────────────────
@@ -2737,17 +2753,12 @@ async function sendMarketingEmail(options) {
         "and the cap is " + cap + ".");
     }
 
-    // ── The footer, in both bodies ───────────────────────────────────────────
+    // ── The footer, in both bodies: lib/legal.js marketingFooter ─────────────
+    // Why it came, the unsubscribe link, the postal address and the contact line.
     var unsubscribeUrl = emailUnsubscribeUrl(contactId);
-    var footerHtml =
-      '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5ef;font-size:12px;line-height:1.6;color:#6b6b80">' +
-      '<p style="margin:0 0 8px">You are receiving this because you asked to hear from us. ' +
-      '<a href="' + escapeHtml(unsubscribeUrl) + '" style="color:#6b6b80">Unsubscribe</a></p>' +
-      '<p style="margin:0">' + escapeHtml(postal).replace(/\r?\n/g, "<br>") + '</p>' +
-      '</div>';
-    var footerText =
-      "\n\n--\nYou are receiving this because you asked to hear from us.\n" +
-      "Unsubscribe: " + unsubscribeUrl + "\n" + postal;
+    var footer = require("./lib/legal").marketingFooter(unsubscribeUrl);
+    var footerHtml = footer.html;
+    var footerText = footer.text;
 
     return sendEmail({
       contactId: contactId,
@@ -4854,6 +4865,19 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       return res.status(400).json({ error: "Business name is required" });
     }
 
+    /* THE TERMS, ACCEPTED OR NO ACCOUNT. The sign-up box ("I am 18 or older
+       and agree to the Terms and Privacy Policy", lib/legal.js ACCEPT_LABEL)
+       sends accept_terms: true, and only the boolean true counts: a missing
+       field, "true" or 1 is refused before anything is read or written. The
+       acceptance is stored on the users row itself (migration 146), so an
+       account never exists without the record of what it agreed to. */
+    if (req.body.accept_terms !== true) {
+      return res.status(400).json({
+        error: "To create an account, confirm that you are " + require("./lib/legal").MINIMUM_AGE + " or older and agree to the Terms and Privacy Policy.",
+        reason: "terms_not_accepted"
+      });
+    }
+
     const { data: existingUser, error: existingUserError } = await supabase
       .from("users")
       .select("id")
@@ -4926,6 +4950,8 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
         email_verification_expires_at: emailVerificationExpiresAt,
         
         signup_ip: req.ip,
+        terms_accepted_at: nowIso(),
+        terms_version: require("./lib/legal").TERMS_VERSION,
         created_at: nowIso(),
         updated_at: nowIso()
       })
@@ -4933,6 +4959,14 @@ app.post("/api/auth/register", authLimiter, async function (req, res, next) {
       .single();
 
     if (userError) {
+      /* Until migration 146 adds terms_accepted_at and terms_version, the
+         insert names columns that do not exist and nothing is written. Say
+         that plainly rather than 500: no account was made, so trying later
+         is safe. */
+      if (userError.code === "42703" || userError.code === "PGRST204") {
+        console.error("[register] REFUSED: users.terms_accepted_at / terms_version are missing (apply migration 146). " + userError.message);
+        return res.status(503).json({ error: "Sign-up is paused for a few minutes while we update. No account was created; please try again shortly.", reason: "terms_columns_missing" });
+      }
       throw userError;
     }
 
@@ -5338,6 +5372,45 @@ app.post("/api/me/delete", requireAuth, yourDataDeleteLimiter, async function (r
     opsAlerts.storageDeletionUnqueued({ user_id: req.user.id, count: files.not_queued, error: (result.unqueued[0] || {}).queue_error });
   } else console.log(line);
   return res.status(result.status).json(result.body);
+});
+
+/* ── The Terms a member has accepted (lib/legal.js, migration 146) ────────
+   GET answers which version is in force and which the member accepted; the
+   shared footer (frontend scripts/bf-legal-footer.js) shows "We've updated our
+   Terms" once when they differ. POST records acceptance of the CURRENT version
+   only. requireAuth and nothing more: the notice never stands between a
+   member and their data or Billing, and an unreadable record shows no notice
+   rather than a wrong one. lib/legal.js is required inside each handler, not
+   as a module-level const: the check harnesses lift module-level consts by
+   name, and "legal" is a word many comments use. */
+app.get("/api/me/terms", requireAuth, async function (req, res) {
+  const legal = require("./lib/legal");
+  const read = await supabase.from("users").select("terms_accepted_at, terms_version").eq("id", req.user.id).maybeSingle();
+  if (read.error || !read.data) {
+    console.error("[terms] read FAILED for user " + req.user.id + ": " + ((read.error && read.error.message) || "no row"));
+    return res.status(503).json({ error: "Your Terms record could not be read just now.", current_version: legal.TERMS_VERSION });
+  }
+  return res.json({
+    current_version: legal.TERMS_VERSION,
+    updated: legal.TERMS_UPDATED,
+    accepted_version: read.data.terms_version || null,
+    accepted_at: read.data.terms_accepted_at || null,
+    needs_acceptance: legal.needsAcceptance(read.data.terms_version)
+  });
+});
+
+app.post("/api/me/terms/accept", requireAuth, async function (req, res) {
+  const legal = require("./lib/legal");
+  if (!req.body || req.body.version !== legal.TERMS_VERSION) {
+    return res.status(400).json({ error: "Those are not the current Terms. Reload the page and read the Terms again.", current_version: legal.TERMS_VERSION });
+  }
+  const acceptedAt = nowIso();
+  const written = await supabase.from("users").update({ terms_accepted_at: acceptedAt, terms_version: legal.TERMS_VERSION, updated_at: acceptedAt }).eq("id", req.user.id);
+  if (written.error) {
+    console.error("[terms] accept FAILED for user " + req.user.id + ": " + written.error.message);
+    return res.status(503).json({ error: "Your acceptance could not be recorded just now. Nothing changed; try again shortly." });
+  }
+  return res.json({ accepted_version: legal.TERMS_VERSION, accepted_at: acceptedAt, needs_acceptance: false });
 });
 
 /* ── POST /api/auth/refresh ──────────────────────────────────────────────────
@@ -16813,7 +16886,7 @@ function emailSenderReadiness() {
   var cap = emailMarketingDailyCap();
   return {
     enabled: emailSequencesEnabled(),
-    postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+    postal_address_set: String(require("./lib/legal").POSTAL_ADDRESS || "").trim() !== "",
     webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
     daily_cap: typeof cap === "number" ? cap : null
   };
@@ -24783,7 +24856,7 @@ app.get("/api/email/sequences", requireAuth, async function (req, res, next) {
       }),
       sender: {
         enabled: emailSequencesEnabled(),
-        postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+        postal_address_set: String(require("./lib/legal").POSTAL_ADDRESS || "").trim() !== "",
         webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
         daily_cap: typeof cap === "number" ? cap : null
       }
@@ -34539,7 +34612,7 @@ async function commandCenterNeedsYou(userId, now) {
   var cap = emailMarketingDailyCap();
   var sender = {
     enabled: emailSequencesEnabled(),
-    postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || "").trim() !== "",
+    postal_address_set: String(require("./lib/legal").POSTAL_ADDRESS || "").trim() !== "",
     webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
     daily_cap: typeof cap === "number" ? cap : null
   };

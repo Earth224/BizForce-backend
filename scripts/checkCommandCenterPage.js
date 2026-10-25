@@ -336,6 +336,10 @@ function server(seed, opts) {
   const db = fakeDb(seed, o.fail);
   const ctx = {
     supabase: db.client, JSON, Math, Promise, Date, crypto, Map, Set, AsyncLocalStorage: require("async_hooks").AsyncLocalStorage,
+    /* BEFORE (backend 5da9dfe): no require; nothing lifted needed one.
+       AFTER (legal pages): the sender readiness reads require("./lib/legal").POSTAL_ADDRESS,
+       resolved from server.js's directory as server.js resolves it. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
     process: { env: Object.assign({}, o.env === undefined ? ENV_SET : o.env) },
     console: { log() {}, error() {}, warn() {} },
@@ -569,9 +573,11 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
     pg.text("ccOutbound").indexOf("No email sequences.") !== -1 && pg.text("ccSpend").indexOf("$0.00 of $") !== -1, pg.text("ccAutopilot"));
   const blocked = server({}, { env: {} });
   pg = await page(live(blocked, USER));
+  /* BEFORE (backend 5da9dfe): with no environment, "No postal address is set (MAIL_POSTAL_ADDRESS)" was one reason.
+     AFTER (legal pages): the postal address is lib/legal.js POSTAL_ADDRESS, never unset, so that reason never shows. */
   check("the sender held: each reason in plain words, and not \"Nothing needs you\"",
     pg.text("ccNeedsYou").indexOf("Nothing needs you") === -1 && pg.text("ccNeedsYou").indexOf("Email sequences are switched off on the server (ENABLE_EMAIL_SEQUENCES)") !== -1 &&
-    pg.text("ccNeedsYou").indexOf("No postal address is set (MAIL_POSTAL_ADDRESS)") !== -1, pg.text("ccNeedsYou"));
+    pg.text("ccNeedsYou").indexOf("No postal address is set") === -1, pg.text("ccNeedsYou"));
   const oneProposal = server({ agent_proposals: [world().agent_proposals[0]] });
   pg = await page(live(oneProposal, OWNER));
   check("one pending proposal: not \"Nothing needs you\"", pg.text("ccNeedsYou").indexOf("Nothing needs you") === -1 && pg.text("ccNeedsYou").indexOf("Publish post A") !== -1);

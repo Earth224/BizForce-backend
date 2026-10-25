@@ -322,7 +322,9 @@ function build(seed, opts) {
     }
   }
   const ctx = {
-    supabase: db.client, Resend, crypto, Buffer, URL, JSON, Math, Promise, require, Date: FakeDate,
+    /* BEFORE (backend 5da9dfe): the check's own require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    supabase: db.client, Resend, crypto, Buffer, URL, JSON, Math, Promise, require: require("module").createRequire(path.join(REPO, "server.js")), Date: FakeDate,
     nowIso: () => new FakeDate().toISOString(),
     process: { env: Object.assign({}, o.env === undefined ? ENV : o.env) },
     console: { log: m => logs.push(String(m)), error: (...a) => logs.push(a.map(String).join(" ")), warn: m => logs.push(String(m)) },
@@ -472,8 +474,16 @@ const untouched = (b, seed, k) => JSON.stringify(b.enr(k)) === JSON.stringify(se
   check("cap_reached: another owner's enrollment is still sent", b.sent.length === 1 && b.sent[0].to === "p3@example.com" && b.enr(3).next_step === 1, b.sent.map(m => m.to).join(","));
   check("cap_reached: attempted 2, deferred 2", /attempted 2 .*deferred 2, aborted no/.test(b.summary()), b.summary());
 
+  /* BEFORE (backend 5da9dfe): a blank MAIL_POSTAL_ADDRESS aborted the tick with no_postal_address.
+     AFTER (legal pages): the address is lib/legal.js POSTAL_ADDRESS, never blank, so the variable changes nothing and
+     the tick sends; no_postal_address stays an abort reason for a lib/legal.js without an address. */
+  seed = world([{ k: 1, consent: "confirmed", due_ms: 3 * DAY }, { k: 2, consent: "confirmed", due_ms: 2 * DAY }, { k: 3, consent: "confirmed", seq: SEQ.other, due_ms: DAY }]);
+  b = build(seed, { env: Object.assign({}, ENV, { MAIL_POSTAL_ADDRESS: "  " }) });
+  await b.tick();
+  check("a blank MAIL_POSTAL_ADDRESS is not read: the tick sends all three, aborting nothing", b.sent.length === 3 && /aborted no/.test(b.summary()), b.summary());
+
   // no_webhook_secret: No marketing mail while bounces cannot be heard.
-  for (const [reason, env] of [["no_postal_address", Object.assign({}, ENV, { MAIL_POSTAL_ADDRESS: "  " })], ["no_webhook_secret", Object.assign({}, ENV, { RESEND_WEBHOOK_SECRET: "" })],
+  for (const [reason, env] of [["no_webhook_secret", Object.assign({}, ENV, { RESEND_WEBHOOK_SECRET: "" })],
     ["cap_unreadable", Object.assign({}, ENV, { EMAIL_MARKETING_DAILY_CAP: "lots" })]]) {
     seed = world([{ k: 1, consent: "confirmed", due_ms: 3 * DAY }, { k: 2, consent: "confirmed", due_ms: 2 * DAY }, { k: 3, consent: "confirmed", seq: SEQ.other, due_ms: DAY }]);
     b = build(seed, { env });

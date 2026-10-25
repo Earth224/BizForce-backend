@@ -132,6 +132,9 @@ function capture(source, extra) {
   const ctx = Object.assign({
     console: { log: function (m) { logs.push(String(m)); }, warn: function (m) { logs.push(String(m)); }, error: function (m) { logs.push(String(m)); } },
     authLimiter: 0,
+    /* BEFORE (backend 5da9dfe): no require. AFTER (legal pages): registration reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     app: { post: function () { handler = arguments[arguments.length - 1]; middleware = Array.prototype.slice.call(arguments, 1, -1); } }
   }, extra);
   vm.createContext(ctx);
@@ -193,7 +196,9 @@ function buildRegister(source, sendBehaviour) {
   return { handler: cap.handler, logs: cap.logs, db: db, sends: sends };
 }
 
-const REG_BODY = { email: "Check.Person@example.invalid", password: "long-enough-password", business_name: "Check Business" };
+/* BEFORE (backend 5da9dfe): no accept_terms. AFTER (legal pages): registration refuses without the Terms box
+   (accept_terms: true), so the body ticks it; scripts/checkLegalPages.js covers the refusal. */
+const REG_BODY = { email: "Check.Person@example.invalid", password: "long-enough-password", business_name: "Check Business", accept_terms: true };
 const shape = function (r) { return JSON.stringify({ status: r.status, keys: Object.keys(r.body || {}).sort(), email_verification_required: r.body && r.body.email_verification_required, token: r.body && r.body.token, refresh_token: r.body && r.body.refresh_token }); };
 
 /* ── part two: verify-email, against the subject's real row ─────────────── */

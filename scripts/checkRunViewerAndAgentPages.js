@@ -286,6 +286,9 @@ function server(seed, opts) {
   const db = fakeDb(seed, o.fail);
   const ctx = {
     supabase: db.client, JSON, Math, Promise, Date, crypto, Map, Set,
+    /* BEFORE (backend 5da9dfe): no require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
     process: { env: Object.assign({}, ENV) },
     console: { log() {}, error() {}, warn() {} },

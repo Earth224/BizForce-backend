@@ -96,6 +96,8 @@ if (MUTATE) {
   console.log("\n!! MUTATION: " + MUTATE);
 }
 const OLD = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 64 << 20 }).toString("utf8").replace(/\r\n/g, "\n");
+// The contact line every transactional email now ends with (lib/legal.js).
+const CF = require("../lib/legal").contactFooter();
 
 /* _shared.definitionOf, uncached for the reason checkMarketingEmail gives: its
    cache keys every source that is not the working tree as one, and this check
@@ -257,7 +259,9 @@ function build(src, opts) {
     }
   }
   const ctx = {
-    supabase: db.client, Resend, crypto, Buffer, URL, Date, JSON, Math, Promise, require, OWNER_ACCOUNT_ID: OWNER,
+    /* BEFORE (backend 5da9dfe): the check's own require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    supabase: db.client, Resend, crypto, Buffer, URL, Date, JSON, Math, Promise, require: require("module").createRequire(path.join(REPO, "server.js")), OWNER_ACCOUNT_ID: OWNER,
     express: { raw: () => "raw" }, nowIso: () => "2026-10-09T12:00:00.000Z",
     process: { env: Object.assign({}, o.env === undefined ? ENV : o.env) },
     console: { log: m => logs.push(String(m)), error: m => logs.push(String(m)), warn: m => logs.push(String(m)) }
@@ -609,8 +613,12 @@ function tokenWith(api, contactId, address, expiresAt) {
     const before = build(OLD, Object.assign({ routes: [] }, o)), after = build(SRC, Object.assign({ routes: [] }, o));
     const rb = await before.api.sendEmail(JSON.parse(JSON.stringify(opts)));
     const ra = await after.api.sendEmail(JSON.parse(JSON.stringify(opts)));
-    const shape = (x) => JSON.stringify([x.r, x.b.sent, x.b.db.log.map(q => [q.table, q.op, q.cols, q.opts, q.payload, q.filters])]);
-    check(name + ": result, Resend call and database traffic identical", shape({ r: ra, b: after }) === shape({ r: rb, b: before }),
+    /* BEFORE (backend 5da9dfe): byte-identical. AFTER (legal pages): identical once lib/legal.js's contact line,
+       which sendEmail now ends every transactional email with, is taken off; and every one sent carries it. */
+    const unfoot = m => Object.assign({}, m, { html: String(m.html).split(CF.html).join(""), text: String(m.text).split(CF.text).join("") });
+    const shape = (x, strip) => JSON.stringify([x.r, strip ? x.b.sent.map(unfoot) : x.b.sent, x.b.db.log.map(q => [q.table, q.op, q.cols, q.opts, q.payload, q.filters])]);
+    check(name + ": result, Resend call (less the contact line) and database traffic identical",
+      shape({ r: ra, b: after }, true) === shape({ r: rb, b: before }) && after.sent.every(m => String(m.text).endsWith(CF.text)),
       JSON.stringify([ra, after.sent.length]) + " vs " + JSON.stringify([rb, before.sent.length]));
   }
 

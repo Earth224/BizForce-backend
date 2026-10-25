@@ -268,7 +268,11 @@ const EXPECTED_OWN = [
   "post /api/agents/sales/lead-status",  // refuses every account but the credential owner (checkLeadRadarOwnerGate)
   // Let the owner see and stop every sequence: pauses, resumes or cancels the
   // caller's own sequence. Deliberately ungated, so stopping mail never needs a subscription.
-  "post /api/email/sequences/:id/status"
+  "post /api/email/sequences/:id/status",
+  // NAMED (Oct 25 2026, legal pages; effectful login-only 122 -> 123): BEFORE, no Terms route.
+  // AFTER, accepting the current Terms writes only the caller's own users.terms_accepted_at and
+  // terms_version. Deliberately ungated: agreeing to the Terms never needs a subscription.
+  "post /api/me/terms/accept"
 ];
 
 /* Unauthenticated routes that write. */

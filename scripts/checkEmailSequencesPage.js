@@ -259,6 +259,9 @@ function backend(env) {
   class Resend { constructor() { RESEND_CALLS++; this.emails = { send: async () => { RESEND_CALLS++; return { data: { id: "x" }, error: null }; } }; } }
   const ctx = {
     supabase: db.client, Resend, JSON, Math, Promise, Date,
+    /* BEFORE (backend 5da9dfe): no require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
     process: { env: Object.assign({}, env || ENV_ALL) },
     console: { log() {}, error() {}, warn() {} },
@@ -457,7 +460,6 @@ const movesIn = (rowHtml) => (rowHtml.match(/data-es-move="([a-z]+)"/g) || []).m
   const LEAKS = ["SECRET-POSTAL", "Hidden Lane", "whsec_", "LEAKME", "re_SHOULD"];
   const cases = [
     ["sender switched off", Object.assign({}, ENV_ALL, { ENABLE_EMAIL_SEQUENCES: "false" }), /switched off/],
-    ["postal address not set", Object.assign({}, ENV_ALL, { MAIL_POSTAL_ADDRESS: " " }), /postal address/],
     // Hold the page to the webhook rule: a missing secret holds marketing mail, so it is a blocking reason.
     ["webhook secret not set", Object.assign({}, ENV_ALL, { RESEND_WEBHOOK_SECRET: "" }), /^Bounce and complaint reports are not connected, so marketing mail is held\.$/],
     ["daily cap unreadable", Object.assign({}, ENV_ALL, { EMAIL_MARKETING_DAILY_CAP: "lots" }), /daily cap could not be read/]
@@ -470,8 +472,12 @@ const movesIn = (rowHtml) => (rowHtml.match(/data-es-move="([a-z]+)"/g) || []).m
     check(label + ": 'Nothing is being sent', never 'Sending is on'", r.html.includes("Nothing is being sent") && !r.html.includes("Sending is on"), r.html);
   }
   // An unset cap is the server's default (50), so "nothing usable" sets it to garbage.
+  /* BEFORE (backend 5da9dfe): a blank MAIL_POSTAL_ADDRESS was a reason line, and "nothing usable" showed four.
+     AFTER (legal pages): the postal address is lib/legal.js's, always set, so the variable is no reason and three remain. */
+  const blankPostal = await senderFor(Object.assign({}, ENV_ALL, { MAIL_POSTAL_ADDRESS: " " }));
+  check("a blank MAIL_POSTAL_ADDRESS is not read: 'Sending is on', no reason line", blankPostal.html.includes("Sending is on") && reasonsIn(blankPostal.html).length === 0, blankPostal.html);
   const none = await senderFor({ EMAIL_MARKETING_DAILY_CAP: "lots" });
-  check("nothing usable: four reason lines", reasonsIn(none.html).length === 4, JSON.stringify(reasonsIn(none.html)));
+  check("nothing usable: three reason lines (switched off, no bounce reports, no readable cap)", reasonsIn(none.html).length === 3, JSON.stringify(reasonsIn(none.html)));
   const dflt = await senderFor({ ENABLE_EMAIL_SEQUENCES: "true", MAIL_POSTAL_ADDRESS: "x", RESEND_WEBHOOK_SECRET: "y" });
   check("cap unset: the server's default, 50, shown as on", dflt.html.includes("Sending is on. Daily cap: 50") && reasonsIn(dflt.html).length === 0, dflt.html);
   check("the sender's fields are booleans and the cap", Object.keys(all.body.sender).sort().join() === "daily_cap,enabled,postal_address_set,webhook_secret_set" &&

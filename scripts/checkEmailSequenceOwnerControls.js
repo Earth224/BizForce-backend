@@ -49,8 +49,10 @@ const MUT = require("./_shared");
 
 const MUTATIONS = {
   // the sender object carries the postal address itself
-  "leak-env-value": [["        postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || \"\").trim() !== \"\",\n",
-    "        postal_address_set: String(process.env.MAIL_POSTAL_ADDRESS || \"\").trim(),\n"]],
+  // BEFORE (backend 5da9dfe): anchored on String(process.env.MAIL_POSTAL_ADDRESS || "").trim().
+  // AFTER (legal pages): the address is lib/legal.js's POSTAL_ADDRESS, so the anchor reads that.
+  "leak-env-value": [["        postal_address_set: String(require(\"./lib/legal\").POSTAL_ADDRESS || \"\").trim() !== \"\",\n",
+    "        postal_address_set: String(require(\"./lib/legal\").POSTAL_ADDRESS || \"\").trim(),\n"]],
   // a cancelled sequence can be made active again
   "cancelled-to-active": [["  paused: [\"active\", \"cancelled\"]\n};", "  paused: [\"active\", \"cancelled\"],\n  cancelled: [\"active\"]\n};"]],
   // stopping needs a subscription
@@ -258,6 +260,9 @@ function build(seed, opts) {
   const refusedBy = [];
   const ctx = {
     supabase: db.client, Resend, JSON, Math, Promise, Date,
+    /* BEFORE (backend 5da9dfe): no require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
     process: { env: Object.assign({}, o.env === undefined ? ENV_SET : o.env) },
     console: { log: m => logs.push(String(m)), error: (...a) => logs.push(a.map(String).join(" ")), warn: m => logs.push(String(m)) },
@@ -339,12 +344,14 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   check("no environment value appears anywhere in the response", leaked.length === 0 && fragments.length === 0, JSON.stringify(leaked.concat(fragments)));
   b = build(world(), { env: {} });
   r = await b.list(OWNER);
-  check("nothing set: enabled false, postal false, webhook false, cap the default 50",
-    same(r.body.sender, { enabled: false, postal_address_set: false, webhook_secret_set: false, daily_cap: 50 }), JSON.stringify(r.body.sender));
+  /* BEFORE (backend 5da9dfe): postal_address_set read MAIL_POSTAL_ADDRESS, so "nothing set" meant postal false.
+     AFTER (legal pages): it reads lib/legal.js POSTAL_ADDRESS, the one copy, which is always set. */
+  check("nothing set: enabled false, postal true (lib/legal.js), webhook false, cap the default 50",
+    same(r.body.sender, { enabled: false, postal_address_set: true, webhook_secret_set: false, daily_cap: 50 }), JSON.stringify(r.body.sender));
   b = build(world(), { env: { ENABLE_EMAIL_SEQUENCES: "TRUE", MAIL_POSTAL_ADDRESS: "   ", RESEND_WEBHOOK_SECRET: "", EMAIL_MARKETING_DAILY_CAP: "lots" } });
   r = await b.list(OWNER);
-  check("\"TRUE\", a blank address, an empty secret, an unreadable cap: false, false, false, null",
-    same(r.body.sender, { enabled: false, postal_address_set: false, webhook_secret_set: false, daily_cap: null }), JSON.stringify(r.body.sender));
+  check("\"TRUE\", a blank MAIL_POSTAL_ADDRESS (not read), an empty secret, an unreadable cap: false, true, false, null",
+    same(r.body.sender, { enabled: false, postal_address_set: true, webhook_secret_set: false, daily_cap: null }), JSON.stringify(r.body.sender));
   check("…and the unreadable cap's text is not echoed", JSON.stringify(r.body).indexOf("lots") === -1);
 
   /* ── 3. the detail, and identical 404s ────────────────────────────────── */

@@ -344,6 +344,10 @@ function build(seed, opts) {
   const dispatchCalls = [];
   const ctx = {
     supabase: db.client, JSON, Math, Promise, Date, crypto,
+    /* BEFORE (backend 5da9dfe): no require; nothing lifted needed one.
+       AFTER (legal pages): the sender readiness reads require("./lib/legal").POSTAL_ADDRESS,
+       resolved from server.js's directory as server.js resolves it. */
+    require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
     process: { env: Object.assign({}, o.env === undefined ? ENV_SET : o.env) },
     console: { log: m => logs.push(String(m)), error: (...a) => logs.push(a.map(String).join(" ")), warn: m => logs.push(String(m)) },
@@ -501,8 +505,11 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
   const ny2 = (await unset.center(OWNER)).body.needs_you.data.email_sender;
   const seq2 = (await unset.sequences(OWNER)).body.sender;
   const ny2b = Object.assign({}, ny2); delete ny2b.blocked_by;
-  check("needs_you: with the sender unconfigured, the same booleans, and blocked_by names all four",
-    same(ny2b, seq2) && same(ny2.blocked_by, ["enabled", "postal_address_set", "webhook_secret_set", "daily_cap"]), JSON.stringify(ny2));
+  /* BEFORE (backend 5da9dfe): "blocked_by names all four", postal_address_set among them, read from MAIL_POSTAL_ADDRESS.
+     AFTER (legal pages): the postal address is lib/legal.js POSTAL_ADDRESS, the one copy, so it is always set and
+     blocks nothing; the other three still do. */
+  check("needs_you: with the sender unconfigured, the same booleans, and blocked_by names the three settings (the postal address is lib/legal.js's, always set)",
+    same(ny2b, seq2) && ny2.postal_address_set === true && same(ny2.blocked_by, ["enabled", "webhook_secret_set", "daily_cap"]), JSON.stringify(ny2));
   check("needs_you: no environment value is in the answer", !/SECRET-POSTAL|whsec_LEAKME/.test(JSON.stringify(cc)));
 
   const plans = (cc.plans || {}).data || [];

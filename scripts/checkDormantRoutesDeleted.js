@@ -105,7 +105,9 @@ const ADDED = [
   ["put", "/api/agent-schedules/:agent_type/resume"],  // Schedules can be paused without losing them: resume (total 316 -> 317)
   ["get", "/api/me/trades"],                    // Every BizCash trade is recorded: the trade ledger (total 317 -> 318)
   ["get", "/api/me/trades.csv"],                // Every BizCash trade is recorded: the ledger as CSV (total 318 -> 319)
-  ["get", "/api/me/trade-statement"]            // Every BizCash trade is recorded: the yearly statement (total 319 -> 320)
+  ["get", "/api/me/trade-statement"],           // Every BizCash trade is recorded: the yearly statement (total 319 -> 320)
+  ["get", "/api/me/terms"],                     // Terms with recorded acceptance: which version the member accepted (total 320 -> 321)
+  ["post", "/api/me/terms/accept"]             // Terms with recorded acceptance: accepting the current version (total 321 -> 322)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

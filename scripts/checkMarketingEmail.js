@@ -17,15 +17,18 @@
         nor Transient; a bounce found only by the address (another contact, other
         case); a history lookup that fails; the cap reached; the count unreadable
         or missing; a malformed cap ("abc", "0", "-5", "2.5"); a body missing.
-     2. The order: no postal address refuses before any database read; no
-        consent refuses before the contact, history or count is read.
+     2. The order: no webhook secret refuses before any database read; no
+        consent refuses before the contact, history or count is read. The
+        postal address is lib/legal.js POSTAL_ADDRESS: MAIL_POSTAL_ADDRESS is
+        no longer read, so unset or blank refuses nothing.
      3. What passes: a temporary bounce alone; the cap minus one (and the
         default 50 when unset); the mail goes to the CONTACT's address with
         template "marketing:<name>", the unsubscribe link and the postal address
         in BOTH bodies (escaped in HTML), the List-Unsubscribe headers as before,
         and a link whose token verifyUnsubscribeToken resolves to the contact.
-     4. Transactional sends are byte-identical to BEFORE: the same Resend call
-        and the same database traffic, with and without the consent check, with
+     4. Transactional sends are identical to BEFORE but for lib/legal.js's
+        contact line, which every one now ends with: the same Resend call and
+        the same database traffic, with and without the consent check, with
         MAIL_POSTAL_ADDRESS set and unset, and on the refusal paths.
      5. The webhook keeps the bounce type: Permanent, Transient and a missing
         type are written as "[bounce type=… subtype=…] <message>" and read back
@@ -59,12 +62,14 @@ const MUTATIONS = {
   "failed-count-sends": [["    if (counted.error || typeof counted.count !== \"number\") {", "    if (false) {"]],
   // a malformed cap falls back to the default
   "default-malformed-cap": [["    return parsed;\n  }\n  return null;\n}\n\n// A bounce field", "    return parsed;\n  }\n  return EMAIL_MARKETING_DEFAULT_DAILY_CAP;\n}\n\n// A bounce field"]],
+  /* BEFORE (backend 5da9dfe): these two removed lines of the footer server.js built from MAIL_POSTAL_ADDRESS.
+     AFTER (legal pages): the footer is lib/legal.js marketingFooter, so each takes its part back out of that footer. */
   // the postal address is dropped from both bodies
-  "drop-postal": [["      '<p style=\"margin:0\">' + escapeHtml(postal).replace(/\\r?\\n/g, \"<br>\") + '</p>' +\n", ""],
-    ["\"Unsubscribe: \" + unsubscribeUrl + \"\\n\" + postal;", "\"Unsubscribe: \" + unsubscribeUrl;"]],
+  "drop-postal": [["    var footerHtml = footer.html;\n    var footerText = footer.text;\n",
+    "    var footerHtml = footer.html.split(require(\"./lib/legal\").ADDRESS_LINES.map(escapeHtml).join(\"<br>\")).join(\"\");\n    var footerText = footer.text.split(require(\"./lib/legal\").ADDRESS_LINES.join(String.fromCharCode(10))).join(\"\");\n"]],
   // the unsubscribe link is dropped from both bodies
-  "drop-body-unsubscribe": [["      '<a href=\"' + escapeHtml(unsubscribeUrl) + '\" style=\"color:#6b6b80\">Unsubscribe</a></p>' +\n", "      '</p>' +\n"],
-    ["\"Unsubscribe: \" + unsubscribeUrl + \"\\n\" + postal;", "postal;"]],
+  "drop-body-unsubscribe": [["    var footerHtml = footer.html;\n    var footerText = footer.text;\n",
+    "    var footerHtml = footer.html.split('<a href=\"' + escapeHtml(unsubscribeUrl) + '\" style=\"color:#6b6b80\">Unsubscribe</a>').join(\"\");\n    var footerText = footer.text.split(\"Unsubscribe: \" + unsubscribeUrl).join(\"\");\n"]],
   // a failed consent lookup is reported as no_consent
   "consent-failure-as-no-consent": [["  if (!consent.ok) {\n    throw emailMarketingRefusal(\"lookup_failed\", \"the contact's email consent could not be read.\");\n  }\n", ""]],
   // the webhook gate is gone
@@ -95,6 +100,9 @@ if (MUTATE) {
   console.log("\n!! MUTATION: " + MUTATE);
 }
 const OLD = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 64 << 20 }).toString("utf8").replace(/\r\n/g, "\n");
+// The one copy of the postal and contact addresses, and the contact line every transactional email now ends with.
+const LEGAL = require("../lib/legal");
+const CF = LEGAL.contactFooter();
 
 /* _shared.definitionOf, uncached. Its cache keys every source that is not the
    working tree as one, and this check holds two of those at once — a mutated
@@ -212,7 +220,9 @@ function build(src, root, plan, env) {
   }
   const ctx = {
     supabase: db.client, Resend, SvixWebhook: Webhook, crypto, Buffer, URL, Date, JSON, Math, Promise,
-    express: { raw: () => "raw" }, nowIso: () => "2026-10-09T12:00:00.000Z", require,
+    /* BEFORE (backend 5da9dfe): the check's own require. AFTER (legal pages): the lifted mail code reads
+       require("./lib/legal"), which must resolve from server.js's directory as it does in server.js. */
+    express: { raw: () => "raw" }, nowIso: () => "2026-10-09T12:00:00.000Z", require: require("module").createRequire(path.join(REPO, "server.js")),
     process: { env: Object.assign({ RESEND_API_KEY: "re_test_key", JWT_SECRET: "check-jwt-secret" }, env || {}) },
     console: { log: m => logs.push(String(m)), error: m => logs.push(String(m)), warn: m => logs.push(String(m)) }
   };
@@ -258,11 +268,14 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
 (async function main() {
   /* ── 1 & 2. refusals and their order ─────────────────────────────────── */
   console.log("\n══ 1. the refusals ══");
-  let r = await marketing({}, {});
-  refused("MAIL_POSTAL_ADDRESS unset", r, "no_postal_address");
-  check("MAIL_POSTAL_ADDRESS unset: refused before any database read", r.b.db.log.length === 0, r.b.db.log.map(q => q.table).join(","));
-  r = await marketing({}, { MAIL_POSTAL_ADDRESS: "   " });
-  refused("MAIL_POSTAL_ADDRESS blank", r, "no_postal_address");
+  /* BEFORE (backend 5da9dfe): MAIL_POSTAL_ADDRESS unset or blank refused with no_postal_address, before any read.
+     AFTER (legal pages): the address is lib/legal.js POSTAL_ADDRESS, the one copy. The variable is not read, so
+     unset or blank changes nothing: with the webhook secret set, the mail goes, carrying lib/legal.js's address. */
+  let r = await marketing({}, { RESEND_WEBHOOK_SECRET: "whsec_check" });
+  check("MAIL_POSTAL_ADDRESS unset: not read; the mail goes with lib/legal.js's address", !r.error && r.b.sent.length === 1 &&
+    String(r.b.sent[0].text).indexOf(LEGAL.ADDRESS_LINES.join("\n")) !== -1, r.error && r.error.message);
+  r = await marketing({}, { MAIL_POSTAL_ADDRESS: "   ", RESEND_WEBHOOK_SECRET: "whsec_check" });
+  check("MAIL_POSTAL_ADDRESS blank: not read either", !r.error && r.b.sent.length === 1, r.error && r.error.message);
   // No marketing mail while bounces cannot be heard.
   r = await marketing({}, { MAIL_POSTAL_ADDRESS: POSTAL });
   refused("RESEND_WEBHOOK_SECRET unset", r, "no_webhook_secret");
@@ -271,7 +284,9 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
   refused("RESEND_WEBHOOK_SECRET blank", r, "no_webhook_secret");
   check("RESEND_WEBHOOK_SECRET blank: refused before any database read", r.b.db.log.length === 0);
   r = await marketing({}, {});
-  check("order: with both unset, the postal address is refused first", r.error && r.error.reason === "no_postal_address", r.error && r.error.reason);
+  // BEFORE: "with both unset, the postal address is refused first". AFTER: the address is never unset, so the secret is.
+  check("order: with nothing set, the webhook secret is refused first, before any read", r.error && r.error.reason === "no_webhook_secret" && r.b.db.log.length === 0,
+    r.error && r.error.reason);
   r = await marketing({ consent: [] }, { MAIL_POSTAL_ADDRESS: POSTAL, RESEND_WEBHOOK_SECRET: "whsec_check" });
   check("order: with the secret set, the next gate (consent) is reached", r.error && r.error.reason === "no_consent", r.error && r.error.reason);
 
@@ -344,9 +359,10 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
   check("the text body carries the unsubscribe link", !!m, call.text);
   check("the HTML body carries the same link", m && call.html.includes('<a href="' + url + m[1] + '"'), call.html);
   check("the link's token verifies to the contact", m && r.b.api.verifyUnsubscribeToken(m[1]) === CONTACT);
-  check("the text body carries the postal address exactly", (call.text || "").endsWith("\n" + POSTAL), call.text);
-  check("the HTML body carries the postal address, escaped, lines broken",
-    (call.html || "").includes("BizForce AI<br>123 Example Street, Suite 4 &amp; 5<br>Springfield, ST 00000"), call.html);
+  // BEFORE: the fixture's MAIL_POSTAL_ADDRESS (POSTAL). AFTER: lib/legal.js's address lines, whatever the variable says.
+  check("the text body carries lib/legal.js's postal address, a line each", (call.text || "").indexOf("\n" + LEGAL.ADDRESS_LINES.join("\n") + "\n") !== -1 &&
+    (call.text || "").indexOf(POSTAL) === -1, call.text);
+  check("the HTML body carries it escaped, lines broken", (call.html || "").includes(LEGAL.ADDRESS_LINES.map(LEGAL.escapeHtml).join("<br>")), call.html);
   check("the original bodies come first, unchanged", call.html.startsWith("<p>Hello</p>") && call.text.startsWith("Hello\n\n--\n"));
   check("headers as before: List-Unsubscribe is the same link, and One-Click",
     m && JSON.stringify(call.headers) === JSON.stringify({ "List-Unsubscribe": "<" + url + m[1] + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }), JSON.stringify(call.headers));
@@ -378,8 +394,12 @@ const bounce = (id, type, subtype, msg, extra) => Object.assign({ id, to_email: 
       const before = build(OLD, TX_ROOT, p, env), after = build(SRC, TX_ROOT, p, env);
       const rb = await before.api.sendEmail(JSON.parse(JSON.stringify(opts)));
       const ra = await after.api.sendEmail(JSON.parse(JSON.stringify(opts)));
-      const same = JSON.stringify([rb, before.sent, before.db.log]) === JSON.stringify([ra, after.sent, after.db.log]);
-      check(name + " [" + envName + "]: result, Resend call and database traffic identical", same,
+      /* BEFORE (backend 5da9dfe): byte-identical. AFTER (legal pages): identical once the contact line lib/legal.js
+         adds to every transactional email is taken off, and every one sent carries it. */
+      const unfooted = after.sent.map(m => Object.assign({}, m, { html: String(m.html).split(CF.html).join(""), text: String(m.text).split(CF.text).join("") }));
+      const same = JSON.stringify([rb, before.sent, before.db.log]) === JSON.stringify([ra, unfooted, after.db.log]) &&
+        after.sent.every(m => String(m.text).endsWith(CF.text) && String(m.html).indexOf(CF.html) !== -1);
+      check(name + " [" + envName + "]: result, Resend call (less the contact line) and database traffic identical", same,
         JSON.stringify([ra, after.sent.length, after.db.log.map(q => q.table + ":" + q.op)]) + " vs " + JSON.stringify([rb, before.sent.length, before.db.log.map(q => q.table + ":" + q.op)]));
     }
   }
