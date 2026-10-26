@@ -142,7 +142,7 @@ const ENTITLEMENT_NAMES = ["PAST_DUE_GRACE_DEFAULT_DAYS", "PAST_DUE_GRACE_MAX_DA
   "SUBSCRIPTION_GRACE_DAYS", "SUBSCRIPTION_PAST_DUE_GRACE_DAYS", "subscriptionExpiryState", "subscriptionEntitlement",
   "ADMIN_EXEMPT_PLAN", "ADMIN_EXEMPT_CONFIG", "isExemptRole", "getUserPlan",
   "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE", "subscriptionRequiredBody",
-  "CHECKOUT_PRODUCTS"];
+  "CHECKOUT_PRODUCTS", "PLAN_CONFIG", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent"];
 const ROUTE_SIG = 'app.post("/api/stripe/checkout", requireAuth, async function (req, res) {';
 function checkoutRoute() {
   const src = SRC["server.js"];
@@ -175,13 +175,14 @@ function buildServer(opts) {
     supabase: { from: () => chain() },
     stripe: { checkout: { sessions: { create: async (p) => { stripeCalls.push(p); return { url: "https://checkout.stripe.test/s1" }; } } } },
     FRONTEND_URL: "https://bizforce.test",
+    nowIso: () => new Date().toISOString(),
     requireAuth: function requireAuth() {},
     app: { post(p, mw, h) { if (p === "/api/stripe/checkout") handler = h; } }
   };
   vm.createContext(ctx);
   const code = ENTITLEMENT_NAMES.map(lift).join("\n\n") + "\n\n" + checkoutRoute() + "\n\n" +
     "this.api = { getUserPlan: getUserPlan, subscriptionEntitlement: subscriptionEntitlement, subscriptionRequiredBody: subscriptionRequiredBody," +
-    " pastDueDays: SUBSCRIPTION_PAST_DUE_GRACE_DAYS, BILLING_URL: BILLING_URL, pastDueGraceState: pastDueGraceState };";
+    " pastDueDays: SUBSCRIPTION_PAST_DUE_GRACE_DAYS, BILLING_URL: BILLING_URL, pastDueGraceState: pastDueGraceState, autoRenewConsent: autoRenewConsent };";
   vm.runInContext(code, ctx);
   ctx.api.checkout = async function (body) {
     const res = { code: 200, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
@@ -343,7 +344,14 @@ function loadAgentPage(file, handlers) {
 
   /* ── C. #11 no second checkout ───────────────────────────────────────── */
   console.log("\n══ C. #11 checkout refuses an account that already has an entitling subscription ══");
-  async function checkout(opts) { const b = buildServer(opts); const out = await b.api.checkout({}); return Object.assign(out, { stripe: b.stripeCalls.length, writes: b.dbWrites.length }); }
+  /* Every call ticks the automatic-renewal box on today's words
+     (checkAutoRenewConsent proves the refusal without it). */
+  async function checkout(opts) {
+    const b = buildServer(opts);
+    const c = b.api.autoRenewConsent("all_access");
+    const out = await b.api.checkout({ product: "all_access", auto_renew_consent: true, auto_renew_consent_text: c.text, auto_renew_consent_version: c.version });
+    return Object.assign(out, { stripe: b.stripeCalls.length, writes: b.dbWrites.length });
+  }
   let c = await checkout({ subs: [sub("active", { current_period_end: iso(NOW + 20 * DAY) })] });
   check("C1. active subscription: 409 already_subscribed", c.status === 409 && c.body.error === "already_subscribed", JSON.stringify([c.status, c.body]));
   check("C2. ...with a message and billing_url", /already has an active subscription/.test(c.body.message) && c.body.billing_url === "/billing.html", JSON.stringify(c.body));

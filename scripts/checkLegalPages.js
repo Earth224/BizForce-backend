@@ -11,9 +11,12 @@
 
    WHAT THIS PROVES
      A. The four pages in the frontend are exactly what the backend builds
-        from the code as it stands, each with "Last updated" and the version;
-        and the builder follows its sources: built from other figures, the
-        pages state those figures (a hard-coded price or amount fails).
+        from the code as it stands, each with one "Last updated" line and the
+        version; and the builder follows its sources: built from other
+        figures, the pages state those figures (a hard-coded price or amount
+        fails). No page says "A All Access", and no sentence on a page is said
+        twice (the Terms' card and section 4, Privacy's "We do not sell", the
+        kept-after-deletion list).
      B. Netlify serves /terms, /privacy, /refund and /contact from the pages,
         ahead of the catch-all: /terms no longer falls through to sign-in.
      C. One copy: the postal address and the contact address appear in
@@ -98,7 +101,15 @@ const MUTATIONS = {
   // the notice shown to members who already accepted
   "notice-always": [["scripts/bf-legal-footer.js", "if (terms && terms.needs_acceptance === true && terms.current_version) {", "if (terms && terms.current_version) {"]],
   // an unbackable security claim on Privacy
-  "claim-bank-level": [["privacy.html", "<p>Exactly as the Your data page states it:</p>", "<p>Exactly as the Your data page states it, with bank-level encryption:</p>"]]
+  "claim-bank-level": [["privacy.html", "<p>Exactly as the Your data page states it:</p>", "<p>Exactly as the Your data page states it, with bank-level encryption:</p>"]],
+  // every page prints the "Last updated · Version" line twice
+  "updated-twice": [["lib/legalPages.js", "    \"  <h1>\" + esc(o.title) + \"</h1>\",\n", "    \"  <h1>\" + esc(o.title) + \"</h1>\",\n    '  <p class=\"updated\">' + esc(legal.TERMS_UPDATED) + \" &middot; Version \" + esc(legal.TERMS_VERSION) + \"</p>\",\n"]],
+  // the article typed in again: "A All Access subscription"
+  "article-a": [["lib/legalPages.js", "p(article(f.planName) + \" \" + f.planName + \" subscription is \"", "p(\"A \" + f.planName + \" subscription is \""]],
+  // Privacy section 3 says "We do not sell" twice in a row again
+  "no-sale-twice": [["lib/legalPages.js", "p(\"We do not share your personal information for advertising.\"),", "p(\"We do not sell your personal information, and we do not share it for advertising.\"),"]],
+  // the Terms' renewal card repeats section 4's sentence word for word
+  "sentence-repeated": [["lib/legalPages.js", "esc(\"No partial or prorated refunds, as section 4 sets out.\")", "esc(\"There are no partial or prorated refunds.\")"]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 
@@ -156,6 +167,22 @@ function listAfter(html, marker) {
   if (a === -1 || b === -1) return null;
   return (html.slice(a + 4, b).match(/<li>([\s\S]*?)<\/li>/g) || []).map(li => decodeHTML(li.replace(/<\/?li>/g, "")));
 }
+/* Every sentence a page says more than once. The page's own text, from
+   <body>, with the table of contents and the postal address left out (the
+   address is a block, printed where it is needed); split at each paragraph,
+   list item or heading, and after each . ! or ? that ends a sentence. */
+function repeatedSentences(html) {
+  if (html == null) return [];
+  const body = String(html).slice(String(html).indexOf("<body>"))
+    .replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<ol class="toc">[\s\S]*?<\/ol>/g, " ").replace(/<p class="address">[\s\S]*?<\/p>/g, " ")
+    .replace(/<\/(p|li|h1|h2|ol|ul|div)>/g, "\n").replace(/<[^>]+>/g, " ");
+  const seen = {}, twice = [];
+  decodeHTML(body).split(/\n|(?<=[.!?])\s+/).map(x => x.replace(/\s+/g, " ").trim()).filter(x => /[a-z]/i.test(x)).forEach(x => {
+    seen[x] = (seen[x] || 0) + 1;
+    if (seen[x] === 2) twice.push(x.slice(0, 120));
+  });
+  return twice;
+}
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fmt = n => Number(n).toLocaleString("en-US");
 
@@ -174,9 +201,20 @@ const fmt = n => Number(n).toLocaleString("en-US");
       detail = i === -1 ? "lengths " + hl.length + "/" + wl.length : "line " + (i + 1) + ": " + JSON.stringify(hl[i]) + " vs built " + JSON.stringify(wl[i]);
     }
     check("A1. " + f + " is exactly what scripts/buildLegalPages.js builds (run it after any change)", have === want, detail);
-    check("A2. " + f + " says \"" + LEGAL.TERMS_UPDATED + "\" and Version " + LEGAL.TERMS_VERSION,
-      have != null && textOf(have).indexOf(LEGAL.TERMS_UPDATED + " · Version " + LEGAL.TERMS_VERSION) !== -1);
+    // A2, A4 and A5 hold for the page in the frontend AND for what the backend builds now.
+    const both = [have, want];
+    check("A2. " + f + " says \"" + LEGAL.TERMS_UPDATED + "\" and Version " + LEGAL.TERMS_VERSION + ", on one line only",
+      both.every(h => h != null && textOf(h).indexOf(LEGAL.TERMS_UPDATED + " · Version " + LEGAL.TERMS_VERSION) !== -1 &&
+        textOf(h).split("Last updated").length === 2 && textOf(h).split(" · Version ").length === 2), both.map(h => h && textOf(h).split("Last updated").length - 1).join("/"));
+    check("A4. " + f + " never says \"A All Access\"", both.every(h => h != null && !/\bA All Access\b/i.test(textOf(h))));
+    const repeated = repeatedSentences(have).concat(repeatedSentences(want));
+    check("A5. " + f + " says no sentence twice", have != null && repeated.length === 0, repeated.join(" | "));
   });
+  {
+    const a = n => textOf(LP.buildLegalPages(Object.assign({}, facts, { planName: n }))["refund.html"]);
+    check("A6. the article follows the plan name: \"An All Access\", \"An Elite\", \"A Pro\"",
+      a("All Access").indexOf("An All Access subscription is") !== -1 && a("Elite").indexOf("An Elite subscription is") !== -1 && a("Pro").indexOf("A Pro subscription is") !== -1);
+  }
   {
     const other = Object.assign({}, facts, { price: 249, interval: "year", pastDueGraceDays: 11, welcomeBonus: 1234, certificationCredit: 77, certifications: 9,
       transferMax: 4321, transferDailyCap: 8765, transferHoldDays: 9, youtubeRetentionDays: 21 });
@@ -287,7 +325,7 @@ const fmt = n => Number(n).toLocaleString("en-US");
     const dollarsB = B.match(/\$\d[\d,.]*/g) || [];
     check("E3. Billing states the price next to Subscribe with automatic renewal, and links Terms and Refunds",
       dollarsB.length >= 2 && dollarsB.every(d => d === "$" + price) && has(B, "All Access is $" + price + " per " + interval + " and renews automatically every " + interval + " until you cancel") &&
-      /id="checkoutRenewalNote">[\s\S]*?href="\/terms"[\s\S]*?href="\/refund"[\s\S]*?<\/p>\s*<button class="btn" id="checkoutBtn"/.test(FE["billing.html"]) &&
+      /id="checkoutRenewalNote">[\s\S]*?href="\/terms"[\s\S]*?href="\/refund"[\s\S]*?<\/p>\s*(?:<label class="renew-consent" data-bf-renew-consent hidden>[^\n]*<\/label>\s*)?<button class="btn" id="checkoutBtn"/.test(FE["billing.html"]) &&
       /id="renewalNote">[\s\S]*?href="\/terms"[\s\S]*?href="\/refund"/.test(FE["billing.html"]), dollarsB.join(" "));
     check("E4. the past-due grace is the code's " + grace + " days", has(T, "You keep access for up to " + grace + " days from the day the payment was due") && has(T, "after " + grace + " days, access pauses"));
     check("E5. the welcome bonus is the code's " + fmt(welcome) + " BFC, once per account", has(T, "a one-time welcome bonus of " + fmt(welcome) + " BFC when an account's subscription first becomes active (once per account)"));
@@ -316,8 +354,12 @@ const fmt = n => Number(n).toLocaleString("en-US");
     const ps = listAfter(ph, "The services some pages have your browser fetch files from:");
     check("F2. the services pages load from are lib/yourData.js PAGE_SERVICES, in order", ps && same(ps, YD.PAGE_SERVICES.map(x => x.name + ": " + x.for + ".")), JSON.stringify(ps));
     const noSale = YD.PROTECTIONS.find(x => x.key === "no_sale").text;
-    check("F3. Your data's no-sale statement appears word for word, and \"We do not sell your personal information\"",
-      ph.indexOf("<p>" + LEGAL.escapeHtml(noSale) + "</p>") !== -1 && textOf(ph).indexOf("We do not sell your personal information") !== -1);
+    // In the frontend's Privacy page and in the one built now.
+    const shares = [ph, built["privacy.html"]].map(h => textOf(h.slice(h.indexOf("<h2 id=\"share\">"), h.indexOf("<h2 id=\"protect\">"))));
+    check("F3. Your data's no-sale statement appears word for word, and section 3 says \"We do not sell\" once",
+      ph.indexOf("<p>" + LEGAL.escapeHtml(noSale) + "</p>") !== -1 && /^We do not sell your data\./.test(noSale) &&
+      shares.every(sh => sh.split("We do not sell").length === 2 && sh.indexOf("We do not share your personal information for advertising.") !== -1),
+      shares.map(sh => sh.split("We do not sell").length - 1).join("/"));
     const prot = listAfter(ph, "Exactly as the Your data page states it");
     check("F4. the protections are Your data's, word for word (encrypted in transit, at rest per the host, encrypted backups, not end-to-end)",
       prot && same(prot, YD.PROTECTIONS.filter(x => x.key !== "no_sale").map(x => x.text)) && ["transit", "at_rest", "backups", "not_e2e"].every(k => YD.PROTECTIONS.some(x => x.key === k)),

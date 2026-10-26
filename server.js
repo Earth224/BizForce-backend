@@ -321,6 +321,9 @@ const PLAN_CONFIG = {
   all_access: {
     name: "All Access",
     price: 199,
+    // How often Stripe renews it; the automatic-renewal consent at checkout
+    // states it (autoRenewConsent, below).
+    interval: "month",
     maxAgents: -1,
     maxWebsites: -1,
     monthlyTasks: -1,
@@ -401,6 +404,32 @@ const CHECKOUT_PRODUCTS = {
     cancelPath: "/dashboard.html?checkout=cancel"
   }
 };
+
+/* AUTOMATIC RENEWAL CONSENT (California's Automatic Renewal Law). Before a
+   subscription checkout starts, the member ticks a box, unchecked by default
+   and placed beside the price, whose words are these. The plan's name, price
+   and interval come from PLAN_CONFIG, so the box always states what Stripe
+   will charge. GET /api/billing/consent hands the words to billing.html and
+   app.html; POST /api/stripe/checkout refuses unless the box was ticked on
+   exactly these words, and records when, with AUTO_RENEW_CONSENT_VERSION, on
+   the member's users row (migration 147) and in the session's metadata.
+   Change the wording here only together with the version. */
+const AUTO_RENEW_CONSENT_VERSION = "2026-10-26";
+function autoRenewConsent(product) {
+  const entry = CHECKOUT_PRODUCTS[product];
+  const plan = entry && PLAN_CONFIG[entry.plan];
+  if (!plan) return null;
+  const price = "$" + (Number.isInteger(plan.price) ? String(plan.price) : Number(plan.price).toFixed(2));
+  return {
+    product: product,
+    plan_name: plan.name,
+    price: plan.price,
+    interval: plan.interval,
+    version: AUTO_RENEW_CONSENT_VERSION,
+    text: "I agree that " + plan.name + " renews automatically every " + plan.interval + " at " + price +
+      " until I cancel, and that I can cancel online at any time in Billing."
+  };
+}
 
 const AGENT_SYSTEM_PROMPTS = {
   seo: "You are the BizForce AI SEO Agent. Produce practical SEO work plans, audits, keyword strategies, local SEO plans, content strategies, and technical SEO recommendations.",
@@ -37775,6 +37804,15 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
     next(error);
   }
 });
+/* The words of the automatic-renewal box, for the pages that start a checkout
+   (billing.html, app.html). Public: it is the plan's price, nothing about the
+   caller. */
+app.get("/api/billing/consent", function (req, res) {
+  const consent = autoRenewConsent(req.query && req.query.product ? String(req.query.product) : "all_access");
+  if (!consent) return res.status(400).json({ error: "unknown_product" });
+  return res.json(consent);
+});
+
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
     // Defaulting to all_access is backwards compatibility, not a preference:
@@ -37788,6 +37826,22 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
     }
 
     const entry = CHECKOUT_PRODUCTS[product];
+
+    /* NO CHECKOUT WITHOUT CONSENT TO AUTOMATIC RENEWAL. The box beside the
+       price must have been ticked on the words autoRenewConsent states today;
+       words from a stale page (an older price, say) are not consent to this
+       one. Refused before anything is read, written or sent to Stripe. */
+    const consent = autoRenewConsent(product);
+    const consentGiven = req.body && req.body.auto_renew_consent === true &&
+      req.body.auto_renew_consent_text === consent.text && req.body.auto_renew_consent_version === consent.version;
+    if (!consentGiven) {
+      return res.status(400).json({
+        error: "auto_renew_consent_required",
+        message: "Tick the box beside the price to agree that " + consent.plan_name + " renews automatically until you cancel. No checkout was started and nothing was charged.",
+        consent_text: consent.text,
+        consent_version: consent.version
+      });
+    }
 
     /* NO SECOND SUBSCRIPTION. An account already holding this plan in a state
        that entitles — active, trialing, or past_due inside its grace, by the
@@ -37833,6 +37887,25 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
       return res.status(500).json({ error: "product_not_configured", product });
     }
 
+    /* The consent is recorded before the session exists: if it cannot be
+       written, no checkout starts. Until migration 147 adds the columns, the
+       write fails and so does checkout, with a 503 that says so. */
+    const consentAt = nowIso();
+    const { error: consentError } = await supabase
+      .from("users")
+      .update({ auto_renew_consent_at: consentAt, auto_renew_consent_version: consent.version })
+      .eq("id", req.user.id);
+    if (consentError) {
+      const missing = consentError.code === "PGRST204" || /auto_renew_consent/.test(String(consentError.message || ""));
+      console.error("Stripe checkout refused: the automatic-renewal consent could not be recorded for user " + req.user.id +
+        (missing ? " (apply migration 147): " : ": ") + (consentError.message || consentError));
+      return res.status(503).json({
+        error: missing ? "consent_columns_missing" : "consent_not_recorded",
+        message: "Your agreement to automatic renewal could not be recorded, so no checkout was started and nothing was charged. Try again in a minute.",
+        billing_url: BILLING_URL
+      });
+    }
+
     const { data: existingSub } = await supabase
       .from("subscriptions")
       .select("stripe_customer_id")
@@ -37874,13 +37947,17 @@ app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
         user_id: req.user.id,
         email: req.user.email,
         plan: entry.plan,
-        price_id: priceId
+        price_id: priceId,
+        auto_renew_consent_at: consentAt,
+        auto_renew_consent_version: consent.version
       },
       subscription_data: {
         metadata: {
           user_id: req.user.id,
           email: req.user.email,
-          plan: entry.plan
+          plan: entry.plan,
+          auto_renew_consent_at: consentAt,
+          auto_renew_consent_version: consent.version
         }
       },
       // Per product, because sending a chart buyer to the platform dashboard

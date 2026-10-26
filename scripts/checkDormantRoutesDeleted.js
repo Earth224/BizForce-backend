@@ -107,7 +107,8 @@ const ADDED = [
   ["get", "/api/me/trades.csv"],                // Every BizCash trade is recorded: the ledger as CSV (total 318 -> 319)
   ["get", "/api/me/trade-statement"],           // Every BizCash trade is recorded: the yearly statement (total 319 -> 320)
   ["get", "/api/me/terms"],                     // Terms with recorded acceptance: which version the member accepted (total 320 -> 321)
-  ["post", "/api/me/terms/accept"]             // Terms with recorded acceptance: accepting the current version (total 321 -> 322)
+  ["post", "/api/me/terms/accept"],            // Terms with recorded acceptance: accepting the current version (total 321 -> 322)
+  ["get", "/api/billing/consent"]               // Express consent to automatic renewal at checkout: the box's words, from PLAN_CONFIG (total 322 -> 323)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
