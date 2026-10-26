@@ -53,7 +53,8 @@
      OTHERS      reaches another ACCOUNT, or value that moves between
                  accounts: a direct message, a crowdfunding campaign other
                  accounts can see and fund, BFC credited, transferred or spent,
-                 a USD checkout paying a seller.
+                 (BEFORE, to ae8e5db: also a USD checkout paying a seller.
+                 AFTER: none; BizForce Market trades in BizCash only.)
      THIRD_PARTY holds or acts on people who are not accounts: SMS
                  subscribers' phone numbers, campaigns and enrollments, and the
                  direct send (shut by SMS_DIRECT_SEND_ENABLED = false).
@@ -202,8 +203,9 @@ const EXPECTED_OTHERS = {
   "post /api/crowdfunding/campaigns/:id/donate": "moves BFC to another account's campaign",
   "get /api/wallet":                             "reads the balance; creates a missing wallet at 0 BFC (the welcome bonus is granted on first subscription, not here)",
   "post /api/certifications/award":              "records a certification; its 100 BFC credit is paid only to an entitled account, checked in the handler",
-  "post /api/marketplace/listings/:id/buy":      "spends BFC on another account's listing",
-  "post /api/marketplace/listings/:id/checkout-usd": "a Stripe checkout paying another account's listing"
+  "post /api/marketplace/listings/:id/buy":      "spends BFC on another account's listing"
+  // BEFORE (ae8e5db): "post /api/marketplace/listings/:id/checkout-usd", a Stripe checkout paying another
+  // account's listing. AFTER: removed; BizForce Market trades in BizCash only (checkMarketplaceBfcOnly).
 };
 
 /* Login-only routes that hold or act on people who are not accounts. */

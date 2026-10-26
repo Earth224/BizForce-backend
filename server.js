@@ -284,9 +284,11 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
   apiVersion: "2024-06-20"
 });
 
-const stripeTest = require("stripe")(process.env.STRIPE_TEST_SECRET_KEY || "", {
-  apiVersion: "2024-06-20"
-});
+/* NO TEST-MODE STRIPE CLIENT. One existed (stripeTest, keyed by
+   STRIPE_TEST_SECRET_KEY) for USD marketplace sales between members, and for
+   reading those payments' metadata in the webhook. BizForce Market trades in
+   BizCash only, those sales are switched off, and nothing else used it, so it
+   is gone rather than left unreachable. */
 
 var VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
 var VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
@@ -952,6 +954,28 @@ function constructStripeEventFromSecrets(rawBody, signature, secrets) {
   throw lastError || new Error("No webhook secret configured");
 }
 
+/* PRODUCTION IS NODE_ENV=production OR ANY RAILWAY DEPLOY. Railway sets
+   RAILWAY_ENVIRONMENT (and RAILWAY_ENVIRONMENT_NAME, RAILWAY_PROJECT_ID) on
+   every service it runs, whatever NODE_ENV says. */
+function isProductionEnv(env) {
+  const e = env || {};
+  return e.NODE_ENV === "production" || !!e.RAILWAY_ENVIRONMENT || !!e.RAILWAY_ENVIRONMENT_NAME || !!e.RAILWAY_PROJECT_ID;
+}
+
+/* THE SECRETS A STRIPE EVENT MAY BE SIGNED WITH. In production, the live one
+   only. STRIPE_TEST_WEBHOOK_SECRET signs Stripe TEST-mode events, which anyone
+   can produce with a test card and no money. Accepted in production, a
+   test-mode payment was handled as a real one: that is how a test-card
+   checkout could take a marketplace listing and its file. Outside production
+   (a local run) the test secret is still accepted, so test events can be
+   replayed against a developer's server. */
+function stripeWebhookSecrets(env) {
+  const e = env || {};
+  return isProductionEnv(e)
+    ? [e.STRIPE_WEBHOOK_SECRET]
+    : [e.STRIPE_WEBHOOK_SECRET, e.STRIPE_TEST_WEBHOOK_SECRET];
+}
+
 app.post(
   "/api/webhook",
   express.raw({ type: "application/json" }),
@@ -961,10 +985,7 @@ app.post(
     let event;
 
     try {
-      event = constructStripeEventFromSecrets(req.body, signature, [
-        process.env.STRIPE_WEBHOOK_SECRET,
-        process.env.STRIPE_TEST_WEBHOOK_SECRET
-      ]);
+      event = constructStripeEventFromSecrets(req.body, signature, stripeWebhookSecrets(process.env));
     } catch (error) {
       // Counted, never alerted: a bad signature is a forged or misrouted
       // request, not breakage, and anyone can send one.
@@ -3871,350 +3892,59 @@ async function recordRevenueEvent(event, fields) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WHAT A LOST PAID ORDER HAS TO SAY FOR ITSELF.
+   A marketplace_usd PAYMENT IS REFUSED, NOT FULFILLED.
 
-   Every failure in the marketplace_usd branch used to print the caught error
-   and nothing else. A real one looked like this:
+   BizForce Market trades in BizCash only (owner decision of 2026-10-26, from
+   the USD marketplace recon in ae8e5db). USD sales between members ran on a
+   Stripe test-mode key with no Connect account behind the seller: the money
+   reached the platform's own Stripe account, nothing paid the seller, and a
+   test card could take a listing. The checkout route is removed, so a new
+   marketplace_usd event can only be a stale session or a forged test one.
 
-     Failed to record marketplace USD order: { code: '23503', details: 'Key
-     (listing_id)=(...) is not present in table "marketplace_listings".', ... }
-
-   The customer has been charged at that point. From that line a person can
-   learn which listing was involved and nothing else: not who paid, not how
-   much, not which Stripe session it was. All four of those — buyer, seller,
-   amount, session — are in scope on that line and none of them was printed.
-   Reconciling meant exporting from Stripe and diffing against the orders
-   table, if anyone thought to.
-
-   So every exit from that branch that leaves money unaccounted for goes
-   through here, and prints all six values. It is one line of output and it is
-   the difference between an order somebody can find and one that is gone.
-
-   THE SESSION ID IS THE KEY TO EVERYTHING ELSE. With it, the payment, the
-   card, the receipt and the refund button are all one lookup away in the
-   Stripe dashboard, so it is printed even when the rest is null. */
-/* 23503 is "foreign key violation" generally; the constraint name is what says
-   it was THIS one. Both are checked so that a different foreign key failing
-   cannot be mistaken for a deleted listing and quietly retried as null. */
-function isListingForeignKeyViolation(error) {
-  if (!error || error.code !== "23503") return false;
-  const text = String(error.message || "") + " " + String(error.details || "") + " " +
-    String(error.constraint || "");
-  return text.indexOf("listing_id") !== -1;
-}
-
-function marketplaceUsdFailure(headline, ctx, error) {
-  const c = ctx || {};
-  const err = error || {};
-  console.error(
-    "[marketplace-usd] " + headline + "\n" +
-    "    session_id : " + (c.sessionId || "(none)") + "\n" +
-    "    buyer_id   : " + (c.buyerId || "(none)") + "\n" +
-    "    seller_id  : " + (c.sellerId || "(none)") + "\n" +
-    "    amount_usd : " + (c.amountUsd === null || c.amountUsd === undefined ? "(none)" : c.amountUsd) +
-      " (cents)\n" +
-    "    listing_id : " + (c.listingId || "(none)") + "\n" +
-    "    error_code : " + (err.code || "(none)") + "\n" +
-    "    error      : " + ((err.message || err.details) ? ((err.message || "") + " " + (err.details || "")).trim() : String(error)) + "\n" +
-    "    THE CUSTOMER HAS BEEN CHARGED. Look the session up in Stripe to confirm the amount and to refund it if this cannot be recovered."
-  );
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   MARK A LISTING SOLD AFTER A USD PAYMENT — AND NEVER THROW.
-
-   THE BFC PATH DOES THIS PROPERLY AND THIS CANNOT. bfc_buy_listing (migration
-   089) takes `select ... for update` on the listing, re-checks the status
-   INSIDE that lock, moves the money, flips the status and writes the order —
-   all in one plpgsql transaction. Two concurrent BFC buyers therefore
-   serialise: the second waits on the lock, sees 'sold', and is refused. Any
-   failure rolls the whole thing back, so a listing is never sold without an
-   order and an order never exists without a sale.
-
-   NONE OF THAT IS AVAILABLE HERE, and the reason is not laziness:
-
-     * The lock would have to be taken at CHECKOUT, in a different HTTP request
-       minutes earlier, and held across a page the customer may never finish.
-       No lock survives that.
-     * This runs over PostgREST, so the order insert and this update are two
-       separate round trips. They are not one transaction and cannot be made
-       one from here.
-     * ROLLING BACK IS FORBIDDEN, which is the real difference. By the time
-       this function runs the customer has ALREADY PAID. bfc_buy_listing can
-       abort because nothing has moved yet; this cannot, because Stripe has the
-       money. An "atomic" version of this branch would, on a failed status
-       update, discard a paid order — losing the buyer's record and their
-       download to protect a status flag. That is strictly the worse failure.
-
-   SO THIS IS BEST-EFFORT BY DESIGN, and loud when it misses. It returns a
-   result instead of throwing, and the caller carries on either way. A listing
-   that stays active after being sold is a bug that costs a possible second
-   sale; it is recoverable by hand, and the log below says exactly which
-   listing to fix. A lost paid order is not recoverable by hand at all. */
-async function markListingSoldAfterPayment(listingId, sessionId, orderId) {
-  if (!listingId) {
-    console.error("[marketplace-usd] PAID ORDER WITH NO LISTING ID — order " + orderId +
-      " (session " + sessionId + ") was recorded, but its metadata carried no listing_id, so no " +
-      "listing could be marked sold. Whatever was bought is still on sale.");
-    return { marked: false, reason: "no_listing_id" };
+   WHAT THIS DOES. Nothing is written: no order, no listing marked sold, no
+   file delivered. The one USD order recorded before the switch-off (session
+   already in marketplace_orders) is left exactly as it is and only logged.
+   Anything else is logged with what Stripe sent and raised as an ops alert,
+   so the owner can look the session up and refund it in the Stripe
+   dashboard. The alert is not awaited: Stripe's answer never waits on an
+   email, and it never rejects (lib/opsAlert.js). Stripe gets a 200, so it
+   does not redeliver an event this server will never act on. */
+async function refuseMarketplaceUsdEvent(event, session, meta) {
+  const m = meta || {};
+  const { data: existing, error: existingError } = await supabase
+    .from("marketplace_orders")
+    .select("id")
+    .eq("stripe_session_id", session.id)
+    .maybeSingle();
+  if (!existingError && existing) {
+    console.log("[marketplace-usd] session " + session.id + " is order " + existing.id +
+      ", recorded before USD sales were switched off. Left as it is.");
+    return { refused: false, existing_order: existing.id };
   }
 
-  try {
-    /* Unconditional on status rather than guarded with .eq("status", "active").
-       The sale happened; that is a fact about the past and not conditional on
-       what the row says now. A seller who paused the listing between checkout
-       and payment still sold it, and re-marking an already-'sold' row costs
-       nothing. Selecting the id back is how a row that no longer exists is
-       told apart from one that was updated. */
-    const { data, error } = await supabase
-      .from("marketplace_listings")
-      .update({ status: "sold", updated_at: nowIso() })
-      .eq("id", listingId)
-      .select("id, status");
-
-    if (error) {
-      console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
-        " was PAID FOR (order " + orderId + ", session " + sessionId + ") and the status update " +
-        "failed: " + (error.message || error) + ". The order is recorded and the buyer is whole. " +
-        "THE LISTING IS STILL ON SALE and can be bought again until someone sets its status to " +
-        "'sold' by hand.");
-      return { marked: false, reason: "update_failed", error: error.message || String(error) };
-    }
-
-    if (!data || data.length === 0) {
-      console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
-        " was PAID FOR (order " + orderId + ", session " + sessionId + ") but no such row exists " +
-        "to update; it was deleted between checkout and payment. The order is recorded and the " +
-        "buyer is whole. Nothing is left on sale, but the order points at a listing that is gone.");
-      return { marked: false, reason: "listing_missing" };
-    }
-
-    console.log("[marketplace-usd] listing " + listingId + " marked sold (order " + orderId +
-      ", session " + sessionId + ").");
-    return { marked: true };
-  } catch (soldError) {
-    /* Belt and braces: this function's contract with its caller is that it does
-       not throw, and a paid order must not be lost to a surprise from the
-       client library. */
-    console.error("[marketplace-usd] LISTING NOT MARKED SOLD — listing " + listingId +
-      " was PAID FOR (order " + orderId + ", session " + sessionId + ") and the status update " +
-      "threw: " + ((soldError && soldError.message) || soldError) + ". The order is recorded and " +
-      "the buyer is whole. THE LISTING IS STILL ON SALE.");
-    return { marked: false, reason: "threw", error: (soldError && soldError.message) || String(soldError) };
-  }
+  const detail = "event " + (event && event.id) + ", session " + session.id + ", amount " +
+    (session.amount_total == null ? "(none)" : session.amount_total) + " (cents), listing " +
+    (m.listing_id || "(none)") + ", buyer " + (m.buyer_id || "(none)") + ", seller " + (m.seller_id || "(none)") +
+    (existingError ? "; the past-order lookup failed: " + (existingError.message || existingError) : "");
+  console.error("[marketplace-usd] REFUSED a new marketplace_usd payment: " + detail + ". " +
+    "USD sales between members are switched off. No order was created, nothing was marked sold and " +
+    "no file was delivered. If money was taken, refund the session in the Stripe dashboard.");
+  opsAlerts.marketplaceUsdRefused({ event_id: event && event.id, session_id: session.id, detail: detail });
+  return { refused: true };
 }
 
 async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
 
-    let meta = (session.metadata && session.metadata.kind) ? session.metadata : {};
-    if (!meta.kind && session.payment_intent) {
-      try {
-        const piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent.id;
-        const pi = await stripeTest.paymentIntents.retrieve(piId);
-        if (pi && pi.metadata) meta = pi.metadata;
-      } catch (e) { console.error("Could not retrieve payment intent metadata:", e); }
-    }
+    /* The session's own metadata only. The payment intent's metadata used to
+       be read as a fallback, through the test-mode client, for marketplace
+       USD sessions; no checkout this server creates needs it now. */
+    const meta = session.metadata || {};
 
     if (meta.kind === "marketplace_usd") {
-      /* DECLARED OUTSIDE THE TRY ON PURPOSE. The catch below reports the
-         payment, so it has to be able to see this — a const inside the try is
-         invisible from the catch, and reaching for it there would throw a
-         ReferenceError on exactly the path whose job is to leave a record.
-         Seeded with what is known before anything can fail: the session id,
-         which is the key to the payment in Stripe, and the amount. */
-      let failureContext = {
-        sessionId: session.id,
-        buyerId: null,
-        sellerId: null,
-        amountUsd: session.amount_total,
-        listingId: null
-      };
-
-      try {
-        const { data: existingOrder, error: existingOrderError } = await supabase
-          .from("marketplace_orders")
-          .select("id")
-          .eq("stripe_session_id", session.id)
-          .maybeSingle();
-        if (existingOrderError) throw existingOrderError;
-        if (existingOrder) {
-          console.log("Marketplace USD order already recorded for session:", session.id);
-          return;
-        }
-
-        const listingId = meta.listing_id || null;
-        const buyerId = meta.buyer_id || null;
-        const sellerId = meta.seller_id || null;
-
-        let listingTitle = null;
-        let listingIsDigital = false;
-        let listingDigitalFilePath = null;
-        let listingDigitalFileName = null;
-        if (listingId) {
-          const { data: listing } = await supabase
-            .from("marketplace_listings")
-            .select("title, is_digital, digital_file_path, digital_file_name")
-            .eq("id", listingId)
-            .maybeSingle();
-          listingTitle = listing ? listing.title : null;
-          listingIsDigital = listing ? !!listing.is_digital : false;
-          listingDigitalFilePath = listing ? listing.digital_file_path : null;
-          listingDigitalFileName = listing ? listing.digital_file_name : null;
-        }
-
-        /* Completed now the metadata has been read. Assigned rather than
-           redeclared so the catch sees the filled-in version. */
-        failureContext = {
-          sessionId: session.id,
-          buyerId: buyerId,
-          sellerId: sellerId,
-          amountUsd: session.amount_total,
-          listingId: listingId
-        };
-
-        /* THE ROW CARRIES WHAT WAS BOUGHT, not just a pointer to it.
-           listing_title and is_digital were already copies taken at purchase
-           time; digital_file_path and digital_file_name (migration 113) join
-           them so the order can serve its own download even if the listing is
-           gone by then. */
-        const orderRow = {
-          listing_id: listingId,
-          buyer_id: buyerId,
-          seller_id: sellerId,
-          amount_bfc: 0,
-          amount_usd: session.amount_total,
-          payment_method: "usd",
-          status: "completed",
-          listing_title: listingTitle,
-          is_digital: listingIsDigital,
-          digital_file_path: listingDigitalFilePath,
-          digital_file_name: listingDigitalFileName,
-          stripe_session_id: session.id
-        };
-
-        /* THE ROW THE NEXT FALLBACK BUILDS ON. Each fallback narrows this and
-           the one after it starts from the narrowed version — the first draft
-           of this code had fallback 2 rebuild from the original orderRow, so a
-           payment that needed BOTH fallbacks re-added the columns fallback 1
-           had just removed and lost the order anyway. They have to compose. */
-        let rowToInsert = orderRow;
-
-        let orderInsert = await supabase
-          .from("marketplace_orders").insert(rowToInsert).select("id").single();
-
-        /* FALLBACK 1 — MIGRATION 113 IS NOT APPLIED YET.
-           PostgREST rejects the whole insert when it names a column that does
-           not exist, so shipping this before the migration lands would lose
-           every USD order rather than merely the snapshot. The same shape the
-           model_calls ledger uses for funded_by, and run.fail for
-           ai_tasks.output: drop what the schema cannot take and keep the row. */
-        if (orderInsert.error && /digital_file_path|digital_file_name/i.test(orderInsert.error.message || "")) {
-          console.error("[marketplace-usd] marketplace_orders has no digital_file_path/digital_file_name " +
-            "column — migration 113_marketplace_orders_digital_snapshot.sql has not been applied. " +
-            "Recording the order WITHOUT the snapshot, so the payment is not lost. This order's " +
-            "download will depend on the listing continuing to exist.");
-          rowToInsert = Object.assign({}, rowToInsert);
-          delete rowToInsert.digital_file_path;
-          delete rowToInsert.digital_file_name;
-          orderInsert = await supabase
-            .from("marketplace_orders").insert(rowToInsert).select("id").single();
-        }
-
-        /* FALLBACK 2 — THE LISTING WAS DELETED BETWEEN CHECKOUT AND PAYMENT.
-           marketplace_orders.listing_id has a foreign key to
-           marketplace_listings, so an order naming a listing that no longer
-           exists is refused with 23503 — and the money is already taken. The
-           foreign key is right and the order still has to land, so it lands
-           WITHOUT the pointer and WITH everything the snapshot copied. Nothing
-           else about the row changes: the buyer, the amount, the session and
-           the file are all still there.
-
-           listing_id is nullable (migration 034), which is what makes this
-           possible rather than a schema change. */
-        if (orderInsert.error && isListingForeignKeyViolation(orderInsert.error)) {
-          marketplaceUsdFailure(
-            "LISTING DELETED BETWEEN CHECKOUT AND PAYMENT — recording the order with listing_id NULL. " +
-            "The payment is NOT lost and the buyer keeps their download; the order simply no longer " +
-            "points at a listing that has been removed.",
-            failureContext, orderInsert.error);
-
-          rowToInsert = Object.assign({}, rowToInsert, { listing_id: null });
-          orderInsert = await supabase
-            .from("marketplace_orders").insert(rowToInsert).select("id").single();
-
-          /* If THAT failed too, the second log is the only record that exists
-             of this payment anywhere in the platform. */
-          if (orderInsert.error) {
-            marketplaceUsdFailure(
-              "A PAID ORDER WAS NOT RECORDED. The retry with listing_id NULL also failed, so this " +
-              "payment exists in Stripe and NOWHERE in this database. It must be reconciled by hand " +
-              "from the session id below.",
-              failureContext, orderInsert.error);
-          }
-        }
-
-        const insertedOrder = orderInsert.data;
-        const insertError = orderInsert.error;
-        if (insertError) throw insertError;
-
-        /* THE ORDER IS WRITTEN FIRST AND THE STATUS SECOND, deliberately.
-           Inverted, a failure of the order insert after a successful status
-           flip would leave a listing marked sold with no record of who bought
-           it and no download — the buyer paid and has nothing. In this order
-           the worst case is a listing that stays on sale, which costs a
-           possible second sale and is fixable by hand.
-
-           And BEFORE delivery rather than after, because this is the step that
-           stops a second buyer. Delivery is already soft and independent; doing
-           the status flip first closes the window as early as it can be closed.
-           Neither step can prevent the other from running. */
-        await markListingSoldAfterPayment(listingId, session.id, insertedOrder.id);
-
-        // ── Digital-good delivery (soft: never break order completion) ──
-        try {
-          if (listingIsDigital && typeof listingDigitalFilePath === "string" && listingDigitalFilePath.length > 0) {
-            const { data: signedDigital, error: signDigitalError } = await supabase.storage
-              .from("bf-digital-goods")
-              .createSignedUrl(listingDigitalFilePath, 604800);
-            if (signDigitalError || !signedDigital || !signedDigital.signedUrl) {
-              console.error("[digital-delivery] Failed to create signed URL:", signDigitalError && (signDigitalError.message || signDigitalError));
-            } else {
-              const { error: deliveryUpdateError } = await supabase
-                .from("marketplace_orders")
-                .update({
-                  is_digital: true,
-                  download_url: signedDigital.signedUrl,
-                  delivered_at: nowIso()
-                })
-                .eq("id", insertedOrder.id);
-              if (deliveryUpdateError) throw deliveryUpdateError;
-            }
-          }
-        } catch (digitalError) {
-          console.error("[digital-delivery] " + (digitalError && digitalError.message ? digitalError.message : digitalError));
-        }
-      } catch (error) {
-        /* A UNIQUE VIOLATION HERE IS A NO-OP, NOT A FAILURE. Migration 112 puts
-           a unique index on stripe_session_id, and Stripe delivers at least
-           once — so a redelivery racing the read above now loses at the index
-           instead of inserting a second order. That is the index doing its job,
-           and logging it as "Failed to record" would teach whoever reads these
-           logs that a normal retry is an error. */
-        const duplicateText = String((error && error.message) || "") + " " +
-          String((error && error.details) || "") + " " + String((error && error.constraint) || "");
-        if (error && error.code === "23505" && duplicateText.indexOf("stripe_session_id") !== -1) {
-          console.log("[marketplace-usd] duplicate delivery of session " + session.id +
-            " lost the race to the unique index; the order was already recorded. Nothing to do.");
-          return;
-        }
-        marketplaceUsdFailure(
-          "A PAID ORDER WAS NOT RECORDED. The marketplace_usd branch threw and the payment is in " +
-          "Stripe with nothing in this database to match it.",
-          failureContext, error);
-      }
-      // Deliberately no revenue_events row: marketplace USD runs on Stripe test mode, so recording it would pollute real MRR.
+      await refuseMarketplaceUsdEvent(event, session, meta);
+      // Deliberately no revenue_events row: no sale happened.
       return;
     }
 
@@ -10122,17 +9852,12 @@ const PROPOSAL_EXECUTORS = {
 
     const priceBfc = Math.max(0, Math.round(Number(payload.price_bfc) || 0));
 
-    let priceUsd = null;
-    if (payload.price_usd !== undefined && payload.price_usd !== null) {
-      const n = Number(payload.price_usd);
-      if (!Number.isInteger(n) || n < 0) {
-        throw new Error("publish_listing: payload.price_usd must be a non-negative integer number of cents, or null");
-      }
-      priceUsd = n;
+    if (listingPriceUsdRefused(payload.price_usd)) {
+      throw new Error("publish_listing: payload.price_usd is refused. " + LISTING_BFC_ONLY_MESSAGE);
     }
 
-    if (priceBfc <= 0 && priceUsd === null) {
-      throw new Error("publish_listing: listing must have a positive price_bfc, a non-null price_usd, or both");
+    if (priceBfc <= 0) {
+      throw new Error("publish_listing: payload.price_bfc must be a whole number of BizCash above 0. " + LISTING_BFC_ONLY_MESSAGE);
     }
 
     const description = safeText(payload.description, 2000) || "";
@@ -10142,7 +9867,7 @@ const PROPOSAL_EXECUTORS = {
 
     const { data, error } = await insertListingWithSlug({
       seller_id: proposal.user_id, title, description,
-      price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(payload.media), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(payload.media), status: "active",
       source_proposal_id: proposal.id,
       created_at: nowIso(), updated_at: nowIso()
     }, "id, title, status");
@@ -10238,15 +9963,10 @@ const PROPOSAL_EXECUTORS = {
     }
 
     if (payload.price_usd !== undefined) {
-      if (payload.price_usd === null) {
-        updates.price_usd = null;
-      } else {
-        const n = Number(payload.price_usd);
-        if (!Number.isInteger(n) || n < 0) {
-          throw new Error("update_listing: payload.price_usd must be a non-negative integer number of cents, or null");
-        }
-        updates.price_usd = n;
+      if (listingPriceUsdRefused(payload.price_usd)) {
+        throw new Error("update_listing: payload.price_usd is refused. " + LISTING_BFC_ONLY_MESSAGE);
       }
+      updates.price_usd = null;
     }
 
     if (payload.category !== undefined) {
@@ -10277,12 +9997,11 @@ const PROPOSAL_EXECUTORS = {
       throw new Error("update_listing: the proposal contained no changes to apply");
     }
 
-    // Same cross-field guard as the route: a listing may never end up with
-    // neither a positive BFC price nor a USD price.
+    // Same guard as the route: an active listing must keep a BFC price above 0.
     const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
-    const finalPriceUsd = updates.price_usd !== undefined ? updates.price_usd : existing.price_usd;
-    if ((!finalPriceBfc || finalPriceBfc <= 0) && (finalPriceUsd === null || finalPriceUsd === undefined)) {
-      throw new Error("update_listing: listing must keep a positive price_bfc, a non-null price_usd, or both");
+    const finalStatus = updates.status !== undefined ? updates.status : existing.status;
+    if (finalStatus === "active" && !(Number(finalPriceBfc) > 0)) {
+      throw new Error("update_listing: an active listing must keep a price_bfc above 0. " + LISTING_BFC_ONLY_MESSAGE);
     }
 
     // Snapshot only the fields actually being changed, so the proposal record
@@ -11182,7 +10901,7 @@ const STORE_AGENT_UNREADABLE = "The Store Agent returned an unreadable response.
 async function generateStoreProposalsForUser(userId) {
   const { data: listings, error: listingsError } = await supabase
     .from("marketplace_listings")
-    .select("id, title, description, category, price_usd, price_bfc, tags, status")
+    .select("id, title, description, category, price_bfc, tags, status")
     .eq("seller_id", userId)
     .limit(50);
 
@@ -11232,7 +10951,6 @@ async function generateStoreProposalsForUser(userId) {
           " | title=" + JSON.stringify(String(l.title || "")) +
           " | category=" + String(l.category || "uncategorized") +
           " | description=" + JSON.stringify(String(l.description || "")) +
-          " | price_usd=" + (l.price_usd === null || l.price_usd === undefined ? "null" : String(l.price_usd)) +
           " | price_bfc=" + String(l.price_bfc === null || l.price_bfc === undefined ? 0 : l.price_bfc) +
           " | status=" + String(l.status || "");
       }).join("\n")
@@ -11261,13 +10979,13 @@ async function generateStoreProposalsForUser(userId) {
     '  "title": a short listing title\n' +
     '  "description": one or two sentences describing the listing\n' +
     '  "category": one of the allowed categories above\n' +
-    '  "price_usd": an integer number of CENTS (e.g. 4900 for $49.00), greater than zero\n' +
+    '  "price_bfc": a whole number of BizCash (BFC), greater than zero. Listings are priced in BizCash only; never give a USD price\n' +
     '  "reasoning": why this listing fits a gap in this particular catalog\n' +
     "\nFor kind \"update_listing\" the element must have:\n" +
     '  "listing_id": the id of an existing listing, copied exactly from the catalog above\n' +
     '  "reasoning": what is wrong with that listing and why this change fixes it\n' +
     "  plus ONLY the fields you want to change, chosen from:\n" +
-    '    "title", "description", "category", "price_usd" (integer CENTS), "price_bfc" (integer), ' +
+    '    "title", "description", "category", "price_bfc" (integer, above 0), ' +
     '"tags" (array of strings), "status" (one of: active, paused, sold)\n' +
     "  Omit every field you are not changing. Do not repeat a field with its current value.";
 
@@ -11311,8 +11029,8 @@ async function generateStoreProposalsForUser(userId) {
       const category = safeText(item.category, 40);
       if (!MARKETPLACE_CATEGORIES.includes(category)) return;
 
-      const priceUsd = Number(item.price_usd);
-      if (!Number.isInteger(priceUsd) || priceUsd <= 0) return;
+      const priceBfc = Number(item.price_bfc);
+      if (!Number.isInteger(priceBfc) || priceBfc <= 0) return;
 
       // The duplicate-title guard applies to new listings only — an update
       // names an existing title by design.
@@ -11325,7 +11043,7 @@ async function generateStoreProposalsForUser(userId) {
         title,
         description: safeText(item.description, 2000) || "",
         category,
-        price_usd: priceUsd,
+        price_bfc: priceBfc,
         reasoning: safeText(item.reasoning, 2000)
       });
       return;
@@ -11363,16 +11081,6 @@ async function generateStoreProposalsForUser(userId) {
         const s = safeText(item.status, 20);
         if (LISTING_STATUSES.indexOf(s) === -1) return;
         changes.status = s;
-      }
-
-      if (item.price_usd !== undefined) {
-        if (item.price_usd === null) {
-          changes.price_usd = null;
-        } else {
-          const n = Number(item.price_usd);
-          if (!Number.isInteger(n) || n < 0) return;
-          changes.price_usd = n;
-        }
       }
 
       if (item.price_bfc !== undefined) {
@@ -11434,7 +11142,7 @@ async function generateStoreProposalsForUser(userId) {
       title:       c.title,
       description: c.description,
       category:    c.category,
-      price_usd:   c.price_usd
+      price_bfc:   c.price_bfc
     };
     return row;
   });
@@ -39285,13 +38993,28 @@ function sanitizeMedia(rawMedia) {
     .slice(0, 12);
 }
 
+/* ── BIZFORCE MARKET IS PRICED IN BIZCASH ONLY ────────────────────────────
+   No listing may carry a USD price above zero, from any path that writes one:
+   the create and edit routes and the Store agent's publish_listing and
+   update_listing executors. A USD price of null or 0 is accepted and stored
+   as null. An active listing needs a BFC price above zero; the five listings
+   that had a USD price keep their data, show in BFC only, and cannot be bought
+   until their seller sets one (bfc_buy_listing refuses a price of 0, and the
+   buy route says why first). */
+const LISTING_BFC_ONLY_MESSAGE = "Listings are priced in BizCash only.";
+const LISTING_NOT_FOR_SALE_MESSAGE = "Not for sale until the seller sets a BizCash price";
+
+function listingPriceUsdRefused(value) {
+  return value !== undefined && value !== null && value !== "" && Number(value) !== 0;
+}
+
 app.get("/api/marketplace/listings", requireAuth, async function (req, res, next) {
   try {
     const category = safeText(req.query.category, 40);
     const q = safeText(req.query.q, 120);
     let query = supabase
       .from("marketplace_listings")
-      .select("id, slug, seller_id, title, description, price_bfc, price_usd, category, tags, media, status, created_at")
+      .select("id, slug, seller_id, title, description, price_bfc, category, tags, media, status, created_at")
       .eq("status", "active")
       .order("created_at", { ascending: false })
       .limit(100);
@@ -39321,12 +39044,7 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
     const description = safeText(req.body.description, 2000);
     const category    = safeText(req.body.category, 40);
     const priceBfc    = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
-    let priceUsd = null;
-    if (req.body.price_usd !== undefined && req.body.price_usd !== null) {
-      const n = Number(req.body.price_usd);
-      if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "price_usd must be a non-negative integer" });
-      priceUsd = n;
-    }
+    if (listingPriceUsdRefused(req.body.price_usd)) return res.status(400).json({ error: LISTING_BFC_ONLY_MESSAGE, field: "price_usd" });
     const tags        = Array.isArray(req.body.tags)
       ? req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10)
       : [];
@@ -39335,10 +39053,10 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
     const digitalFileName = isDigital ? (safeText(req.body.digital_file_name, 200) || null) : null;
     if (!title)    return res.status(400).json({ error: "Title is required" });
     if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
-    if (priceBfc <= 0 && priceUsd === null) return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
+    if (priceBfc <= 0) return res.status(400).json({ error: "Set a BizCash (BFC) price above 0. " + LISTING_BFC_ONLY_MESSAGE, field: "price_bfc" });
     const { data, error } = await insertListingWithSlug({
       seller_id: req.user.id, title, description: description || "",
-      price_bfc: priceBfc, price_usd: priceUsd, category, tags, media: sanitizeMedia(req.body.media), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media), status: "active",
       is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
       created_at: nowIso(), updated_at: nowIso()
     }, "*");
@@ -39375,6 +39093,16 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
       return res.status(400).json({ error: "Listing id is required" });
     }
 
+    const { data: priced, error: pricedError } = await supabase
+      .from("marketplace_listings")
+      .select("price_bfc")
+      .eq("id", listingId)
+      .maybeSingle();
+    if (pricedError) throw pricedError;
+    if (priced && !(Number(priced.price_bfc) > 0)) {
+      return res.status(409).json({ error: LISTING_NOT_FOR_SALE_MESSAGE + ".", field: "price_bfc" });
+    }
+
     const { data, error } = await supabase.rpc("bfc_buy_listing", {
       p_buyer: req.user.id,
       p_listing_id: listingId
@@ -39388,78 +39116,8 @@ app.post("/api/marketplace/listings/:id/buy", requireAuth, async function (req, 
   } catch (error) { next(error); }
 });
 
-app.post("/api/marketplace/listings/:id/checkout-usd", requireAuth, async function (req, res, next) {
-  try {
-    const { data: listing, error: listingError } = await supabase
-      .from("marketplace_listings")
-      .select("id, title, price_usd, seller_id, status")
-      .eq("id", req.params.id)
-      .maybeSingle();
-    if (listingError) throw listingError;
-    if (!listing) return res.status(404).json({ error: "Listing not found" });
-
-    if (listing.price_usd === null || listing.price_usd <= 0) {
-      return res.status(400).json({ error: "This listing is not available for USD purchase" });
-    }
-
-    if (listing.status !== "active") {
-      return res.status(409).json({ error: "This listing is no longer available for purchase (status: " + listing.status + ")" });
-    }
-
-    if (listing.seller_id === req.user.id) {
-      return res.status(400).json({ error: "You cannot buy your own listing" });
-    }
-
-    if (!process.env.STRIPE_TEST_SECRET_KEY) {
-      return res.status(503).json({ error: "USD checkout is not configured yet" });
-    }
-
-    const session = await stripeTest.checkout.sessions.create({
-      mode: "payment",
-      line_items: [{
-        price_data: {
-          currency: "usd",
-          product_data: { name: listing.title },
-          unit_amount: listing.price_usd
-        },
-        quantity: 1
-      }],
-      success_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=success",
-      cancel_url: (process.env.FRONTEND_URL || "") + "/marketplace.html?purchase=cancelled",
-      /* Without this, Stripe shows no promo-code box and REJECTS any code
-         against this session — the subscription checkout at /api/stripe/checkout
-         has carried it since it was written and this one never did, which is the
-         whole of the difference between them.
-
-         WHAT IT ENABLES: a coupon or promotion code created in the Stripe
-         dashboard can be entered by the buyer and applied to this line item.
-         WHAT IT DOES NOT: nothing here creates, validates, lists or records a
-         code, and no column on marketplace_listings holds one. The discount
-         exists only in Stripe, and the webhook does not read
-         total_details.amount_discount, so the platform cannot report what any
-         buyer actually paid after a code. */
-      allow_promotion_codes: true,
-      metadata: {
-        listing_id: String(listing.id),
-        buyer_id: String(req.user.id),
-        seller_id: String(listing.seller_id),
-        kind: "marketplace_usd"
-      },
-      payment_intent_data: {
-        metadata: {
-          listing_id: String(listing.id),
-          buyer_id: String(req.user.id),
-          seller_id: String(listing.seller_id),
-          kind: "marketplace_usd"
-        }
-      }
-    });
-
-    return res.json({ url: session.url });
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
-  }
-});
+/* POST /api/marketplace/listings/:id/checkout-usd IS REMOVED. BizForce Market
+   trades in BizCash only; buying is POST /api/marketplace/listings/:id/buy. */
 
 app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, next) {
   try {
@@ -39479,32 +39137,28 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
     if (req.body.price_bfc   !== undefined) updates.price_bfc   = Math.max(0, Math.round(Number(req.body.price_bfc) || 0));
     if (req.body.price_usd   !== undefined) {
-      if (req.body.price_usd === null) {
-        updates.price_usd = null;
-      } else {
-        const n = Number(req.body.price_usd);
-        if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "price_usd must be a non-negative integer" });
-        updates.price_usd = n;
-      }
+      if (listingPriceUsdRefused(req.body.price_usd)) return res.status(400).json({ error: LISTING_BFC_ONLY_MESSAGE, field: "price_usd" });
+      updates.price_usd = null;
     }
     if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
     if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media);
 
-    if (updates.price_bfc !== undefined || updates.price_usd !== undefined) {
+    // A pause is always allowed; any other edit must leave an active listing with a BFC price.
+    if (!pauseOnly) {
       const { data: existing, error: existingError } = await supabase
         .from("marketplace_listings")
-        .select("price_bfc, price_usd")
+        .select("price_bfc, status")
         .eq("id", req.params.id)
         .eq("seller_id", req.user.id)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ error: "Listing not found" });
       const finalPriceBfc = updates.price_bfc !== undefined ? updates.price_bfc : existing.price_bfc;
-      const finalPriceUsd = updates.price_usd !== undefined ? updates.price_usd : existing.price_usd;
-      if ((!finalPriceBfc || finalPriceBfc <= 0) && (finalPriceUsd === null || finalPriceUsd === undefined)) {
-        return res.status(400).json({ error: "Listing must have a BFC price, a USD price, or both" });
+      const finalStatus = updates.status !== undefined ? updates.status : existing.status;
+      if (finalStatus === "active" && !(Number(finalPriceBfc) > 0)) {
+        return res.status(400).json({ error: "Set a BizCash (BFC) price above 0 to keep this listing active, or pause it. " + LISTING_BFC_ONLY_MESSAGE, field: "price_bfc" });
       }
     }
 
@@ -42614,7 +42268,7 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
 
     const [productsRes, portfolioRes, musicRes, videosRes] = await Promise.all([
       supabase.from("marketplace_listings")
-        .select("id, slug, title, description, category, price_usd, media, listing_kind")
+        .select("id, slug, title, description, category, price_bfc, media, listing_kind")
         .eq("seller_id", userId)
         .eq("status", "active"),
       supabase.from("profile_portfolio").select("*").eq("user_id", userId).order("sort_order", { ascending: true }),
@@ -42639,9 +42293,10 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
         description: l.description,
         image_url: (media.length > 0 && media[0] && media[0].url) ? media[0].url : null,
         category: l.category,
-        currency: "USD",
-        price: l.price_usd == null ? null : l.price_usd / 100,
-        is_purchasable: typeof l.price_usd === "number" && l.price_usd > 0
+        // Priced in BizCash only: a listing with no BFC price is shown, not sold.
+        currency: "BFC",
+        price: Number(l.price_bfc) > 0 ? Number(l.price_bfc) : null,
+        is_purchasable: Number(l.price_bfc) > 0
       };
     };
     const products = seller.show_products
@@ -42855,7 +42510,7 @@ app.get("/api/marketplace/listings/:id", async function (req, res, next) {
     // rely on. Anything else is treated as a slug.
     let listingQuery = supabase
       .from("marketplace_listings")
-      .select("id, title, description, category, price_usd, price_bfc, tags, media, is_digital, status, seller_id, created_at")
+      .select("id, title, description, category, price_bfc, tags, media, is_digital, status, seller_id, created_at")
       .eq("status", "active");
 
     listingQuery = LISTING_ID_UUID.test(listingKey)

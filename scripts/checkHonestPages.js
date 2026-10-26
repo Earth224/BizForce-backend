@@ -21,6 +21,10 @@
      5. No "marketplace intelligence".
      6. agents/content.html never reads contentAgent.stats and draws no
         "Sample" note.
+     7. BizForce Market is priced in BizCash only: no page or script offers a
+        USD purchase, a USD price or a cash portion; a seller sees "Priced in
+        BizCash (BFC)"; a listing with no BFC price says it is not for sale;
+        integrations.html and my-purchases.html stay true.
 
    MUTATE=<name> edits the frontend files IN MEMORY. MUTATE=all runs each in
    its own process and passes only if every one fails. A mutation whose search
@@ -52,7 +56,10 @@ const MUTATIONS = {
     "Shop listings, keywords, pricing, and marketplace intelligence."]],
   // a failed pipeline read shows 0
   "zero-on-failed-pipeline": [[SALES, "          setFn(\"mcFnReplied\", \"could not be read\");\n          setFn(\"mcFnConverted\", \"could not be read\");\n",
-    "          setFn(\"mcFnReplied\", 0);\n          setFn(\"mcFnConverted\", 0);\n"]]
+    "          setFn(\"mcFnReplied\", 0);\n          setFn(\"mcFnConverted\", 0);\n"]],
+  // a "Buy with USD" button left on one page
+  "buy-usd-left": [["marketplace.html", "'<span class=\"not-for-sale\">Not for sale until the seller sets a BizCash price</span>') +\n",
+    "'<span class=\"not-for-sale\">Not for sale until the seller sets a BizCash price</span>') +\n        '<button type=\"button\" class=\"btn-sm btn-buy btn-buy-usd\"' + idAttr + '>Buy with USD</button>' +\n"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -235,6 +242,39 @@ const TASKS = [
   const code = content.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
   check("6. content.html never reads .stats from the contentAgent store", !/\.stats\b/.test(code), (code.match(/[^\n]*\.stats\b[^\n]*/) || [""])[0].trim());
   check("6. and draws no \"Sample\" note", content.indexOf("statsSimNote") === -1 && content.indexOf("sim-note") === -1);
+
+  /* ── 7. BizForce Market is priced in BizCash only ─────────────────────── */
+  /* BEFORE (frontend 9197caa): marketplace.html and garage-sale.html had a "Buy with USD" button, a Price (USD)
+     or "Cash portion (USD)" field sent as price_usd, and copy offering a BFC/USD split; seller.html's Buy and
+     listing.html's price ran through the USD checkout. AFTER: BizCash only, everywhere. */
+  console.log("\n══ 7. no page offers a USD purchase ══");
+  const scriptFiles = fs.existsSync(path.join(FRONTEND, "scripts")) ? fs.readdirSync(path.join(FRONTEND, "scripts")).filter(f => f.endsWith(".js")) : [];
+  const ALL = Object.assign({}, PAGES);
+  scriptFiles.forEach(f => { ALL["scripts/" + f] = fs.readFileSync(path.join(FRONTEND, "scripts", f), "utf8"); });
+  const dash = path.join(FRONTEND, "dashboard.html");
+  if (fs.existsSync(dash)) ALL["dashboard.html"] = fs.readFileSync(dash, "utf8");
+  const offenders = (re) => Object.keys(ALL).filter(f => re.test(ALL[f]));
+  const usdBuy = offenders(/Buy with USD|btn-buy-usd|buyWithUsd|checkout-usd/);
+  check("7. no page or script has a \"Buy with USD\" button or calls the USD checkout (" + Object.keys(ALL).length + " files)", usdBuy.length === 0, usdBuy.join(", "));
+  const usdField = offenders(/id="fPriceUsd"|Price \(USD\)|Cash portion|price_usd\s*:/);
+  check("7. no USD price or cash-portion field, and no request sends price_usd", usdField.length === 0, usdField.join(", "));
+  const usdCopy = offenders(/cash portion in USD|BFC\/USD split|USD-only|a cash \(USD\) amount/i);
+  check("7. no copy implies USD sales between members", usdCopy.length === 0, usdCopy.join(", "));
+  const SELLER_FORMS = ["marketplace.html", "garage-sale.html"];
+  check("7. a seller sees \"Priced in BizCash (BFC)\" beside the price on " + SELLER_FORMS.join(" and "),
+    SELLER_FORMS.every(f => /<label class="form-label">Price \(BFC\) \*<\/label>\s*<input class="form-input" id="fPrice"[^>]*>\s*<p class="field-hint">Priced in BizCash \(BFC\)\. BizForce Market trades in BizCash only\.<\/p>/.test(PAGES[f])));
+  const NFS = "Not for sale until the seller sets a BizCash price";
+  const nfsPages = ["marketplace.html", "garage-sale.html", "listing.html", "seller.html"];
+  check("7. a listing with no BFC price says \"" + NFS + "\" on " + nfsPages.join(", "), nfsPages.every(f => PAGES[f].indexOf(NFS) !== -1),
+    nfsPages.filter(f => PAGES[f].indexOf(NFS) === -1).join(", "));
+  check("7. the storefront's Buy spends BizCash through the buy route",
+    /fetch\(API_URL \+ "\/api\/marketplace\/listings\/" \+ encodeURIComponent\(id\) \+ "\/buy"/.test(PAGES["seller.html"]) && PAGES["seller.html"].indexOf(">Buy with BizCash</button>") !== -1);
+  check("7. the listing page shows a BFC price only and sends Buy to the marketplace",
+    !/price_usd|formatUsd/.test(PAGES["listing.html"]) && PAGES["listing.html"].indexOf("'<a class=\"buy-btn\" href=\"' + escapeHtml(buyHref) + '\">Buy with BizCash</a>'") !== -1);
+  check("7. integrations.html still says Stripe bills the subscription only",
+    PAGES["integrations.html"].indexOf("BizForce uses Stripe to bill your BizForce subscription: checkout and the billing portal. Taking payments into your own Stripe account is not built.") !== -1);
+  check("7. my-purchases.html still formats a past USD order in dollars",
+    PAGES["my-purchases.html"].indexOf("return isUsd ? (\"$\" + ((p.amount_usd || 0) / 100).toFixed(2)) : (p.amount_bfc || 0).toLocaleString() + \" BFC\";") !== -1);
 
   check("zero network", NETWORK.length === 0, JSON.stringify(NETWORK));
   console.log("");

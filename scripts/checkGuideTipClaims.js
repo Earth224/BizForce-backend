@@ -819,7 +819,7 @@ const B = [
     () => /'<button type="button" class="btn-sm btn-edit"' \+ idAttr \+ '>Edit<\/button>'/.test(FILES[MARKET]) &&
       /'<button type="button" class="btn-sm btn-delete"' \+ idAttr \+ '>Delete<\/button>'/.test(FILES[MARKET]) &&
       /var statusHtml = isOwn \? '<span class="status-badge status-'/.test(FILES[MARKET]) &&
-      /var body = \{ title, description: desc, category, price_bfc: price, price_usd: priceUsd, tags: tagsRaw, media: listingMedia \};/.test(FILES[MARKET]) &&
+      /var body = \{ title, description: desc, category, price_bfc: price, tags: tagsRaw, media: listingMedia \};/.test(FILES[MARKET]) &&
       !/\bstatus\s*:\s*"(active|paused|sold)"|body\.status\b/.test(FILES[MARKET])],
   ["8 certifications 76", certTips, "press Try Again on the result screen, or Start Assessment on the card", /Retake Assessment/,
     () => /<button class="result-retry-btn" id="resultRetryBtn">Try Again<\/button>/.test(FILES[CERTS]) &&

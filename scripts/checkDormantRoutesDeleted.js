@@ -112,7 +112,8 @@ const ADDED = [
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
-  "post /api/seo/audit"            // never fetched the site, so every audit was invented (5d014de)
+  "post /api/seo/audit",           // never fetched the site, so every audit was invented (5d014de)
+  "post /api/marketplace/listings/:id/checkout-usd"  // BizForce Market trades in BizCash only; USD sales between members switched off (total 323 -> 322)
 ]);
 const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k) && !REMOVED.has(k); })
   .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }));

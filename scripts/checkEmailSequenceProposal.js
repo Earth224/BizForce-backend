@@ -61,7 +61,9 @@ const MUTATIONS = {
   "accept-null-delay": [["    if (typeof delay !== \"number\" || !Number.isInteger(delay) || delay < 0) {\n",
     "    if (delay !== null && (typeof delay !== \"number\" || !Number.isInteger(delay) || delay < 0)) {\n"]],
   // the executor no longer checks the owner is admin
-  "executor-skips-admin": [["  if (!ownerRead.data || ownerRead.data.role !== \"admin\") {\n", "  if (false) {\n"]],
+  // (the same admin test is in publish_social_post since 5403e88, so the anchor carries the next line)
+  "executor-skips-admin": [["  if (!ownerRead.data || ownerRead.data.role !== \"admin\") {\n    throw new Error(\"send_email_sequence: \"",
+    "  if (false) {\n    throw new Error(\"send_email_sequence: \""]],
   // a grant still waiting on its confirmation link is enrolled
   "enroll-granted": [["    } else if (latest.action === \"confirmed\") {\n",
     "    } else if (latest.action === \"confirmed\" || latest.action === \"granted\") {\n"]],

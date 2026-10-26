@@ -1,312 +1,204 @@
+"use strict";
 /* ══════════════════════════════════════════════════════════════════════════
-   checkMarketplaceOrderSnapshot.js — a paid order must survive its listing.
+   checkMarketplaceOrderSnapshot.js — a past order survives its listing, and a
+   past USD order still shows in My Purchases.
 
-   THE DEFECT. marketplace_orders.listing_id carries a foreign key to
-   marketplace_listings. A listing deleted between checkout and payment made the
-   order INSERT fail with 23503: the customer was charged, no order row was
-   written, and one log line naming only the listing id was the entire trace.
+   BizForce Market trades in BizCash only since 2026-10-26 (owner decision,
+   option (i) of the USD marketplace recon in ae8e5db). One USD order was
+   recorded before that, and it must keep rendering and downloading. Named
+   entry by entry:
 
-   WHAT THIS PROVES, AND WHAT IT HONESTLY CANNOT
+     where the snapshot is written
+       BEFORE (ae8e5db)  the webhook's marketplace_usd branch copied the file
+                         path and name onto each new USD order (migration 113)
+       AFTER             no USD order is written any more
+                         (checkMarketplaceUsdSold proves the refusal); orders
+                         already written keep their snapshot
+     GET /api/purchases/:orderId/download
+       BEFORE and AFTER  the order's own snapshot first, the listing joined
+                         through listing_id only as a fallback; a deleted
+                         listing does not cost the buyer their file
+     GET /api/purchases
+       BEFORE and AFTER  the buyer's orders, USD and BFC, with amount_usd and
+                         amount_bfc
+     my-purchases.html
+       BEFORE and AFTER  a USD order shows as "$1.00", a BFC order as
+                         "500 BFC", a digital order offers Download
 
-     1. A normal purchase snapshots the file path onto the order.
-     2. A listing deleted AFTER the order still serves its download — from the
-        order's own snapshot rather than the join. This is the case the
-        snapshot actually rescues.
-     3. A listing deleted BEFORE payment lands the order with listing_id NULL
-        and the payment recorded. The SNAPSHOT IS EMPTY in this case and this
-        script asserts that it is empty rather than pretending otherwise: the
-        webhook reads the listing to build the snapshot, and by then there is
-        nothing to read. The money is recorded and refundable; the purchase is
-        not fulfillable. Closing that gap needs the listing captured at CHECKOUT
-        time, into the Stripe session, which is a different change.
-     4. An order with no snapshot at all — every order written before migration
-        113 — still downloads through the join.
+   HOW. The two routes are lifted from server.js into a vm against a fake
+   database and fake storage, and my-purchases.html runs in jsdom with a fetch
+   stub. It used to write fixture listings, orders and storage objects to the
+   live database through the webhook; it writes nothing now. No database, no
+   network, no BIZFORCE_CHECK_USER_ID.
 
-   MIGRATION 113 MAY NOT BE APPLIED. The script detects it and says so. Without
-   it the snapshot columns do not exist, and what is proven instead is the
-   fallback: the order still lands, without a snapshot, rather than the whole
-   insert being refused.
+   MUTATE=no-snapshot     the past order loses its snapshot, so the download
+                          falls back to a listing that is gone. "served from
+                          the snapshot" must go red with a 404.
+   MUTATE=usd-order-hidden  my-purchases.html shows every amount in BFC, so
+                          the past USD order reads "0 BFC". The rendering
+                          assertions must go red.
 
-   MUTATE=no-snapshot blanks the snapshot on the order after it is written, so
-   the purchase has to fall back to the listing — which scenario 2 then deletes.
-   Both post-deletion assertions must go red with HTTP 404, which is precisely
-   the buyer this change exists to protect, put back the way they were.
-
-   Fixtures are created under the subject account and removed with a verified
-   read-back. The owner's rows are read for contrast and never written.
+   BIZFORCE_FRONTEND_DIR overrides the frontend location.
    ══════════════════════════════════════════════════════════════════════════ */
-
-require("dotenv").config();
-const MUT = require("./_shared");
-// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["no-snapshot"]);
-
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
-const SUBJECT_USER_ID = resolveSubjectAccount();
-
+const fs = require("fs");
+const vm = require("vm");
 const path = require("path");
+const net = require("net");
+const dns = require("dns");
+const MUT = require("./_shared");
+
+const MUTATIONS = ["no-snapshot", "usd-order-hidden"];
+const MUTATE = process.env.MUTATE || "";
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
+if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
+  console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + MUTATIONS.join(", "));
+  process.exit(2);
+}
+
 const REPO = path.join(__dirname, "..");
+const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
+const SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+let PURCHASES_HTML = fs.readFileSync(path.join(FRONTEND, "my-purchases.html"), "utf8").replace(/\r\n/g, "\n");
+if (MUTATE === "usd-order-hidden") {
+  PURCHASES_HTML = MUT.replaceOnce(PURCHASES_HTML,
+    "  var isUsd = p.amount_usd !== null && p.amount_usd !== undefined;\n",
+    "  var isUsd = false;\n", MUTATE);
+}
+if (MUTATE) console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
 
-const EXPRESS_PATH = require.resolve("express", { paths: [REPO] });
-const realExpress = require(EXPRESS_PATH);
-let app = null;
-const expressWrapper = function () {
-  const made = realExpress.apply(this, arguments);
-  if (!app) app = made;
-  return made;
-};
-Object.keys(realExpress).forEach(function (k) { expressWrapper[k] = realExpress[k]; });
-require.cache[EXPRESS_PATH].exports = expressWrapper;
-
-process.env.PORT = process.env.CHECK_PORT || "0";
-const server = require(path.join(REPO, "server.js"));
-
-const { createClient } = require("@supabase/supabase-js");
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-const residue = createResidueGuard({
-  supabase: supabase,
-  name: "marketplaceOrderSnapshot",
-  subject: SUBJECT_USER_ID,
-  tables: ["ai_tasks", "model_calls"]
-});
-residue.install();
-
-const MUTATING = process.env.MUTATE === "no-snapshot";
-
-let failures = 0;
+let passes = 0, failures = 0;
 function check(label, ok, detail) {
-  if (ok) console.log("    pass  " + label);
-  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
+  if (ok) { passes++; console.log("    pass  " + label); }
+  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
 
-const DIGITAL_BUCKET = "bf-digital-goods";
-const stamp = Date.now();
-const made = { listings: [], orders: [], objects: [] };
+/* The one past USD order's shape, as the webhook wrote it: $1.00, digital,
+   with the migration 113 snapshot. Its listing has since been deleted. */
+const BUYER = "buyer-1";
+const PAST_USD = {
+  id: "order-usd", listing_id: null, buyer_id: BUYER, seller_id: "seller-1", amount_bfc: 0, amount_usd: 100,
+  payment_method: "usd", status: "completed", listing_title: "Past USD purchase", is_digital: true,
+  digital_file_path: "seller-1/past.pdf", digital_file_name: "past.pdf", delivered_at: "2026-07-25T10:00:00Z",
+  stripe_session_id: "cs_past", created_at: "2026-07-25T10:00:00Z"
+};
+if (MUTATE === "no-snapshot") { PAST_USD.digital_file_path = null; PAST_USD.digital_file_name = null; }
+const LEGACY = {
+  id: "order-legacy", listing_id: "listing-legacy", buyer_id: BUYER, seller_id: "seller-1", amount_bfc: 0, amount_usd: 100,
+  payment_method: "usd", status: "completed", listing_title: "Before 113", is_digital: true, created_at: "2026-06-01T10:00:00Z"
+};
+const ORPHAN = {
+  id: "order-orphan", listing_id: null, buyer_id: BUYER, seller_id: "seller-1", amount_bfc: 0, amount_usd: 100,
+  payment_method: "usd", status: "completed", listing_title: "No file", is_digital: true, created_at: "2026-06-02T10:00:00Z"
+};
+const BFC_ORDER = {
+  id: "order-bfc", listing_id: "listing-bfc", buyer_id: BUYER, seller_id: "seller-2", amount_bfc: 500, amount_usd: null,
+  status: "completed", listing_title: "BFC purchase", is_digital: false, created_at: "2026-10-01T10:00:00Z"
+};
+const ROWS = {
+  marketplace_orders: [PAST_USD, LEGACY, ORPHAN, BFC_ORDER],
+  marketplace_listings: [{ id: "listing-legacy", digital_file_path: "seller-1/legacy.pdf", digital_file_name: "legacy.pdf" }]
+};
 
-async function removeFixtures() {
-  for (const id of made.orders) await supabase.from("marketplace_orders").delete().eq("id", id);
-  for (const id of made.listings) await supabase.from("marketplace_listings").delete().eq("id", id);
-  for (const o of made.objects) await supabase.storage.from(DIGITAL_BUCKET).remove([o]);
-
-  const ordersLeft = made.orders.length
-    ? (await supabase.from("marketplace_orders").select("id", { count: "exact", head: true }).in("id", made.orders)).count : 0;
-  const listingsLeft = made.listings.length
-    ? (await supabase.from("marketplace_listings").select("id", { count: "exact", head: true }).in("id", made.listings)).count : 0;
-  const objs = made.objects.length
-    ? await supabase.storage.from(DIGITAL_BUCKET).list(SUBJECT_USER_ID, { search: "snapshotcheck_" + stamp }) : { data: [] };
-
-  console.log("    [fixture] marketplace_orders: " + made.orders.length + " written, " + ordersLeft + " still present");
-  console.log("    [fixture] marketplace_listings: " + made.listings.length + " written, " + listingsLeft + " still present");
-  console.log("    [fixture] storage objects: " + made.objects.length + " written, " + (objs.data || []).length + " still present");
-  if (ordersLeft || listingsLeft || (objs.data || []).length) failures++;
-}
-
-async function makeObject(tag) {
-  const key = SUBJECT_USER_ID + "/snapshotcheck_" + stamp + "_" + tag + ".txt";
-  const up = await supabase.storage.from(DIGITAL_BUCKET)
-    .upload(key, Buffer.from("fixture " + tag + "\n"), { contentType: "text/plain" });
-  if (up.error) throw new Error("could not upload the fixture object: " + up.error.message);
-  made.objects.push(key);
-  return key;
-}
-
-async function makeListing(objectKey, tag) {
-  const r = await supabase.from("marketplace_listings").insert({
-    seller_id: SUBJECT_USER_ID,
-    title: "CHECK FIXTURE — snapshot " + tag + " " + stamp,
-    description: "scripts/checkMarketplaceOrderSnapshot.js. Removed by the same run.",
-    price_bfc: 0, price_usd: 100, category: "other", tags: [], status: "active", media: [],
-    is_digital: true, digital_file_path: objectKey, digital_file_name: "fixture_" + tag + ".txt"
-  }).select("id").single();
-  if (r.error) throw new Error("could not create the fixture listing: " + r.error.message);
-  made.listings.push(r.data.id);
-  return r.data.id;
-}
-
-function sessionEvent(sessionId, listingId, cents) {
-  const metadata = { kind: "marketplace_usd", buyer_id: SUBJECT_USER_ID, seller_id: SUBJECT_USER_ID };
-  if (listingId !== null) metadata.listing_id = String(listingId);
+function fakeDb() {
+  const calls = [];
+  const signed = [];
+  function from(table) {
+    const q = { table: table, op: "select", filters: [] };
+    const chain = {};
+    ["select", "order", "limit"].forEach(function (op) { chain[op] = function () { return chain; }; });
+    chain.eq = function (c, v) { q.filters.push([c, v]); return chain; };
+    ["insert", "update", "upsert", "delete"].forEach(function (op) { chain[op] = function (p) { q.op = op; q.payload = p; return chain; }; });
+    const hit = function () { calls.push(JSON.parse(JSON.stringify(q))); return (ROWS[table] || []).filter(function (r) { return q.filters.every(function (f) { return r[f[0]] === f[1]; }); }); };
+    chain.maybeSingle = async function () { return { data: hit()[0] || null, error: null }; };
+    chain.then = function (res, rej) { return Promise.resolve({ data: hit(), error: null }).then(res, rej); };
+    return chain;
+  }
   return {
-    id: "evt_" + sessionId,
-    type: "checkout.session.completed",
-    data: { object: { id: sessionId, amount_total: cents, payment_intent: null, metadata: metadata } }
+    calls: calls, signed: signed,
+    client: { from: from, storage: { from: function (b) { return { createSignedUrl: async function (p) { signed.push(b + "/" + p); return { data: { signedUrl: "https://signed/" + p }, error: null }; } }; } } }
   };
 }
-
-async function orderFor(sessionId) {
-  const r = await supabase.from("marketplace_orders").select("*").eq("stripe_session_id", sessionId);
-  (r.data || []).forEach(function (o) { if (made.orders.indexOf(o.id) === -1) made.orders.push(o.id); });
-  return (r.data || [])[0] || null;
+function lift(routePath, db) {
+  const start = SRC.indexOf("app.get(\"" + routePath + "\",");
+  if (start === -1) throw new Error("route not found: " + routePath);
+  const end = MUT.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("async function (req, res, next) {", start)));
+  let handler = null;
+  const ctx = { supabase: db.client, requireAuth: 0, console: { log() {}, warn() {}, error() {} },
+    app: { get: function () { handler = arguments[arguments.length - 1]; } }, JSON: JSON, Object: Object, String: String, Promise: Promise };
+  vm.createContext(ctx);
+  vm.runInContext(SRC.slice(start, end + 2), ctx);
+  return handler;
 }
-
-/* The download route, invoked as itself with the user requireAuth would have
-   attached. Nothing else in this file can answer "would the buyer get it". */
-function callDownload(orderId) {
-  const layer = app._router.stack.filter(function (l) {
-    return l.route && l.route.path === "/api/purchases/:orderId/download" && l.route.methods.get;
-  })[0];
-  const stack = layer.route.stack;
-  const handler = stack[stack.length - 1].handle;
-  return new Promise(function (resolve) {
-    let done = false;
-    const fin = function (r) { if (!done) { done = true; resolve(r); } };
-    const res = {
-      statusCode: 200,
-      status: function (c) { this.statusCode = c; return this; },
-      json: function (p) { fin({ status: this.statusCode, body: p }); return this; }
-    };
-    Promise.resolve()
-      .then(function () {
-        return handler({ params: { orderId: orderId }, user: { id: SUBJECT_USER_ID }, query: {}, body: {}, headers: {} },
-          res, function (e) { fin({ status: 500, body: { error: String(e) } }); });
-      })
-      .catch(function (e) { fin({ status: 500, body: { error: String(e) } }); });
-  });
+async function call(handler, params) {
+  const res = { statusCode: 200, body: undefined, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
+  await handler({ user: { id: BUYER }, params: params || {}, query: {}, body: {} }, res, function (e) { res.statusCode = 500; res.body = { error: String(e) }; });
+  return { status: res.statusCode, body: res.body };
 }
 
 (async function main() {
-  await residue.sweepPrevious(SUBJECT_USER_ID);
+  /* ── 1. the download route ─────────────────────────────────────────── */
+  console.log("\n══ 1. GET /api/purchases/:orderId/download (snapshot first, the listing as fallback) ══");
+  const db = fakeDb();
+  const download = lift("/api/purchases/:orderId/download", db);
+  let r = await call(download, { orderId: "order-usd" });
+  check("the past USD order downloads though its listing is gone, served from its own snapshot",
+    r.status === 200 && r.body.url === "https://signed/seller-1/past.pdf" && r.body.fileName === "past.pdf", r.status + " " + JSON.stringify(r.body));
+  r = await call(download, { orderId: "order-legacy" });
+  check("an order written before migration 113 still downloads through the listing join",
+    r.status === 200 && r.body.fileName === "legacy.pdf", r.status + " " + JSON.stringify(r.body));
+  r = await call(download, { orderId: "order-orphan" });
+  check("an order with neither a snapshot nor a listing is a 404, said plainly", r.status === 404 && r.body.error === "Digital file not found", r.status + " " + JSON.stringify(r.body));
+  r = await call(download, { orderId: "order-bfc" });
+  check("an order with no digital good is a 403", r.status === 403, r.status);
+  check("the download route writes nothing", db.calls.every(function (c) { return c.op === "select"; }), JSON.stringify(db.calls));
 
-  const probe = await supabase.from("marketplace_orders").select("digital_file_path").limit(1);
-  const SNAPSHOT_COLUMNS = !probe.error;
-  console.log("\n══ migration 113 applied to this database: " + (SNAPSHOT_COLUMNS ? "YES" : "NO") + " ══");
-  if (!SNAPSHOT_COLUMNS) {
-    console.log("    The snapshot columns do not exist yet. What is proven below is the fallback:");
-    console.log("    the order still lands WITHOUT a snapshot rather than the insert being refused,");
-    console.log("    and the download still works through the join. Apply 113 and re-run for the rest.");
-  }
+  /* ── 2. the purchases list ─────────────────────────────────────────── */
+  console.log("\n══ 2. GET /api/purchases (USD and BFC orders) ══");
+  const list = lift("/api/purchases", db);
+  r = await call(list);
+  const usd = ((r.body && r.body.purchases) || []).find(function (p) { return p.id === "order-usd"; });
+  check("the past USD order is listed with its amount in cents", r.status === 200 && usd && usd.amount_usd === 100 && usd.is_digital === true, r.status + " " + JSON.stringify(usd));
+  check("the route selects amount_usd and amount_bfc", /\.select\("id, listing_id, listing_title, amount_usd, amount_bfc, status, is_digital, delivered_at, created_at"\)/.test(SRC.slice(SRC.indexOf("app.get(\"/api/purchases\","), SRC.indexOf("app.get(\"/api/purchases/:orderId/download\","))));
 
-  try {
-    /* ── 1. a normal purchase snapshots the file ───────────────────────── */
-    console.log("\n══ 1. a normal purchase ══");
-    const keyA = await makeObject("a");
-    const listingA = await makeListing(keyA, "a");
-    const sessA = "cs_snap_a_" + stamp;
-    await server.__handleStripeEvent(sessionEvent(sessA, listingA, 100));
-
-    const orderA = await orderFor(sessA);
-    check("the order was written", !!orderA, "no order");
-    if (orderA) {
-      console.log("    order: " + JSON.stringify({
-        listing_id: orderA.listing_id ? "set" : null, listing_title: orderA.listing_title,
-        is_digital: orderA.is_digital,
-        digital_file_path: orderA.digital_file_path ? "set" : (orderA.digital_file_path === undefined ? "(column absent)" : null),
-        digital_file_name: orderA.digital_file_name === undefined ? "(column absent)" : orderA.digital_file_name
-      }));
-      if (SNAPSHOT_COLUMNS) {
-        check("the file path was snapshotted onto the order", orderA.digital_file_path === keyA,
-          String(orderA.digital_file_path));
-        check("the file name was snapshotted too", orderA.digital_file_name === "fixture_a.txt",
-          String(orderA.digital_file_name));
-      }
-      check("the title was snapshotted, as it always was", !!orderA.listing_title, String(orderA.listing_title));
-    }
-
-    /* ── 2. the listing is deleted AFTER the order ─────────────────────── */
-    console.log("\n══ 2. the seller deletes the listing after the sale ══");
-    console.log("    This is the case the snapshot rescues: the order exists, carries the file,");
-    console.log("    and the buyer must keep their download once the listing is gone.");
-
-    if (MUTATING && SNAPSHOT_COLUMNS && orderA) {
-      await supabase.from("marketplace_orders")
-        .update({ digital_file_path: null, digital_file_name: null }).eq("id", orderA.id);
-      console.log("\n    !! MUTATION: the snapshot has been blanked on the order, so only the");
-      console.log("       fallback can serve it. 'served from the snapshot' must go red.\n");
-    }
-
-    const beforeDelete = await callDownload(orderA.id);
-    check("the download works while the listing still exists", beforeDelete.status === 200,
-      beforeDelete.status + " " + JSON.stringify(beforeDelete.body).slice(0, 70));
-
-    await supabase.from("marketplace_listings").delete().eq("id", listingA);
-    const gone = await supabase.from("marketplace_listings").select("id").eq("id", listingA).maybeSingle();
-    check("the listing is deleted", !gone.data, "still present");
-
-    const orderAfterDelete = await orderFor(sessA);
-    check("the paid order survived the deletion", !!orderAfterDelete, "the order is gone too");
-    if (orderAfterDelete) {
-      console.log("    the order's listing_id after the deletion: " +
-        (orderAfterDelete.listing_id === null ? "NULL (ON DELETE SET NULL)" : "still set (ON DELETE NO ACTION / RESTRICT did not fire)"));
-    }
-
-    const afterDelete = await callDownload(orderA.id);
-    console.log("    download after the listing was deleted: HTTP " + afterDelete.status);
-    /* DELIBERATELY NOT GUARDED ON !MUTATING. The first draft of this file was,
-       and that made the mutation mode worthless: it blanked the snapshot, the
-       download 404'd, and the suite still reported ALL CHECKS PASSED because
-       the two assertions that would have noticed had stepped aside for it. A
-       mutation whose assertions skip themselves proves nothing. These run
-       either way — green normally, red when the snapshot is taken away. */
-    if (SNAPSHOT_COLUMNS) {
-      check("the buyer can still download after the listing is deleted", afterDelete.status === 200,
-        afterDelete.status + " " + JSON.stringify(afterDelete.body).slice(0, 70));
-      check("and the filename came from the order's snapshot",
-        afterDelete.body && afterDelete.body.fileName === "fixture_a.txt", JSON.stringify(afterDelete.body && afterDelete.body.fileName));
-    }
-
-    /* ── 3. the listing is deleted BEFORE payment ──────────────────────── */
-    console.log("\n══ 3. the listing is deleted before the payment arrives ══");
-    console.log("    The 23503 case. The order must land with listing_id NULL and the payment");
-    console.log("    recorded. The snapshot is EMPTY here and this asserts that it is: the webhook");
-    console.log("    builds the snapshot by reading the listing, and by now there is none to read.");
-
-    const keyC = await makeObject("c");
-    const listingC = await makeListing(keyC, "c");
-    await supabase.from("marketplace_listings").delete().eq("id", listingC);
-    const sessC = "cs_snap_c_" + stamp;
-    await server.__handleStripeEvent(sessionEvent(sessC, listingC, 777));
-
-    const orderC = await orderFor(sessC);
-    check("the paid order landed despite the listing being gone", !!orderC, "NO ORDER — the payment is lost");
-    if (orderC) {
-      check("with listing_id NULL", orderC.listing_id === null, String(orderC.listing_id));
-      check("and the amount recorded", orderC.amount_usd === 777, String(orderC.amount_usd));
-      check("and the session recorded, which is the key to the payment in Stripe",
-        orderC.stripe_session_id === sessC, String(orderC.stripe_session_id));
-      check("and marked completed", orderC.status === "completed", String(orderC.status));
-      if (SNAPSHOT_COLUMNS) {
-        check("the snapshot is empty, as it must be — there was nothing left to copy",
-          !orderC.digital_file_path, String(orderC.digital_file_path));
-      }
-    }
-
-    /* ── 4. an order with no snapshot still downloads ──────────────────── */
-    console.log("\n══ 4. an order predating the snapshot ══");
-    const keyD = await makeObject("d");
-    const listingD = await makeListing(keyD, "d");
-    const legacy = await supabase.from("marketplace_orders").insert({
-      listing_id: listingD, buyer_id: SUBJECT_USER_ID, seller_id: SUBJECT_USER_ID,
-      amount_bfc: 0, amount_usd: 100, payment_method: "usd", status: "completed",
-      listing_title: "legacy fixture", is_digital: true,
-      stripe_session_id: "cs_snap_legacy_" + stamp
-    }).select("id").single();
-    if (legacy.error) throw new Error("could not create the legacy order: " + legacy.error.message);
-    made.orders.push(legacy.data.id);
-    console.log("    an order written with no snapshot columns set at all, listing intact");
-
-    const legacyDownload = await callDownload(legacy.data.id);
-    check("it still downloads, through the foreign-key join", legacyDownload.status === 200,
-      legacyDownload.status + " " + JSON.stringify(legacyDownload.body).slice(0, 70));
-    check("and the filename came from the listing",
-      legacyDownload.body && legacyDownload.body.fileName === "fixture_d.txt",
-      JSON.stringify(legacyDownload.body && legacyDownload.body.fileName));
-  } finally {
-    console.log("\n══ cleanup ══");
-    await removeFixtures();
-    const cleanupResult = await residue.cleanup("end of run");
-    if (cleanupResult.leftovers.length) failures++;
-  }
+  /* ── 3. my-purchases.html ──────────────────────────────────────────── */
+  console.log("\n══ 3. my-purchases.html renders the past USD order ══");
+  let JSDOM;
+  try { JSDOM = require(require.resolve("jsdom", { paths: [REPO] })).JSDOM; } catch (e) { console.log("    FAIL  jsdom is not installed"); process.exit(1); }
+  const purchases = r.body.purchases;
+  const jsdomLib = require(require.resolve("jsdom", { paths: [REPO] }));
+  // The page's sign-in redirect is a navigation jsdom does not implement; it is not under test.
+  const virtualConsole = new jsdomLib.VirtualConsole();
+  virtualConsole.on("jsdomError", function (e) { if (!/navigation/i.test(String(e && e.message))) console.log("    (jsdom) " + e.message); });
+  const dom = new JSDOM(PURCHASES_HTML.replace(/<script src="[^"]*"><\/script>/g, ""), { runScripts: "outside-only", url: "https://bizforceai.net/my-purchases.html", virtualConsole: virtualConsole });
+  const w = dom.window;
+  const network = [];
+  w.token = "check-token";
+  w.fetch = function (url) {
+    network.push(String(url));
+    const p = String(url).indexOf("/api/purchases") !== -1
+      ? Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({ purchases: purchases }); } })
+      : Promise.reject(new Error("unexpected fetch " + url));
+    p.catch(function () {});
+    return p;
+  };
+  const inline = (PURCHASES_HTML.match(/<script>([\s\S]*?)<\/script>/g) || []).map(function (b) { return b.slice(8, -9); });
+  inline.forEach(function (code) { w.eval(code); });
+  for (let i = 0; i < 20; i++) await new Promise(function (res) { setImmediate(res); });
+  const cards = Array.prototype.slice.call(w.document.querySelectorAll(".purchase-card"));
+  const cardFor = function (title) { return cards.find(function (c) { return c.querySelector(".purchase-title").textContent === title; }); };
+  const usdCard = cardFor("Past USD purchase");
+  const bfcCard = cardFor("BFC purchase");
+  check("every order is a card (" + purchases.length + ")", cards.length === purchases.length, cards.length);
+  check("the past USD order reads \"$1.00\"", usdCard && usdCard.querySelector(".purchase-amount").textContent === "$1.00",
+    usdCard && usdCard.querySelector(".purchase-amount").textContent);
+  check("…and offers Download", usdCard && !!usdCard.querySelector(".btn-download"));
+  check("a BFC order reads \"500 BFC\"", bfcCard && bfcCard.querySelector(".purchase-amount").textContent === "500 BFC",
+    bfcCard && bfcCard.querySelector(".purchase-amount").textContent);
+  check("the page fetched only /api/purchases", network.length === 1 && /\/api\/purchases$/.test(network[0]), JSON.stringify(network));
 
   console.log("");
-  if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }
-  console.log("ALL CHECKS PASSED");
+  if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
+  console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);
-})().catch(async function (err) {
-  console.error("\nThe check threw: " + ((err && err.stack) || err));
-  try { await removeFixtures(); } catch (e) { /* the guard still runs */ }
-  process.exit(1);
-});
+})().catch(function (e) { console.log("    FAIL  the check threw: " + ((e && e.stack) || e)); process.exit(1); });

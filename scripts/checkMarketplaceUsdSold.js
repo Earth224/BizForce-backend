@@ -1,379 +1,269 @@
+"use strict";
 /* ══════════════════════════════════════════════════════════════════════════
-   checkMarketplaceUsdSold.js — a paid USD listing must end up sold, and a
-   redelivery of the same payment must change nothing.
+   checkMarketplaceUsdSold.js — a marketplace_usd payment sells nothing.
 
-   THE TWO DEFECTS. The webhook's marketplace_usd branch recorded the order and
-   delivered the file but never touched marketplace_listings, so a USD listing
-   stayed 'active' after being bought and could be bought again — while the BFC
-   path, through bfc_buy_listing, flips it to 'sold' inside the same locked
-   transaction that moves the money. And the branch's idempotency was a
-   read-then-insert with no lock, so two deliveries of one Stripe event could
-   both pass.
+   BizForce Market trades in BizCash only (owner decision of 2026-10-26, option
+   (i) of the USD marketplace recon in ae8e5db). This check used to prove the
+   opposite: that a paid USD listing ended up sold and its file delivered. It
+   now proves the switch-off, named entry by entry:
 
-   HOW THIS DRIVES IT. The webhook cannot be reached over HTTP without forging
-   a Stripe signature, so the check hands the real handleStripeEvent a
-   real-shaped checkout.session.completed event. The handler is the thing under
-   test; a re-implementation of it would proves nothing about it.
+     webhook, a NEW marketplace_usd event
+       BEFORE (ae8e5db)  wrote a marketplace_orders row, marked the listing
+                         sold, and signed a download for a digital good
+       AFTER             writes nothing: no order, nothing marked sold, no
+                         file delivered; logs "[marketplace-usd] REFUSED" and
+                         raises the marketplace_usd_refused ops alert
+     webhook, the ONE PAST USD order's session delivered again
+       BEFORE            "already recorded", nothing written
+       AFTER             the same: read, logged, left as it is, no alert
+     webhook signing secrets
+       BEFORE            STRIPE_WEBHOOK_SECRET and STRIPE_TEST_WEBHOOK_SECRET,
+                         everywhere: a test-card payment signed in test mode
+                         was accepted by the live server
+       AFTER             production (NODE_ENV=production or any Railway
+                         variable) accepts the live secret only; a local run
+                         still accepts both
+     the test-mode client
+       BEFORE            stripeTest, used by the USD checkout and the webhook's
+                         payment-intent metadata fallback
+       AFTER             removed; no code in server.js names it, its key, or
+                         paymentIntents.retrieve
 
-   ── WHOSE DATA THIS TOUCHES ───────────────────────────────────────────────
+   HOW. The real handleStripeEvent, refuseMarketplaceUsdEvent,
+   stripeWebhookSecrets and constructStripeEventFromSecrets are lifted from
+   server.js into a vm, against a fake database that records every call and an
+   ops alert stub that records every alert. Events are signed with the real
+   stripe library's offline test-header helper. The network is blocked: a
+   Stripe API call would fail the run. No database, no Stripe, no
+   BIZFORCE_CHECK_USER_ID; nothing is written anywhere.
 
-   Its own, and only its own. Every fixture — the listing, the order, the
-   storage object — is created by this script under the subject account that
-   BIZFORCE_CHECK_USER_ID names, and removed again in a finally block that
-   verifies the removal. The owner's listings are read for context and never
-   written.
-
-   THE RESIDUE GUARD IS INSTALLED BUT DOES NOT OWN THE MARKETPLACE TABLES, and
-   that is deliberate rather than an oversight. The guard identifies a row's
-   owner by a user_id column; marketplace_listings has seller_id and
-   marketplace_orders has buyer_id and seller_id, so isSubjectRow would find no
-   user_id, correctly refuse to delete, and leave the fixtures behind. It is
-   installed for ai_tasks and model_calls — which nothing here should write, so
-   a row appearing in either is itself a finding — and the marketplace fixtures
-   are tracked and deleted by explicit id below.
-
-   MUTATE=no-sold-update strips listing_id out of the event metadata, so the
-   handler records the payment and has nothing to mark sold — the behaviour
-   this commit fixes, reached without editing the code under test. The "listing
-   is sold" assertions must go red while the "order was still written"
-   assertions stay green, which is the whole point of the ordering: a failed
-   status flip must never cost a paid order.
-
-   It deliberately does NOT point the event at a non-existent listing.
-   marketplace_orders.listing_id turns out to carry a foreign key to
-   marketplace_listings — undocumented, in no migration — so that shape fails
-   the ORDER INSERT with 23503 instead, mutating a different thing entirely and
-   losing the paid order. See the note in scenario 3.
+   MUTATE=webhook-marks-sold   the refusal marks the listing sold before it
+                               logs. "nothing is written" must go red.
+   MUTATE=no-alert             the refusal raises no ops alert.
+   MUTATE=test-secret-in-production  production accepts the test secret again.
    ══════════════════════════════════════════════════════════════════════════ */
-
-require("dotenv").config();
-const MUT = require("./_shared");
-// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["no-sold-update"]);
-
-const { createResidueGuard, resolveSubjectAccount } = require("./checkRunResidue");
-const SUBJECT_USER_ID = resolveSubjectAccount();
-
+const fs = require("fs");
+const vm = require("vm");
 const path = require("path");
+const net = require("net");
+const dns = require("dns");
+const MUT = require("./_shared");
+
+const MUTATIONS = ["webhook-marks-sold", "no-alert", "test-secret-in-production"];
+const MUTATE = process.env.MUTATE || "";
+// One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
+if (MUTATE === "all") MUT.runAllMutations(__filename, MUTATIONS);
+if (MUTATE && MUTATIONS.indexOf(MUTATE) === -1) {
+  console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + MUTATIONS.join(", "));
+  process.exit(2);
+}
+
+const NETWORK = [];
+net.Socket.prototype.connect = function () { NETWORK.push("socket"); throw new Error("checkMarketplaceUsdSold: no network"); };
+dns.lookup = function (host) { NETWORK.push("dns " + host); throw new Error("checkMarketplaceUsdSold: no network"); };
+
 const REPO = path.join(__dirname, "..");
+let SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
 
-const EXPRESS_PATH = require.resolve("express", { paths: [REPO] });
-const realExpress = require(EXPRESS_PATH);
-let app = null;
-const expressWrapper = function () {
-  const made = realExpress.apply(this, arguments);
-  if (!app) app = made;
-  return made;
-};
-Object.keys(realExpress).forEach(function (k) { expressWrapper[k] = realExpress[k]; });
-require.cache[EXPRESS_PATH].exports = expressWrapper;
+if (MUTATE === "webhook-marks-sold") {
+  SRC = MUT.replaceOnce(SRC,
+    "  const detail = \"event \" + (event && event.id) + \", session \" + session.id + \", amount \" +\n",
+    "  await supabase.from(\"marketplace_listings\").update({ status: \"sold\" }).eq(\"id\", m.listing_id);\n" +
+    "  const detail = \"event \" + (event && event.id) + \", session \" + session.id + \", amount \" +\n", MUTATE);
+}
+if (MUTATE === "no-alert") {
+  SRC = MUT.replaceOnce(SRC, "  opsAlerts.marketplaceUsdRefused({", "  ({", MUTATE);
+}
+if (MUTATE === "test-secret-in-production") {
+  SRC = MUT.replaceOnce(SRC, "    ? [e.STRIPE_WEBHOOK_SECRET]\n", "    ? [e.STRIPE_WEBHOOK_SECRET, e.STRIPE_TEST_WEBHOOK_SECRET]\n", MUTATE);
+}
+if (MUTATE) console.log("\n!! MUTATION: " + MUTATE + " (server.js, in memory)");
 
-process.env.PORT = process.env.CHECK_PORT || "0";
-const server = require(path.join(REPO, "server.js"));
-
-const { createClient } = require("@supabase/supabase-js");
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-const residue = createResidueGuard({
-  supabase: supabase,
-  name: "marketplaceUsdSold",
-  subject: SUBJECT_USER_ID,
-  tables: ["ai_tasks", "model_calls"]
-});
-residue.install();
-
-const MUTATING = process.env.MUTATE === "no-sold-update";
-
-let failures = 0;
+let passes = 0, failures = 0;
 function check(label, ok, detail) {
-  if (ok) console.log("    pass  " + label);
-  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + detail + "]" : "")); }
+  if (ok) { passes++; console.log("    pass  " + label); }
+  else { failures++; console.log("    FAIL  " + label + (detail !== undefined ? "  [" + String(detail).slice(0, 300) + "]" : "")); }
 }
 
-/* Fixtures, tracked for explicit removal. */
-const made = { listings: [], orders: [], objects: [] };
-
-const DIGITAL_BUCKET = "bf-digital-goods";
-const stamp = Date.now();
-const FIXTURE_OBJECT = SUBJECT_USER_ID + "/checkMarketplaceUsdSold_" + stamp + ".txt";
-
-async function removeFixtures() {
-  for (const id of made.orders) {
-    await supabase.from("marketplace_orders").delete().eq("id", id);
-  }
-  for (const id of made.listings) {
-    await supabase.from("marketplace_listings").delete().eq("id", id);
-  }
-  for (const obj of made.objects) {
-    await supabase.storage.from(DIGITAL_BUCKET).remove([obj]);
-  }
-
-  /* THE REPORT IS THE READ-BACK, NOT THE DELETE, the same rule the residue
-     guard follows for the tables it does own. */
-  const ordersLeft = made.orders.length
-    ? (await supabase.from("marketplace_orders").select("id", { count: "exact", head: true }).in("id", made.orders)).count
-    : 0;
-  const listingsLeft = made.listings.length
-    ? (await supabase.from("marketplace_listings").select("id", { count: "exact", head: true }).in("id", made.listings)).count
-    : 0;
-  const objs = made.objects.length
-    ? await supabase.storage.from(DIGITAL_BUCKET).list(SUBJECT_USER_ID, { search: "checkMarketplaceUsdSold_" + stamp })
-    : { data: [] };
-  const objectsLeft = (objs.data || []).length;
-
-  console.log("    [fixture] marketplace_orders: " + made.orders.length + " written, " + ordersLeft + " still present");
-  console.log("    [fixture] marketplace_listings: " + made.listings.length + " written, " + listingsLeft + " still present");
-  console.log("    [fixture] storage objects: " + made.objects.length + " written, " + objectsLeft + " still present");
-  if (ordersLeft || listingsLeft || objectsLeft) failures++;
-}
-
-async function makeListing(fields) {
-  const row = Object.assign({
-    seller_id: SUBJECT_USER_ID,
-    title: "CHECK FIXTURE — marketplace usd sold " + stamp,
-    description: "Created by scripts/checkMarketplaceUsdSold.js. Deleted by the same run.",
-    price_bfc: 0,
-    price_usd: 100,
-    category: "other",
-    tags: [],
-    status: "active",
-    media: []
-  }, fields || {});
-  const r = await supabase.from("marketplace_listings").insert(row).select("id, status").single();
-  if (r.error) throw new Error("could not create the fixture listing: " + r.error.message);
-  made.listings.push(r.data.id);
-  return r.data;
-}
-
-/* listingId null builds an event whose metadata carries NO listing_id, which
-   is the shape used to prove that a payment whose listing cannot be marked
-   sold still records the order. */
-function sessionEvent(sessionId, listingId, amountCents) {
-  const metadata = {
-    kind: "marketplace_usd",
-    buyer_id: SUBJECT_USER_ID,
-    seller_id: SUBJECT_USER_ID
-  };
-  if (listingId !== null) metadata.listing_id = String(listingId);
-
-  return {
-    id: "evt_check_" + sessionId,
-    type: "checkout.session.completed",
-    data: {
-      object: {
-        id: sessionId,
-        amount_total: amountCents,
-        payment_intent: null,
-        metadata: metadata
+/* ── the fake database: every call recorded ───────────────────────────── */
+const WRITE_OPS = ["insert", "update", "upsert", "delete"];
+function fakeDb(plan) {
+  const calls = [];
+  function from(table) {
+    const q = { table: table, op: "select", filters: [] };
+    const chain = {};
+    ["select", "eq", "neq", "in", "is", "order", "limit", "gt", "lte", "or"].forEach(function (op) {
+      chain[op] = function () { if (op !== "select") q.filters.push([op].concat([].slice.call(arguments))); return chain; };
+    });
+    WRITE_OPS.forEach(function (op) {
+      chain[op] = function (payload) { q.op = op; q.payload = payload; return chain; };
+    });
+    const answer = function () {
+      calls.push(JSON.parse(JSON.stringify(q)));
+      if (q.op === "select" && table === "marketplace_orders") {
+        if (plan.lookupError) return { data: null, error: { message: plan.lookupError } };
+        const session = (q.filters.find(function (f) { return f[0] === "eq" && f[1] === "stripe_session_id"; }) || [])[2];
+        return { data: plan.orders && plan.orders[session] ? { id: plan.orders[session] } : null, error: null };
       }
+      return { data: q.op === "select" ? null : [{ id: "row" }], error: null };
+    };
+    chain.maybeSingle = async function () { return answer(); };
+    chain.single = async function () { return answer(); };
+    chain.then = function (res, rej) { return Promise.resolve(answer()).then(res, rej); };
+    return chain;
+  }
+  const storage = {
+    from: function (bucket) {
+      return {
+        createSignedUrl: async function (p) { calls.push({ table: "storage:" + bucket, op: "sign", payload: p }); return { data: { signedUrl: "https://signed" }, error: null }; },
+        upload: async function (p) { calls.push({ table: "storage:" + bucket, op: "upload", payload: p }); return { data: {}, error: null }; },
+        remove: async function (p) { calls.push({ table: "storage:" + bucket, op: "remove", payload: p }); return { data: {}, error: null }; }
+      };
     }
   };
+  return { client: { from: from, storage: storage }, calls: calls };
 }
+const writesIn = function (calls) { return calls.filter(function (c) { return c.op !== "select"; }); };
 
-/* The handler reports what it did through the log and nothing else, so the
-   only way to assert which branch ran is to listen. Wraps rather than replaces,
-   so the output still appears in the run. */
-function captureConsole() {
-  const lines = [];
-  const realLog = console.log;
-  const realError = console.error;
-  console.log = function () { lines.push(Array.prototype.join.call(arguments, " ")); realLog.apply(console, arguments); };
-  console.error = function () { lines.push(Array.prototype.join.call(arguments, " ")); realError.apply(console, arguments); };
-  return {
-    lines: lines,
-    stop: function () { console.log = realLog; console.error = realError; }
+/* ── the real functions, lifted ────────────────────────────────────────── */
+const NAMES = ["isProductionEnv", "stripeWebhookSecrets", "constructStripeEventFromSecrets", "refuseMarketplaceUsdEvent", "handleStripeEvent"];
+const lifted = NAMES.map(function (n) {
+  const d = MUT.definitionOf(SRC, n);
+  if (!d) { console.log("    FAIL  " + n + " was not found in server.js"); process.exit(1); }
+  return d;
+}).join("\n\n");
+
+const Stripe = require(require.resolve("stripe", { paths: [REPO] }));
+const stripeLib = Stripe("sk_test_check_offline_not_a_key");
+
+function build(plan) {
+  const db = fakeDb(plan || {});
+  const logs = [];
+  const alerts = [];
+  const ctx = {
+    supabase: db.client,
+    stripe: stripeLib,
+    nowIso: function () { return "2026-10-26T12:00:00.000Z"; },
+    console: {
+      log: function () { logs.push(["log", [].join.call(arguments, " ")]); },
+      warn: function () { logs.push(["warn", [].join.call(arguments, " ")]); },
+      error: function () { logs.push(["error", [].join.call(arguments, " ")]); }
+    },
+    opsAlerts: {
+      marketplaceUsdRefused: function (info) { alerts.push(JSON.parse(JSON.stringify(info))); return Promise.resolve({ sent: true }); },
+      stripeWebhookFailed: function () { return Promise.resolve({}); },
+      noteSignatureFailure: function () {}
+    },
+    recordRevenueEvent: async function () { throw new Error("no revenue_events row may be written for a marketplace_usd event"); },
+    getPlanFromPriceId: function () { return null; },
+    JSON: JSON, Object: Object, Array: Array, Number: Number, String: String, Promise: Promise, Error: Error, Date: Date, Buffer: Buffer
   };
+  vm.createContext(ctx);
+  vm.runInContext(lifted + "\nthis.__f = { " + NAMES.join(", ") + " };", ctx);
+  return { f: ctx.__f, db: db, logs: logs, alerts: alerts };
 }
 
-async function listingStatus(id) {
-  const r = await supabase.from("marketplace_listings").select("status").eq("id", id).maybeSingle();
-  return r.data ? r.data.status : "(gone)";
-}
-
-async function ordersForSession(sessionId) {
-  const r = await supabase.from("marketplace_orders").select("*").eq("stripe_session_id", sessionId);
-  (r.data || []).forEach(function (o) { if (made.orders.indexOf(o.id) === -1) made.orders.push(o.id); });
-  return r.data || [];
+function usdEvent(sessionId, extra) {
+  return {
+    id: "evt_" + sessionId, type: "checkout.session.completed",
+    data: { object: Object.assign({
+      id: sessionId, amount_total: 4900, payment_intent: "pi_" + sessionId,
+      metadata: { kind: "marketplace_usd", listing_id: "listing-1", buyer_id: "buyer-1", seller_id: "seller-1" }
+    }, extra || {}) }
+  };
 }
 
 (async function main() {
-  await residue.sweepPrevious(SUBJECT_USER_ID);
+  /* ── 1. a new marketplace_usd event ─────────────────────────────────── */
+  console.log("\n══ 1. a NEW marketplace_usd event (BEFORE: order, sold, delivered · AFTER: nothing) ══");
+  const fresh = build({ orders: {} });
+  let threw = null;
+  try { await fresh.f.handleStripeEvent(usdEvent("cs_new_after_switch_off")); } catch (e) { threw = e; }
+  check("the handler returns normally, so Stripe gets a 200 and does not redeliver", threw === null, threw && threw.message);
+  const freshWrites = writesIn(fresh.db.calls);
+  check("nothing is written: no insert, update, upsert, delete or storage call", freshWrites.length === 0, JSON.stringify(freshWrites));
+  check("no marketplace_orders row is created", !fresh.db.calls.some(function (c) { return c.table === "marketplace_orders" && c.op !== "select"; }));
+  check("no listing is marked sold", !fresh.db.calls.some(function (c) { return c.table === "marketplace_listings" && c.op !== "select"; }));
+  check("no file is delivered: no signed URL is made", !fresh.db.calls.some(function (c) { return c.op === "sign"; }));
+  check("the only database call is the read for a past order with that session",
+    fresh.db.calls.length === 1 && fresh.db.calls[0].table === "marketplace_orders" && fresh.db.calls[0].op === "select",
+    JSON.stringify(fresh.db.calls));
+  const refusedLog = fresh.logs.filter(function (l) { return l[0] === "error" && l[1].indexOf("[marketplace-usd] REFUSED") === 0; });
+  check("it is logged as REFUSED, naming the session, the amount and the listing",
+    refusedLog.length === 1 && /cs_new_after_switch_off/.test(refusedLog[0][1]) && /4900/.test(refusedLog[0][1]) && /listing-1/.test(refusedLog[0][1]),
+    JSON.stringify(fresh.logs));
+  check("one ops alert is raised, for that session",
+    fresh.alerts.length === 1 && fresh.alerts[0].session_id === "cs_new_after_switch_off" && fresh.alerts[0].event_id === "evt_cs_new_after_switch_off",
+    JSON.stringify(fresh.alerts));
 
-  console.log("\n══ the owner's listings are read only for context ══");
-  const ownerRows = await supabase.from("marketplace_listings")
-    .select("id, status", { count: "exact" }).neq("seller_id", SUBJECT_USER_ID);
-  const ownerBefore = (ownerRows.data || []).map(function (r) { return r.id + "=" + r.status; }).sort().join(", ");
-  console.log("    " + (ownerRows.data || []).length + " listing(s) not belonging to the subject: " + ownerBefore);
+  /* a digital listing and no listing id change nothing */
+  const bare = build({ orders: {} });
+  await bare.f.handleStripeEvent(usdEvent("cs_new_no_listing", { metadata: { kind: "marketplace_usd" } }));
+  check("an event with no listing id is refused the same way: nothing written, one alert",
+    writesIn(bare.db.calls).length === 0 && bare.alerts.length === 1, JSON.stringify(bare.db.calls) + " " + bare.alerts.length);
 
-  const indexProbe = await supabase.from("marketplace_orders").select("stripe_session_id").limit(1);
-  console.log("    migration 112 applied: unknown from here (a unique index is not visible over PostgREST);");
-  console.log("    the duplicate-delivery case below is asserted on the OUTCOME — one order — which");
-  console.log("    holds whether the index or the handler's own check is what stopped it.");
+  /* a failed past-order read still writes nothing and still alerts */
+  const failing = build({ lookupError: "connection reset" });
+  threw = null;
+  try { await failing.f.handleStripeEvent(usdEvent("cs_new_lookup_fails")); } catch (e) { threw = e; }
+  check("a failed past-order read: no throw, nothing written, one alert that says the read failed",
+    threw === null && writesIn(failing.db.calls).length === 0 && failing.alerts.length === 1 && /lookup failed: connection reset/.test(failing.alerts[0].detail),
+    (threw && threw.message) + " " + JSON.stringify(failing.alerts));
 
-  try {
-    /* ── 1. a paid listing ends up sold ────────────────────────────────── */
-    console.log("\n══ 1. a fresh marketplace_usd event ══");
+  /* ── 2. the one past USD order ──────────────────────────────────────── */
+  console.log("\n══ 2. the past USD order's session, delivered again (read-only) ══");
+  const past = build({ orders: { cs_past_order: "order-past-1" } });
+  await past.f.handleStripeEvent(usdEvent("cs_past_order"));
+  check("nothing is written for the past order", writesIn(past.db.calls).length === 0, JSON.stringify(past.db.calls));
+  check("no alert: it is the order recorded before the switch-off", past.alerts.length === 0, JSON.stringify(past.alerts));
+  check("it is logged as left as it is, naming the order",
+    past.logs.some(function (l) { return l[0] === "log" && /cs_past_order is order order-past-1, recorded before USD sales were switched off\. Left as it is\./.test(l[1]); }),
+    JSON.stringify(past.logs));
 
-    /* A real object in the private bucket, so delivery is proven rather than
-       inferred from a soft-failure log. Removed with the rest. */
-    const upload = await supabase.storage.from(DIGITAL_BUCKET)
-      .upload(FIXTURE_OBJECT, Buffer.from("check fixture — not a real product\n"), { contentType: "text/plain" });
-    if (upload.error) {
-      console.log("    (could not upload a fixture object: " + upload.error.message + " — delivery will be asserted as soft-failed)");
-    } else {
-      made.objects.push(FIXTURE_OBJECT);
-      console.log("    [fixture] uploaded a placeholder object to " + DIGITAL_BUCKET);
-    }
+  /* ── 3. the signing secrets ─────────────────────────────────────────── */
+  console.log("\n══ 3. the webhook's signing secrets (BEFORE: test secret everywhere · AFTER: refused in production) ══");
+  const sec = build({}).f;
+  const LIVE = "whsec_live_check", TEST = "whsec_test_check";
+  const PROD_ENVS = [
+    ["NODE_ENV=production", { NODE_ENV: "production" }],
+    ["Railway (RAILWAY_ENVIRONMENT), NODE_ENV unset", { RAILWAY_ENVIRONMENT: "production" }],
+    ["Railway (RAILWAY_ENVIRONMENT_NAME), NODE_ENV=development", { NODE_ENV: "development", RAILWAY_ENVIRONMENT_NAME: "production" }],
+    ["Railway (RAILWAY_PROJECT_ID)", { RAILWAY_PROJECT_ID: "p1" }]
+  ];
+  const payload = JSON.stringify({ id: "evt_sig", object: "event", type: "checkout.session.completed", data: { object: { id: "cs_sig", metadata: { kind: "marketplace_usd" } } } });
+  const signedTest = stripeLib.webhooks.generateTestHeaderString({ payload: payload, secret: TEST });
+  const signedLive = stripeLib.webhooks.generateTestHeaderString({ payload: payload, secret: LIVE });
+  PROD_ENVS.forEach(function (pe) {
+    const env = Object.assign({ STRIPE_WEBHOOK_SECRET: LIVE, STRIPE_TEST_WEBHOOK_SECRET: TEST }, pe[1]);
+    const list = sec.stripeWebhookSecrets(env);
+    check(pe[0] + ": the live secret only", JSON.stringify(list) === JSON.stringify([LIVE]), JSON.stringify(list));
+    let refused = null;
+    try { sec.constructStripeEventFromSecrets(Buffer.from(payload), signedTest, list); } catch (e) { refused = e; }
+    check(pe[0] + ": an event signed with the test secret is refused", refused !== null);
+    let ok = null;
+    try { ok = sec.constructStripeEventFromSecrets(Buffer.from(payload), signedLive, list); } catch (e) { ok = null; }
+    check(pe[0] + ": an event signed with the live secret is accepted", !!ok && ok.id === "evt_sig");
+  });
+  const local = sec.stripeWebhookSecrets({ STRIPE_WEBHOOK_SECRET: LIVE, STRIPE_TEST_WEBHOOK_SECRET: TEST, NODE_ENV: "development" });
+  check("a local run (no production marker) still accepts both, for replaying test events",
+    JSON.stringify(local) === JSON.stringify([LIVE, TEST]), JSON.stringify(local));
+  check("the webhook route reads its secrets from stripeWebhookSecrets(process.env)",
+    SRC.indexOf("event = constructStripeEventFromSecrets(req.body, signature, stripeWebhookSecrets(process.env));") !== -1);
+  check("the comment says why the test secret is refused in production",
+    /STRIPE_TEST_WEBHOOK_SECRET signs Stripe TEST-mode events, which anyone\n\s+can produce with a test card and no money/.test(SRC));
 
-    const listing = await makeListing({
-      is_digital: !upload.error,
-      digital_file_path: upload.error ? null : FIXTURE_OBJECT,
-      digital_file_name: upload.error ? null : "fixture.txt"
-    });
-    console.log("    [fixture] listing " + listing.id + " created, status=" + listing.status);
-    check("the fixture listing starts active", listing.status === "active", listing.status);
+  /* ── 4. the test-mode client is gone ────────────────────────────────── */
+  console.log("\n══ 4. the test-mode Stripe client (BEFORE: stripeTest · AFTER: removed) ══");
+  const code = SRC.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+  check("no code names stripeTest", !/\bstripeTest\b/.test(code), (code.match(/[^\n]*\bstripeTest\b[^\n]*/) || [""])[0].trim());
+  check("no code reads STRIPE_TEST_SECRET_KEY", code.indexOf("STRIPE_TEST_SECRET_KEY") === -1);
+  check("no code retrieves a payment intent", code.indexOf("paymentIntents.retrieve") === -1);
+  check("the only Stripe checkout session server.js creates is the subscription's",
+    (code.match(/checkout\.sessions\.create\(/g) || []).length === 1 && code.indexOf("await stripe.checkout.sessions.create(sessionParams);") !== -1);
 
-    const sessionId = "cs_check_" + stamp;
-    /* MUTATION: the event carries no listing_id, so the handler records the
-       payment and cannot mark anything sold — the pre-fix behaviour, reached
-       without editing the code under test. It deliberately does NOT point at a
-       non-existent listing: marketplace_orders.listing_id has a foreign key to
-       marketplace_listings, so that would fail the ORDER INSERT instead and
-       would be mutating the wrong thing. */
-    const targetListing = MUTATING ? null : listing.id;
-    if (MUTATING) {
-      console.log("\n    !! MUTATION: the event carries no listing_id, so no listing can be marked");
-      console.log("       sold. The 'sold' assertions must go red and the 'order still written'");
-      console.log("       assertions must stay green — a failed status flip must never cost a");
-      console.log("       paid order.\n");
-    }
-
-    await server.__handleStripeEvent(sessionEvent(sessionId, targetListing, 100));
-
-    const afterOne = await listingStatus(listing.id);
-    console.log("    listing status after the event: " + afterOne);
-    check("the listing is marked sold", afterOne === "sold", afterOne);
-
-    const orders1 = await ordersForSession(sessionId);
-    check("exactly one order was written", orders1.length === 1, "orders: " + orders1.length);
-    if (orders1.length) {
-      const o = orders1[0];
-      console.log("    order: " + JSON.stringify({
-        status: o.status, payment_method: o.payment_method, amount_usd: o.amount_usd,
-        is_digital: o.is_digital, delivered: !!o.delivered_at, download_url: o.download_url ? "set" : null
-      }));
-      check("the order is completed and marked usd", o.status === "completed" && o.payment_method === "usd",
-        o.status + "/" + o.payment_method);
-      check("the order records the amount paid", o.amount_usd === 100, String(o.amount_usd));
-      if (!upload.error && !MUTATING) {
-        check("the digital good was delivered", !!o.download_url && !!o.delivered_at,
-          "download_url=" + (o.download_url ? "set" : "null") + " delivered_at=" + o.delivered_at);
-      }
-    }
-
-    /* ── 2. a redelivery of the same session changes nothing ───────────── */
-    console.log("\n══ 2. the same session delivered again ══");
-    const statusBeforeReplay = await listingStatus(listing.id);
-    await server.__handleStripeEvent(sessionEvent(sessionId, targetListing, 100));
-
-    const orders2 = await ordersForSession(sessionId);
-    check("still exactly one order for that session", orders2.length === 1, "orders: " + orders2.length);
-    check("the listing status is unchanged by the redelivery",
-      (await listingStatus(listing.id)) === statusBeforeReplay, statusBeforeReplay);
-
-    /* ── 3. a failed status update still writes the order ──────────────── */
-    console.log("\n══ 3. a payment whose listing cannot be marked sold ══");
-    console.log("    The event carries no listing_id, so the handler records the payment and has");
-    console.log("    nothing to mark sold. The paid order must still be written.");
-    console.log("");
-    console.log("    NOT tested as a missing listing id, and that is a finding rather than a");
-    console.log("    convenience: marketplace_orders.listing_id has a foreign key to");
-    console.log("    marketplace_listings — undocumented, in no migration — so an event naming a");
-    console.log("    deleted listing fails at the ORDER INSERT with 23503 and the paid order is");
-    console.log("    lost outright. That is a separate defect from the one under test here.");
-
-    const orphanSession = "cs_check_orphan_" + stamp;
-    await server.__handleStripeEvent(sessionEvent(orphanSession, null, 250));
-
-    const orphanOrders = await ordersForSession(orphanSession);
-    check("the paid order was still written", orphanOrders.length === 1, "orders: " + orphanOrders.length);
-    if (orphanOrders.length) {
-      check("and it is completed, not left pending", orphanOrders[0].status === "completed", orphanOrders[0].status);
-      check("and it records the amount paid", orphanOrders[0].amount_usd === 250, String(orphanOrders[0].amount_usd));
-    }
-    console.log("    (the handler logged the listing it could not mark sold — see [marketplace-usd] above)");
-
-    /* ── 3b. two deliveries racing — the case the index exists for ─────── */
-    console.log("\n══ 3b. two deliveries of one session, racing ══");
-    console.log("    Scenario 2 above is a SEQUENTIAL redelivery, which the handler's own");
-    console.log("    read-first check catches before it ever reaches the insert. That check cannot");
-    console.log("    catch a CONCURRENT redelivery: both calls read \"no order yet\" before either");
-    console.log("    inserts. Stripe delivers at least once, so this is a real arrival pattern.");
-    console.log("    With migration 112 applied the loser hits the unique index and the handler");
-    console.log("    reports it as a no-op. Without the index, both would insert.");
-
-    let raceSaw23505 = false;
-    let raceAttempts = 0;
-    let raceOrders = -1;
-    let raceListingId = null;
-
-    /* The interleaving is the operating system's to decide, so this tries a few
-       times rather than asserting a race lands on the first go. Each attempt is
-       its own listing and its own session, and every row is tracked. */
-    for (raceAttempts = 1; raceAttempts <= 5 && !raceSaw23505; raceAttempts++) {
-      const raceListing = await makeListing({});
-      raceListingId = raceListing.id;
-      const raceSession = "cs_check_race_" + stamp + "_" + raceAttempts;
-
-      const cap = captureConsole();
-      await Promise.all([
-        server.__handleStripeEvent(sessionEvent(raceSession, raceListingId, 100)),
-        server.__handleStripeEvent(sessionEvent(raceSession, raceListingId, 100))
-      ]);
-      cap.stop();
-
-      raceSaw23505 = cap.lines.some(function (l) {
-        return l.indexOf("lost the race to the unique index") !== -1;
-      });
-      const rows = await ordersForSession(raceSession);
-      raceOrders = rows.length;
-
-      console.log("    attempt " + raceAttempts + ": orders=" + rows.length +
-        "  the index caught a duplicate: " + (raceSaw23505 ? "YES" : "no — the read won this time"));
-
-      /* Exactly one order, whichever mechanism stopped the second. That is the
-         assertion that matters; which of the two caught it is timing. */
-      check("attempt " + raceAttempts + ": exactly one order survived the race", rows.length === 1,
-        "orders: " + rows.length);
-    }
-
-    check("the handler's 23505 no-op path is reachable and was reached", raceSaw23505,
-      "not observed in " + (raceAttempts - 1) + " attempt(s) — the read-first check won every time, " +
-      "which is not a failure of the index but leaves this path unproven in this run");
-
-    /* ── 4. nothing of the owner's moved ───────────────────────────────── */
-    console.log("\n══ 4. nothing outside the subject's own rows changed ══");
-    const ownerAfterRows = await supabase.from("marketplace_listings")
-      .select("id, status").neq("seller_id", SUBJECT_USER_ID);
-    const ownerAfter = (ownerAfterRows.data || []).map(function (r) { return r.id + "=" + r.status; }).sort().join(", ");
-    check("every listing not belonging to the subject is untouched", ownerAfter === ownerBefore,
-      "before: " + ownerBefore + "  after: " + ownerAfter);
-  } finally {
-    console.log("\n══ cleanup ══");
-    await removeFixtures();
-    const cleanupResult = await residue.cleanup("end of run");
-    if (cleanupResult.leftovers.length) failures++;
-  }
-
+  check("zero network: no Stripe or database call left this process", NETWORK.length === 0, JSON.stringify(NETWORK));
   console.log("");
-  if (failures) { console.log("CHECKS FAILED: " + failures); process.exit(1); }
-  console.log("ALL CHECKS PASSED");
+  if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
+  console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);
-})().catch(async function (err) {
-  console.error("\nThe check threw: " + ((err && err.stack) || err));
-  try { await removeFixtures(); } catch (e) { /* the guard still runs on the way out */ }
-  process.exit(1);
-});
+})().catch(function (e) { console.log("    FAIL  the check threw: " + ((e && e.stack) || e)); process.exit(1); });

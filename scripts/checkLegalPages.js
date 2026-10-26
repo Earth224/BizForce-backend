@@ -109,7 +109,9 @@ const MUTATIONS = {
   // Privacy section 3 says "We do not sell" twice in a row again
   "no-sale-twice": [["lib/legalPages.js", "p(\"We do not share your personal information for advertising.\"),", "p(\"We do not sell your personal information, and we do not share it for advertising.\"),"]],
   // the Terms' renewal card repeats section 4's sentence word for word
-  "sentence-repeated": [["lib/legalPages.js", "esc(\"No partial or prorated refunds, as section 4 sets out.\")", "esc(\"There are no partial or prorated refunds.\")"]]
+  "sentence-repeated": [["lib/legalPages.js", "esc(\"No partial or prorated refunds, as section 4 sets out.\")", "esc(\"There are no partial or prorated refunds.\")"]],
+  // the Terms drop the BizCash-only statement from section 8
+  "terms-not-bfc-only": [["terms.html", "<p>BizForce Market trades are in BizCash only. Every listing is priced and bought in BFC, and BizForce processes no member-to-member payments in US dollars.</p>", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 
@@ -343,6 +345,13 @@ const fmt = n => Number(n).toLocaleString("en-US");
       "BizForce may change the BFC rules"].every(x => has(T, x)));
     check("E11. Privacy's YouTube retention is lib/youtubeRetention.js's " + ytDays + " days", has(P, "How long: at most " + ytDays + " days."));
     check("E12. the refund policy is lib/legal.js's, on Terms and Refunds", LEGAL.REFUND_POLICY.every(x => has(T, x) && has(R, x)));
+    /* BEFORE (ae8e5db): section 8 said nothing about how listings are paid for, while USD sales ran.
+       AFTER: it states BizCash only, and the code backs it (server.js refuses a USD price on every listing write). */
+    const sec8 = T.slice(T.indexOf("8. BizForce Market and the BizCash Member Trade Agreement"), T.indexOf("9. Suspension and termination"));
+    check("E13. Terms section 8: BizForce Market trades are in BizCash only, and no member-to-member payments in US dollars are processed",
+      /\nconst LISTING_BFC_ONLY_MESSAGE = "Listings are priced in BizCash only\.";/.test(sv) &&
+      has(sec8, "BizForce Market trades are in BizCash only.") && has(sec8, "BizForce processes no member-to-member payments in US dollars") &&
+      !/Buy with USD|cash portion|price in USD|USD price/i.test(T), sec8.slice(0, 300));
   }
 
   /* ── F ─────────────────────────────────────────────────────────────────── */

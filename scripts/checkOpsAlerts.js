@@ -220,6 +220,8 @@ function mountRoutes(h, stubs) {
     process: { env: { RAILWAY_GIT_COMMIT_SHA: "abc1234", SUPABASE_SERVICE_KEY: "sb_secret_123", STRIPE_WEBHOOK_SECRET: "whsec_x" } },
     icuHealth: () => ({ timezone_applied: true, graphemes_counted: true }),
     constructStripeEventFromSecrets: stubs && stubs.construct || (() => ({ id: "evt_1", type: "checkout.session.completed" })),
+    // Which secrets are accepted is checkMarketplaceUsdSold's; the route only needs the list.
+    stripeWebhookSecrets: (env) => [env.STRIPE_WEBHOOK_SECRET],
     handleStripeEvent: stubs && stubs.handle || (async () => {}),
     console: { log() {}, error() {}, warn() {} }
   };
