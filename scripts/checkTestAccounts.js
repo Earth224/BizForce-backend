@@ -22,8 +22,9 @@
         null revenue named in `unreadable`, never a guess.
      3. NO NEW COUNT CAN SKIP IT. Every read of subscriptions or revenue_events
         in server.js and lib/ is listed and must be a write, a read scoped to
-        one account or one Stripe object, or go through lib/testAccounts.js. A
-        read across accounts that does not fails here.
+        one account or one Stripe object, or go through lib/testAccounts.js's
+        isUncountedAccount (test accounts and the owner). A read across
+        accounts that does not, or that asks only isTestAccount, fails here.
      4. STILL ENTITLED. getUserPlan, subscriptionEntitlement and
         requireActiveSubscription never ask whether an account is a test, and
         only lib/selfReview.js requires lib/testAccounts.js.
@@ -41,6 +42,7 @@
      selfreview-counts-test-accounts  self-review counts a test account's revenue
      unscoped-subscriber-count        a new count of active subscriptions across accounts
      unscoped-revenue-sum             a new revenue sum across accounts
+     unscoped-count-test-only         a new count across accounts that leaves out test accounts but not the owner
      gate-refuses-test-accounts       getUserPlan refuses a test account
      cleanup-adds-seed-row            the update also cancels the check account's row
      cleanup-no-count-guard           the update runs whatever the count
@@ -55,7 +57,7 @@ const MUT = require("./_shared");
 const { braceMatch } = MUT;
 const REPO = path.join(__dirname, "..");
 
-const MUTATIONS = ["selfreview-counts-test-accounts", "unscoped-subscriber-count", "unscoped-revenue-sum",
+const MUTATIONS = ["selfreview-counts-test-accounts", "unscoped-subscriber-count", "unscoped-revenue-sum", "unscoped-count-test-only",
   "gate-refuses-test-accounts", "cleanup-adds-seed-row", "cleanup-no-count-guard"];
 const MUTATE = process.env.MUTATE || "";
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -97,6 +99,12 @@ if (MUTATE === "unscoped-revenue-sum") {
   SERVER = MUT.replaceOnce(SERVER, "async function hasActivePlan(userId, plan) {",
     "async function platformRevenue() {\n  const { data } = await supabase.from(\"revenue_events\").select(\"amount\").gte(\"created_at\", \"2026-01-01\");\n" +
     "  return (data || []).reduce(function (n, r) { return n + Number(r.amount); }, 0);\n}\n\nasync function hasActivePlan(userId, plan) {", MUTATE);
+}
+if (MUTATE === "unscoped-count-test-only") {
+  SERVER = MUT.replaceOnce(SERVER, "async function hasActivePlan(userId, plan) {",
+    "async function countPayingSubscribers() {\n  const { data } = await supabase.from(\"subscriptions\").select(\"user_id, users(id, email)\").in(\"status\", [\"active\", \"trialing\"]);\n" +
+    "  return (data || []).filter(function (r) { return !require(\"./lib/testAccounts\").isTestAccount(r.users); }).length;\n}\n\n" +
+    "async function hasActivePlan(userId, plan) {", MUTATE);
 }
 if (MUTATE === "gate-refuses-test-accounts") {
   SERVER = MUT.replaceOnce(SERVER, "  const subscription = await getActiveSubscription(userId);\n\n  if (isExemptRole(subject)) {",
@@ -269,7 +277,9 @@ const LIVE_ROWS = [
         if (/^\.from\([^)]*\)\s*\.(insert|upsert|update|delete)\(/.test(stmt)) kind = "write";
         else if (/\.eq\(\s*("user_id"|"stripe_subscription_id"|"stripe_customer_id"|"stripe_event_id"|REVENUE_OWNER_COLUMN)\s*,/.test(stmt)) kind = "one account or one Stripe object";
         else if (m[3] && file === "lib/selfReview.js") kind = "self-review count source";
-        else if (/isTestAccount|TEST_ACCOUNTS/.test(src.slice(Math.max(0, m.index - 2000), m.index + stmt.length))) kind = "across accounts, through lib/testAccounts.js";
+        // isUncountedAccount leaves out the test accounts AND the owner (scripts/checkOwnerPass.js); isTestAccount alone counts the owner.
+        else if (/isUncountedAccount/.test(src.slice(Math.max(0, m.index - 2000), m.index + stmt.length))) kind = "across accounts, through lib/testAccounts.js";
+        else if (/isTestAccount|TEST_ACCOUNTS/.test(src.slice(Math.max(0, m.index - 2000), m.index + stmt.length))) kind = "ACROSS ACCOUNTS, the owner included";
         else kind = "ACROSS ACCOUNTS, test accounts included";
         reads.push({ where: file + ":" + line, table: m[1] || m[2] || m[3], kind: kind });
       }

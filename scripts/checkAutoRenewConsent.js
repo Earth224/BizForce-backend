@@ -162,6 +162,8 @@ function buildServer(opts) {
     console: { log() {}, warn() {}, error() {} },
     Date, Math, Number, String, Object, Array, JSON, Promise,
     AGENT_SYSTEM_PROMPTS: { seo: "" },
+    // The checkout route refuses the owner first (scripts/checkOwnerPass.js); u1 is not him.
+    OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID,
     nowIso: () => new Date().toISOString(),
     getActiveSubscriptions: async () => { reads++; events.push("read subscriptions"); return opts.subs || []; },
     subscriptionEntitlement: held => ({ active: held.status === "active" }),
@@ -175,7 +177,7 @@ function buildServer(opts) {
     }
   };
   vm.createContext(ctx);
-  vm.runInContext(["BILLING_URL", "PLAN_CONFIG", "CHECKOUT_PRODUCTS", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent"].map(lift).join("\n\n") + "\n\n" +
+  vm.runInContext(["BILLING_URL", "PLAN_CONFIG", "CHECKOUT_PRODUCTS", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent", "isOwnerAccount"].map(lift).join("\n\n") + "\n\n" +
     routeSrc(CONSENT_SIG) + "\n\n" + routeSrc(CHECKOUT_SIG) + "\n\n" +
     "this.api = { PLAN_CONFIG: PLAN_CONFIG, autoRenewConsent: autoRenewConsent, VERSION: AUTO_RENEW_CONSENT_VERSION };", ctx);
   async function run(key, req) {

@@ -248,9 +248,11 @@ async function recordNewRows(guard, userId, sinceIso) {
     planUnentitled && ("active=" + planUnentitled.active + " reason=" + planUnentitled.inactive_reason));
   check("the paying account is entitled", planPaying && planPaying.active === true,
     planPaying && ("active=" + planPaying.active));
-  check("the admin passes by exemption, so gating this pass does not lock the owner out",
-    planAdmin && planAdmin.active === true && planAdmin.exempt === true && planAdmin.access_reason === "admin",
-    planAdmin && ("active=" + planAdmin.active + " exempt=" + planAdmin.exempt));
+  /* The owner account passes by the owner pass (reason "owner", scripts/checkOwnerPass.js); any other admin by role. */
+  const adminReason = admin.id === OWNER_ACCOUNT_ID ? "owner" : "admin";
+  check("the admin passes by exemption (reason " + adminReason + "), so gating this pass does not lock the owner out",
+    planAdmin && planAdmin.active === true && planAdmin.exempt === true && planAdmin.access_reason === adminReason,
+    planAdmin && ("active=" + planAdmin.active + " exempt=" + planAdmin.exempt + " reason=" + planAdmin.access_reason));
 
   const before = { unentitled: await countsFor(unentitled.id), paying: await countsFor(paying.id) };
   const ownerBefore = await countsFor(OWNER_ACCOUNT_ID);

@@ -140,7 +140,7 @@ function lift(name) {
 
 const ENTITLEMENT_NAMES = ["PAST_DUE_GRACE_DEFAULT_DAYS", "PAST_DUE_GRACE_MAX_DAYS", "parsePastDueGraceDays", "pastDueTimeOf", "pastDueGraceState",
   "SUBSCRIPTION_GRACE_DAYS", "SUBSCRIPTION_PAST_DUE_GRACE_DAYS", "subscriptionExpiryState", "subscriptionEntitlement",
-  "ADMIN_EXEMPT_PLAN", "ADMIN_EXEMPT_CONFIG", "isExemptRole", "getUserPlan",
+  "ADMIN_EXEMPT_PLAN", "ADMIN_EXEMPT_CONFIG", "isExemptRole", "OWNER_PASS_PLAN", "isOwnerAccount", "getUserPlan",
   "BILLING_URL", "SUBSCRIPTION_REFUSAL_MESSAGES", "SUBSCRIPTION_REFUSAL_DEFAULT", "SUBSCRIPTION_PAST_DUE_MESSAGE", "subscriptionRequiredBody",
   "CHECKOUT_PRODUCTS", "PLAN_CONFIG", "AUTO_RENEW_CONSENT_VERSION", "autoRenewConsent"];
 const ROUTE_SIG = 'app.post("/api/stripe/checkout", requireAuth, async function (req, res) {';
@@ -168,6 +168,8 @@ function buildServer(opts) {
     console: { log: m => logs.push(String(m)), warn: m => logs.push(String(m)), error: m => logs.push(String(m)) },
     Date: opts.Date || Date, Math, Number, String, Object, Array, JSON, Promise,
     AGENT_SYSTEM_PROMPTS: { seo: "" },
+    // getUserPlan and checkout key the owner pass on it (scripts/checkOwnerPass.js); u1 is not him.
+    OWNER_ACCOUNT_ID: require("../lib/ownerAccount").OWNER_ACCOUNT_ID,
     getPlanConfig: plan => (plan === "all_access" ? { name: "All Access" } : null),
     getUserById: async () => opts.user || { id: "u1", role: "user" },
     getActiveSubscription: async () => (opts.subs && opts.subs[0]) || null,

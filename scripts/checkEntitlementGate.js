@@ -231,6 +231,9 @@ async function countsFor(userId) {
   console.log("  unentitled : " + unentitled.id + "  (" + unentitled.email + ", role " + unentitled.role + ")");
   console.log("  paying     : " + paying.id + "  (" + paying.email + ", role " + paying.role + ")");
   console.log("  admin      : " + admin.id + "  (" + admin.email + ", role " + admin.role + ")");
+  /* The owner account (lib/ownerAccount.js) passes by the owner pass, not the
+     role: reason "owner" (scripts/checkOwnerPass.js). Any other admin: "admin". */
+  const ADMIN_REASON = admin.id === require("../lib/ownerAccount").OWNER_ACCOUNT_ID ? "owner" : "admin";
 
   /* THE PREMISE IS CHECKED BEFORE THE CHECKS. If the "unentitled" account
      turned out to be entitled, every refusal below would be measuring
@@ -244,8 +247,8 @@ async function countsFor(userId) {
   check("the paying account really is entitled, and not by exemption",
     payingPlan && payingPlan.active === true && payingPlan.exempt === false,
     payingPlan && ("active=" + payingPlan.active + " exempt=" + payingPlan.exempt));
-  check("the admin account passes by exemption",
-    adminPlan && adminPlan.active === true && adminPlan.exempt === true && adminPlan.access_reason === "admin",
+  check("the admin account passes by exemption (reason " + ADMIN_REASON + ")",
+    adminPlan && adminPlan.active === true && adminPlan.exempt === true && adminPlan.access_reason === ADMIN_REASON,
     adminPlan && ("active=" + adminPlan.active + " exempt=" + adminPlan.exempt + " reason=" + adminPlan.access_reason));
 
   const before = {
@@ -291,8 +294,8 @@ async function countsFor(userId) {
     const owner = await runToGate(route.path, route.method, admin);
     check("an admin passes the gate", owner.passed === true,
       owner.sent ? ("refused with " + owner.sent.status + " " + JSON.stringify(owner.sent.body)) : ("passed=" + owner.passed));
-    check("and passes as exempt rather than as a subscriber",
-      !!owner.req && owner.req.planExempt === true && owner.req.planAccessReason === "admin",
+    check("and passes as exempt rather than as a subscriber (reason " + ADMIN_REASON + ")",
+      !!owner.req && owner.req.planExempt === true && owner.req.planAccessReason === ADMIN_REASON,
       owner.req && ("exempt=" + owner.req.planExempt + " reason=" + owner.req.planAccessReason));
   }
 

@@ -3125,6 +3125,10 @@ function subscriptionExpiryState(subscription) {
    with no reliable start, it is refused as it always was. Every other status
    refuses. */
 function subscriptionEntitlement(subscription) {
+  /* The owner's own row entitles whatever it says (see THE OWNER PASS). */
+  if (subscription && isOwnerAccount(subscription.user_id)) {
+    return { active: true, statusEntitles: true, expiry: subscriptionExpiryState(null), pastDue: null, inactive_reason: null, owner: true };
+  }
   const status = subscription ? subscription.status : null;
   const statusEntitles = ["active", "trialing"].includes(status);
   const expiry = subscriptionExpiryState(subscription);
@@ -3204,11 +3208,66 @@ function isExemptRole(user) {
   return !!user && String(user.role || "").toLowerCase() === "admin";
 }
 
+/* ── THE OWNER PASS ───────────────────────────────────────────────────────────
+   The owner never pays for, is refused by, or is counted in his own platform.
+   His account kept a Stripe subscription row that went past_due with no
+   period end (Stripe retrying his own card for $199), and that row decided
+   his access: past its grace, or with no period to count a grace from, the
+   gate refused him.
+
+   KEYED ONLY BY OWNER_ACCOUNT_ID, the code constant in lib/ownerAccount.js.
+   Not users.role (a row), not an email, not an environment variable, not
+   anything a request carries: those can be changed by someone other than the
+   person who deploys this code, and this one cannot. No other account can
+   claim the pass.
+
+   WHAT IT GIVES. getUserPlan answers all_access, active, access_reason
+   "owner", whatever the subscriptions row says or whether it can be read; the
+   real row is still returned, never a fabricated one, so Billing can show it.
+   `exempt` is true: he is not paying. Checkout refuses him before anything is
+   written or sent to Stripe. lib/testAccounts.js's isUncountedAccount leaves
+   him out of every subscriber, revenue and MRR count.
+
+   WHAT IT DOES NOT. It is not a subscription going active, so no welcome
+   bonus: grantWelcomeBonusOnce is reached only from checkout.session.completed.
+   scripts/checkOwnerPass.js proves all of this. */
+var OWNER_PASS_PLAN = "all_access";
+
+function isOwnerAccount(userId) {
+  return typeof userId === "string" && userId === OWNER_ACCOUNT_ID;
+}
+
 /* `user` is optional. requireActiveSubscription already holds req.user, so it
    passes it and costs nothing; the four enforce* callers have only a userId, so
    the role is looked up for them. Looked up rather than assumed, because a gate
    that guesses at a role is a gate. */
 async function getUserPlan(userId, user) {
+  if (isOwnerAccount(userId)) {
+    /* The row is read only to be shown. A failed read is no reason to refuse
+       the owner, so it is logged and the pass stands. */
+    var ownerRow = null;
+    try {
+      ownerRow = await getActiveSubscription(userId);
+    } catch (ownerRowError) {
+      console.error("[entitlement] OWNER PASS — the owner's subscription row could not be read: " +
+        ((ownerRowError && ownerRowError.message) || ownerRowError) + ". Access stands; it does not depend on that row.");
+    }
+    console.log("[entitlement] OWNER PASS — user " + userId + " (OWNER_ACCOUNT_ID) granted all_access. subscription row: " +
+      (ownerRow ? "present, status \"" + ownerRow.status + "\"" : "none") + ". It does not decide this account's access.");
+
+    return {
+      plan: OWNER_PASS_PLAN,
+      config: getPlanConfig(OWNER_PASS_PLAN),
+      // The real row, whatever it is. Never a fabricated one.
+      subscription: ownerRow || null,
+      active: true,
+      expired: false,
+      inactive_reason: null,
+      exempt: true,
+      access_reason: "owner"
+    };
+  }
+
   var subject = user;
   if (!subject) {
     try {
@@ -37523,6 +37582,15 @@ app.get("/api/billing/consent", function (req, res) {
 
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
   try {
+    /* THE OWNER NEVER BUYS. Refused first: nothing read, written or sent to Stripe. */
+    if (isOwnerAccount(req.user.id)) {
+      return res.status(409).json({
+        error: "owner_account",
+        message: "The owner account has full access and never needs a subscription. Nothing was charged.",
+        billing_url: BILLING_URL
+      });
+    }
+
     // Defaulting to all_access is backwards compatibility, not a preference:
     // every caller that exists today sends no body at all, and each must keep
     // buying the same thing it bought before this route learned to sell two
