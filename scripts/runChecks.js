@@ -86,6 +86,13 @@ function classify(dir) {
   return { real, helpers };
 }
 
+/* The real checks that write rows under the check account: the ones that
+   require ./checkRunResidue. These are what BIZFORCE_CHECK_USER_ID is for. */
+function liveRowChecks(dir) {
+  return classify(dir).real.map(c => c.file)
+    .filter(f => /require\(\s*["']\.\/checkRunResidue(\.js)?["']\s*\)/.test(fs.readFileSync(path.join(dir, f), "utf8")));
+}
+
 function childEnv(extra) {
   const env = Object.assign({}, process.env, extra || {});
   BLANKED.forEach(k => { env[k] = ""; });
@@ -129,8 +136,12 @@ async function main() {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message); process.exit(2); }
   if (!String(process.env[SUBJECT_ENV] || "").trim()) {
-    console.error("REFUSED: " + SUBJECT_ENV + " is not set. Set it to the check account's id before running the checks; " +
-      "checks that write rows do so under that account and remove them afterwards.");
+    const live = liveRowChecks(opts.dir);
+    console.error("REFUSED: " + SUBJECT_ENV + " is not set: set it to run the " + live.length + " live-row checks. " +
+      "Set it to the check account's id before running the checks; checks that write rows do so under that account " +
+      "and remove them afterwards (scripts/checkRunResidue.js).\n" +
+      "  PowerShell:  $env:" + SUBJECT_ENV + " = \"<the check account's user id>\"\n" +
+      "  bash:        export " + SUBJECT_ENV + "=<the check account's user id>");
     process.exit(2);
   }
 

@@ -78,26 +78,39 @@ if (MUTATE === "spendwire") {
 if (MUTATE === "thinkingdouble") {
   SERVER = mutate(SERVER, "(Number(row.output_tokens) || 0) * price.output / 1e6;",
     "((Number(row.output_tokens) || 0) + (Number(row.thinking_tokens) || 0)) * price.output / 1e6;", "thinkingdouble");
-  SERVER = mutate(SERVER, ".select(\"id, model, input_tokens, output_tokens, funded_by\", { count: \"exact\" })",
-    ".select(\"id, model, input_tokens, output_tokens, thinking_tokens, funded_by\", { count: \"exact\" })", "thinkingdouble");
+  // NAMED (Oct 27 2026): BEFORE the anchor was the select line alone; AFTER it includes the .eq("user_id") that
+  // follows it, since platformSpendToday has the same select line.
+  SERVER = mutate(SERVER, ".select(\"id, model, input_tokens, output_tokens, funded_by\", { count: \"exact\" })\n      .eq(\"user_id\", userId)",
+    ".select(\"id, model, input_tokens, output_tokens, thinking_tokens, funded_by\", { count: \"exact\" })\n      .eq(\"user_id\", userId)", "thinkingdouble");
 }
 if (MUTATE === "unpricedskip") SERVER = mutate(SERVER, "    var cost = modelCallCostUsd(row);\n", "    var cost = modelCallCostUsd(row);\n    if (!cost.priced) return;\n", "unpricedskip");
-if (MUTATE === "byok") SERVER = mutate(SERVER, "    if (row.funded_by === \"user\") return;\n", "", "byok");
+// NAMED (Oct 27 2026): BEFORE the anchor was the funded_by line alone; AFTER it starts at modelSpendThisMonth's `var unpriced`.
+if (MUTATE === "byok") SERVER = mutate(SERVER, "  var unpriced = {};\n  rows.forEach(function (row) {\n    if (row.funded_by === \"user\") return;\n", "  var unpriced = {};\n  rows.forEach(function (row) {\n", "byok");
 if (MUTATE === "month") SERVER = mutate(SERVER, "      .gte(\"created_on\", month.since)\n", "", "month");
-if (MUTATE === "paging") SERVER = mutate(SERVER, "    if (!page.data || page.data.length < 1000) break;", "    break;", "paging");
-if (MUTATE === "failclosed") SERVER = mutate(SERVER, "  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;\n}",
-  "  return Number.isFinite(parsed) && parsed > 0 ? parsed : MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD;\n}", "failclosed");
+// NAMED (Oct 27 2026): BEFORE the break line alone; AFTER it ends with modelSpendThisMonth's own count error, which has no `day`.
+if (MUTATE === "paging") SERVER = mutate(SERVER, "    if (!page.data || page.data.length < 1000) break;\n  }\n  if (typeof total !== \"number\" || rows.length !== total) {\n    return { error: \"read \" + rows.length + \" ledger rows but the exact count is \" + JSON.stringify(total) };",
+  "    break;\n  }\n  if (typeof total !== \"number\" || rows.length !== total) {\n    return { error: \"read \" + rows.length + \" ledger rows but the exact count is \" + JSON.stringify(total) };", "paging");
+// NAMED (Oct 27 2026): BEFORE the return line alone; AFTER it starts at the monthly limit's own default.
+if (MUTATE === "failclosed") SERVER = mutate(SERVER, "return MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD;\n  var parsed = Number(String(raw).trim());\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;\n}",
+  "return MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD;\n  var parsed = Number(String(raw).trim());\n  return Number.isFinite(parsed) && parsed > 0 ? parsed : MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD;\n}", "failclosed");
 if (MUTATE === "message") SERVER = mutate(SERVER, "    \"Monthly model spend limit reached. This account's model calls have cost $\" + spent.toFixed(2) +\n    \" this calendar month, against a limit of $\" + limit.toFixed(2) + \" per account per month \" +\n",
   "    \"Limit exceeded. \" +\n", "message");
 if (MUTATE) console.log("\n!! MUTATION: " + MUTATE);
 
 const NAMES = ["MODEL_CALL_DAILY_LIMIT_DEFAULT", "modelCallDailyLimit", "modelCallLimitReset", "dailyModelCallLimitError", "unreadableModelCallLimitError",
   "modelCallUtcDay", "enforceDailyModelCallLimit", "MODEL_PRICES_USD_PER_MILLION", "MODEL_PRICES_SOURCE", "MODEL_SPEND_MONTHLY_LIMIT_DEFAULT_USD",
-  "modelSpendMonthlyLimit", "modelCallCostUsd", "modelSpendMonth", "modelSpendThisMonth", "monthlyModelSpendLimitError", "enforceMonthlyModelSpendLimit"];
+  "modelSpendMonthlyLimit", "modelCallCostUsd", "modelSpendMonth", "modelSpendThisMonth", "monthlyModelSpendLimitError", "enforceMonthlyModelSpendLimit",
+  // NAMED (Oct 27 2026, launch hardening #5). BEFORE: enforceDailyModelCallLimit called only the
+  // per-account limits. AFTER: it first calls enforcePlatformDailySpendCeiling, so the ceiling's
+  // names are lifted too, and every context here sets PLATFORM_DAILY_SPEND_CAP_USD far above any real
+  // day, so this check measures the per-account limits alone (checkLaunchHardening holds the ceiling).
+  "isOwnerAccount", "PLATFORM_DAILY_SPEND_CAP_DEFAULT_USD", "PLATFORM_SPEND_ALERT_SHARE", "PLATFORM_SPEND_STATE", "platformDailySpendCap",
+  "platformSpendToday", "platformSpendAlert", "platformDailySpendLimitError", "enforcePlatformDailySpendCeiling"];
 const def = name => { const d = definitionOf(SERVER, name); if (!d) throw new Error("not found in server.js: " + name); return d; };
 const logs = [];
 function lift(client, env) {
-  const ctx = vm.createContext({ supabase: client, process: { env: Object.assign({}, env || {}) },
+  const ctx = vm.createContext({ supabase: client, process: { env: Object.assign({ PLATFORM_DAILY_SPEND_CAP_USD: "1000000" }, env || {}) },
+    OWNER_ACCOUNT_ID: "00000000-0000-4000-8000-0000000000ff",
     console: { log() {}, warn(m) { logs.push(String(m)); }, error(m) { logs.push(String(m)); } } });
   vm.runInContext(NAMES.map(def).join("\n\n") + "\nthis.api = { enforceDailyModelCallLimit, enforceMonthlyModelSpendLimit, modelSpendThisMonth, modelCallCostUsd, modelSpendMonth, modelSpendMonthlyLimit, PRICES: MODEL_PRICES_USD_PER_MILLION, SOURCE: MODEL_PRICES_SOURCE };", ctx);
   return ctx.api;

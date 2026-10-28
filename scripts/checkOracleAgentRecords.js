@@ -108,7 +108,7 @@ const BRAIN_MOD = loadBrain();
 
 /* ── the route, lifted ────────────────────────────────────────────────────── */
 const STUBS = new Set(["supabase", "console", "process", "require", "module", "app", "Anthropic", "requireAuth",
-  "requireActiveSubscription", "aiLimiter", "buildAgentSystemPrompt", "useBillingPlans", "Buffer", "URL", "setTimeout", "setImmediate", "fetch"]);
+  "requireActiveSubscription", "aiLimiter", "oracleChatLimiter", "buildAgentSystemPrompt", "useBillingPlans", "Buffer", "URL", "setTimeout", "setImmediate", "fetch"]);
 const SPANS = [];
 {
   const re = /^(?:(?:async )?function [A-Za-z_$][A-Za-z0-9_$]*[(]|app[.][a-z]+[(])/gm; let m;
@@ -143,7 +143,9 @@ function closure(root) {
   }
   return [...have.values()].sort((x, y) => SRC.indexOf(x) - SRC.indexOf(y)).join("\n\n") + "\n\n" + root;
 }
-const SIG = 'app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatUpload.array("files", 8), async function (req, res, next) {';
+// NAMED (Oct 27 2026, launch hardening #6). BEFORE: requireAuth, requireActiveSubscription, oracleChatUpload.
+// AFTER: oracleChatLimiter between the subscription gate and the upload (checkLaunchHardening holds the limiter).
+const SIG = 'app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatLimiter, oracleChatUpload.array("files", 8), async function (req, res, next) {';
 const routeStart = SRC.indexOf(SIG);
 if (routeStart < 0) { console.log("    FAIL  POST /api/oracle not found"); process.exit(1); }
 const ROUTE = SRC.slice(routeStart, s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("async function (req, res, next)", routeStart))) + 2);
@@ -282,7 +284,10 @@ function world(opts) {
   };
   return Object.assign(w, o);
 }
-const ENV = { ENABLE_EMAIL_SEQUENCES: "true", MAIL_POSTAL_ADDRESS: "1 Example St", RESEND_WEBHOOK_SECRET: "", EMAIL_MARKETING_DAILY_CAP: "40", ANTHROPIC_API_KEY: "sk-check" };
+// PLATFORM_DAILY_SPEND_CAP_USD (launch hardening #5): the fake model_calls hold OTHER's rows for today, more than
+// the $25 default ceiling, and this check is about the records, not the ceiling (checkLaunchHardening holds it).
+const ENV = { ENABLE_EMAIL_SEQUENCES: "true", MAIL_POSTAL_ADDRESS: "1 Example St", RESEND_WEBHOOK_SECRET: "", EMAIL_MARKETING_DAILY_CAP: "40", ANTHROPIC_API_KEY: "sk-check",
+  PLATFORM_DAILY_SPEND_CAP_USD: "1000000" };
 
 /* ── one request ───────────────────────────────────────────────────────────── */
 async function ask(seed, opts) {
@@ -305,7 +310,7 @@ async function ask(seed, opts) {
     setTimeout: (fn) => 0, fetch: () => { throw new Error("no network"); },
     process: { env: Object.assign({}, ENV, o.env || {}) },
     console: { log: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) },
-    Anthropic, requireAuth() {}, requireActiveSubscription() {}, aiLimiter() {},
+    Anthropic, requireAuth() {}, requireActiveSubscription() {}, aiLimiter() {}, oracleChatLimiter() {},
     buildAgentSystemPrompt: BRAIN_MOD.buildAgentSystemPrompt, useBillingPlans: BRAIN_MOD.useBillingPlans,
     AsyncLocalStorage: require("async_hooks").AsyncLocalStorage,
     decodeHTML: rq("entities").decodeHTML, decodeHTMLAttribute: rq("entities").decodeHTMLAttribute,
@@ -398,7 +403,9 @@ const UNREAD = "could not be read just now";
   console.log("\n══ C. a failed read says so ══");
   const failing = [["Recent tool runs", "ai_tasks", q => q.filters.some(f => f[0] === "not")], ["Proposals", "agent_proposals"], ["Schedules and autonomy", "agent_schedules"],
     ["Email sequences", "email_sequences"], ["Published content", "content_library", q => q.filters.some(f => f[1] === "status")], ["Arrivals from this account's published posts", "engine_visits"],
-    ["Model spend this calendar month", "model_calls", q => q.opts && q.opts.count === "exact" && !q.opts.head], ["Latest self-review", "self_reviews"]];
+    // NAMED (Oct 27 2026, launch hardening #5). BEFORE: every counted model_calls select failed. AFTER: only the
+    // account's own (user_id) read fails; the platform ceiling's whole-day read must succeed, or it refuses the call.
+    ["Model spend this calendar month", "model_calls", q => q.opts && q.opts.count === "exact" && !q.opts.head && q.filters.some(f => f[1] === "user_id")], ["Latest self-review", "self_reviews"]];
   for (const [title, table, when] of failing) {
     const C = await ask(seedA, { fail: q => q.table === table && q.op === "select" && (!when || when(q)) ? { message: "relation is unavailable" } : null });
     const cb = recordsOf(C.system);

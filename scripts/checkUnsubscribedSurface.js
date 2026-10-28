@@ -44,7 +44,8 @@
 
    WHERE THE LINE IS DRAWN, for login-only routes that write:
      PUBLIC      writes something an UNAUTHENTICATED reader is served. The
-                 public GET routes serve exactly these tables: profiles,
+                 public GET routes serve exactly these tables (BEFORE Oct 27
+                 2026 also profiles; AFTER, GET /api/profile/:username is gone):
                  digital_cards (by share token), bf_profiles, profile_products,
                  profile_portfolio, bf_music_tracks, bf_videos, content_library
                  (status published), marketplace_listings. A route that writes
@@ -165,7 +166,11 @@ const EXPECTED_GATED = [
   // The Analytics agent's Arrivals Ledger, counted through the caller's own tracked links
   "post /api/agents/analytics/arrivals",
   // The SEO agent's Social Search, measured from the caller's own draft
-  "post /api/agents/seo/social-search"
+  "post /api/agents/seo/social-search",
+  // NAMED (Oct 27 2026, launch hardening #2; gated 61 -> 62, OTHERS 5 -> 4, effectful login-only 122 -> 121):
+  // BEFORE, a campaign donation was login-only and listed in EXPECTED_OTHERS. AFTER, it needs a
+  // subscription like the transfer it now shares limits with (requireActiveSubscription, bfcDonateLimiter).
+  "post /api/crowdfunding/campaigns/:id/donate"
 ];
 
 const EXPECTED_ADMIN = [
@@ -178,7 +183,8 @@ const EXPECTED_PUBLIC = {
   "post /api/proposals/:id/approve":        "publish_blog_post → public blog post; publish_listing / update_listing → public listing — those three need a subscription, checked in the handler; a calendar event does not",
   "put /api/marketplace/listings/:id":      "edits a public listing — needs a subscription, checked in the handler, except a pause",
   "delete /api/marketplace/listings/:id":   "removes a public listing",
-  "put /api/profile/me":                    "profiles, served by GET /api/profile/:username only while the owner is entitled",
+  // BEFORE (e364883): "put /api/profile/me", profiles, served to anyone by GET /api/profile/:username.
+  // AFTER: that route is deleted (launch hardening #1), so the edit is in EXPECTED_OWN.
   "post /api/digital-cards":                "a card, served by GET /api/cards/share/:token",
   "put /api/digital-cards/:id":             "edits a shareable card",
   "delete /api/digital-cards/:id":          "removes a shareable card",
@@ -200,8 +206,8 @@ const EXPECTED_PUBLIC = {
 /* Login-only routes that reach another account, or value between accounts. */
 const EXPECTED_OTHERS = {
   "post /api/messages":                          "a direct message to another account",
-  "post /api/crowdfunding/campaigns/:id/donate": "moves BFC to another account's campaign",
-  "get /api/wallet":                             "reads the balance; creates a missing wallet at 0 BFC (the welcome bonus is granted on first subscription, not here)",
+  // BEFORE (e364883): "post /api/crowdfunding/campaigns/:id/donate", login-only. AFTER: gated (EXPECTED_GATED).
+  "get /api/wallet":                            "reads the balance; creates a missing wallet at 0 BFC (the welcome bonus is granted on first subscription, not here)",
   "post /api/certifications/award":              "records a certification; its 100 BFC credit is paid only to an entitled account, checked in the handler",
   "post /api/marketplace/listings/:id/buy":      "spends BFC on another account's listing"
   // BEFORE (ae8e5db): "post /api/marketplace/listings/:id/checkout-usd", a Stripe checkout paying another
@@ -274,7 +280,11 @@ const EXPECTED_OWN = [
   // NAMED (Oct 25 2026, legal pages; effectful login-only 122 -> 123): BEFORE, no Terms route.
   // AFTER, accepting the current Terms writes only the caller's own users.terms_accepted_at and
   // terms_version. Deliberately ungated: agreeing to the Terms never needs a subscription.
-  "post /api/me/terms/accept"
+  "post /api/me/terms/accept",
+  // NAMED (Oct 27 2026, launch hardening #1): BEFORE, in EXPECTED_PUBLIC, because GET
+  // /api/profile/:username served the profiles row to anyone. AFTER, no unauthenticated route
+  // serves profiles; GET /api/profile/by-id/:userId needs a login and returns five display columns.
+  "put /api/profile/me"
 ];
 
 /* Unauthenticated routes that write. */
@@ -313,7 +323,7 @@ const EXPECTED_HANDLER_GATES = {
    this is where publishing is gated. */
 const SERVE_GUARD = "if (!(await ownerPagePublic(";
 const EXPECTED_SERVE_GATED = {
-  "get /api/profile/:username":             SERVE_GUARD,
+  // BEFORE (e364883): "get /api/profile/:username". AFTER: deleted (launch hardening #1, checkDormantRoutesDeleted).
   "get /api/cards/share/:token":            SERVE_GUARD,
   "get /api/bfp/profile/:userId":           SERVE_GUARD,
   "get /api/bfp/pproducts/public/:userId":  SERVE_GUARD,

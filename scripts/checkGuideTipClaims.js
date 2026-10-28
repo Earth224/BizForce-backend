@@ -415,7 +415,9 @@ const MUTATIONS = {
   "server-widens-to-doc": [[SERVER, "  \".docx\": \"application/vnd", "  \".doc\": \"application/msword\",\n  \".docx\": \"application/vnd"],
     [SERVER, "  \"text/plain\": true,   // .txt\n", "  \"application/msword\": true,\n  \"text/plain\": true,   // .txt\n"]],
   // POST /api/oracle goes back to the shared MIME-only multer: the browser's label decides again
-  "oracle-route-on-shared-filter": [[SERVER, "requireActiveSubscription, oracleChatUpload.array(\"files\", 8), async", "requireActiveSubscription, oracleUpload.array(\"files\", 8), async"]],
+  // NAMED (Oct 27 2026, launch hardening #6): BEFORE the anchor began at requireActiveSubscription; AFTER at
+  // oracleChatLimiter, which now stands between the gate and the upload.
+  "oracle-route-on-shared-filter": [[SERVER, "oracleChatLimiter, oracleChatUpload.array(\"files\", 8), async", "oracleChatLimiter, oracleUpload.array(\"files\", 8), async"]],
   // the shared multer takes the extension rule too, narrowing the marketplace, BizBook, cover and editor uploads
   "shared-filter-by-extension": [[SERVER, "  fileFilter: function (req, file, cb) {\n    if (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype]) {\n", "  fileFilter: function (req, file, cb) {\n    if (oracleUploadType(file)) {\n"]],
   // the vertical marketing comment says the three types do not exist again
@@ -1263,9 +1265,11 @@ GRID_NAMES.forEach(n => GRID_MIMES.forEach(m => {
 }));
 check("D. over " + GRID_NAMES.length * GRID_MIMES.length + " name/label pairs the server accepts nothing outside the nine types and no alias but .csv's and .md's",
   GRID_NAMES.length * GRID_MIMES.length > 300 && wide.length === 0, wide.join(" | "));
+// NAMED (Oct 27 2026, launch hardening #6). BEFORE: requireActiveSubscription, oracleChatUpload. AFTER:
+// oracleChatLimiter between them, so a refused request is turned away before its files are read.
 check("D. POST /api/oracle uploads through oracleChatUpload, and no other route does",
   (SV.match(/oracleChatUpload\.(array|single|fields)\(/g) || []).length === 1 &&
-  /app\.post\("\/api\/oracle", requireAuth, requireActiveSubscription, oracleChatUpload\.array\("files", 8\), async function/.test(SV));
+  /app\.post\("\/api\/oracle", requireAuth, requireActiveSubscription, oracleChatLimiter, oracleChatUpload\.array\("files", 8\), async function/.test(SV));
 const sharedTakes = (name, mime) => { let ok = null; if (SHARED_FILTER) SHARED_FILTER({}, { originalname: name, mimetype: mime }, (err, y) => { ok = !err && !!y; }); return ok; };
 const sharedWrong = SV_ALLOWED.map(m => ["x.bin", m, true]).concat([["cover.jfif", "image/jpeg", true], ["a.png", "image/jpeg", true], ["blob", "image/png", true],
   ["a.csv", "application/vnd.ms-excel", false], ["a.md", "", false], ["a.doc", "application/msword", false], ["a.svg", "image/svg+xml", false]])

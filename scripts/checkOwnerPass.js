@@ -95,7 +95,9 @@ const MUTATIONS = {
   "billing-no-owner-notice": [["billing.html", "      document.getElementById(\"ownerNotice\").style.display = owner ? \"block\" : \"none\";\n", ""]],
   // Billing hides the owner's Stripe row, so he cannot cancel it
   "billing-hides-owner-row": [["billing.html", "      if (sub && owner) {\n        showOwnerRow(sub);\n        return;\n      }\n",
-    "      if (sub && owner) {\n        showNeither();\n        return;\n      }\n"]]
+    "      if (sub && owner) {\n        showNeither();\n        return;\n      }\n"]],
+  // the contexts read the real clock again (#11): no source edit, CLOCK_FROZEN goes false
+  "clock-unfrozen": []
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -156,9 +158,27 @@ const USERS = {
   [OTHER_ADMIN]: { id: OTHER_ADMIN, email: "staff@example.com", role: "admin" }
 };
 
+/* A FROZEN CLOCK in every context (launch hardening #11, Oct 27, 2026).
+   subscriptionExpiryState reads Date.now() for msPastGrace, and B compares a
+   new and an old context's answers computed a moment apart, so a millisecond
+   tick between the two calls failed the comparison (seen once in the Oct 27
+   suite run). Every context built here reads CLOCK_MS, the instant this
+   script started. BEFORE: ctx.Date was the real Date and nowIso the real
+   time. AFTER: both are frozen at CLOCK_MS. MUTATE=clock-unfrozen puts the
+   real Date back, and B's 5 ms check must fail. */
+const CLOCK_MS = Date.now();
+const CLOCK_FROZEN = MUTATE !== "clock-unfrozen";
+function frozenDate(ms) {
+  return class FrozenDate extends Date {
+    constructor(...a) { if (a.length === 0) super(ms); else super(...a); }
+    static now() { return ms; }
+  };
+}
+
 /* A server built from `src`, with in-memory stand-ins. opts.rows: userId → row (or an Error to throw). */
 function buildServer(src, opts) {
   opts = opts || {};
+  const D = CLOCK_FROZEN ? frozenDate(CLOCK_MS) : Date;
   const logs = [], stripeCalls = [], dbCalls = [], subReads = [], bonus = [];
   let handler = null;
   const chain = (table) => {
@@ -179,7 +199,7 @@ function buildServer(src, opts) {
   const ctx = {
     process: { env: Object.assign({ STRIPE_STARTER_PRICE_ID: "price_check" }, opts.env || {}) },
     console: { log: m => logs.push(String(m)), warn: m => logs.push(String(m)), error: m => logs.push(String(m)) },
-    Date, Math, Number, String, Object, Array, JSON, Promise,
+    Date: D, Math, Number, String, Object, Array, JSON, Promise,
     AGENT_SYSTEM_PROMPTS: { seo: "", sales: "" },
     OWNER_ACCOUNT_ID: OWNER,
     getUserById: async (id) => USERS[id] || null,
@@ -190,7 +210,7 @@ function buildServer(src, opts) {
     supabase: { from: (t) => chain(t) },
     stripe: { checkout: { sessions: { create: async (p) => { stripeCalls.push(p); return { url: "https://checkout.stripe.test/s1" }; } } } },
     FRONTEND_URL: "https://bizforce.test",
-    nowIso: () => new Date().toISOString(),
+    nowIso: () => new D().toISOString(),
     requireAuth: function requireAuth() {},
     app: { post(p, mw, h) { if (p === "/api/stripe/checkout") handler = h; } }
   };
@@ -207,8 +227,8 @@ function buildServer(src, opts) {
   return { api, logs, stripeCalls, dbCalls, subReads, bonus, ctx };
 }
 
-const NOW = Date.now();
-const row = (userId, status, extra) => Object.assign({ id: "row-" + status, user_id: userId, plan: "all_access", status: status,
+const NOW = CLOCK_MS;
+const row =(userId, status, extra) => Object.assign({ id: "row-" + status, user_id: userId, plan: "all_access", status: status,
   stripe_subscription_id: "sub_check", stripe_customer_id: "cus_check", current_period_start: null, current_period_end: null,
   created_at: "2026-08-09T01:33:10.239Z" }, extra || {});
 // The owner's live row, as read on Oct 27, 2026: past_due, start Sep 9, end null.
@@ -307,6 +327,15 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
         if (r) check("B. " + (id === OTHER ? "a member" : "an admin who is not the owner") + ", " + what + ": subscriptionEntitlement is what " + PRE + " gives",
           same(nb.api.subscriptionEntitlement(r), ob.api.subscriptionEntitlement(r)));
       }
+    }
+    {
+      const r = row(OTHER, "active", { current_period_end: iso(NOW - 30 * DAY) });
+      const nb = buildServer(SERVER, { rows: { [OTHER]: r } });
+      const first = nb.api.subscriptionEntitlement(r);
+      await new Promise(done => setTimeout(done, 5));
+      const second = nb.api.subscriptionEntitlement(r);
+      check("B. the clock is frozen in every context: one row read 5 ms apart gives the same msPastGrace, so the comparisons above cannot tick (#11)",
+        same(first, second) && nb.ctx.Date.now() === CLOCK_MS, JSON.stringify([first.expiry, second.expiry]));
     }
     const b = buildServer(SERVER, { rows: { [OTHER]: LIVE(OTHER) } });
     const p = await b.api.getUserPlan(OTHER, USERS[OTHER]);

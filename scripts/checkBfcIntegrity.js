@@ -154,7 +154,8 @@ let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"');
 const TRANSFER_CONSTS = blockSource(SERVER, "const BFC_RECIPIENT_UUID = ", "  unknown_sender:        400\n};\n");
 // The transfer's success answer carries bfcDisclaimer: BFC_NOTICE (launch audit #9; checkBfcNotice holds its text).
 const NOTICE_CONST = blockSource(SERVER, "const BFC_NOTICE = ", "its rules or availability may change.\";\n");
-const HELPERS = ["nowIso", "safeText", "creditWallet", "escapeLikePattern"].map(n => functionSource(SERVER, n)).join("\n\n");
+// bfcSentLast24h: the route's 24-hour total, transfers and donations together (launch hardening #2).
+const HELPERS = ["nowIso", "safeText", "creditWallet", "escapeLikePattern", "bfcSentLast24h"].map(n => functionSource(SERVER, n)).join("\n\n");
 // Send by username: the resolver and its constants, and the lookup route the confirm step reads.
 let USERNAME_BLOCK = blockSource(SERVER, "const BFC_USERNAME = ", "  return found.data || null;\n}\n");
 const LIMITER_BLOCK = blockSource(SERVER, "const bfcRecipientLookupLimiter = rateLimit({", "\n});\n");
@@ -399,6 +400,7 @@ function buildRoutes(client, env) {
     publicCertificationCatalog: CATALOG.publicCertificationCatalog,
     bfcTransferLimits: LIMITS.bfcTransferLimits,
     BFC_TRANSFER_DESCRIPTION: LIMITS.BFC_TRANSFER_DESCRIPTION,
+    bfcCountsTowardDailyCap: LIMITS.bfcCountsTowardDailyCap,
     app: { get: capture("get"), post: capture("post") }
   };
   vm.createContext(ctx);
@@ -764,7 +766,13 @@ const wrongAnswers = cert => cert.questions.map(q => (q.ans + 1) % q.opts.length
     check("F5. bfc_send takes the sender's wallet lock before it reads the 24-hour total", lock !== -1 && sum !== -1 && lock < sum, lock + " < " + sum);
     check("F6. the total counts the sender's 'Transfer' debits in the last 24 hours, the same description the route counts",
       /where user_id = p_from\n  and type = 'debit'\n  and description = 'Transfer'\n  and created_at > now\(\) - interval '24 hours';/.test(sendFn) &&
-      LIMITS.BFC_TRANSFER_DESCRIPTION === "Transfer" && /\.eq\("description", BFC_TRANSFER_DESCRIPTION\)/.test(TRANSFER));
+      // NAMED (Oct 27 2026, launch hardening #2). BEFORE: the route read the total itself with
+      // .eq("description", BFC_TRANSFER_DESCRIPTION). AFTER: it reads bfcSentLast24h, which counts
+      // what bfcCountsTowardDailyCap counts: 'Transfer' and, since migration 148, 'Donation: ' debits
+      // (checkLaunchHardening holds the shared total).
+      LIMITS.BFC_TRANSFER_DESCRIPTION === "Transfer" && LIMITS.bfcCountsTowardDailyCap("Transfer") &&
+      /const sent = await bfcSentLast24h\(req\.user\.id\);/.test(TRANSFER) &&
+      /bfcCountsTowardDailyCap\(row\.description\)/.test(functionSource(SERVER, "bfcSentLast24h")));
     check("F7. bfc_send refuses a send that would pass p_daily_cap",
       /if v_sent \+ p_amount > p_daily_cap then\nraise exception 'over_daily_cap:/.test(sendFn));
     check("F8. bfc_send refuses itself when a limit is missing, and then moves BFC only through bfc_transfer under 'Transfer'",

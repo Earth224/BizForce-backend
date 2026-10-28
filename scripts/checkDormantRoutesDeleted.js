@@ -32,6 +32,9 @@
 
    MUTATE=revive  re-mounts GET /api/deals after boot, ahead of the 404
                   catch-all. Its 404 check and the route total must go red.
+   MUTATE=revive-profile  re-mounts GET /api/profile/:username answering with
+                  an email (launch hardening #1). Section 0 and the total must
+                  go red.
 
    Starting server.js starts its intervals and crons as it always does; the
    run is over in seconds and nothing here writes to the database.
@@ -49,8 +52,8 @@ const PORT = Number(process.env.CHECK_PORT || 4791);
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
-if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["revive"]);
-if (MUTATE && MUTATE !== "revive") { console.error("Unknown MUTATE=" + MUTATE + ". Known: revive"); process.exit(2); }
+if (process.env.MUTATE === "all") MUT.runAllMutations(__filename, ["revive", "revive-profile"]);
+if (MUTATE && MUTATE !== "revive" && MUTATE !== "revive-profile") { console.error("Unknown MUTATE=" + MUTATE + ". Known: revive, revive-profile"); process.exit(2); }
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -113,7 +116,8 @@ const ADDED = [
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
   "post /api/seo/audit",           // never fetched the site, so every audit was invented (5d014de)
-  "post /api/marketplace/listings/:id/checkout-usd"  // BizForce Market trades in BizCash only; USD sales between members switched off (total 323 -> 322)
+  "post /api/marketplace/listings/:id/checkout-usd",  // BizForce Market trades in BizCash only; USD sales between members switched off (total 323 -> 322)
+  "get /api/profile/:username"     // Launch hardening #1: it served select("*") of a profile, email and phone and plan included, to anyone, and no page called it (total 322 -> 321)
 ]);
 const EXPECTED = routeList(OLD_SRC).filter(function (k) { return !deletedKeys.has(k) && !REMOVED.has(k); })
   .concat(ADDED.map(function (a) { return a[0] + " " + a[1]; }));
@@ -158,14 +162,23 @@ function waitForListen() {
   console.log("\n══ server booted on " + PORT + ": " + listening + (MUTATE ? " | MUTATED (" + MUTATE + ")" : "") + " ══");
   if (!listening) { console.log("    FAIL  the server did not come up"); process.exit(1); }
 
-  if (MUTATE === "revive") {
-    app.get("/api/deals", function (req, res) { res.json({ deals: [], revived: true }); });
+  if (MUTATE === "revive" || MUTATE === "revive-profile") {
+    if (MUTATE === "revive") app.get("/api/deals", function (req, res) { res.json({ deals: [], revived: true }); });
+    else app.get("/api/profile/:username", function (req, res) { res.json({ username: req.params.username, email: "member@example.com" }); });
     // app.get appends after the 404 catch-all, which would answer first; move it up.
     const revived = app._router.stack.pop();
     let lastRouteIdx = -1;
     app._router.stack.forEach(function (l, i) { if (l.route) lastRouteIdx = i; });
     app._router.stack.splice(lastRouteIdx + 1, 0, revived);
-    console.log("!! MUTATION: GET /api/deals is mounted again — its checks and the total must fail.");
+    console.log("!! MUTATION: " + (MUTATE === "revive" ? "GET /api/deals" : "GET /api/profile/:username, answering with an email,") + " is mounted again — its checks and the total must fail.");
+  }
+
+  /* ── 0. the public profile route is gone (launch hardening #1) ─────── */
+  console.log("\n══ 0. GET /api/profile/:username ══");
+  {
+    const status = await request("get", "/api/profile/:username");
+    check("GET    /api/profile/:username — not in the router, answers 404: no unauthenticated route serves a profile row", !mounted("get", "/api/profile/:username") && status === 404,
+      "mounted=" + mounted("get", "/api/profile/:username") + " status=" + status);
   }
 
   /* ── 1. the 21 are gone ─────────────────────────────────────────────── */
