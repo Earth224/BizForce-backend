@@ -115,7 +115,13 @@ const ADDED = [
   // NAMED (Oct 27 2026, launch item #10): BEFORE 321 routes; AFTER 322, adding the business card's short link
   ["get", "/api/cards/slug/:slug"],             // bizforceai.net/c/<slug>: one card, the share route's allowlist and owner check (total 321 -> 322)
   // NAMED (Oct 28 2026, Termaximus Guide mode): BEFORE 322 routes; AFTER 323, adding Guide mode's one route
-  ["post", "/api/guide/ask"]                    // Termaximus Guide mode: verified steps from lib/appMap.json, requireAuth + aiLimiter (total 322 -> 323)
+  ["post", "/api/guide/ask"],                   // Termaximus Guide mode: verified steps from lib/appMap.json, requireAuth + aiLimiter (total 322 -> 323)
+  // NAMED (Oct 28 2026, member support): BEFORE 323 routes; AFTER 328, adding member support's five routes
+  ["post", "/api/wallet/support"],             // Support with BizCash: the transfer's limits, kind support and a note (total 323 -> 324)
+  ["get", "/api/support/me"],                  // the member's own support links, headline and page switches (total 324 -> 325)
+  ["put", "/api/support/me"],                  // saves them: links normalized from the allow-list, at most five (total 325 -> 326)
+  ["get", "/support/:username"],               // bizforceai.net/support/<username>: the support page, served with its own OG tags (total 326 -> 327)
+  ["get", "/api/sitemap/support.xml"]          // the support pages members chose to list in search engines (total 327 -> 328)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

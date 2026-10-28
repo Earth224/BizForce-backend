@@ -325,8 +325,10 @@ check("S7. settings, crm, inventory, proposals, prospecting, calendar, messages,
 const tagBeforeFooter = NEWLY_GUIDED.filter(f => FILES[f].indexOf(GUIDE_TAG + "\n") === -1 || FILES[f].indexOf(GUIDE_TAG) > FILES[f].indexOf('<script src="/scripts/bf-legal-footer.js"></script>'));
 check("S7. on each, the tag sits on its own line before the legal footer's", tagBeforeFooter.length === 0, tagBeforeFooter.join(", "));
 check("S7. the legal pages do not load it", LEGAL.every(f => FILES[f] && !loadsGuide(f)), LEGAL.filter(f => !FILES[f] || loadsGuide(f)).join(", "));
-check("S7. the guide displays on 56 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11",
-  SHOWN.length === 56 && HTML_PAGES.filter(loadsGuide).length === 57, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
+// NAMED (Oct 28 2026, member support): BEFORE 56 pages showed the guide and 57 loaded it. AFTER 57 and 58: the
+// support page (support.html, also served at /support/<username>) loads it and has its own entry.
+check("S7. the guide displays on 57 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html",
+  SHOWN.length === 57 && HTML_PAGES.filter(loadsGuide).length === 58, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
 
 /* ── S8. phones: the button and the sheet ───────────────────────────────── */
 console.log("\n══ S8. phones: the Guide button and the bottom sheet ══");

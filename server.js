@@ -55,6 +55,8 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { isTestAccount } = require("./lib/testAccounts");
 const guideAsk = require("./lib/guideAsk");
 const APP_MAP = require("./lib/appMap.json");
+const supportLinks = require("./lib/supportLinks");
+const supportPage = require("./lib/supportPage");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
@@ -38903,6 +38905,24 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
       return res.status(400).json({ error: "amount must be a positive integer", reason: "invalid_amount" });
     }
 
+    return await bfcSendWithinLimits(req, res, { recipientId: recipientId, byUsername: byUsername, amount: amount, support: null });
+  } catch (error) { next(error); }
+});
+
+/* THE TRANSFER PATH, after the recipient and amount are known. Every BizCash
+   send between two members goes through here: POST /api/wallet/transfer, and
+   POST /api/wallet/support (send.support set: { note, done }), so support
+   obeys every transfer rule exactly as a transfer does — the per-transfer
+   maximum, the new-account hold, the recipient being an account, and the ONE
+   24-hour total shared with transfers and donations — and bfc_send checks them
+   all again under the sender's wallet lock. A transfer's call to bfc_send is
+   the six arguments it always was; only support adds p_kind and p_note
+   (migration 150). It answers the request itself. */
+async function bfcSendWithinLimits(req, res, send) {
+  const recipientId = send.recipientId;
+  const byUsername = send.byUsername;
+  const amount = send.amount;
+  {
     const limits = bfcTransferLimits(process.env);
     if (limits.error) {
       console.error("[POST /api/wallet/transfer] REFUSED — " + limits.error + ". Every transfer is refused until it is fixed.");
@@ -38977,7 +38997,10 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
       });
     }
 
-    const { data, error } = await supabase.rpc("bfc_send", {
+    const { data, error } = send.support
+      ? await supabase.rpc("bfc_send", { p_from: req.user.id, p_to: recipient.id, p_amount: amount, p_max_per_transfer: limits.max,
+          p_daily_cap: limits.dailyCap, p_hold_days: limits.holdDays, p_kind: "support", p_note: send.support.note })
+      : await supabase.rpc("bfc_send", {
       p_from: req.user.id,
       p_to: recipient.id,
       p_amount: amount,
@@ -38988,6 +39011,13 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
 
     if (error) {
       const message = String(error.message || "");
+      if (send.support && (error.code === "PGRST202" || /Could not find the function public\.bfc_send/i.test(message))) {
+        console.error("[POST /api/wallet/support] bfc_send has no p_kind — supabase/migrations/150_member_support.sql has not been applied.");
+        return res.status(503).json({
+          error: "BizCash support is unavailable until a database update (migration 150) is applied. Nothing was sent.",
+          reason: "migration_150_not_applied"
+        });
+      }
       if (error.code === "PGRST202" || /Could not find the function public\.bfc_send/i.test(message)) {
         console.error("[POST /api/wallet/transfer] bfc_send is missing — supabase/migrations/139_bfc_transfer_limits.sql has not been applied.");
         return res.status(503).json({
@@ -39010,8 +39040,230 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
       });
     }
 
+    if (send.support) return await send.support.done(data);
     return res.json({ balance: data, bfcDisclaimer: BFC_NOTICE });
+  }
+}
+
+/* ── Member support (diagnostic §4 a, b): BizCash support, donation links, a
+   support page. No USD passes through BizForce: support is a BizCash
+   transfer, and a donation link opens the member's own provider page. ── */
+
+/* Per account, after requireAuth: support is a send, and 20 in 10 minutes is
+   far above what a person does and slow for a script. */
+const bfcSupportLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  keyGenerator: function (req) { return "bfc-support:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many support payments in a short time. Try again in a few minutes. Nothing was sent.", reason: "rate_limited" }
+});
+
+/* BizCash support to another member, BY USERNAME (the id is resolved here and
+   never leaves the server). The same transfer path as POST
+   /api/wallet/transfer — bfcSendWithinLimits — so every transfer rule holds
+   unchanged; it is recorded in bfc_transfers as kind 'support' with the
+   optional note (plain text, at most 140 characters, stored escaped, shown
+   only to the two members), and the recipient is notified. */
+app.post("/api/wallet/support", requireAuth, requireActiveSubscription, bfcSupportLimiter, async function (req, res, next) {
+  try {
+    const member = await findMemberByUsername(req.body.username);
+    if (!member) {
+      return res.status(404).json({ error: BFC_UNKNOWN_USERNAME + " Nothing was sent.", reason: "unknown_recipient" });
+    }
+    if (member.user_id === req.user.id) {
+      return res.status(400).json({ error: "You cannot support yourself. Nothing was sent.", reason: "self_support" });
+    }
+    const amount = req.body.amount;
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return res.status(400).json({ error: "The amount must be a whole number of BFC, 1 or more. Nothing was sent.", reason: "invalid_amount" });
+    }
+    const note = supportLinks.noteForStorage(req.body.note);
+    if (note.error) return res.status(400).json({ error: note.error + " Nothing was sent.", reason: note.reason });
+    // The notification says who it is from by username, so the sender needs one.
+    const me = await supabase.from("bf_profiles").select("username").eq("user_id", req.user.id).maybeSingle();
+    if (me.error) throw me.error;
+    if (!me.data || !me.data.username) {
+      return res.status(400).json({ error: "Set a username on your profile first, so the member can see who the support is from. Nothing was sent.", reason: "no_username" });
+    }
+    return await bfcSendWithinLimits(req, res, {
+      recipientId: member.user_id, byUsername: true, amount: amount,
+      support: {
+        note: note.note,
+        done: async function (balance) {
+          const notice = await supabase.from("notifications").insert({
+            user_id: member.user_id,
+            type: "support",
+            title: "@" + me.data.username + " supported you with " + amount.toLocaleString("en-US") + " BFC",
+            message: note.note,
+            read: false
+          });
+          if (notice.error) {
+            console.warn("[notifications] insert failed for POST /api/wallet/support — the support was sent, the member simply was not notified:", notice.error.message || notice.error);
+          }
+          return res.json({
+            balance: balance,
+            bfcDisclaimer: BFC_NOTICE,
+            support: { to: "@" + member.username, display_name: member.display_name || member.username, amount_bfc: amount }
+          });
+        }
+      }
+    });
   } catch (error) { next(error); }
+});
+
+/* A member's support settings, as stored (member_support, migration 150).
+   { row } or { row: null } when they have none, or { missing } before 150. */
+async function readMemberSupport(userId) {
+  const r = await supabase.from("member_support").select("user_id, links, headline, page_on, discoverable").eq("user_id", userId).maybeSingle();
+  if (r.error) {
+    if (r.error.code === "42P01" || /member_support/i.test(String(r.error.message || ""))) return { missing: true, row: null };
+    throw r.error;
+  }
+  return { row: r.data || null };
+}
+
+/* What the member's own settings screen reads: the links rebuilt from
+   provider and handle, the headline, the switches, and their support URL. */
+function ownSupportAnswer(row, username) {
+  return {
+    links: supportLinks.publicLinks(row && row.links),
+    headline: (row && row.headline) || null,
+    page_on: row ? row.page_on : null,
+    page_live: supportLinks.pageIsOn(row),
+    discoverable: !!(row && row.discoverable === true),
+    support_url: username ? supportLinks.supportUrl(username) : null,
+    providers: supportLinks.PROVIDER_KEYS.map(function (k) { return { provider: k, label: supportLinks.PROVIDERS[k].label, example: supportLinks.PROVIDERS[k].example }; }),
+    max_links: supportLinks.MAX_LINKS
+  };
+}
+
+app.get("/api/support/me", requireAuth, async function (req, res, next) {
+  try {
+    const got = await readMemberSupport(req.user.id);
+    if (got.missing) return res.status(503).json({ error: "Support links are unavailable until a database update (migration 150) is applied.", reason: "migration_150_not_applied" });
+    const prof = await supabase.from("bf_profiles").select("username").eq("user_id", req.user.id).maybeSingle();
+    if (prof.error) throw prof.error;
+    return res.json(ownSupportAnswer(got.row, prof.data && prof.data.username));
+  } catch (error) { next(error); }
+});
+
+/* Saves the member's support settings. Each link must match its provider's
+   allow-listed pattern (lib/supportLinks.js) or the whole save is refused
+   with the link and the reason; what is stored is { provider, handle } only. */
+app.put("/api/support/me", requireAuth, async function (req, res, next) {
+  try {
+    const body = req.body || {};
+    const extra = Object.keys(body).filter(function (k) { return ["links", "headline", "page_on", "discoverable"].indexOf(k) === -1; });
+    if (extra.length) return res.status(400).json({ error: "Support settings do not take " + extra[0] + ".", reason: "unknown_field", field: extra[0] });
+    const got = await readMemberSupport(req.user.id);
+    if (got.missing) return res.status(503).json({ error: "Support links are unavailable until a database update (migration 150) is applied.", reason: "migration_150_not_applied" });
+    const row = { user_id: req.user.id, updated_at: nowIso() };
+    if (body.links !== undefined) {
+      const norm = supportLinks.normalizeLinks(body.links);
+      if (norm.error) return res.status(400).json({ error: norm.error, reason: norm.reason, field: norm.field });
+      row.links = norm.links;
+    }
+    if (body.headline !== undefined) {
+      const h = supportLinks.headlineFrom(body.headline);
+      if (h.error) return res.status(400).json({ error: h.error, reason: h.reason, field: "headline" });
+      row.headline = h.headline;
+    }
+    if (body.page_on !== undefined) {
+      if (body.page_on !== true && body.page_on !== false) return res.status(400).json({ error: "page_on must be true or false.", reason: "invalid_page_on", field: "page_on" });
+      row.page_on = body.page_on;
+    }
+    if (body.discoverable !== undefined) {
+      if (body.discoverable !== true && body.discoverable !== false) return res.status(400).json({ error: "discoverable must be true or false.", reason: "invalid_discoverable", field: "discoverable" });
+      row.discoverable = body.discoverable;
+    }
+    const saved = await supabase.from("member_support").upsert(row, { onConflict: "user_id" }).select("user_id, links, headline, page_on, discoverable").single();
+    if (saved.error) throw saved.error;
+    supportSitemapCache = { xml: null, at: 0 };
+    const prof = await supabase.from("bf_profiles").select("username").eq("user_id", req.user.id).maybeSingle();
+    if (prof.error) throw prof.error;
+    return res.json(ownSupportAnswer(saved.data, prof.data && prof.data.username));
+  } catch (error) { next(error); }
+});
+
+/* The public face of a member's support, for the profile, storefront and card
+   routes: their normalized links only (URLs rebuilt), never the switches,
+   the headline's history or anything about who supported them. A member
+   whose settings cannot be read shows no links rather than failing the page. */
+async function publicSupportLinks(userId) {
+  try {
+    const got = await readMemberSupport(userId);
+    return supportLinks.publicLinks(got.row && got.row.links);
+  } catch (e) {
+    console.error("[support] links for " + userId + " could not be read: " + ((e && e.message) || e));
+    return [];
+  }
+}
+
+/* Per IP: the public support page and its sitemap, like any public page, and
+   slow for anyone walking usernames. */
+const supportPageLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many requests. Try again in a few minutes."
+});
+
+/* bizforceai.net/support/<username>, proxied here by Netlify so the page is
+   served with the member's own title, photo and preview tags
+   (lib/supportPage.js). An invalid or unknown username, or a member whose
+   page is not public, is the plain "No member found" page with a 404. */
+app.get("/support/:username", supportPageLimiter, async function (req, res) {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("X-Content-Type-Options", "nosniff");
+  try {
+    const raw = String(req.params.username || "");
+    if (!supportPage.USERNAME.test(raw)) return res.status(404).send(supportPage.render({ state: "none" }));
+    const member = await findMemberByUsername(raw);
+    if (!member || !(await ownerPagePublic(member.user_id))) return res.status(404).send(supportPage.render({ state: "none" }));
+    const got = await readMemberSupport(member.user_id);
+    const view = supportPage.viewFor(member, got.row);
+    res.set("Cache-Control", "public, max-age=60");
+    return res.status(view.state === "none" ? 404 : 200).send(supportPage.render(view));
+  } catch (err) {
+    console.error("[support page] " + ((err && err.message) || err));
+    res.set("Retry-After", "60");
+    return res.status(503).send(supportPage.render({ state: "none" }).replace("<h1>No member found</h1>", "<h1>This page could not be loaded just now</h1>"));
+  }
+});
+
+/* Support pages whose members chose to be discoverable, and only those. */
+var supportSitemapCache = { xml: null, at: 0 };
+app.get("/api/sitemap/support.xml", supportPageLimiter, async function (req, res) {
+  try {
+    if (!supportSitemapCache.xml || Date.now() - supportSitemapCache.at > BLOG_SITEMAP_CACHE_MS) {
+      const rows = await supabase.from("member_support").select("user_id, links, page_on, discoverable").eq("discoverable", true).limit(5000);
+      if (rows.error) throw rows.error;
+      const live = (rows.data || []).filter(function (r) { return supportLinks.pageIsOn(r); });
+      const visible = await publicOwnersAmong(live.map(function (r) { return r.user_id; }));
+      const ids = live.map(function (r) { return r.user_id; }).filter(function (id) { return visible.has(id); });
+      let names = [];
+      if (ids.length) {
+        const prof = await supabase.from("bf_profiles").select("user_id, username").in("user_id", ids);
+        if (prof.error) throw prof.error;
+        names = (prof.data || []).map(function (p) { return p.username; }).filter(function (u) { return u && supportPage.USERNAME.test(u); }).sort();
+      }
+      supportSitemapCache = {
+        xml: '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+          names.map(function (u) { return "  <url><loc>" + supportLinks.escapeHtml(supportLinks.supportUrl(u)) + "</loc></url>\n"; }).join("") + "</urlset>\n",
+        at: Date.now()
+      };
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=600");
+    return res.status(200).send(supportSitemapCache.xml);
+  } catch (err) {
+    console.error("[sitemap/support] could not be built:", (err && err.message) || err);
+    res.set("Retry-After", "600");
+    return res.status(503).type("text/plain").send("The support sitemap could not be built just now.");
+  }
 });
 
 /* ── Marketplace ── */
@@ -42497,7 +42749,7 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
     // never returned.
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
-    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });
+    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
 });
 
@@ -42517,7 +42769,7 @@ app.get("/api/cards/slug/:slug", async function (req, res, next) {
     if (!data) return res.status(404).json({ error: "Card not found" });
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
-    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });
+    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
 });
 
@@ -42582,7 +42834,8 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
     const { data, error } = await supabase
       .from("bf_profiles").select("*").eq("user_id", userId).maybeSingle();
     if (error) throw error;
-    return res.json({ profile: data });
+    // Of the member's support settings, only the normalized links (URLs rebuilt) are public here.
+    return res.json({ profile: data, support_links: data ? await publicSupportLinks(userId) : [] });
   } catch (error) { next(error); }
 });
 
@@ -42954,7 +43207,8 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       services: services,
       portfolio: portfolio,
       music: music,
-      videos: videos
+      videos: videos,
+      support_links: await publicSupportLinks(userId)
     });
   } catch (error) { next(error); }
 });

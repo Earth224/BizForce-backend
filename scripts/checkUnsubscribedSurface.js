@@ -170,7 +170,10 @@ const EXPECTED_GATED = [
   // NAMED (Oct 27 2026, launch hardening #2; gated 61 -> 62, OTHERS 5 -> 4, effectful login-only 122 -> 121):
   // BEFORE, a campaign donation was login-only and listed in EXPECTED_OTHERS. AFTER, it needs a
   // subscription like the transfer it now shares limits with (requireActiveSubscription, bfcDonateLimiter).
-  "post /api/crowdfunding/campaigns/:id/donate"
+  "post /api/crowdfunding/campaigns/:id/donate",
+  // NAMED (Oct 28 2026, member support; gated 62 -> 63): BEFORE no support route. AFTER Support with BizCash
+  // needs a subscription like the transfer whose limits it shares (requireActiveSubscription, bfcSupportLimiter).
+  "post /api/wallet/support"
 ];
 
 const EXPECTED_ADMIN = [
@@ -200,7 +203,10 @@ const EXPECTED_PUBLIC = {
   "delete /api/bfp/music/:id":              "bf_music_tracks, served publicly",
   "post /api/bfp/videos":                   "bf_videos, served publicly",
   "put /api/bfp/videos/:id":                "bf_videos, served publicly",
-  "delete /api/bfp/videos/:id":             "bf_videos, served publicly"
+  "delete /api/bfp/videos/:id":             "bf_videos, served publicly",
+  // NAMED (Oct 28 2026, member support; effectful login-only 122 -> 123): BEFORE no support settings. AFTER
+  // a member saves their support links and page switches, served on their public pages and support page.
+  "put /api/support/me":                    "member_support: the support links and support page, served publicly"
 };
 
 /* Login-only routes that reach another account, or value between accounts. */
@@ -335,7 +341,11 @@ const EXPECTED_SERVE_GATED = {
   "get /api/bfp/videos/public/:userId":     SERVE_GUARD,
   "get /api/bfp/seller/:handle":            SERVE_GUARD,
   "get /api/bfp/services/browse":           "publicOwnersAmong(",
-  "get /api/bfp/artists/browse":            "publicOwnersAmong("
+  "get /api/bfp/artists/browse":            "publicOwnersAmong(",
+  // NAMED (Oct 28 2026, member support): BEFORE no support page. AFTER bizforceai.net/support/<username> and the
+  // support sitemap, each serving a member only while the owner is entitled.
+  "get /support/:username":                 "!(await ownerPagePublic(member.user_id))",
+  "get /api/sitemap/support.xml":           "publicOwnersAmong("
 };
 
 /* ── MUTATE=serve-open: the seller page's guard removed at compile ──────── */

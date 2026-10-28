@@ -68,7 +68,9 @@ const MUTATIONS = {
   // the statement loses its note
   "no-statement-note": ["lib/trades.js", "\"<p class=\\\"note\\\">\" + esc(st.note) + \"</p>\\n", "\"<p class=\\\"note\\\"></p>\\n"],
   // the CSV leaves issued BFC out
-  "csv-drops-issued": ["lib/trades.js", "  result.issued.forEach(function (x) { lines.push([x.date, ISSUED_LABEL, x.description, \"\", \"\", x.bfc, x.reference].map(cell).join(\",\")); });\n", ""],
+  // NAMED (Oct 28 2026, member support): BEFORE the issued line ended at x.reference. AFTER it ends with an empty note
+  // cell, as the CSV gained a "note" column (support notes); the anchor follows the line.
+  "csv-drops-issued": ["lib/trades.js", "  result.issued.forEach(function (x) { lines.push([x.date, ISSUED_LABEL, x.description, \"\", \"\", x.bfc, x.reference, \"\"].map(cell).join(\",\")); });\n", ""],
   // the trades route gated by subscription
   "route-gated": ["server.js", "app.get(\"/api/me/trades\", requireAuth, tradesLimiter, async function (req, res) {",
     "app.get(\"/api/me/trades\", requireAuth, requireActiveSubscription, tradesLimiter, async function (req, res) {"],
@@ -196,8 +198,11 @@ function fixture() {
   check("A4. a deleted member is shown as \"a deleted member\", on both sides of their trades",
     one(a, "don-1", "donation given", "a deleted member", -50, "Community garden") && one(a, "ord-2", "sale", "a deleted member", 80, "Ebook") &&
     one(c, "don-1", "donation received", "@alice", 50, "Community garden") && one(c, "ord-2", "purchase", "@alice", -80, "Ebook"));
-  check("A5. every one of the six types appears, and a member's list is exactly their trades",
-    T.TYPES.every(ty => a.trades.concat(b.trades).some(t => t.type === ty)) && a.trades.length === 7 && b.trades.length === 5 && c.trades.length === 2,
+  // NAMED (Oct 28 2026, member support): BEFORE T.TYPES held six types and A5 required each in this fixture. AFTER it
+  // holds eight: "support given" and "support received" (kind support) are asserted, with this module, by checkMemberSupport.js.
+  const SIX = T.TYPES.filter(ty => ty !== T.TYPE.supportGiven && ty !== T.TYPE.supportReceived);
+  check("A5. every one of the six types appears, and a member's list is exactly their trades (the two support types: checkMemberSupport.js)",
+    T.TYPES.length === 8 && SIX.length === 6 && SIX.every(ty => a.trades.concat(b.trades).some(t => t.type === ty)) && a.trades.length === 7 && b.trades.length === 5 && c.trades.length === 2,
     a.trades.length + "/" + b.trades.length + "/" + c.trades.length);
   check("A6. oldest first, each dated in UTC (ISO, ending Z)", a.trades.every((t, i) => /Z$/.test(t.date) && (i === 0 || a.trades[i - 1].date <= t.date)) && a.trades[0].reference === "tr-0");
   check("A7. a member with no trades gets an empty list that still reconciles", (await T.listTrades(db, D, all)).trades.length === 0);

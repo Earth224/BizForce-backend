@@ -185,8 +185,10 @@ const MUTATIONS = {
   // #10: slugs not unique in the database
   "slug-not-unique": [["MIG", "CREATE UNIQUE INDEX IF NOT EXISTS digital_cards_slug_unique", "CREATE INDEX IF NOT EXISTS digital_cards_slug_unique"]],
   // #10: the short link route served to a lapsed owner
-  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
-    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
+  // NAMED (Oct 28 2026, member support): BEFORE the slug route answered { card }. AFTER { card, support_links }; the
+  // anchor and its replacement follow the line, the mutation (the owner check removed) is the same.
+  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
+    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
   // #10: Netlify does not serve /c/<slug>
   "short-link-unrouted": [["FE:_redirects", "/c/:slug /card-view.html 200\n", ""]],
   // #12: a public page without a canonical
@@ -687,7 +689,9 @@ function fakeDb(tables, fail) {
     const CDN_DIR = process.env.BIZFORCE_CDN_DIR || "";
     const B64LEN = { sha256: 44, sha384: 64, sha512: 88 };
     console.log("    " + cdnTags.length + " CDN tags" + (CDN_DIR ? ", hashed against the files in " + CDN_DIR : " (BIZFORCE_CDN_DIR not set: format checked, real files not hashed)"));
-    check("8. the CDN tags are the seven known ones (qrcode x2, html2canvas, jspdf, chart.js x3)", cdnTags.length === 7, cdnTags.length);
+    // NAMED (Oct 28 2026, member support): BEFORE seven CDN tags (qrcode x2). AFTER eight: support.html, the support
+    // page's shell, loads the card's same qrcode@1.4.4 with the same SRI hash for its QR code.
+    check("8. the CDN tags are the eight known ones (qrcode x3, html2canvas, jspdf, chart.js x3)", cdnTags.length === 8, cdnTags.length);
     cdnTags.forEach(c => {
       const integ = attr(c.tag, "integrity") || "";
       const m = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(integ);
@@ -816,7 +820,10 @@ function fakeDb(tables, fail) {
     };
     const db = fakeDb(rows);
     let handler = null;
+    // NAMED (Oct 28 2026, member support): BEFORE the card route's closure needed no require. AFTER the card answer adds
+    // support_links through publicSupportLinks, which lifts `const supportLinks = require("./lib/supportLinks")`.
     const ctx = { supabase: db.client, process: { env: {} }, console: quiet, ownerPagePublic: async uid => uid !== "u2",
+      require: p => require(p.indexOf("./") === 0 ? path.join(__dirname, "..", p) : p),
       app: { get() { handler = arguments[arguments.length - 1]; } } };
     vm.createContext(ctx);
     const route = (() => { const at = SRC.indexOf('app.get("/api/cards/slug/:slug",'); if (at < 0) return ""; const open = SRC.indexOf("{", SRC.indexOf("async function (req, res, next)", at)); return SRC.slice(at, s.braceMatch(SRC, open)) + ");"; })();
@@ -868,7 +875,9 @@ function fakeDb(tables, fail) {
     const g4 = await get("lapsed"), g5 = await get("nobody-here");
     check("10. a lapsed owner's card and an unknown slug are both 404", g4.status === 404 && g5.status === 404, g4.status + " " + g5.status);
     const code = uncommented(SRC);
-    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: publicCardFrom\(data, await cardOwnerPhoto\(data\)\) \}\);/.test(code));
+    // NAMED (Oct 28 2026, member support): BEFORE the answer was { card } alone. AFTER it is { card, support_links }, the
+    // owner's normalized support links only (publicSupportLinks; checkMemberSupport D1-D2 holds what they carry).
+    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: publicCardFrom\(data, await cardOwnerPhoto\(data\)\), support_links: await publicSupportLinks\(data\.user_id\) \}\);/.test(code));
     check("10. POST and PUT /api/digital-cards validate the privacy fields and map the slug refusals",
       (code.match(/const privacy = cardPrivacyUpdates\(req\.body\);/g) || []).length === 2 && /const postRefusal = cardWriteRefusal\(error\);/.test(code) && /const putRefusal = cardWriteRefusal\(error\);/.test(code));
     const reFromSql = (/slug ~ '([^']+)'/.exec(MIG) || [])[1];

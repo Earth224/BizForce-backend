@@ -364,7 +364,15 @@ function world(extraTx) {
 }
 const BFC_STUBS = new Set(BASE_STUBS.concat(["requireActiveSubscription", "bfcDonateLimiter", "bfcTransferLimits", "bfcCountsTowardDailyCap", "getUserPlan"]));
 const DONATE = routeSource("post", "/api/crowdfunding/campaigns/:id/donate");
-const TRANSFER = routeSource("post", "/api/wallet/transfer");
+// NAMED (Oct 28 2026, member support): BEFORE the transfer route held the limits, the hold, the
+// recipient check, the 24-hour total and the bfc_send call itself. AFTER those lines, unchanged, sit in
+// bfcSendWithinLimits, which the route and POST /api/wallet/support both call; the route is read with it.
+const TRANSFER = (function () {
+  const route = routeSource("post", "/api/wallet/transfer");
+  const at = SRC.indexOf("async function bfcSendWithinLimits(");
+  if (!route || at < 0) return null;
+  return route + "\n\n" + SRC.slice(at, s.braceMatch(SRC, SRC.indexOf(") {", at) + 2));
+})();
 function bfcRoutes(db, env) {
   const handlers = {};
   const logs = [];

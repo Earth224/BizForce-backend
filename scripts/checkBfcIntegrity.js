@@ -150,7 +150,10 @@ function blockSource(src, startText, endText) {
 
 let AWARD = routeSource(SERVER, 'app.post("/api/certifications/award"');
 const CATALOG_ROUTE = routeSource(SERVER, 'app.get("/api/certifications/catalog"');
-let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"');
+// NAMED (Oct 28 2026, member support): BEFORE the transfer route held the limits, the hold, the
+// recipient check, the 24-hour total and the bfc_send call itself. AFTER those lines, unchanged, sit in
+// bfcSendWithinLimits, which the route and POST /api/wallet/support both call; the route is read with it.
+let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"') + "\n\n" + functionSource(SERVER, "bfcSendWithinLimits");
 const TRANSFER_CONSTS = blockSource(SERVER, "const BFC_RECIPIENT_UUID = ", "  unknown_sender:        400\n};\n");
 // The transfer's success answer carries bfcDisclaimer: BFC_NOTICE (launch audit #9; checkBfcNotice holds its text).
 const NOTICE_CONST = blockSource(SERVER, "const BFC_NOTICE = ", "its rules or availability may change.\";\n");

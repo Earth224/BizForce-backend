@@ -263,9 +263,11 @@ function wellFormed(xml) {
   /* ── E. the frontend files ─────────────────────────────────────────────── */
   console.log("\n══ E. sitemap index, pages sitemap, rewrite, robots ══");
   const INDEX = fe("sitemap.xml"), PAGES = fe("sitemap-pages.xml"), REDIR = fe("_redirects"), ROBOTS = fe("robots.txt");
-  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml and sitemap-blog.xml", !!INDEX && wellFormed(INDEX) === null &&
+  // NAMED (Oct 28 2026, member support): BEFORE the index listed sitemap-pages.xml and sitemap-blog.xml. AFTER it also
+  // lists sitemap-support.xml, the support pages members chose to list (checkMemberSupport.js holds that route).
+  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml, sitemap-blog.xml and sitemap-support.xml", !!INDEX && wellFormed(INDEX) === null &&
     /<sitemapindex xmlns="http:\/\/www\.sitemaps\.org\/schemas\/sitemap\/0\.9">/.test(INDEX) &&
-    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml"]), INDEX);
+    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml"]), INDEX);
   // NAMED (Oct 27 2026, launch item #12): BEFORE the five pages ended at /suppressed.html. AFTER the four legal pages
   // follow it, /terms, /privacy, /refund and /contact, each public and canonical (checkLaunchBlockB section 12).
   check("E. sitemap-pages.xml keeps /, /app, /vitality, /xxl-xtreme, /suppressed.html and adds /terms, /privacy, /refund, /contact", !!PAGES && wellFormed(PAGES) === null &&

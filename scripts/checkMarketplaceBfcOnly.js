@@ -148,6 +148,9 @@ function context(db, extra) {
     requireAuth: 0, requireActiveSubscription: 0,
     refuseUnlessSubscribed: async function () { return false; },
     ownerPagePublic: async function () { return true; },
+    // NAMED (Oct 28 2026, member support): BEFORE the storefront route's closure needed no require. AFTER it answers
+    // support_links through publicSupportLinks, which lifts `const supportLinks = require("./lib/supportLinks")`.
+    require: function (p) { return require(p.indexOf("./") === 0 ? path.join(__dirname, "..", p) : p); },
     insertListingWithSlug: async function (row) { inserted.push(JSON.parse(JSON.stringify(row))); return { data: Object.assign({ id: "new-listing" }, row), error: null }; },
     JSON: JSON, Object: Object, Array: Array, Number: Number, String: String, Math: Math, Promise: Promise, Error: Error, Date: Date
   }, extra || {});
