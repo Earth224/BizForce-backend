@@ -84,7 +84,9 @@ const MUTATIONS = {
   // sign-out leaving bizforce_ai_mailbox
   "signout-leaves-mailbox": [[SESSION, "    \"bizforce_ai_mailbox\", \"bf_agent_memories\",\n", "    \"bf_agent_memories\",\n"]],
   // the Termaximus insights cached for the tab survive sign-out
-  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\"];", "  var PER_USER_SESSION_PREFIXES = [];"]],
+  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_trail\"];"]],
+  // the Guide mode page trail survives sign-out
+  "trail-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\"];"]],
   // data-clear-only still runs the session guard (app.html would redirect to itself)
   "clear-only-runs-guard": [[SESSION, "  if (thisScript && thisScript.hasAttribute && thisScript.hasAttribute(\"data-clear-only\")) return;\n", ""]],
   // a write button left enabled offline
@@ -544,6 +546,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        AFTER: one shared scripts/bf-session.js clearDevice() clears PER_USER on every path; KEPT stays, each for its reason. */
     const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions"];
     const SESSION_PREFIX = "bf_tmx_insight:";
+    /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
+       "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
+       in this tab (scripts/termaximus-presence.js), a per-member session key, so IV0 lists it and sign-out clears it. */
+    const SESSION_KEYS = ["bf_tmx_trail"];
     const KEPT = {
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
@@ -570,11 +576,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
         }
       });
     })(FRONTEND);
-    const unlisted = Object.keys(found).filter(k => PER_USER.indexOf(k) === -1 && !KEPT[k]);
+    const unlisted = Object.keys(found).filter(k => PER_USER.indexOf(k) === -1 && SESSION_KEYS.indexOf(k) === -1 && !KEPT[k]);
     check("IV0. every storage key in the frontend is either cleared at sign-out or kept for a stated reason (" + Object.keys(found).length + " keys)",
       Object.keys(found).length >= 20 && unlisted.length === 0 && unknown.length === 0, unlisted.concat(unknown).join(", "));
-    check("IV0b. ... and the lists are not stale: every key on them is still used", PER_USER.concat(Object.keys(KEPT)).filter(k => !found[k]).length === 0,
-      PER_USER.concat(Object.keys(KEPT)).filter(k => !found[k]).join(","));
+    check("IV0b. ... and the lists are not stale: every key on them is still used", PER_USER.concat(SESSION_KEYS, Object.keys(KEPT)).filter(k => !found[k]).length === 0,
+      PER_USER.concat(SESSION_KEYS, Object.keys(KEPT)).filter(k => !found[k]).join(","));
     check("IV0c. the Termaximus insight cache (sessionStorage) is keyed by the prefix sign-out clears", /var INSIGHT_CACHE_PREFIX = "bf_tmx_insight:";/.test(FILES[GUIDE]));
 
     // A browser with every key set, and a way to read what is left.
@@ -584,10 +590,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
         key: i => [...m.keys()][i] || null, get length() { return m.size; } };
     }
     const full = token => { const o = {}; PER_USER.forEach(k => { o[k] = "x"; }); Object.keys(KEPT).forEach(k => { o[k] = "kept"; }); if (token) o.bf_token = TOKEN; else delete o.bf_token; return o; };
-    const sess = () => store({ [SESSION_PREFIX + "dashboard.html"]: "{\"text\":\"your insight\"}", "unrelated-tab-key": "stays" });
+    const sess = () => store({ [SESSION_PREFIX + "dashboard.html"]: "{\"text\":\"your insight\"}", bf_tmx_trail: "[{\"page\":\"crm.html\",\"t\":1}]", "unrelated-tab-key": "stays" });
     function verdict(ls, ss, idb) {
       const left = PER_USER.filter(k => ls.getItem(k) !== null), lost = Object.keys(KEPT).filter(k => ls.getItem(k) !== "kept");
       const ok = left.length === 0 && lost.length === 0 && ss.getItem(SESSION_PREFIX + "dashboard.html") === null && ss.getItem("unrelated-tab-key") === "stays" &&
+        SESSION_KEYS.every(k => ss.getItem(k) === null) &&
         idb.log.deletes.indexOf("bf-offline") !== -1;
       return { ok, why: "left: " + left.join(",") + " / lost: " + lost.join(",") + " / insight " + ss.getItem(SESSION_PREFIX + "dashboard.html") + " / idb " + idb.log.deletes.join(",") };
     }
@@ -609,7 +616,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       const b = browser(store({}), store({}), fakeIDB(), true, stub);
       check("IV1. bf-session.js shares one clearDevice, listing exactly the per-member keys and the insight prefix",
         !!b.ctx.BFSession && typeof b.ctx.BFSession.clearDevice === "function" && JSON.stringify(b.ctx.BFSession.PER_USER_LOCAL.slice().sort()) === JSON.stringify(PER_USER.slice().sort()) &&
-        JSON.stringify(b.ctx.BFSession.PER_USER_SESSION_PREFIXES) === JSON.stringify([SESSION_PREFIX]), b.ctx.BFSession && b.ctx.BFSession.PER_USER_LOCAL.join(","));
+        JSON.stringify(b.ctx.BFSession.PER_USER_SESSION_PREFIXES) === JSON.stringify([SESSION_PREFIX].concat(SESSION_KEYS)), b.ctx.BFSession && b.ctx.BFSession.PER_USER_LOCAL.join(","));
       check("IV2. loaded data-clear-only with no session, it does nothing else: no redirect, no fetch wrapper", b.replaced.length === 0 && b.ctx.fetch === stub, b.replaced.join(","));
     }
     // dashboard.html logout()

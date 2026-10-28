@@ -113,7 +113,9 @@ const ADDED = [
   ["post", "/api/me/terms/accept"],            // Terms with recorded acceptance: accepting the current version (total 321 -> 322)
   ["get", "/api/billing/consent"],              // Express consent to automatic renewal at checkout: the box's words, from PLAN_CONFIG (total 322 -> 323)
   // NAMED (Oct 27 2026, launch item #10): BEFORE 321 routes; AFTER 322, adding the business card's short link
-  ["get", "/api/cards/slug/:slug"]              // bizforceai.net/c/<slug>: one card, the share route's allowlist and owner check (total 321 -> 322)
+  ["get", "/api/cards/slug/:slug"],             // bizforceai.net/c/<slug>: one card, the share route's allowlist and owner check (total 321 -> 322)
+  // NAMED (Oct 28 2026, Termaximus Guide mode): BEFORE 322 routes; AFTER 323, adding Guide mode's one route
+  ["post", "/api/guide/ask"]                    // Termaximus Guide mode: verified steps from lib/appMap.json, requireAuth + aiLimiter (total 322 -> 323)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

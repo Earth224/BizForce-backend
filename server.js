@@ -53,6 +53,8 @@ const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 // Only the platform spend ceiling asks this (platformSpendTestAccounts); no gate does.
 const { isTestAccount } = require("./lib/testAccounts");
+const guideAsk = require("./lib/guideAsk");
+const APP_MAP = require("./lib/appMap.json");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
@@ -14063,6 +14065,49 @@ async function callAnthropicText(promptText, maxTokens, userId = null, model = "
   throw lastError;
 }
 
+/* Termaximus's Guide mode model call (POST /api/guide/ask, lib/guideAsk.js).
+   Separate from callAnthropicText because it needs a system prompt, the app
+   map in a cache_control block that every guide question shares. The server's
+   limits come first, as at every model call site here: enforceDailyModelCallLimit
+   with route "guide" checks the platform spend ceiling, then the 250-a-day and
+   monthly caps, and throws (429) to refuse before anything is spent. Then it
+   resolves the key, asks once and writes the ledger row, route "guide". */
+async function callGuideModel(opts) {
+  await enforceDailyModelCallLimit(opts.userId, guideAsk.GUIDE_ROUTE);
+  var resolvedKey = await resolveAnthropicKey.withSource(opts.userId);
+  var anthropicClient = new Anthropic({ apiKey: resolvedKey.key, timeout: 60000 });
+  var model = "claude-haiku-4-5-20251001";
+  var response = await anthropicClient.messages.create({
+    model: model,
+    max_tokens: opts.maxTokens,
+    system: opts.system,
+    messages: [{ role: "user", content: [{ type: "text", text: opts.user }] }]
+  });
+  /* model_calls has no cache columns, so the cached map's tokens are counted
+     as ordinary input: every token is recorded, priced as uncached input.
+     That overstates a cache read (billed at a tenth) and never understates,
+     so the spend ceiling, which reads this ledger, can only be early. */
+  var u = response.usage || {};
+  var usage = {
+    input_tokens: Number(u.input_tokens || 0) + Number(u.cache_creation_input_tokens || 0) + Number(u.cache_read_input_tokens || 0),
+    output_tokens: u.output_tokens
+  };
+  await recordModelCall({
+    userId:     opts.userId,
+    agentType:  null,
+    route:      guideAsk.GUIDE_ROUTE,
+    model:      response.model || model,
+    usage:      usage,
+    fundedBy:      resolvedKey.source,
+    fallbackReason: resolvedKey.reason
+  });
+  var text = (response.content || [])
+    .filter(function (block) { return block.type === "text"; })
+    .map(function (block) { return block.text; })
+    .join("");
+  return { text: text || "", model: response.model || model };
+}
+
 function extractRequiredExecutiveAssignmentHeadings(promptText) {
   var text = String(promptText || "");
   var headings = [];
@@ -17344,6 +17389,17 @@ function oracleMessageFrom(rawMessage, files) {
 
    oracleChatLimiter comes before the upload too, for the same reason: a caller
    over the limit is told so before eight files are buffered. */
+/* Termaximus's Guide mode: verified steps from the generated app map. Signed in
+   is enough (an unsubscribed member is capped tighter, so they can still find
+   Billing); lib/guideAsk.js holds the whitelist, the caps and the verification. */
+app.post("/api/guide/ask", requireAuth, aiLimiter, guideAsk.createGuideAskHandler({
+  map: APP_MAP,
+  supabase: supabase,
+  getPlan: getUserPlan,
+  callModel: callGuideModel,
+  utcDay: function () { return modelCallUtcDay(); }
+}));
+
 app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatLimiter, oracleChatUpload.array("files", 8), async function (req, res, next) {
   try {
     var message = oracleMessageFrom(req.body.message, req.files);
