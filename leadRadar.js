@@ -520,7 +520,9 @@ async function radarTick() {
   }
 }
 
-async function startLeadRadar() {
+/* track(name, handle) registers the five-minute interval with server.js's
+   graceful shutdown (lib/gracefulShutdown.js), so a SIGTERM stops it. */
+async function startLeadRadar(track) {
   // Ungated. The tick used to sit behind ENABLE_AUTO_JOBS because it chained
   // into scoreNewLeads(), which calls the Claude API up to 20x per tick — that
   // spend is now gated separately by ENABLE_LEAD_SCORING inside radarTick, so
@@ -532,7 +534,9 @@ async function startLeadRadar() {
   radarTick().catch(function (err) {
     console.error("[LeadRadar] Initial run error:", err.message || err);
   });
-  setInterval(radarTick, 300000);
+  var handle = setInterval(radarTick, 300000);
+  if (typeof track === "function") track("leadRadarTick", handle);
+  return handle;
 }
 
 /* The values the scoring prompt tells the model to choose from, and the only

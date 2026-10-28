@@ -750,13 +750,16 @@ check("A. 3 sales.html: \"Live Activity\" is kept, and a 20 s setInterval render
   /<h2 class="section-label">Live Activity<\/h2>\s*<div id="mcActivityFeed">/.test(FILES[SALES]) &&
   /mcTaskTimer = setInterval\(mcRefreshConsole, 20000\);/.test(FILES[SALES]) && /mcRenderFeed\(tasks\);/.test(MC_REFRESH) &&
   /function mcRenderFeed\(tasks\) \{\s*var feed = document\.getElementById\("mcActivityFeed"\);/.test(FILES[SALES]));
-const DYNAMIC_INTRO = (/intro\.textContent = "([^"]+)";/.exec(FILES[CONTENT]) || ["", ""])[1];
 const STATIC_INTRO = (/<p id="connectIntro"[^>]*>([^<]*)<\/p>/.exec(FILES[CONTENT]) || ["", ""])[1];
 check("A. 5 content.html #connectIntro: the static text no longer offers connecting or scheduling",
   !!STATIC_INTRO && !/Connect your social accounts|direct scheduling/.test(STATIC_INTRO), STATIC_INTRO);
-check("A. 5 content.html #connectIntro: the static text says connecting is off and approved drafts are not published — true when the accounts read fails",
-  /Connecting social accounts is turned off for now/.test(STATIC_INTRO) && /Approved drafts are saved, not published\./.test(STATIC_INTRO) &&
-  STATIC_INTRO === DYNAMIC_INTRO && /\.catch\(function \(\) \{\}\);\n  \}\n\n  loadConnectedAccounts\(\);/.test(FILES[CONTENT]), STATIC_INTRO);
+// NAMED (Oct 27 2026, launch item #4): BEFORE, six Connect buttons (each "Unavailable" once /api/social/accounts answered)
+// and a static intro that the accounts read rewrote with the same words ("Connecting social accounts is turned off for
+// now … Approved drafts are saved, not published."). AFTER, no Connect button, no accounts read, and one static line that
+// says what is coming and never asks for a password; checkLaunchBlockB pins the exact line.
+check("A. 5 content.html #connectIntro: one honest line, and no Connect control or accounts read is left",
+  STATIC_INTRO === "Connecting your social accounts is coming: Bluesky first, then Facebook and Instagram, through each platform's own sign-in. BizForce will never ask for your passwords." &&
+  !/connectPlatform|loadConnectedAccounts|class="connect-btn"|openCreateAccount|caModalConnect|\/api\/social\/accounts/.test(FILES[CONTENT]), STATIC_INTRO);
 
 // Social publishing, listing and connecting are shut for good: no Zernio host, no Zernio key read (launch audit #22c).
 function socialShut() { return FILES[SERVER].indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(FILES[SERVER]); }
@@ -965,10 +968,16 @@ const C = [
   ["11 business-chat 95", chatTips, "There is one thread, not a list of past threads", /Revisit past threads/,
     () => /\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: true \}\);/.test(CHAT_GET) && !/\.limit\(/.test(CHAT_GET) &&
       !/thread_id|conversation_id/.test(CHAT_POST + CHAT_GET) && /data\.messages\.forEach\(function\(msg\) \{\s*addMessage\(msg\.role, msg\.content\);/.test(FILES[CHAT])],
-  ["11 card-view 98", cvTips, "the card's QR codes hold a vCard contact, not a link to this page", /via a shared link or QR code/,
-    () => [FILES[CARDVIEW], FILES[CARDS]].every(p => /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), vcard \|\| "BizForce AI"/.test(p) &&
-      /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), vcard \|\| "BizForce AI"/.test(p) && /"BEGIN:VCARD"/.test(p)) &&
-      /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) && /"https:\/\/bizforceai\.net\/card-view\.html\?token=" \+ st/.test(FILES[CARDS])],
+  // NAMED (Oct 27 2026, launch item #10): BEFORE the tip said the QR codes hold a vCard, and the pin proved both pages
+  // passed buildVCard's text to QRCode.toCanvas. AFTER both pages pass the card's public URL (the short link, else the
+  // ?token= link), card-view opens from either, and the vCard is the Save Contact download (scripts/bf-card.js).
+  ["11 card-view 98", cvTips, "the card's QR codes open this page", /via a shared link or QR code/,
+    () => /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
+      /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
+      /QRCode\.toCanvas\(qr, url,/.test(FILES[CARDS]) && /QRCode\.toCanvas\(qrVideo, url,/.test(FILES[CARDS]) &&
+      /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) &&
+      /\/\^\\\/c\\\/\(\[a-z0-9-\]\{3,40\}\)\\\/\?\$\/\.exec\(window\.location\.pathname\)/.test(FILES[CARDVIEW]) &&
+      /var url = window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: st \}\);/.test(FILES[CARDS])],
   ["11 sales 118", salesTips, "its tasks read none of the leads or pipeline on this page", /revenue intelligence|from your business data/,
     () => NO_PIPELINE() && ["Sales Funnel", "Lead Generation", "Outreach Script", "Offer Builder", "Objection Handling"].every(n => offers(SALES, n))],
   ["11 sales 122", salesTips, "a task's prompt carries no pipeline data", /stale pipeline data/, NO_PIPELINE],

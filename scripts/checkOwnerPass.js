@@ -458,11 +458,19 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
     fs.readdirSync(path.join(REPO, "lib")).filter(f => /\.js$/.test(f)).forEach(f => {
       files["lib/" + f] = f === "selfReview.js" ? SRC["lib/selfReview.js"] : lf(fs.readFileSync(path.join(REPO, "lib", f), "utf8"));
     });
+    // NAMED (Oct 27 2026, launch item #0): BEFORE every requirer counted through isUncountedAccount and nothing else
+    // asked isTestAccount. AFTER server.js's platformSpendTestAccounts asks isTestAccount, on purpose: the platform's
+    // daily ceiling leaves out test accounts but COUNTS the owner, whose model calls are real spend. That one function
+    // is the only exception; any other file, or any other call in server.js, still fails.
+    const PLATFORM_SPEND_FN = (/^async function platformSpendTestAccounts\(userIds\) \{[\s\S]*?\n\}\n/m.exec(SERVER) || [""])[0];
+    const testCallsOutside = (f) => (f === "server.js" ? files[f].replace(PLATFORM_SPEND_FN, "") : files[f]);
     const requirers = Object.keys(files).filter(f => /require\("\.\/(lib\/)?testAccounts"\)/.test(files[f]));
-    const testOnly = Object.keys(files).filter(f => f !== "lib/testAccounts.js" && /isTestAccount\s*\(/.test(files[f]));
-    check("D. every file that requires lib/testAccounts.js counts through isUncountedAccount (" + requirers.join(", ") + ")",
-      requirers.length > 0 && requirers.every(f => /\{ isUncountedAccount \} = require\("\.\/(lib\/)?testAccounts"\)/.test(files[f])), requirers.join(", "));
-    check("D. no file outside lib/testAccounts.js asks the test-only question", testOnly.length === 0, testOnly.join(", "));
+    const testOnly = Object.keys(files).filter(f => f !== "lib/testAccounts.js" && /isTestAccount\s*\(/.test(testCallsOutside(f)));
+    check("D. every file that requires lib/testAccounts.js counts through isUncountedAccount, except server.js's platform spend (" + requirers.join(", ") + ")",
+      requirers.length > 0 && requirers.every(f => /\{ isUncountedAccount \} = require\("\.\/(lib\/)?testAccounts"\)/.test(files[f]) ||
+        (f === "server.js" && /^const \{ isTestAccount \} = require\("\.\/lib\/testAccounts"\);$/m.test(files[f]) && PLATFORM_SPEND_FN.length > 0)), requirers.join(", "));
+    check("D. no file outside lib/testAccounts.js asks the test-only question, but for the platform spend's own function",
+      testOnly.length === 0 && /isTestAccount\(\{ id: id \}\)/.test(PLATFORM_SPEND_FN), testOnly.join(", "));
   }
 
   /* ── E ─────────────────────────────────────────────────────────────────── */

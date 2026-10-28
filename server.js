@@ -51,6 +51,8 @@ const { runMastodonRadarOnce } = require("./mastodonRadar");
 const { startRedditRadar } = require("./redditRadar");
 const { encrypt, decrypt } = require("./lib/apiKeyCrypto");
 const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
+// Only the platform spend ceiling asks this (platformSpendTestAccounts); no gate does.
+const { isTestAccount } = require("./lib/testAccounts");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
@@ -62,7 +64,20 @@ const { youtubeCaps, youtubeUnitsToday } = require("./lib/youtubeQuota");
 const { isUsefulYoutubeComment } = require("./lib/youtubeFilter");
 const { guardedFetch, publicMessage: guardedFetchPublicMessage, logLine: guardedFetchLogLine, UNREACHABLE_MESSAGE: GUARDED_FETCH_UNREACHABLE } = require("./lib/guardedFetch");
 const webpush = require("web-push");
-const cron = require("node-cron");
+const nodeCron = require("node-cron");
+const { createShutdown, installProcessHandlers, shutdownTimeoutMs } = require("./lib/gracefulShutdown");
+
+/* GRACEFUL RESTARTS (launch item #7, lib/gracefulShutdown.js). Every cron task
+   and interval this file starts is registered here, so a SIGTERM stops them
+   before the HTTP server drains. `cron` keeps node-cron's schedule signature;
+   each call site below is unchanged, and each returned task is kept only by
+   this registry. */
+const shutdownControl = createShutdown({ timeoutMs: shutdownTimeoutMs(process.env) });
+const cron = {
+  schedule: function (expression, fn, options) {
+    return shutdownControl.trackJob(expression, nodeCron.schedule(expression, fn, options));
+  }
+};
 
 const app = express();
 
@@ -114,6 +129,10 @@ app.use(function (req, res, next) {
 
   next();
 });
+/* While a SIGTERM drains this process, a NEW request gets a 503 and
+   Connection: close (after the CORS headers above, so the browser can read
+   it); requests already in flight are not affected. */
+app.use(shutdownControl.gate);
 const PORT = process.env.PORT || 8080;
 app.get("/", (req, res) => {
   res.status(200).send("BizForce AI Backend Live");
@@ -13444,7 +13463,35 @@ function platformDailySpendCap() {
 
 /* Today's (UTC) platform spend across every account, every row, priced. Rows
    an account paid for with its own key (funded_by 'user') cost the platform
-   nothing and are not counted, as in modelSpendThisMonth. */
+   nothing and are not counted, as in modelSpendThisMonth.
+
+   TEST ACCOUNTS ARE NOT COUNTED (launch item #0, 2026-10-27). The check
+   suite's fixtures (scripts/checkModelSpendBudget.js inserts rows worth
+   thousands of dollars, dated the 1st of the month, as the check account)
+   would otherwise trip the ceiling for every member on the day they run.
+   lib/testAccounts.js is the one definition: a row whose user_id is a test id
+   is dropped without a read; for every other account on today's rows, one
+   read of users (id, email) asks isTestAccount by email. If that read fails,
+   those rows are COUNTED: a ceiling that errs toward stopping is still a
+   ceiling. The owner's own calls are real spend and are counted. */
+async function platformSpendTestAccounts(userIds) {
+  var tests = {};
+  var unknown = [];
+  userIds.forEach(function (id) {
+    if (isTestAccount({ id: id })) tests[id] = true;
+    else unknown.push(id);
+  });
+  if (!unknown.length) return { tests: tests };
+  var read = await supabase.from("users").select("id, email").in("id", unknown);
+  if (read.error || !Array.isArray(read.data)) {
+    console.error("[spend] platform spend: the users read for test accounts failed (" +
+      ((read.error && read.error.message) || "no rows array") + "); counting those " + unknown.length + " account(s).");
+    return { tests: tests, unread: unknown.length };
+  }
+  read.data.forEach(function (u) { if (isTestAccount(u)) tests[String(u.id)] = true; });
+  return { tests: tests };
+}
+
 async function platformSpendToday(now) {
   var day = modelCallUtcDay(now);
   var rows = [];
@@ -13452,7 +13499,7 @@ async function platformSpendToday(now) {
   for (var from = 0; ; from += 1000) {
     var page = await supabase
       .from("model_calls")
-      .select("id, model, input_tokens, output_tokens, funded_by", { count: "exact" })
+      .select("id, user_id, model, input_tokens, output_tokens, funded_by", { count: "exact" })
       .eq("created_on", day)
       .order("id", { ascending: true })
       .range(from, from + 999);
@@ -13464,12 +13511,20 @@ async function platformSpendToday(now) {
   if (typeof total !== "number" || rows.length !== total) {
     return { error: "read " + rows.length + " ledger rows but the exact count is " + JSON.stringify(total), day: day };
   }
-  var usd = 0;
+  var ids = [];
   rows.forEach(function (row) {
+    var id = String(row.user_id || "").toLowerCase();
+    if (id && ids.indexOf(id) === -1) ids.push(id);
+  });
+  var accounts = await platformSpendTestAccounts(ids);
+  var usd = 0;
+  var testRows = 0;
+  rows.forEach(function (row) {
+    if (accounts.tests[String(row.user_id || "").toLowerCase()]) { testRows++; return; }
     if (row.funded_by === "user") return;
     usd += modelCallCostUsd(row).usd;
   });
-  return { usd: usd, rows: rows.length, day: day };
+  return { usd: usd, rows: rows.length, test_rows: testRows, day: day };
 }
 
 // Never throws and is never awaited: a model call does not wait on an email.
@@ -41980,6 +42035,103 @@ app.get("/api/editor/image", requireAuth, async function (req, res, next) {
 
 const CARD_THEMES = ["dark","midnight","forest","ember"];
 
+/* ── A COMPLETE BUSINESS CARD (launch item #10, 2026-10-27) ───────────────────
+
+   WHAT A STRANGER IS SERVED is publicCardFrom's allowlist, and nothing else:
+   never user_id, id or share_token, and never a field the member hid. A
+   member hides their email, phone or photo with show_email, show_phone and
+   show_photo (migration 149; absent, as before the migration, means shown,
+   which is what every card did until now). A hidden field is served as ""
+   (or a null photo), so the page, the tap-to-call and tap-to-email links and
+   the vCard all lack it: none of them can show what the server never sent.
+
+   THE PHOTO is the member's profile photo (bf_profiles.avatar_url), an https
+   URL only. The page embeds it in the vCard when it is small enough and links
+   it otherwise (scripts/bf-card.js in the frontend).
+
+   THE SHORT LINK is bizforceai.net/c/<slug>: Netlify serves card-view.html at
+   that path, and the page asks GET /api/cards/slug/:slug. A slug is 3 to 40
+   lowercase letters, digits and single hyphens, starting and ending with a
+   letter or digit, not on CARD_SLUG_RESERVED, and unique (migration 149's
+   unique index; a taken slug is a 409). public_url, which the QR encodes, is
+   the short link when there is a slug and the card-view link when not. */
+const CARD_SITE = "https://bizforceai.net";
+const CARD_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/;
+const CARD_SLUG_RESERVED = ["admin", "api", "app", "bizforce", "bizforceai", "blog", "c", "card", "cards", "contact", "help",
+  "login", "mail", "official", "owner", "privacy", "refund", "settings", "signup", "staff", "support", "team", "terms", "www"];
+const CARD_PRIVACY_FIELDS = ["show_email", "show_phone", "show_photo"];
+
+/* null or "" clears the slug; anything else is validated. */
+function cardSlugFrom(raw) {
+  if (raw === null || raw === undefined) return { slug: null };
+  var s = String(raw).trim().toLowerCase();
+  if (s === "") return { slug: null };
+  if (!CARD_SLUG_RE.test(s) || s.indexOf("--") !== -1) {
+    return { error: "A short link is 3 to 40 lowercase letters, numbers and single hyphens, starting and ending with a letter or number." };
+  }
+  if (CARD_SLUG_RESERVED.indexOf(s) !== -1) return { error: "That short link is reserved. Choose another." };
+  return { slug: s };
+}
+
+function cardPublicUrl(row) {
+  if (row && row.slug) return CARD_SITE + "/c/" + row.slug;
+  if (row && row.share_token) return CARD_SITE + "/card-view.html?token=" + encodeURIComponent(row.share_token);
+  return null;
+}
+
+/* The privacy and short-link fields a POST or PUT body carries, validated.
+   Only fields present in the body are written, so a client that sends none
+   of them writes none of them. */
+function cardPrivacyUpdates(body) {
+  var out = {};
+  CARD_PRIVACY_FIELDS.forEach(function (f) {
+    if (body[f] !== undefined) out[f] = body[f] !== false && body[f] !== "false";
+  });
+  if (body.slug !== undefined) {
+    var parsed = cardSlugFrom(body.slug);
+    if (parsed.error) return { error: parsed.error };
+    out.slug = parsed.slug;
+  }
+  return { updates: out };
+}
+
+/* A write that failed on migration 149's unique slug index is a 409; one that
+   named a column the database does not have yet is a 503 that says so. */
+function cardWriteRefusal(error) {
+  if (!error) return null;
+  if (error.code === "23505" && /slug/.test(String(error.message || "") + String(error.details || ""))) {
+    return { status: 409, error: "That short link is taken. Choose another." };
+  }
+  if ((error.code === "PGRST204" || error.code === "42703") && /slug|show_email|show_phone|show_photo/.test(String(error.message || ""))) {
+    return { status: 503, error: "Short links and hiding card fields are not switched on yet (migration 149). Nothing was saved." };
+  }
+  return null;
+}
+
+async function cardOwnerPhoto(row) {
+  if (!row || row.show_photo === false) return null;
+  try {
+    var read = await supabase.from("bf_profiles").select("avatar_url").eq("user_id", row.user_id).maybeSingle();
+    var url = read && !read.error && read.data ? String(read.data.avatar_url || "") : "";
+    return /^https:\/\/[^\s"<>]+$/.test(url) ? url : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function publicCardFrom(row, photoUrl) {
+  return {
+    full_name: row.full_name || "", job_title: row.job_title || "", company: row.company || "", website: row.website || "",
+    email: row.show_email === false ? "" : (row.email || ""),
+    phone: row.show_phone === false ? "" : (row.phone || ""),
+    photo_url: row.show_photo === false ? null : (photoUrl || null),
+    public_url: cardPublicUrl(row),
+    theme: row.theme, video_url: row.video_url || null, bg_image_url: row.bg_image_url || null,
+    still_image_url: row.still_image_url || null, audio_url: row.audio_url || null,
+    holographic_style: Boolean(row.holographic_style), media_layout: row.media_layout || {}
+  };
+}
+
 // The digital_cards columns that hold a bf-public object URL.
 const CARD_MEDIA_COLUMNS = ["video_url", "bg_image_url", "still_image_url", "audio_url"];
 
@@ -42108,9 +42260,11 @@ app.get("/api/digital-cards", requireAuth, async function (req, res, next) {
 
 app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
   try {
+    const privacy = cardPrivacyUpdates(req.body);
+    if (privacy.error) return res.status(400).json({ error: privacy.error });
     const { data, error } = await supabase
       .from("digital_cards")
-      .insert({
+      .insert(Object.assign({
         user_id:   req.user.id,
         full_name: safeText(req.body.full_name, 120) || "",
         job_title: safeText(req.body.job_title, 120) || "",
@@ -42127,8 +42281,10 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         media_layout: req.body.media_layout || {},
         share_token: crypto.randomBytes(16).toString("hex"),
         created_at: nowIso(), updated_at: nowIso()
-      })
+      }, privacy.updates))
       .select("*").single();
+    const postRefusal = cardWriteRefusal(error);
+    if (postRefusal) return res.status(postRefusal.status).json({ error: postRefusal.error });
     if (error) {
       console.error("[digital-cards POST] Supabase error:", {
         code: error.code, message: error.message,
@@ -42158,6 +42314,9 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.audio_url       !== undefined) updates.audio_url       = safeText(req.body.audio_url, 500)       || null;
     if (req.body.holographic_style !== undefined) updates.holographic_style = Boolean(req.body.holographic_style);
     if (req.body.media_layout !== undefined) updates.media_layout = req.body.media_layout || {};
+    const privacy = cardPrivacyUpdates(req.body);
+    if (privacy.error) return res.status(400).json({ error: privacy.error });
+    Object.assign(updates, privacy.updates);
 
     // Capture the media URLs this update is about to overwrite, so the displaced objects
     // can be removed afterwards instead of being orphaned in bf-public forever.
@@ -42186,6 +42345,8 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .select("*").single();
+    const putRefusal = cardWriteRefusal(error);
+    if (putRefusal) return res.status(putRefusal.status).json({ error: putRefusal.error });
     if (error) {
       console.error("[digital-cards PUT] Supabase error:", {
         code: error.code, message: error.message,
@@ -42265,12 +42426,13 @@ app.post("/api/cards/share-token", requireAuth, requireActiveSubscription, async
   } catch (error) { next(error); }
 });
 
-// Public — no auth — returns card by share token
+// Public — no auth — returns card by share token. select("*") so the card
+// reads the same before and after migration 149; publicCardFrom is what leaves.
 app.get("/api/cards/share/:token", async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("digital_cards")
-      .select("user_id, full_name, job_title, company, email, phone, website, theme, video_url, bg_image_url, still_image_url, audio_url, holographic_style, media_layout")
+      .select("*")
       .eq("share_token", req.params.token)
       .maybeSingle();
     if (error) throw error;
@@ -42278,9 +42440,28 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
     // Served only while its owner is entitled. user_id is read for that and
     // never returned.
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
-    const { user_id: cardOwnerId, ...card } = data;
 
-    return res.json({ card: card });
+    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });
+  } catch (error) { next(error); }
+});
+
+// Public — no auth — the short link bizforceai.net/c/<slug> (Netlify serves
+// card-view.html there, and the page asks this). A slug that cannot be valid
+// is a 404 without a read.
+app.get("/api/cards/slug/:slug", async function (req, res, next) {
+  try {
+    const parsed = cardSlugFrom(req.params.slug);
+    if (!parsed.slug) return res.status(404).json({ error: "Card not found" });
+    const { data, error } = await supabase
+      .from("digital_cards")
+      .select("*")
+      .eq("slug", parsed.slug)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Card not found" });
+    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
+
+    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)) });
   } catch (error) { next(error); }
 });
 
@@ -47970,7 +48151,7 @@ async function dripTick() {
 // Manual runs through POST /api/sms/run-engine are unaffected — they call
 // runDripEngine directly and never look at this flag.
 if (process.env.ENABLE_DRIP_SCHEDULER === "true") {
-  setInterval(dripTick, 300000);
+  shutdownControl.trackInterval("dripTick", setInterval(dripTick, 300000));
   dripTick();
   console.log("[startup] dripTick scheduled — every 5 minutes (ENABLE_DRIP_SCHEDULER=true)");
 } else {
@@ -48071,7 +48252,7 @@ async function reminderTick() {
    server.js to test it, and each load used to run a pass against live data.
    Production runs `node server.js` (package.json "start"), where this holds. */
 if (require.main === module) {
-  setInterval(reminderTick, 60000);
+  shutdownControl.trackInterval("reminderTick", setInterval(reminderTick, 60000));
   reminderTick();
 } else {
   console.log("[startup] reminder scheduler not started: server.js was loaded by another script (a check), not run as the program.");
@@ -50204,7 +50385,7 @@ async function emailSequenceTick() {
   }
 }
 
-app.listen(PORT, function () {
+shutdownControl.setServer(app.listen(PORT, function () {
   console.log("BizForce AI server running on port " + PORT);
   console.log("[startup] OUTREACH_MIN_INTENT=" + OUTREACH_MIN_INTENT);
   console.log("[startup] SUBSCRIPTION_GRACE_DAYS=" + SUBSCRIPTION_GRACE_DAYS +
@@ -50250,7 +50431,7 @@ app.listen(PORT, function () {
      each, which is how a suite run hammered the login into 429s. Production
      runs `node server.js` (package.json "start"), where this holds. */
   if (require.main === module) {
-    startLeadRadar().catch(function (err) {
+    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {
       console.error("[LeadRadar] startup error:", err.message || err);
     });
   } else {
@@ -50275,7 +50456,7 @@ app.listen(PORT, function () {
         console.error("[SalesAutoConvert] Initial run error:", err.message || err);
       });
     }, 60000);
-    setInterval(salesAutoConvertTick, 300000);
+    shutdownControl.trackInterval("salesAutoConvertTick", setInterval(salesAutoConvertTick, 300000));
   } else {
     console.log("[startup] salesAutoConvertTick disabled (ENABLE_SALES_AUTOLOOP not true)");
   }
@@ -50515,7 +50696,17 @@ app.listen(PORT, function () {
   // startRedditRadar().catch(function (err) {
   //   console.error("[RedditRadar] startup error:", err.message || err);
   // });
-});
+}));
+
+/* SIGTERM, SIGINT and the two crash events (lib/gracefulShutdown.js), ONLY WHEN
+   THIS FILE IS THE PROGRAM: a check that loads server.js keeps Node's own crash
+   behaviour and never emails the owner. */
+if (require.main === module) {
+  installProcessHandlers(process, shutdownControl, function (key, info) { return opsAlerts.raise(key, info); });
+  console.log("[startup] graceful shutdown on SIGTERM and SIGINT, up to " + shutdownControl.timeoutMs + " ms for requests in flight (SHUTDOWN_TIMEOUT_MS)");
+} else {
+  console.log("[startup] process signal and crash handlers not installed: server.js was loaded by another script (a check), not run as the program.");
+}
 
 module.exports = {
   runSalesAutoConvert,

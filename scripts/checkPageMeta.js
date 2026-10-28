@@ -53,7 +53,18 @@ const PINNED = {
   "xxl-xtreme.html": ["War Horse Xtreme Oil for Men, 4 oz — Every Ingredient Named",
     "War Horse Xtreme, also sold as Sword Vitality XXL Xtreme: a 4 oz oil blend for men with no fillers, binders or additives. Its label names every ingredient."],
   "suppressed.html": ["BizForce AI — for businesses the ad networks won't serve",
-    "For businesses an ad network, platform or payment processor has cut off: search content you approve, a blog and a storefront under your own handle. $199/month."]
+    "For businesses an ad network, platform or payment processor has cut off: search content you approve, a blog and a storefront under your own handle. $199/month."],
+  // NAMED (Oct 27 2026, launch item #12): BEFORE the sitemap listed five pages and these four were not in it (their titles
+  // were 22–30 characters, "Terms of Service — BizForce AI"). AFTER they are listed, with titles and descriptions built
+  // by lib/legalPages.js (scripts/buildLegalPages.js) inside this check's ranges.
+  "terms.html": ["Terms of Service — BizForce AI subscription and BizCash",
+    "BizForce AI terms: the $199 per month subscription and its automatic renewal, refunds, acceptable use, AI output, and the BizCash Member Trade Agreement."],
+  "privacy.html": ["Privacy Policy — what BizForce AI collects, and your rights",
+    "What BizForce AI collects, why, which services receive it, how it is protected and kept, your privacy rights including in California, and YouTube data."],
+  "refund.html": ["Refund Policy — cancel BizForce AI online, keep paid access",
+    "BizForce AI refund policy: cancel any time online on Billing, keep access to the end of the period you paid for, no partial or prorated refunds."],
+  "contact.html": ["Contact BizForce AI — email, postal address, data requests",
+    "How to contact BizForce AI by email or post, and what to include for billing questions, data requests, account deletion help and abuse reports."]
 };
 
 const MUTATIONS = {
@@ -61,8 +72,10 @@ const MUTATIONS = {
   "title-over-60": [["index.html", "<title>BizForce AI — AI agents for SEO, email, content and sales</title>",
     "<title>BizForce AI — AI agents for SEO, email, content, ads and sales</title>"]],
   // a description over 160 characters
-  "description-over-160": [["vitality.html", "Educational only, not medical advice. Free download.\"/>",
-    "Educational only, not medical advice. Free PDF download.\"/>"]],
+  // NAMED (Oct 27 2026, launch item #12): BEFORE the description's closing text was on the page once. AFTER og:description
+  // repeats it, so the anchor takes the meta description's own line, the one the canonical follows.
+  "description-over-160": [["vitality.html", "Educational only, not medical advice. Free download.\"/>\n<link rel=\"canonical\"",
+    "Educational only, not medical advice. Free PDF download.\"/>\n<link rel=\"canonical\""]],
   // a title under 50 characters
   "title-under-50": [["app.html", "<title>Sign In or Create an Account — BizForce AI All Access</title>", "<title>BizForce AI</title>"]],
   // the description goes missing

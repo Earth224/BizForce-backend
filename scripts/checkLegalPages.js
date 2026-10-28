@@ -383,8 +383,10 @@ const fmt = n => Number(n).toLocaleString("en-US");
     check("F6. the opt-in device copy is described in Your data's words", YD.DEVICE_COPY.lines.every(l => textOf(ph).indexOf(l) !== -1));
     // every host a page has the browser load from is named
     const hosts = new Set();
+    // NAMED (Oct 27 2026, launch item #12): BEFORE every <link href> counted; AFTER a rel="canonical" link is left out,
+    // because it names the page's own address on bizforceai.net and the browser loads nothing from it.
     Object.keys(FE).filter(f => FE[f] && /\.(html|js)$/.test(f)).forEach(f => {
-      const t = FE[f];
+      const t = FE[f].replace(/<link\s+rel="canonical"[^>]*>/g, "");
       [/<script[^>]*\ssrc="https?:\/\/([^/"]+)/g, /<link[^>]*\shref="https?:\/\/([^/"]+)/g, /<img[^>]*\ssrc="https?:\/\/([^/"]+)/g,
         /<iframe[^>]*\ssrc=["']https?:\/\/([^/"']+)/g, /@import\s+url\(["']?https?:\/\/([^/"')]+)/g].forEach(re => {
         let m; while ((m = re.exec(t))) hosts.add(m[1]);

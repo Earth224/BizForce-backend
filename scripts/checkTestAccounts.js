@@ -27,7 +27,10 @@
         accounts that does not, or that asks only isTestAccount, fails here.
      4. STILL ENTITLED. getUserPlan, subscriptionEntitlement and
         requireActiveSubscription never ask whether an account is a test, and
-        only lib/selfReview.js requires lib/testAccounts.js.
+        only lib/selfReview.js and server.js require lib/testAccounts.js, and
+        in server.js only the platform spend ceiling (platformSpendTestAccounts)
+        asks isTestAccount: test accounts' model calls cost the platform
+        nothing toward its daily ceiling, and still pass every gate.
      5. THE CLEANUP FILE (supabase/cleanups/cancel_test_subscriptions.sql, and
         the owner's copy in Downloads, byte for byte the same). Its preview,
         guard and update name exactly the ten clean-run rows; it never names
@@ -136,6 +139,14 @@ function functionSource(src, name) {
   const m = re.exec(src);
   if (!m) throw new Error("function " + name + " was not found");
   return src.slice(m.index, braceMatch(src, src.indexOf(") {", m.index) + 2));
+}
+// Every top-level function in src whose body calls isTestAccount.
+function FNS_ASKING_TEST(src) {
+  const out = {};
+  for (const m of src.matchAll(/^(?:async )?function ([A-Za-z0-9_$]+)\(/gm)) {
+    if (/\bisTestAccount\(/.test(functionSource(src, m[1]))) out[m[1]] = true;
+  }
+  return out;
 }
 
 /* The ten clean-run rows, the check account's row, and the three others the recon read on 2026-10-21. */
@@ -303,7 +314,11 @@ const LIVE_ROWS = [
     const asks = gate.filter(n => /isTestAccount|TEST_ACCOUNTS|testAccounts|bftest|\.invalid/.test(functionSource(SERVER, n)));
     check("4. " + gate.join(", ") + " never ask whether an account is a test", asks.length === 0, asks.join(", "));
     const requirers = Object.keys(LIB).concat(["server.js"]).filter(f => /require\("\.\/(lib\/)?testAccounts"\)/.test(f === "server.js" ? SERVER : LIB[f]));
-    check("4. only lib/selfReview.js requires lib/testAccounts.js", JSON.stringify(requirers) === JSON.stringify(["lib/selfReview.js"]), requirers.join(", "));
+    // NAMED (Oct 27 2026, launch item #0): BEFORE only lib/selfReview.js required lib/testAccounts.js. AFTER server.js does
+    // too, for the platform spend ceiling alone (platformSpendTestAccounts); the line above still proves no gate asks.
+    check("4. only lib/selfReview.js and server.js require lib/testAccounts.js", JSON.stringify(requirers) === JSON.stringify(["lib/selfReview.js", "server.js"]), requirers.join(", "));
+    const askers = Object.keys(FNS_ASKING_TEST(SERVER));
+    check("4. in server.js only platformSpendTestAccounts asks isTestAccount", JSON.stringify(askers) === JSON.stringify(["platformSpendTestAccounts"]), askers.join(", "));
     check("4. the cleanup leaves the check account's subscription, which checkRunResidue requires active",
       /if \(s\.status !== "active"\) \{\n    problems\.push\("its subscription's status is "/.test(RESIDUE_SRC) && CLEANUP.indexOf(SEED_ROW) !== -1 &&
       !new RegExp("STEP 2[\\s\\S]*" + SEED_ROW + "[\\s\\S]*STEP 3").test(CLEANUP));

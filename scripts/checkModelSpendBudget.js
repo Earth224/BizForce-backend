@@ -105,19 +105,25 @@ const NAMES = ["MODEL_CALL_DAILY_LIMIT_DEFAULT", "modelCallDailyLimit", "modelCa
   // names are lifted too, and every context here sets PLATFORM_DAILY_SPEND_CAP_USD far above any real
   // day, so this check measures the per-account limits alone (checkLaunchHardening holds the ceiling).
   "isOwnerAccount", "PLATFORM_DAILY_SPEND_CAP_DEFAULT_USD", "PLATFORM_SPEND_ALERT_SHARE", "PLATFORM_SPEND_STATE", "platformDailySpendCap",
-  "platformSpendToday", "platformSpendAlert", "platformDailySpendLimitError", "enforcePlatformDailySpendCeiling"];
+  "platformSpendToday", "platformSpendAlert", "platformDailySpendLimitError", "enforcePlatformDailySpendCeiling",
+  // NAMED (Oct 27 2026, launch item #0): BEFORE platformSpendToday counted every account's rows. AFTER it leaves out test
+  // accounts (lib/testAccounts.js), through platformSpendTestAccounts, so that is lifted too, with the real isTestAccount.
+  "platformSpendTestAccounts"];
 const def = name => { const d = definitionOf(SERVER, name); if (!d) throw new Error("not found in server.js: " + name); return d; };
 const logs = [];
 function lift(client, env) {
   const ctx = vm.createContext({ supabase: client, process: { env: Object.assign({ PLATFORM_DAILY_SPEND_CAP_USD: "1000000" }, env || {}) },
-    OWNER_ACCOUNT_ID: "00000000-0000-4000-8000-0000000000ff",
+    OWNER_ACCOUNT_ID: "00000000-0000-4000-8000-0000000000ff", isTestAccount: require("../lib/testAccounts").isTestAccount,
     console: { log() {}, warn(m) { logs.push(String(m)); }, error(m) { logs.push(String(m)); } } });
-  vm.runInContext(NAMES.map(def).join("\n\n") + "\nthis.api = { enforceDailyModelCallLimit, enforceMonthlyModelSpendLimit, modelSpendThisMonth, modelCallCostUsd, modelSpendMonth, modelSpendMonthlyLimit, PRICES: MODEL_PRICES_USD_PER_MILLION, SOURCE: MODEL_PRICES_SOURCE };", ctx);
+  vm.runInContext(NAMES.map(def).join("\n\n") + "\nthis.api = { enforceDailyModelCallLimit, enforceMonthlyModelSpendLimit, modelSpendThisMonth, modelCallCostUsd, modelSpendMonth, modelSpendMonthlyLimit, platformSpendToday, VmDate: Date, PRICES: MODEL_PRICES_USD_PER_MILLION, SOURCE: MODEL_PRICES_SOURCE };", ctx);
   return ctx.api;
 }
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 
+let fixturesOnTheFirst = 0;
+let FIRST_OF_MONTH = null;
 async function insert(rows) {
+  fixturesOnTheFirst += rows.filter(x => x.created_on === FIRST_OF_MONTH).length;
   const r = await supabase.from("model_calls").insert(rows.map(x => Object.assign({ user_id: SUBJECT_USER_ID, agent_type: "check", route: "checkModelSpendBudget fixture" }, x))).select("id");
   if (r.error) throw new Error("fixture insert failed: " + r.error.message);
   r.data.forEach(x => residue.record("model_calls", x.id));
@@ -131,6 +137,11 @@ async function insert(rows) {
 
   const api = lift(supabase, {});
   const month = api.modelSpendMonth(new Date());
+  FIRST_OF_MONTH = month.since;
+  // Section 11: the platform's spend for the 1st, read before any fixture is written.
+  // The vm's own Date: modelCallUtcDay asks `now instanceof Date`, which a Date from this realm is not.
+  const NOON_ON_THE_FIRST = new api.VmDate(month.since + "T12:00:00Z");
+  const platformBefore = await api.platformSpendToday(NOON_ON_THE_FIRST);
   const today = new Date().toISOString().slice(0, 10);
   const lastMonthDay = new Date(Date.parse(month.since + "T00:00:00Z") - 86400000).toISOString().slice(0, 10);
   const base = await api.modelSpendThisMonth(SUBJECT_USER_ID);
@@ -222,6 +233,19 @@ async function insert(rows) {
   const exact = await supabase.from("model_calls").select("id", { count: "exact", head: true }).eq("user_id", SUBJECT_USER_ID).gte("created_on", month.since);
   check("6. all " + exact.count + " of this month's rows are read, and 1,001 rows of $0.001 add $1.001",
     !s6.error && s6.rows === exact.count && near(s6.usd - s5.usd, 1.001), s6.error || (s6.rows + " rows, +" + (s6.usd - s5.usd).toFixed(6)));
+
+  /* ── 11. the fixtures never count toward the platform ceiling (launch item #0) ── */
+  console.log("\n══ 11. none of these fixtures counts toward the platform's daily ceiling, on the 1st or any day ══");
+  const platformAfter = await api.platformSpendToday(NOON_ON_THE_FIRST);
+  console.log("    the 1st (" + month.since + "): before $" + (platformBefore.usd || 0).toFixed(6) + " in " + platformBefore.rows + " rows (" +
+    platformBefore.test_rows + " test); after $" + (platformAfter.usd || 0).toFixed(6) + " in " + platformAfter.rows + " rows (" + platformAfter.test_rows + " test); " +
+    fixturesOnTheFirst + " fixtures written on the 1st");
+  check("11. both reads of the 1st's platform spend succeeded", !platformBefore.error && !platformAfter.error, platformBefore.error || platformAfter.error);
+  check("11. " + fixturesOnTheFirst + " fixture rows dated the 1st (thousands of dollars at list price) are all read and all left out as a test account's",
+    fixturesOnTheFirst > 1000 && platformAfter.rows - platformBefore.rows === fixturesOnTheFirst &&
+    platformAfter.test_rows - platformBefore.test_rows === fixturesOnTheFirst, JSON.stringify([platformBefore.rows, platformAfter.rows, platformBefore.test_rows, platformAfter.test_rows]));
+  check("11. the platform's spend for the 1st is exactly what it was before them", near(platformAfter.usd, platformBefore.usd),
+    (platformAfter.usd - platformBefore.usd).toFixed(6));
 
   console.log("\n══ cleanup ══");
   const cleanupResult = await residue.cleanup("end of run");

@@ -288,10 +288,12 @@ const KEYWORDS = 32;
   CLOCK += 300000;
   await R.mod.runLeadRadarOnce();
   check("loaded, ticked, never started: not one radar_status write", R.state.heartbeats.length === 0, JSON.stringify(R.state.heartbeats));
-  const startSite = FILES[SERVER].indexOf("    startLeadRadar().catch(function (err) {");
+  // NAMED (Oct 27 2026, launch item #7): BEFORE startLeadRadar() took nothing; AFTER it takes
+  // shutdownControl.trackInterval (a SIGTERM stops its interval). Still exactly one call, still guarded.
+  const startSite = FILES[SERVER].indexOf("    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {");
   const guard = FILES[SERVER].lastIndexOf("  if (require.main === module) {\n", startSite);
   check("server.js starts the radar only when it is the program, so loading it (as the checks do) writes no heartbeat",
-    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(\)/g) || []).length === 1);
+    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1);
 
   check("zero Bluesky calls left this process (the agent is a stub)", true);
   console.log("");

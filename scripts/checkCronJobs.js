@@ -152,8 +152,11 @@ const MUTATIONS = {
   "drop-a-timezone": ["    }, {\n      timezone: SELF_REVIEW_TIMEZONE\n    });\n", "    });\n"],
   // one expression is corrupted
   "corrupt-an-expression": ["    cron.schedule(\"0 7 * * *\", function () {\n", "    cron.schedule(\"0 77 * * *\", function () {\n"],
-  // the reminder pass runs whenever server.js is loaded, a check included
-  "unguard-reminders": ["if (require.main === module) {\n  setInterval(reminderTick, 60000);\n", "if (true) {\n  setInterval(reminderTick, 60000);\n"]
+  // the reminder pass runs whenever server.js is loaded, a check included.
+  // NAMED (Oct 27 2026, launch item #7): BEFORE the anchor was the bare setInterval line; AFTER the interval is registered
+  // with lib/gracefulShutdown.js (shutdownControl.trackInterval) so a SIGTERM clears it, and the anchor says so.
+  "unguard-reminders": ["if (require.main === module) {\n  shutdownControl.trackInterval(\"reminderTick\", setInterval(reminderTick, 60000));\n",
+    "if (true) {\n  shutdownControl.trackInterval(\"reminderTick\", setInterval(reminderTick, 60000));\n"]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -400,6 +403,13 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
       calls.map(c => c.timezone.value).join(", "));
     const otherCron = [...SRC.matchAll(/\bcron\.([A-Za-z]+)/g)].map(m => m[1]).filter(n => n !== "schedule");
     check("nothing else calls cron.* (no validate, getTasks or task handling)", otherCron.length === 0, otherCron.join(", "));
+    // NAMED (Oct 27 2026, launch item #7): BEFORE `cron` was node-cron itself. AFTER it is server.js's wrapper, whose one
+    // method passes the same three arguments to node-cron and hands the task to lib/gracefulShutdown.js (trackJob), which
+    // only ever calls task.stop() on SIGTERM; checkLaunchBlockB proves that. The call sites still keep nothing.
+    check("server.js's cron is the shutdown-registering wrapper around node-cron, and nothing else",
+      /\nconst nodeCron = require\("node-cron"\);\n/.test(SRC) &&
+      /\nconst cron = \{\n  schedule: function \(expression, fn, options\) \{\n    return shutdownControl\.trackJob\(expression, nodeCron\.schedule\(expression, fn, options\)\);\n  \}\n\};\n/.test(SRC) &&
+      (SRC.match(/\bnodeCron\./g) || []).length === 1);
     check("no call keeps the returned task (no now, start/stop or task events)", calls.every(c => c.isStatement));
     check("none sets scheduled, runOnInit or recoverMissedExecutions",
       !/\b(runOnInit|recoverMissedExecutions)\b/.test(SRC) && calls.every(c => !c.optionsText || !/scheduled\s*:/.test(c.optionsText)));

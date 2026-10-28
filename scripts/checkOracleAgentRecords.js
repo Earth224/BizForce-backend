@@ -316,6 +316,9 @@ async function ask(seed, opts) {
     decodeHTML: rq("entities").decodeHTML, decodeHTMLAttribute: rq("entities").decodeHTMLAttribute,
     DateTime: rq("luxon").DateTime, encrypt: rq("./lib/apiKeyCrypto").encrypt, decrypt: rq("./lib/apiKeyCrypto").decrypt,
     OWNER_ACCOUNT_ID: rq("./lib/ownerAccount").OWNER_ACCOUNT_ID, computeSynastryAspects: rq("./lib/synastry").computeSynastryAspects,
+    // NAMED (Oct 27 2026, launch item #0): BEFORE the platform ceiling's closure took only OWNER_ACCOUNT_ID from outside.
+    // AFTER platformSpendToday leaves out test accounts through lib/testAccounts.js's isTestAccount, passed in here.
+    isTestAccount: rq("./lib/testAccounts").isTestAccount,
     youtubeCaps: rq("./lib/youtubeQuota").youtubeCaps, youtubeUnitsToday: rq("./lib/youtubeQuota").youtubeUnitsToday,
     app: { post(p) { handlers[p] = arguments[arguments.length - 1]; }, get() {}, use() {} }
   };

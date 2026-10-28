@@ -325,6 +325,9 @@ const SERVE_GUARD = "if (!(await ownerPagePublic(";
 const EXPECTED_SERVE_GATED = {
   // BEFORE (e364883): "get /api/profile/:username". AFTER: deleted (launch hardening #1, checkDormantRoutesDeleted).
   "get /api/cards/share/:token":            SERVE_GUARD,
+  // NAMED (Oct 27 2026, launch item #10): BEFORE a card was served only by its share token. AFTER the short link
+  // bizforceai.net/c/<slug> is served by GET /api/cards/slug/:slug, with the same owner check.
+  "get /api/cards/slug/:slug":              SERVE_GUARD,
   "get /api/bfp/profile/:userId":           SERVE_GUARD,
   "get /api/bfp/pproducts/public/:userId":  SERVE_GUARD,
   "get /api/bfp/pportfolio/public/:userId": SERVE_GUARD,

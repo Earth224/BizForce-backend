@@ -70,7 +70,9 @@ const MUTATIONS = {
   // mention and tag facets are kept too
   "all-facets": [[SERVER, "          return feature && feature.$type === \"app.bsky.richtext.facet#link\";", "          return !!feature;"]],
   // loading server.js starts the live radar again
-  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    startLeadRadar()", "  if (true) {\n    startLeadRadar()"]],
+  // NAMED (Oct 27 2026, launch item #7): BEFORE the call was startLeadRadar(); AFTER it passes
+  // shutdownControl.trackInterval, so a SIGTERM stops the radar's five-minute interval.
+  "radar-starts-when-loaded": [[SERVER, "  if (require.main === module) {\n    startLeadRadar(shutdownControl.trackInterval)", "  if (true) {\n    startLeadRadar(shutdownControl.trackInterval)"]],
   // checkOutreachReplies logs in live unless told not to
   "replies-live-by-default": [[REPLIES, "const LIVE = process.env.CHECK_LIVE_BLUESKY === \"true\";", "const LIVE = process.env.CHECK_LIVE_BLUESKY !== \"false\";"]]
 };
@@ -396,10 +398,12 @@ const LEAD = { post_uri: "at://did:plc:lead/app.bsky.feed.post/1", post_cid: "ba
 
   /* ── G. loading server.js never starts the radar ──────────────────────── */
   console.log("\n══ G. a check that loads server.js does not start the live radar ══");
-  const startSite = FILES[SERVER].indexOf("    startLeadRadar().catch(function (err) {");
+  // NAMED (Oct 27 2026, launch item #7): BEFORE startLeadRadar() took nothing; AFTER it takes
+  // shutdownControl.trackInterval (a SIGTERM stops its interval). Still exactly one call, still guarded.
+  const startSite = FILES[SERVER].indexOf("    startLeadRadar(shutdownControl.trackInterval).catch(function (err) {");
   const guard = FILES[SERVER].lastIndexOf("  if (require.main === module) {\n", startSite);
   check("startLeadRadar runs only when server.js is the program (require.main === module)",
-    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(\)/g) || []).length === 1, startSite + " / " + guard);
+    startSite > 0 && guard > 0 && startSite - guard < 60 && (FILES[SERVER].match(/startLeadRadar\(/g) || []).length === 1, startSite + " / " + guard);
 
   check("zero Bluesky calls left this process (every agent here is a stub)", true);
   console.log("");

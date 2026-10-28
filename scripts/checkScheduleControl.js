@@ -588,7 +588,9 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
   {
     const scheduled = new Set();
     let m;
-    const iv = /^[ \t]*setInterval\((\w+),/gm;   // a statement, not a comment's example
+    // NAMED (Oct 27 2026, launch item #7): BEFORE each interval was a bare setInterval(tick, ms) statement. AFTER each is
+    // registered with the graceful shutdown, shutdownControl.trackInterval("tick", setInterval(tick, ms)), so either form counts.
+    const iv = /^[ \t]*(?:shutdownControl\.trackInterval\("\w+", )?setInterval\((\w+),/gm;   // a statement, not a comment's example
     while ((m = iv.exec(SRC))) scheduled.add(m[1]);
     const cr = /cron\.schedule\([^,]+, function \(\) \{\s*(?:var \w+ = [^;]+;\s*)?([\w.]+)\(/g;
     while ((m = cr.exec(SRC))) scheduled.add(m[1]);

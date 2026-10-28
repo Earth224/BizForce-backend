@@ -569,11 +569,15 @@ const PLATFORM_ROOT = definitionOf("enforceDailyModelCallLimit");
 function platform(rows, env, dbOpts) {
   const db = fakeDb({ model_calls: rows }, dbOpts || {});
   const alerts = [], logs = [];
+  // NAMED (Oct 27 2026, launch item #0): BEFORE the ceiling's closure needed only OWNER_ACCOUNT_ID from outside server.js.
+  // AFTER platformSpendToday also asks lib/testAccounts.js's isTestAccount (test accounts are not counted), which is
+  // passed in as the real function; checkLaunchBlockB proves the exclusion itself.
   const ctx = { supabase: db.client, process: { env: Object.assign({}, env || {}) }, OWNER_ACCOUNT_ID: OWNER_ID,
+    isTestAccount: rq("./lib/testAccounts").isTestAccount,
     console: { log() {}, warn(m) { logs.push(String(m)); }, error(m) { logs.push(String(m)); } } };
   vm.createContext(ctx);
   vm.runInContext(closure(PLATFORM_ROOT + "\n\nthis.__api = { enforceDailyModelCallLimit, enforcePlatformDailySpendCeiling, platformDailySpendCap, modelCallUtcDay, PLATFORM_SPEND_STATE };",
-    new Set(BASE_STUBS.concat(["OWNER_ACCOUNT_ID"]))), ctx);
+    new Set(BASE_STUBS.concat(["OWNER_ACCOUNT_ID", "isTestAccount"]))), ctx);
   ctx.__api.PLATFORM_SPEND_STATE.raise = function (key, info) { alerts.push({ key, info }); return Promise.resolve(); };
   return { api: ctx.__api, alerts, logs, db };
 }
