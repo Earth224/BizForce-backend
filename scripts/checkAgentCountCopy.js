@@ -90,8 +90,12 @@ const SITES = [
   { file: "app.html",   what: "subscription line",      re: new RegExp("One subscription covers all " + N + " AI business agents\\. Lead Radar isn") },
   { file: "app.html",   what: "fine print",             re: new RegExp("PR, and R&amp;D — " + N + " specialists in all") },
   { file: "billing.html", what: "plan feature list",    re: new RegExp("<li>All " + N + " AI Business Agents \\(SEO, Sales, Content") },
-  { file: "scripts/termaximus-guide.js", what: "ai-agents tip, directory", re: new RegExp("The full directory of all " + N + " AI agents") },
-  { file: "scripts/termaximus-guide.js", what: "ai-agents tip, shortlist", re: new RegExp("with " + N + " to choose from, a shortlist") }
+  /* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard). The two old ai-agents tips are gone:
+       "ai-agents tip, directory"  "The full directory of all N AI agents"  → ai-agents tip "it holds the N agents registered";
+       "ai-agents tip, shortlist"  "with N to choose from, a shortlist"     → dashboard tip "each lists all N agents".
+     Still two guide sites, so still twelve in all. */
+  { file: "scripts/termaximus-guide.js", what: "ai-agents tip, directory", re: new RegExp("so it holds the " + N + " agents registered") },
+  { file: "scripts/termaximus-guide.js", what: "dashboard tip, directories", re: new RegExp("each lists all " + N + " agents\\.") }
 ];
 
 /* ── 1. the registered roster ─────────────────────────────────────────────── */

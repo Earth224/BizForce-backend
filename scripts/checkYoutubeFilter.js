@@ -360,9 +360,18 @@ const EMOJI_SHORT = "libido tips 🔥 🔥 🔥 👍";
   check("F. a refusal hides the section and the count", refused.ytSection.hidden === true && refused.ytHidden.hidden === true && refused.ytHidden.textContent === "");
 
   /* ── G. the guide tip ──────────────────────────────────────────────────── */
-  console.log("\n══ G. the guide tip states the rules ══");
-  check("G. the Lead Radar tip says: no link, at least " + YF.YOUTUBE_MIN_WORDS + " words, a word from the search it matched, and that the section counts what was hidden",
-    GUIDE.indexOf("A YouTube comment is shown only if it has no link, at least " + YF.YOUTUBE_MIN_WORDS + " words, and a word from the search it matched; the section says how many were hidden and why.") !== -1);
+  /* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard: four or five tips of at most 160
+     characters). BEFORE: "the Lead Radar tip says: no link, at least 6 words, a word from the search it matched,
+     and that the section counts what was hidden" — one sentence inside a 587-character tip. AFTER: the rule is the
+     page's to state, beside the finds it governs: the YouTube section's own line names the three reasons a comment
+     is hidden (proved in F against the filter's reasons), and the guide may state no YouTube rule at all that the
+     filter contradicts — no other word minimum, no "shown" claim for linked comments. */
+  console.log("\n══ G. the rules are stated where the finds are, and the guide contradicts none of them ══");
+  const radarTips = (/"lead-radar\.html": \[([\s\S]*?)\n    \]/.exec(GUIDE) || ["", ""])[1];
+  const minClaims = (GUIDE.match(/at least (\d+) words/g) || []).map(m => +/(\d+)/.exec(m)[1]);
+  check("G. the YouTube section's line names all three reasons, and the guide states no word minimum but the filter's " + YF.YOUTUBE_MIN_WORDS + " and no rule letting a linked comment through",
+    radarTips.length > 0 && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(PAGE) &&
+    minClaims.every(n => n === YF.YOUTUBE_MIN_WORDS) && !/link[s]? (are|is) (shown|kept)|with a link (is|are) shown/i.test(GUIDE), JSON.stringify(minClaims));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

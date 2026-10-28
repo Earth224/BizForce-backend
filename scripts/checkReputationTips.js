@@ -46,7 +46,12 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 const MUTATE = process.env.MUTATE || "";
 const PAGE = "reputation-agent.html", GUIDE = "scripts/termaximus-guide.js", SERVER = "server.js";
 
-const NEW_FIRST_TIP = '      "This agent does not watch or monitor mentions, reviews or sentiment anywhere. It works only from what you paste in or type, and from your Business Profile.",';
+/* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard). The mutation anchors moved with the tips:
+     restore-watches-tip  anchor "This agent does not watch … and from your Business Profile."  → "… it works only from what you paste in or type."
+     restore-risks-panel  anchor "Review Strategy, Brand Trust Plan and Crisis Response write plans …"  → "Run \"Crisis Response\" once before you need it, so the plan is ready."
+     tip-claims-tracking  anchor "Review Request builds a request sequence … breaks review-platform rules."  → "… \"Review Request\" flags incentive wording."
+   Each mutation still puts back the same false claim; no check changed. */
+const NEW_FIRST_TIP = '      "This agent does not watch or monitor mentions, reviews or sentiment anywhere; it works only from what you paste in or type.",';
 
 const MUTATIONS = {
   // the old first tip is back
@@ -54,12 +59,12 @@ const MUTATIONS = {
     '      "This agent watches reviews, sentiment, and mentions, and flags Risks early — built as much for recovery as for monitoring.",']],
   // the tips send people to a Risks panel again
   "restore-risks-panel": [[GUIDE,
-    '      "Review Strategy, Brand Trust Plan and Crisis Response write plans from your request and Business Profile. Run Crisis Response once before you need it, so the plan is ready."',
+    '      "Run \\"Crisis Response\\" once before you need it, so the plan is ready."',
     '      "Check the Risks panel regularly; it\'s this agent\'s early-warning system, not an afterthought."']],
   // a tip says the agent keeps an eye on reviews, without any listed word
   "tip-claims-tracking": [[GUIDE,
-    '"Review Request builds a request sequence for a moment you choose, and flags incentive wording that breaks review-platform rules."',
-    '"Review Request builds a request sequence for a moment you choose, and keeps tracking your reviews afterwards."']],
+    '\\"Review Request\\" flags incentive wording."',
+    '\\"Review Request\\" keeps tracking your reviews afterwards."']],
   // the page stops offering a tool the tips name
   "page-drops-review-request": [[PAGE, '"label": "Review Request",', '"label": "Review Ask",']]
 };

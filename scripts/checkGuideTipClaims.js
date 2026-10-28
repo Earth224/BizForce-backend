@@ -268,6 +268,28 @@
      M  restore-lead-radar-tip and restore-radar-146-unconditional are
         anchored on the new tip text (the same mutations).
 
+   NAMED BEFORE → AFTER (Oct 28 2026, every Termaximus guide rewritten to one
+   standard — four or five tips of at most 160 characters; checkGuideStandard
+   holds the standard itself). No claim was loosened; each pin followed its tip:
+     R1 R2 R3 R4 L  the tip each block reads is found by its new text, and a claim
+        that moved to another tip, to GUIDE_COMMON or to the page is asserted
+        there (each line is NAMED where it changed).
+     R5–R7  the Last-run tip on broker, publicist and community is GUIDE_COMMON,
+        rendered on every page carrying #lastRunText; the not-measured phrase
+        is still required, each in its own tip.
+     A B C CN  the full row-by-row list is above block A. Four rows are RETIRED
+        (seo 115, wallet 69, store 161, lead-radar 148): their tips were cut to
+        meet the standard, and each still bans its old untrue wording. Two rows
+        are new (ads 6, executive 6), so every tip of the four agent entries is
+        still covered by a row.
+     G3 AUTO_ALLOWED  empty → billing.html's "automatic-renewal box", with the
+        box and the refusal that enforces it asserted.
+     M  every mutation anchored on a tip is re-anchored on the new tip text and
+        restores the same lie; invented-bfc-amount moved to the campaigns tip,
+        automatic-in-agents-hub to the hub's Do tip, warnings-panel-elsewhere
+        to operations' "Document a workflow" tip, delete-ads-entry deletes the
+        new ads entry.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
    whose search text does not match exactly once is an ERROR.
@@ -295,11 +317,11 @@ const fileOfKey = k => IN_AGENTS.indexOf(k) !== -1 ? "agents/" + k : k;
 const MUTATIONS = {
   // Lead Radar's tip claims the Business Profile again
   "restore-lead-radar-tip": [[GUIDE,
-    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why. It does not read your Business Profile, so editing your profile does not change what it finds."',
+    '"It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar\'s own code, and does not read your Business Profile."',
     '"It tracks against your Business Profile\'s Competitors and Industry — keep those current so the radar is watching the conversations that actually matter to you."']],
   // the broker tip points at the removed Pipeline report section again
   "restore-broker-pipeline-section": [[GUIDE,
-    '"Each run is saved — open your latest from the Last run link on this page; the agent keeps no record of where your deals stand, so keep that yourself."',
+    '"The agent keeps no record of where your deals stand; \\"Deal Pipeline\\" analyses only the deals you describe in your request."',
     '"Track the Pipeline report section as your single source of truth for where every deal actually stands."']],
   // the kept billing tip loses its evidence: the banner is gone from the page
   "remove-cancel-banner": [[BILLING, '<div class="warn-banner" id="cancelWarn">', '<div class="warn-banner">']],
@@ -309,41 +331,41 @@ const MUTATIONS = {
   "dashboard-polls": [[DASH, "    loadAnalytics();\n    loadActivity();", "    loadAnalytics();\n    loadActivity();\n    setInterval(loadAnalytics, 30000);"]],
   // seo line 114 points at the removed report sections again
   "restore-seo-114": [[GUIDE,
-    '"Each run is saved — open your latest from the Last run link on this page; Refresh Data updates that link and your Business Profile after a new run."',
-    '"Refresh Data after each run to pull the latest report into Website Audits, Keyword Research, and Opportunities."']],
+    'press \\"Refresh Data\\", and run again."',
+    'press \\"Refresh Data\\" to pull the latest report into Website Audits, Keyword Research, and Opportunities."']],
   // rd-agent line 216 names the removed goals fields again
   "restore-rd-research-goals": [[GUIDE,
-    '"Keep your Business Profile\'s Industry, Description, Target Audience, Business Goals and Competitors current (edit it from the Content Agent); I read them to decide what\'s actually worth researching."',
-    '"Set your Market Goals and Research Goals directly; I read them alongside your Business Profile to decide what\'s actually worth researching."']],
+    '"Research off target? Keep Industry, Target Audience and Competitors current in your Business Profile; I read them first."',
+    '"Research off target? Set your Market Goals and Research Goals directly; I read them first."']],
   // the dashboard subtitle claims real time again
   "restore-dashboard-realtime": [[DASH, '<p class="agent-subtitle">Your business intelligence, read when the page opens.</p>',
     '<p class="agent-subtitle">Your real-time business intelligence.</p>']],
   // line 146 claims Mastodon and YouTube unconditionally again
   "restore-radar-146-unconditional": [[GUIDE,
-    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code; Mastodon and YouTube searches run only when switched on. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it. A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why. It does not read",
-    "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code; it does not read"]],
+    "It searches a fixed set of buyer-intent phrases on Bluesky, set in the radar's own code, and does not read",
+    "It searches a fixed set of buyer-intent phrases and hashtags on Bluesky, Mastodon and YouTube, set in the radar's own code, and does not read"]],
   // the retention job stops deleting the pipeline rows built on a YouTube find: the tip's new sentence would be false
   "retention-keeps-pipeline": [[RETENTION, "      .from(\"sales_lead_pipeline\")\n      .delete()\n", "      .from(\"sales_lead_pipeline\")\n      .select(\"id\")\n"]],
   // a removed section ("Warnings", analytics) is named in another page's tip that no per-tip check covers:
   // only the guide-wide guard G1 can catch it
-  "warnings-panel-elsewhere": [[GUIDE, '"Sequence your requests — document a workflow before you automate it;',
-    '"Check the Warnings panel, then sequence your requests — document a workflow before you automate it;']],
+  "warnings-panel-elsewhere": [[GUIDE, '"Document a workflow before you automate it;',
+    '"Check the Warnings panel, then document a workflow before you automate it;']],
   // Mastodon capture loses its switch: the "only when switched on" wording would be false
   "mastodon-ungated": [["leadRadar.js", 'if (process.env.ENABLE_MASTODON_RADAR === "true") {', "if (true) {"]],
   // ── groups 6–10 ──
   // wallet tip 68 states the invented payouts again
   "restore-wallet-68-amounts": [[GUIDE,
-    "your first pass of each certification pays 100 BFC while you're subscribed, and a one-time 1,000 BFC welcome bonus lands when your subscription goes active. Running agent tasks and posting listings pay nothing.",
-    "certifications (+100), agent tasks (+50), marketplace listings (+25), and the welcome bonus (+200) are all real, stackable ways to build balance."]],
+    "Your first pass of each certification pays 100 BFC while you're subscribed, and a one-time 1,000 BFC welcome bonus is paid once your subscription is active.",
+    "Certifications (+100), agent tasks (+50), marketplace listings (+25), and the welcome bonus (+200) are all real, stackable ways to build balance."]],
   // wallet tip 67 says credits accumulate automatically again
   /* BEFORE (frontend c57bad5): anchored on "the one action here is Send BFC, ... using the platform earns nothing by itself."
      AFTER: the tip now also names Trades, so the anchor is the new sentence; the restored lie is the same. */
   "restore-credits-automatic": [[GUIDE,
-    "the one way to move BFC here is Send BFC, which sends credits to another member by their username after you confirm the name it finds; Trades lists every trade you made with another member, with a CSV download and a yearly statement. Using the platform earns nothing by itself.",
-    "it's a read-only ledger; credits accumulate automatically as you use the platform."]],
+    "Press \\\"Send BFC\\\", enter the member's username and the amount, check the name it finds, then press \\\"Confirm\\\".",
+    "It's a read-only ledger; credits accumulate automatically as you use the platform."]],
   // store tip 159 claims to manage inventory across every channel again
   "restore-store-159": [[GUIDE,
-    "This agent writes commerce plans — store audits, inventory plans, omnichannel strategy, conversion audits, and product launch plans — from your Business Profile and what you tell it; it connects to no store or channel.",
+    "It connects to no store or channel; audits are written from your Business Profile and what you tell it, not your store's own data.",
     "This agent manages multi-store commerce intelligence — inventory, product performance, and omnichannel strategy across every channel you sell on."]],
   // the SEO report is called a Google report again
   "restore-google-seo-report": [[SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', '<h3 class="seo-opt-report-title">Google SEO Report</h3>']],
@@ -351,9 +373,9 @@ const MUTATIONS = {
   "restore-ai-agents-338": [["ai-agents.html", "Eighteen AI business specialists — open any one to go to its own page.",
     "Build your own customizable team of AI business specialists."]],
   // "automatically" in a tip no per-tip check covers: only the widened G3 can catch it
-  "automatic-in-agents-hub": [[GUIDE, "each card opens that agent's dedicated workspace", "each card automatically opens that agent's dedicated workspace"]],
+  "automatic-in-agents-hub": [[GUIDE, "to open its own page; that is where its tasks", "to automatically open its own page; that is where its tasks"]],
   // an invented BFC amount in a tip no per-tip check covers: only G4 can catch it
-  "invented-bfc-amount": [[GUIDE, "a complete listing gets found faster than a bare one.", "a complete listing earns +500 BFC and gets found faster than a bare one."]],
+  "invented-bfc-amount": [[GUIDE, "members give in BizCash, never in dollars.", "members give in BizCash, never in dollars, and each gift earns +500 BFC."]],
   // the server starts paying for agent tasks: "running agent tasks … pay nothing" would be false
   "task-pays-bfc": [[SERVER, "const WELCOME_BONUS_BFC = 1000;",
     "const WELCOME_BONUS_BFC = 1000;\nasync function payForTask(userId) { await creditWallet(userId, 50, \"Agent task\"); }"]],
@@ -366,22 +388,22 @@ const MUTATIONS = {
   "restore-act-on-findings": [[AP, "' carry out its scheduled runs below in the ',\n                  'background, without you launching them. Off means it ',",
     "' start its own tasks in the background ',\n                  'without you launching them, and act on what it finds. Off means it ',"]],
   // certifications tip 76 names Retake Assessment for a failed attempt again
-  "restore-retake-76": [[GUIDE, "If you don't pass the first time, press Try Again on the result screen, or Start Assessment on the card later — there's no penalty for trying again.",
-    "Use Retake Assessment if you don't pass the first time — there's no penalty for trying again."]],
+  "restore-retake-76": [[GUIDE, "Didn't pass? Press \\\"Try Again\\\" on the result screen, or \\\"Start Assessment\\\" on the card later; there is no penalty for trying again.",
+    "Didn't pass? Use Retake Assessment; there is no penalty for trying again."]],
   // the dashboard tip points at the removed Recent Activity feed again
-  "restore-recent-activity": [[GUIDE, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed",
+  "restore-recent-activity": [[GUIDE, "Start in \\\"Command Center\\\": \\\"Needs you\\\" lists the proposals waiting for your approval and the runs that failed",
     "Use the Active Queue card and Recent Activity feed to see what's actually running"]],
   // the dashboard tip points at the removed Active Queue card again (launch audit #22a)
-  "restore-active-queue-tip": [[GUIDE, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed, Executive plans lists each plan's assignments with a Dispatch button, and Agent activity counts the runs your agents actually made.",
+  "restore-active-queue-tip": [[GUIDE, "Start in \\\"Command Center\\\": \\\"Needs you\\\" lists the proposals waiting for your approval and the runs that failed.",
     "Use the Active Queue card and its View Queue button to see your active assignments before you dig into any single tool."]],
   // the Active Queue card comes back while the tip names the Command Center
   "restore-active-queue-card": [["dashboard.html", "<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\"",
     "<div id=\"activeQueueSummary\" class=\"bf-feature-card card bf-card\" data-card=\"active-queue\"><h3>Active Queue</h3></div>\n<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\""]],
   // ── group 11, the leftovers, G5 and G6 ──
   // oracle tip 226 says the numbers sharpen with time again
-  "restore-226-sharpen": [[GUIDE, "Your Life Path, Expression, Soul Urge, and Birthday numbers are fixed by your birth name and date and do not change with time; your current location, your path and your story can, and the Oracle reads them with every question.", "Your Life Path, Expression, Soul Urge, and Birthday numbers only sharpen with time, and the Oracle's counsel sharpens with them."]],
+  "restore-226-sharpen": [[GUIDE, "Your Life Path, Expression, Soul Urge and Birthday numbers are fixed by birth name and date; place, path and story can change.", "Your Life Path, Expression, Soul Urge and Birthday numbers only sharpen with time, and the Oracle's counsel sharpens with them."]],
   // sales tip 118 claims pipeline intelligence from your business data again
-  "restore-sales-118": [[GUIDE, "\"This agent writes sales material — funnels, lead generation, outreach scripts, offers, and objection handling — from your Business Profile and what you tell it; its tasks read none of the leads or pipeline on this page.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
+  "restore-sales-118": [[GUIDE, "\"The tasks read none of the leads or pipeline on this page, so say in your request what has changed in your deals.\",", "\"This agent builds pipeline and revenue intelligence — funnels, lead generation, outreach scripts, offers, and objection handling — from your business data.\","]],
   // the Oracle's picker offers .doc again, which the server refuses
   "restore-picker-doc": [["oracle.html", "      { ext: \".docx\", mime:", "      { ext: \".doc\",  mime: \"application/msword\" },\n      { ext: \".docx\", mime:"]],
   // the picker offers every image type again; the server takes four
@@ -393,7 +415,7 @@ const MUTATIONS = {
   // an agent page's subtitle changes and the home page card does not (G6, from the page side)
   "page-subtitle-drifts": [["vertical-marketing-agent.html", "<p class=\"agent-subtitle\">Marketing built for one industry vertical — its language, its channels, its objections.</p>", "<p class=\"agent-subtitle\">Marketing built for one industry: its positioning, language, channels, and objections.</p>"]],
   // the ads-agent entry is deleted (G5)
-  "delete-ads-entry": [[GUIDE, "    \"ads-agent.html\": [\n      \"This agent writes ad campaigns and ad copy from your Business Profile and what you tell it; it connects to no ad account and reads no ad results, so nothing here buys, runs or measures an ad.\",\n      \"Ad Copy writes for a Google Responsive Search Ad or a Meta feed ad and measures every asset against that platform's limits — Google's 30-character headlines and 90-character descriptions are hard limits, rejected at upload if longer; Meta's are the points where the feed cuts text short.\",\n      \"Ad Copy also runs what it writes through the policy scan, so wording that gets ads rejected is flagged in the same result.\",\n      \"Policy Check scans copy you paste for wording that gets ads rejected — cure claims, before-and-after results, guaranteed results, addressing a personal attribute — and for FDA disease claims; a clean scan is not approval, and with Suggest rewrites unchecked it makes no model call at all.\",\n      \"Use Ad Campaign for a whole plan — audience, offer, hooks, creative angles, copy, budget guidance, and a testing plan — then write each ad's assets in Ad Copy.\"\n    ],\n", ""]],
+  "delete-ads-entry": [[GUIDE, "    \"ads-agent.html\": [\n      \"Open \\\"Ad Copy\\\", enter the product, angle, platform and audience, and press \\\"Write the copy\\\".\",\n      \"Each asset comes back measured against that platform's limits and run through the policy scan, so rejected wording is flagged.\",\n      \"It connects to no ad account and reads no ad results, so nothing here buys, runs or measures an ad.\",\n      \"Ad refused elsewhere? Paste it into \\\"Policy Check\\\"; a clean scan is not approval, and with \\\"Suggest rewrites\\\" unticked it makes no model call.\",\n      \"Use \\\"Ad Campaign\\\" for a whole plan — audience, offer, hooks, budget guidance and a testing plan — then write each ad in \\\"Ad Copy\\\".\"\n    ],\n", ""]],
   // an app.html entry comes back, on a page where the guide returns early (G5)
   "readd-app-entry": [[GUIDE, "    \"seo.html\": [\n", "    \"app.html\": [\n      \"The front door — sign in or create an account here.\"\n    ],\n    \"seo.html\": [\n"]],
   // the wallet's certification card promises BFC for any pass again
@@ -509,21 +531,35 @@ check("K. the server's /api/auth/me returns the subscriptions row (select *), wh
 
 /* ── R1. analytics-dashboard.html ──────────────────────────────────────── */
 console.log("\n══ R1. analytics-dashboard.html — \"real-time\" rewritten ══");
-const dashTip = tipWith(tipsFor("analytics-dashboard.html"), "business intelligence command center");
-check("R1. the tip no longer says real-time", !!dashTip && !/real-?time/i.test(dashTip), dashTip);
-check("R1. the tip says the page is read once when it opens", /read once when the page opens/.test(dashTip));
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): the tip was found by "business intelligence command center" and had
+// to say "read once when the page opens" and name all eight tiles and charts. AFTER, the main-action tip is found by
+// 'from "Tasks Run" to "SMS Campaigns"' and every tile or chart it names must be real (at least three named); the
+// read-once claim moved to its own tip, "Figures are fetched once, as the page loads".
+const dashTip = tipWith(tipsFor("analytics-dashboard.html"), 'from "Tasks Run" to "SMS Campaigns"');
+const dashOnceTip = tipWith(tipsFor("analytics-dashboard.html"), "Figures are fetched once, as the page loads");
+check("R1. the tip no longer says real-time", !!dashTip && !/real-?time/i.test(dashTip) && !/real-?time/i.test(dashOnceTip), dashTip);
+check("R1. a tip says the page is read once, as it loads (named after: was \"read once when the page opens\")", !!dashOnceTip);
 check("R1. the page fetches its data on load and never again: no setInterval, EventSource or WebSocket",
   /\n    loadAnalytics\(\);\n    loadActivity\(\);/.test(FILES[DASH]) && !/setInterval|EventSource|WebSocket/.test(FILES[DASH]));
 const DASH_NAMED = { "Tasks Run": "statTasksRun", "Tasks Completed": "statTasksCompleted", "Content Items": "statContentItems",
   "SMS Subscribers": "statSubscribers", "Opted-In": "statOptedIn", "SMS Campaigns": "statCampaigns", "Content Breakdown": "chartContent", "Tasks by Agent": "chartAgents" };
-check("R1. every tile and chart the tip names is on the page, by label and element id",
-  Object.keys(DASH_NAMED).every(n => dashTip.indexOf(n) !== -1 && FILES[DASH].indexOf(">" + n + "<") !== -1 && FILES[DASH].indexOf('id="' + DASH_NAMED[n] + '"') !== -1),
-  Object.keys(DASH_NAMED).filter(n => !(dashTip.indexOf(n) !== -1 && FILES[DASH].indexOf(">" + n + "<") !== -1 && FILES[DASH].indexOf('id="' + DASH_NAMED[n] + '"') !== -1)).join(", "));
+const dashNamed = Object.keys(DASH_NAMED).filter(n => dashTip.indexOf(n) !== -1);
+check("R1. every tile and chart the tip names is on the page, by label and element id (named after: was all eight named)",
+  dashNamed.length >= 3 && dashNamed.every(n => FILES[DASH].indexOf(">" + n + "<") !== -1 && FILES[DASH].indexOf('id="' + DASH_NAMED[n] + '"') !== -1) &&
+  // "the six tiles, from Tasks Run to SMS Campaigns": exactly the six stat ids DASH_NAMED lists, in that order on the page.
+  /\bsix tiles\b/.test(dashTip) && (function () {
+    const ids = ["statTasksRun", "statTasksCompleted", "statContentItems", "statSubscribers", "statOptedIn", "statCampaigns"];
+    const at = ids.map(id => FILES[DASH].indexOf('<span class="stat-number" id="' + id + '">'));
+    const between = FILES[DASH].slice(at[0], at[5]).match(/<span class="stat-number" id="stat\w+">/g) || [];
+    return at.every((p, i) => p !== -1 && (i === 0 || p > at[i - 1])) && between.length === 5;
+  })(),
+  dashNamed.filter(n => !(FILES[DASH].indexOf(">" + n + "<") !== -1 && FILES[DASH].indexOf('id="' + DASH_NAMED[n] + '"') !== -1)).join(", ") || dashNamed.join(", "));
 
 /* ── R2. agents/sales.html ─────────────────────────────────────────────── */
 console.log("\n══ R2. sales.html — Pipeline and Opportunities rewritten ══");
 const salesTips = tipsFor("sales.html");
-const salesTip = tipWith(salesTips, "Sales Pipeline panel");
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): found by "Sales Pipeline panel" → 'In "Sales Pipeline", move each lead'.
+const salesTip = tipWith(salesTips, 'In "Sales Pipeline", move each lead');
 check("R2. the old \"Pipeline and Opportunities panels … flag where deals are stalling\" tip is gone",
   salesTips.every(t => !/Opportunities panel|flag where deals are stalling/.test(t)) && !!salesTip, JSON.stringify(salesTips));
 check("R2. the new tip uses no watching word", !WATCHING.test(salesTip), salesTip);
@@ -542,12 +578,15 @@ check("R2. still no Opportunities panel and no stalled-deal logic on the page or
 /* ── R3. agents/analytics.html ─────────────────────────────────────────── */
 console.log("\n══ R3. analytics.html — Warnings rewritten ══");
 const anTips = tipsFor("analytics.html");
-const anTip = tipWith(anTips, "KPI and forecasting layer");
-check("R3. the old \"Warnings that flag risk\" wording is gone from that tip", !!anTip && !/Warnings that flag risk|insights, revenue forecasts/.test(anTip), anTip);
-check("R3. the new tip uses no watching word", !WATCHING.test(anTip), anTip);
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): one tip, found by "KPI and forecasting layer", named all three
+// features; AFTER each has its own tip, so the tip is found by '"Revenue Forecast" builds a forecasting method' and the
+// three names are required across the entry, each offered by the page.
+const anTip = tipWith(anTips, '"Revenue Forecast" builds a forecasting method');
+check("R3. the old \"Warnings that flag risk\" wording is gone from the entry", !!anTip && anTips.every(t => !/Warnings that flag risk|insights, revenue forecasts/.test(t)), anTip);
+check("R3. the new tip uses no watching word", !!anTip && !WATCHING.test(anTip), anTip);
 const anOffered = offeredOn(ANALYTICS);
-check("R3. every feature the tip names is offered: KPI Review, Funnel Analysis, Revenue Forecast",
-  ["KPI Review", "Funnel Analysis", "Revenue Forecast"].every(n => anTip.indexOf(n) !== -1 && anOffered.indexOf(n) !== -1), JSON.stringify(anOffered));
+check("R3. every feature the entry names is offered: KPI Review, Funnel Analysis, Revenue Forecast (named after: was one tip)",
+  ["KPI Review", "Funnel Analysis", "Revenue Forecast"].every(n => anTips.join(" ").indexOf(n) !== -1 && anOffered.indexOf(n) !== -1), JSON.stringify(anOffered));
 check("R3. the page has no Warnings section, and the tip names none",
   !/Warnings/.test(FILES[ANALYTICS]) && !/Warnings/.test(anTip));
 check("R3. revenue_forecast still produces no revenue figure (the tip says it reads no revenue data)",
@@ -567,10 +606,15 @@ check("L. the tip says it searches a fixed set of buyer-intent phrases on Bluesk
 // "Older scored YouTube finds can appear in the list; new YouTube finds are not scored or shown", until the retention job.
 // NAMED BEFORE → AFTER (YouTube quota build): was "…and YouTube capture is switched off. YouTube finds are kept for at
 // most 30 days, and a Sales pipeline entry built on one is removed with it."
-check("L. the tip says Mastodon and YouTube searches run only when switched on, and YouTube finds have their own section: not scored, not replyable, kept at most 30 days, a pipeline entry removed with one",
-  /Mastodon and YouTube searches run only when switched on\. YouTube finds are listed in their own section below the scored list: not scored, not replyable from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it\./.test(lrTip) &&
-  !/YouTube capture is switched off/.test(lrTip) &&
-  !/Older scored YouTube finds can appear/.test(lrTip) && !/YouTube finds are not shown here/.test(lrTip), lrTip);
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard, every tip at most 160 characters): the tip had to carry the whole
+// YouTube paragraph ("…YouTube finds are listed in their own section below the scored list: not scored, not replyable
+// from here, and kept for at most 30 days; a Sales pipeline entry built on one is removed with it."). AFTER, the
+// switches tip says "Mastodon, YouTube and scoring each wait on their own switch", and the YouTube section's own
+// heading and the page subtitle carry the rest (both asserted below); no tip may restate the old, false lines.
+const lrSwitchTip = tipWith(lrTips, "Mastodon, YouTube and scoring each wait on their own switch");
+check("L. a tip says Mastodon, YouTube and scoring each wait on their own switch, and no tip says YouTube is switched off or unshown (named after: was the YouTube paragraph)",
+  !!lrSwitchTip && /New Bluesky finds arrive every 5 minutes/.test(lrSwitchTip) &&
+  lrTips.every(t => !/YouTube capture is switched off|Older scored YouTube finds can appear|YouTube finds are not shown here/.test(t)), lrSwitchTip);
 check("L. the tip says it does not read your Business Profile", /does not read your Business Profile/.test(lrTip));
 check("L. no Lead Radar tip makes a Business Profile claim: the profile is named only in that denial",
   lrTips.every(t => t.replace(/does not read your Business Profile/g, "").search(/Business Profile|\bprofile's\b|Competitors|Industry/) === -1 ||
@@ -631,8 +675,12 @@ check("L. lead-radar.html has the YouTube section, titled as the tip says, outsi
 check("L. a YouTube find has no Draft button, no score and no reply control", ytBuilder.length > 0 && !/draft|score|reply|copy-btn/i.test(ytBuilder), ytBuilder.slice(0, 300));
 // NAMED BEFORE → AFTER (YouTube filter build): new. Each rule the tip names is the filter's, and the count it names is shown.
 const YT_FILTER = fs.readFileSync(path.join(REPO, "lib", "youtubeFilter.js"), "utf8");
-check("L. the tip states the three YouTube rules and the hidden count, and each is real: the filter's link test, its 6-word minimum, its topic test, used at capture and display, and the page's count line",
-  /A YouTube comment is shown only if it has no link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why\./.test(lrTip) &&
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): the tip had to state "A YouTube comment is shown only if it has no
+// link, at least 6 words, and a word from the search it matched; the section says how many were hidden and why." AFTER,
+// the section's own count line says it on the page; the code evidence is unchanged, and checkYoutubeFilter G holds any
+// word minimum a tip states to the filter's.
+check("L. the YouTube rules and the hidden count are real and shown in the section: the filter's link test, its 6-word minimum, its topic test, used at capture and display, and the page's count line (named after: was also stated in the tip)",
+  lrTips.every(t => !/YouTube comment is shown only if/.test(t) || /at least 6 words/.test(t)) &&
   /var YOUTUBE_MIN_WORDS = 6;/.test(YT_FILTER) && /reason: "link"/.test(YT_FILTER) && /reason: "off_topic"/.test(YT_FILTER) &&
   /isUsefulYoutubeComment\(commentText, keyword\)/.test(FILES["youtubeRadar.js"]) && /isUsefulYoutubeComment\(page\[i\]\.post_text, page\[i\]\.matched_keyword\)/.test(FILES[SERVER]) &&
   /id="ytHidden"/.test(ytSection) && /" hidden: " \+ link \+ " with links, " \+ short \+ " too short, " \+ off \+ " off topic"/.test(FILES[RADAR_PAGE]), lrTip);
@@ -646,20 +694,32 @@ check("L. no Lead Radar tip and not the subtitle claims Mastodon, YouTube or sco
 /* ── R4–R7. the template pages whose report sections were removed ──────── */
 console.log("\n══ R4–R7. broker, publicist, community — report sections rewritten ══");
 const brTips = tipsFor("broker-agent.html");
-const brIntro = tipWith(brTips, "deal flow and partnerships");
-check("R4. broker: \"manages deal flow … pipeline tracking\" is gone", !!brIntro && !/pipeline tracking|manages deal flow/.test(brIntro), brIntro);
-check("R4. broker: the intro names Deal Pipeline as the page offers it", /Deal Pipeline analysis/.test(brIntro) && offeredOn(BROKER).indexOf("Deal Pipeline") !== -1);
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): the intro tip ("deal flow and partnerships … Deal Pipeline analysis")
+// restated the hero and is gone; the tip that names Deal Pipeline is found by '"Deal Pipeline" analyses only'.
+const brIntro = tipWith(brTips, '"Deal Pipeline" analyses only');
+check("R4. broker: \"manages deal flow … pipeline tracking\" is gone", !!brIntro && brTips.every(t => !/pipeline tracking|manages deal flow/.test(t)), brIntro);
+check("R4. broker: a tip names Deal Pipeline as the page offers it (named after: was \"Deal Pipeline analysis\")", /"Deal Pipeline" analyses only the deals you describe/.test(brIntro) && offeredOn(BROKER).indexOf("Deal Pipeline") !== -1);
 check("R5. broker: \"Track the Pipeline report section\" is gone", brTips.every(t => !/Pipeline report section/.test(t)), JSON.stringify(brTips));
 const pubTips = tipsFor("publicist-agent.html");
 check("R6. publicist: \"Track Coverage and Media Outreach reports\" is gone", pubTips.every(t => !/Coverage and Media Outreach reports/.test(t)), JSON.stringify(pubTips));
 const comTips = tipsFor("community-agent.html");
 check("R7. community: \"Watch the Engagement and Growth Plans sections\" is gone", comTips.every(t => !/Engagement and Growth Plans sections/.test(t)), JSON.stringify(comTips));
-[[BROKER, brTips, "R5", "the agent keeps no record of where your deals stand"],
+/* NAMED BEFORE → AFTER (Oct 28 2026, one standard): each page's own tip began "Each run is saved — open your latest
+   from the Last run link on this page; …". That shared truth is now said once, in GUIDE_COMMON, which the guide renders
+   under the tips on every page carrying #lastRunText. So the Last-run assertion reads GUIDE_COMMON and the renderer's
+   condition, and the not-measured phrase is found in its own tip:
+     R5 "the agent keeps no record of where your deals stand" → "keeps no record of where your deals stand";
+     R6 "nothing here measures coverage" (unchanged);
+     R7 "nothing here measures engagement, and Audience Ledger …" → "measures engagement, and Audience Ledger counts sign-ups rather than activity". */
+const GUIDE_COMMON = (/\n  var GUIDE_COMMON = "((?:[^"\\]|\\.)*)";/.exec(FILES[GUIDE]) || ["", ""])[1];
+const COMMON_RENDERED = /\(document\.getElementById\("lastRunText"\) \? '<p class="tmx-guide-common" data-tmx-guide-common>' \+ GUIDE_COMMON \+ '<\/p>' : ''\)/.test(FILES[GUIDE]);
+[[BROKER, brTips, "R5", "keeps no record of where your deals stand"],
  [PUBLICIST, pubTips, "R6", "nothing here measures coverage"],
- [COMMUNITY, comTips, "R7", "nothing here measures engagement, and Audience Ledger counts sign-ups rather than activity"]].forEach(([file, tips, id, says]) => {
-  const t = tipWith(tips, "Last run link");
-  check(id + ". " + file + ": the new tip points to the Last run link, which the page offers and links to run.html", !!t && lastRunOffered(file), t);
-  check(id + ". " + file + ": the new tip says what is not measured, and uses no watching word", t.indexOf(says) !== -1 && !WATCHING.test(t), t);
+ [COMMUNITY, comTips, "R7", "measures engagement, and Audience Ledger counts sign-ups rather than activity"]].forEach(([file, tips, id, says]) => {
+  const t = tipWith(tips, says);
+  check(id + ". " + file + ": the common line points to the Last run link, which the page offers and links to run.html (named after: was the page's own tip)",
+    /\\"Last run\\" opens the newest/.test(GUIDE_COMMON) && COMMON_RENDERED && lastRunOffered(file), GUIDE_COMMON);
+  check(id + ". " + file + ": the new tip says what is not measured, and uses no watching word", !!t && !WATCHING.test(t), t);
   check(id + ". " + file + ": the page still renders no report sections (REPORT_SECTIONS, #reportsGrid)", !/REPORT_SECTIONS|reportsGrid/.test(FILES[file]));
 });
 check("R4–R7. no tip on these three pages uses a watching word", brTips.concat(pubTips, comTips).every(t => !WATCHING.test(t)),
@@ -673,63 +733,153 @@ const seoTips = tipsFor("seo.html"), anaTips = anTips, emTips = tipsFor("email-a
 const infTips = tipsFor("influencer-agent.html"), rdTips = tipsFor("rd-agent.html"), socTips = tipsFor("social.html"), conTips = tipsFor("content.html");
 const opsTips = tipsFor("operations-agent.html"), dashTips = tipsFor("analytics-dashboard.html"), cardTips = tipsFor("digital-cards.html"), idTips = tipsFor("business-id.html");
 const REFRESH_FN = (/function refreshPage\(\) \{([\s\S]*?)\n    \}/.exec(FILES[SEO]) || ["", ""])[1];
+/* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard). Every row of A, B, C and CN below keeps
+   its id, its old-wording ban and its proof; the fragment that finds the tip moved to the new text:
+     A 1 seo 114            "Refresh Data updates that link"                    → 'press "Refresh Data", and run again'
+     A 1 seo 115            "Treat your saved runs as your standing SEO playbook" → RETIRED: the tip is gone (it restated the
+                             Last-run truth GUIDE_COMMON now says once); its ban on Executive Reports / Recommendations stays
+     A 1 analytics 140      "nothing here checks your figures for anomalies"     → "These tools measure only the figures you enter"
+                             (proof gains the Now/Before fields the tools measure)
+     A 1 analytics 142      "Enter current figures in KPI Review and Funnel Analysis" → 'enter each stage\'s count in "Funnel Analysis"'
+     A 1 store 163          "this agent reads no sales, traffic or channel data" → "audits are written from your Business Profile and what you tell it"
+     A 1 influencer 204     "Re-run Creator List when your audience or goals change" → '"Creator List" describes the kinds of creators'
+     A 1 rd 215             "innovation briefs with a written feasibility assessment" → "screens an idea with a written feasibility assessment"
+     A 1 rd 217             "your differentiation is clearer"                    → 'Pick "Market Research" or "Competitive Intelligence"'
+     A 1 social 132         "strategic planning layer"                           → 'Pick "Content Calendar" or "Platform Playbook"'
+     A 1 sales 119          "The leads and pipeline on this page come from Lead Radar" → "They come from Lead Radar"
+     A 2 rd 216             "I read them to decide what's actually worth researching" → "current in your Business Profile; I read them first"
+                             (the tip names three of the five fields; the proof still requires all five)
+     A 3 dashboard 36       "read once when the page opens (reload for fresh numbers)" → "Figures are fetched once, as the page loads"
+     A 3/4 lead-radar 145   "when intent scoring is switched on, it scores them" → "Mastodon, YouTube and scoring each wait on their own switch"
+     A 5 content 125        "approved drafts are saved, …"                       → "Approved drafts are saved, not published or scheduled"
+     A 5 content 127        "approving saves it to the Approval Queue as an unpublished draft" → 'each draft waits in "Approval Queue"'
+     A 5 content 128        "cannot be connected on this platform at present"    → "social accounts cannot be connected yet"
+     A 5 social 134         "posts cannot be scheduled …"                        → "Posts cannot be scheduled and social accounts cannot be connected at present"
+     A G seo 113            "and the Page Audit tool"                            → 'Pick "Keyword Research" or "Local SEO Plan"'
+     A G operations 209     "SOP Documents and Efficiency Audits are shaped"     → 'Open "Standard Operating Procedure"' (proof gains that tool label)
+     A G operations 212     "Revisit your SOP Documents periodically"            → 'Run "Efficiency Audit" to find the bottleneck'
+     A G digital-cards 79   "all shown in the card preview"                      → "the preview updates as you type"
+     A G business-id 86     'redrawn each time you save, plus a "BizForce AI Member" badge' → 'redrawn from what you saved, with a "BizForce AI Member" badge'
+     B 10 dashboard 17      "edit it here under Expand Profile or …"             → 'Press "Expand Profile" and edit it'
+     B 10 dashboard 18      "Start with the Command Center: Needs you lists …"   → '"Needs you" lists the proposals waiting for your approval'
+     B 10 dashboard 19      "Agent Hub and Full Directory each list all 18 agents" → 'open "Agent Hub" or "Full Directory"; each lists all'
+     B 9 ai-agents 29       "each card shows the agent's name and an Open Agent button" → "each card here holds only a name and that link"
+     B 9 ai-agents 31       "find it by name and press Open Agent"               → 'Find an agent by name and press "Open Agent"'
+     B 8 marketplace 62     "with Edit and Delete buttons"                       → 'with "Edit" and "Delete", are under "My Listings"'
+     B 8 certifications 76  "press Try Again on the result screen, or Start Assessment on the card" → 'Press "Try Again" on the result screen'
+     B 8 lead-radar 147     "Copy it to your clipboard and post it on Bluesky yourself" → "to your clipboard and post it on Bluesky yourself"
+     B 7 wallet 66          "The history shows your latest 50 transactions"      → "your history, which lists your latest 50 transactions"
+     B 7 wallet 67          "the one way to move BFC here is Send BFC"           → 'Press "Send BFC", enter the member\'s username'
+     B 7 wallet 68          "… welcome bonus lands when your subscription goes active" → "… welcome bonus is paid once your subscription is active"
+     B 7 wallet 69          "not how much you use the platform"                  → RETIRED: the tip is gone; its ban on "rewards real engagement" stays,
+                             and 68 (the only two ways BFC is paid) and G4 still hold every amount
+     B 6 seo 111            "keyword research, content plans, local SEO plans, and page audits" → "knows no search volume, competition or ranking"
+     B 6 analytics 139      "the context every analytics task is written from"   → GUIDE_COMMON's "Every agent reads the Business Profile you set
+                             on the Content Agent page" (the same truth, now said once for every agent page)
+     B 6 analytics 141      "… and it works out the change"                      → "enter each metric's Now and Before figures"
+     B 6 email 152          "it writes the copy and reads no delivery data"      → "It writes the copy and reads no delivery data"
+     B 6 email 154          "… and the test itself runs in your own email platform" → "notes which to A/B test first; run the test in your own email platform"
+     B 6 store 159          "it connects to no store or channel"                 → "It connects to no store or channel"
+     B 6 store 160          "are written from that context, not from your store's own data" → "not your store's own data"
+     B 6 store 161          "it plans your channel mix, inventory sync approach, …" → RETIRED: the tip is gone; its ban stays
+     B 6 influencer 201     "drafts the work of creator partnerships"            → 'press "Draft the offer" to put budget and territory in writing'
+                             (proof gains the offer tool's Budget and Territory fields)
+     C 11 analytics-dashboard 38 "If a tile shows 0, …"                          → "A 0 means there is nothing of that kind on your account yet"
+     C 11 business-id 89    "the card is drawn only on this page, for you — nothing …" → "drawn only on this page, for you; nothing on the platform shows it"
+     C 11 business-chat 92  "each answer is written from the last 20 messages of it" → "Each answer is written from the last 20 messages only"
+     C 11 business-chat 95  "There is one thread, not a list of past threads"    → "kept in one thread, not a list of past threads"
+     C 11 card-view 98      "the card's QR codes open this page"                 → "its QR codes open this same page"
+     C 11 sales 118         "its tasks read none of the leads or pipeline on this page" → "read none of the leads or pipeline on this page"
+     C 11 sales 122         "a task's prompt carries no pipeline data"           → "so say in your request what has changed in your deals"
+     C 11 content 129       "its saved articles and SMS campaigns"               → '"Content Library" keeps saved articles and SMS campaigns'
+     C 11 lead-radar 148    "Product Breakdown counts leads, it does not measure intent" → RETIRED: the tip is gone; its ban stays
+     C 11 broker 175        "they give you a checklist and a framework to take to a lawyer, …" → "to a lawyer; they are not execution documents"
+     C 11 rd 218            "screen ideas by feasibility before you invest"      → '"Innovation Brief" screens an idea'
+     C 11 rd 219            "the only earlier runs it sees are excerpts of your last 5 R&D runs" → "sees excerpts of your last 5 runs on this page"
+     C 11 oracle 226        "are fixed by your birth name and date and do not change with time" → "are fixed by birth name and date; place, path and story can change"
+     C   "the four new entries have 4–5 tips each, and the vertical entry exactly 6" → "4–5 tips each" for all four (vertical is 5:
+                             the standard caps an entry at 5)
+     CN ads 1 "it connects …" → "It connects …"; ads 2 "measures every asset against that platform's limits" → "measured against that
+        platform's limits"; ads 3 "Ad Copy also runs what it writes through the policy scan" → "run through the policy scan, so rejected
+        wording is flagged"; ads 4 "… with Suggest rewrites unchecked it makes no model call at all" → 'with "Suggest rewrites" unticked it
+        makes no model call'; ads 5 "Use Ad Campaign for a whole plan" → 'Use "Ad Campaign" for a whole plan'; NEW ads 6 'Open "Ad Copy",
+        enter the product, angle, platform and audience' (the Do tip; its four fields are the tool's)
+     CN executive 1 "it runs none of them itself" → "the plan runs none of them itself"; executive 3 "Begin with the Start here list" →
+        'Begin with the "Start here" list'; executive 4 → 'Assignments marked "your own work" are yours to do'; executive 5 "only the
+        Executive Plan tool's assignments can be run" → "only plan assignments can be run"; NEW executive 6 'Open "Executive Plan", give it
+        the goal' (the Do tip; its fields are the tool's)
+     CN vertical 1 "nothing about …" → "Nothing about the industry is researched"; vertical 2 "Vertical Positioning takes the industry" →
+        'Open "Vertical Positioning", enter the industry'; vertical 3 → '"Objection Handling" with "Work the objections"'; vertical 4 →
+        "the model's own estimate, not a measurement"; vertical 5 → '"Vertical Campaign Plan" runs the creator campaign one'; vertical 6 →
+        'paste it into "Claims Scan" and press "Scan for claims"'
+     CN sms 1 "This page is not an agent" → 'Add people with "Add" or "Import"' (same proof: the page's own buttons, no agent config);
+        sms 3 "The drip engine is fixed in dry-run mode" → 'records in "Send Log" what would go out'
+   A RETIRED row (fragment null) keeps only its old-wording ban, and says so in its label. */
 const A = [
   // group 1 — removed report sections
-  ["1 seo 114", seoTips, "Refresh Data updates that link", /pull the latest report|Website Audits|and Opportunities/,
+  ["1 seo 114", seoTips, 'press "Refresh Data", and run again', /pull the latest report|Website Audits|and Opportunities/,
     () => lastRunOffered(SEO) && /id="refreshBtn">Refresh Data</.test(FILES[SEO]) && /bfLoadLastRun\(\)/.test(REFRESH_FN) && /bfLoadBusinessContext\(\)/.test(REFRESH_FN)],
-  ["1 seo 115", seoTips, "Treat your saved runs as your standing SEO playbook", /Executive Reports|Recommendations/, () => true],
-  ["1 analytics 140", anaTips, "nothing here checks your figures for anomalies", /Warnings panel|catch anomalies early/, () => lastRunOffered(ANALYTICS)],
-  ["1 analytics 142", anaTips, "Enter current figures in KPI Review and Funnel Analysis", /Executive Reports|Refresh Data before big decisions/,
+  ["1 seo 115", seoTips, null, /Executive Reports|Recommendations/, () => true],
+  ["1 analytics 140", anaTips, "These tools measure only the figures you enter", /Warnings panel|catch anomalies early/,
+    () => lastRunOffered(ANALYTICS) && /"name": "current",\s*"label": "Now",/.test(FILES[ANALYTICS]) && /"name": "previous",\s*"label": "Before",/.test(FILES[ANALYTICS])],
+  ["1 analytics 142", anaTips, 'enter each stage\'s count in "Funnel Analysis"', /Executive Reports|Refresh Data before big decisions/,
     () => (configOf(ANALYTICS).tools || []).map(t => t.label).filter(l => l === "KPI Review" || l === "Funnel Analysis").length === 2],
   ["1 email 156", emTips, "nothing here measures opens, clicks or delivery", /Check Sequences and Insights|after each send/,
     () => lastRunOffered(EMAIL) && /no open-rate, click-rate or /.test(FILES[SERVER])],
-  ["1 store 163", stTips, "this agent reads no sales, traffic or channel data", /Analytics report section|channel performance gaps show up first/,
+  ["1 store 163", stTips, "audits are written from your Business Profile and what you tell it", /Analytics report section|channel performance gaps show up first/,
     () => lastRunOffered(STORE) && /store_audit: "[^"\n]*does not fetch or open the store and measures nothing about it/.test(FILES[SERVER]) &&
       /conversion_audit: "[^"\n]*reads no analytics, traffic, checkout or conversion data/.test(FILES[SERVER])],
-  ["1 influencer 204", infTips, "Re-run Creator List when your audience or goals change", /Trending Creators|last month's list/,
+  ["1 influencer 204", infTips, '"Creator List" describes the kinds of creators', /Trending Creators|last month's list/,
     () => offers(INFLUENCER, "Creator List") && /creator_list: "[^"\n]*ideal creator archetypes[^"\n]*scoring rubric to evaluate fit/.test(FILES[SERVER]) && !/Trending Creators|trendingCreators/.test(FILES[INFLUENCER])],
-  ["1 rd 215", rdTips, "innovation briefs with a written feasibility assessment", /scored with real confidence|feasibility metrics/,
+  ["1 rd 215", rdTips, "screens an idea with a written feasibility assessment", /scored with real confidence|feasibility metrics/,
     () => offers(RD, "Innovation Brief") && /innovation_brief: "[^"\n]*feasibility assessment/.test(FILES[SERVER]) &&
       !/feasibility_?score|confidence_?score|differentiation_?score|feasibilityScore|confidenceScore|differentiationScore/i.test(FILES[SERVER] + FILES[RD])],
-  ["1 rd 217", rdTips, "your differentiation is clearer", /differentiation scores/, () => offers(RD, "Market Research") && offers(RD, "Competitive Intelligence")],
-  ["1 social 132", socTips, "strategic planning layer", /content pillars/i,
+  ["1 rd 217", rdTips, 'Pick "Market Research" or "Competitive Intelligence"', /differentiation scores/, () => offers(RD, "Market Research") && offers(RD, "Competitive Intelligence")],
+  ["1 social 132", socTips, 'Pick "Content Calendar" or "Platform Playbook"', /content pillars/i,
     () => ["Social Campaign", "Content Calendar", "Engagement Strategy", "Platform Playbook", "Audience Growth Plan"].every(n => offers(SOCIAL, n))],
-  ["1 sales 119", salesTips, "The leads and pipeline on this page come from Lead Radar", /pipeline recommendations/,
+  ["1 sales 119", salesTips, "They come from Lead Radar", /pipeline recommendations/,
     () => offers(SALES, "Lead Generation") && RADARS.every(f => !PROFILE_READ.test(FILES[f]))],
   // group 2 — a field that does not exist
-  ["2 rd 216", rdTips, "I read them to decide what's actually worth researching", /Market Goals|Research Goals/,
+  ["2 rd 216", rdTips, "current in your Business Profile; I read them first", /Market Goals|Research Goals/,
     () => ["Industry", "Description", "Target Audience", "Business Goals", "Competitors"].every(f => PROFILE_FIELDS.indexOf(f) !== -1) &&
       ["p.industry", "p.description", "p.target_audience", "p.primary_goal", "p.top_competitors"].every(c => FILES[BRAIN].indexOf(c) !== -1) &&
       !/market_goals|research_goals|marketGoals|researchGoals/.test(FILES[SERVER] + FILES[RD])],
   // group 3 — live with no mechanism
-  ["3 dashboard 36", dashTips, "read once when the page opens (reload for fresh numbers)", /live read-only summary/,
+  ["3 dashboard 36", dashTips, "Figures are fetched once, as the page loads", /live read-only summary/,
     () => !/setInterval|EventSource|WebSocket/.test(FILES[DASH])],
   // groups 3 and 4 — Lead Radar 145 (146 is proven in L)
-  ["3/4 lead-radar 145", lrTips, "when intent scoring is switched on, it scores them", /\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them/,
+  ["3/4 lead-radar 145", lrTips, "Mastodon, YouTube and scoring each wait on their own switch",/\blive Bluesky|by matched keyword|scans for buying-intent posts every 5 minutes, scores them/,
     () => /id="refreshBtn" onclick="loadLeads\(\)">Refresh</.test(FILES[RADAR_PAGE]) &&
       /l\.suggested_product && l\.suggested_product !== "none" && \(l\.intent_score \|\| 0\) >= 40/.test(FILES[RADAR_PAGE]) &&
       !/setInterval|EventSource|WebSocket/.test(FILES[RADAR_PAGE]) && gated("ENABLE_LEAD_SCORING", "scoreNewLeads()")],
   // group 5 — social connect, publish and schedule are off. The Zernio code behind SOCIAL_ACCOUNTS_SCOPED was deleted
   // (launch audit #22c), so "off" is now: server.js names no zernio.com and reads no ZERNIO_ variable (socialShut).
-  ["5 content 125", conTips, "approved drafts are saved, not published or scheduled", /approve and schedule/,
+  ["5 content 125", conTips, "Approved drafts are saved, not published or scheduled", /approve and schedule/,
     () => /status:\s*"not_published",\s*scheduled_for:\s*null,/.test(FILES[SERVER]) && socialShut()],
-  ["5 content 127", conTips, "approving saves it to the Approval Queue as an unpublished draft", /before it goes live/,
+  ["5 content 127", conTips, 'each draft waits in "Approval Queue"', /before it goes live/,
     () => /<h2 class="section-label">Generate SEO Article<\/h2>/.test(FILES[CONTENT]) && /<h2 class="section-label">Generate SMS Campaign<\/h2>/.test(FILES[CONTENT]) &&
       offers(CONTENT, "Social Media Drafts") && /<h2 class="ap-section-label">Approval Queue<\/h2>/.test(FILES[AP]) && /status:\s*"not_published"/.test(FILES[SERVER])],
-  ["5 content 128", conTips, "cannot be connected on this platform at present", /Connect your social accounts|directly on this page so approved content has somewhere to go/,
+  ["5 content 128", conTips, "social accounts cannot be connected yet",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
     () => socialShut() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
-  ["5 social 134", socTips, "posts cannot be scheduled and social accounts cannot be connected at present", /drafting and scheduling posts|account connections live/,
+  ["5 social 134", socTips, "Posts cannot be scheduled and social accounts cannot be connected at present",/drafting and scheduling posts|account connections live/,
     () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut()],
   // guard catches outside the list
-  ["G seo 113", seoTips, "and the Page Audit tool", /SEO Audit|Competitor Analysis/,
+  ["G seo 113", seoTips, 'Pick "Keyword Research" or "Local SEO Plan"', /SEO Audit|Competitor Analysis/,
     () => ["Keyword Research", "Competitor Comparison", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n))],
-  ["G operations 209", opsTips, "SOP Documents and Efficiency Audits are shaped", /\bSOPs\b/, () => offers(OPERATIONS, "SOP Document") && offers(OPERATIONS, "Efficiency Audit")],
-  ["G operations 212", opsTips, "Revisit your SOP Documents periodically", /\bSOPs\b/, () => offers(OPERATIONS, "SOP Document")],
-  ["G digital-cards 79", cardTips, "all shown in the card preview", /live-previewed/, () => /addEventListener\("input", updatePreview\)/.test(FILES[CARDS])],
-  ["G business-id 86", idTips, "redrawn each time you save, plus a \"BizForce AI Member\" badge", /live-rendered|verified member/,
+  ["G operations 209", opsTips, 'Open "Standard Operating Procedure"', /\bSOPs\b/,
+    () => offers(OPERATIONS, "SOP Document") && offers(OPERATIONS, "Efficiency Audit") && offers(OPERATIONS, "Standard Operating Procedure")],
+  ["G operations 212", opsTips, 'Run "Efficiency Audit" to find the bottleneck', /\bSOPs\b/, () => offers(OPERATIONS, "SOP Document") && offers(OPERATIONS, "Efficiency Audit")],
+  ["G digital-cards 79", cardTips, "the preview updates as you type", /live-previewed/, () => /addEventListener\("input", updatePreview\)/.test(FILES[CARDS])],
+  ["G business-id 86", idTips, "redrawn from what you saved, with a \"BizForce AI Member\" badge", /live-rendered|verified member/,
     () => /<\/svg>BizForce AI Member<\/div>/.test(FILES[BIZID]) && /profile = data\.profile;\s*renderCard\(profile\);\s*status\.textContent = "Saved successfully!";/.test(FILES[BIZID])]
 ];
+// A retired row: its tip is gone in the Oct 28 2026 rewrite, and only its old-wording ban is still asserted.
+function retired(block, id, tips, old) {
+  check(block + ". " + id + ": RETIRED (tip removed Oct 28 2026) — the old untrue wording is still gone from the whole entry",
+    tips.length > 0 && tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
+}
 A.forEach(([id, tips, fragment, old, proof]) => {
+  if (fragment === null) return retired("A", id, tips, old);
   const t = tipWith(tips, fragment);
   check("A. " + id + ": the new wording is there", !!t, fragment);
   check("A. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
@@ -792,7 +942,7 @@ const taskPrompt = key => (new RegExp("\\n  " + key + ": \"([^\"\\n]*)\"").exec(
 const AP_FILE = FILES[AP];
 const B = [
   // group 10 — dashboard
-  ["10 dashboard 17", hqTips, "edit it here under Expand Profile or on the Content Agent's Edit Profile", /Business Identity page|keep both current/,
+  ["10 dashboard 17", hqTips, "Press \"Expand Profile\" and edit it", /Business Identity page|keep both current/,
     () => /var nameField = document\.getElementById\("business_name"\);[\s\S]{0,300}?var goalField = document\.getElementById\("primary_goal"\);/.test(FILES[DASHBOARD]) &&
       /id="businessProfileSummaryIndustry"/.test(FILES[DASHBOARD]) && /id="businessProfileSummaryGoal"/.test(FILES[DASHBOARD]) &&
       /<span class="bf-profile-expand-label">Expand Profile<\/span>/.test(FILES[DASHBOARD]) &&
@@ -802,84 +952,87 @@ const B = [
   /* Launch audit #22a removed the Active Queue card and the Agent Work Queue it
      scrolled to (a list kept only in this browser), so this tip now names the
      Command Center's three panels, each read from GET /api/command-center. */
-  ["10 dashboard 18", hqTips, "Start with the Command Center: Needs you lists the proposals waiting on you and the runs that failed", /Recent Activity|Active Queue|View Queue|Work Queue/,
+  ["10 dashboard 18", hqTips, "\"Needs you\" lists the proposals waiting for your approval", /Recent Activity|Active Queue|View Queue|Work Queue/,
     () => /<h3>Needs you<\/h3><div id="ccNeedsYou">/.test(FILES[DASHBOARD]) && /<h3>Executive plans<\/h3><div id="ccPlans">/.test(FILES[DASHBOARD]) &&
       /<h3>Agent activity<\/h3><div id="ccActivity">/.test(FILES[DASHBOARD]) &&
       /Proposals waiting for you/.test(FILES[DASHBOARD]) && /Runs that failed in the last 7 days/.test(FILES[DASHBOARD]) &&
       /data-cc-dispatch="1"[^']*'[^>]*>Dispatch<\/button>/.test(FILES[DASHBOARD]) && /plural\(d\.total, "run", "runs"\)/.test(FILES[DASHBOARD]) &&
       !/id="activeQueueSummary/.test(FILES[DASHBOARD]) && !/id="agentAssignmentsSection"/.test(FILES[DASHBOARD]) &&
       !/>[^<>]*Recent Activity[^<>]*</.test(FILES[DASHBOARD]) && !/id="recentActivity/i.test(FILES[DASHBOARD])],
-  ["10 dashboard 19", hqTips, "Agent Hub and Full Directory each list all 18 agents", /curated set/,
+  ["10 dashboard 19", hqTips, "open \"Agent Hub\" or \"Full Directory\"; each lists all", /curated set/,
     () => /onclick="window\.location\.href='agents-hub\.html';">Agent Hub<\/button>/.test(FILES[DASHBOARD]) &&
       /onclick="window\.location\.href='ai-agents\.html';">Full Directory<\/button>/.test(FILES[DASHBOARD]) &&
       (FILES[HUB].match(/class="agent-card/g) || []).length === 18 && /agents\.forEach\(function \(agent\) \{/.test(FILES[DIRECTORY])],
   // group 9 — the directory: ai_agents.description is seeded empty, so a card shows a name and a link
-  ["9 ai-agents 29", dirTips, "each card shows the agent's name and an Open Agent button to its own page", /one-line description|specializes in|descriptions are specific/,
+  ["9 ai-agents 29", dirTips, "each card here holds only a name and that link", /one-line description|specializes in|descriptions are specific/,
     () => /display_name: agentDisplayName\(type\),\s*description: "",/.test(SV) && /name\.textContent = agent\.display_name \|\| "";/.test(FILES[DIRECTORY]) &&
       /var href = agent\.page_url \|\| "agents-hub\.html";/.test(FILES[DIRECTORY]) && /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
-  ["9 ai-agents 31", dirTips, "find it by name and press Open Agent", /which agent fits a task — the descriptions/,
+  ["9 ai-agents 31", dirTips, "Find an agent by name and press \"Open Agent\"", /which agent fits a task — the descriptions/,
     () => /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
   // group 8 — controls that do not exist under that name
-  ["8 marketplace 62", mkTips, "with Edit and Delete buttons", /manage status|Active\/Paused\/Sold/,
+  ["8 marketplace 62", mkTips, "with \"Edit\" and \"Delete\", are under \"My Listings\"", /manage status|Active\/Paused\/Sold/,
     () => /'<button type="button" class="btn-sm btn-edit"' \+ idAttr \+ '>Edit<\/button>'/.test(FILES[MARKET]) &&
       /'<button type="button" class="btn-sm btn-delete"' \+ idAttr \+ '>Delete<\/button>'/.test(FILES[MARKET]) &&
       /var statusHtml = isOwn \? '<span class="status-badge status-'/.test(FILES[MARKET]) &&
       /var body = \{ title, description: desc, category, price_bfc: price, tags: tagsRaw, media: listingMedia \};/.test(FILES[MARKET]) &&
       !/\bstatus\s*:\s*"(active|paused|sold)"|body\.status\b/.test(FILES[MARKET])],
-  ["8 certifications 76", certTips, "press Try Again on the result screen, or Start Assessment on the card", /Retake Assessment/,
+  ["8 certifications 76", certTips, "Press \"Try Again\" on the result screen", /Retake Assessment/,
     () => /<button class="result-retry-btn" id="resultRetryBtn">Try Again<\/button>/.test(FILES[CERTS]) &&
       /if \(earned\) \{\s*html \+= '<button class="cert-btn cert-btn-retry"[^\n]*>Retake Assessment<\/button>';\s*\} else \{\s*html \+= '<button class="cert-btn cert-btn-start"[^\n]*>Start Assessment<\/button>';/.test(FILES[CERTS]) &&
       // A fail shows the result screen, with Try Again on it. The server grades now, so it is the server's fail.
       /if \(!result\.passed\) \{\s*render\(pct, false, null, res\.data\.already_earned === true \? "kept" : null\);/.test(FILES[CERTS]) &&
       !/cooldown|max_?attempts|attempt_?limit|lockout/i.test(SV.slice(SV.indexOf('app.post("/api/certifications/award"'), SV.indexOf("async function creditWallet(")))],
-  ["8 lead-radar 147", lrTips, "Copy it to your clipboard and post it on Bluesky yourself", /Sort by score|Copy it straight to Bluesky/,
+  ["8 lead-radar 147", lrTips, "to your clipboard and post it on Bluesky yourself", /Sort by score|Copy it straight to Bluesky/,
     () => /leads\.sort\(function \(a, b\) \{ return \(b\.intent_score \|\| 0\) - \(a\.intent_score \|\| 0\); \}\);/.test(FILES[RADAR_PAGE]) &&
       !/<select|>[^<>\n]*\bSort\b[^<>\n]*</i.test(FILES[RADAR_PAGE]) &&
       /return \(l\.intent_score \|\| 0\) >= 60;/.test(FILES[RADAR_PAGE]) && /label: "High-Intent"/.test(FILES[RADAR_PAGE]) &&
       /function copyReply\(idx\) \{[\s\S]{0,200}?navigator\.clipboard\.writeText\(text\)/.test(FILES[RADAR_PAGE]) && />Draft Engagement<\/button>/.test(FILES[RADAR_PAGE]) &&
       !/bsky\.social|createRecord|app\.bsky/.test(FILES[RADAR_PAGE])],
   // group 7 — wallet and certification payouts
-  ["7 wallet 66", walTips, "The history shows your latest 50 transactions", /full Transaction History/,
+  ["7 wallet 66", walTips, "your history, which lists your latest 50 transactions", /full Transaction History/,
     () => HISTORY_50() && ["Available Balance", "Total Earned", "Total Spent"].every(l => FILES[WALLET].indexOf(">" + l + "<") !== -1) && /\n    Transaction History\n/.test(FILES[WALLET])],
   // BEFORE (frontend c57bad5): "the one action here is Send BFC", proof SEND_BFC() && ONLY_TWO_CREDITS().
   // AFTER (Trades on the wallet): the page also lists trades, with a CSV and a yearly statement; Send BFC is still the one way to move BFC.
-  ["7 wallet 67", walTips, "the one way to move BFC here is Send BFC", /accumulate automatically|read-only ledger|the one action here/,
+  ["7 wallet 67", walTips, "Press \"Send BFC\", enter the member's username", /accumulate automatically|read-only ledger|the one action here/,
     () => SEND_BFC() && ONLY_TWO_CREDITS() && /id="tradesCsvBtn"/.test(FILES[WALLET]) && /id="statementBtn"/.test(FILES[WALLET]) &&
       /fetch\(API_URL \+ "\/api\/me\/trades\.csv"/.test(FILES[WALLET]) && /fetch\(API_URL \+ "\/api\/me\/trade-statement\?year="/.test(FILES[WALLET])],
-  ["7 wallet 68", walTips, "a one-time 1,000 BFC welcome bonus lands when your subscription goes active", /\+50|\+25|\+200|agent tasks \(|stackable/,
+  ["7 wallet 68", walTips, "a one-time 1,000 BFC welcome bonus is paid once your subscription is active", /\+50|\+25|\+200|agent tasks \(|stackable/,
     () => CERT_CREDIT.test(SV) && WELCOME() && ONLY_TWO_CREDITS() && /How to Earn BFC/.test(FILES[WALLET])],
-  ["7 wallet 69", walTips, "not how much you use the platform", /rewards real engagement|how actively you're using/,
+  ["7 wallet 69", walTips, null, /rewards real engagement|how actively you're using/,
     () => ONLY_TWO_CREDITS() && ["bfc_send", "bfc_buy_listing", "bfc_donate"].every(r => SV.indexOf('rpc("' + r + '"') !== -1)],
   ["7 certifications 75", certTips, "Your first pass of each certification pays 100 BFC to your Wallet while you're subscribed", /Passing pays out BFC/,
     () => CERT_CREDIT.test(SV) && /AN EARNED RECORD IS NEVER WRITTEN AGAIN/.test(SV)],
   // group 6 — data no agent reads
-  ["6 seo 111", seoTips, "keyword research, content plans, local SEO plans, and page audits", /rankings|forecasts/,
+  ["6 seo 111", seoTips, "knows no search volume, competition or ranking", /rankings|forecasts/,
     () => ["Keyword Research", "Content Plan", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n)) && /knows no search volume, competition, difficulty or ranking/.test(taskPrompt("keyword_research"))],
-  ["6 analytics 139", anaTips, "the context every analytics task is written from", /thin forecasts|Accuracy depends/,
+  ["6 analytics 139", anaTips.concat([GUIDE_COMMON.replace(/\\"/g, '"')]), "Every agent reads the Business Profile you set on the Content Agent page", /thin forecasts|Accuracy depends/,
     () => ["Industry", "Website", "Competitors"].every(f => PROFILE_FIELDS.indexOf(f) !== -1) &&
       ["\"Industry: \"", "\"Website: \"", "\"Competitors: \""].every(l => FILES[BRAIN].indexOf(l) !== -1) &&
       /var profileResult = await supabase\s*\.from\("business_profiles"\)/.test(SV) && /buildAgentSystemPrompt\(agentBrain, businessProfile,/.test(SV)],
-  ["6 analytics 141", anaTips, "enter each metric's Now and Before figures and it works out the change", /trend lines actually mean|on a schedule/,
+  ["6 analytics 141", anaTips, "enter each metric's Now and Before figures", /trend lines actually mean|on a schedule/,
     () => /"name": "current",\s*"label": "Now",/.test(FILES[ANALYTICS]) && /"name": "previous",\s*"label": "Before",/.test(FILES[ANALYTICS]) &&
       /var change = hasPrevious \? current - previous : null;/.test(SV)],
-  ["6 email 152", emTips, "it writes the copy and reads no delivery data", /deliverability/i,
+  ["6 email 152", emTips, "It writes the copy and reads no delivery data", /deliverability/i,
     () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n)) && /no open-rate, click-rate or /.test(SV)],
-  ["6 email 154", emTips, "notes which to A/B test first, and the test itself runs in your own email platform", /lives and dies/,
+  ["6 email 154", emTips, "notes which to A/B test first; run the test in your own email platform", /lives and dies/,
     () => offers(EMAIL, "Subject Line Testing") && /Note which to A\/B test first\./.test(taskPrompt("subject_lines"))],
-  ["6 store 159", stTips, "it connects to no store or channel", /manages multi-store|across every channel|commerce intelligence/,
+  ["6 store 159", stTips, "It connects to no store or channel", /manages multi-store|across every channel|commerce intelligence/,
     () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) &&
       /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/shopify|woocommerce|bigcommerce/i.test(FILES[STORE])],
-  ["6 store 160", stTips, "are written from that context, not from your store's own data", /compare you against/,
+  ["6 store 160", stTips, "not your store's own data", /compare you against/,
     () => /reads no analytics, traffic, checkout or conversion data/.test(taskPrompt("conversion_audit"))],
-  ["6 store 161", stTips, "it plans your channel mix, inventory sync approach, and a consistent customer experience", /coordinating across stores|edge is/,
+  ["6 store 161", stTips, null, /coordinating across stores|edge is/,
     () => /channel mix/.test(taskPrompt("omnichannel_strategy")) && /inventory sync approach/.test(taskPrompt("omnichannel_strategy")) && /customer experience consistency/.test(taskPrompt("omnichannel_strategy"))],
-  ["6 influencer 201", infTips, "drafts the work of creator partnerships", /end to end|forecasting ROI/,
-    () => ["Influencer Outreach", "Campaign Plan", "Partnership Offer", "ROI Forecast"].every(n => offers(INFLUENCER, n)) && /^Build an influencer ROI model the owner can fill in/.test(taskPrompt("roi_forecast"))],
+  ["6 influencer 201", infTips, "press \"Draft the offer\" to put budget and territory in writing", /end to end|forecasting ROI/,
+    () => ["Influencer Outreach", "Campaign Plan", "Partnership Offer", "ROI Forecast"].every(n => offers(INFLUENCER, n)) && /^Build an influencer ROI model the owner can fill in/.test(taskPrompt("roi_forecast")) &&
+      /"runLabel": "Draft the offer",/.test(FILES[INFLUENCER]) && /"name": "budget",\s*"label": "Budget",/.test(FILES[INFLUENCER]) &&
+      /"name": "territory",\s*"label": "Territory \/ market",/.test(FILES[INFLUENCER]) && /"\\n\\nTERRITORY \/ MARKET:\\n" \+ territory/.test(SV)],
   ["6 influencer 203", infTips, "builds the return model and break-even from figures you supply", /expected return/,
     () => /a break-even calculation/.test(taskPrompt("roi_forecast")) && /use only numbers the user supplies/.test(taskPrompt("roi_forecast"))]
 ];
 const NO_CLAIM = t => !WATCHING.test(t) && !/\bautomatic(ally)?\b|\binstant(ly)?\b|\bauto-/i.test(t);
 B.forEach(([id, tips, fragment, old, proof]) => {
+  if (fragment === null) return retired("B", id, tips, old);
   const t = tipWith(tips, fragment);
   check("B. " + id + ": the new wording is there", !!t, fragment);
   check("B. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
@@ -956,50 +1109,50 @@ const NO_PIPELINE = () => TASK_TABLES === "agent_memory,ai_tasks,business_profil
 const DOCX_ONLY = () => /"application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document": true, \/\/ \.docx/.test(SV) && !/application\/msword/.test(SV);
 const C = [
   // group 11 — one-off tips
-  ["11 analytics-dashboard 38", dashTips, "If a tile shows 0, there's nothing of that kind on your account yet", /hasn't loaded or hasn't been generated/,
+  ["11 analytics-dashboard 38", dashTips, "A 0 means there is nothing of that kind on your account yet", /hasn't loaded or hasn't been generated/,
     () => (FILES[DASH].match(/<span class="stat-number" id="stat\w+">—<\/span>/g) || []).length >= 6 &&
       /\.textContent\s+= s\.tasksRun\s+!= null \? s\.tasksRun\s+: "—";/.test(FILES[DASH]) &&
       (LIVE_STATS.match(/return result\.count \|\| 0;/g) || []).length === 2 && /Could not load analytics data\./.test(FILES[DASH])],
-  ["11 business-id 89", idTips, "the card is drawn only on this page, for you — nothing on the platform shows it to other members", /first impression other members/,
+  ["11 business-id 89", idTips, "drawn only on this page, for you; nothing on the platform shows it to other members", /first impression other members/,
     () => /function renderCard\(p\) \{/.test(FILES[BIZID]) && /fetch\(API_URL \+ "\/api\/profile\/me", \{\s*headers: \{ "Authorization": "Bearer " \+ token \}/.test(FILES[BIZID]) &&
       /app\.get\("\/api\/profile\/me", requireAuth,/.test(SV) && HTML_PAGES.filter(f => f !== BIZID && /id-card-watermark|BizForce AI Member/.test(FILES[f])).length === 0],
-  ["11 business-chat 92", chatTips, "each answer is written from the last 20 messages of it", /remembers the conversation across sessions/,
+  ["11 business-chat 92", chatTips, "Each answer is written from the last 20 messages only", /remembers the conversation across sessions/,
     () => /role: "user",[\s\S]*?\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(20\);[\s\S]*?role: "assistant",/.test(CHAT_POST)],
-  ["11 business-chat 95", chatTips, "There is one thread, not a list of past threads", /Revisit past threads/,
+  ["11 business-chat 95", chatTips, "kept in one thread, not a list of past threads", /Revisit past threads/,
     () => /\.eq\("user_id", req\.user\.id\)\s*\.order\("created_at", \{ ascending: true \}\);/.test(CHAT_GET) && !/\.limit\(/.test(CHAT_GET) &&
       !/thread_id|conversation_id/.test(CHAT_POST + CHAT_GET) && /data\.messages\.forEach\(function\(msg\) \{\s*addMessage\(msg\.role, msg\.content\);/.test(FILES[CHAT])],
   // NAMED (Oct 27 2026, launch item #10): BEFORE the tip said the QR codes hold a vCard, and the pin proved both pages
   // passed buildVCard's text to QRCode.toCanvas. AFTER both pages pass the card's public URL (the short link, else the
   // ?token= link), card-view opens from either, and the vCard is the Save Contact download (scripts/bf-card.js).
-  ["11 card-view 98", cvTips, "the card's QR codes open this page", /via a shared link or QR code/,
+  ["11 card-view 98", cvTips, "its QR codes open this same page", /via a shared link or QR code/,
     () => /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(qr, url,/.test(FILES[CARDS]) && /QRCode\.toCanvas\(qrVideo, url,/.test(FILES[CARDS]) &&
       /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) &&
       /\/\^\\\/c\\\/\(\[a-z0-9-\]\{3,40\}\)\\\/\?\$\/\.exec\(window\.location\.pathname\)/.test(FILES[CARDVIEW]) &&
       /var url = window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: st \}\);/.test(FILES[CARDS])],
-  ["11 sales 118", salesTips, "its tasks read none of the leads or pipeline on this page", /revenue intelligence|from your business data/,
+  ["11 sales 118", salesTips, "read none of the leads or pipeline on this page", /revenue intelligence|from your business data/,
     () => NO_PIPELINE() && ["Sales Funnel", "Lead Generation", "Outreach Script", "Offer Builder", "Objection Handling"].every(n => offers(SALES, n))],
-  ["11 sales 122", salesTips, "a task's prompt carries no pipeline data", /stale pipeline data/, NO_PIPELINE],
-  ["11 content 129", conTips, "its saved articles and SMS campaigns", /delete drafts so your queue/,
+  ["11 sales 122", salesTips, "so say in your request what has changed in your deals", /stale pipeline data/, NO_PIPELINE],
+  ["11 content 129", conTips, "\"Content Library\" keeps saved articles and SMS campaigns", /delete drafts so your queue/,
     () => /fetch\(CL_API \+ "\/api\/content-library\?type=blog"/.test(FILES[CONTENT]) && /fetch\(CL_API \+ "\/api\/content-library\?type=sms"/.test(FILES[CONTENT]) &&
       ["data-expand=", "data-copy=", 'class=\\"cl-delete-btn\\"'].every(a => FILES[CONTENT].indexOf(a) !== -1) &&
       /fetch\(API \+ "\/api\/social-drafts"/.test(FILES[CONTENT]) && />Content Library<\/h2>/.test(FILES[CONTENT])],
-  ["11 lead-radar 148", lrTips, "Product Breakdown counts leads, it does not measure intent", /pulling the most buying intent/,
+  ["11 lead-radar 148", lrTips, null, /pulling the most buying intent/,
     () => /productCounts\[p\] = \(productCounts\[p\] \|\| 0\) \+ 1;/.test(FILES[RADAR_PAGE]) &&
       /<span class=\\"chart-title\\">Product Breakdown<\/span>/.test(FILES[RADAR_PAGE]) && /<span class=\\"chart-title\\">Score Distribution<\/span>/.test(FILES[RADAR_PAGE])],
-  ["11 broker 175", brTips, "they give you a checklist and a framework to take to a lawyer, not execution documents", /real execution documents/,
+  ["11 broker 175", brTips, "to a lawyer; they are not execution documents", /real execution documents/,
     () => ["Due Diligence Checklist", "Term Sheet Draft", "Term Sheet Framework"].every(n => offers(BROKER, n)) &&
       /A framework, not a legal document\./.test(FILES[BROKER]) && /"THIS IS A FRAMEWORK, NOT A LEGAL DOCUMENT, AND NO LAWYER HAS SEEN IT\./.test(SV) &&
       /Take this to a lawyer before/.test(SV) && /^Draft a term sheet framework/.test(taskPrompt("term_sheet")) && /^Build a due diligence checklist/.test(taskPrompt("due_diligence"))],
-  ["11 rd 218", rdTips, "screen ideas by feasibility before you invest", /feasibility and impact/,
+  ["11 rd 218", rdTips, "\"Innovation Brief\" screens an idea", /feasibility and impact/,
     () => offers(RD, "Innovation Brief") && /feasibility assessment/.test(taskPrompt("innovation_brief")) && !/impact/i.test(taskPrompt("innovation_brief"))],
-  ["11 rd 219", rdTips, "the only earlier runs it sees are excerpts of your last 5 R&D runs", /summarize everything else/,
+  ["11 rd 219", rdTips, "sees excerpts of your last 5 runs on this page", /summarize everything else/,
     () => offers(RD, "Executive Briefing") && (SV.match(/executive_briefing/g) || []).length === 2 &&
       /\.from\("ai_tasks"\)\s*\.select\("agent_type, prompt, result, status, created_at"\)\s*\.eq\("user_id", userId\)\s*\.eq\("agent_type", agentType\)\s*\.order\("created_at", \{ ascending: false \}\)\s*\.limit\(5\);/.test(TASK_ROUTE) &&
       /excerptWithMarker\(task\.result, PRIOR_TASK_RESULT_CAP\)/.test(TASK_ROUTE)],
   ["11 oracle 225", orTips, "PDFs, Word files (.docx only), plain text", /Word files(?! \(\.docx only\))/, DOCX_ONLY],
-  ["11 oracle 226", orTips, "are fixed by your birth name and date and do not change with time", /sharpen with time/,
+  ["11 oracle 226", orTips, "are fixed by birth name and date; place, path and story can change", /sharpen with time/,
     () => /calculateLifePath\(oracleSync\.birth_date\)/.test(ORACLE_POST) && /calculateNameNumber\(oracleSync\.birth_name, false\)/.test(ORACLE_POST) &&
       /calculateNameNumber\(oracleSync\.birth_name, true\)/.test(ORACLE_POST) && /extractBirthday\(oracleSync\.birth_date\)/.test(ORACLE_POST) &&
       /"Current Location: " \+ \(oracleSync\.current_location/.test(ORACLE_POST) && /"Path & Focus: "\s+\+ \(oracleSync\.path_focus/.test(ORACLE_POST) &&
@@ -1013,54 +1166,63 @@ const SMS_FALSE = /\bsends? (your )?(texts?|messages?|SMS) (to|on)\b|automated d
 const ADS_ROUTES = () => (SV.match(/app\.post\("\/api\/agents\/ads\//g) || []).length === 2 && !/graph\.facebook\.com|googleads\.googleapis|adwords/i.test(SV);
 const DRY = () => (SV.match(/var DRY_RUN = true;/g) || []).length === 1 && /var DRY_RUN = true;/.test(ENGINE);
 const CN = [
-  ["ads 1", adsTips, "it connects to no ad account and reads no ad results", ADS_FALSE,
+  ["ads 1", adsTips, "It connects to no ad account and reads no ad results", ADS_FALSE,
     () => ADS_ROUTES() && offers(ADS, "Ad Campaign") && offers(ADS, "Ad Copy") && /buildAgentSystemPrompt\(adsBrain, businessProfile, \{\}, \[\]\)/.test(ADS_COPY)],
-  ["ads 2", adsTips, "measures every asset against that platform's limits", ADS_FALSE,
+  ["ads 2", adsTips, "measured against that platform's limits", ADS_FALSE,
     () => /HEADLINE:\s+\{ max: 30, kind: "hard",[\s\S]{0,200}?DESCRIPTION: \{ max: 90, kind: "hard",/.test(SV) &&
       /PRIMARY_TEXT: \{ max: 125, kind: "truncation",/.test(SV) && /function measureAdAsset\(assetType, text, spec\)/.test(SV) &&
       /"label": "Google Responsive Search Ad \(30 \/ 90, enforced\)"/.test(FILES[ADS]) && /"label": "Meta feed ad \(125 primary text, truncated\)"/.test(FILES[ADS])],
-  ["ads 3", adsTips, "Ad Copy also runs what it writes through the policy scan", ADS_FALSE,
+  ["ads 3", adsTips, "run through the policy scan, so rejected wording is flagged", ADS_FALSE,
     () => /var policyFindings = scanAdPolicy\(assets\.map\(function \(a\) \{ return a\.text; \}\)\.join\("\\n"\)\);/.test(ADS_COPY)],
-  ["ads 4", adsTips, "a clean scan is not approval, and with Suggest rewrites unchecked it makes no model call at all", ADS_FALSE,
+  ["ads 4", adsTips, "a clean scan is not approval, and with \"Suggest rewrites\" unticked it makes no model call", ADS_FALSE,
     () => ["cure_or_treat_claims", "before_and_after", "guaranteed_results", "personal_attributes", "fda_disease_claims"].every(id => SV.indexOf('id: "' + id + '"') !== -1) &&
       /var wantRewrites = req\.body\.suggest_rewrites !== false;/.test(ADS_POLICY) && /if \(findings\.length && wantRewrites\) \{/.test(ADS_POLICY) &&
       /"A CLEAN SCAN IS NOT APPROVAL FROM ANYBODY\./.test(SV) && /"label": "Suggest rewrites"/.test(FILES[ADS]) && offers(ADS, "Policy Check")],
-  ["ads 5", adsTips, "Use Ad Campaign for a whole plan", ADS_FALSE,
+  ["ads 5", adsTips, "Use \"Ad Campaign\" for a whole plan", ADS_FALSE,
     () => /audience, offer, hooks, creative angles, copy, budget guidance, testing plan/.test(taskPrompt("ad_campaign")) && offers(ADS, "Ad Campaign")],
-  ["executive 1", exTips, "it runs none of them itself", EXEC_FALSE,
+  // NEW (Oct 28 2026): the Do tip, its four fields and its button the Ad Copy tool's own.
+  ["ads 6", adsTips, "Open \"Ad Copy\", enter the product, angle, platform and audience", ADS_FALSE,
+    () => { const t = (configOf(ADS).tools || []).filter(x => x.label === "Ad Copy")[0];
+      return !!t && t.runLabel === "Write the copy" && ["Product", "Angle", "Platform", "Audience"].every(l => t.fields.some(f => f.label === l)); }],
+  ["executive 1",exTips, "the plan runs none of them itself", EXEC_FALSE,
     () => !!EXEC_PLAN && !/dispatchToolCall\(|handleAiTaskRequest\(/.test(EXEC_PLAN) && /'">Run this assignment<\/button>'/.test(AP_FILE) &&
       /return fetch\(API_URL \+ "\/api\/assignments\/dispatch", \{/.test(AP_FILE)],
   ["executive 2", exTips, "is checked against the tools that really exist", EXEC_FALSE,
     () => /is_dispatchable: !!toolExists && problems\.length === 0 && inputCheck\.missing\.length === 0/.test(EXEC_PLAN) && /<span>Not runnable<\/span>/.test(AP_FILE) &&
       offers(EXEC, "Executive Plan") && configOf(EXEC).tools[0].fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints"],
-  ["executive 3", exTips, "Begin with the Start here list", EXEC_FALSE,
+  ["executive 3", exTips, "Begin with the \"Start here\" list", EXEC_FALSE,
     () => /'<div class="ap-zone-label">Start here<\/div>'/.test(AP_FILE) && /'<div class="ap-zone-label">Order<\/div>'/.test(AP_FILE) &&
       /Nothing can start yet — every assignment waits on another\./.test(AP_FILE) && /function orderExecutiveAssignments\(assignments\)/.test(SV) && /can_start_now: ordering\.waves\.length \? ordering\.waves\[0\] : \[\],/.test(EXEC_PLAN)],
-  ["executive 4", exTips, "Assignments marked your own work are yours to do", EXEC_FALSE,
+  ["executive 4", exTips, "Assignments marked \"your own work\" are yours to do", EXEC_FALSE,
     () => /'<span class="ap-asg-yours">your own work<\/span>'/.test(AP_FILE) && /if \(a\.is_dispatchable !== true\) return planNotRunnableLine\(a\);/.test(AP_FILE) &&
       /YOU is not dispatchable and has no route/.test(SV)],
-  ["executive 5", exTips, "only the Executive Plan tool's assignments can be run", EXEC_FALSE,
+  ["executive 5", exTips, "only plan assignments can be run", EXEC_FALSE,
     () => /if \(row\.task_type !== "executive\/plan"\) \{\s*return dispatchRefusal\(res, "not_an_executive_plan",/.test(DISPATCH) && /taskType: "executive\/plan",/.test(EXEC_PLAN) &&
       ["Executive Command Plan", "Agent Coordination", "Executive Briefing", "KPI Review"].every(n => offers(EXEC, n))],
-  ["vertical 1", vmTips, "nothing about the industry is researched", VERT_FALSE,
+  // NEW (Oct 28 2026): the Do tip; goal, horizon and constraints are the Executive Plan tool's fields, the goal alone required.
+  ["executive 6", exTips, "Open \"Executive Plan\", give it the goal", EXEC_FALSE,
+    () => { const t = configOf(EXEC).tools[0];
+      return !!t && t.label === "Executive Plan" && t.runLabel === "Build the plan" && t.fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints" &&
+        t.fields.filter(f => f.required).length === 1 && t.fields[0].required === true; }],
+  ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],
-  ["vertical 2", vmTips, "Vertical Positioning takes the industry", VERT_FALSE,
+  ["vertical 2", vmTips, "Open \"Vertical Positioning\", enter the industry", VERT_FALSE,
     () => /labels: \["POSITIONING", "TRADE_LANGUAGE", "CHANNELS", "WHAT_NOT_TO_SAY", "CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"\]/.test(VERT_POS) &&
       configOf(VERT).tools[0].label === "Vertical Positioning" && configOf(VERT).tools[0].fields.map(f => f.name + (f.required ? "*" : "")).join("|") === "industry*|offering|audience"],
-  ["vertical 3", vmTips, "Objection Handling takes the industry and the offer", VERT_FALSE,
+  ["vertical 3", vmTips, "\"Objection Handling\" with \"Work the objections\"", VERT_FALSE,
     () => /\["OBJECTION", "WHAT_IS_BEHIND_IT", "ANSWER", "PROOF_THAT_HELPS", "LIKELIHOOD"\]/.test(VERT_OBJ) && /\["CONFIDENCE", "VERIFY_WITH_A_PRACTITIONER"\]/.test(VERT_OBJ) &&
       /An industry is required — the vertical whose objections you want\./.test(VERT_OBJ) && /An offer is required — what is being sold to that industry\./.test(VERT_OBJ) && offers(VERT, "Objection Handling")],
-  ["vertical 4", vmTips, "the model's own estimate of how well it knows the trade, not a measurement", VERT_FALSE,
+  ["vertical 4", vmTips, "the model's own estimate, not a measurement", VERT_FALSE,
     () => /treat the confidence level below as the model's own estimate of its recall/.test(SV) && /Have a practitioner read this before/.test(SV)],
-  ["vertical 5", vmTips, "Vertical Campaign Plan, for one, runs the creator-partnership campaign instruction", VERT_FALSE,
+  ["vertical 5", vmTips, "\"Vertical Campaign Plan\" runs the creator campaign one", VERT_FALSE,
     () => /\{ value: "campaign_plan",\s+label: "Vertical Campaign Plan" \}/.test(FILES[VERT]) && /partner selection criteria/.test(taskPrompt("campaign_plan")) && /usage rights/.test(taskPrompt("campaign_plan"))],
-  ["vertical 6", vmTips, "Claims Scan runs the supplement claim rules and the ad-policy rules over copy you paste", VERT_FALSE,
+  ["vertical 6", vmTips, "paste it into \"Claims Scan\" and press \"Scan for claims\"", VERT_FALSE,
     () => !!VERT_CLAIMS && !/callAnthropicText\(|toolGenerateWithOneRetry\(/.test(VERT_CLAIMS) && /model_call_made: false,/.test(VERT_CLAIMS) &&
       /statement: AD_POLICY_NOT_APPROVAL,/.test(VERT_CLAIMS) && /function claimsScanText\(profile, text, cautions\)/.test(SV) && /scanAdPolicy\(scanned\)/.test(SV) &&
       /complianceRequiredTextPresent\(profile, whole\)/.test(SV) && offers(VERT, "Claims Scan") &&
       /"checkboxLabel": "Also scan everything I've stored on BizForce"/.test(FILES[VERT])],
-  ["sms 1", smsTips, "This page is not an agent", SMS_FALSE,
+  ["sms 1", smsTips, "Add people with \"Add\" or \"Import\"", SMS_FALSE,
     () => !/agents\/sms\.html/.test(svSlice("const AGENT_PAGE_URLS = {", "\n};")) && !/AGENT_PROFILE_CONFIG/.test(FILES[SMS]) &&
       ['id="sms-add-btn" class="sms-add-btn">Add<', 'id="sms-bulk-btn" class="sms-add-btn">Import<', 'id="sms-camp-create-btn" class="sms-add-btn">Create<',
        'id="sms-msg-add-btn" class="sms-add-btn">Add Message<', 'id="enroll-all-btn" class="sms-ghost-btn">Enroll All Subscribers<'].every(b => FILES[SMS].indexOf(b) !== -1)],
@@ -1068,7 +1230,7 @@ const CN = [
     () => /var delayHours = \(msgs\[newStep\]\.delay_hours != null \? msgs\[newStep\]\.delay_hours : 0\);\s*var nextDate = new Date\(Date\.now\(\) \+ delayHours \* 60 \* 60 \* 1000\);/.test(ENGINE) &&
       /if \(enrollment\.next_send_at && new Date\(enrollment\.next_send_at\) > new Date\(\)\) \{/.test(ENGINE) && !!ENROLL && !/next_send_at/.test(ENROLL) &&
       /<span class="sms-msg-field-label">Delay \(hours\)<\/span>/.test(FILES[SMS])],
-  ["sms 3", smsTips, "The drip engine is fixed in dry-run mode", SMS_FALSE,
+  ["sms 3", smsTips, "records in \"Send Log\" what would go out", SMS_FALSE,
     () => DRY() && /status:\s+DRY_RUN \? "dry_run" : "sent",/.test(ENGINE) && /twilio_sid:\s+null,/.test(ENGINE) && !/twilio\.|messages\.create|api\.twilio/i.test(ENGINE) &&
       /id="run-engine-btn" class="sms-ghost-btn">Run Drip Engine \(Dry Run\)</.test(FILES[SMS]) && /"Sent: "\s+\+ \(r\.sent/.test(FILES[SMS]) && />Send Log</.test(FILES[SMS])],
   ["sms 4", smsTips, "A dry run moves no enrollment forward", SMS_FALSE,
@@ -1078,13 +1240,17 @@ const CN = [
       /subscriber\.consent_status !== "opted_in"/.test(ENGINE) && !/\/api\/sms\/send["']/.test(FILES[SMS])]
 ];
 C.forEach(([id, tips, fragment, old, proof]) => {
+  if (fragment === null) return retired("C", id, tips, old);
   const t = tipWith(tips, fragment);
   check("C. " + id + ": the new wording is there", !!t, fragment);
   check("C. " + id + ": the old untrue wording is gone from the whole entry", tips.every(x => !old.test(x)), tips.filter(x => old.test(x)).join(" | "));
   check("C. " + id + ": what it names exists and what it says happens", !!t && proof());
   check("C. " + id + ": no watching or automatic claim", !!t && NO_CLAIM(t), t);
 });
-check("C. the four new entries have 4–5 tips each, and the vertical entry exactly 6 with Claims Scan", [adsTips, exTips, smsTips].every(t => t.length >= 4 && t.length <= 5) && vmTips.length === 6,
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): "…and the vertical entry exactly 6 with Claims Scan" → all four
+// at 4–5, the vertical entry still carrying its Claims Scan tip (row "vertical 6").
+check("C. the four new entries have 4–5 tips each, the vertical entry among them with Claims Scan", [adsTips, exTips, vmTips, smsTips].every(t => t.length >= 4 && t.length <= 5) &&
+  vmTips.some(t => /"Claims Scan"/.test(t)),
   [adsTips, exTips, vmTips, smsTips].map(t => t.length).join(","));
 CN.forEach(([id, tips, fragment, never, proof]) => {
   const t = tipWith(tips, fragment);
@@ -1368,7 +1534,16 @@ check("G3. the only \"live\" copy left on analytics-dashboard, sales and lead-ra
 // G3, widened: "automatically", "instantly" and "auto-" claims, over every tip. Each allowed use is listed with the
 // mechanism that makes it true, asserted in code; any other use fails. None is allowed today.
 const AUTO = /\bautomatic(ally)?\b|\binstant(ly)?\b|\bauto-/i;
-const AUTO_ALLOWED = [];
+// NAMED BEFORE → AFTER (Oct 28 2026, one standard): empty → one entry. billing.html's Do tip names "the
+// automatic-renewal box", the consent the brief requires checkout to show; the subscription does renew automatically,
+// and the box is real: bf-renew-consent.js puts it beside the price and refuses checkout until it is ticked.
+const RENEW = (() => { try { return fs.readFileSync(path.join(FRONTEND, "scripts", "bf-renew-consent.js"), "utf8"); } catch (e) { return ""; } })();
+const AUTO_ALLOWED = [
+  { key: "billing.html", phrase: "automatic-renewal box",
+    proof: () => /<input type="checkbox" data-bf-renew-consent-box>/.test(FILES[BILLING]) && /<script src="\/scripts\/bf-renew-consent\.js"><\/script>/.test(FILES[BILLING]) &&
+      /return \{ error: "Tick the box beside the price to agree to automatic renewal before you subscribe\." \};/.test(RENEW) &&
+      /auto_renew_consent: true/.test(RENEW) && /auto_renew_consent/.test(SV) }
+];
 const autoHits = ALL.filter(x => AUTO.test(x.t) && !AUTO_ALLOWED.some(a => a.key === x.key && x.t.indexOf(a.phrase) !== -1 &&
   !AUTO.test(x.t.split(a.phrase).join("")) && a.proof()));
 check("G3. no tip says automatically, instantly or auto- unless allowlisted with its mechanism",

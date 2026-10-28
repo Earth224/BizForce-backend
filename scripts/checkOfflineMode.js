@@ -720,10 +720,18 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       /id="panel-account"[\s\S]*<div class="toggle-title">Offline Copy<\/div>\s*<div class="toggle-desc" id="offlineSetting"><\/div>[\s\S]*id="signOutBtn"/.test(FILES[SETTINGS]) &&
       /window\.BFOffline\.mountSetting\(document\.getElementById\("offlineSetting"\)\)/.test(FILES[SETTINGS]) &&
       FILES[SETTINGS].indexOf("<script src=\"/scripts/bf-offline.js\"></script>") < FILES[SETTINGS].indexOf("</head>"));
-    const tip = "To open your recent tasks, business profile and wallet history with no connection, turn on \\\"Keep a copy on this device for offline use\\\" in Settings, under Account. " +
-      "Offline, a page shows the time its copy was saved, and nothing can be sent or changed until you're back online.";
-    check("V12. the Termaximus guide has the tip, on the dashboard, naming the setting as it is labelled",
-      /"dashboard\.html": \[[^\]]*/.exec(FILES[GUIDE]) && /"dashboard\.html": \[[^\]]*/.exec(FILES[GUIDE])[0].indexOf(tip) !== -1);
+    /* NAMED BEFORE → AFTER (Oct 28 2026, every guide rewritten to one standard). BEFORE: one dashboard tip, "To open
+       your recent tasks, business profile and wallet history with no connection, turn on "Keep a copy on this device
+       for offline use" in Settings, under Account. Offline, a page shows the time its copy was saved, …". AFTER: the
+       tip belongs to Settings, which now loads the guide: two settings tips, one naming the setting as labelled and
+       its panel, one saying what offline means; and the dashboard entry no longer carries it. */
+    const entryOf = key => (new RegExp('"' + key.replace(/\./g, "\\.") + '": \\[[^\\]]*').exec(FILES[GUIDE]) || [""])[0];
+    const tipOn = "Turn on \\\"Keep a copy on this device for offline use\\\" under \\\"Account\\\" to open recent tasks, profile and wallet with no connection.";
+    const tipOff = "Offline, a page shows when its copy was saved, and nothing can be sent or changed until you're back online.";
+    check("V12. the Termaximus guide has the tip on Settings (which loads the guide), naming the setting as it is labelled and its Account panel; the dashboard no longer has it",
+      entryOf("settings.html").indexOf(tipOn) !== -1 && entryOf("settings.html").indexOf(tipOff) !== -1 &&
+      FILES[SETTINGS].indexOf('<script src="/scripts/termaximus-guide.js"></script>') !== -1 && /Keep a copy on this device/.test(FILES[OFF]) &&
+      entryOf("dashboard.html") !== "" && !/Keep a copy on this device/.test(entryOf("dashboard.html")));
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(","));
