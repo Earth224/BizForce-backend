@@ -23,26 +23,35 @@ const PLATFORM_KNOWLEDGE = {
     }
   },
 
+  /* THE ONE HONEST DESCRIPTION OF EACH AGENT. Every surface reads this list:
+     the roster every agent and the Oracle are told (buildAgentSystemPrompt),
+     GET /api/agents and GET /api/agents/:type (AGENT_DESCRIPTIONS, which
+     replaces whatever an ai_agents row holds), and the frontend, whose page
+     subtitles, home-page cards and scripts/agent-descriptions.js are written
+     from it by scripts/buildAgentDescriptions.js. ai_agents.description is
+     cleared and kept empty (migration 153), so no stored copy can drift.
+     Each says only what the agent's code does; scripts/checkAgentDescriptions.js
+     holds every surface to it. alias is routing only, said in the roster. */
   agents: [
-    { key: "general",    name: "General Agent",   description: "General-purpose business execution assistant for requests that don't fit a specialist agent." },
-    { key: "executive",  name: "Executive Agent",  description: "Coordinates every other agent — breaks a business objective into agent assignments with priorities, timelines, KPIs, and a 7/30/60/90-day roadmap." },
-    { key: "seo",        name: "SEO Agent",        description: "Technical SEO audits, keyword strategy, local SEO plans, content clusters, and ranking action plans." },
-    { key: "sales",      name: "Sales Agent",      description: "Sales scripts, offers, funnels, objection handling, and revenue-focused conversion systems." },
-    { key: "content",    name: "Content Agent",    description: "Publish-ready SEO articles and content plans; the primary generator feeding the Content Library (blog and SMS content)." },
-    { key: "ads",        name: "Ads Agent",        description: "Compliant ad campaigns: audience targeting, creative angles, copy, budget logic, and testing plans." },
-    { key: "reputation", name: "Reputation Agent", description: "Review generation systems, response templates, and brand trust/authority plans." },
-    { key: "analytics",  name: "Analytics Agent",  description: "KPI and funnel review on figures you supply, reporting frameworks, and growth-opportunity identification. Reads no website analytics, traffic or revenue data." },
-    { key: "email",      name: "Email Agent",      description: "Email sequences, subject lines, nurture/retention/winback flows, and promotional campaigns." },
-    { key: "community",  name: "Community Agent",  description: "Community growth plans, engagement systems, referral loops, and moderation strategy." },
-    { key: "influencer", name: "Influencer Agent", description: "Creator outreach, partnership offers, campaign plans, and ROI forecasting for influencer marketing." },
-    { key: "operations", name: "Operations Agent", description: "SOPs, workflows, automation plans, checklists, and internal process design." },
-    { key: "store",      name: "Store Agent",      description: "Multi-store and e-commerce strategy: inventory, omnichannel performance, and conversion optimization." },
-    { key: "publicist",  name: "Publicist Agent",  description: "Press releases, media pitches, PR campaigns, and brand narrative development." },
-    { key: "broker",     name: "Broker Agent",     description: "Deal flow identification, partnership structuring, negotiation briefs, due diligence, and term sheets." },
-    { key: "rd",         name: "R&D Agent",        description: "Market research, competitive intelligence, trend analysis, and executive-ready briefings. (Also addressable as \"research\".)" },
-    { key: "etsy",       name: "Storefront Agent", description: "Listing copy for any online store, keyword candidates, and pricing arithmetic on figures the seller supplies. Reads no marketplace." },
-    { key: "social",     name: "Social Agent",     description: "Social media campaigns, content calendars, engagement strategy, and platform-specific playbooks." },
-    { key: "vertical_marketing", name: "Vertical Marketing Agent", description: "Marketing built for one industry vertical rather than in general: positioning, language, channels, and objections particular to a single trade." }
+    { key: "general",    name: "General Agent",   description: "General-purpose business help for requests that don't fit a specialist agent." },
+    { key: "executive",  name: "Executive Agent",  description: "Executive plans of assignments for the other agents, plus coordination, briefings, and KPI reviews." },
+    { key: "seo",        name: "SEO Agent",        description: "Search intelligence from your business profile." },
+    { key: "sales",      name: "Sales Agent",      description: "Funnels, outreach scripts, and offers from your business profile, plus the leads Lead Radar captures." },
+    { key: "content",    name: "Content Agent",    description: "Articles, campaigns, and creative strategy intelligence." },
+    { key: "ads",        name: "Ads Agent",        description: "Ad campaigns, audience growth, ad copy, and policy checks." },
+    { key: "reputation", name: "Reputation Agent", description: "Review requests, replies to reviews you paste in, and reputation, trust and crisis plans. It reads no review site." },
+    { key: "analytics",  name: "Analytics Agent",  description: "KPI reviews and funnel analysis on figures you enter, plus arrivals on your own tracked links. It reads no website analytics or revenue data." },
+    { key: "email",      name: "Email Agent",      description: "Email campaigns, sequences, win-back and nurture flows, and subject lines." },
+    { key: "community",  name: "Community Agent",  description: "Community growth plans, engagement strategy, referral loops, and retention systems." },
+    { key: "influencer", name: "Influencer Agent", description: "Creator outreach, partnership offers, and influencer campaign plans. It finds no creators and measures no results." },
+    { key: "operations", name: "Operations Agent", description: "SOPs, checklists, and workflow and automation plans, written from your business profile." },
+    { key: "store",      name: "Store Agent",      description: "Stock & Margin from your own inventory records, BizForce Market listings proposed for your approval, and store, conversion and launch plans." },
+    { key: "publicist",  name: "Publicist Agent",  description: "Press releases, media pitches, PR campaigns, and brand narrative." },
+    { key: "broker",     name: "Broker Agent",     description: "Deal pipeline plans, partnership strategy, negotiation briefs, due-diligence checklists, and draft term sheets." },
+    { key: "rd",         name: "R&D Agent",        description: "Research intelligence powered by your business profile.", alias: "research" },
+    { key: "etsy",       name: "Storefront Agent", description: "Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply." },
+    { key: "social",     name: "Social Agent",     description: "Social campaigns, content calendars and platform playbooks, plus Bluesky posts from your own connected account." },
+    { key: "vertical_marketing", name: "Vertical Marketing Agent", description: "Marketing built for one industry vertical — its language, its channels, its objections." }
   ],
 
   systems: {
@@ -244,7 +253,8 @@ function formatPlatformKnowledge() {
   lines.push("\nAgents on this platform (" + roster.length + "):");
   roster.forEach(function (key) {
     var agent = byKey[key];
-    lines.push("- " + (agent ? agent.name + " (" + key + "): " + agent.description : key));
+    lines.push("- " + (agent ? agent.name + " (" + key + "): " + agent.description +
+      (agent.alias ? " (Also addressable as \"" + agent.alias + "\".)" : "") : key));
   });
   if (byKey.general) {
     lines.push("A request that names none of these goes to a general-purpose fallback (general), which is not one of the " + roster.length + ".");
@@ -504,8 +514,21 @@ function buildAgentSystemPrompt(agentSpecificPrompt, businessProfile, liveStats,
   return blocks.join("\n\n");
 }
 
+/* type → its one honest description (PLATFORM_KNOWLEDGE.agents). An unknown
+   type has none: "" rather than a guess, and never a stored copy. */
+const AGENT_DESCRIPTIONS = Object.freeze(PLATFORM_KNOWLEDGE.agents.reduce(function (out, agent) {
+  out[agent.key] = agent.description;
+  return out;
+}, {}));
+function agentDescription(type) {
+  var key = String(type || "").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(AGENT_DESCRIPTIONS, key) ? AGENT_DESCRIPTIONS[key] : "";
+}
+
 module.exports = {
   PLATFORM_KNOWLEDGE,
+  AGENT_DESCRIPTIONS,
+  agentDescription,
   BRAIN_DIRECTIVES,
   NO_INVENTION_RULE,
   buildAgentSystemPrompt,

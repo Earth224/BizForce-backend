@@ -49,10 +49,12 @@ const MUTATIONS = {
   // Sent counts finished tasks again
   "restore-old-funnel-status": [[SALES, "else if (t.status === \"sent\") sentCount++;", "else if (t.status === \"completed\") sentCount++;"]],
   // a pill row comes back
-  "restore-pill-row": [[ETSY, "<p class=\"agent-subtitle\">Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply.</p>",
-    "<p class=\"agent-subtitle\">Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply.</p>\n        <div class=\"capability-pills\"><span class=\"capability-pill\">Competitors</span></div>"]],
+  // NAMED (Oct 28 2026, one honest description per agent): the Storefront subtitle these two anchors sit on changes
+  // from "Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply." to config/brain.js's "Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply."
+  "restore-pill-row": [[ETSY, "<p class=\"agent-subtitle\">Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply.</p>",
+    "<p class=\"agent-subtitle\">Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply.</p>\n        <div class=\"capability-pills\"><span class=\"capability-pill\">Competitors</span></div>"]],
   // the marketplace claim comes back
-  "restore-marketplace-intelligence": [[INDEX, "Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply.",
+  "restore-marketplace-intelligence": [[INDEX, "Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply.",
     "Shop listings, keywords, pricing, and marketplace intelligence."]],
   // a failed pipeline read shows 0
   "zero-on-failed-pipeline": [[SALES, "          setFn(\"mcFnReplied\", \"could not be read\");\n          setFn(\"mcFnConverted\", \"could not be read\");\n",
@@ -236,8 +238,9 @@ const TASKS = [
   check("4. the old labels are gone", files.every(f => !/label:\s*"Shop Audit" \}|label:\s*"Competitor Analysis" \}/.test(PAGES[f])));
   const mi = files.filter(f => /marketplace intelligence/i.test(PAGES[f]));
   check("5. no \"marketplace intelligence\"", mi.length === 0, mi.join(", "));
-  check("5. the Etsy page and the home page describe listing copy, keyword candidates and pricing arithmetic",
-    [ETSY, INDEX].every(f => PAGES[f].indexOf("Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply.") !== -1));
+  // NAMED (Oct 28 2026): BEFORE "Listing copy, tag-length keyword candidates, and pricing arithmetic on figures you supply." AFTER the one honest description (config/brain.js; checkAgentDescriptions).
+  check("5. the Storefront page and the home page describe listing copy, keyword candidates against the tag limits you enter, and pricing arithmetic",
+    [ETSY, INDEX].every(f => PAGES[f].indexOf("Listing copy, keyword candidates measured against the tag limits you enter, and pricing arithmetic on figures you supply.") !== -1));
   const content = PAGES["agents/content.html"];
   const code = content.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
   check("6. content.html never reads .stats from the contentAgent store", !/\.stats\b/.test(code), (code.match(/[^\n]*\.stats\b[^\n]*/) || [""])[0].trim());

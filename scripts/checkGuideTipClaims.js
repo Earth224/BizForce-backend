@@ -978,8 +978,13 @@ const B = [
       /onclick="window\.location\.href='ai-agents\.html';">Full Directory<\/button>/.test(FILES[DASHBOARD]) &&
       (FILES[HUB].match(/class="agent-card/g) || []).length === 18 && /agents\.forEach\(function \(agent\) \{/.test(FILES[DIRECTORY])],
   // group 9 — the directory: ai_agents.description is seeded empty, so a card shows a name and a link
-  ["9 ai-agents 29", dirTips, "each card here holds only a name and that link", /one-line description|specializes in|descriptions are specific/,
-    () => /display_name: agentDisplayName\(type\),\s*description: "",/.test(SV) && /name\.textContent = agent\.display_name \|\| "";/.test(FILES[DIRECTORY]) &&
+  // NAMED (Oct 28 2026, one honest description per agent): BEFORE "each card here holds only a name and that link", proven
+  // by seeding description "" (untrue for any row that held one, as the owner's did). AFTER every card shows the agent's
+  // one honest description from scripts/agent-descriptions.js; seeding stores NULL and no stored copy is ever shown.
+  ["9 ai-agents 29", dirTips, "each card shows the agent's name and one line on what it does", /one-line description|specializes in|descriptions are specific/,
+    () => /display_name: agentDisplayName\(type\),\s*\/\/[^\n]*\n\s*description: null,/.test(SV) && /name\.textContent = agent\.display_name \|\| "";/.test(FILES[DIRECTORY]) &&
+      /description\.textContent = Object\.prototype\.hasOwnProperty\.call\(descriptions, type\) \? descriptions\[type\] : "";/.test(FILES[DIRECTORY]) &&
+      /<script src="\/scripts\/agent-descriptions\.js"><\/script>/.test(FILES[DIRECTORY]) &&
       /var href = agent\.page_url \|\| "agents-hub\.html";/.test(FILES[DIRECTORY]) && /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
   ["9 ai-agents 31", dirTips, "Find an agent by name and press \"Open Agent\"", /which agent fits a task — the descriptions/,
     () => /link\.textContent = "Open Agent";/.test(FILES[DIRECTORY])],
@@ -1062,8 +1067,12 @@ const BCOPY = [
   // [id, file, the new text as it stands in the file, old untrue wording (absent from the page's visible text), proof]
   ["6 email-agent.html subtitle", EMAIL, '<p class="agent-subtitle">Email campaigns, sequences, win-back and nurture flows, and subject lines.</p>', /deliverability/i,
     () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n))],
-  ["6 store-agent.html subtitle", STORE, '<p class="agent-subtitle">Store audits, inventory plans, omnichannel strategy, and launch plans.</p>', /Multi-store|sales intelligence/i,
-    () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Product Launch Plan"].every(n => offers(STORE, n))],
+  // NAMED (Oct 28 2026, one honest description per agent): BEFORE "Store audits, inventory plans, omnichannel strategy, and
+  // launch plans." AFTER config/brain.js's text: Stock & Margin from the member's own inventory, proposed BizForce Market
+  // listings, and plans; no omnichannel claim. The proof gains the Stock & Margin tool and the proposals route.
+  ["6 store-agent.html subtitle", STORE, '<p class="agent-subtitle">Stock &amp; Margin from your own inventory records, BizForce Market listings proposed for your approval, and store, conversion and launch plans.</p>', /Multi-store|sales intelligence|omnichannel strategy,/i,
+    () => ["Store Audit", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) && /"label": "Stock & Margin"/.test(FILES[STORE]) &&
+      FILES[SERVER].indexOf('app.post("/api/agents/store/stock-margin"') !== -1 && FILES[SERVER].indexOf('app.post("/api/agents/store/generate-proposals"') !== -1],
   ["6 publicist-agent.html subtitle", PUBLICIST, '<p class="agent-subtitle">Press releases, media pitches, PR campaigns, and brand narrative.</p>', /visibility intelligence/i,
     () => ["Press Release", "Media Pitch", "PR Campaign", "Brand Narrative"].every(n => offers(PUBLICIST, n))],
   ["6 community-agent.html subtitle", COMMUNITY, '<p class="agent-subtitle">Community growth plans, engagement strategy, referral loops, and retention systems.</p>', /Community health|growth intelligence/i,

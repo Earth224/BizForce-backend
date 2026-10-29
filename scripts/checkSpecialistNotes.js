@@ -69,6 +69,18 @@ const ETSY_ROSTER_NOW = "- Storefront Agent (etsy): Listing copy for any online 
    the same way, on the same terms: the old line must be there to swap. */
 const ANALYTICS_ROSTER_BEFORE = "KPI analysis, traffic and conversion review, dashboards, and growth-opportunity identification.";
 const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, reporting frameworks, and growth-opportunity identification. Reads no website analytics, traffic or revenue data.";
+/* NAMED (Oct 28 2026, one honest description per agent): BEFORE, section 4 swapped exactly the two lines
+   above. AFTER, config/brain.js's roster IS the one source of every agent description shown anywhere, and
+   eight of them were rewritten, so section 4 swaps EVERY roster line ("- <name> (<key>): …"), each for the
+   current line of the same key. It still demands the same keys in the same order, that the two old lines
+   above were there to swap, and that every other byte of the prompt is identical to BASELINE.
+   checkAgentDescriptions pins the current lines' wording. */
+function rosterLines(p) {
+  const at = p.indexOf("\nAgents on this platform (");
+  if (at < 0) return null;
+  const end = p.indexOf("\n\n", at + 1);
+  return p.slice(at, end < 0 ? p.length : end).split("\n").filter(l => /^- .+ \([a-z_]+\): /.test(l));
+}
 const MUTATIONS = ["nocap", "silentcut", "midword", "oracle", "leadnotes", "peragent", "limit", "self", "notrunc", "unwired"];
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
@@ -204,12 +216,20 @@ async function pages(table, cols, filter) {
   function baselinePrompt(a) {
     const p = brain0.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]);
     if (p.split(ETSY_ROSTER_BEFORE).length !== 2 || p.split(ANALYTICS_ROSTER_BEFORE).length !== 2) return null;
-    return p.replace(ETSY_ROSTER_BEFORE, ETSY_ROSTER_NOW).replace(ANALYTICS_ROSTER_BEFORE, ANALYTICS_ROSTER_NOW);
+    const was = rosterLines(p), now = rosterLines(brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]));
+    const key = l => (/^- .+ \(([a-z_]+)\): /.exec(l) || [])[1];
+    if (!was || !now || was.length !== now.length || was.some((l, i) => key(l) !== key(now[i]))) return null;
+    let out = p;
+    for (let i = 0; i < was.length; i++) {
+      if (out.split(was[i]).length !== 2) return null;
+      out = out.slice(0, out.indexOf(was[i])) + now[i] + out.slice(out.indexOf(was[i]) + was[i].length);
+    }
+    return out;
   }
   const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => baselinePrompt(a) !== null &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === baselinePrompt(a) &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === baselinePrompt(a));
-  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the renamed Storefront (etsy) and corrected Analytics roster lines", same);
+  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the roster lines, each swapped for the same agent's current line", same);
 
   console.log("\n══ 5. only the typed-task path reads them ══");
   const handler = defs(SERVER, ["handleAiTaskRequest"]);

@@ -114,14 +114,18 @@ function analyze(list) { return B.analyzeMigrations(list.map(([name, sql]) => ({
   check("S2. no BLOCKING finding: the file runs on a fresh database", blocking.length === 0, blocking.map(f => f.file + ":" + f.line + " " + f.text).join(" | "));
   /* BEFORE (backend 48334d9): exactly one PRODUCTION DATA statement, 040's username backfill.
      AFTER (migration 145): a second, 145's backfill of bfc_transfers from existing 'Transfer' ledger pairs (INSERT ... SELECT,
-     ON CONFLICT DO NOTHING). It reads production rows on purpose; on a scratch database it inserts nothing. */
-  check("S2. two PRODUCTION DATA statements: 040's username backfill and 145's transfer backfill",
-    prod.length === 2 && prod[0].file === "040_bf_profiles_username.sql" && /^changes existing rows/.test(prod[0].text) &&
-    prod[1].file === "145_bfc_transfers.sql" && /^INSERT \.\.\. SELECT copies existing rows/.test(prod[1].text),
+     ON CONFLICT DO NOTHING). It reads production rows on purpose; on a scratch database it inserts nothing.
+     NAMED (Oct 28 2026, one honest description per agent): two → three. 153 sets every stored ai_agents.description to
+     NULL (UPDATE … WHERE description IS NOT NULL), on purpose: the stale copies are what it clears. On a scratch database
+     it changes nothing. */
+  check("S2. three PRODUCTION DATA statements: 040's username backfill, 145's transfer backfill and 153's description clear",
+    prod.length === 3 && prod[0].file === "040_bf_profiles_username.sql" && /^changes existing rows/.test(prod[0].text) &&
+    prod[1].file === "145_bfc_transfers.sql" && /^INSERT \.\.\. SELECT copies existing rows/.test(prod[1].text) &&
+    prod[2].file === "153_agent_descriptions_cleared.sql" && /^changes existing rows/.test(prod[2].text),
     prod.map(f => f.file + ":" + f.line + " " + f.text).join(", "));
   check("S2. nothing needed fixing", fixed.length === 0, fixed.map(f => f.file + " " + f.text).join(" | "));
-  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 2, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text) &&
-    /--   PRODUCTION DATA  145_bfc_transfers\.sql:\d+/.test(text));
+  check("S2. the header lists the findings", /-- Findings: BLOCKING 0, PRODUCTION DATA 3, NOT IDEMPOTENT \d+, FIXED 0\./.test(text) && /--   PRODUCTION DATA  040_bf_profiles_username\.sql:\d+/.test(text) &&
+    /--   PRODUCTION DATA  145_bfc_transfers\.sql:\d+/.test(text) && /--   PRODUCTION DATA  153_agent_descriptions_cleared\.sql:\d+/.test(text));
 
   console.log("\n══ S3. the rules, on fixtures ══");
   const split = B.splitStatements("-- create table nope (id int);\ncreate table a (id int); /* drop table a; */\n" +

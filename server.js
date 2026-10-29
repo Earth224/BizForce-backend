@@ -9624,6 +9624,12 @@ app.post("/api/inventory/items/:id/movements", requireAuth, async function (req,
   }
 });
 
+/* An agent's description is not stored and not editable: each agent has one
+   honest description (config/brain.js PLATFORM_KNOWLEDGE.agents), shown
+   beside the display name, which is the member's to change. */
+var AGENT_DESCRIPTION_FIXED = "An agent's description can't be changed: each agent shows the one description that says what it does. " +
+  "You can change its display name.";
+
 app.get("/api/agents", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
@@ -9647,7 +9653,8 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
             user_id: req.user.id,
             type,
             display_name: agentDisplayName(type),
-            description: "",
+            // No description is stored: the honest one is config/brain.js's, added at read time below.
+            description: null,
             active: true,
             settings: {},
             tasks_completed: 0,
@@ -9717,9 +9724,15 @@ app.get("/api/agents", requireAuth, async function (req, res, next) {
        the rows above it. The two can legitimately differ in length: rows are
        seeded once and never reconciled, so a user seeded before a type was
        deregistered keeps a row for it while the roster no longer lists it. */
+    /* description is likewise DERIVED AT READ TIME: the agent's one honest
+       description from config/brain.js, replacing whatever the row holds.
+       Stored descriptions drifted (the owner's rows still said "Etsy listing
+       optimization … competitor-shop analysis"); migration 153 clears them,
+       and this keeps a stored copy from ever being shown again. */
     const agentsWithPages = agents.map(function (agent) {
       return Object.assign({}, agent, {
-        page_url: agentPageUrl(agent && agent.type)
+        page_url: agentPageUrl(agent && agent.type),
+        description: require("./config/brain").agentDescription(agent && agent.type)
       });
     });
 
@@ -9793,7 +9806,8 @@ app.get("/api/agents/:type", requireAuth, async function (req, res, next) {
       return res.status(404).json({ error: "agent not found" });
     }
 
-    return res.json({ agent: data });
+    // The honest description (config/brain.js), never the row's stored copy.
+    return res.json({ agent: Object.assign({}, data, { description: require("./config/brain").agentDescription(data.type) }) });
   } catch (error) {
     next(error);
   }
@@ -9808,6 +9822,10 @@ app.post("/api/agents", requireAuth, requireActiveSubscription, async function (
       return res.status(400).json({ error: "Invalid agent type" });
     }
 
+    if (Object.prototype.hasOwnProperty.call(req.body, "description")) {
+      return res.status(400).json({ error: AGENT_DESCRIPTION_FIXED, field: "description" });
+    }
+
     const limit = await enforceAgentLimit(req.user.id, type);
 
     if (!limit.allowed) {
@@ -9820,7 +9838,7 @@ app.post("/api/agents", requireAuth, requireActiveSubscription, async function (
         user_id: req.user.id,
         type,
         display_name: displayName || agentDisplayName(type),
-        description: safeText(req.body.description, 500),
+        description: null,
         active: true,
         settings: req.body.settings || {},
         tasks_completed: 0,
@@ -9849,8 +9867,9 @@ app.put("/api/agents/:id", requireAuth, async function (req, res, next) {
       updates.display_name = safeText(req.body.display_name, 120);
     }
 
+    // Only the display name is the member's to change; the description is the agent's honest one.
     if (Object.prototype.hasOwnProperty.call(req.body, "description")) {
-      updates.description = safeText(req.body.description, 500);
+      return res.status(400).json({ error: AGENT_DESCRIPTION_FIXED, field: "description" });
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body, "settings")) {

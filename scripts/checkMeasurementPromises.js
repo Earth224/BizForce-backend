@@ -242,7 +242,11 @@ const FIVE_REMOVED = ["estimated value", "estimated time", "publications and jou
   console.log("\n══ 2. the Analytics roster line ══");
   const line = (FILES[BRAIN].match(/\{ key: "analytics",[^\n]*\}/) || [""])[0];
   check("it no longer promises traffic and conversion review", line && line.indexOf("traffic and conversion review") === -1, line);
-  check("it says it reads no website analytics, traffic or revenue data", line.indexOf("Reads no website analytics, traffic or revenue data.") !== -1, line);
+  // NAMED (Oct 28 2026, one honest description per agent): BEFORE "Reads no website analytics, traffic or revenue data."
+  // AFTER "It reads no website analytics or revenue data." The line now also names the Arrivals Ledger, which counts
+  // arrivals on the member's own tracked links, so "no traffic" would be untrue; it still reads no site analytics or revenue.
+  check("it says it reads no website analytics or revenue data", line.indexOf("It reads no website analytics or revenue data.") !== -1 &&
+    line.indexOf("arrivals on your own tracked links") !== -1, line);
 
   /* ── 3. the social caveat ─────────────────────────────────────────────── */
   console.log("\n══ 3. social/post says graphemes on Bluesky ══");
