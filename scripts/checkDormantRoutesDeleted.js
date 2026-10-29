@@ -121,7 +121,16 @@ const ADDED = [
   ["get", "/api/support/me"],                  // the member's own support links, headline and page switches (total 324 -> 325)
   ["put", "/api/support/me"],                  // saves them: links normalized from the allow-list, at most five (total 325 -> 326)
   ["get", "/support/:username"],               // bizforceai.net/support/<username>: the support page, served with its own OG tags (total 326 -> 327)
-  ["get", "/api/sitemap/support.xml"]          // the support pages members chose to list in search engines (total 327 -> 328)
+  ["get", "/api/sitemap/support.xml"],         // the support pages members chose to list in search engines (total 327 -> 328)
+  // NAMED (Oct 28 2026, the learning loop): BEFORE 328 routes; AFTER 336, adding its eight routes, each requireAuth
+  ["get", "/api/agents/feedback/:taskId"],      // the member's rating of their own run, and its outcome (total 328 -> 329)
+  ["put", "/api/agents/feedback/:taskId"],      // rate a run 👍/👎 with a reason and comment; one per member per run (total 329 -> 330)
+  ["post", "/api/agents/feedback/:taskId/pin"], // "Use this as an example": 👍 runs only, five per agent (total 330 -> 331)
+  ["get", "/api/agents/:agentType/learning"],   // the score, outcomes, examples, preferences, suggestions and the exact guidance (total 331 -> 332)
+  ["post", "/api/agents/:agentType/preferences"], // a preference typed or a suggestion accepted; eight at most (total 332 -> 333)
+  ["put", "/api/agents/:agentType/preferences/:id"], // edit a preference (total 333 -> 334)
+  ["delete", "/api/agents/:agentType/preferences/:id"], // remove a preference (total 334 -> 335)
+  ["get", "/api/admin/agent-learning"]          // the owner's platform view: counts per agent, no member ids (total 335 -> 336)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

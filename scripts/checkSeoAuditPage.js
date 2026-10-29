@@ -592,8 +592,10 @@ const count = (h, needle) => h.split(needle).length - 1;
   const seoOld = load(OLD_SRC, SEO_CFG);
   const oldStyle = seoOld.style, newStyle = seo.style;
   // Demand signals on the R&D page added .ap-ds-* rules beside the .ap-seo-* ones.
-  const removed = newStyle.replace(/\.ap-(?:seo|ds)-[^}]*\}/g, "");
-  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-* and .ap-ds-* rules were added", !/\.ap-(?:seo|ds)-/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
+  // NAMED (Oct 28 2026, the learning loop): BEFORE only .ap-seo-* and .ap-ds-* rules were added. AFTER the rating
+  // bar's .ap-rate* and the learning panel's .ap-learn* rules are added too; every rule of BEFORE is still unchanged.
+  const removed = newStyle.replace(/\.ap-(?:seo-|ds-|rate|learn-)[^}]*\}/g, "");
+  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-*, .ap-ds-*, .ap-rate* and .ap-learn-* rules were added", !/\.ap-(?:seo-|ds-|rate|learn-)/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
   console.log("    (" + pages.length + " agent pages, " + toolCount + " other tools, " + compared + " renders compared)");
 
 

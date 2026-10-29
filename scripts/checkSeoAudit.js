@@ -232,8 +232,10 @@ async function audit(url, model) {
   const db = fakeDb();
   const prompts = [];
   let handler = null;
+  // NAMED (Oct 28 2026, the learning loop): BEFORE require was this script's own. AFTER a "./lib/..." path
+  // resolves from the repo, because the lifted toolGenerateWithOneRetry reaches require("./lib/learningLoop").
   const ctx = {
-    supabase: db.client, nowIso: () => "2026-10-09T12:00:00.000Z", process: { env: {} }, require: require, Buffer: Buffer, URL: URL,
+    supabase: db.client, nowIso: () => "2026-10-09T12:00:00.000Z", process: { env: {} }, require: p => require(p.indexOf("./") === 0 ? path.join(REPO, p) : p), Buffer: Buffer, URL: URL,
     console: { log() {}, warn() {}, error() {} }, setTimeout: setTimeout,
     requireAuth: "requireAuth", requireActiveSubscription: "requireActiveSubscription", aiLimiter: "aiLimiter",
     resolvePreferredLanguage: async () => null,

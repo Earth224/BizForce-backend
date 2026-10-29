@@ -100,6 +100,9 @@ async function run(body) {
   const ctx = {
     supabase: sb.client, nowIso: () => "2026-10-13T12:00:00.000Z", process: { env: {} },
     console: { log() {}, error() {}, warn() {} },
+    // NAMED (Oct 28 2026, the learning loop): BEFORE no require here. AFTER the lifted toolGenerateWithOneRetry
+    // reaches require("./lib/learningLoop"), so a "./lib/..." path resolves from the repo.
+    require: p => require(p.indexOf("./") === 0 ? path.join(REPO, p) : p),
     requireAuth: 0, requireActiveSubscription: 0, aiLimiter: 0,
     resolvePreferredLanguage: async () => null,
     buildLanguageInstruction: () => "",

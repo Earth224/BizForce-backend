@@ -54,6 +54,7 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 // Only the platform spend ceiling asks this (platformSpendTestAccounts); no gate does.
 const { isTestAccount } = require("./lib/testAccounts");
 const guideAsk = require("./lib/guideAsk");
+const LEARNING = require("./lib/learningLoop");
 const APP_MAP = require("./lib/appMap.json");
 const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
@@ -15756,6 +15757,11 @@ if (memoryResult.error) {
     var taskInstruction = taskInstructions[taskType] || taskInstructions["general"];
     var specialistNotes = await fetchSpecialistNotes(userId, agentType);
     var sharedSystemPrompt = buildAgentSystemPrompt(agentBrain, businessProfile, liveStats, combinedMemoriesForBrain, specialistNotes);
+    /* The member's own preferences and pinned examples for this agent, placed
+       BELOW the system prompt, the safety rules and the approval status, and
+       never above them; "" when the member has said nothing, so the prompt is
+       then exactly what it always was (memberGuidanceFor). */
+    var memberGuidance = await memberGuidanceFor(userId, agentType);
     var finalPrompt =
   sharedSystemPrompt +
   "\n\nTASK TYPE:\n" + taskType +
@@ -15765,6 +15771,7 @@ if (memoryResult.error) {
   "- For high-risk actions, return requires_approval true and an approval plan.\n" +
   "- Keep outputs lawful, practical, and business-safe.\n" +
   "\n\nAPPROVAL STATUS:\n" + approvalInstruction +
+  memberGuidance +
   "\n\nUSER REQUEST:\n" + userPrompt;
     /* task_type IS RECORDED, HAVING BEEN VALIDATED AND USED. It was checked
        against allowedTaskTypes above, coerced to "general" if unrecognised, and
@@ -16790,6 +16797,332 @@ app.delete("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
     next(error);
   }
 });
+// ════════════════════════════════════════════════════════════════════════════
+// THE LEARNING LOOP: each member's ratings, pinned examples and preferences.
+// ════════════════════════════════════════════════════════════════════════════
+/* THE MODEL DOES NOT LEARN, AND NOTHING HERE SAYS IT DOES. A member rates a run
+   👍 or 👎, may pin a 👍 run as an example, and keeps up to eight preferences per
+   agent. memberGuidanceFor turns the member's own pins and preferences into a
+   block placed below every rule of that member's prompts for that agent
+   (lib/learningLoop.js says how and how much). Every word of the block is
+   answered to the member as `guidance` by GET /api/agents/:agentType/learning,
+   so nothing is told to the agent that the member cannot read.
+
+   OWN RUNS ONLY. A run is rated, pinned or used as an example only when its
+   ai_tasks row is the member's: every read of a run here carries
+   .eq("user_id", ...). The rails (findComplianceViolations, fdaRailViolations,
+   claimsScanText) scan the output and read none of this.
+   scripts/checkLearningLoop.js proves it. */
+var LEARNING_AGENT_TYPE = /^[a-z][a-z0-9_]{1,39}$/;
+
+/* "" on anything at all going wrong, so a failed read leaves the prompt
+   exactly as it was before this existed. */
+async function memberGuidanceFor(userId, agentType) {
+  try {
+    if (!isValidUuid(userId) || !LEARNING_AGENT_TYPE.test(String(agentType || ""))) return "";
+    var prefs = await supabase.from("agent_preferences").select("text")
+      .eq("user_id", userId).eq("agent_type", agentType)
+      .order("created_at", { ascending: true }).limit(LEARNING.PREF_CAP);
+    if (prefs.error) return "";
+    var pins = await supabase.from("agent_feedback").select("task_id, pinned_at")
+      .eq("user_id", userId).eq("agent_type", agentType).eq("pinned", true).eq("rating", "up")
+      .order("pinned_at", { ascending: false }).limit(LEARNING.EXAMPLES_IN_PROMPT);
+    if (pins.error) return "";
+    var ids = (pins.data || []).map(function (p) { return p.task_id; }).filter(isValidUuid);
+    var examples = [];
+    if (ids.length) {
+      var runs = await supabase.from("ai_tasks").select("id, task_type, result, output")
+        .in("id", ids).eq("user_id", userId);
+      if (runs.error) return "";
+      var byId = {};
+      (runs.data || []).forEach(function (t) { byId[t.id] = t; });
+      ids.forEach(function (id) {
+        if (byId[id]) examples.push({ task_type: byId[id].task_type, text: LEARNING.runText(byId[id]) });
+      });
+    }
+    return LEARNING.buildGuidanceBlock({
+      preferences: (prefs.data || []).map(function (p) { return p.text; }),
+      examples: examples
+    });
+  } catch (err) {
+    return "";
+  }
+}
+
+async function learningOwnRun(userId, taskId) {
+  if (!isValidUuid(taskId)) return null;
+  var run = await supabase.from("ai_tasks").select("id, user_id, agent_type, task_type, status")
+    .eq("id", taskId).eq("user_id", userId).maybeSingle();
+  if (run.error) throw run.error;
+  return run.data || null;
+}
+
+async function learningFeedbackRow(userId, taskId) {
+  var row = await supabase.from("agent_feedback").select("*")
+    .eq("task_id", taskId).eq("user_id", userId).maybeSingle();
+  if (row.error) throw row.error;
+  return row.data || null;
+}
+
+function learningFeedbackOut(row) {
+  if (!row) return null;
+  return { task_id: row.task_id, agent_type: row.agent_type, rating: row.rating, reason: row.reason || null,
+    comment: row.comment || null, pinned: row.pinned === true, pinned_at: row.pinned_at || null,
+    created_at: row.created_at, updated_at: row.updated_at };
+}
+
+async function learningProposals(userId, agentType) {
+  var since = new Date(Date.now() - LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  var rows = await supabase.from("agent_proposals").select("status, decided_at, executed_at, payload")
+    .eq("user_id", userId).eq("agent_type", agentType).gte("decided_at", since).limit(1000);
+  if (rows.error) throw rows.error;
+  return rows.data || [];
+}
+
+// One run's rating, and what came of it where that is already recorded.
+app.get("/api/agents/feedback/:taskId", requireAuth, async function (req, res, next) {
+  try {
+    var run = await learningOwnRun(req.user.id, req.params.taskId);
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    var row = await learningFeedbackRow(req.user.id, run.id);
+    var proposals = await supabase.from("agent_proposals").select("status, payload")
+      .eq("user_id", req.user.id).eq("payload->>source_task_id", run.id).limit(5);
+    return res.json({
+      feedback: learningFeedbackOut(row),
+      outcome: proposals.error ? null : LEARNING.runOutcome(run.id, proposals.data || []),
+      reasons: LEARNING.REASONS
+    });
+  } catch (error) { next(error); }
+});
+
+// Rate a run 👍 or 👎, with an optional reason and comment. One per member per run; rating again changes it.
+app.put("/api/agents/feedback/:taskId", requireAuth, async function (req, res, next) {
+  try {
+    var run = await learningOwnRun(req.user.id, req.params.taskId);
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    if (run.status === "processing") return res.status(400).json({ error: "This run has not finished, so there is nothing to rate yet." });
+    var input = LEARNING.normalizeRating(req.body);
+    if (input.error) return res.status(400).json({ error: input.error });
+    var existing = await learningFeedbackRow(req.user.id, run.id);
+    var now = new Date().toISOString();
+    var row = { task_id: run.id, user_id: req.user.id, agent_type: run.agent_type, rating: input.rating,
+      reason: input.reason, comment: input.comment, updated_at: now };
+    // A 👎 run is no example: rating it down takes it out of the examples.
+    if (input.rating === "down" || !existing) { row.pinned = false; row.pinned_at = null; }
+    var saved = await supabase.from("agent_feedback").upsert(row, { onConflict: "task_id,user_id" }).select("*").single();
+    if (saved.error) throw saved.error;
+    return res.json({ feedback: learningFeedbackOut(saved.data) });
+  } catch (error) { next(error); }
+});
+
+/* "Use this as an example": only a run rated 👍. At most five pinned per
+   member per agent; pinning a sixth unpins the oldest. */
+app.post("/api/agents/feedback/:taskId/pin", requireAuth, async function (req, res, next) {
+  try {
+    var run = await learningOwnRun(req.user.id, req.params.taskId);
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    var existing = await learningFeedbackRow(req.user.id, run.id);
+    var pin = !(req.body && req.body.pinned === false);
+    if (!pin) {
+      if (!existing) return res.json({ feedback: null, unpinned: [] });
+      var off = await supabase.from("agent_feedback").update({ pinned: false, pinned_at: null })
+        .eq("task_id", run.id).eq("user_id", req.user.id).select("*").single();
+      if (off.error) throw off.error;
+      return res.json({ feedback: learningFeedbackOut(off.data), unpinned: [] });
+    }
+    if (!existing || existing.rating !== "up") {
+      return res.status(400).json({ error: "Only a run you rated 👍 can be used as an example." });
+    }
+    var others = await supabase.from("agent_feedback").select("task_id, pinned_at")
+      .eq("user_id", req.user.id).eq("agent_type", existing.agent_type).eq("pinned", true)
+      .order("pinned_at", { ascending: true });
+    if (others.error) throw others.error;
+    var pinnedOthers = (others.data || []).filter(function (r) { return r.task_id !== run.id; });
+    var unpinned = [];
+    while (pinnedOthers.length >= LEARNING.PIN_CAP) {
+      var oldest = pinnedOthers.shift();
+      var drop = await supabase.from("agent_feedback").update({ pinned: false, pinned_at: null })
+        .eq("task_id", oldest.task_id).eq("user_id", req.user.id);
+      if (drop.error) throw drop.error;
+      unpinned.push(oldest.task_id);
+    }
+    var on = await supabase.from("agent_feedback").update({ pinned: true, pinned_at: new Date().toISOString() })
+      .eq("task_id", run.id).eq("user_id", req.user.id).select("*").single();
+    if (on.error) throw on.error;
+    return res.json({ feedback: learningFeedbackOut(on.data), unpinned: unpinned });
+  } catch (error) { next(error); }
+});
+
+/* Everything one agent has from this member, and everything it is told: the
+   score, the outcomes, the examples, the preferences, the suggestions, and the
+   exact block placed in the prompt. */
+app.get("/api/agents/:agentType/learning", requireAuth, async function (req, res, next) {
+  try {
+    var agentType = String(req.params.agentType || "").toLowerCase();
+    if (!LEARNING_AGENT_TYPE.test(agentType)) return res.status(400).json({ error: "Unknown agent" });
+    var userId = req.user.id;
+    var nowMs = Date.now();
+    var since = new Date(nowMs - 2 * LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    var fb = await supabase.from("agent_feedback").select("task_id, rating, reason, pinned, pinned_at, created_at, updated_at")
+      .eq("user_id", userId).eq("agent_type", agentType).gte("updated_at", since).limit(5000);
+    if (fb.error) throw fb.error;
+    var prefs = await supabase.from("agent_preferences").select("id, text, source, created_at")
+      .eq("user_id", userId).eq("agent_type", agentType).order("created_at", { ascending: true });
+    if (prefs.error) throw prefs.error;
+    var pins = await supabase.from("agent_feedback").select("task_id, pinned_at")
+      .eq("user_id", userId).eq("agent_type", agentType).eq("pinned", true)
+      .order("pinned_at", { ascending: false }).limit(LEARNING.PIN_CAP);
+    if (pins.error) throw pins.error;
+    var pinIds = (pins.data || []).map(function (p) { return p.task_id; }).filter(isValidUuid);
+    var examples = [];
+    if (pinIds.length) {
+      var runs = await supabase.from("ai_tasks").select("id, task_type, result, output, created_at")
+        .in("id", pinIds).eq("user_id", userId);
+      if (runs.error) throw runs.error;
+      var byId = {};
+      (runs.data || []).forEach(function (t) { byId[t.id] = t; });
+      (pins.data || []).forEach(function (p) {
+        var t = byId[p.task_id];
+        if (!t) return;
+        var text = LEARNING.runText(t);
+        examples.push({ task_id: t.id, task_type: t.task_type, created_at: t.created_at, pinned_at: p.pinned_at,
+          excerpt: text.length > 280 ? text.slice(0, 277) + "…" : text });
+      });
+    }
+    var prefTexts = (prefs.data || []).map(function (p) { return p.text; });
+
+    var outcomes = null;
+    try {
+      var proposals = await learningProposals(userId, agentType);
+      var refusals = null, arrivals = null;
+      if (agentType === "seo") {
+        var refused = await supabase.from("seo_refused_drafts").select("id", { count: "exact", head: true })
+          .eq("user_id", userId).gte("created_at", new Date(nowMs - LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString());
+        refusals = refused.error ? null : (refused.count || 0);
+      }
+      if (agentType === "content" || agentType === "seo" || agentType === "sales") {
+        var loaded = await loadArrivals(userId, false);
+        if (loaded && loaded.visits && !loaded.visits.error && Array.isArray(loaded.visits.rows)) {
+          arrivals = loaded.visits.rows.filter(function (v) {
+            var t = Date.parse(v.created_at);
+            return isFinite(t) && t <= nowMs && nowMs - t < LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000;
+          }).length;
+        }
+      }
+      outcomes = LEARNING.outcomesFrom({ proposals: proposals, claims_refusals: refusals, arrivals: arrivals }, nowMs);
+    } catch (err) {
+      outcomes = null;
+    }
+
+    return res.json({
+      agent_type: agentType,
+      copy: LEARNING.HONEST_COPY,
+      score: LEARNING.scoreFrom(fb.data || [], nowMs),
+      outcomes: outcomes,
+      examples: examples,
+      preferences: (prefs.data || []).map(function (p) { return { id: p.id, text: p.text, source: p.source, created_at: p.created_at }; }),
+      suggestions: LEARNING.suggestionsFrom(fb.data || [], prefTexts, nowMs),
+      guidance: await memberGuidanceFor(userId, agentType),
+      limits: { pinned: LEARNING.PIN_CAP, in_prompt: LEARNING.EXAMPLES_IN_PROMPT, preferences: LEARNING.PREF_CAP,
+        preference_chars: LEARNING.PREF_MAX, comment_chars: LEARNING.COMMENT_MAX, min_ratings: LEARNING.MIN_RATINGS,
+        guidance_chars: LEARNING.GUIDANCE_CHAR_BUDGET }
+    });
+  } catch (error) { next(error); }
+});
+
+async function learningPrefTexts(userId, agentType) {
+  var rows = await supabase.from("agent_preferences").select("id, text")
+    .eq("user_id", userId).eq("agent_type", agentType);
+  if (rows.error) throw rows.error;
+  return rows.data || [];
+}
+
+/* A preference is saved only here: typed by the member (source "member"), or
+   a suggestion the member accepted (source "suggestion", and only while it is
+   still being suggested). A suggestion is never stored by being shown. */
+app.post("/api/agents/:agentType/preferences", requireAuth, async function (req, res, next) {
+  try {
+    var agentType = String(req.params.agentType || "").toLowerCase();
+    if (!LEARNING_AGENT_TYPE.test(agentType)) return res.status(400).json({ error: "Unknown agent" });
+    var userId = req.user.id;
+    var body = req.body || {};
+    var source = body.source === "suggestion" ? "suggestion" : "member";
+    var text = LEARNING.cleanPreference(body.text);
+    if (!text) return res.status(400).json({ error: "A preference is one line of " + LEARNING.PREF_MAX + " characters or fewer." });
+    var current = await learningPrefTexts(userId, agentType);
+    if (source === "suggestion") {
+      var since = new Date(Date.now() - LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      var fb = await supabase.from("agent_feedback").select("rating, reason, created_at, updated_at")
+        .eq("user_id", userId).eq("agent_type", agentType).gte("updated_at", since).limit(5000);
+      if (fb.error) throw fb.error;
+      var offered = LEARNING.suggestionsFrom(fb.data || [], current.map(function (p) { return p.text; }), Date.now());
+      if (!offered.some(function (s) { return s.text === text; })) {
+        return res.status(400).json({ error: "That is not a suggestion this agent is making now." });
+      }
+    }
+    if (current.some(function (p) { return String(p.text).toLowerCase() === text.toLowerCase(); })) {
+      return res.status(409).json({ error: "This agent already has that preference." });
+    }
+    if (current.length >= LEARNING.PREF_CAP) {
+      return res.status(400).json({ error: "An agent keeps at most " + LEARNING.PREF_CAP + " preferences. Remove one first." });
+    }
+    var saved = await supabase.from("agent_preferences").insert({ user_id: userId, agent_type: agentType, text: text, source: source })
+      .select("id, text, source, created_at").single();
+    if (saved.error) throw saved.error;
+    return res.json({ preference: saved.data });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/agents/:agentType/preferences/:id", requireAuth, async function (req, res, next) {
+  try {
+    var agentType = String(req.params.agentType || "").toLowerCase();
+    if (!LEARNING_AGENT_TYPE.test(agentType) || !isValidUuid(req.params.id)) return res.status(404).json({ error: "Preference not found" });
+    var text = LEARNING.cleanPreference(req.body && req.body.text);
+    if (!text) return res.status(400).json({ error: "A preference is one line of " + LEARNING.PREF_MAX + " characters or fewer." });
+    var current = await learningPrefTexts(req.user.id, agentType);
+    if (!current.some(function (p) { return p.id === req.params.id; })) return res.status(404).json({ error: "Preference not found" });
+    if (current.some(function (p) { return p.id !== req.params.id && String(p.text).toLowerCase() === text.toLowerCase(); })) {
+      return res.status(409).json({ error: "This agent already has that preference." });
+    }
+    var saved = await supabase.from("agent_preferences").update({ text: text, source: "member" })
+      .eq("id", req.params.id).eq("user_id", req.user.id).eq("agent_type", agentType)
+      .select("id, text, source, created_at").single();
+    if (saved.error) throw saved.error;
+    return res.json({ preference: saved.data });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/agents/:agentType/preferences/:id", requireAuth, async function (req, res, next) {
+  try {
+    var agentType = String(req.params.agentType || "").toLowerCase();
+    if (!LEARNING_AGENT_TYPE.test(agentType) || !isValidUuid(req.params.id)) return res.status(404).json({ error: "Preference not found" });
+    var gone = await supabase.from("agent_preferences").delete()
+      .eq("id", req.params.id).eq("user_id", req.user.id).eq("agent_type", agentType).select("id");
+    if (gone.error) throw gone.error;
+    if (!gone.data || !gone.data.length) return res.status(404).json({ error: "Preference not found" });
+    return res.json({ deleted: true });
+  } catch (error) { next(error); }
+});
+
+/* THE OWNER'S PLATFORM VIEW: every member's ratings together, per agent, as
+   counts. No member id, run id or comment is read into the answer. */
+app.get("/api/admin/agent-learning", requireAuth, async function (req, res, next) {
+  try {
+    if (!isOwnerAccount(req.user.id)) return res.status(404).json({ error: "Not found" });
+    var nowMs = Date.now();
+    var since = new Date(nowMs - 2 * LEARNING.WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    var rows = [];
+    for (var from = 0; from < 200000; from += 1000) {
+      var page = await supabase.from("agent_feedback").select("agent_type, rating, created_at, updated_at")
+        .gte("updated_at", since).order("updated_at", { ascending: true }).range(from, from + 999);
+      if (page.error) throw page.error;
+      rows = rows.concat(page.data || []);
+      if (!page.data || page.data.length < 1000) break;
+    }
+    return res.json({ window_days: LEARNING.WINDOW_DAYS, min_ratings: LEARNING.MIN_RATINGS, agents: LEARNING.platformView(rows, nowMs) });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
   try {
     // Not a uuid, so no task has it: the same 404 as a missing one, without
@@ -23310,9 +23643,14 @@ function toolFailureOutput(details) {
 async function toolGenerateWithOneRetry(options) {
   var opts = options || {};
   var firstRaw = null;
+  /* The member's own guidance for this agent goes AFTER the route's whole
+     prompt, rules and rails included, and before a retry's correction; "" when
+     there is none, so the prompt is then exactly the route's (memberGuidanceFor). */
+  var memberGuidance = opts.ledger && opts.ledger.user_id
+    ? await memberGuidanceFor(opts.ledger.user_id, opts.ledger.agent_type) : "";
 
   for (var attempt = 1; attempt <= 2; attempt++) {
-    var promptForAttempt = attempt === 1 ? opts.prompt : (opts.prompt + opts.correction);
+    var promptForAttempt = attempt === 1 ? (opts.prompt + memberGuidance) : (opts.prompt + memberGuidance + opts.correction);
 
     var generation = await callAnthropicText(promptForAttempt, opts.maxTokens, (opts.ledger && opts.ledger.user_id) || null, undefined, opts.ledger);
     var text = (generation && generation.text) ? generation.text : "";
@@ -42826,13 +43164,25 @@ app.get("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
+/* THE PUBLIC PROFILE IS AN ALLOW-LIST. Every bf_profiles column (migrations
+   009, 010 and 040) is either here, because the member writes it to show it on
+   their public page, or left out: id (the row's internal id), user_id (the
+   account id), created_at and updated_at. A column added later, by a
+   migration or by hand, is private until it is named here. The owner's own
+   GET /api/bfp/profile/me still reads every column. */
+const BF_PUBLIC_PROFILE_COLUMNS = [
+  "username", "display_name", "title", "tagline", "bio", "avatar_url", "banner_url",
+  "accent_color", "font_style", "show_products", "show_portfolio", "show_music", "show_card", "show_videos",
+  "location", "website", "social_links", "skills", "industry"
+];
+
 app.get("/api/bfp/profile/:userId", async function (req, res, next) {
   try {
     const userId = safeText(req.params.userId, 60);
     // Served only while its owner is entitled; otherwise it reads as no profile.
     if (!(await ownerPagePublic(userId))) return res.json({ profile: null });
     const { data, error } = await supabase
-      .from("bf_profiles").select("*").eq("user_id", userId).maybeSingle();
+      .from("bf_profiles").select(BF_PUBLIC_PROFILE_COLUMNS.join(", ")).eq("user_id", userId).maybeSingle();
     if (error) throw error;
     // Of the member's support settings, only the normalized links (URLs rebuilt) are public here.
     return res.json({ profile: data, support_links: data ? await publicSupportLinks(userId) : [] });

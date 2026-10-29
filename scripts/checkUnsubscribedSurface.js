@@ -290,7 +290,14 @@ const EXPECTED_OWN = [
   // NAMED (Oct 27 2026, launch hardening #1): BEFORE, in EXPECTED_PUBLIC, because GET
   // /api/profile/:username served the profiles row to anyone. AFTER, no unauthenticated route
   // serves profiles; GET /api/profile/by-id/:userId needs a login and returns five display columns.
-  "put /api/profile/me"
+  "put /api/profile/me",
+  // NAMED (Oct 28 2026, the learning loop; effectful login-only 123 -> 129): BEFORE no ratings, examples or
+  // preferences. AFTER a member rates and pins their own runs and keeps their own preferences per agent; every
+  // row is theirs (agent_feedback, agent_preferences), served to no one else. The learning view is listed for the
+  // lifted loadArrivals it reads through. Deliberately ungated: rating a past run never needs a subscription,
+  // and nothing here calls the model (the runs that use the guidance are gated where they were).
+  "put /api/agents/feedback/:taskId", "post /api/agents/feedback/:taskId/pin", "get /api/agents/:agentType/learning",
+  "post /api/agents/:agentType/preferences", "put /api/agents/:agentType/preferences/:id", "delete /api/agents/:agentType/preferences/:id"
 ];
 
 /* Unauthenticated routes that write. */

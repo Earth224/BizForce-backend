@@ -882,7 +882,9 @@ function pageDom(html, url, opts) {
 
   const MIG = ALL.mig;
   const migs = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).map(f => Number(f.split("_")[0]));
-  check("G5. migration 150 is the next free number", migs.filter(n => n === 150).length === 1 && Math.max(...migs.filter(n => n !== 150)) === 149);
+  // NAMED (Oct 28 2026, the learning loop): BEFORE "migration 150 is the next free number", the highest of all.
+  // AFTER migration 151 follows it, so 150 is asserted unique and next after 149, not the highest.
+  check("G5. migration 150 is unique and the next number after 149", migs.filter(n => n === 150).length === 1 && Math.max(...migs.filter(n => n < 150)) === 149);
   check("G5. bfc_transfers gains kind (default 'transfer', so every existing row is a transfer) and note, allowed only on support",
     MIG.indexOf("ALTER TABLE public.bfc_transfers ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'transfer';") !== -1 &&
     MIG.indexOf("ALTER TABLE public.bfc_transfers ADD COLUMN IF NOT EXISTS note text;") !== -1 &&
