@@ -29,8 +29,11 @@
      6-10. THE OTHER SYSTEMS. Each corrected sentence about Lead Radar, SMS,
         social publishing, the subscription and agent_memory is asserted
         twice: once against the code it describes (leadRadar.js, server.js)
-        and once against what the agents are told. Social publishing is gated,
-        so it must be named as unavailable, not left out.
+        and once against what the agents are told. Social publishing reaches
+        Bluesky only, from a member's own connected account, through approval
+        or their own automation (backend 1b95c1c); every other platform is
+        saved unpublished, so it must be named, not left out, and must agree
+        with the Social Agent's description.
      11. NO INVENTION. NO_INVENTION_RULE covers statistics, offers, arithmetic,
         estimates and "I don't have that figure", and is the LAST block of the
         assembled prompt — after memory, which carries earlier invented
@@ -98,6 +101,8 @@
    MUTATE=radar    restores "scores against the profile"       → 6 goes red
    MUTATE=sms      restores "broadcasts segmentable by filter" → 7 goes red
    MUTATE=social   leaves social publishing out                → 8 goes red
+   MUTATE=socialstale restores "publishing ... currently unavailable" → 8 goes red
+   MUTATE=socialagent the Social Agent claims Instagram posts   → 8 goes red
    MUTATE=invent   puts the rule with the directives, not last → 11 goes red
    MUTATE=tally    restores the fetch-and-tally byAgent        → 12 goes red
    MUTATE=owner    restores "unavailable to customer accounts" → 13 goes red
@@ -147,7 +152,7 @@ const supabase = createClient(
 const residue = createResidueGuard({ supabase: supabase, name: "agentBriefTruth", subject: SUBJECT_USER_ID, tables: [] });
 residue.install();
 
-const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "socialcall", "socialstatus", "invent", "tally", "owner", "zero",
+const MUTATIONS = ["price", "roster", "banned", "ceiling", "stop", "radar", "sms", "social", "socialstale", "socialagent", "socialcall", "socialstatus", "invent", "tally", "owner", "zero",
   "dontknow", "memory", "offers", "zerobase", "testimonial", "product", "reach", "reasoning", "screen", "cue",
   "opener", "sequence", "audit", "reader", "superlative", "anchor", "asking", "grouped",
   "widen", "flagship", "sellingpoint", "inslot", "economics", "econanchor",
@@ -335,7 +340,16 @@ if (MUTATE === "sms") {
 }
 if (MUTATE === "social") {
   BRAIN = mutate(BRAIN, /    social_publishing: \{[\s\S]*?\n    \},\n/.exec(BRAIN)[0], "", "social");
-  console.log("\n!! MUTATION: social publishing is left out instead of said to be unavailable — 8 must fail.");
+  console.log("\n!! MUTATION: social publishing is left out instead of described — 8 must fail.");
+}
+if (MUTATE === "socialstale") {
+  BRAIN = mutate(BRAIN, /    social_publishing: \{\n      name: "Social Publishing",\n      description:\n        "[^\n]*"\n/.exec(BRAIN)[0],
+    `    social_publishing: {\n      name: "Social Publishing",\n      description:\n        "Agents write social posts and calendars, but connecting a social account and publishing to it are currently unavailable. An approved draft is saved and marked not published; nothing is posted. Never tell a user a post has gone out or is queued to go out."\n`, "socialstale");
+  console.log("\n!! MUTATION: the stale \"currently unavailable\" social publishing text is back — 8 must fail.");
+}
+if (MUTATE === "socialagent") {
+  BRAIN = mutate(BRAIN, `plus Bluesky posts from your own connected account." },`, `plus Instagram and Bluesky posts from your own connected accounts." },`, "socialagent");
+  console.log("\n!! MUTATION: the Social Agent's description claims Instagram posts the system text says are not connected — 8 must fail.");
 }
 if (MUTATE === "invent") {
   BRAIN = mutate(BRAIN, `    BRAIN_DIRECTIVES,\n    String(agentSpecificPrompt || "").trim(),`, `    BRAIN_DIRECTIVES,\n    NO_INVENTION_RULE,\n    String(agentSpecificPrompt || "").trim(),`, "invent");
@@ -572,25 +586,52 @@ function runTask(agentType, stopReason, opts) {
     routeBody('app.get("/api/analytics/summary"').indexOf("getLiveStats(") !== -1 && liveStats.indexOf('"sms_subscribers"') !== -1 && liveStats.indexOf('"sms_campaigns"') !== -1);
   check("7. told: the counts feed the live Analytics dashboard", /feed the live Analytics dashboard/.test(sms));
 
-  console.log("\n══ 8. social publishing — gated, so said to be unavailable, not left out ══");
+  console.log("\n══ 8. social publishing — Bluesky only, from the member's own account, through approval or their automation ══");
   const social = systemLine("Social Publishing");
   console.log("    " + (social.slice(0, 110) || "(no Social Publishing line)"));
-  // Launch audit #22c deleted the Zernio code behind SOCIAL_ACCOUNTS_SCOPED: nothing can reach a social platform now.
+  // Launch audit #22c deleted the Zernio code behind SOCIAL_ACCOUNTS_SCOPED: no platform but Bluesky can be reached.
   const socialGated = SERVER.indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(SERVER) && /status:\s+"not_published"/.test(SERVER);
-  check("8. code: no social platform is called and a publish is saved as not_published", socialGated);
-  check("8. told: the feature is named, said to be unavailable, and drafts said to be saved unpublished",
-    /currently unavailable/.test(social) && /marked not published; nothing is posted/.test(social), social.slice(0, 60) || "missing");
+  check("8. code: no platform but Bluesky is called, and any other publish is saved as not_published", socialGated);
+  // Backend 1b95c1c: a member connects their own Bluesky with an app password; posts are filed for approval, or run by their own automation.
+  const proposePost = routeBody('app.post("/api/agents/social/propose-post"');
+  const blueskyPath = routeBody('app.post("/api/social/bluesky/connect"').indexOf('require("./lib/memberBluesky")') !== -1 &&
+    /action_type:\s+"publish_social_post"/.test(proposePost) && /status:\s+"pending"/.test(proposePost) &&
+    proposePost.indexOf("if (proposal.payload.posts_as.automatic === true) {") !== -1 && proposePost.indexOf("autoExecuteFiledProposal(proposal, executePublishSocialPost)") !== -1;
+  check("8. code: a member connects their own Bluesky, and a post is filed for approval or run by their own automation", blueskyPath);
+  /* NAMED BEFORE → AFTER (Oct 29 2026, "Agents are told the truth about social publishing").
+     BEFORE: told /currently unavailable/ and /marked not published; nothing is posted/ (connecting and publishing unavailable).
+     AFTER: told Bluesky only, the member's own account, a Bluesky app password, approval or "Post approved drafts automatically",
+     no other platform connected yet and its drafts saved unpublished, and nothing said to have gone out unless it was published. */
+  check("8. told: Bluesky is the only platform, from the member's own account, connected with an app password, posted on approval or by their automation",
+    /Bluesky is the only platform a post can go to/.test(social) && /their own Bluesky account/.test(social) && /a Bluesky app password \(never their main password\)/.test(social) &&
+    /filed for approval and goes out from that account only when the member approves it/.test(social) && /"Post approved drafts automatically"/.test(social) &&
+    !/currently unavailable/.test(social), social.slice(0, 80) || "missing");
+  check("8. told: no other platform is connected yet, its drafts are saved unpublished, and nothing is said to have gone out that was not published",
+    /No other social platform is connected yet/.test(social) && /marked not published; nothing is posted/.test(social) &&
+    /Never tell a user a post has gone out unless it was published to their Bluesky account, and never that a post is queued to go out\./.test(social), social.slice(-160));
+  // The Social Agent's description and this text say the same thing: Bluesky, the member's own account, no other platform.
+  const socialAgent = (brain.PLATFORM_KNOWLEDGE.agents.find(a => a.key === "social") || {}).description || "";
+  const OTHER_PLATFORMS = /Instagram|Facebook|TikTok|LinkedIn|Twitter|\bX\b|Threads|YouTube|Pinterest|Mastodon|Reddit|Snapchat/;
+  check("8. agree: the Social Agent's description and the Social Publishing text both name Bluesky from the member's own connected account, and neither names another platform",
+    /Bluesky posts from your own connected account/.test(socialAgent) && /their own Bluesky account/.test(social) &&
+    !OTHER_PLATFORMS.test(socialAgent) && !OTHER_PLATFORMS.test(social) && brain.agentDescription("social") === socialAgent,
+    socialAgent + " | " + social.slice(0, 80));
 
   console.log("\n══ 9. what the subscription unlocks ══");
   const pricing = lines.find(l => l.startsWith("Pricing:")) || "";
   const platform = lines.find(l => l.startsWith("BizForce AI — ")) || "";
   const unlocks = pricing.slice(pricing.indexOf("unlocks"), pricing.indexOf("—"));
   check("9. told: the unlock list names nothing that is gated off", !/lead radar|sms drip|publish/i.test(unlocks), unlocks);
-  check("9. told: the pricing line says SMS sending and social publishing are unavailable, and Lead Radar works on one account, as the code has them",
-    smsSendsNothing && socialGated && radarRefusals >= 4 &&
-    /SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on the one account that holds the platform's connected social credentials\./.test(pricing), pricing.slice(-160));
-  check("9. told: the platform line claims no SMS marketing or lead detection, and names what is unavailable",
-    !/SMS marketing|lead detection/.test(platform) && /Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only/.test(platform), platform.slice(0, 80));
+  /* NAMED BEFORE → AFTER (Oct 29 2026, "Agents are told the truth about social publishing").
+     BEFORE pricing: "SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on ...".
+     AFTER pricing:  "SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on ...".
+     BEFORE platform: "Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only".
+     AFTER platform:  "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only". */
+  check("9. told: the pricing line says SMS sending is unavailable, social publishing reaches only the member's own Bluesky, and Lead Radar works on one account, as the code has them",
+    smsSendsNothing && socialGated && blueskyPath && radarRefusals >= 4 &&
+    /SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on the one account that holds the platform's connected social credentials\./.test(pricing), pricing.slice(-200));
+  check("9. told: the platform line claims no SMS marketing or lead detection, and names what is unavailable and what reaches Bluesky",
+    !/SMS marketing|lead detection/.test(platform) && /Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only/.test(platform), platform.slice(0, 80));
 
   console.log("\n══ 10. data_model (documentation: never rendered into a prompt) ══");
   const memDoc = brain.PLATFORM_KNOWLEDGE.data_model.agent_memory;

@@ -11,7 +11,7 @@ const PLATFORM_KNOWLEDGE = {
   platform: {
     name: "BizForce AI",
     description:
-      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",
+      "An AI staff automation platform: a full team of specialist AI agents, a personal Oracle advisor, content generation, an SMS subscriber and campaign workspace, and a digital card builder, unified under one account and one shared business profile. Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only; see Other systems.",
     /* NO PRICE AND NO TIER NAME HERE. This said $29.99 while the plan charged
        $199, and every agent repeated it. Both now come from server.js's
        PLAN_CONFIG at render time (useBillingPlans, below), so the figure the
@@ -19,7 +19,7 @@ const PLATFORM_KNOWLEDGE = {
     pricing: {
       model: "single_tier",
       description:
-        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on the one account that holds the platform's connected social credentials."
+        "One subscription unlocks every agent, the Oracle, content tools, the SMS workspace and the digital card builder — there are no feature-gated pricing tiers. SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on the one account that holds the platform's connected social credentials."
     }
   },
 
@@ -73,7 +73,7 @@ const PLATFORM_KNOWLEDGE = {
     social_publishing: {
       name: "Social Publishing",
       description:
-        "Agents write social posts and calendars, but connecting a social account and publishing to it are currently unavailable. An approved draft is saved and marked not published; nothing is posted. Never tell a user a post has gone out or is queued to go out."
+        "Agents write social posts and calendars. Bluesky is the only platform a post can go to: a member connects their own Bluesky account on the Social Agent page with their handle and a Bluesky app password (never their main password), and a Bluesky post the Social Agent drafts is then filed for approval and goes out from that account only when the member approves it, or as soon as it is filed if the member has turned on \"Post approved drafts automatically\"; every screen runs first either way. No other social platform is connected yet: a draft approved for any other platform is saved and marked not published; nothing is posted. Never tell a user a post has gone out unless it was published to their Bluesky account, and never that a post is queued to go out."
     },
     digital_card_builder: {
       name: "Digital Card Builder",

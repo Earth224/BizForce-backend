@@ -75,6 +75,19 @@ const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, repor
    current line of the same key. It still demands the same keys in the same order, that the two old lines
    above were there to swap, and that every other byte of the prompt is identical to BASELINE.
    checkAgentDescriptions pins the current lines' wording. */
+/* NAMED BEFORE → AFTER (Oct 29 2026, "Agents are told the truth about social publishing"). BEFORE: section 4
+   swapped the roster lines only. AFTER: it also swaps exactly these three sentences of config/brain.js, which
+   said social publishing was unavailable after backend 1b95c1c let members post to their own Bluesky. Each old
+   sentence must be in BASELINE's prompt exactly once to swap, and every other byte must still be identical.
+   checkAgentBriefTruth 8 and 9 pin the new wording against the code. */
+const SYSTEM_SWAPS = [
+  ["Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",
+   "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only; see Other systems."],
+  ["SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on",
+   "SMS sending is unavailable on every account, whatever the plan; social publishing reaches only Bluesky, from the member's own connected account; and Lead Radar works only on"],
+  ["Agents write social posts and calendars, but connecting a social account and publishing to it are currently unavailable. An approved draft is saved and marked not published; nothing is posted. Never tell a user a post has gone out or is queued to go out.",
+   'Agents write social posts and calendars. Bluesky is the only platform a post can go to: a member connects their own Bluesky account on the Social Agent page with their handle and a Bluesky app password (never their main password), and a Bluesky post the Social Agent drafts is then filed for approval and goes out from that account only when the member approves it, or as soon as it is filed if the member has turned on "Post approved drafts automatically"; every screen runs first either way. No other social platform is connected yet: a draft approved for any other platform is saved and marked not published; nothing is posted. Never tell a user a post has gone out unless it was published to their Bluesky account, and never that a post is queued to go out.']
+];
 function rosterLines(p) {
   const at = p.indexOf("\nAgents on this platform (");
   if (at < 0) return null;
@@ -224,12 +237,16 @@ async function pages(table, cols, filter) {
       if (out.split(was[i]).length !== 2) return null;
       out = out.slice(0, out.indexOf(was[i])) + now[i] + out.slice(out.indexOf(was[i]) + was[i].length);
     }
+    for (const [before, after] of SYSTEM_SWAPS) {
+      if (out.split(before).length !== 2) return null;
+      out = out.slice(0, out.indexOf(before)) + after + out.slice(out.indexOf(before) + before.length);
+    }
     return out;
   }
   const same = [[{}, {}, []], [profile, {}, memories], [profile, { tasksRun: 3 }, []]].every(a => baselinePrompt(a) !== null &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2]) === baselinePrompt(a) &&
     brainNow.buildAgentSystemPrompt("AGENT", a[0], a[1], a[2], []) === baselinePrompt(a));
-  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the roster lines, each swapped for the same agent's current line", same);
+  check("4. with no notes (absent or empty), every prompt is byte-identical to " + BASELINE + " but for the roster lines, each swapped for the same agent's current line, and the three social-publishing sentences", same);
 
   console.log("\n══ 5. only the typed-task path reads them ══");
   const handler = defs(SERVER, ["handleAiTaskRequest"]);

@@ -550,9 +550,13 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
        in this tab (scripts/termaximus-presence.js), a per-member session key, so IV0 lists it and sign-out clears it. */
     const SESSION_KEYS = ["bf_tmx_trail"];
+    /* NAMED BEFORE → AFTER (Oct 29 2026, "Termaximus chat box can be moved like the mist"). BEFORE: KEPT had 14 keys.
+       AFTER: 15; tmx_chat_pos is where the Termaximus chat box was dragged (scripts/termaximus-presence.js), a device
+       preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
+      tmx_chat_pos: "where the Termaximus chat box sits",
       tmx_agent_language: "the language Termaximus speaks", oracle_corner_star_pos: "where an Oracle widget sits", bf_oracle_moon_pos: "where an Oracle widget sits",
       bf_active_calendar: "which calendar is shown", bf_agent_order: "card order", bf_dashboard_order: "card order", bf_dashboard_custom: "card order",
       bf_return_to: "the public page to return to after signing in; app.html must still find it"
