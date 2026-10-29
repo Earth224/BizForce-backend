@@ -141,7 +141,10 @@ const ADDED = [
   // NAMED (Oct 29 2026, live activity for every agent): BEFORE 342 routes; AFTER 344, adding its two reads,
   // each requireAuth only, each answering only the caller's rows, neither calling the model (checkAgentLive)
   ["get", "/api/agents/live"],                  // all 18 agents' live activity, at most 24 KB (total 342 -> 343)
-  ["get", "/api/agents/:type/live"]             // one agent's live activity, at most 3 KB (total 343 -> 344)
+  ["get", "/api/agents/:type/live"],            // one agent's live activity, at most 3 KB (total 343 -> 344)
+  // NAMED (Oct 29 2026, Executive Headquarters, Block 3a): BEFORE 344 routes; AFTER 345, adding the calendar's
+  // read of the caller's own schedules, requireAuth only, writing nothing, calling no model (checkExecutiveHQ H6)
+  ["get", "/api/agents/live/calendar"]          // each schedule's runs in a range of at most 62 days (total 344 -> 345)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

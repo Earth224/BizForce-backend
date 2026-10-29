@@ -311,7 +311,16 @@ function reachability(html, externals) {
   console.log("\n══ 2. dashboard.html parses ══");
   const scripts = inlineScripts(FILES[DASH]);
   const bad = []; scripts.forEach((code, i) => { try { new vm.Script(code); } catch (e) { bad.push(i + ": " + e.message); } });
-  check("all " + scripts.length + " inline scripts in dashboard.html parse", scripts.length >= 10 && bad.length === 0, bad.join(" | "));
+  /* NAMED (Block 3a, Oct 29 2026): the Command Center's inline script moved into
+     scripts/bf-command-center.js (shared with executive-agent.html), so the page
+     has one inline script fewer. Before: scripts.length >= 10. After: >= 9, and the
+     shared script is pinned as loaded right after its section and parsing. */
+  check("all " + scripts.length + " inline scripts in dashboard.html parse", scripts.length >= 9 && bad.length === 0, bad.join(" | "));
+  const CC_SRC = '</section>\n<script src="/scripts/bf-command-center.js"></script>';
+  let ccParses = true; try { new vm.Script(FILES["scripts/bf-command-center.js"] || ""); } catch (e) { ccParses = false; }
+  check("the Command Center is scripts/bf-command-center.js, loaded right after its section, and it parses",
+    FILES[DASH].indexOf(CC_SRC) !== -1 && FILES[DASH].indexOf("(function commandCenter() {") === -1 && ccParses &&
+    (FILES["scripts/bf-command-center.js"] || "").indexOf("(function commandCenter() {") !== -1);
 
   /* ── 3. no reference to anything removed ──────────────────────────────── */
   console.log("\n══ 3. nothing references a removed function ══");

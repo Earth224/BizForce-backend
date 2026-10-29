@@ -936,6 +936,8 @@ const DASHBOARD = "dashboard.html", HUB = "agents-hub.html", DIRECTORY = "ai-age
 const hqTips = tipsFor("dashboard.html"), dirTips = tipsFor("ai-agents.html"), mkTips = tipsFor("marketplace.html");
 const walTips = tipsFor("wallet.html"), certTips = tipsFor("certifications.html");
 const SV = FILES[SERVER];
+const CC_JS = "scripts/bf-command-center.js", HQ_JS = "scripts/bf-hq.js";
+[CC_JS, HQ_JS].forEach(readFrontend);
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
 const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
@@ -969,8 +971,12 @@ const B = [
   ["10 dashboard 18", hqTips, "\"Needs you\" lists the proposals waiting for your approval", /Recent Activity|Active Queue|View Queue|Work Queue/,
     () => /<h3>Needs you<\/h3><div id="ccNeedsYou">/.test(FILES[DASHBOARD]) && /<h3>Executive plans<\/h3><div id="ccPlans">/.test(FILES[DASHBOARD]) &&
       /<h3>Agent activity<\/h3><div id="ccActivity">/.test(FILES[DASHBOARD]) &&
-      /Proposals waiting for you/.test(FILES[DASHBOARD]) && /Runs that failed in the last 7 days/.test(FILES[DASHBOARD]) &&
-      /data-cc-dispatch="1"[^']*'[^>]*>Dispatch<\/button>/.test(FILES[DASHBOARD]) && /plural\(d\.total, "run", "runs"\)/.test(FILES[DASHBOARD]) &&
+      // NAMED (Block 3a, Oct 29 2026): the Command Center's renderer moved from dashboard.html into
+      // scripts/bf-command-center.js, which the dashboard loads right after its section; these four
+      // read that script now (before: FILES[DASHBOARD]).
+      FILES[DASHBOARD].indexOf('</section>\n<script src="/scripts/bf-command-center.js"></script>') !== -1 &&
+      /Proposals waiting for you/.test(FILES[CC_JS]) && /Runs that failed in the last 7 days/.test(FILES[CC_JS]) &&
+      /data-cc-dispatch="1"[^']*'[^>]*>Dispatch<\/button>/.test(FILES[CC_JS]) && /plural\(d\.total, "run", "runs"\)/.test(FILES[CC_JS]) &&
       !/id="activeQueueSummary/.test(FILES[DASHBOARD]) && !/id="agentAssignmentsSection"/.test(FILES[DASHBOARD]) &&
       !/>[^<>]*Recent Activity[^<>]*</.test(FILES[DASHBOARD]) && !/id="recentActivity/i.test(FILES[DASHBOARD])],
   ["10 dashboard 19", hqTips, "open \"Agent Hub\" or \"Full Directory\"; each lists all", /curated set/,
@@ -1216,23 +1222,28 @@ const CN = [
   ["executive 3", exTips, "Begin with the \"Start here\" list", EXEC_FALSE,
     () => /'<div class="ap-zone-label">Start here<\/div>'/.test(AP_FILE) && /'<div class="ap-zone-label">Order<\/div>'/.test(AP_FILE) &&
       /Nothing can start yet — every assignment waits on another\./.test(AP_FILE) && /function orderExecutiveAssignments\(assignments\)/.test(SV) && /can_start_now: ordering\.waves\.length \? ordering\.waves\[0\] : \[\],/.test(EXEC_PLAN)],
-  ["executive 4", exTips, "Assignments marked \"your own work\" are yours to do", EXEC_FALSE,
-    () => /'<span class="ap-asg-yours">your own work<\/span>'/.test(AP_FILE) && /if \(a\.is_dispatchable !== true\) return planNotRunnableLine\(a\);/.test(AP_FILE) &&
-      /YOU is not dispatchable and has no route/.test(SV)],
-  ["executive 5", exTips, "only plan assignments can be run", EXEC_FALSE,
-    () => /if \(row\.task_type !== "executive\/plan"\) \{\s*return dispatchRefusal\(res, "not_an_executive_plan",/.test(DISPATCH) && /taskType: "executive\/plan",/.test(EXEC_PLAN) &&
-      ["Executive Command Plan", "Agent Coordination", "Executive Briefing", "KPI Review"].every(n => offers(EXEC, n))],
+  /* NAMED (Block 3a, Oct 29 2026): rows "executive 4" ("Assignments marked \"your own work\" are yours to do")
+     and "executive 5" ("only plan assignments can be run") covered a tip replaced by the Headquarters tip,
+     now "executive 8"; their proofs still hold in the code but no tip claims them. */
   // NEW (Oct 28 2026): the Do tip; goal, horizon and constraints are the Executive Plan tool's fields, the goal alone required.
   ["executive 6", exTips, "Open \"Executive Plan\", give it the goal", EXEC_FALSE,
     () => { const t = configOf(EXEC).tools[0];
       return !!t && t.label === "Executive Plan" && t.runLabel === "Build the plan" && t.fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints" &&
         t.fields.filter(f => f.required).length === 1 && t.fields[0].required === true; }],
-  // NEW (Oct 29 2026): the Plans module under the page header; each ran assignment shows its own run's status, read from ai_tasks.
-  ["executive 7", exTips, "each assignment reads ready, refused, or its own run's result, linked to the run", EXEC_FALSE,
-    () => { const SL = fs.readFileSync(path.join(REPO, "lib/agentSignatures.js"), "utf8");
-      return AP_FILE.indexOf('var m = sigModule("executive", "Plans", ') !== -1 &&
-        AP_FILE.indexOf('li.appendChild(sigLink(a.run.label, "/run.html?id=" + encodeURIComponent(a.run.task_id)));') !== -1 &&
-        SL.indexOf("var st = runStatus[d.tool_task_id];") !== -1 && SL.indexOf('row.state = a.is_dispatchable === true ? "ready" : "not_dispatchable";') !== -1; }],
+  /* NAMED (Block 3a, Oct 29 2026): row "executive 7" ("each assignment reads ready, refused, or its own run's
+     result, linked to the run") covered the Plans tip, replaced by the approval-queue tip, now "executive 9".
+     NEW: the Headquarters grid; each tile's five rows, and attention puts stalled and failed first. */
+  ["executive 8", exTips, "each tile shows an agent's Now, Last, Next, Approvals and Score", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<h2 class="hq-title" id="hqTitle">Headquarters</h2>') !== -1 && FILES[EXEC].indexOf('aria-label="Sorted by attention; press to sort A to Z">Sort: attention</button>') !== -1 &&
+      FILES[EXEC].indexOf('<script src="/scripts/bf-hq.js"></script>') !== -1 &&
+      FILES[HQ_JS].indexOf('b.appendChild(el("span", "hq-now", nowText(a)));') !== -1 &&
+      FILES[HQ_JS].indexOf('[["Last", lastText(a)], ["Next", nextText(a)], ["Approvals", approvalsText(a)], ["Score", scoreText(a)]]') !== -1 &&
+      FILES[HQ_JS].indexOf('if ((a.now && a.now.state === "stalled") || (a.runs && a.runs.failed_7d > 0)) return 0;') !== -1],
+  // NEW: the approval queue; Approve is sent only from a click, and the server re-checks the proposal before acting.
+  ["executive 9", exTips, "nothing is approved until you press \"Approve\"", EXEC_FALSE,
+    () => (FILES[HQ_JS].match(/decide\(/g) || []).length === 2 && FILES[HQ_JS].indexOf("    if (d) decide(d);\n") !== -1 &&
+      FILES[HQ_JS].indexOf('approve.setAttribute("data-hq-decide", "approve");') !== -1 && FILES[HQ_JS].indexOf('"/api/proposals/" + encodeURIComponent(id) + "/" + action') !== -1 &&
+      /app\.post\("\/api\/proposals\/:id\/approve", requireAuth, async function/.test(SV) && /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[/.test(SV)],
   ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],

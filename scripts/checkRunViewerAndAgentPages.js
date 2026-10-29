@@ -57,7 +57,7 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const MUTATE = process.env.MUTATE || "";
-const RUN = "run.html", DASH = "dashboard.html", AP = "scripts/agent-profile.js";
+const RUN = "run.html", DASH = "dashboard.html", AP = "scripts/agent-profile.js", CC = "scripts/bf-command-center.js";
 const AGENT_PAGES = ["ads-agent.html", "agents/analytics.html", "agents/sales.html", "agents/seo.html", "agents/social.html", "broker-agent.html",
   "community-agent.html", "email-agent.html", "etsy-agent.html", "executive-agent.html", "influencer-agent.html", "operations-agent.html",
   "publicist-agent.html", "rd-agent.html", "reputation-agent.html", "store-agent.html", "vertical-marketing-agent.html"];
@@ -67,7 +67,9 @@ const MUTATIONS = {
   "result-unescaped": [[RUN, "      if (task.result) { return '<pre class=\"rv-pre rv-result\">' + esc(task.result) + '</pre>'; }\n",
     "      if (task.result) { return '<pre class=\"rv-pre rv-result\">' + task.result + '</pre>'; }\n"]],
   // "Ran" links back to Task History
-  "ran-to-task-history": [[DASH, "                text += ' · ' + runLink(ld.tool_task_id, \"open the run\");\n",
+  /* NAMED (Block 3a, Oct 29 2026): the Command Center renderer moved from dashboard.html into
+     scripts/bf-command-center.js; this mutation now edits that file (before: DASH). */
+  "ran-to-task-history": [[CC, "                text += ' · ' + runLink(ld.tool_task_id, \"open the run\");\n",
     "                text += ' · <a href=\"email-agent.html\">see it in Task History</a>';\n"]],
   // one agent page reads the leftover store again
   "restore-store-read": [[ "email-agent.html", "    function refreshPage() {\n",
@@ -89,7 +91,7 @@ function check(label, ok, detail) {
 
 /* ── the frontend ───────────────────────────────────────────────────────── */
 const FILES = {};
-[RUN, DASH, AP, "agents/content.html"].concat(AGENT_PAGES).forEach(f => {
+[RUN, DASH, AP, CC, "agents/content.html"].concat(AGENT_PAGES).forEach(f => {
   const p = path.join(FRONTEND, f);
   if (!fs.existsSync(p)) { console.error("Frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }
   FILES[f] = fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n");
@@ -509,7 +511,9 @@ function runViewer(search, serve, extra) {
   const cc = (await srv.call("get /api/command-center", OWNER)).body;
   check("the fixture is the real GET /api/command-center's answer", cc && cc.plans && cc.plans.ok === true && cc.activity.ok === true && cc.needs_you.ok === true,
     JSON.stringify(cc && [cc.plans, cc.activity, cc.needs_you].map(x => x && x.error)));
-  const ccScript = inlineScripts(FILES[DASH]).filter(c => c.indexOf("(function commandCenter() {") !== -1);
+  /* NAMED (Block 3a, Oct 29 2026): before, dashboard.html's inline "(function commandCenter() {"
+     block; now the shared scripts/bf-command-center.js that dashboard.html loads. */
+  const ccScript = [FILES[CC]].filter(c => c.indexOf("(function commandCenter() {") !== -1);
   const ccPage = await runPage({ page: DASH, serve: (url) => srv.serve(url), strict: true, scripts: ccScript,
     realIds: ["commandCenterSection", "ccStatus", "ccRefresh", "ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutbound", "ccSpend", "ccPlatformPanel", "ccPlatform"] });
   const links = (html) => [...html.matchAll(/href="run\.html\?id=([^"]+)"/g)].map(m => decodeURIComponent(m[1]));

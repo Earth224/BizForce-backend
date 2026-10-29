@@ -29,7 +29,8 @@
         empty list, and every other section still answers with its data.
      6. Sales dry runs are excluded from activity and counted separately.
      7. Another user's rows never appear, in any section.
-     8. platform is present only for an admin.
+     8. platform is present only for an admin, and with it today's platform
+        spend ceiling; a member's answer reads no platform-wide ledger.
      9. No subscription gate: requireAuth and nothing else, and a lapsed account
         reads it.
 
@@ -594,14 +595,30 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
     JSON.stringify([other.needs_you, other.plans.data.map(p => p.id)]));
   check("another user's plan shows \"not dispatched\" even though a row of theirs names the owner's plan",
     other.plans.data[0].assignments[0].latest_dispatch === "not dispatched", JSON.stringify(other.plans.data[0].assignments[0]));
+  /* NAMED (Block 3a, Oct 29 2026): the admin-only platform section now reads today's
+     platform spend for its ceiling (platformSpendToday: model_calls with no user_id
+     filter, across every account), so that read joins platform's exemptions here,
+     and the two checks after "platform: absent for a non-admin" hold it to the admin. */
+  const platformLedgerRead = q => q.table === "model_calls" && !q.filters.some(f => f[0] === "eq" && f[1] === "user_id");
   check("every query of every table was scoped to the caller (user_id or owner_id), except platform's",
-    b.db.log.filter(q => ["job_runs", "radar_status", "email_sequence_enrollments"].indexOf(q.table) === -1)
+    b.db.log.filter(q => ["job_runs", "radar_status", "email_sequence_enrollments"].indexOf(q.table) === -1 && !platformLedgerRead(q))
       .every(q => q.filters.some(f => f[0] === "eq" && (f[1] === "user_id" || f[1] === "owner_id"))),
     JSON.stringify(b.db.log.filter(q => !q.filters.some(f => f[0] === "eq" && (f[1] === "user_id" || f[1] === "owner_id"))).map(q => q.table)));
   check("platform: present for the admin, with job_runs and radar_status",
     owner.platform && owner.platform.ok === true && owner.platform.data.job_runs.length === 1 && owner.platform.data.radar_status.length === 1,
     JSON.stringify(owner.platform));
   check("platform: absent for a non-admin", other.platform === undefined && !("platform" in other), JSON.stringify(Object.keys(other)));
+  check("platform: the admin's carries today's ceiling, the cap and the spend in dollars",
+    !!owner.platform && !!owner.platform.data.ceiling && owner.platform.data.ceiling.cap_usd === 25 && typeof owner.platform.data.ceiling.spent_usd === "number",
+    JSON.stringify(owner.platform && owner.platform.data.ceiling));
+  {
+    const solo = build(world());
+    const mine = (await solo.center(OTHER)).body;
+    check("a non-admin's answer makes no platform-wide ledger read and carries no ceiling figure",
+      !solo.db.log.some(platformLedgerRead) && JSON.stringify(mine).indexOf("\"cap_usd\"") === -1 && JSON.stringify(mine).indexOf("\"spent_usd\"") === -1 &&
+      JSON.stringify(mine).indexOf("\"ceiling\"") === -1,
+      JSON.stringify(solo.db.log.filter(platformLedgerRead).map(q => [q.cols, q.filters])));
+  }
 
   b = build(world());
   r = await b.center(LAPSED);

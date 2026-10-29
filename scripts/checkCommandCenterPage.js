@@ -38,6 +38,10 @@
         frontend; the Agent Work Queue and the browser-side parse that filled
         it are gone (launch audit #22a); every inline script in both pages
         parses; the Command Center sets no timer.
+     9. The renderer is one shared script, scripts/bf-command-center.js (Block
+        3a), loaded right after the section by dashboard.html and by
+        executive-agent.html (Headquarters); the same answer renders the same
+        panels on both, and a member's platform panel stays hidden on both.
 
    MUTATE=<name> edits the frontend files IN MEMORY. MUTATE=all runs each in
    its own process and passes only if every one fails at least one check. A
@@ -56,19 +60,22 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const MUTATE = process.env.MUTATE || "";
-const DASH = "dashboard.html", EXEC = "executive-agent.html";
+const DASH = "dashboard.html", EXEC = "executive-agent.html", CC = "scripts/bf-command-center.js";
 
 const FAILED_PANEL = "            setPanel(PANELS[name], errorBox(section.error || \"the server gave no reason\"));\n";
+/* NAMED (Block 3a, Oct 29 2026): the Command Center's renderer moved from dashboard.html into
+   scripts/bf-command-center.js, so the three mutations anchored in it now edit that file
+   (before: DASH). The markup mutations stay on DASH. */
 const MUTATIONS = {
   // a section the server could not read says "Nothing needs you"
-  "nothing-needs-you-on-failure": [[DASH, FAILED_PANEL,
+  "nothing-needs-you-on-failure": [[CC, FAILED_PANEL,
     "            setPanel(PANELS[name], name === \"needs_you\" ? '<p class=\"cc-clear\">Nothing needs you.</p>' : errorBox(section.error || \"the server gave no reason\"));\n"]],
   // Dispatch is offered on an assignment that already ran
-  "dispatch-on-ran": [[DASH, "                if (a.is_dispatchable === true && !ran) {\n", "                if (a.is_dispatchable === true) {\n"]],
+  "dispatch-on-ran": [[CC, "                if (a.is_dispatchable === true && !ran) {\n", "                if (a.is_dispatchable === true) {\n"]],
   // the typed agent count comes back
   "restore-18": [[DASH, "<span class=\"topbar-agents-num\">—</span>", "<span class=\"topbar-agents-num\">18</span>"]],
   // a failed section renders as an empty panel
-  "failed-section-empty": [[DASH, FAILED_PANEL, "            setPanel(PANELS[name], \"\");\n"]],
+  "failed-section-empty": [[CC, FAILED_PANEL, "            setPanel(PANELS[name], \"\");\n"]],
   // the Agent Work Queue comes back below the Command Center (launch audit #22a)
   "work-queue-returns": [[DASH, "<section id=\"agentMemorySection\"",
     "<section id=\"agentAssignmentsSection\" class=\"bf-section\"><div id=\"activeAssignmentsList\"></div></section>\n<section id=\"agentMemorySection\""]]
@@ -104,7 +111,10 @@ const inlineScripts = (html) => {
   while ((m = re.exec(html))) if (!(m[1] && /\bsrc=/.test(m[1]))) out.push(m[2]);
   return out;
 };
-const CC_SCRIPT = inlineScripts(FILES[DASH]).filter(code => code.indexOf("(function commandCenter() {") !== -1);
+/* NAMED (Block 3a, Oct 29 2026): before, the script under test was dashboard.html's inline
+   "(function commandCenter() {" block. It is scripts/bf-command-center.js now, and section 9
+   proves both pages load it right after their own #commandCenterSection. */
+const CC_SCRIPT = [FILES[CC] || ""].filter(code => code.indexOf("(function commandCenter() {") !== -1);
 
 /* ── the server, lifted (the same lifter as checkCommandCenter) ──────────── */
 const SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
@@ -383,7 +393,7 @@ const settle = async () => { for (let i = 0; i < 40; i++) await new Promise(r =>
    answers each fetch with { status, body } or throws for a network failure. */
 async function page(serve, opts) {
   const o = opts || {};
-  const html = FILES[DASH];
+  const html = FILES[o.file || DASH];
   const els = {};
   const element = (elId) => {
     if (els[elId]) return els[elId];
@@ -404,7 +414,7 @@ async function page(serve, opts) {
     });
   };
   const ctx = {
-    document: { getElementById: element },
+    document: { getElementById: element, createElement: () => ({}), head: { appendChild() {} } },
     localStorage: { getItem: (k) => (k === "bf_token" && o.token !== null ? (o.token || "tok-owner") : null) },
     fetch, window: {}, Promise, JSON, Date, Object, Number, String, Array, isNaN, Math
   };
@@ -702,6 +712,23 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
     const bad = []; scripts.forEach((code, i) => { try { new vm.Script(code); } catch (e) { bad.push(i + ": " + e.message); } });
     check("every inline script in " + file + " parses (" + scripts.length + ")", scripts.length > 0 && bad.length === 0, bad.join(" | "));
   });
+
+  /* ── 9. one Command Center, two pages ─────────────────────────────────── */
+  console.log("\n══ 9. the shared Command Center on the dashboard and in Headquarters ══");
+  const loadsAfterSection = f => /<\/section>\s*(?:<script src="\/scripts\/bf-hq\.js"><\/script>\s*)?<script src="\/scripts\/bf-command-center\.js"><\/script>/.test(FILES[f]) &&
+    (FILES[f].match(/<script src="\/scripts\/bf-command-center\.js"><\/script>/g) || []).length === 1;
+  check("both pages load scripts/bf-command-center.js once, right after the section; neither keeps an inline copy",
+    [DASH, EXEC].every(loadsAfterSection) && [DASH, EXEC].every(f => FILES[f].indexOf("(function commandCenter() {") === -1));
+  const ids = f => (FILES[f].match(/<section id="commandCenterSection"[\s\S]*?<\/section>/) || [""])[0].match(/id="[A-Za-z]+"/g) || [];
+  check("both pages carry the same Command Center markup ids", JSON.stringify(ids(DASH)) === JSON.stringify(ids(EXEC)) && ids(DASH).length === 11,
+    JSON.stringify([ids(DASH), ids(EXEC)]));
+  const onDash = await page(live(full, OWNER)), onExec = await page(live(full, OWNER), { file: EXEC });
+  check("the same answer renders the same panels, word for word, on both pages",
+    PANEL_IDS.concat(["ccPlatform"]).every(k => onDash.panel(k) === onExec.panel(k) && onDash.panel(k).length > 0) &&
+    onExec.els.ccPlatformPanel.style.display === "", PANEL_IDS.filter(k => onDash.panel(k) !== onExec.panel(k)).join(","));
+  const memberExec = await page(live(full, USER), { file: EXEC });
+  check("in Headquarters, a member's Command Center keeps the platform panel hidden and empty",
+    memberExec.els.ccPlatformPanel.style.display === "none" && memberExec.panel("ccPlatform") === "");
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

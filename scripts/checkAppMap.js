@@ -221,6 +221,12 @@ console.log("\n══ M4. routes, gates and tips ══");
   const subs = Object.keys(MAPV.routes).filter(r => /sub/.test(MAPV.routes[r]));
   check("M4. ... and subscriber-only routes are marked so (" + subs.length + ")", subs.length >= 10, subs.length);
   check("M4. the agent tools' run buttons carry their tool routes (e.g. seo.html)", (MAPV.pages["seo.html"].c || []).some(r => /^\[data-tool-run=/.test(r[0]) && /^POST \/api\/agents\/seo\//.test(r[3] || "")));
+  // Block 3a (Oct 29 2026): Headquarters' sort and the calendar's read-only layer are mapped as their pages label them.
+  const mapped = (p, sel) => (MAPV.pages[p] && MAPV.pages[p].c || []).find(r => r[0] === sel);
+  check("M4. Headquarters' sort (executive-agent.html #hqSort) and the calendar's \"Agent runs\" toggle (#calAgentRunsBtn) are in the map",
+    JSON.stringify(mapped("executive-agent.html", "#hqSort")) === JSON.stringify(["#hqSort", "Sorted by attention; press to sort A to Z", "b"]) &&
+    JSON.stringify(mapped("calendar.html", "#calAgentRunsBtn")) === JSON.stringify(["#calAgentRunsBtn", "Agent runs", "b"]),
+    JSON.stringify([mapped("executive-agent.html", "#hqSort"), mapped("calendar.html", "#calAgentRunsBtn")]));
   const vm = require("vm");
   const g = readFront("scripts/termaximus-guide.js");
   const i = g.indexOf("var PAGE_GUIDANCE = {"), j = g.indexOf("\n  };", i);

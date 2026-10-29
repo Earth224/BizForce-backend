@@ -10261,6 +10261,89 @@ app.get("/api/agents/live", requireAuth, async function (req, res, next) {
   }
 });
 
+/* The calendar's "Agent runs" layer: each schedule's runs between two UTC days,
+   by lib/agentLive.js runsBetween — the panel's own next-run walk through
+   agentScheduleIsDue, after the same gates. READ-ONLY: nothing is written to
+   calendar_events or anywhere else. ?from=YYYY-MM-DD&to=YYYY-MM-DD, to
+   exclusive, at most CALENDAR_SPAN_DAYS apart. */
+app.get("/api/agents/live/calendar", requireAuth, async function (req, res, next) {
+  try {
+    var live = require("./lib/agentLive");
+    var userId = req.user.id;
+    var dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+    var fromDay = String(req.query.from || ""), toDay = String(req.query.to || "");
+    var from = dayPattern.test(fromDay) ? new Date(fromDay + "T00:00:00.000Z") : null;
+    var to = dayPattern.test(toDay) ? new Date(toDay + "T00:00:00.000Z") : null;
+    if (!from || !to || isNaN(from.getTime()) || isNaN(to.getTime()) || to.getTime() <= from.getTime() ||
+        to.getTime() - from.getTime() > live.CALENDAR_SPAN_DAYS * 86400000) {
+      return res.status(400).json({ error: "from and to must be UTC days (YYYY-MM-DD), to after from and at most " + live.CALENDAR_SPAN_DAYS + " days later." });
+    }
+    var now = new Date();
+    var rowsOrUnavailable = async function (name, fn) {
+      try {
+        return { rows: await fn() };
+      } catch (error) {
+        console.error("[agents/live/calendar] the " + name + " read failed for " + userId + ": " + ((error && error.message) || error));
+        return { unavailable: (error && error.message) || String(error) };
+      }
+    };
+    var schedules = await rowsOrUnavailable("schedules", async function () {
+      return commandCenterRead(await supabase
+        .from("agent_schedules")
+        .select(AGENT_SCHEDULE_CARD_FIELDS)
+        .eq("user_id", userId)
+        .order("agent_type", { ascending: true }), "your schedules").data || [];
+    });
+    var autonomyRows = await rowsOrUnavailable("autonomy", async function () {
+      return commandCenterRead(await supabase
+        .from("agent_autonomy")
+        .select("agent_type, enabled")
+        .eq("user_id", userId)
+        .order("agent_type", { ascending: true }), "your autonomy").data || [];
+    });
+    // Whether the runner would run schedules for this account; unknown is null, and shows nothing.
+    var active = null;
+    try {
+      var userPlan = await getUserPlan(userId, req.user);
+      if (userPlan) active = userPlan.active === true;
+    } catch (planError) {
+      console.error("[agents/live/calendar] could not read the plan for " + userId + ": " + ((planError && planError.message) || planError));
+    }
+    var schedulerOn = process.env.ENABLE_AGENT_SCHEDULES === "true";
+    var body = {
+      generated_at: now.toISOString(),
+      from: fromDay,
+      to: toDay,
+      scheduler_on: schedulerOn,
+      subscription_active: active
+    };
+    if (schedules.unavailable !== undefined) {
+      body.schedules = { unavailable: schedules.unavailable };
+      return res.json(body);
+    }
+    body.schedules = schedules.rows.filter(function (row) { return live.AGENT_KEYS.indexOf(row.agent_type) !== -1; }).map(function (row) {
+      var autonomy = autonomyRows.unavailable !== undefined ? { unavailable: autonomyRows.unavailable }
+        : autonomyRows.rows.some(function (a) { return a.agent_type === row.agent_type && a.enabled === true; });
+      var walk = live.runsBetween(row, { from: from, to: to, now: now, isDue: agentScheduleIsDue, schedulerOn: schedulerOn, autonomy: autonomy, subscriptionActive: active });
+      var out = {
+        agent_type: row.agent_type,
+        name: live.AGENT_NAMES[row.agent_type] || row.agent_type,
+        task_type: row.task_type || null,
+        cadence: row.cadence,
+        hour_utc: row.hour_utc,
+        consecutive_failures: typeof row.consecutive_failures === "number" ? row.consecutive_failures : 0,
+        runs: walk.runs,
+        reason: walk.reason || null
+      };
+      if (walk.unavailable !== undefined) out.unavailable = walk.unavailable;
+      return out;
+    });
+    return res.json(body);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/agents/:type/live", requireAuth, async function (req, res, next) {
   try {
     var type = String(req.params.type || "").toLowerCase().trim();
@@ -36372,7 +36455,11 @@ async function commandCenterSpend(userId, now) {
   };
 }
 
-async function commandCenterPlatform() {
+/* Admin only: the route adds this section for role admin and for nobody else,
+   so the platform ceiling's dollar figures reach no member. A member meets the
+   ceiling only as the refusal on their own request (platformDailySpendLimitError,
+   which names no figure). */
+async function commandCenterPlatform(now) {
   var jobs = commandCenterRead(await supabase
     .from("job_runs")
     .select("job_name, last_run_on, finished_at, last_error")
@@ -36381,7 +36468,15 @@ async function commandCenterPlatform() {
     .from("radar_status")
     .select("*")
     .order("source", { ascending: true }), "radar status");
-  return { job_runs: jobs.data || [], radar_status: radar.data || [] };
+  // Today's platform spend against the daily ceiling, by the ceiling's own reader.
+  var ceiling;
+  var cap = platformDailySpendCap();
+  if (cap === null) ceiling = { unavailable: "PLATFORM_DAILY_SPEND_CAP_USD is not a positive number, so every member's model call is refused" };
+  else {
+    var today = await platformSpendToday(now);
+    ceiling = today.error ? { unavailable: today.error } : { cap_usd: cap, spent_usd: Number(today.usd.toFixed(4)), day: today.day };
+  }
+  return { job_runs: jobs.data || [], radar_status: radar.data || [], ceiling: ceiling };
 }
 
 app.get("/api/command-center", requireAuth, async function (req, res, next) {
@@ -36398,7 +36493,7 @@ app.get("/api/command-center", requireAuth, async function (req, res, next) {
     ];
     var isAdmin = req.user.role === "admin";
     if (isAdmin) {
-      reads.push(commandCenterSection("platform", function () { return commandCenterPlatform(); }));
+      reads.push(commandCenterSection("platform", function () { return commandCenterPlatform(now); }));
     }
     var sections = await Promise.all(reads);
     var body = {
