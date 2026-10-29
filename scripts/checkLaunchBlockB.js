@@ -696,7 +696,10 @@ function fakeDb(tables, fail) {
     console.log("    " + cdnTags.length + " CDN tags" + (CDN_DIR ? ", hashed against the files in " + CDN_DIR : " (BIZFORCE_CDN_DIR not set: format checked, real files not hashed)"));
     // NAMED (Oct 28 2026, member support): BEFORE seven CDN tags (qrcode x2). AFTER eight: support.html, the support
     // page's shell, loads the card's same qrcode@1.4.4 with the same SRI hash for its QR code.
-    check("8. the CDN tags are the eight known ones (qrcode x3, html2canvas, jspdf, chart.js x3)", cdnTags.length === 8, cdnTags.length);
+    // NAMED (Oct 29 2026, signature live modules): BEFORE eight CDN tags (chart.js x3). AFTER nine: agents/analytics.html
+    // loads chart.js@4.4.1 for its live charts with the same tag and SRI hash as lead-radar.html, sales.html and
+    // analytics-dashboard.html (checkAgentLive S7 holds the four tags equal).
+    check("8. the CDN tags are the nine known ones (qrcode x3, html2canvas, jspdf, chart.js x4)", cdnTags.length === 9, cdnTags.length);
     cdnTags.forEach(c => {
       const integ = attr(c.tag, "integrity") || "";
       const m = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/.exec(integ);

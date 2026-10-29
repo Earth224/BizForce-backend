@@ -29,6 +29,31 @@
          to 5 minutes, reset by a good answer; /live is not a saved offline
          read; prefers-reduced-motion stops every animation.
 
+   SIGNATURE MODULES (added with backend "Signature live data for Analytics,
+   Store, Social, Email, SEO and Sales" and frontend "Signature live modules
+   with charts, on six agent pages"; lib/agentSignatures.js and
+   agentSignatureReads in server.js):
+     S1  Analytics: runs per day and by agent without dry_run; blog arrivals
+         on the member's own tracked bl- refs only;
+     S2  Store: the member's own items, low stock at their own reorder point,
+         margin bands by measureStockAndMargin, store proposals, BizCash trades
+         (lib/trades.js, BFC only);
+     S3  Social: the connection from named columns, never a secret;
+         automation and its latest change; drafts by status, newest 3;
+     S4  Email: sequences, enrolments, the next send, the sender's blockers
+         exactly as its booleans say;
+     S5  SEO: audits (flags, no score, because none is stored), posts,
+         arrivals, the latest optimize run;
+     S6  Sales: the pipeline; the radar for the credential owner only, YouTube
+         on its own row and never in a total;
+     S7  the 3 KB budget with signatures, no signature on the all-agents
+         answer, Chart.js with the exact SRI tag, textContent only, and each
+         module in jsdom with real fixtures and empty states.
+   A failed read or a null count is { unavailable } in every module.
+
+   The fake database returns only the columns a query selects, so a column no
+   one asked for cannot reach an answer.
+
    No network (fetch is stubbed), no live database rows: the database is a
    fake held in memory.
 
@@ -46,6 +71,7 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const MUTATE = process.env.MUTATE || "";
 const SERVER = "server.js", LIB = "lib/agentLive.js", PROFILE = "scripts/agent-profile.js", OFFLINE = "scripts/bf-offline.js";
+const SIGLIB = "lib/agentSignatures.js", ANALYTICS_PAGE = "agents/analytics.html";
 
 const MUTATIONS = {
   // the running-tasks read loses its owner filter, so another member's run shows (L2)
@@ -75,6 +101,26 @@ const MUTATIONS = {
   // a 5xx is retried at the normal interval, without backing off (L6)
   "no-backoff": [[PROFILE, "    var wait = Math.min(LIVE_MAX_BACKOFF_MS, live.base * Math.pow(2, live.failures));\n", "    var wait = live.base;\n"]],
   // the live routes are registered after /api/agents/:type, which swallows /api/agents/live (L2)
+  // Analytics counts dry runs, in the read and in the lib (S1)
+  "analytics-dry-run-counted": [[SERVER, "          .neq(\"status\", \"dry_run\")\n          .gte(\"created_at\", windowStart)\n          .order(\"id\", { ascending: true });\n      }, \"runs in the last 30 days\");", "          .gte(\"created_at\", windowStart)\n          .order(\"id\", { ascending: true });\n      }, \"runs in the last 30 days\");"],
+    [SIGLIB, "var runs = r.runs30.rows.filter(function (t) { return t && t.status !== \"dry_run\"; });", "var runs = r.runs30.rows;"]],
+  // an arrival on any ref is counted: a Lead Radar ref, an untracked post, an unknown ref (S1)
+  "non-bl-arrivals-counted": [[SIGLIB, "    return v && typeof v.ref === \"string\" && v.ref.indexOf(\"bl-\") === 0 && tracked[v.ref] === true;\n", "    return v && typeof v.ref === \"string\";\n"]],
+  // YouTube is added into the Bluesky and Mastodon total (S6)
+  "youtube-summed": [[SIGLIB, "? bl[k] + ma[k] : { unavailable", "? bl[k] + ma[k] + (typeof pair(\"youtube\")[k] === \"number\" ? pair(\"youtube\")[k] : 0) : { unavailable"]],
+  // the radar counts are read and sent for every member, not only the owner (S6)
+  "radar-to-non-owner": [[SERVER, "    if (OUTREACH_CREDENTIAL_OWNER_ID === userId) {\n      r.radar = {};", "    if (true) {\n      r.radar = {};"],
+    [SIGLIB, "  if (opts.isOwner === true && r.radar) {", "  if (r.radar) {"]],
+  // the connection row is read whole and passed through, app password and all (S3)
+  "bluesky-secret-in-payload": [[SERVER, "        .select(\"handle, status, auto_post, auto_post_changed_at, last_ok_at, last_error_at, last_error_code, created_at\")\n", "        .select(\"*\")\n"],
+    [SIGLIB, "    out.connection = c && c.handle ? {\n", "    out.connection = c && c.handle ? Object.assign({}, c, {\n"],
+    [SIGLIB, "      last_error_code: c.last_error_code ? cut(c.last_error_code, 60) : null\n    } : { connected: false", "      last_error_code: c.last_error_code ? cut(c.last_error_code, 60) : null\n    }) : { connected: false"]],
+  // the inventory read loses its owner filter (S2)
+  "other-member-inventory": [[SERVER, "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status\", { count: \"exact\" })\n          .eq(\"user_id\", userId)\n", "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status\", { count: \"exact\" })\n"]],
+  // an inventory read that failed answers as an empty shop (S2)
+  "store-failed-read-as-zero": [[SIGLIB, "  if (failed(r.items)) out.stock = unavailableOf(r.items);", "  if (failed(r.items)) out.stock = { items: 0, with_reorder_point: 0, low: { count: 0, named: [] }, margin_bands: {} };"]],
+  // Chart.js is loaded on agents/analytics.html without its integrity hash (S7)
+  "chartjs-without-sri": [[ANALYTICS_PAGE, " integrity=\"sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4\" crossorigin=\"anonymous\"></script>\n  <style>", "></script>\n  <style>"]],
   "route-after-type": [[SERVER, 'app.get("/api/agents/live", requireAuth, async function (req, res, next) {', 'app.get("/api/agents/:type", requireAuth, async function (req, res, next) {\n});\napp.get("/api/agents/live", requireAuth, async function (req, res, next) {']]
 };
 
@@ -85,8 +131,8 @@ try { ({ JSDOM } = require("jsdom")); } catch (e) { console.log("    FAIL  jsdom
 
 const lf = t => t.replace(/\r\n/g, "\n");
 const FILES = {};
-[SERVER, LIB].forEach(f => { FILES[f] = lf(fs.readFileSync(path.join(REPO, f), "utf8")); });
-[PROFILE, OFFLINE].forEach(f => {
+[SERVER, LIB, SIGLIB].forEach(f => { FILES[f] = lf(fs.readFileSync(path.join(REPO, f), "utf8")); });
+[PROFILE, OFFLINE, ANALYTICS_PAGE].forEach(f => {
   const p = path.join(FRONTEND, f);
   if (!fs.existsSync(p)) { console.log("    FAIL  frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)"); process.exit(1); }
   FILES[f] = lf(fs.readFileSync(p, "utf8"));
@@ -106,16 +152,16 @@ function check(label, ok, detail) {
 }
 
 /* ── the lib, compiled from the (possibly mutated) source ── */
-function compileLib() {
-  const file = path.join(REPO, LIB);
+function compileLib(rel) {
+  const file = path.join(REPO, rel);
   const m = new Module(file, module);
   m.filename = file;
   m.paths = Module._nodeModulePaths(path.dirname(file));
-  m._compile(FILES[LIB], file);
+  m._compile(FILES[rel], file);
   return m.exports;
 }
-let LIVE;
-try { LIVE = compileLib(); } catch (e) { console.log("    FAIL  lib/agentLive.js did not load: " + e.message); process.exit(1); }
+let LIVE, SIGS;
+try { LIVE = compileLib(LIB); SIGS = compileLib(SIGLIB); } catch (e) { console.log("    FAIL  lib/agentLive.js or lib/agentSignatures.js did not load: " + e.message); process.exit(1); }
 
 /* ── the routes and what they call, lifted from server.js ── */
 const SRC = FILES[SERVER];
@@ -137,7 +183,11 @@ const TYPE_ROUTE = 'app.get("/api/agents/:type", requireAuth, async function (re
 const DEFS = ["agentLiveBody", "commandCenterRead", "commandCenterAllRows", "COMMAND_CENTER_PAGE", "AGENT_SCHEDULE_FIELDS",
   "AGENT_SCHEDULE_CARD_FIELDS", "agentScheduleIsDue", "agentScheduleUtcDay", "agentScheduleDaysInUtcMonth",
   "agentScheduleEffectiveMonthDay", "modelCallCostUsd", "MODEL_PRICES_USD_PER_MILLION", "modelSpendMonth",
-  "modelCallUtcDay", "modelCallDailyLimit", "MODEL_CALL_DAILY_LIMIT_DEFAULT"];
+  "modelCallUtcDay", "modelCallDailyLimit", "MODEL_CALL_DAILY_LIMIT_DEFAULT",
+  // the signature modules' reads and the rules they reuse
+  "agentSignature", "agentSignatureReads", "blogRefToken", "measureStockAndMargin", "storeStockFigure", "storeStockCents", "STORE_STOCK_MIN_OUT_MOVEMENTS",
+  "emailSequenceEnrollmentRows", "EMAIL_SEQUENCE_CONTACT_PAGE", "emailSequencesEnabled", "emailMarketingDailyCap",
+  "EMAIL_MARKETING_DEFAULT_DAILY_CAP", "SEO_OPTIMIZE_TASK_PROMPT_PREFIX", "SALES_LEAD_STATUSES", "OUTREACH_CREDENTIAL_OWNER_ID"];
 const ROUTE_SRC = [routeOf(LIVE_ALL), routeOf(LIVE_ONE)];
 const LIFTED = DEFS.map(defOf).join("\n\n") + "\n\n" + ROUTE_SRC.filter(Boolean).join("\n\n");
 let LIFTED_SCRIPT;
@@ -159,6 +209,8 @@ function fakeDb(tables, opts) {
       if (op === "gte") return x >= v;
       if (op === "lt") return x < v;
       if (op === "is") return x === v;
+      if (op === "not_is") return x !== v && x !== undefined;
+      if (op === "ilike") return typeof x === "string" && x.toLowerCase().indexOf(v.toLowerCase().replace(/%$/, "")) === 0;
       return false;
     }));
     const api = {
@@ -169,6 +221,11 @@ function fakeDb(tables, opts) {
       gte(c, v) { q.filters.push(["gte", c, v]); return api; },
       lt(c, v) { q.filters.push(["lt", c, v]); return api; },
       is(c, v) { q.filters.push(["is", c, v]); return api; },
+      not(c, op, v) { if (op !== "is") throw new Error("fake db: not(" + op + ") is not supported"); q.filters.push(["not_is", c, v]); return api; },
+      ilike(c, v) { q.filters.push(["ilike", c, v]); return api; },
+      // A write is recorded, never applied: the live routes must make none.
+      insert() { q.write = "insert"; return api; }, update() { q.write = "update"; return api; },
+      upsert() { q.write = "upsert"; return api; }, delete() { q.write = "delete"; return api; },
       order(c, o) { q.orderBy.push([c, !o || o.ascending !== false]); return api; },
       limit(n) { q.lim = n; return api; },
       range(a, b) { q.rng = [a, b]; return api; },
@@ -185,6 +242,11 @@ function fakeDb(tables, opts) {
           if (q.rng) rows = rows.slice(q.rng[0], q.rng[1] + 1);
           if (q.lim !== null) rows = rows.slice(0, q.lim);
           const nullCount = (opts.nullCount || []).indexOf(table) !== -1;
+          // Only the columns asked for, so a column nobody selected cannot leak into an answer.
+          if (q.cols && q.cols !== "*") {
+            const want = q.cols.split(",").map(x => x.trim());
+            rows = rows.map(r => want.reduce((o, k) => { if (k in r) o[k] = r[k]; return o; }, {}));
+          }
           out = { data: q.head ? null : JSON.parse(JSON.stringify(rows)), count: q.count ? (nullCount ? null : total) : null, error: null };
         }
         return Promise.resolve(out).then(resolve, reject);
@@ -217,7 +279,9 @@ function harness(tables, o) {
     process: { env: Object.assign({ ENABLE_AGENT_SCHEDULES: "true" }, o.env || {}) },
     Date: fixedDate(o.now || NOW),
     getUserPlan: async () => { if (o.planThrows) throw new Error("plan read failed"); return o.plan === undefined ? { active: true } : o.plan; },
-    require: name => (name === "./lib/agentLive" ? libForVm : require(path.join(REPO, name))),
+    require: name => (name === "./lib/agentLive" ? libForVm : name === "./lib/agentSignatures" ? SIGS : require(path.join(REPO, name))),
+    crypto: require("crypto"),
+    OWNER_ACCOUNT_ID: o.owner || U1,
     requireAuth: function requireAuth() {}, requireActiveSubscription: function requireActiveSubscription() {},
     callAnthropicText: async () => { modelCalls.push(1); throw new Error("no model call is allowed here"); },
     app: { get(p, ...h) { routes[p] = { handler: h[h.length - 1], gates: h.slice(0, -1).map(f => f && f.name) }; } },
@@ -476,6 +540,9 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
       return p;
     };
     w.localStorage.setItem("bf_token", "check-token");
+    // A recording stand-in for Chart.js, and prefers-reduced-motion on request.
+    if (o.chart) w.Chart = function Chart(canvas, spec) { (w.__charts = w.__charts || []).push({ canvas, spec }); this.destroy = () => {}; };
+    w.matchMedia = q => ({ matches: !!o.reducedMotion && /reduce/.test(q), addListener() {}, removeListener() {} });
     let err = null;
     try {
       if (!config) throw new Error(file + " has no AGENT_PROFILE_CONFIG");
@@ -598,6 +665,385 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     check("L6. prefers-reduced-motion stops every animation (" + animated.length + ") and the transitions",
       animated.length >= 3 && animated.every(sel => sel.split(",").every(x => reduced.indexOf(x.trim()) !== -1)) && /animation:none/.test(reduced) &&
       /\.ap-live-v,\.ap-live-beat\{transition:none\}/.test(css), JSON.stringify(animated) + " / " + reduced);
+  }
+
+  /* ══ The signature modules (lib/agentSignatures.js, agentSignatureReads, the renderers) ══ */
+  const refBox = {}; vm.createContext(refBox);
+  vm.runInContext(defOf("blogRefToken") + "\nthis.ref = blogRefToken;", Object.assign(refBox, { crypto: require("crypto"), String }));
+  const REF = (u, slug) => refBox.ref(u, slug);
+  const OWNER = U1, U4 = "44444444-4444-4444-8444-444444444444";
+  function sigFixture() {
+    const t = fixture();
+    const extra = [
+      task(U1, "content", "completed", 1 * DAY + 30), task(U1, "content", "completed", 1 * DAY + 60), task(U1, "ads", "completed", 20 * DAY),
+      task(U1, "seo", "completed", 2 * DAY + 10, { id: "audit-latest", task_type: "seo/audit", output: { flags: [{ id: "F1", basis: "error" }, { id: "F6", basis: "guideline" }, { id: "F9", basis: "guideline" }], measured: { title: "x" } } }),
+      task(U1, "seo", "failed", 5 * DAY, { id: "audit-failed", task_type: "seo/audit" }),
+      task(U1, "seo", "completed", 50 * DAY, { id: "audit-old", task_type: "seo/audit", output: { flags: [] } }),
+      task(U1, "seo", "completed", 1 * DAY, { id: "optimize-latest", task_type: null, prompt: "SEO optimize: https://example.com" }),
+      task(U2, "seo", "completed", 1 * DAY, { id: "OTHER-MEMBER-AUDIT", task_type: "seo/audit", output: { flags: [{ basis: "error" }] } })
+    ];
+    t.ai_tasks = t.ai_tasks.concat(extra);
+    const body = (u, slug) => "<p>Read more</p><a href=\"https://bizforceai.net/?ref=" + REF(u, slug) + "\">BizForce</a>";
+    t.content_library = [
+      { id: "c1", user_id: U1, slug: "launch", status: "published", published_at: ago(3 * DAY), body: body(U1, "launch") },
+      { id: "c2", user_id: U1, slug: "notes", status: "published", published_at: ago(10 * DAY), body: "<p>no link</p>" },
+      { id: "c3", user_id: U1, slug: "old", status: "published", published_at: ago(40 * DAY), body: "<p>old</p>" },
+      { id: "c4", user_id: U1, slug: "draft", status: "draft", published_at: null, body: body(U1, "draft").replace("?ref=", "?nope=") },
+      { id: "c5", user_id: U1, slug: null, status: "draft", published_at: null, body: "" },
+      { id: "c6", user_id: U2, slug: "launch", status: "published", published_at: ago(2 * DAY), body: body(U2, "launch") }
+    ];
+    let v = 0;
+    const visit = (ref, m) => ({ id: "v" + (++v), ref, created_at: ago(m) });
+    t.engine_visits = [
+      visit(REF(U1, "launch"), 1 * DAY), visit(REF(U1, "launch"), 1 * DAY + 5), visit(REF(U1, "launch"), 4 * DAY), visit(REF(U1, "launch"), 40 * DAY),
+      visit(REF(U2, "launch"), 1 * DAY), visit(REF(U2, "launch"), 2 * DAY), visit(REF(U1, "notes"), 1 * DAY),
+      visit("lr-0123456789", 1 * DAY), visit("lr-0123456789", 2 * DAY)
+    ];
+    t.inventory_items = [
+      { id: "i1", user_id: U1, name: "Blue mug", unit: "unit", quantity_on_hand: 2, reorder_point: 5, unit_cost: 4, unit_price: 10, status: "active" },
+      { id: "i2", user_id: U1, name: "Red mug", unit: "unit", quantity_on_hand: 10, reorder_point: 3, unit_cost: 8, unit_price: 9, status: "active" },
+      { id: "i3", user_id: U1, name: "Tea", unit: "box", quantity_on_hand: 0, reorder_point: 0, unit_cost: 5, unit_price: 4, status: "active" },
+      { id: "i4", user_id: U1, name: "Spoon", unit: "unit", quantity_on_hand: 3, reorder_point: null, unit_cost: null, unit_price: 2, status: "active" },
+      { id: "i5", user_id: U1, name: "Old stock", unit: "unit", quantity_on_hand: 0, reorder_point: 9, unit_cost: 1, unit_price: 2, status: "archived" },
+      { id: "i9", user_id: U2, name: "OTHER MEMBER ITEM", unit: "unit", quantity_on_hand: 0, reorder_point: 10, unit_cost: 1, unit_price: 100, status: "active" }
+    ];
+    t.agent_proposals.push({ id: "sp1", user_id: U1, agent_type: "store", title: "List the blue mug on BizForce Market", status: "pending", created_at: ago(90) });
+    t.marketplace_orders = [
+      { id: "o1", buyer_id: U2, seller_id: U1, amount_bfc: 25, listing_title: "Mug", payment_method: "bfc", created_at: ago(3 * DAY) },
+      { id: "o2", buyer_id: U1, seller_id: U4, amount_bfc: 10, listing_title: "Tea", payment_method: "bfc", created_at: ago(5 * DAY) },
+      { id: "o3", buyer_id: U2, seller_id: U1, amount_bfc: 99, listing_title: "USD sale", payment_method: "usd", created_at: ago(2 * DAY) },
+      { id: "o4", buyer_id: U2, seller_id: U1, amount_bfc: 40, listing_title: "Old sale", payment_method: "bfc", created_at: ago(60 * DAY) },
+      { id: "o5", buyer_id: U2, seller_id: U4, amount_bfc: 7, listing_title: "Not ours", payment_method: "bfc", created_at: ago(2 * DAY) }
+    ];
+    t.member_social_connections = [
+      { id: "mc1", user_id: U1, platform: "bluesky", handle: "maker.bsky.social", did: "did:plc:SECRETDIDVALUE", app_password_ciphertext: "deadbeefcafe0011",
+        app_password_iv: "a1a1a1a1a1a1a1a1a1a1a1a1", app_password_auth_tag: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", status: "connected", auto_post: true,
+        auto_post_changed_at: ago(2 * DAY), last_ok_at: ago(3 * 60), last_error_at: ago(DAY), last_error_code: "rate_limited", created_at: ago(9 * DAY), updated_at: ago(60) },
+      { id: "mc2", user_id: U2, platform: "bluesky", handle: "other.bsky.social", did: "did:plc:OTHER", app_password_ciphertext: "ffff", app_password_iv: "c", app_password_auth_tag: "d",
+        status: "connected", auto_post: false, created_at: ago(DAY) }
+    ];
+    t.member_social_setting_changes = [
+      { id: "ch1", user_id: U1, platform: "bluesky", setting: "auto_post", old_value: false, new_value: true, changed_at: ago(2 * DAY) },
+      { id: "ch0", user_id: U1, platform: "bluesky", setting: "auto_post", old_value: true, new_value: false, changed_at: ago(5 * DAY) },
+      { id: "ch9", user_id: U2, platform: "bluesky", setting: "auto_post", old_value: false, new_value: true, changed_at: ago(60) }
+    ];
+    t.agent_proposals.push({ id: "pp-wait", user_id: U1, agent_type: "social", title: "Post: launch day", status: "pending", created_at: ago(100) },
+      { id: "pp-no", user_id: U1, agent_type: "social", title: "Post: sale", status: "rejected", created_at: ago(200) });
+    t.social_post_drafts = [
+      { id: "d1", user_id: U1, status: "pending_approval", proposal_id: "pp-wait", content: "Launch day is here <img src=x onerror=alert(1)>", created_at: ago(100), published_at: null },
+      { id: "d2", user_id: U1, status: "pending_approval", proposal_id: "pp-no", content: "Big sale", created_at: ago(200), published_at: null },
+      { id: "d3", user_id: U1, status: "published", proposal_id: null, content: "We shipped", created_at: ago(300), published_at: ago(290), platform_post_uri: "at://did:plc:abc123/app.bsky.feed.post/3kxyzabc" },
+      { id: "d4", user_id: U1, status: "publish_failed", proposal_id: null, content: "Did not go", created_at: ago(400), published_at: null },
+      { id: "d5", user_id: U1, status: "not_published", proposal_id: null, content: "Saved", created_at: ago(500), published_at: null },
+      { id: "d6", user_id: U1, status: "published", proposal_id: null, content: "Long ago", created_at: ago(40 * DAY), published_at: ago(40 * DAY), platform_post_uri: "at://did:plc:abc123/app.bsky.feed.post/old" },
+      { id: "d9", user_id: U2, status: "published", proposal_id: null, content: "OTHER MEMBER DRAFT", created_at: ago(50), published_at: ago(50), platform_post_uri: "at://did:plc:x/app.bsky.feed.post/y" }
+    ];
+    t.email_sequences = [
+      { id: "s1", owner_id: U1, name: "Welcome series", status: "active", created_at: ago(9 * DAY) },
+      { id: "s2", owner_id: U1, name: "Winback", status: "draft", created_at: ago(2 * DAY) },
+      { id: "s9", owner_id: U2, name: "OTHER MEMBER SEQUENCE", status: "active", created_at: ago(DAY) }
+    ];
+    t.email_sequence_enrollments = [
+      { id: "e1", sequence_id: "s1", status: "active", next_send_at: "2026-10-30T09:00:00.000Z" },
+      { id: "e2", sequence_id: "s1", status: "active", next_send_at: "2026-10-29T15:00:00.000Z" },
+      { id: "e3", sequence_id: "s1", status: "stopped", stop_reason: "unsubscribed", next_send_at: null },
+      { id: "e4", sequence_id: "s1", status: "completed", next_send_at: null },
+      { id: "e9", sequence_id: "s9", status: "active", next_send_at: "2026-10-29T11:00:00.000Z" }
+    ];
+    t.sales_lead_pipeline = [
+      { id: "sl1", user_id: U1, lead_post_uri: "at://a", status: "new" }, { id: "sl2", user_id: U1, lead_post_uri: "at://b", status: "new" },
+      { id: "sl3", user_id: U1, lead_post_uri: "at://c", status: "contacted" }, { id: "sl9", user_id: U2, lead_post_uri: "at://z", status: "converted" }
+    ];
+    let L = 0;
+    const lead = (source, m) => ({ id: "bl" + (++L), source, status: source === "youtube" ? "signal" : "scored", post_text: "OWNER LEAD TEXT", created_at: ago(m) });
+    t.bsky_leads = [lead("bluesky", 60), lead("bluesky", DAY), lead("bluesky", 6 * DAY), lead("bluesky", 8 * DAY), lead("bluesky", 20 * DAY), lead("bluesky", 40 * DAY),
+      lead("mastodon", 2 * DAY), lead("youtube", 30), lead("youtube", DAY), lead("youtube", 3 * DAY), lead("youtube", 6 * DAY), lead("youtube", 12 * DAY)];
+    return t;
+  }
+  const SIG_PAGES = { analytics: "agents/analytics.html", store: "store-agent.html", social: "agents/social.html", email: "email-agent.html", seo: "agents/seo.html", sales: "agents/sales.html" };
+  const sigCall = async (type, o, user) => {
+    const hh = harness(o && o.tables || sigFixture(), o);
+    const r = await hh.call("/api/agents/:type/live", { type }, user || { id: U1 });
+    return Object.assign(r, { h: hh, sig: r.body && r.body.agent && r.body.agent.signature });
+  };
+
+  console.log("\n══ S1. Analytics: runs per day, by agent, and blog arrivals (bl- only) ══");
+  {
+    const r = await sigCall("analytics");
+    const g = r.sig;
+    const win = SIGS.windowOf(new Date(NOW));
+    const labels = []; for (let i = 0; i < 30; i++) labels.push(new Date(Date.parse(win.days_from + "T00:00:00Z") + i * 86400000).toISOString().slice(0, 10));
+    const mine = sigFixture().ai_tasks.filter(t => t.user_id === U1 && t.status !== "dry_run" && labels.indexOf(t.created_at.slice(0, 10)) !== -1);
+    const want = labels.map(d => mine.filter(t => t.created_at.slice(0, 10) === d).length);
+    check("S1. the window is 30 UTC days ending today, from " + win.days_from, g && g.kind === "analytics" && g.days_from === "2026-09-30" && g.days === 30, g && g.days_from);
+    check("S1. runs per day match the member's own non-dry-run rows (" + want.reduce((a, b) => a + b, 0) + " runs)", g && JSON.stringify(g.runs.per_day) === JSON.stringify(want) && g.runs.total === mine.length,
+      g && JSON.stringify(g.runs.per_day) + " vs " + JSON.stringify(want));
+    check("S1. Sales's 40 dry runs today are not counted: Sales shows its one real run (10 days ago), and today shows only real runs", g && g.runs.by_agent.find(a => a.type === "sales").runs === 1 && g.runs.per_day[29] === want[29],
+      g && JSON.stringify(g.runs.by_agent));
+    const byAgent = {}; mine.forEach(t => { byAgent[t.agent_type] = (byAgent[t.agent_type] || 0) + 1; });
+    check("S1. runs by agent, busiest first, named from config/brain.js without \"Agent\"",
+      g && JSON.stringify(g.runs.by_agent.map(a => [a.type, a.runs])) === JSON.stringify(Object.keys(byAgent).sort((a, b) => byAgent[b] - byAgent[a] || (a < b ? -1 : 1)).map(k => [k, byAgent[k]])) &&
+      g.runs.by_agent.find(a => a.type === "seo").name === "SEO", g && JSON.stringify(g.runs.by_agent));
+    check("S1. blog arrivals: 3, through 1 tracked post, on the right days (2 yesterday, 1 four days ago)",
+      g && g.arrivals.total === 3 && g.arrivals.tracked_posts === 1 && g.arrivals.per_day[28] === 2 && g.arrivals.per_day[25] === 1, g && JSON.stringify(g.arrivals));
+    const posts = [{ ref: "bl-aaaaaaaaaa", tracked: true }, { ref: "bl-bbbbbbbbbb", tracked: false }, { ref: "lr-cccccccccc", tracked: true }];
+    const visits = ["bl-aaaaaaaaaa", "bl-aaaaaaaaaa", "bl-bbbbbbbbbb", "lr-cccccccccc", "lr-dddddddddd", "bl-zzzzzzzzzz"].map(ref => ({ ref, created_at: new Date(NOW - 3600000).toISOString() }));
+    const lone = SIGS.blogArrivals({ rows: { posts, visits } }, win);
+    check("S1. the lib counts only bl- refs of a tracked post: an lr- (Lead Radar) ref, an untracked post and an unknown ref are not arrivals", lone.total === 2 && lone.tracked_posts === 1, JSON.stringify(lone));
+    check("S1. the arrivals read asks engine_visits only for the member's own tracked bl- refs",
+      r.h.db.log.filter(q => q.table === "engine_visits").every(q => q.filters.some(f => f[0] === "in" && f[1] === "ref" && JSON.stringify(f[2]) === JSON.stringify([REF(U1, "launch")]))) &&
+      r.h.db.log.some(q => q.table === "engine_visits"));
+    const none = await sigCall("analytics", null, { id: U3 });
+    check("S1. a member with no tracked post: arrivals say why, not 0", none.sig.arrivals.none === SIGS.NO_TRACKED_LINK && none.sig.arrivals.total === undefined && none.sig.runs.total === 0,
+      JSON.stringify(none.sig.arrivals));
+    const down = await sigCall("analytics", { fail: ["engine_visits"] });
+    check("S1. engine_visits down: arrivals { unavailable }, runs still answer", down.sig.arrivals.unavailable && down.sig.runs.total === mine.length, JSON.stringify(down.sig.arrivals));
+    const tdown = await sigCall("analytics", { fail: ["ai_tasks"] });
+    check("S1. ai_tasks down: runs { unavailable }, never 0", tdown.sig.runs.unavailable && tdown.sig.runs.total === undefined);
+  }
+
+  console.log("\n══ S2. Store: the member's own items, reorder points, margins, proposals, BizCash trades ══");
+  {
+    const r = await sigCall("store");
+    const g = r.sig;
+    check("S2. 4 active items (the archived one and another member's are not counted)", g && g.stock.items === 4 && JSON.stringify(g).indexOf("OTHER MEMBER") === -1, g && JSON.stringify(g.stock));
+    check("S2. low stock at the member's own reorder point: Blue mug (2 ≤ 5) and Tea (0 ≤ 0); Red mug (10 > 3) and Spoon (none set) are not",
+      g && g.stock.low.count === 2 && JSON.stringify(g.stock.low.named) === JSON.stringify(["Blue mug", "Tea"]) && g.stock.with_reorder_point === 3, g && JSON.stringify(g.stock.low));
+    check("S2. margin bands from stock-margin's arithmetic: Blue 60% (40 and up), Red 11.1% (under 20), Tea −25% (loss), Spoon not priced",
+      g && JSON.stringify(g.stock.margin_bands) === JSON.stringify({ loss: 1, under_20: 1, from_20_to_40: 0, from_40: 1, not_priced: 1 }), g && JSON.stringify(g.stock.margin_bands));
+    check("S2. inventory is read with user_id = the member", r.h.db.log.filter(q => q.table === "inventory_items").every(q => q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === U1)));
+    check("S2. store proposals waiting: 1", g && g.pending === 1, g && g.pending);
+    check("S2. BizCash trades in 30 days, BFC only: 1 sale · 25 BFC, 1 purchase · 10 BFC (the USD order, the old sale and others' trades are not counted)",
+      g && JSON.stringify(g.trades_30d) === JSON.stringify({ purchases: 1, purchases_bfc: 10, sales: 1, sales_bfc: 25 }), g && JSON.stringify(g.trades_30d));
+    const empty = await sigCall("store", null, { id: U3 });
+    check("S2. no items: items 0, so the page says \"Add inventory\"", empty.sig.stock.items === 0 && empty.sig.trades_30d.sales === 0);
+    const down = await sigCall("store", { fail: ["inventory_items", "marketplace_orders"] });
+    check("S2. inventory or trades down: { unavailable }, never 0 items", down.sig.stock.unavailable && down.sig.stock.items === undefined && down.sig.trades_30d.unavailable, JSON.stringify(down.sig));
+  }
+
+  console.log("\n══ S3. Social: the connection without a secret, automation, drafts ══");
+  {
+    const r = await sigCall("social");
+    const g = r.sig;
+    const blob = JSON.stringify(r.body);
+    check("S3. connected as @maker.bsky.social, last ok, the last error code",
+      g && g.connection.connected === true && g.connection.handle === "@maker.bsky.social" && g.connection.last_error_code === "rate_limited" && g.connection.last_ok_at === ago(180),
+      g && JSON.stringify(g.connection));
+    check("S3. no secret in the answer: no app password ciphertext, iv, tag or did, under any key or value",
+      ["deadbeefcafe0011", "a1a1a1a1a1a1", "b2b2b2b2b2b2", "SECRETDIDVALUE", "app_password", "ciphertext", "auth_tag", "\"did\""].every(x => blob.indexOf(x) === -1), blob.slice(0, 300));
+    check("S3. the connection read names its columns and never asks for the password or the did",
+      r.h.db.log.filter(q => q.table === "member_social_connections").every(q => q.cols !== "*" && !/app_password|did/.test(q.cols)) &&
+      r.h.db.log.some(q => q.table === "member_social_connections"));
+    check("S3. automatic posting on, with the latest change from its log (turned on, 2 days ago)",
+      g && g.automation.on === true && g.automation.latest && g.automation.latest.to === "on" && g.automation.latest.at === ago(2 * DAY), g && JSON.stringify(g.automation));
+    check("S3. drafts in 30 days by status: 1 waiting, 1 published, 1 refused (its proposal was rejected), 1 failed, 1 saved",
+      g && ["pending_approval", "published", "refused", "failed", "other"].every(k => g.drafts_30d[k] === 1), g && JSON.stringify(g.drafts_30d));
+    check("S3. the newest 3, newest first, with links: proposals.html, then the Bluesky post",
+      g && JSON.stringify(g.drafts_30d.newest.map(d => [d.id, d.state, d.href])) === JSON.stringify([["d1", "pending_approval", "/proposals.html"], ["d2", "refused", "/proposals.html"],
+        ["d3", "published", "https://bsky.app/profile/did:plc:abc123/post/3kxyzabc"]]), g && JSON.stringify(g.drafts_30d.newest));
+    const none = await sigCall("social", null, { id: U3 });
+    check("S3. not connected: { connected: false, status: disconnected }, automation off", none.sig.connection.connected === false && none.sig.connection.status === "disconnected" &&
+      none.sig.automation.on === false && none.sig.drafts_30d.published === 0);
+    const down = await sigCall("social", { fail: ["member_social_connections", "social_post_drafts"] });
+    check("S3. connection or drafts down: { unavailable }, never \"not connected\" or 0 drafts", down.sig.connection.unavailable && down.sig.drafts_30d.unavailable, JSON.stringify(down.sig));
+  }
+
+  console.log("\n══ S4. Email: sequences, enrolments, the next send, the sender's blockers ══");
+  {
+    const r = await sigCall("email");
+    const g = r.sig;
+    check("S4. 2 sequences of the member's own (another member's is not listed)", g && g.sequences.count === 2 && JSON.stringify(g).indexOf("OTHER MEMBER") === -1, g && JSON.stringify(g.sequences));
+    check("S4. enrolments: 2 active, 1 stopped; next send the earliest active one (29 Oct 15:00)",
+      g && g.sequences.enrolments_active === 2 && g.sequences.enrolments_stopped === 1 && g.sequences.next_send_at === "2026-10-29T15:00:00.000Z" &&
+      g.sequences.list[1].name === "Welcome series" && g.sequences.list[1].active === 2, g && JSON.stringify(g.sequences));
+    check("S4. sender off and no webhook secret: exactly those two blockers, in the server's words",
+      g && g.sender.ready === false && JSON.stringify(g.sender.blockers.map(b => b.key)) === JSON.stringify(["enabled", "webhook_secret_set"]) &&
+      g.sender.blockers[1].text === "RESEND_WEBHOOK_SECRET is not set, so bounce and complaint reports cannot be received and marketing mail is held.", g && JSON.stringify(g.sender));
+    const ready = await sigCall("email", { env: { ENABLE_EMAIL_SEQUENCES: "true", RESEND_WEBHOOK_SECRET: "set-in-this-check" } });
+    check("S4. switched on with the secret set: ready, no blockers, the default daily cap", ready.sig.sender.ready === true && ready.sig.sender.blockers.length === 0 && typeof ready.sig.sender.daily_cap === "number",
+      JSON.stringify(ready.sig.sender));
+    const badCap = await sigCall("email", { env: { ENABLE_EMAIL_SEQUENCES: "true", RESEND_WEBHOOK_SECRET: "x", EMAIL_MARKETING_DAILY_CAP: "lots" } });
+    check("S4. a daily cap that is not a whole number is a blocker", JSON.stringify(badCap.sig.sender.blockers.map(b => b.key)) === JSON.stringify(["daily_cap"]) && badCap.sig.sender.daily_cap === null);
+    check("S4. the secret's value never appears in the answer", JSON.stringify(ready.body).indexOf("set-in-this-check") === -1);
+    const none = await sigCall("email", null, { id: U3 });
+    check("S4. no sequences: count 0", none.sig.sequences.count === 0);
+    const down = await sigCall("email", { fail: ["email_sequence_enrollments"] });
+    check("S4. enrolments down: sequences { unavailable }, the sender still answers", down.sig.sequences.unavailable && down.sig.sender.blockers.length === 2);
+  }
+
+  console.log("\n══ S5. SEO: audits, posts published, arrivals, the latest optimize ══");
+  {
+    const r = await sigCall("seo");
+    const g = r.sig;
+    check("S5. audits in 30 days: 2 (1 completed); the 50-day-old one and another member's are not counted", g && g.audits_30d.runs === 2 && g.audits_30d.completed === 1, g && JSON.stringify(g.audits_30d));
+    check("S5. the latest audit: its flags (1 error, 2 guidelines), and no score, because none is stored",
+      g && g.latest_audit.task_id === "audit-latest" && g.latest_audit.errors === 1 && g.latest_audit.guidelines === 2 && g.latest_audit.score === null &&
+      g.latest_audit.score_reason === "An audit stores its flags, not a score", g && JSON.stringify(g.latest_audit));
+    check("S5. blog posts published in 30 days: 2", g && g.posts_published_30d === 2, g && g.posts_published_30d);
+    check("S5. blog arrivals in 30 days: 3 through 1 tracked post (bl- only)", g && g.arrivals_30d.total === 3 && g.arrivals_30d.tracked_posts === 1, g && JSON.stringify(g.arrivals_30d));
+    check("S5. the latest optimize run", g && g.latest_optimize && g.latest_optimize.task_id === "optimize-latest" && g.latest_optimize.status === "completed", g && JSON.stringify(g.latest_optimize));
+    const nc = await sigCall("seo", { nullCount: ["content_library"] });
+    check("S5. a posts count that comes back null is { unavailable }, never 0", nc.sig.posts_published_30d.unavailable !== undefined, JSON.stringify(nc.sig.posts_published_30d));
+    const none = await sigCall("seo", null, { id: U3 });
+    check("S5. nothing yet: 0 audits, no latest audit, 0 posts, arrivals cannot be counted, no optimize",
+      none.sig.audits_30d.runs === 0 && none.sig.latest_audit === null && none.sig.posts_published_30d === 0 && none.sig.arrivals_30d.none && none.sig.latest_optimize === null);
+  }
+
+  console.log("\n══ S6. Sales: the pipeline, and the radar for the owner only ══");
+  {
+    const r = await sigCall("sales");
+    const g = r.sig;
+    check("S6. the owner's pipeline by stage: 2 new, 1 contacted (another member's converted lead is not counted)",
+      g && JSON.stringify(g.pipeline) === JSON.stringify({ stages: { new: 2, drafted: 0, contacted: 1, replied: 0, converted: 0 }, total: 3 }), g && JSON.stringify(g.pipeline));
+    check("S6. the owner's radar finds by source: Bluesky 3 / 5, Mastodon 1 / 1 (7 / 30 days)",
+      g && g.radar && JSON.stringify(g.radar.bluesky) === JSON.stringify({ d7: 3, d30: 5 }) && JSON.stringify(g.radar.mastodon) === JSON.stringify({ d7: 1, d30: 1 }), g && JSON.stringify(g.radar));
+    check("S6. YouTube in its own row, \"kept 30 days, not combined\": 4 / 5",
+      g && g.radar && g.radar.youtube.d7 === 4 && g.radar.youtube.d30 === 5 && g.radar.youtube.note === "kept 30 days, not combined");
+    check("S6. the only total is Bluesky + Mastodon (4 / 6); YouTube is never added to it, and no key sums all three",
+      g && g.radar && JSON.stringify(g.radar.bluesky_and_mastodon) === JSON.stringify({ d7: 4, d30: 6 }) && Object.keys(g.radar).join(",") === "bluesky,mastodon,bluesky_and_mastodon,youtube",
+      g && JSON.stringify(g.radar));
+    check("S6. no lead text, uri or id leaves bsky_leads: head counts only", JSON.stringify(r.body).indexOf("OWNER LEAD TEXT") === -1 &&
+      r.h.db.log.filter(q => q.table === "bsky_leads").every(q => q.head === true));
+    const other = await sigCall("sales", null, { id: U2 });
+    check("S6. a member who is not the owner: their own pipeline (1 converted), no radar key at all", other.sig.pipeline.total === 1 && other.sig.radar === undefined &&
+      JSON.stringify(other.body).indexOf("youtube") === -1 && JSON.stringify(other.body).indexOf("radar") === -1, JSON.stringify(other.sig));
+    check("S6. ... and bsky_leads is not read for them", other.h.db.log.every(q => q.table !== "bsky_leads"));
+    const nc = await sigCall("sales", { nullCount: ["bsky_leads"] });
+    check("S6. a radar count that comes back null is { unavailable }, and so is the total built on it",
+      nc.sig.radar.bluesky.d7.unavailable && nc.sig.radar.bluesky_and_mastodon.d7.unavailable && nc.sig.radar.youtube.d30.unavailable);
+  }
+
+  console.log("\n══ S7. the budgets, the all-agents answer, the modules in jsdom ══");
+  {
+    const big = sigFixture();
+    LIVE.AGENT_KEYS.forEach((k, j) => {
+      for (let i = 0; i < 9; i++) big.agent_proposals.push({ id: k + "-p" + i + "-" + "x".repeat(20), user_id: U1, agent_type: k, title: "T".repeat(200), status: "pending", created_at: ago(i) });
+      big.ai_tasks.push(task(U1, k, "failed", 2 + j, { task_type: k + "/" + "a-very-long-tool-name", error: "E".repeat(2000) }));
+    });
+    for (let i = 0; i < 9; i++) big.email_sequences.push({ id: "sx" + i, owner_id: U1, name: "N".repeat(120), status: "active", created_at: ago(i) });
+    for (let i = 0; i < 9; i++) big.social_post_drafts.push({ id: "dx" + i, user_id: U1, status: "publish_failed", content: "C".repeat(5000), created_at: ago(i), published_at: null });
+    big.member_social_connections[0].last_error_code = "X".repeat(60);
+    for (let i = 0; i < 30; i++) big.inventory_items.push({ id: "ix" + i, user_id: U1, name: "Item ".repeat(30) + i, quantity_on_hand: 0, reorder_point: 1, unit_cost: 1, unit_price: 2, status: "active" });
+    const sizes = {}, writes = [];
+    for (const k of SIGS.SIGNATURE_TYPES) {
+      const rr = await sigCall(k, { tables: JSON.parse(JSON.stringify(big)) });
+      sizes[k] = JSON.stringify(rr.body).length;
+      rr.h.db.log.forEach(q => { if (q.write) writes.push(k + ": " + q.write + " " + q.table); });
+      if (rr.sig && rr.sig.unavailable !== undefined) writes.push(k + ": the module could not be built: " + rr.sig.unavailable);
+    }
+    check("S7. the six modules only read: no insert, update, upsert or delete, and every module was built", writes.length === 0, writes.join("; "));
+    check("S7. worst case, each of the six with its signature in at most 3 KB (" + JSON.stringify(sizes) + ")", Object.values(sizes).every(n => n <= 3 * 1024), JSON.stringify(sizes));
+    const allR = await harness(sigFixture()).call("/api/agents/live");
+    check("S7. GET /api/agents/live carries no signature (signature: null for all 18) and says where the modules are",
+      Object.values(allR.body.agents).every(a => a.signature === null) && /\/api\/agents\/<type>\/live only/.test(allR.body.signatures) && JSON.stringify(allR.body).length <= 24 * 1024);
+
+    // The exact Chart.js tag, from agents/lead-radar.html
+    const LR = lf(fs.readFileSync(path.join(FRONTEND, "agents/lead-radar.html"), "utf8"));
+    const TAG = (/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/chart\.js@4\.4\.1\/dist\/chart\.umd\.min\.js"[^>]*><\/script>/.exec(LR) || [])[0] || "";
+    const pageTags = ["agents/sales.html", "analytics-dashboard.html"].map(f => lf(fs.readFileSync(path.join(FRONTEND, f), "utf8"))).concat([FILES[ANALYTICS_PAGE]])
+      .map(h => (h.match(/<script[^>]*chart\.js[^>]*><\/script>/g) || []));
+    check("S7. Chart.js 4.4.1 on agents/analytics.html with exactly the SRI tag of lead-radar.html, sales.html and analytics-dashboard.html",
+      /integrity="sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg\/P5HG5lF1urn4" crossorigin="anonymous"/.test(TAG) && pageTags.every(t => t.length === 1 && t[0] === TAG),
+      JSON.stringify(pageTags));
+    const SIGSRC = FILES[PROFILE].slice(FILES[PROFILE].indexOf("══ SIGNATURE MODULES"), FILES[PROFILE].indexOf("/* ── boot ── */"));
+    check("S7. the modules set every string with textContent: no innerHTML or insertAdjacentHTML in them", SIGSRC.length > 5000 && !/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(SIGSRC));
+    check("S7. nothing in the modules animates: no animation rule in their styles",
+      !/\.ap-sig[^{]*\{[^}]*animation/.test(FILES[PROFILE].slice(FILES[PROFILE].indexOf("function liveMarkup()"), FILES[PROFILE].indexOf("function liveSet("))));
+
+    // jsdom: each page with its own per-agent answer
+    const answer = async (type, user, o) => { const rr = await sigCall(type, o, user); return rr.body; };
+    const mountSig = async (type, body, o) => {
+      o = o || {};
+      const m = await mount(SIG_PAGES[type], () => ({ status: 200, body }), o);
+      return m;
+    };
+    const A = {};
+    for (const k of SIG_PAGES ? Object.keys(SIG_PAGES) : []) { A[k] = await answer(k); A[k + "_empty"] = await answer(k, { id: U3 }); }
+    // The module's words as a reader meets them: each text node apart.
+    const slotText = m => {
+      const out = [], walk = m.doc.createTreeWalker(m.doc.getElementById("apLiveSignature"), 4);
+      while (walk.nextNode()) out.push(walk.currentNode.nodeValue);
+      return out.join(" ").replace(/\s+/g, " ").trim();
+    };
+
+    const an = await mountSig("analytics", A.analytics, { chart: true });
+    const made = an.w.__charts || [];
+    check("S7. Analytics in jsdom: three Chart.js charts — runs per day (line), runs by agent (bar), arrivals per day (line)",
+      JSON.stringify(made.map(c => [c.canvas.id, c.spec.type])) === JSON.stringify([["apSigRunsDay", "line"], ["apSigByAgent", "bar"], ["apSigArrivals", "line"]]), JSON.stringify(made.map(c => c.canvas.id)));
+    check("S7. ... drawn from the answer's own numbers", made.length === 3 && JSON.stringify(made[0].spec.data.datasets[0].data) === JSON.stringify(A.analytics.agent.signature.runs.per_day) &&
+      JSON.stringify(made[2].spec.data.datasets[0].data) === JSON.stringify(A.analytics.agent.signature.arrivals.per_day));
+    const canvases = [...an.doc.querySelectorAll("#apLiveSignature canvas")];
+    const tables = [...an.doc.querySelectorAll("#apLiveSignature figure table")];
+    check("S7. each chart has an accessible summary: an aria-label with the numbers, and a table of every value",
+      canvases.length === 3 && canvases.every(c => c.getAttribute("role") === "img" && /\d/.test(c.getAttribute("aria-label"))) &&
+      /^Arrivals per day\. 3 arrivals in all; the most was 2 on /.test(canvases[2].getAttribute("aria-label")) &&
+      tables.length === 3 && tables[0].querySelectorAll("tr").length === 31, canvases.map(c => c.getAttribute("aria-label")).join(" | "));
+    check("S7. the chart colours come from the panel's CSS variables", made.length && made[0].spec.data.datasets[0].borderColor === "#22d3ee" && made[1].spec.data.datasets[0].borderColor === "#a855f7",
+      made.length && made[0].spec.data.datasets[0].borderColor);
+    check("S7. the first draw animates once (400 ms); with prefers-reduced-motion, not at all", made.length && made[0].spec.options.animation && made[0].spec.options.animation.duration === 400);
+    const rm = await mountSig("analytics", A.analytics, { chart: true, reducedMotion: true });
+    check("S7. ... reduced motion: animation false on every chart", (rm.w.__charts || []).length === 3 && rm.w.__charts.every(c => c.spec.options.animation === false));
+    await an.fire();
+    check("S7. an unchanged answer on the next poll redraws nothing", (an.w.__charts || []).length === 3);
+    const noChart = await mountSig("analytics", A.analytics);
+    check("S7. Chart.js not loaded: the numbers are shown as tables, and it says so",
+      noChart.doc.querySelectorAll("#apLiveSignature canvas").length === 0 && [...noChart.doc.querySelectorAll("#apLiveSignature table")].every(t => t.className === "ap-sig-table") &&
+      /The chart could not load; the numbers are in the table\./.test(slotText(noChart)));
+    const anE = await mountSig("analytics", A.analytics_empty, { chart: true });
+    check("S7. Analytics empty: \"0 runs\", \"No runs in the last 30 days\", arrivals \"Cannot be counted\", no chart",
+      (anE.w.__charts || []).length === 0 && /0 runs/.test(slotText(anE)) && /No runs in the last 30 days, so there is nothing to chart\./.test(slotText(anE)) && /Cannot be counted/.test(slotText(anE)), slotText(anE));
+
+    const st = await mountSig("store", A.store);
+    check("S7. Store: 4 items, \"2 at or below reorder point\" (Blue mug, Tea), margin bars, 1 proposal waiting, trades",
+      /4 items/.test(slotText(st)) && /2 at or below reorder point Blue mug, Tea/.test(slotText(st)) && st.doc.querySelectorAll("#apLiveSignature .ap-sig-bar").length === 5 &&
+      /1 waiting/.test(slotText(st)) && /1 sale · 25 BFC/.test(slotText(st)) && /1 purchase · 10 BFC, last 30 days/.test(slotText(st)), slotText(st));
+    const stE = await mountSig("store", A.store_empty);
+    const addInv = stE.doc.querySelector("#apLiveSignature a[href='/inventory.html']");
+    check("S7. Store empty: \"No inventory yet. Add inventory\", linked to the Inventory page", addInv && addInv.textContent === "Add inventory" && /No inventory yet\./.test(slotText(stE)), slotText(stE));
+
+    const so = await mountSig("social", A.social);
+    check("S7. Social: \"Connected as @maker.bsky.social\", the last error code, automatic posting on, the four statuses",
+      /Connected as @maker\.bsky\.social/.test(slotText(so)) && /last error rate_limited/.test(slotText(so)) && /Automatic posting On Turned on/.test(slotText(so)) &&
+      ["pending_approval", "published", "refused", "failed"].every(k => so.doc.querySelector("#apLiveSignature [data-bar='" + k + "']")), slotText(so));
+    check("S7. a draft's text is shown as text: no element is made from it", so.doc.querySelectorAll("#apLiveSignature img").length === 0 && /<img src=x/.test(slotText(so)));
+    const soE = await mountSig("social", A.social_empty);
+    const conn = soE.doc.querySelector("#apLiveSignature a[href='#bskyConnect']");
+    check("S7. Social not connected: \"Not connected. Connect Bluesky\", linked to the connect card", conn && conn.textContent === "Connect Bluesky", slotText(soE));
+
+    const em = await mountSig("email", A.email);
+    check("S7. Email: 2 sequences, \"2 active · 1 stopped\", the next send, and \"Blocked\" with both blockers in words",
+      /2 sequences/.test(slotText(em)) && /2 active · 1 stopped/.test(slotText(em)) && /Blocked/.test(slotText(em)) &&
+      JSON.stringify([...em.doc.querySelectorAll("[data-blocker]")].map(e => e.getAttribute("data-blocker"))) === JSON.stringify(["enabled", "webhook_secret_set"]) &&
+      /RESEND_WEBHOOK_SECRET is not set/.test(slotText(em)), slotText(em));
+    const emE = await mountSig("email", A.email_empty);
+    const prop = emE.doc.querySelector("#apLiveSignature a[href='#esPanel']");
+    check("S7. Email empty: \"No sequences yet. Propose one\"", prop && prop.textContent === "Propose one" && /No sequences yet\./.test(slotText(emE)), slotText(emE));
+
+    const se = await mountSig("seo", A.seo);
+    const auditLink = se.doc.querySelector("#apLiveSignature a[href='/run.html?id=audit-latest']");
+    check("S7. SEO: 2 audits, the latest linked with \"1 error · 2 guidelines · no score: an audit stores its flags\", 2 posts, 3 arrivals, the optimize run",
+      auditLink && /2 audits/.test(slotText(se)) && /1 error · 2 guidelines · no score: an audit stores its flags/.test(slotText(se)) && /2 published/.test(slotText(se)) &&
+      /3 arrivals/.test(slotText(se)) && se.doc.querySelector("#apLiveSignature a[href='/run.html?id=optimize-latest']"), slotText(se));
+    const seE = await mountSig("seo", A.seo_empty);
+    check("S7. SEO empty: \"No audit has completed yet\", \"0 published\", \"Cannot be counted\", \"Not run yet\"",
+      /No audit has completed yet/.test(slotText(seE)) && /0 published/.test(slotText(seE)) && /Cannot be counted/.test(slotText(seE)) && /Not run yet/.test(slotText(seE)), slotText(seE));
+
+    const sa = await mountSig("sales", A.sales);
+    const rows = [...sa.doc.querySelectorAll("#apLiveSignature .ap-sig-radar tr")].map(tr => [...tr.children].map(c => c.textContent));
+    check("S7. Sales (owner): the pipeline bars and the radar table — YouTube on its own row, labelled, apart from the total",
+      JSON.stringify(rows) === JSON.stringify([["Source", "7 days", "30 days"], ["Bluesky", "3", "5"], ["Mastodon", "1", "1"], ["Bluesky + Mastodon", "4", "6"],
+        ["YouTube — kept 30 days, not combined", "4", "5"]]) && sa.doc.querySelectorAll("#apLiveSignature .ap-sig-bar").length === 5, JSON.stringify(rows));
+    const saO = await mountSig("sales", await answer("sales", { id: U2 }));
+    check("S7. Sales (not the owner): the pipeline only, no radar section", saO.doc.querySelectorAll("#apLiveSignature .ap-sig-radar").length === 0 &&
+      !/Lead Radar/.test(slotText(saO)) && /1 lead/.test(slotText(saO)), slotText(saO));
+    const saE = await mountSig("sales", A.sales_empty);
+    check("S7. Sales empty: \"No leads in your pipeline yet.\"", /No leads in your pipeline yet\./.test(slotText(saE)), slotText(saE));
+
+    const brokenStore = await mountSig("store", await answer("store", null, { fail: ["inventory_items"] }));
+    check("S7. a section the server could not read says \"Could not be read\", never 0 items", /Inventory Could not be read/.test(slotText(brokenStore)) && !/0 items/.test(slotText(brokenStore)),
+      slotText(brokenStore));
+    const other = await mount("ads-agent.html", () => ({ status: 200, body: { generated_at: "x", daily_calls: { used: 0, limit: 250 }, agent: Object.assign({}, A.store.agent, { type: "ads", signature: null }) } }));
+    check("S7. an agent without a module keeps the slot empty", other.doc.getElementById("apLiveSignature").innerHTML === "");
   }
 
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED (" + passes + ")" : "CHECKS FAILED: " + failures + " failing, " + passes + " passing"));

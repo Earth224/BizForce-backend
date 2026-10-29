@@ -305,7 +305,12 @@ const EXPECTED_OWN = [
   // NAMED (Oct 28 2026, members connect their own Bluesky; effectful login-only 129 -> 131): BEFORE no member
   // connection. AFTER a member deletes their own connection row (member_social_connections) and sets their own
   // automation switch (logged in member_social_setting_changes); both rows are theirs and served to no one else.
-  "post /api/social/bluesky/disconnect", "put /api/social/bluesky/automation"
+  "post /api/social/bluesky/disconnect", "put /api/social/bluesky/automation",
+  // NAMED (Oct 29 2026, signature live modules; effectful login-only 131 -> 133): BEFORE the two live routes were pure
+  // reads and unlisted. AFTER they reach blogRefToken (the Analytics and SEO arrivals), whose crypto hash .update( this
+  // file's WRITES pattern reads as a write, the same way the learning view is listed for loadArrivals. They write
+  // nothing; checkAgentLive holds every query they make to the caller's own rows and to reads.
+  "get /api/agents/live", "get /api/agents/:type/live"
 ];
 
 /* Unauthenticated routes that write. */

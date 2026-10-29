@@ -9924,7 +9924,7 @@ async function agentLiveBody(req, types) {
     console.error("[agents/live] could not read the plan for " + userId + ": " + ((planErr && planErr.message) || planErr));
   }
 
-  return live.buildLive({
+  var body = live.buildLive({
     types: types,
     now: now,
     isDue: agentScheduleIsDue,
@@ -9933,6 +9933,243 @@ async function agentLiveBody(req, types) {
     subscriptionActive: subscriptionActive,
     dailyCalls: dailyCalls,
     reads: reads
+  });
+
+  // The signature module: GET /api/agents/<type>/live only, for the six agents that have one.
+  var SIG = require("./lib/agentSignatures");
+  if (one && body.agent && SIG.SIGNATURE_TYPES.indexOf(one) !== -1) {
+    // A module that cannot be built fails its own field, never the panel above it.
+    try {
+      body.agent.signature = await agentSignature(one, userId, now, read, body.agent);
+    } catch (sigErr) {
+      console.error("[agents/live] the " + one + " signature could not be built for " + userId + ": " + ((sigErr && sigErr.message) || sigErr));
+      body.agent.signature = { kind: one, unavailable: (sigErr && sigErr.message) || String(sigErr) };
+    }
+    SIG.fit(body.agent, live.PAYLOAD_BUDGET_ONE - 400);
+  } else if (!one) {
+    body.signatures = "Each agent's signature module is sent by GET /api/agents/<type>/live only.";
+  }
+  return body;
+}
+
+/* The reads behind one agent's signature module (lib/agentSignatures.js), each
+   through agentLiveBody's read(): { rows } or { unavailable }, scoped to the
+   caller. The radar counts are read for the credential owner only. */
+async function agentSignatureReads(type, userId, now, read, agent) {
+  var SIG = require("./lib/agentSignatures");
+  var windowStart = SIG.windowOf(now).since;
+  var r = {};
+  var headCount = async function (what, q) {
+    var got = commandCenterRead(await q, what);
+    if (typeof got.count !== "number") throw new Error(what + ": the count did not come back");
+    return got.count;
+  };
+  // The member's own tracked posts (bl- refs), then the arrivals on those refs in the window.
+  var blogArrivals = function () {
+    return read("blog arrivals", async function () {
+      var posts = (await commandCenterAllRows(function () {
+        return supabase
+          .from("content_library")
+          .select("id, slug, body", { count: "exact" })
+          .eq("user_id", userId)
+          .not("slug", "is", null)
+          .order("id", { ascending: true });
+      }, "your posts")).map(function (p) {
+        var ref = blogRefToken(userId, p.slug);
+        return { ref: ref, tracked: String(p.body == null ? "" : p.body).indexOf("?ref=" + ref) !== -1 };
+      });
+      var refs = posts.filter(function (p) { return p.tracked; }).map(function (p) { return p.ref; });
+      var visits = [];
+      for (var i = 0; i < refs.length; i += 200) {
+        var chunk = refs.slice(i, i + 200);
+        visits = visits.concat(await commandCenterAllRows(function () {
+          return supabase
+            .from("engine_visits")
+            .select("id, ref, created_at", { count: "exact" })
+            .in("ref", chunk)
+            .gte("created_at", windowStart)
+            .order("id", { ascending: true });
+        }, "arrivals"));
+      }
+      return { posts: posts, visits: visits };
+    });
+  };
+
+  if (type === "analytics") {
+    r.runs30 = await read("runs in 30 days", function () {
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("ai_tasks")
+          .select("id, agent_type, status, created_at", { count: "exact" })
+          .eq("user_id", userId)
+          .neq("status", "dry_run")
+          .gte("created_at", windowStart)
+          .order("id", { ascending: true });
+      }, "runs in the last 30 days");
+    });
+    r.arrivals = await blogArrivals();
+  } else if (type === "store") {
+    r.items = await read("inventory", function () {
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("inventory_items")
+          .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status", { count: "exact" })
+          .eq("user_id", userId)
+          .order("id", { ascending: true });
+      }, "inventory items");
+    });
+    r.trades = await read("trades", function () {
+      var trades = require("./lib/trades");
+      return trades.listTrades(supabase, userId, trades.periodFrom({ from: SIG.windowOf(now).days_from }));
+    });
+  } else if (type === "social") {
+    r.connection = await read("Bluesky connection", async function () {
+      // Named columns only: the app password's ciphertext, iv and tag, and the did, are never read here.
+      var rows = commandCenterRead(await supabase
+        .from("member_social_connections")
+        .select("handle, status, auto_post, auto_post_changed_at, last_ok_at, last_error_at, last_error_code, created_at")
+        .eq("user_id", userId)
+        .eq("platform", "bluesky")
+        .limit(1), "Bluesky connection").data || [];
+      return rows[0] || false;
+    });
+    r.changes = await read("automation log", async function () {
+      return commandCenterRead(await supabase
+        .from("member_social_setting_changes")
+        .select("new_value, changed_at")
+        .eq("user_id", userId)
+        .eq("platform", "bluesky")
+        .eq("setting", "auto_post")
+        .order("changed_at", { ascending: false })
+        .limit(1), "automation log").data || [];
+    });
+    r.drafts = await read("social drafts", function () {
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("social_post_drafts")
+          .select("id, status, proposal_id, content, created_at, published_at, platform_post_uri", { count: "exact" })
+          .eq("user_id", userId)
+          .gte("created_at", windowStart)
+          .order("id", { ascending: true });
+      }, "social drafts in 30 days");
+    });
+    // A draft still waiting on a proposal the member refused is "refused".
+    r.draftProposals = r.drafts.unavailable !== undefined ? { unavailable: r.drafts.unavailable } : await read("draft proposals", async function () {
+      var ids = r.drafts.rows.filter(function (d) { return d.status === "pending_approval" && d.proposal_id; }).map(function (d) { return d.proposal_id; });
+      var status = {};
+      for (var i = 0; i < ids.length; i += 200) {
+        (commandCenterRead(await supabase
+          .from("agent_proposals")
+          .select("id, status")
+          .eq("user_id", userId)
+          .in("id", ids.slice(i, i + 200)), "draft proposals").data || []).forEach(function (p) { status[p.id] = p.status; });
+      }
+      return status;
+    });
+  } else if (type === "email") {
+    r.sequences = await read("sequences", async function () {
+      return commandCenterRead(await supabase
+        .from("email_sequences")
+        .select("id, name, status, created_at")
+        .eq("owner_id", userId)
+        .order("created_at", { ascending: false }), "email sequences").data || [];
+    });
+    r.enrollments = r.sequences.unavailable !== undefined ? { unavailable: r.sequences.unavailable } : await read("enrolments", function () {
+      return emailSequenceEnrollmentRows(r.sequences.rows.map(function (s) { return s.id; }), "sequence_id, status, next_send_at");
+    });
+  } else if (type === "seo") {
+    r.audits30 = await read("audits", function () {
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("ai_tasks")
+          .select("id, status, created_at", { count: "exact" })
+          .eq("user_id", userId)
+          .eq("agent_type", "seo")
+          .eq("task_type", "seo/audit")
+          .neq("status", "dry_run")
+          .gte("created_at", windowStart)
+          .order("id", { ascending: true });
+      }, "audits in 30 days");
+    });
+    r.latestAudit = await read("latest audit", async function () {
+      return (commandCenterRead(await supabase
+        .from("ai_tasks")
+        .select("id, output, created_at, completed_at")
+        .eq("user_id", userId)
+        .eq("agent_type", "seo")
+        .eq("task_type", "seo/audit")
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(1), "latest audit").data || [])[0] || false;
+    });
+    r.posts30 = await read("posts published", function () {
+      return headCount("posts published in 30 days", supabase
+        .from("content_library")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId)
+        .eq("status", "published")
+        .gte("published_at", windowStart));
+    });
+    r.arrivals = await blogArrivals();
+    r.optimize = await read("latest optimize", async function () {
+      return (commandCenterRead(await supabase
+        .from("ai_tasks")
+        .select("id, status, created_at, completed_at")
+        .eq("user_id", userId)
+        .eq("agent_type", "seo")
+        .neq("status", "dry_run")
+        .ilike("prompt", SEO_OPTIMIZE_TASK_PROMPT_PREFIX + "%")
+        .order("created_at", { ascending: false })
+        .limit(1), "latest optimize").data || [])[0] || false;
+    });
+  } else if (type === "sales") {
+    r.pipeline = await read("pipeline", function () {
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("sales_lead_pipeline")
+          .select("id, status", { count: "exact" })
+          .eq("user_id", userId)
+          .order("id", { ascending: true });
+      }, "your pipeline");
+    });
+    // bsky_leads has no user_id: every row is the credential owner's, so no one else's answer reads it.
+    if (OUTREACH_CREDENTIAL_OWNER_ID === userId) {
+      r.radar = {};
+      var sources = ["bluesky", "mastodon", "youtube"];
+      for (var s = 0; s < sources.length; s++) {
+        for (var d = 0; d < 2; d++) {
+          var days = d === 0 ? 7 : 30, src = sources[s];
+          r.radar[src + "_" + days] = await read(src + " finds", function () {
+            return headCount(src + " finds in " + days + " days", supabase
+              .from("bsky_leads")
+              .select("id", { count: "exact", head: true })
+              .eq("source", src)
+              .gte("created_at", new Date(now.getTime() - days * 86400000).toISOString()));
+          });
+        }
+      }
+    }
+  }
+  return r;
+}
+
+async function agentSignature(type, userId, now, read, agent) {
+  var r = await agentSignatureReads(type, userId, now, read, agent);
+  var cap = emailMarketingDailyCap();
+  return require("./lib/agentSignatures").build(type, r, {
+    now: now,
+    names: require("./lib/agentLive").AGENT_NAMES,
+    measureStock: measureStockAndMargin,
+    pendingFor: agent.proposals && typeof agent.proposals.pending === "number" ? agent.proposals.pending : { unavailable: "proposals could not be read" },
+    sender: {
+      enabled: emailSequencesEnabled(),
+      postal_address_set: String(require("./lib/legal").POSTAL_ADDRESS || "").trim() !== "",
+      webhook_secret_set: String(process.env.RESEND_WEBHOOK_SECRET || "").trim() !== "",
+      daily_cap: typeof cap === "number"
+    },
+    dailyCap: cap,
+    stages: SALES_LEAD_STATUSES,
+    isOwner: userId === OUTREACH_CREDENTIAL_OWNER_ID
   });
 }
 
