@@ -9777,6 +9777,185 @@ app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
   });
 });
 
+/* ── Live activity: GET /api/agents/live and GET /api/agents/:type/live ──────
+   What each agent is doing for THIS member, read from their own rows and
+   nothing else (lib/agentLive.js builds the answer). No model call, so the
+   spend ceiling and the daily call cap are untouched. Login only, never a
+   subscription gate: a lapsed member still sees their state, and is told
+   their schedules wait for the subscription.
+
+   Each read is its own section: a failed one answers { unavailable } on its
+   own field and never as an empty list or a zero (commandCenterRead and
+   commandCenterAllRows, the Command Center's rules). Every query is scoped to
+   req.user.id. Registered above /api/agents/:type, which would otherwise
+   swallow /api/agents/live. */
+async function agentLiveBody(req, types) {
+  var live = require("./lib/agentLive");
+  var userId = req.user.id;
+  var now = new Date();
+  var one = types.length === 1 ? types[0] : null;
+  var scoped = function (q) { return one ? q.eq("agent_type", one) : q.in("agent_type", types); };
+  var weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+  var read = async function (name, fn) {
+    try {
+      return { rows: await fn() };
+    } catch (error) {
+      var message = (error && error.message) || String(error);
+      console.error("[agents/live] the " + name + " read failed for " + userId + ": " + message);
+      return { unavailable: message };
+    }
+  };
+
+  var reads = {};
+  reads.processing = await read("running", async function () {
+    return commandCenterRead(await scoped(supabase
+      .from("ai_tasks")
+      .select("id, agent_type, task_type, status, created_at")
+      .eq("user_id", userId)
+      .eq("status", "processing"))
+      .order("created_at", { ascending: false })
+      .limit(200), "running tasks").data || [];
+  });
+  reads.recent = await read("recent runs", function () {
+    return commandCenterAllRows(function () {
+      return scoped(supabase
+        .from("ai_tasks")
+        .select("id, agent_type, task_type, status, created_at, completed_at, error", { count: "exact" })
+        .eq("user_id", userId)
+        .neq("status", "dry_run")
+        .gte("created_at", weekAgo))
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true });
+    }, "runs in the last 7 days");
+  });
+  /* The last run of an agent quiet for a week: one batch of the newest older
+     rows, then one row per agent still missing only if that batch was full. */
+  reads.last = await read("last runs", async function () {
+    var older = commandCenterRead(await scoped(supabase
+      .from("ai_tasks")
+      .select("id, agent_type, task_type, status, created_at, completed_at, error")
+      .eq("user_id", userId)
+      .neq("status", "dry_run")
+      .lt("created_at", weekAgo))
+      .order("created_at", { ascending: false })
+      .limit(300), "older runs").data || [];
+    if (older.length < 300) return older;
+    var seen = {};
+    older.concat(reads.recent.rows || []).forEach(function (r) { seen[r.agent_type] = true; });
+    var missing = types.filter(function (t) { return !seen[t]; });
+    var extra = await Promise.all(missing.map(async function (t) {
+      return commandCenterRead(await supabase
+        .from("ai_tasks")
+        .select("id, agent_type, task_type, status, created_at, completed_at, error")
+        .eq("user_id", userId)
+        .eq("agent_type", t)
+        .neq("status", "dry_run")
+        .order("created_at", { ascending: false })
+        .limit(1), "last " + t + " run").data || [];
+    }));
+    return older.concat.apply(older, extra);
+  });
+  reads.proposals = await read("proposals", function () {
+    return commandCenterAllRows(function () {
+      return scoped(supabase
+        .from("agent_proposals")
+        .select("id, agent_type, title, created_at", { count: "exact" })
+        .eq("user_id", userId)
+        .eq("status", "pending"))
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true });
+    }, "pending proposals");
+  });
+  reads.schedules = await read("schedules", async function () {
+    return commandCenterRead(await scoped(supabase
+      .from("agent_schedules")
+      .select(AGENT_SCHEDULE_CARD_FIELDS)
+      .eq("user_id", userId)), "schedules").data || [];
+  });
+  reads.autonomy = await read("autonomy", async function () {
+    return commandCenterRead(await scoped(supabase
+      .from("agent_autonomy")
+      .select("agent_type, enabled")
+      .eq("user_id", userId)), "autonomy").data || [];
+  });
+  reads.feedback = await read("ratings", function () {
+    return commandCenterAllRows(function () {
+      return scoped(supabase
+        .from("agent_feedback")
+        .select("id, agent_type, rating, pinned", { count: "exact" })
+        .eq("user_id", userId))
+        .order("id", { ascending: true });
+    }, "ratings");
+  });
+  reads.spend = await read("model spend", function () {
+    return commandCenterAllRows(function () {
+      return scoped(supabase
+        .from("model_calls")
+        .select("id, agent_type, model, input_tokens, output_tokens, funded_by", { count: "exact" })
+        .eq("user_id", userId)
+        .gte("created_on", modelSpendMonth(now).since))
+        .order("id", { ascending: true });
+    }, "model spend this month");
+  });
+
+  // The 250-a-day cap, read the way enforceDailyModelCallLimit counts it. A
+  // count that does not come back as a number is unknown, never 0.
+  var dailyCalls;
+  try {
+    var limit = modelCallDailyLimit();
+    var counted = commandCenterRead(await supabase
+      .from("model_calls")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("created_on", modelCallUtcDay(now)), "model calls today");
+    if (typeof counted.count !== "number") throw new Error("model calls today: the count did not come back");
+    if (limit === null) throw new Error("the daily limit is misconfigured");
+    dailyCalls = { used: counted.count, limit: limit };
+  } catch (error) {
+    dailyCalls = { unavailable: (error && error.message) || String(error) };
+  }
+
+  // Whether the runner would run schedules for this account now; unknown is null.
+  var subscriptionActive = null;
+  try {
+    var plan = await getUserPlan(userId, req.user);
+    if (plan) subscriptionActive = plan.active === true;
+  } catch (planErr) {
+    console.error("[agents/live] could not read the plan for " + userId + ": " + ((planErr && planErr.message) || planErr));
+  }
+
+  return live.buildLive({
+    types: types,
+    now: now,
+    isDue: agentScheduleIsDue,
+    costOf: modelCallCostUsd,
+    schedulerOn: process.env.ENABLE_AGENT_SCHEDULES === "true",
+    subscriptionActive: subscriptionActive,
+    dailyCalls: dailyCalls,
+    reads: reads
+  });
+}
+
+app.get("/api/agents/live", requireAuth, async function (req, res, next) {
+  try {
+    return res.json(await agentLiveBody(req, require("./lib/agentLive").AGENT_KEYS.slice()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/agents/:type/live", requireAuth, async function (req, res, next) {
+  try {
+    var type = String(req.params.type || "").toLowerCase().trim();
+    if (require("./lib/agentLive").AGENT_KEYS.indexOf(type) === -1) {
+      return res.status(404).json({ error: "There is no agent called " + JSON.stringify(type.slice(0, 40)) + ". Live activity is kept for the 18 agents." });
+    }
+    return res.json(await agentLiveBody(req, [type]));
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* A LITERAL GET UNDER /api/agents MUST BE REGISTERED ABOVE THIS ROUTE.
 
    :type matches any single segment, so it swallows /api/agents/<word> for every

@@ -299,7 +299,10 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       "getUserPlan in requireActiveSubscription", "planLookup in createPassEntitlementCache",
       "getUserPlan in enforceAgentLimit", "getUserPlan in enforceTaskLimit", "getUserPlan in /api/auth/me", "getUserPlan in /api/agents",
       "getUserPlan in dispatchToolCall", "getUserPlan in /api/agent-schedules", "subscriptionEntitlement in /api/stripe/checkout",
-      "getUserPlan in /api/certifications/award", "getUserPlan in runAgentSchedulePass", "getUserPlan in __selfReviewPlanFor"];
+      "getUserPlan in /api/certifications/award", "getUserPlan in runAgentSchedulePass", "getUserPlan in __selfReviewPlanFor",
+      // NAMED (Oct 29 2026, live activity): BEFORE 15 readers; AFTER 16. agentLiveBody reads .active only to
+      // say whether a schedule will run (subscription_active, null if the read fails); it gates nothing.
+      "getUserPlan in agentLiveBody"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));

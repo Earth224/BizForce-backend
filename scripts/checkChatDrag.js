@@ -27,10 +27,12 @@
          phone layout is unchanged; widening again restores the spot;
      C6  the header is focusable and the arrow keys nudge it (Shift for 4×),
          saved and clamped; Home resets; keys on the buttons move nothing;
-     C7  the mist's own drag still clamps the mist, on the same function.
-         (Not asserted: the mist restoring its stored spot on load. It never
-         has: _tmxRestorePosition() runs before TMX_POS_KEY is assigned, so it
-         reads localStorage key "undefined". Left as it was; reported.)
+     C7  the mist's own drag still clamps the mist, on the same function; and
+         a stored mist spot is applied and clamped on load.
+         NAMED BEFORE → AFTER (Oct 29 2026, "the mist remembers its place").
+         BEFORE: not asserted, because _tmxRestorePosition() ran before
+         TMX_POS_KEY was assigned and read localStorage key "undefined". AFTER:
+         the key is assigned above the call, and C7 asserts the restore.
 
    No network (fetch is a stub), no database.
 
@@ -71,7 +73,9 @@ const MUTATIONS = {
   // the arrow keys do nothing (C6)
   "no-arrow-keys": [[PRESENCE, "    if (!dx && !dy) return;\n", "    if (true) return;\n"]],
   // the header is never a tab stop (C6)
-  "header-not-focusable": [[PRESENCE, '    chatHeader.setAttribute("tabindex", "0");\n', ""]]
+  "header-not-focusable": [[PRESENCE, '    chatHeader.setAttribute("tabindex", "0");\n', ""]],
+  // the mist's key is assigned after the restore reads it again, so the saved spot is never applied (C7)
+  "mist-key-after-call": [[PRESENCE, '  var TMX_POS_KEY = "tmx_presence_pos";\n  _tmxRestorePosition();\n', '  _tmxRestorePosition();\n  var TMX_POS_KEY = "tmx_presence_pos";\n']]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -310,6 +314,10 @@ const onScreen = (r, W, H) => r.left >= 0 && r.top >= 0 && r.left + Math.min(CHA
     const r = root.style;
     check("C7. the mist dragged far down and right still stops at its own size from the edge (1170, 690)", r.left === (1280 - MIST_W) + "px" && r.top === (800 - MIST_H) + "px", r.left + " " + r.top);
     check("C7. ... and the chat box did not move with it", at(p.rect(), DEF.left, DEF.top) && p.stored() === null, json(p.rect()));
+    const q = page({ store: { tmx_presence_pos: JSON.stringify({ left: 300, top: 150 }) } }), qr = q.$("tmx-presence-root").style;
+    check("C7. a stored mist spot (300, 150) is applied on load", qr.left === "300px" && qr.top === "150px" && qr.right === "auto" && qr.bottom === "auto", qr.left + " " + qr.top);
+    const o = page({ store: { tmx_presence_pos: JSON.stringify({ left: 5000, top: -40 }) } }), or = o.$("tmx-presence-root").style;
+    check("C7. ... and a stored spot off screen is clamped on load (1170, 0)", or.left === (1280 - MIST_W) + "px" && or.top === "0px", or.left + " " + or.top);
     check("C7. the chat box is clamped by the mist's own function (_tmxClampPosition), passed the box", (FILES[PRESENCE].match(/_tmxClampPosition\([^)]*, chat\)/g) || []).length >= 3 &&
       /\n  function _tmxClampPosition\(left, top, el\) \{\n    el = el \|\| root;\n/.test(FILES[PRESENCE]));
   }

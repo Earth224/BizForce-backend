@@ -137,7 +137,11 @@ const ADDED = [
   ["post", "/api/social/bluesky/disconnect"],   // deletes the member's connection row (total 338 -> 339)
   ["get", "/api/social/bluesky/automation"],    // "Post approved drafts automatically": the member's setting and its change log (total 339 -> 340)
   ["put", "/api/social/bluesky/automation"],    // turn it on or off; every change logged (total 340 -> 341)
-  ["post", "/api/social/bluesky/propose-profile"] // file a display name / description update for approval, always (total 341 -> 342)
+  ["post", "/api/social/bluesky/propose-profile"], // file a display name / description update for approval, always (total 341 -> 342)
+  // NAMED (Oct 29 2026, live activity for every agent): BEFORE 342 routes; AFTER 344, adding its two reads,
+  // each requireAuth only, each answering only the caller's rows, neither calling the model (checkAgentLive)
+  ["get", "/api/agents/live"],                  // all 18 agents' live activity, at most 24 KB (total 342 -> 343)
+  ["get", "/api/agents/:type/live"]             // one agent's live activity, at most 3 KB (total 343 -> 344)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
