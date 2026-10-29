@@ -59,7 +59,10 @@ const PUB_JS = "scripts/social-publish.js", PROPOSALS = "proposals.html", PROFIL
   SOCIAL = "agents/social.html", CONTENT = "agents/content.html";
 const MUTATIONS = {
   // the filing button is shown to everyone
-  "form-for-non-admins": [[PUB_JS, "slot.innerHTML = admin ? filingFormMarkup(data.task_id) : notOwnerMarkup();", "slot.innerHTML = filingFormMarkup(data.task_id);"]],
+  // NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE anchored on the admin-only ternary. AFTER the button
+  // is drawn for a connected member or the unconnected owner (acct.kind member or platform); the mutation drops that test.
+  "form-for-non-admins": [[PUB_JS, "slot.innerHTML = acct.kind === \"member\" || acct.kind === \"platform\" ? filingFormMarkup(data.task_id, acct) : notOwnerMarkup(acct);",
+    "slot.innerHTML = filingFormMarkup(data.task_id, acct);"]],
   // a link is drawn without a uri to build it from
   "link-without-uri": [[PROPOSALS, "return m ? \"https://bsky.app/profile/\" + m[1] + \"/post/\" + m[2] : null;",
     "return m ? \"https://bsky.app/profile/\" + m[1] + \"/post/\" + m[2] : \"https://bsky.app/\";"]],
@@ -143,7 +146,10 @@ function routeText(method, route) {
   if (SRC.slice(end, end + 2) !== ");") throw new Error(method.toUpperCase() + " " + route + " did not end where expected");
   return SRC.slice(start, end + 2);
 }
-const ROUTES = [["post", "/api/agents/social/post"], ["post", "/api/agents/social/propose-post"], ["post", "/api/social-drafts"]];
+// NAMED (Oct 28 2026): BEFORE three routes. AFTER GET /api/social/bluesky/status too: the filing button asks it whose
+// account a post goes out from before it asks /api/auth/me.
+const ROUTES = [["post", "/api/agents/social/post"], ["post", "/api/agents/social/propose-post"], ["post", "/api/social-drafts"],
+  ["get", "/api/social/bluesky/status"]];
 const LIFTED = closure(ROUTES.map(([m, r]) => routeText(m, r)).join("\n\n") +
   "\n\nthis.api = { execute: executePublishSocialPost, publicUser: publicUser };");
 
@@ -156,7 +162,8 @@ function violates(table, row) {
   return null;
 }
 function fakeDb(seed) {
-  const tables = { ai_tasks: [], users: [], social_post_drafts: [], agent_proposals: [] };
+  // NAMED (Oct 28 2026): member_social_connections (empty: every fixture here is the unconnected owner) and notifications added.
+  const tables = { ai_tasks: [], users: [], social_post_drafts: [], agent_proposals: [], member_social_connections: [], notifications: [] };
   Object.keys(seed || {}).forEach(t => { tables[t] = seed[t].map(r => JSON.parse(JSON.stringify(r))); });
   let n = 0;
   const copy = v => JSON.parse(JSON.stringify(v));
@@ -221,6 +228,7 @@ function backend(opts) {
     supabase: db.client, bskyGate: gate, RichText, JSON, Math, Promise, Date, Intl,
     nowIso: () => "2026-10-11T12:00:00.000Z",
     process: { env: {} },
+    require: p => require(p.indexOf("./") === 0 ? path.join(REPO, p) : p),
     fetch: () => { NETWORK.push("backend fetch"); return Promise.reject(new Error("no network")); },
     console: { log() {}, error() {}, warn() {} },
     requireAuth: function requireAuth(req, res, next) { next(); },
@@ -232,7 +240,7 @@ function backend(opts) {
     resolvePreferredLanguage: async () => null, buildAgentSystemPrompt: () => "SYSTEM", buildLanguageInstruction: () => ""
   };
   const routes = {};
-  ctx.app = { post(p) { routes["post " + p] = [].slice.call(arguments, 1); } };
+  ctx.app = { post(p) { routes["post " + p] = [].slice.call(arguments, 1); }, get(p) { routes["get " + p] = [].slice.call(arguments, 1); } };
   vm.createContext(ctx);
   vm.runInContext(LIFTED, ctx);
   async function call(key, user, body) {
@@ -296,6 +304,7 @@ function realHandlers(be, user, role, override) {
     const o = override && override(method, p, body);
     if (o !== undefined) return o;
     if (method === "GET" && p === "/api/auth/me") return { status: 200, body: { user: be.api.publicUser({ id: user, role, email: "o@example.com" }) } };
+    if (method === "GET" && p === "/api/social/bluesky/status") return be.call("get /api/social/bluesky/status", user);
     if (method === "POST" && p === "/api/agents/social/propose-post") return be.call("post /api/agents/social/propose-post", user, body);
     return { status: 404, body: { error: "unplanned " + method + " " + p } };
   };

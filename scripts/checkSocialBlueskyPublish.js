@@ -177,7 +177,10 @@ function violates(table, row) {
   if (row.status === "published" && (row.platform_post_uri == null || row.published_at == null)) return "social_post_drafts_published_check";
   return null;
 }
-const TABLES = ["ai_tasks", "users", "social_post_drafts", "agent_proposals"];
+// NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE four tables. AFTER member_social_connections (empty in
+// every fixture here, so each post is the owner's from the platform account, as before) and notifications are planned too;
+// scripts/checkBlueskyConnect.js covers members' own accounts.
+const TABLES = ["ai_tasks", "users", "social_post_drafts", "agent_proposals", "member_social_connections", "notifications"];
 function fakeDb(seed, override) {
   const tables = {};
   TABLES.forEach(t => { tables[t] = ((seed || {})[t] || []).map(r => JSON.parse(JSON.stringify(r))); });
@@ -295,6 +298,9 @@ function build(seedTables, opts) {
     supabase: db.client, bskyGate: gate, RichText, Date, JSON, Math, Promise, Number, Object, Array, String, Intl,
     nowIso: () => "2026-10-11T12:00:00.000Z",
     process: { env: {} },
+    // NAMED (Oct 28 2026): BEFORE no require. AFTER the executor requires ./lib/memberBluesky and ./lib/apiKeyCrypto inline
+    // (only on a member's path, never taken here), resolved from the repo.
+    require: p => require(p.indexOf("./") === 0 ? path.join(REPO, p) : p),
     fetch: async (u) => { FETCHES.push(String(u)); throw new Error("no network"); },
     console: { log: m => logs.push(String(m)), error: m => logs.push(String(m)), warn: m => logs.push(String(m)) },
     requireAuth: function requireAuth() {}, requireActiveSubscription: function requireActiveSubscription() {}, aiLimiter: function aiLimiter() {},
@@ -373,7 +379,11 @@ async function filed(seedTables, opts, taskId) {
   b = build(seed());
   r = await b.propose(PLAIN, { task_id: T.ok });
   check("a non-admin: 403 naming the single Bluesky account", r.code === 403 && /owner account/.test(r.body.error) && /single Bluesky/.test(r.body.error), r.code + " " + JSON.stringify(r.body));
-  check("…before reading anything", b.db.log.length === 0, b.db.log.length);
+  // NAMED (Oct 28 2026): BEFORE the role refused before any read. AFTER the posting account is decided first, so the one
+  // read is the caller's own member_social_connections row (none here), and nothing else is read or written.
+  check("…after reading only the caller's own Bluesky connection, and nothing else",
+    b.db.log.length === 1 && b.db.log[0].table === "member_social_connections" && b.db.log[0].op === "select" &&
+    b.db.log[0].filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === PLAIN), JSON.stringify(b.db.log.map(q => q.op + " " + q.table)));
   const rOther = await b.propose(OWNER, { task_id: T.other });
   const rMissing = await b.propose(OWNER, { task_id: T.missing });
   const rMalformed = await b.propose(OWNER, { task_id: "not-a-uuid" });
@@ -413,8 +423,11 @@ async function filed(seedTables, opts, taskId) {
     JSON.stringify(draft));
   check("the proposal: social, publish_social_post, pending, the caller's",
     proposal && proposal.agent_type === "social" && proposal.action_type === "publish_social_post" && proposal.status === "pending" && proposal.user_id === OWNER, JSON.stringify(proposal));
-  check("payload is exactly { draft_id, text, source_task_id }",
-    proposal && JSON.stringify(Object.keys(proposal.payload)) === JSON.stringify(["draft_id", "text", "source_task_id"]) &&
+  // NAMED (Oct 28 2026): BEFORE exactly { draft_id, text, source_task_id }. AFTER posts_as is added, the account it will post
+  // as: { account: "platform" } for the unconnected owner here.
+  check("payload is exactly { draft_id, text, source_task_id, posts_as: { account: platform } }",
+    proposal && JSON.stringify(Object.keys(proposal.payload)) === JSON.stringify(["draft_id", "text", "source_task_id", "posts_as"]) &&
+    JSON.stringify(proposal.payload.posts_as) === JSON.stringify({ account: "platform" }) &&
     proposal.payload.draft_id === draft.id && proposal.payload.text === POST && proposal.payload.source_task_id === T.ok, proposal && JSON.stringify(proposal.payload));
   check("text in the body is never read", !JSON.stringify(b.db.tables).includes("INJECTED"));
   check("the response says nothing was posted", /Nothing has been posted/.test(r.body.note), r.body.note);

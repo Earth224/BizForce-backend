@@ -173,7 +173,11 @@ const EXPECTED_GATED = [
   "post /api/crowdfunding/campaigns/:id/donate",
   // NAMED (Oct 28 2026, member support; gated 62 -> 63): BEFORE no support route. AFTER Support with BizCash
   // needs a subscription like the transfer whose limits it shares (requireActiveSubscription, bfcSupportLimiter).
-  "post /api/wallet/support"
+  "post /api/wallet/support",
+  // NAMED (Oct 28 2026, members connect their own Bluesky; gated 63 -> 65): BEFORE no member connection. AFTER
+  // connecting a Bluesky account and filing a profile update need a subscription (requireActiveSubscription);
+  // disconnecting and reading the status never do.
+  "post /api/social/bluesky/connect", "post /api/social/bluesky/propose-profile"
 ];
 
 const EXPECTED_ADMIN = [
@@ -297,7 +301,11 @@ const EXPECTED_OWN = [
   // lifted loadArrivals it reads through. Deliberately ungated: rating a past run never needs a subscription,
   // and nothing here calls the model (the runs that use the guidance are gated where they were).
   "put /api/agents/feedback/:taskId", "post /api/agents/feedback/:taskId/pin", "get /api/agents/:agentType/learning",
-  "post /api/agents/:agentType/preferences", "put /api/agents/:agentType/preferences/:id", "delete /api/agents/:agentType/preferences/:id"
+  "post /api/agents/:agentType/preferences", "put /api/agents/:agentType/preferences/:id", "delete /api/agents/:agentType/preferences/:id",
+  // NAMED (Oct 28 2026, members connect their own Bluesky; effectful login-only 129 -> 131): BEFORE no member
+  // connection. AFTER a member deletes their own connection row (member_social_connections) and sets their own
+  // automation switch (logged in member_social_setting_changes); both rows are theirs and served to no one else.
+  "post /api/social/bluesky/disconnect", "put /api/social/bluesky/automation"
 ];
 
 /* Unauthenticated routes that write. */
@@ -328,7 +336,10 @@ const EXPECTED_UNAUTH_WRITES = {
 const EXPECTED_HANDLER_GATES = {
   "post /api/proposals/:id/approve":   'refuseUnlessSubscribed(req, res, "approve " + pending.action_type)',
   "put /api/marketplace/listings/:id": 'refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")',
-  "post /api/certifications/award":    'creditWithheld = "subscription_required"'
+  "post /api/certifications/award":    'creditWithheld = "subscription_required"',
+  // NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE three. AFTER turning automatic posting ON needs a
+  // subscription, checked in the handler; turning it off never does.
+  "put /api/social/bluesky/automation": 'refuseUnlessSubscribed(req, res, "turn on automatic Bluesky posting")'
 };
 
 /* Unauthenticated GET routes that serve an account's public page, and must

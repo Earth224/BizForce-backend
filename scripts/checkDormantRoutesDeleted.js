@@ -130,7 +130,14 @@ const ADDED = [
   ["post", "/api/agents/:agentType/preferences"], // a preference typed or a suggestion accepted; eight at most (total 332 -> 333)
   ["put", "/api/agents/:agentType/preferences/:id"], // edit a preference (total 333 -> 334)
   ["delete", "/api/agents/:agentType/preferences/:id"], // remove a preference (total 334 -> 335)
-  ["get", "/api/admin/agent-learning"]          // the owner's platform view: counts per agent, no member ids (total 335 -> 336)
+  ["get", "/api/admin/agent-learning"],         // the owner's platform view: counts per agent, no member ids (total 335 -> 336)
+  // NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE 336 routes; AFTER 342, adding its six routes, each requireAuth
+  ["post", "/api/social/bluesky/connect"],      // verify a handle and app password with Bluesky, store it encrypted; 5 an hour (total 336 -> 337)
+  ["get", "/api/social/bluesky/status"],        // { connected, handle, status, since } only (total 337 -> 338)
+  ["post", "/api/social/bluesky/disconnect"],   // deletes the member's connection row (total 338 -> 339)
+  ["get", "/api/social/bluesky/automation"],    // "Post approved drafts automatically": the member's setting and its change log (total 339 -> 340)
+  ["put", "/api/social/bluesky/automation"],    // turn it on or off; every change logged (total 340 -> 341)
+  ["post", "/api/social/bluesky/propose-profile"] // file a display name / description update for approval, always (total 341 -> 342)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

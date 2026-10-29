@@ -91,7 +91,11 @@ const CARD_VIEW = "card-view.html", CARDS = "digital-cards.html", BF_CARD = "scr
 const DASH = "dashboard.html", SMS = "agents/sms.html";
 
 const MUTATE = process.env.MUTATE || "";
-const EXACT_CONNECT_LINE = "Connecting your social accounts is coming: Bluesky first, then Facebook and Instagram, through each platform's own sign-in. BizForce will never ask for your passwords.";
+// NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE "Connecting your social accounts is coming: Bluesky first, then
+// Facebook and Instagram, through each platform's own sign-in. BizForce will never ask for your passwords." AFTER Bluesky connects
+// on the Social Agent page with an app password, and the other platforms keep the honest "coming" wording. The
+// connect-line-changed anchor moves from "BizForce will never ask for your passwords.</p>" to the line's new last clause.
+const EXACT_CONNECT_LINE = "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in.";
 const MUTATIONS = {
   // #0: test-account rows are counted in the platform's spend
   "test-fixture-counted": [["SRC", "    if (accounts.tests[String(row.user_id || \"\").toLowerCase()]) { testRows++; return; }\n", ""]],
@@ -103,7 +107,8 @@ const MUTATIONS = {
   "connect-button-restored": [["FE:" + CONTENT, EXACT_CONNECT_LINE + "</p>",
     EXACT_CONNECT_LINE + "</p>\n      <button class=\"connect-btn\" onclick=\"connectPlatform('facebook')\">Connect Facebook</button>"]],
   // #4: the sentence is softened
-  "connect-line-changed": [["FE:" + CONTENT, "BizForce will never ask for your passwords.</p>", "BizForce will not ask for your passwords.</p>"]],
+  "connect-line-changed": [["FE:" + CONTENT, "never your main password. Facebook and Instagram are coming, through each platform's own sign-in.</p>",
+    "never your main password. Facebook and Instagram are coming soon.</p>"]],
   // #7: SIGTERM does not close the server
   "sigterm-not-closing-server": [["SHUT", "  proc.on(\"SIGTERM\", function () { shutdownApi.shutdown(\"SIGTERM\", 0); });", "  proc.on(\"SIGTERM\", function () { });"]],
   // #7: the shutdown never calls server.close

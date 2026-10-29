@@ -10525,6 +10525,12 @@ const PROPOSAL_EXECUTORS = {
   // call time.
   publish_social_post: executePublishSocialPost,
 
+  // Updates the display name and description of a member's own connected
+  // Bluesky profile from an approved POST /api/social/bluesky/propose-profile.
+  // Never the avatar or banner, and always through approval: no automation
+  // runs it. Defined further down the file; it only runs at call time.
+  update_bluesky_profile: executeUpdateBlueskyProfile,
+
   // Creates an email sequence and enrolls the owner's confirmed contacts from
   // an approved POST /api/agents/email/propose-sequence. Sends nothing.
   // executeSendEmailSequence is defined further down the file; it only runs at
@@ -10555,6 +10561,11 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "publish_social_post") {
       return res.status(400).json({
         error: "A social post cannot be filed here. Use POST /api/agents/social/propose-post with the task_id of a completed social/post run for Bluesky."
+      });
+    }
+    if (actionType === "update_bluesky_profile") {
+      return res.status(400).json({
+        error: "A Bluesky profile update cannot be filed here. Use POST /api/social/bluesky/propose-profile from the Social Agent page."
       });
     }
 
@@ -10805,7 +10816,7 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
    is enrolled to be mailed to the owner's contacts. A social post is published
    on Bluesky. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
-  "publish_social_post"];
+  "publish_social_post", "update_bluesky_profile"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -28245,8 +28256,12 @@ app.post("/api/agents/social/calendar", requireAuth, requireActiveSubscription, 
    post through lib/bskyGate.js and records the uri and cid on the draft
    (migration 136).
 
-   OWNER ONLY. There is one Bluesky account in this process (BLUESKY_IDENTIFIER),
-   so a post filed by anyone else would go out from the owner's account.
+   FROM WHOSE ACCOUNT (blueskyPostingAccount): a member who connected their own
+   Bluesky account (migration 152) files posts that go out from it. Without a
+   connection only the owner may file, and the owner's posts then go out from
+   the platform's one account (BLUESKY_IDENTIFIER). With "Post approved drafts
+   automatically" on, a member's filed post is run through the executor at
+   once (autoExecuteFiledProposal); every screen still runs.
 
    The text is the stored run's post and nothing else; text in the request body
    is never read. The same checks run again at approval, and the executor trusts
@@ -28258,13 +28273,197 @@ var SOCIAL_POST_OWNER_ONLY =
   "Filing a Bluesky post is limited to the owner account: posts go out from this platform's single Bluesky " +
   "account, not from yours.";
 
+/* A member with no connection (and not the owner) is told how to post from
+   their own account; the two phrases the owner-only refusal used are kept. */
+var SOCIAL_POST_CONNECT_FIRST =
+  "Connect your own Bluesky account on the Social Agent page to file posts: they go out from your account. " +
+  "Without a connection, filing is limited to the owner account, whose posts go out from this platform's single Bluesky account.";
+var BLUESKY_RECONNECT_FIRST =
+  "Your Bluesky connection needs to be reconnected: the app password you saved no longer signs in. " +
+  "Make a new app password in Bluesky and connect again on the Social Agent page.";
+
+/* WHICH ACCOUNT A BLUESKY POST GOES OUT FROM. A member with a connection
+   (migration 152) posts from it, always. The owner keeps the platform's own
+   account (BLUESKY_IDENTIFIER, through lib/bskyGate.js) for the owner's own
+   posts ONLY while the owner has no connection; once connected, the owner
+   posts from that connection too. Nobody else ever posts from the platform's
+   account. A connection that needs reconnecting is refused, never quietly
+   replaced by the platform's account.
+
+   { kind: "member", handle, row } | { kind: "needs_reconnect", handle } |
+   { kind: "platform" } | { kind: "none" }. `role` is the caller's when the
+   route already holds it; null reads it. A failed read throws. */
+async function blueskyPostingAccount(userId, role) {
+  var read = await supabase
+    .from("member_social_connections")
+    .select("id, handle, did, status, auto_post, app_password_ciphertext, app_password_iv, app_password_auth_tag")
+    .eq("user_id", userId)
+    .eq("platform", "bluesky")
+    .maybeSingle();
+  if (read.error) {
+    throw read.error;
+  }
+  if (read.data) {
+    return read.data.status === "connected"
+      ? { kind: "member", handle: read.data.handle, row: read.data }
+      : { kind: "needs_reconnect", handle: read.data.handle };
+  }
+  if (role === null || role === undefined) {
+    var ownerRead = await supabase
+      .from("users")
+      .select("role")
+      .eq("id", userId)
+      .maybeSingle();
+    if (ownerRead.error) {
+      throw ownerRead.error;
+    }
+    role = ownerRead.data ? ownerRead.data.role : null;
+  }
+  return role === "admin" ? { kind: "platform" } : { kind: "none" };
+}
+
+// What a proposal records as the account it will post as: proposals.html shows it as "Posts as @handle".
+function blueskyPostsAs(account) {
+  return account.kind === "member"
+    ? { account: "member", handle: account.handle, automatic: account.row.auto_post === true }
+    : { account: "platform" };
+}
+function blueskyAccountLabel(postsAs) {
+  return postsAs && postsAs.account === "member" ? "@" + postsAs.handle : "the platform's Bluesky account";
+}
+
+/* THE CLAIMS AND COMPLIANCE SCREEN on every Bluesky post and profile text,
+   filed by hand or posted by a member's automation alike: the rails the blog
+   publisher runs under the supplement profile, findComplianceViolations (the
+   FDA/FTC supplement rules) and fdaRailViolations (the FDA disease-claim group
+   outside a caution-only sentence). A match refuses; nothing is softened or
+   rewritten. null when nothing matched. */
+var BLUESKY_CLAIMS_PROFILE = "supplement_vitality";
+function blueskyClaimsRefusal(text) {
+  var profile = COMPLIANCE_PROFILES[BLUESKY_CLAIMS_PROFILE];
+  var violations = findComplianceViolations(profile, text, 5).concat(fdaRailViolations(profile, text));
+  if (!violations.length) return null;
+  return {
+    error: "The claims screen refused this text: " + violations.map(function (v) {
+      return "matched " + JSON.stringify(v.matched) + " — " + v.rule;
+    }).join("; ") + ".",
+    violations: violations
+  };
+}
+
+/* After an action under a member's own session: a success notes last_ok_at; a
+   session failure marks the connection needs_reconnect and raises ONE in-app
+   notice (the update is conditional on status connected, so a second failure
+   finds nothing to mark and says nothing again); any other failure notes the
+   error code and leaves the connection as it is. Nothing is retried, and this
+   never throws: the action's own result is what its caller reports. */
+async function recordBlueskySession(userId, handle, outcome) {
+  try {
+    var stamp = nowIso();
+    if (outcome.ok) {
+      await supabase.from("member_social_connections").update({ last_ok_at: stamp, updated_at: stamp })
+        .eq("user_id", userId).eq("platform", "bluesky");
+      return;
+    }
+    var patch = { last_error_at: stamp, last_error_code: String(outcome.code || outcome.reason).slice(0, 60), updated_at: stamp };
+    if (outcome.reason !== "session_failed") {
+      await supabase.from("member_social_connections").update(patch).eq("user_id", userId).eq("platform", "bluesky");
+      return;
+    }
+    var marked = await supabase
+      .from("member_social_connections")
+      .update(Object.assign({ status: "needs_reconnect" }, patch))
+      .eq("user_id", userId)
+      .eq("platform", "bluesky")
+      .eq("status", "connected")
+      .select("id");
+    if (marked.error || !(marked.data || []).length) {
+      return;
+    }
+    var notice = await supabase.from("notifications").insert({
+      user_id: userId,
+      type:    "bluesky_reconnect",
+      title:   "Reconnect your Bluesky account",
+      message: "BizForce could not sign in to @" + handle + " with the app password you saved, so nothing was posted and " +
+        "nothing will be tried again. Make a new app password in Bluesky and connect again on the Social Agent page.",
+      read:    false
+    });
+    if (notice.error) {
+      console.warn("[bluesky] the reconnect notice could not be saved:", notice.error.message || notice.error);
+    }
+  } catch (err) {
+    console.error("[bluesky] recording a member session outcome failed:", (err && err.message) || err);
+  }
+}
+
+// A member-session failure in words. Never Bluesky's own text, never the password.
+function blueskyFailureText(outcome, handle) {
+  if (outcome.reason === "session_failed") {
+    return "Bluesky refused the session for @" + handle + " (" + outcome.code + "), so the connection now needs reconnecting. " +
+      "Reconnect Bluesky on the Social Agent page.";
+  }
+  if (outcome.reason === "rate_limited") return "Bluesky rate limit on @" + handle + " (" + outcome.code + ").";
+  if (outcome.reason === "unreachable") return "Bluesky could not be reached to sign in as @" + handle + ".";
+  return "Bluesky did not take it (" + (outcome.code || outcome.reason) + ").";
+}
+
+/* A MEMBER'S OWN AUTOMATION ("Post approved drafts automatically"): the filed
+   proposal is claimed and run through `executor`, the same function the
+   approve route runs, so it skips only the manual approve step. The executor
+   repeats every screen, and a refusal there marks the proposal failed, which
+   nothing retries. Never called for a profile edit. */
+async function autoExecuteFiledProposal(proposal, executor) {
+  var claim = await supabase
+    .from("agent_proposals")
+    .update({ status: "executing", decided_at: nowIso() })
+    .eq("id", proposal.id)
+    .eq("user_id", proposal.user_id)
+    .eq("status", "pending")
+    .select("*")
+    .maybeSingle();
+  if (claim.error) {
+    throw claim.error;
+  }
+  if (!claim.data) {
+    return { ok: false, proposal: proposal, error: "The proposal was no longer pending." };
+  }
+  var result;
+  try {
+    result = await executor(claim.data);
+  } catch (executorErr) {
+    var message = (executorErr && executorErr.message) ? executorErr.message : String(executorErr);
+    var failed = await supabase
+      .from("agent_proposals")
+      .update({ status: "failed", execution_error: message })
+      .eq("id", claim.data.id)
+      .select("*")
+      .maybeSingle();
+    return { ok: false, proposal: failed.data || claim.data, error: message };
+  }
+  var done = await supabase
+    .from("agent_proposals")
+    .update({ status: "executed", executed_at: nowIso(), execution_result: result === undefined ? null : result })
+    .eq("id", claim.data.id)
+    .select("*")
+    .maybeSingle();
+  if (done.error) {
+    throw done.error;
+  }
+  return { ok: true, proposal: done.data, result: result };
+}
+
 app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
       var userId = req.user.id;
 
-      if (req.user.role !== "admin") {
-        return res.status(403).json({ error: SOCIAL_POST_OWNER_ONLY });
+      // Which account it would post from comes first: nobody without one is read further.
+      var account = await blueskyPostingAccount(userId, req.user.role);
+      if (account.kind === "needs_reconnect") {
+        return res.status(409).json({ error: BLUESKY_RECONNECT_FIRST, code: "needs_reconnect" });
+      }
+      if (account.kind === "none") {
+        return res.status(403).json({ error: SOCIAL_POST_CONNECT_FIRST, code: "not_connected" });
       }
       if (!GRAPHEME_SEGMENTER) {
         return res.status(503).json(BLUESKY_UNCOUNTABLE);
@@ -28318,6 +28517,10 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
             ". It cannot be published as written. Nothing was filed."
         });
       }
+      var claimsRefusal = blueskyClaimsRefusal(text);
+      if (claimsRefusal) {
+        return res.status(400).json({ error: claimsRefusal.error + " Nothing was filed.", code: "claims_screen", violations: claimsRefusal.violations });
+      }
 
       var draftInsert = await supabase
         .from("social_post_drafts")
@@ -28345,7 +28548,7 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
           action_type:   "publish_social_post",
           title:         safeText("Bluesky post: " + text.replace(/\s+/g, " ").slice(0, 120), 200),
           target:        "bluesky",
-          payload:       { draft_id: draft.id, text: text, source_task_id: task.id },
+          payload:       { draft_id: draft.id, text: text, source_task_id: task.id, posts_as: blueskyPostsAs(account) },
           cost_amount:   0,
           cost_currency: "USD",
           reversible:    false,
@@ -28373,12 +28576,31 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
         throw linked.error;
       }
 
+      var measured = { length: graphemes, length_unit: "graphemes", limit: BLUESKY_MAX_GRAPHEMES };
+      // The member's own automation: only the manual approve step is skipped.
+      if (proposal.payload.posts_as.automatic === true) {
+        var auto = await autoExecuteFiledProposal(proposal, executePublishSocialPost);
+        var after = await supabase.from("social_post_drafts").select("*").eq("id", draft.id).eq("user_id", userId).maybeSingle();
+        return res.status(201).json({
+          draft: after.data || linked.data,
+          proposal: auto.proposal,
+          measured: measured,
+          automatic: true,
+          posted: auto.ok,
+          note: auto.ok
+            ? "Posted automatically from @" + account.handle + ", because \"Post approved drafts automatically\" is on. Every screen ran first."
+            : "Run automatically and not posted: " + auto.error + ". Nothing is retried."
+        });
+      }
       return res.status(201).json({
         draft: linked.data,
         proposal: proposal,
-        measured: { length: graphemes, length_unit: "graphemes", limit: BLUESKY_MAX_GRAPHEMES },
-        note: "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
-          "top-level post, from the platform's Bluesky account."
+        measured: measured,
+        note: account.kind === "member"
+          ? "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
+            "top-level post, from your Bluesky account @" + account.handle + "."
+          : "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
+            "top-level post, from the platform's Bluesky account."
       });
     } catch (error) {
       console.error("[social/propose-post] Error:", error);
@@ -28387,8 +28609,10 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
   });
 
 /* The publish_social_post executor (PROPOSAL_EXECUTORS). One argument, the
-   claimed proposal row; throws on any failure. Trusts nothing stored: the owner
-   must still be admin; the draft must exist, belong to the proposal's user and
+   claimed proposal row; throws on any failure. Trusts nothing stored: the
+   posting account is decided again (blueskyPostingAccount) and must be the one
+   the proposal was filed as, a member's own connection or, for an unconnected
+   owner still admin, the platform's; the text passes the claims screen again; the draft must exist, belong to the proposal's user and
    be for Bluesky; the payload's text must equal both the draft's content and
    the source run's stored post, and still be within 300 graphemes.
 
@@ -28415,17 +28639,26 @@ async function executePublishSocialPost(proposal) {
     throw new Error("publish_social_post: the stored text is " + graphemes + " graphemes, over Bluesky's limit of " +
       BLUESKY_MAX_GRAPHEMES + ". Nothing was posted");
   }
-
-  var ownerRead = await supabase
-    .from("users")
-    .select("role")
-    .eq("id", ownerId)
-    .maybeSingle();
-  if (ownerRead.error) {
-    throw ownerRead.error;
+  var claimsRefused = blueskyClaimsRefusal(text);
+  if (claimsRefused) {
+    throw new Error("publish_social_post: " + claimsRefused.error + " Nothing was posted");
   }
-  if (!ownerRead.data || ownerRead.data.role !== "admin") {
+
+  /* The account, decided again from the database, must be the one the
+     proposal was filed to post as. A proposal filed before member
+     connections existed names none: the owner filed it for the platform's. */
+  var account = await blueskyPostingAccount(ownerId, null);
+  if (account.kind === "none") {
     throw new Error("publish_social_post: " + SOCIAL_POST_OWNER_ONLY + " Nothing was posted");
+  }
+  if (account.kind === "needs_reconnect") {
+    throw new Error("publish_social_post: " + BLUESKY_RECONNECT_FIRST + " Nothing was posted");
+  }
+  var filedAs = payload.posts_as && typeof payload.posts_as === "object" ? payload.posts_as : { account: "platform" };
+  var nowAs = blueskyPostsAs(account);
+  if (filedAs.account !== nowAs.account || (nowAs.account === "member" && filedAs.handle !== nowAs.handle)) {
+    throw new Error("publish_social_post: this was filed to post as " + blueskyAccountLabel(filedAs) + ", and it would now post as " +
+      blueskyAccountLabel(nowAs) + ". Nothing was posted; file it again to post from the account connected now");
   }
 
   var draftId = typeof payload.draft_id === "string" && UUID_RE.test(payload.draft_id) ? payload.draft_id : null;
@@ -28491,10 +28724,17 @@ async function executePublishSocialPost(proposal) {
   }
 
   var outcome;
-  try {
-    outcome = await bskyGate.call(function (agent) { return agent.post(record); });
-  } catch (err) {
-    outcome = { ok: false, reason: "post_error", error: (err && err.message) || String(err) };
+  if (account.kind === "member") {
+    // The member's own session: one login, one post, no retry (lib/memberBluesky.js).
+    outcome = await require("./lib/memberBluesky").withSession(account.row, require("./lib/apiKeyCrypto").decrypt,
+      function (agent) { return agent.post(record); });
+    await recordBlueskySession(ownerId, account.handle, outcome);
+  } else {
+    try {
+      outcome = await bskyGate.call(function (agent) { return agent.post(record); });
+    } catch (err) {
+      outcome = { ok: false, reason: "post_error", error: (err && err.message) || String(err) };
+    }
   }
 
   var posted = outcome.ok ? (outcome.value || {}) : null;
@@ -28504,6 +28744,8 @@ async function executePublishSocialPost(proposal) {
   if (!uri) {
     var why = outcome.ok
       ? "Bluesky answered without a post uri, so whether the post went out cannot be confirmed."
+      : account.kind === "member"
+        ? blueskyFailureText(outcome, account.handle)
       : outcome.reason === "rate_limited"
         ? "Bluesky rate limit: no Bluesky call until " + outcome.resumes_at + " (" + outcome.retry_after_seconds + "s)."
         : "Bluesky did not take the post (" + outcome.reason + (outcome.error ? ": " + outcome.error : "") + ").";
@@ -28541,6 +28783,348 @@ async function executePublishSocialPost(proposal) {
   }
 
   return { uri: uri, cid: cid, published_at: publishedAt, draft_id: draft.id };
+}
+
+/* ── A member's own Bluesky account (migration 152, lib/memberBluesky.js) ─────
+   POST /api/social/bluesky/connect          a handle and an app password,
+                                             verified by a Bluesky login
+   GET  /api/social/bluesky/status           { connected, handle, status, since }
+   POST /api/social/bluesky/disconnect       deletes the connection
+   GET  /api/social/bluesky/automation       "Post approved drafts automatically",
+   PUT  /api/social/bluesky/automation       and every change to it
+   POST /api/social/bluesky/propose-profile  files a profile update for approval
+
+   THE APP PASSWORD is encrypted with lib/apiKeyCrypto.js (AES-256-GCM under
+   ENCRYPTION_SECRET, the user_api_keys scheme) BEFORE Bluesky is contacted, so
+   a server without the key sends nothing, and it is stored only after Bluesky
+   accepts it. It is never returned, never logged and never exported; the
+   export shows the platform, the handle and the date connected. A refused
+   handle or password stores nothing.
+
+   Posting (blueskyPostingAccount) and its rule are above, with propose-post. */
+
+/* Per account: five connection attempts an hour. A wrong password is not
+   retried into a lockout from here either. */
+const blueskyConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: function (req) { return "bsky-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many Bluesky connection attempts. Try again in an hour. Nothing was saved.", reason: "rate_limited", saved: false }
+});
+
+app.post("/api/social/bluesky/connect", requireAuth, requireActiveSubscription, blueskyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      var mb = require("./lib/memberBluesky");
+      var body = req.body || {};
+      var handle = mb.normalizeHandle(body.handle);
+      if (!handle) {
+        return res.status(400).json({ error: mb.MESSAGES.handle, code: "handle_format", saved: false });
+      }
+      var password = mb.checkAppPassword(body.app_password);
+      if (!password.ok) {
+        return res.status(400).json({ error: password.error, code: password.code, saved: false });
+      }
+
+      // Sealed first: a server that cannot encrypt it never sends it to Bluesky.
+      var sealed;
+      try {
+        sealed = require("./lib/apiKeyCrypto").encrypt(password.value);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: mb.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+
+      var verified = await mb.verify(handle, password.value);
+      if (!verified.ok) {
+        if (verified.kind === "rejected") {
+          return res.status(400).json({ error: mb.MESSAGES.rejected, code: "bluesky_rejected", saved: false });
+        }
+        return res.status(503).json({
+          error: verified.kind === "rate_limited" ? mb.MESSAGES.rateLimited : mb.MESSAGES.unreachable,
+          code: verified.kind === "rate_limited" ? "bluesky_rate_limited" : "bluesky_unreachable",
+          saved: false
+        });
+      }
+
+      var stamp = nowIso();
+      var saved = await supabase
+        .from("member_social_connections")
+        .upsert({
+          user_id:                 req.user.id,
+          platform:                "bluesky",
+          handle:                  verified.handle,
+          did:                     verified.did,
+          app_password_ciphertext: sealed.ciphertext,
+          app_password_iv:         sealed.iv,
+          app_password_auth_tag:   sealed.authTag,
+          status:                  "connected",
+          last_ok_at:              stamp,
+          last_error_at:           null,
+          last_error_code:         null,
+          updated_at:              stamp
+        }, { onConflict: "user_id,platform" })
+        .select("handle, status, created_at")
+        .single();
+      if (saved.error) {
+        throw saved.error;
+      }
+      return res.json(mb.statusOf(saved.data));
+    } catch (error) {
+      console.error("[social/bluesky/connect] Error:", (error && error.message) || error);
+      next(error);
+    }
+  });
+
+app.get("/api/social/bluesky/status", requireAuth, async function (req, res, next) {
+  try {
+    var read = await supabase
+      .from("member_social_connections")
+      .select("handle, status, created_at")
+      .eq("user_id", req.user.id)
+      .eq("platform", "bluesky")
+      .maybeSingle();
+    if (read.error) {
+      throw read.error;
+    }
+    return res.json(require("./lib/memberBluesky").statusOf(read.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not: a member can always take their password back.
+app.post("/api/social/bluesky/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var gone = await supabase
+      .from("member_social_connections")
+      .delete()
+      .eq("user_id", req.user.id)
+      .eq("platform", "bluesky")
+      .select("id");
+    if (gone.error) {
+      throw gone.error;
+    }
+    return res.json(Object.assign(require("./lib/memberBluesky").statusOf(null), {
+      removed: (gone.data || []).length > 0,
+      note: "Disconnected. BizForce no longer holds your app password. You can also delete it in Bluesky Settings → Privacy and security → App passwords."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The automation setting and its log, newest first. available is false when
+   there is no working connection to post from. */
+async function blueskyAutomationState(userId) {
+  var conn = await supabase
+    .from("member_social_connections")
+    .select("status, auto_post, auto_post_changed_at")
+    .eq("user_id", userId)
+    .eq("platform", "bluesky")
+    .maybeSingle();
+  if (conn.error) {
+    throw conn.error;
+  }
+  var log = await supabase
+    .from("member_social_setting_changes")
+    .select("old_value, new_value, changed_at")
+    .eq("user_id", userId)
+    .eq("platform", "bluesky")
+    .eq("setting", "auto_post")
+    .order("changed_at", { ascending: false })
+    .limit(10);
+  if (log.error) {
+    throw log.error;
+  }
+  return {
+    auto_post: !!(conn.data && conn.data.auto_post === true),
+    changed_at: conn.data ? conn.data.auto_post_changed_at || null : null,
+    available: !!(conn.data && conn.data.status === "connected"),
+    changes: log.data || []
+  };
+}
+
+app.get("/api/social/bluesky/automation", requireAuth, async function (req, res, next) {
+  try {
+    return res.json(await blueskyAutomationState(req.user.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* OFF is always allowed; ON needs an active subscription and a working
+   connection. Every change writes one member_social_setting_changes row. */
+app.put("/api/social/bluesky/automation", requireAuth, async function (req, res, next) {
+  try {
+    var wanted = req.body ? req.body.auto_post : undefined;
+    if (typeof wanted !== "boolean") {
+      return res.status(400).json({ error: "auto_post must be true or false. Nothing was changed." });
+    }
+    var conn = await supabase
+      .from("member_social_connections")
+      .select("status, auto_post")
+      .eq("user_id", req.user.id)
+      .eq("platform", "bluesky")
+      .maybeSingle();
+    if (conn.error) {
+      throw conn.error;
+    }
+    if (wanted && (!conn.data || conn.data.status !== "connected")) {
+      return res.status(conn.data ? 409 : 400).json({
+        error: conn.data ? BLUESKY_RECONNECT_FIRST : "Connect your Bluesky account first. Nothing was changed."
+      });
+    }
+    if (wanted && await refuseUnlessSubscribed(req, res, "turn on automatic Bluesky posting")) {
+      return;
+    }
+    var before = !!(conn.data && conn.data.auto_post === true);
+    if (conn.data && before !== wanted) {
+      var stamp = nowIso();
+      var changed = await supabase
+        .from("member_social_connections")
+        .update({ auto_post: wanted, auto_post_changed_at: stamp, updated_at: stamp })
+        .eq("user_id", req.user.id)
+        .eq("platform", "bluesky")
+        .eq("auto_post", before)
+        .select("id");
+      if (changed.error) {
+        throw changed.error;
+      }
+      if ((changed.data || []).length) {
+        var logged = await supabase.from("member_social_setting_changes").insert({
+          user_id: req.user.id, platform: "bluesky", setting: "auto_post", old_value: before, new_value: wanted, changed_at: stamp
+        });
+        if (logged.error) {
+          throw logged.error;
+        }
+        console.log("[social/bluesky/automation] " + req.user.id + " turned automatic posting " + (wanted ? "on" : "off"));
+      }
+    }
+    return res.json(await blueskyAutomationState(req.user.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The display name and description of a profile update, checked: text, at
+   most 64 and 256 graphemes, through the claims screen. { fields } or
+   { error, status?, violations? }. The same check runs at filing and again in
+   the executor. Nothing else on a profile is ever named here. */
+function blueskyProfileFieldsRefusal(source) {
+  var mb = require("./lib/memberBluesky");
+  var fields = {};
+  var names = [["display_name", "display name", mb.DISPLAY_NAME_MAX], ["description", "description", mb.DESCRIPTION_MAX]];
+  for (var i = 0; i < names.length; i++) {
+    var value = source[names[i][0]];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string") return { error: names[i][0] + " must be text." };
+    fields[names[i][0]] = value.trim();
+  }
+  if (fields.display_name === undefined && fields.description === undefined) {
+    return { error: "Give a display_name, a description, or both. Nothing else on the profile is changed here." };
+  }
+  if (!GRAPHEME_SEGMENTER) {
+    return { status: 503, error: BLUESKY_UNCOUNTABLE.error };
+  }
+  for (var j = 0; j < names.length; j++) {
+    if (fields[names[j][0]] === undefined) continue;
+    var count = countGraphemes(fields[names[j][0]]);
+    if (count > names[j][2]) {
+      return { error: "That " + names[j][1] + " is " + count + " graphemes, over Bluesky's limit of " + names[j][2] + "." };
+    }
+  }
+  var claims = blueskyClaimsRefusal([fields.display_name || "", fields.description || ""].join("\n\n"));
+  if (claims) {
+    return { error: claims.error, violations: claims.violations };
+  }
+  return { fields: fields };
+}
+
+var BLUESKY_PROFILE_OWN_ONLY = "Profile edits apply only to your own connected Bluesky account. Connect it on the Social Agent " +
+  "page; the platform's account is never edited here.";
+
+/* Files a profile update. NOTHING HERE CHANGES THE PROFILE, and nothing ever
+   runs it automatically: it waits for approval on the proposals page, whatever
+   the automation setting. */
+app.post("/api/social/bluesky/propose-profile", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var account = await blueskyPostingAccount(req.user.id, "user");
+      if (account.kind === "needs_reconnect") {
+        return res.status(409).json({ error: BLUESKY_RECONNECT_FIRST, code: "needs_reconnect" });
+      }
+      if (account.kind !== "member") {
+        return res.status(403).json({ error: BLUESKY_PROFILE_OWN_ONLY, code: "not_connected" });
+      }
+      var checked = blueskyProfileFieldsRefusal(req.body || {});
+      if (checked.error) {
+        return res.status(checked.status || 400).json({ error: checked.error + " Nothing was filed.", violations: checked.violations });
+      }
+      var profileProposal = await supabase
+        .from("agent_proposals")
+        .insert({
+          user_id:       req.user.id,
+          agent_type:    "social",
+          action_type:   "update_bluesky_profile",
+          title:         safeText("Bluesky profile update: @" + account.handle, 200),
+          target:        "bluesky",
+          payload:       Object.assign({}, checked.fields, { posts_as: { account: "member", handle: account.handle, automatic: false } }),
+          cost_amount:   0,
+          cost_currency: "USD",
+          reversible:    false,
+          status:        "pending",
+          created_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (profileProposal.error) {
+        throw profileProposal.error;
+      }
+      return res.status(201).json({
+        proposal: profileProposal.data,
+        note: "Filed for approval. Nothing has changed on Bluesky. Approving it on the proposals page sets only the " +
+          "display name and description of @" + account.handle + "; the avatar and banner are never touched."
+      });
+    } catch (error) {
+      console.error("[social/bluesky/propose-profile] Error:", (error && error.message) || error);
+      next(error);
+    }
+  });
+
+/* The update_bluesky_profile executor (PROPOSAL_EXECUTORS): the fields are
+   checked again, the connection must still be the one it was filed for, and
+   one session sets displayName and description onto the record Bluesky holds,
+   so the avatar and banner are carried over untouched. A session failure marks
+   needs_reconnect, tells the member once, and is not retried. */
+async function executeUpdateBlueskyProfile(proposal) {
+  var payload = proposal.payload || {};
+  var checked = blueskyProfileFieldsRefusal(payload);
+  if (checked.error) {
+    throw new Error("update_bluesky_profile: " + checked.error + " Nothing was changed");
+  }
+  var account = await blueskyPostingAccount(proposal.user_id, "user");
+  if (account.kind === "needs_reconnect") {
+    throw new Error("update_bluesky_profile: " + BLUESKY_RECONNECT_FIRST + " Nothing was changed");
+  }
+  if (account.kind !== "member") {
+    throw new Error("update_bluesky_profile: " + BLUESKY_PROFILE_OWN_ONLY + " Nothing was changed");
+  }
+  var filedFor = payload.posts_as && typeof payload.posts_as === "object" ? payload.posts_as.handle : null;
+  if (filedFor !== account.handle) {
+    throw new Error("update_bluesky_profile: this was filed for " + (filedFor ? "@" + filedFor : "no account") + ", and @" +
+      account.handle + " is connected now. Nothing was changed");
+  }
+  var mb = require("./lib/memberBluesky");
+  var outcome = await mb.withSession(account.row, require("./lib/apiKeyCrypto").decrypt, function (agent) {
+    return agent.upsertProfile(mb.profileUpdater(checked.fields));
+  });
+  await recordBlueskySession(proposal.user_id, account.handle, outcome);
+  if (!outcome.ok) {
+    throw new Error("update_bluesky_profile: " + blueskyFailureText(outcome, account.handle) + " Nothing is retried automatically");
+  }
+  return { updated: true, handle: "@" + account.handle, fields: Object.keys(checked.fields), updated_at: nowIso() };
 }
 
 // ── SEO Agent: Social Search ────────────────────────────────────────────────

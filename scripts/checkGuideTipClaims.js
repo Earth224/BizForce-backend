@@ -755,6 +755,11 @@ const REFRESH_FN = (/function refreshPage\(\) \{([\s\S]*?)\n    \}/.exec(FILES[S
      A 5 content 127        "approving saves it to the Approval Queue as an unpublished draft" → 'each draft waits in "Approval Queue"'
      A 5 content 128        "cannot be connected on this platform at present"    → "social accounts cannot be connected yet"
      A 5 social 134         "posts cannot be scheduled …"                        → "Posts cannot be scheduled and social accounts cannot be connected at present"
+     NAMED (Oct 28 2026, members connect their own Bluesky):
+     A 5 content 128        "social accounts cannot be connected yet"            → "to post on Bluesky from your own account, use the Social Agent page"
+                             (proof: the Social page carries the Connect Bluesky card and POST /api/social/bluesky/connect exists)
+     A 5 social 134         "Posts cannot be scheduled and social accounts cannot be connected at present" → "Only Bluesky connects so far, and posts cannot be scheduled"
+                             (proof gains the card's line that the other platforms are coming, and the connect route)
      A G seo 113            "and the Page Audit tool"                            → 'Pick "Keyword Research" or "Local SEO Plan"'
      A G operations 209     "SOP Documents and Efficiency Audits are shaped"     → 'Open "Standard Operating Procedure"' (proof gains that tool label)
      A G operations 212     "Revisit your SOP Documents periodically"            → 'Run "Efficiency Audit" to find the bottleneck'
@@ -859,10 +864,11 @@ const A = [
   ["5 content 127", conTips, 'each draft waits in "Approval Queue"', /before it goes live/,
     () => /<h2 class="section-label">Generate SEO Article<\/h2>/.test(FILES[CONTENT]) && /<h2 class="section-label">Generate SMS Campaign<\/h2>/.test(FILES[CONTENT]) &&
       offers(CONTENT, "Social Media Drafts") && /<h2 class="ap-section-label">Approval Queue<\/h2>/.test(FILES[AP]) && /status:\s*"not_published"/.test(FILES[SERVER])],
-  ["5 content 128", conTips, "social accounts cannot be connected yet",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
-    () => socialShut() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
-  ["5 social 134", socTips, "Posts cannot be scheduled and social accounts cannot be connected at present",/drafting and scheduling posts|account connections live/,
-    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut()],
+  ["5 content 128", conTips, "to post on Bluesky from your own account, use the Social Agent page",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
+    () => socialShut() && blueskyConnects() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
+  ["5 social 134", socTips, "Only Bluesky connects so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
+    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() &&
+      /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn, TikTok and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
   // guard catches outside the list
   ["G seo 113", seoTips, 'Pick "Keyword Research" or "Local SEO Plan"', /SEO Audit|Competitor Analysis/,
     () => ["Keyword Research", "Competitor Comparison", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n))],
@@ -903,14 +909,22 @@ check("A. 3 sales.html: \"Live Activity\" is kept, and a 20 s setInterval render
 const STATIC_INTRO = (/<p id="connectIntro"[^>]*>([^<]*)<\/p>/.exec(FILES[CONTENT]) || ["", ""])[1];
 check("A. 5 content.html #connectIntro: the static text no longer offers connecting or scheduling",
   !!STATIC_INTRO && !/Connect your social accounts|direct scheduling/.test(STATIC_INTRO), STATIC_INTRO);
+// NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE "Connecting your social accounts is coming: Bluesky first, …
+// BizForce will never ask for your passwords." AFTER Bluesky connects on the Social Agent page with an app password (never the
+// main password), and Facebook and Instagram are still coming through their own sign-in; checkLaunchBlockB pins the exact line.
 // NAMED (Oct 27 2026, launch item #4): BEFORE, six Connect buttons (each "Unavailable" once /api/social/accounts answered)
 // and a static intro that the accounts read rewrote with the same words ("Connecting social accounts is turned off for
 // now … Approved drafts are saved, not published."). AFTER, no Connect button, no accounts read, and one static line that
 // says what is coming and never asks for a password; checkLaunchBlockB pins the exact line.
 check("A. 5 content.html #connectIntro: one honest line, and no Connect control or accounts read is left",
-  STATIC_INTRO === "Connecting your social accounts is coming: Bluesky first, then Facebook and Instagram, through each platform's own sign-in. BizForce will never ask for your passwords." &&
+  STATIC_INTRO === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in." &&
   !/connectPlatform|loadConnectedAccounts|class="connect-btn"|openCreateAccount|caModalConnect|\/api\/social\/accounts/.test(FILES[CONTENT]), STATIC_INTRO);
 
+// A member connects their own Bluesky on the Social Agent page (backend migration 152, lib/memberBluesky.js).
+function blueskyConnects() {
+  return /<section class="context-card bsky-card" id="bskyConnect"/.test(FILES[SOCIAL]) && /<script src="\/scripts\/bluesky-connect\.js"><\/script>/.test(FILES[SOCIAL]) &&
+    FILES[SERVER].indexOf('app.post("/api/social/bluesky/connect", requireAuth, requireActiveSubscription, blueskyConnectLimiter,') !== -1;
+}
 // Social publishing, listing and connecting are shut for good: no Zernio host, no Zernio key read (launch audit #22c).
 function socialShut() { return FILES[SERVER].indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(FILES[SERVER]); }
 
@@ -1542,7 +1556,14 @@ const AUTO_ALLOWED = [
   { key: "billing.html", phrase: "automatic-renewal box",
     proof: () => /<input type="checkbox" data-bf-renew-consent-box>/.test(FILES[BILLING]) && /<script src="\/scripts\/bf-renew-consent\.js"><\/script>/.test(FILES[BILLING]) &&
       /return \{ error: "Tick the box beside the price to agree to automatic renewal before you subscribe\." \};/.test(RENEW) &&
-      /auto_renew_consent: true/.test(RENEW) && /auto_renew_consent/.test(SV) }
+      /auto_renew_consent: true/.test(RENEW) && /auto_renew_consent/.test(SV) },
+  // NAMED BEFORE → AFTER (Oct 28 2026, members connect their own Bluesky): one entry → two. social.html's tip quotes the
+  // switch "Post approved drafts automatically" by its label; the switch is on the page, and with it on the server posts at
+  // filing through the same executor (autoExecuteFiledProposal), after the claims screen (checkBlueskyConnect G6–G9).
+  { key: "social.html", phrase: "Post approved drafts automatically",
+    proof: () => /<input type="checkbox" id="bskyAutoPost" \/> <span>Post approved drafts automatically<\/span>/.test(FILES[SOCIAL]) &&
+      SV.indexOf("if (proposal.payload.posts_as.automatic === true) {") !== -1 && SV.indexOf("autoExecuteFiledProposal(proposal, executePublishSocialPost)") !== -1 &&
+      SV.indexOf("      var claimsRefusal = blueskyClaimsRefusal(text);\n") !== -1 }
 ];
 const autoHits = ALL.filter(x => AUTO.test(x.t) && !AUTO_ALLOWED.some(a => a.key === x.key && x.t.indexOf(a.phrase) !== -1 &&
   !AUTO.test(x.t.split(a.phrase).join("")) && a.proof()));
