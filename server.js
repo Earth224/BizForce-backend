@@ -10149,6 +10149,86 @@ async function agentSignatureReads(type, userId, now, read, agent) {
         }
       }
     }
+  } else if (type === "executive") {
+    r.plans = await read("plans", async function () {
+      return commandCenterRead(await supabase
+        .from("ai_tasks")
+        .select("id, status, output, created_at")
+        .eq("user_id", userId)
+        .eq("task_type", "executive/plan")
+        .order("created_at", { ascending: false })
+        .limit(3), "your plans").data || [];
+    });
+    var planIds = r.plans.unavailable !== undefined ? [] : r.plans.rows.map(function (p) { return p.id; });
+    r.dispatches = r.plans.unavailable !== undefined ? { unavailable: r.plans.unavailable } : await read("dispatches", async function () {
+      if (!planIds.length) return [];
+      return commandCenterAllRows(function () {
+        return supabase
+          .from("executive_dispatches")
+          .select("id, plan_task_id, assignment_id, outcome, refused_reason, tool_task_id, created_at", { count: "exact" })
+          .eq("user_id", userId)
+          .in("plan_task_id", planIds)
+          .order("id", { ascending: true });
+      }, "your dispatches");
+    });
+    // Each dispatched run's own final status, from its ai_tasks row: read-only, the member's rows only.
+    r.toolStatus = r.dispatches.unavailable !== undefined ? { unavailable: r.dispatches.unavailable } : await read("dispatched runs", async function () {
+      var ids = [];
+      r.dispatches.rows.forEach(function (d) { if (d.tool_task_id && ids.indexOf(d.tool_task_id) === -1) ids.push(d.tool_task_id); });
+      var byId = {};
+      for (var i = 0; i < ids.length; i += 200) {
+        (commandCenterRead(await supabase
+          .from("ai_tasks")
+          .select("id, status")
+          .eq("user_id", userId)
+          .in("id", ids.slice(i, i + 200)), "dispatched runs").data || []).forEach(function (t) { byId[t.id] = t.status; });
+      }
+      return byId;
+    });
+  } else {
+    // Every other agent: its own runs in the window (only the listed task types where there is a list).
+    var only = SIG.RUN_TYPES[type] || null;
+    r.runs = await read("runs", function () {
+      return commandCenterAllRows(function () {
+        var q = supabase
+          .from("ai_tasks")
+          .select("id, agent_type, task_type, status, created_at", { count: "exact" })
+          .eq("user_id", userId)
+          .eq("agent_type", type)
+          .neq("status", "dry_run")
+          .gte("created_at", windowStart);
+        if (only) q = q.in("task_type", only);
+        return q.order("id", { ascending: true });
+      }, type + " runs in 30 days");
+    });
+    if (type === "content") {
+      // The Command Center's rule for published content (commandCenterOutbound).
+      r.published = await read("published posts", function () {
+        return headCount("content published in 30 days", supabase
+          .from("content_library")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", userId)
+          .eq("status", "published")
+          .gte("published_at", windowStart));
+      });
+      r.profile = await read("business profile", async function () {
+        return (commandCenterRead(await supabase
+          .from("business_profiles")
+          .select("business_name, industry, website, description, products_services, target_audience, brand_voice, primary_goal, goals, location, top_keywords, top_competitors")
+          .eq("user_id", userId)
+          .limit(1), "business profile").data || [])[0] || false;
+      });
+    } else if (type === "operations") {
+      r.routines = await read("routines", function () {
+        return commandCenterAllRows(function () {
+          return supabase
+            .from("routines")
+            .select("id, name, run_count, last_run_at", { count: "exact" })
+            .eq("user_id", userId)
+            .order("id", { ascending: true });
+        }, "your routines");
+      });
+    }
   }
   return r;
 }

@@ -1227,6 +1227,12 @@ const CN = [
     () => { const t = configOf(EXEC).tools[0];
       return !!t && t.label === "Executive Plan" && t.runLabel === "Build the plan" && t.fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints" &&
         t.fields.filter(f => f.required).length === 1 && t.fields[0].required === true; }],
+  // NEW (Oct 29 2026): the Plans module under the page header; each ran assignment shows its own run's status, read from ai_tasks.
+  ["executive 7", exTips, "each assignment reads ready, refused, or its own run's result, linked to the run", EXEC_FALSE,
+    () => { const SL = fs.readFileSync(path.join(REPO, "lib/agentSignatures.js"), "utf8");
+      return AP_FILE.indexOf('var m = sigModule("executive", "Plans", ') !== -1 &&
+        AP_FILE.indexOf('li.appendChild(sigLink(a.run.label, "/run.html?id=" + encodeURIComponent(a.run.task_id)));') !== -1 &&
+        SL.indexOf("var st = runStatus[d.tool_task_id];") !== -1 && SL.indexOf('row.state = a.is_dispatchable === true ? "ready" : "not_dispatchable";') !== -1; }],
   ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],

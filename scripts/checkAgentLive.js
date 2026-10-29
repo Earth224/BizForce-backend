@@ -49,6 +49,19 @@
      S7  the 3 KB budget with signatures, no signature on the all-agents
          answer, Chart.js with the exact SRI tag, textContent only, and each
          module in jsdom with real fixtures and empty states.
+   THE REMAINING TWELVE (backend "Signature live data for the remaining twelve
+   agents", frontend "Every agent page carries its own live module"):
+     T1  Executive: the latest 3 plans, each assignment's latest dispatch, and
+         a ran assignment's status from its own ai_tasks row, all the member's;
+     T2  Content: posts by the commandCenterOutbound rule, outlines and audits,
+         the eleven formatBusinessProfile lines as set / not set, no value;
+     T3  Operations: the member's own routines, SOP and checklist runs;
+     T4  R&D: demand-signal runs and competitor scans, read without output, so
+         no lead text and no per-source figure;
+     T5  the eight thin agents: their own runs only, or a first tool and button
+         that the app map lists on that page;
+     T6  3 KB for each of the twelve, each in jsdom with fixtures and empty
+         states, the page's own accent, and all 18 pages with a module.
    A failed read or a null count is { unavailable } in every module.
 
    The fake database returns only the columns a query selects, so a column no
@@ -121,6 +134,19 @@ const MUTATIONS = {
   "store-failed-read-as-zero": [[SIGLIB, "  if (failed(r.items)) out.stock = unavailableOf(r.items);", "  if (failed(r.items)) out.stock = { items: 0, with_reorder_point: 0, low: { count: 0, named: [] }, margin_bands: {} };"]],
   // Chart.js is loaded on agents/analytics.html without its integrity hash (S7)
   "chartjs-without-sri": [[ANALYTICS_PAGE, " integrity=\"sha384-9nhczxUqK87bcKHh20fSQcTGD4qq5GhayNYSYWqwBkINBhOfQLg/P5HG5lF1urn4\" crossorigin=\"anonymous\"></script>\n  <style>", "></script>\n  <style>"]],
+  // another member's dispatch on the member's plan is read and shown (T1)
+  "other-member-dispatch": [[SERVER, '          .eq("user_id", userId)\n          .in("plan_task_id", planIds)', '          .in("plan_task_id", planIds)']],
+  // a dispatched run's status is taken from the plan, not from the run's own ai_tasks row (T1)
+  "dispatch-outcome-from-plan": [[SIGLIB, "var st = runStatus[d.tool_task_id];", "var st = plan.status;"]],
+  // the R&D runs are read with their output, and an excerpt of the leads is sent (T4)
+  "rd-lead-text": [[SERVER, '.select("id, agent_type, task_type, status, created_at", { count: "exact" })', '.select("id, agent_type, task_type, status, created_at, result, output", { count: "exact" })'],
+    [SIGLIB, "  return { runs_30d: runsOf(r.runs, DRAFT_CAP) };\n}", "  return { runs_30d: runsOf(r.runs, DRAFT_CAP), excerpt: (r.runs.rows || []).map(function (t) { return t.result || null; }) };\n}"]],
+  // a thin agent's runs read loses its agent filter, so every agent's runs show (T5)
+  "thin-other-agent-runs": [[SERVER, '          .eq("agent_type", type)\n          .neq("status", "dry_run")\n          .gte("created_at", windowStart);', '          .neq("status", "dry_run")\n          .gte("created_at", windowStart);']],
+  // an empty state names a button the page does not have (T5)
+  "empty-state-missing-control": [[SIGLIB, 'press: "Write the copy" }', 'press: "Write ad copy" }']],
+  // a routines read that failed answers as no routines (T3)
+  "routines-failed-read-as-zero": [[SIGLIB, "if (failed(r.routines)) out.routines = unavailableOf(r.routines);", "if (failed(r.routines)) out.routines = { count: 0, list: [] };"]],
   "route-after-type": [[SERVER, 'app.get("/api/agents/live", requireAuth, async function (req, res, next) {', 'app.get("/api/agents/:type", requireAuth, async function (req, res, next) {\n});\napp.get("/api/agents/live", requireAuth, async function (req, res, next) {']]
 };
 
@@ -1044,6 +1070,258 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
       slotText(brokenStore));
     const other = await mount("ads-agent.html", () => ({ status: 200, body: { generated_at: "x", daily_calls: { used: 0, limit: 250 }, agent: Object.assign({}, A.store.agent, { type: "ads", signature: null }) } }));
     check("S7. an agent without a module keeps the slot empty", other.doc.getElementById("apLiveSignature").innerHTML === "");
+  }
+
+  /* ══ The remaining twelve modules ══ */
+  function t2Fixture() {
+    const t = sigFixture();
+    const plan = (u, id, m, goal, assignments, status) => task(u, "executive", status || "completed", m, { id, task_type: "executive/plan", output: { goal, assignments } });
+    t.ai_tasks.push(
+      plan(U1, "plan-a", 3 * DAY, "Grow the newsletter", [
+        { id: 1, agent: "seo", tool: "audit", is_dispatchable: true }, { id: 2, agent: "content", tool: "outline", is_dispatchable: true },
+        { id: 3, agent: "email", tool: "sequence", is_dispatchable: true }, { id: 4, agent: "sales", tool: "funnel", is_dispatchable: false },
+        { id: 5, agent: "ads", tool: "copy", is_dispatchable: true }]),
+      plan(U1, "plan-b", 5 * DAY, "Launch the shop", [{ id: 1, agent: "store", tool: "stock-margin", is_dispatchable: true }]),
+      plan(U1, "plan-c", 6 * DAY, "Tidy the books", [{ id: 1, agent: "operations", tool: "sop", is_dispatchable: true }]),
+      plan(U1, "plan-d", 8 * DAY, "OLDEST PLAN NOT SHOWN", []),
+      plan(U2, "plan-z", 1 * DAY, "OTHER MEMBER PLAN", [{ id: 1, agent: "seo", tool: "audit", is_dispatchable: true }]),
+      task(U1, "seo", "completed", 3 * DAY - 30, { id: "run-done", task_type: "seo/audit" }),
+      task(U1, "content", "processing", 2, { id: "run-going", task_type: "content/outline" }),
+      task(U1, "ads", "failed", 3 * DAY - 60, { id: "run-fail", task_type: "ads/copy" }),
+      task(U2, "operations", "completed", 6 * DAY - 10, { id: "u2-run", task_type: "operations/sop" }),
+      task(U1, "content", "completed", 5 * DAY, { task_type: "content/outline" }), task(U1, "content", "completed", 2 * DAY + 3, { task_type: "content/outline" }),
+      task(U1, "content", "completed", 1 * DAY + 7, { id: "content-audit-1", task_type: "content/audit" }),
+      task(U1, "content", "completed", 4 * DAY, { task_type: "blog_post" }),
+      task(U1, "operations", "completed", 2 * DAY, { id: "ops-sop-1", task_type: "operations/sop" }), task(U1, "operations", "completed", 3 * DAY, { task_type: "operations/checklist" }),
+      task(U1, "rd", "completed", 1 * DAY, { id: "rd-sig-1", task_type: "rd/demand-signals", output: { finds: [{ text: "LEAD TEXT FROM BLUESKY" }], by_source: { bluesky: 3, youtube: 5 } },
+        result: "LEAD TEXT FROM BLUESKY" }),
+      task(U1, "rd", "completed", 9 * DAY, { task_type: "rd/demand-signals", output: { finds: [{ text: "MORE LEAD TEXT" }] } }),
+      task(U1, "rd", "completed", 4 * DAY, { id: "rd-scan-1", task_type: "rd/competitor-scan" }), task(U1, "rd", "completed", 2 * DAY, { task_type: "rd/brief" }),
+      task(U1, "ads", "completed", 1 * DAY, { id: "ads-copy-1", task_type: "ads/copy" }), task(U1, "ads", "completed", 3 * DAY, { task_type: "ad_campaign" }),
+      task(U2, "ads", "completed", 60, { id: "OTHER-MEMBER-ADS", task_type: "ads/copy" })
+    );
+    t.executive_dispatches = [
+      { id: "x1", user_id: U1, plan_task_id: "plan-a", assignment_id: 1, outcome: "failed", tool_task_id: null, created_at: ago(3 * DAY - 10) },
+      { id: "x2", user_id: U1, plan_task_id: "plan-a", assignment_id: 1, outcome: "ran", tool_task_id: "run-done", created_at: ago(3 * DAY - 31) },
+      { id: "x3", user_id: U1, plan_task_id: "plan-a", assignment_id: 2, outcome: "ran", tool_task_id: "run-going", created_at: ago(3) },
+      { id: "x4", user_id: U1, plan_task_id: "plan-a", assignment_id: 3, outcome: "refused", refused_reason: "not_subscribed", tool_task_id: null, created_at: ago(3 * DAY - 40) },
+      { id: "x5", user_id: U1, plan_task_id: "plan-a", assignment_id: 5, outcome: "ran", tool_task_id: "run-fail", created_at: ago(3 * DAY - 61) },
+      { id: "x6", user_id: U1, plan_task_id: "plan-c", assignment_id: 1, outcome: "ran", tool_task_id: "u2-run", created_at: ago(6 * DAY - 11) },
+      { id: "x9", user_id: U2, plan_task_id: "plan-a", assignment_id: 4, outcome: "ran", tool_task_id: "OTHER-MEMBER-RUN", created_at: ago(60) }
+    ];
+    t.business_profiles = [
+      { id: "bp1", user_id: U1, business_name: "Maker Co", industry: "Crafts", website: "  ", goals: "Grow", primary_goal: null, description: null, secret_note: "PROFILE VALUE NEVER SENT" },
+      { id: "bp2", user_id: U2, business_name: "Other", industry: "Other", website: "x", description: "x", products_services: "x", target_audience: "x", brand_voice: "x", primary_goal: "x",
+        location: "x", top_keywords: "x", top_competitors: "x" }
+    ];
+    t.routines = [
+      { id: "r1", user_id: U1, name: "Morning open", run_count: 4, last_run_at: ago(DAY) },
+      { id: "r2", user_id: U1, name: "Close out", run_count: 0, last_run_at: null },
+      { id: "r9", user_id: U2, name: "OTHER MEMBER ROUTINE", run_count: 9, last_run_at: ago(10) }
+    ];
+    return t;
+  }
+  const t2Call = async (type, o, user) => {
+    const hh = harness(o && o.tables || t2Fixture(), o);
+    const r = await hh.call("/api/agents/:type/live", { type }, user || { id: U1 });
+    return Object.assign(r, { h: hh, sig: r.body && r.body.agent && r.body.agent.signature });
+  };
+  const PAGE_OF = {};
+  AGENT_PAGES.forEach(f => { PAGE_OF[pageType(f)] = f; });
+
+  console.log("\n══ T1. Executive: plans, assignments, and each run's own status ══");
+  {
+    const r = await t2Call("executive");
+    const g = r.sig;
+    check("T1. the member's latest 3 plans, newest first (another member's newer plan and the 4th-oldest are not shown)",
+      g && JSON.stringify(g.plans.map(p => p.id)) === JSON.stringify(["plan-a", "plan-b", "plan-c"]) && JSON.stringify(r.body).indexOf("OTHER MEMBER PLAN") === -1 &&
+      JSON.stringify(r.body).indexOf("OLDEST PLAN") === -1, g && JSON.stringify(g.plans && g.plans.map(p => p.id)));
+    const a = g && g.plans[0].assignments.map(x => [x.id, x.state, x.run ? x.run.label : x.refused_reason || null]);
+    check("T1. plan-a: #1 ran → Completed (its latest dispatch, not the earlier failure), #2 ran → In progress, #3 refused (not_subscribed), #4 not dispatchable, #5 ran → Failed",
+      JSON.stringify(a) === JSON.stringify([[1, "ran", "Completed"], [2, "ran", "In progress"], [3, "refused", "not_subscribed"], [4, "not_dispatchable", null], [5, "ran", "Failed"]]), JSON.stringify(a));
+    check("T1. each run's status is its own ai_tasks row's: the plan is \"completed\", yet #2 is In progress and #5 Failed",
+      g && g.plans[0].assignments[1].run.status === "processing" && g.plans[0].assignments[4].run.status === "failed" && g.plans[0].assignments[0].run.task_id === "run-done");
+    check("T1. another member's dispatch on this plan's assignment #4 never appears", JSON.stringify(r.body).indexOf("OTHER-MEMBER-RUN") === -1 && g.plans[0].assignments[3].state === "not_dispatchable");
+    check("T1. a dispatched run that is not the member's own reads \"Run not found\", never its status", g && g.plans[2].assignments[0].run.label === "Run not found" && g.plans[2].assignments[0].run.status === null,
+      g && JSON.stringify(g.plans[2]));
+    check("T1. plan-b, never dispatched: started false, its assignment ready", g && g.plans[1].started === false && g.plans[1].assignments[0].state === "ready");
+    check("T1. every read is the member's own: plans, dispatches and the dispatched runs",
+      r.h.db.log.filter(q => q.table === "executive_dispatches" || (q.table === "ai_tasks" && q.filters.some(f => f[1] === "id" || (f[1] === "task_type" && f[2] === "executive/plan"))))
+        .every(q => q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === U1)) && r.h.db.log.some(q => q.table === "executive_dispatches"));
+    const none = await t2Call("executive", null, { id: U3 });
+    check("T1. no plans: an empty list (the page says \"No plans yet\")", none.sig.plans.length === 0);
+    const down = await t2Call("executive", { fail: ["executive_dispatches"] });
+    check("T1. dispatches down: plans { unavailable }, never \"Not started\"", down.sig.plans.unavailable !== undefined, JSON.stringify(down.sig));
+  }
+
+  console.log("\n══ T2. Content: posts published, outlines and audits, the profile checklist ══");
+  {
+    const r = await t2Call("content");
+    const g = r.sig;
+    check("T2. posts published in 30 days by the commandCenterOutbound rule (status published, published_at in the window): 2", g && g.published_30d === 2, g && g.published_30d);
+    const outbound = defOf("commandCenterOutbound");
+    check("T2. ... the same filters commandCenterOutbound uses", /\.eq\("status", "published"\)\s*\.gte\("published_at", since\)/.test(outbound) &&
+      r.h.db.log.some(q => q.table === "content_library" && q.head && q.filters.some(f => f[1] === "status" && f[2] === "published") && q.filters.some(f => f[0] === "gte" && f[1] === "published_at")));
+    check("T2. outlines and audits only: 3 outlines (one still running), 1 audit, the newest 3 (a Launch Task blog post is not one)",
+      g && g.runs_30d.count === 4 && g.runs_30d.by_type["content/outline"] === 3 && g.runs_30d.by_type["content/audit"] === 1 && g.runs_30d.newest[0].task_id === "run-going" &&
+      g.runs_30d.newest.length === 3 && g.runs_30d.newest[1].task_id === "content-audit-1",
+      g && JSON.stringify(g.runs_30d));
+    const brain = lf(fs.readFileSync(path.join(REPO, "config/brain.js"), "utf8"));
+    const fmtSrc = brain.slice(brain.indexOf("function formatBusinessProfile("), brain.indexOf("var industry = profileValue(p.industry)"));
+    const promptKeys = [...fmtSrc.matchAll(/\(p\.([a-z_]+)(?:\s*\|\|\s*p\.([a-z_]+))?\s*\|\|\s*"Not provided"\)/g)].map(m => m[2] ? m[1] + "|" + m[2] : m[1]);
+    check("T2. the checklist is the eleven lines formatBusinessProfile gives every agent (" + promptKeys.length + ")",
+      JSON.stringify(SIGS.PROFILE_CHECKLIST.map(f => f[0])) === JSON.stringify(promptKeys) && promptKeys.length === 11, promptKeys.join(","));
+    check("T2. the member's profile: 3 of 11 set (name, industry, goals; a blank website is not set), and no value is sent",
+      g && g.profile.set === 3 && g.profile.of === 11 && JSON.stringify(g.profile.fields.filter(f => f.set).map(f => f.label)) === JSON.stringify(["Business name", "Industry", "Goals"]) &&
+      JSON.stringify(r.body).indexOf("Maker Co") === -1 && JSON.stringify(r.body).indexOf("PROFILE VALUE") === -1, g && JSON.stringify(g.profile));
+    const none = await t2Call("content", null, { id: U3 });
+    check("T2. no profile: exists false, 0 of 11; no posts; no runs", none.sig.profile.exists === false && none.sig.profile.set === 0 && none.sig.published_30d === 0 && none.sig.runs_30d.count === 0);
+    const down = await t2Call("content", { fail: ["business_profiles"], nullCount: ["content_library"] });
+    check("T2. profile down and a null published count: both { unavailable }, never 0 of 11 or 0 posts", down.sig.profile.unavailable && down.sig.published_30d.unavailable);
+  }
+
+  console.log("\n══ T3. Operations: the member's routines, SOP and checklist runs ══");
+  {
+    const r = await t2Call("operations");
+    const g = r.sig;
+    check("T3. the member's 2 routines, last run first, with run counts (another member's is not listed)",
+      g && g.routines.count === 2 && JSON.stringify(g.routines.list.map(x => [x.name, x.run_count, !!x.last_run_at])) === JSON.stringify([["Morning open", 4, true], ["Close out", 0, false]]) &&
+      JSON.stringify(r.body).indexOf("OTHER MEMBER ROUTINE") === -1, g && JSON.stringify(g.routines));
+    check("T3. routines are read with user_id = the member", r.h.db.log.filter(q => q.table === "routines").every(q => q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === U1)));
+    check("T3. 1 SOP and 1 checklist in 30 days, newest first", g && g.runs_30d.by_type["operations/sop"] === 1 && g.runs_30d.by_type["operations/checklist"] === 1 && g.runs_30d.newest[0].task_id === "ops-sop-1");
+    const none = await t2Call("operations", null, { id: U3 });
+    check("T3. no routines: count 0 (the page says \"No routines yet\", linked to routines.html)", none.sig.routines.count === 0 && none.sig.runs_30d.count === 0);
+    const down = await t2Call("operations", { fail: ["routines"] });
+    check("T3. routines down: { unavailable }, never 0 routines", down.sig.routines.unavailable !== undefined && down.sig.routines.count === undefined);
+  }
+
+  console.log("\n══ T4. R&D: signal runs and scans, no lead text, nothing combined ══");
+  {
+    const r = await t2Call("rd");
+    const g = r.sig;
+    check("T4. 2 demand-signal runs and 1 competitor scan in 30 days (the brief is not one); newest first",
+      g && g.runs_30d.by_type["rd/demand-signals"] === 2 && g.runs_30d.by_type["rd/competitor-scan"] === 1 && g.runs_30d.count === 3 && g.runs_30d.newest[0].task_id === "rd-sig-1",
+      g && JSON.stringify(g.runs_30d));
+    const blob = JSON.stringify(r.body);
+    check("T4. no lead text and no per-source count reaches the answer (no YouTube figure, combined or not)",
+      blob.indexOf("LEAD TEXT") === -1 && !/youtube|bluesky|by_source|finds/i.test(JSON.stringify(g)), JSON.stringify(g).slice(0, 300));
+    check("T4. the run read never selects output or result", r.h.db.log.filter(q => q.table === "ai_tasks" && q.filters.some(f => f[1] === "task_type" && Array.isArray(f[2])))
+      .every(q => !/output|result|prompt/.test(q.cols)));
+  }
+
+  console.log("\n══ T5. the eight thin agents: their own runs, or the first tool to try ══");
+  {
+    const map = require(path.join(REPO, "lib/appMap.json")).pages;
+    const r = await t2Call("ads");
+    const g = r.sig;
+    check("T5. Ads shows its own 4 runs in 30 days, newest first, with type and status (no SEO run, no other member's, none older than 30 days)",
+      g && g.runs_30d.count === 4 && g.runs_30d.newest[0].task_id === "ads-copy-1" && g.runs_30d.newest.every(x => x.task_id !== "OTHER-MEMBER-ADS") &&
+      JSON.stringify(Object.keys(g.runs_30d.by_type).sort()) === JSON.stringify(["ad_campaign", "ads/copy", "ads/tool"]) && !g.first_action, g && JSON.stringify(g.runs_30d));
+    check("T5. the thin runs read is scoped to the member and the agent", r.h.db.log.filter(q => q.table === "ai_tasks" && q.rng).some(q =>
+      q.filters.some(f => f[1] === "agent_type" && f[2] === "ads") && q.filters.some(f => f[1] === "user_id" && f[2] === U1)));
+    const empties = {}, missing = [];
+    for (const k of SIGS.THIN_TYPES) {
+      const e = await t2Call(k, null, { id: U3 });
+      empties[k] = e.sig;
+      const fa = e.sig && e.sig.first_action, page = map[PAGE_OF[k]];
+      const toggle = page && page.c.find(c => c[0] === "[data-tool-toggle=\"" + (fa && fa.tool) + "\"]");
+      const run = page && page.c.find(c => c[0] === "[data-tool-run=\"" + (fa && fa.tool) + "\"]");
+      if (!fa || !toggle || toggle[1] !== fa.open || !run || run[1] !== fa.press) missing.push(k + ": " + JSON.stringify(fa) + " vs " + JSON.stringify([toggle, run]));
+    }
+    check("T5. each of the eight with no run names a tool and button that exist on its page, as the app map lists them", missing.length === 0, missing.join(" | "));
+    check("T5. ... with no runs and nothing else: no sample, chart or placeholder data in the answer",
+      Object.values(empties).every(s => s.runs_30d.count === 0 && JSON.stringify(Object.keys(s).sort()) === JSON.stringify(["first_action", "kind", "runs_30d"])));
+    const down = await t2Call("ads", { fail: ["ai_tasks"] });
+    check("T5. runs down: { unavailable }, never \"No runs yet\" and no first action", down.sig.runs_30d.unavailable !== undefined && !down.sig.first_action);
+  }
+
+  console.log("\n══ T6. budgets, and the twelve in jsdom ══");
+  {
+    const big = t2Fixture();
+    for (let p = 0; p < 4; p++) big.ai_tasks.push(task(U1, "executive", "completed", 10 + p, { id: "bigplan-" + p, task_type: "executive/plan",
+      output: { goal: "G".repeat(400), assignments: Array.from({ length: 12 }, (_, i) => ({ id: i + 1, agent: "vertical_marketing", tool: "t".repeat(60), is_dispatchable: true })) } }));
+    for (let i = 0; i < 12; i++) big.executive_dispatches.push({ id: "bx" + i, user_id: U1, plan_task_id: "bigplan-0", assignment_id: i + 1, outcome: "refused", refused_reason: "R".repeat(300), created_at: ago(5) });
+    for (let i = 0; i < 40; i++) big.routines.push({ id: "rx" + i, user_id: U1, name: "N".repeat(200), run_count: 99999, last_run_at: ago(i) });
+    for (const k of LIVE.AGENT_KEYS) {
+      for (let i = 0; i < 9; i++) big.agent_proposals.push({ id: k + "-q" + i + "-" + "x".repeat(20), user_id: U1, agent_type: k, title: "T".repeat(200), status: "pending", created_at: ago(i) });
+      for (let i = 0; i < 12; i++) big.ai_tasks.push(task(U1, k, "failed", 20 + i, { task_type: (SIGS.RUN_TYPES[k] || [k + "/" + "a-very-long-tool-name-here"])[0], error: "E".repeat(2000) }));
+    }
+    const sizes = {};
+    for (const k of ["executive", "content", "operations", "rd"].concat(SIGS.THIN_TYPES)) {
+      const rr = await t2Call(k, { tables: JSON.parse(JSON.stringify(big)) });
+      sizes[k] = JSON.stringify(rr.body).length;
+    }
+    check("T6. worst case, each of the twelve in at most 3 KB (" + JSON.stringify(sizes) + ")", Object.values(sizes).every(n => n <= 3 * 1024), JSON.stringify(sizes));
+
+    const slotWords = m => { const out = [], w = m.doc.createTreeWalker(m.doc.getElementById("apLiveSignature"), 4); while (w.nextNode()) out.push(w.currentNode.nodeValue); return out.join(" ").replace(/\s+/g, " ").trim(); };
+    const per = async (type, user) => (await t2Call(type, null, user)).body;
+    const accentOf = f => (/accentColor:\s*"([^"]+)"/.exec(fs.readFileSync(path.join(FRONTEND, f), "utf8")) || [])[1];
+
+    const mountWith = async (type, body) => { const m = await mount(PAGE_OF[type], () => ({ status: 200, body })); return m; };
+    const ex = await mountWith("executive", await per("executive"));
+    const lis = [...ex.doc.querySelectorAll("#apLiveSignature [data-plan='plan-a'] li")].map(li => li.textContent);
+    check("T6. Executive: each assignment marked, runs linked to run.html",
+      JSON.stringify(lis) === JSON.stringify(["#1 seo · audit — Completed", "#2 content · outline — In progress", "#3 email · sequence — Refused: not_subscribed",
+        "#4 sales · funnel — Not dispatchable", "#5 ads · copy — Failed"]) && ex.doc.querySelector("#apLiveSignature a[href='/run.html?id=run-going']"), JSON.stringify(lis));
+    check("T6. Executive: an undispatched plan says \"Not started\"", /Launch the shop Not started/.test(slotWords(ex)), slotWords(ex));
+    const exE = await mountWith("executive", await per("executive", { id: U3 }));
+    const cc = exE.doc.querySelector("#apLiveSignature a[href='/dashboard.html#commandCenterSection']");
+    check("T6. Executive empty: \"No plans yet — start one in the Command Center\", linked", cc && /^No plans yet — start one in the Command Center$/.test(slotWords(exE).replace(/^Plans Your latest plans and what became of each assignment /, "")), slotWords(exE));
+
+    const co = await mountWith("content", await per("content"));
+    const checks = [...co.doc.querySelectorAll("#apLiveSignature [data-field]")].map(li => li.textContent);
+    check("T6. Content: 2 posts, \"3 outlines · 1 audits\", the profile \"3 of 11 set\" as a checklist",
+      /2 posts/.test(slotWords(co)) && /3 outlines · 1 audits/.test(slotWords(co)) && /3 of 11 set/.test(slotWords(co)) && checks.length === 11 && checks[0] === "✓ Business name" && checks[2] === "○ Website",
+      slotWords(co));
+    const coE = await mountWith("content", await per("content", { id: U3 }));
+    check("T6. Content empty: \"0 posts\", \"None run in the last 30 days\", \"Not filled in yet\"",
+      /0 posts/.test(slotWords(coE)) && /None run in the last 30 days/.test(slotWords(coE)) && /Not filled in yet/.test(slotWords(coE)), slotWords(coE));
+
+    const op = await mountWith("operations", await per("operations"));
+    check("T6. Operations: the routines with run counts, \"1 SOPs · 1 checklists\", runs linked",
+      /Morning open · 4 runs · last /.test(slotWords(op)) && /Close out · 0 runs · never run/.test(slotWords(op)) && /1 SOPs · 1 checklists/.test(slotWords(op)) &&
+      op.doc.querySelector("#apLiveSignature a[href='/run.html?id=ops-sop-1']"), slotWords(op));
+    const opE = await mountWith("operations", await per("operations", { id: U3 }));
+    const rl = opE.doc.querySelector("#apLiveSignature a[href='/routines.html']");
+    check("T6. Operations empty: \"No routines yet\", linked to routines.html", rl && /No routines yet/.test(slotWords(opE)), slotWords(opE));
+
+    const rdm = await mountWith("rd", await per("rd"));
+    check("T6. R&D: \"2 runs\" of demand signals, \"1 scan\", the newest linked, no lead text",
+      /Demand signals 2 runs/.test(slotWords(rdm)) && /Competitor scans 1 scan/.test(slotWords(rdm)) && rdm.doc.querySelector("#apLiveSignature a[href='/run.html?id=rd-sig-1']") &&
+      !/LEAD TEXT/.test(slotWords(rdm)), slotWords(rdm));
+    const rdE = await mountWith("rd", await per("rd", { id: U3 }));
+    check("T6. R&D empty: \"0 runs\", \"0 scans\", \"None yet\"", /0 runs/.test(slotWords(rdE)) && /0 scans/.test(slotWords(rdE)) && /None yet/.test(slotWords(rdE)), slotWords(rdE));
+
+    const ad = await mountWith("ads", await per("ads"));
+    const adMod = ad.doc.querySelector("#apLiveSignature [data-sig='ads']");
+    check("T6. Ads: \"4 runs\", each linked, in the page's own accent (" + accentOf(PAGE_OF.ads) + ")",
+      /Recent runs/.test(slotWords(ad)) && /4 runs/.test(slotWords(ad)) && ad.doc.querySelectorAll("#apLiveSignature a[href^='/run.html?id=']").length === 4 &&
+      adMod && adMod.style.getPropertyValue("--ap-sig-accent") === accentOf(PAGE_OF.ads), slotWords(ad));
+    const thinBad = [];
+    for (const k of SIGS.THIN_TYPES) {
+      const m = await mountWith(k, await per(k, { id: U3 }));
+      const fa = SIGS.FIRST_ACTIONS[k];
+      const mod = m.doc.querySelector("#apLiveSignature [data-sig='" + k + "']");
+      const btn = m.doc.querySelector("#apLiveSignature button[data-press]");
+      const words = slotWords(m);
+      if (!mod || words !== "Recent runs This agent's own runs, last 30 days No runs yet. Open \"" + fa.open + "\" and press \"" + fa.press + "\". Open " + fa.open ||
+        !btn || btn.getAttribute("data-press") !== "[data-tool-toggle=\"" + fa.tool + "\"]" || mod.style.getPropertyValue("--ap-sig-accent") !== accentOf(PAGE_OF[k]) ||
+        m.doc.querySelectorAll("#apLiveSignature canvas, #apLiveSignature svg, #apLiveSignature img").length) thinBad.push(k + ": " + words);
+    }
+    check("T6. the eight empty: \"No runs yet\", the page's own tool and button, a control that opens it, its own accent, and nothing else", thinBad.length === 0, thinBad.join(" | "));
+    const accents = SIGS.THIN_TYPES.map(k => accentOf(PAGE_OF[k]));
+    check("T6. ... the accents differ from page to page (" + new Set(accents).size + " colours over 8 pages)", new Set(accents).size >= 5, accents.join(","));
+    check("T6. no module of the twelve shows sample, demo or placeholder words",
+      [ex, exE, co, coE, op, opE, rdm, rdE, ad].every(m => !/\b(sample|example|placeholder|demo|lorem)\b/i.test(slotWords(m))));
+
+    const missingSig = [];
+    for (const f of AGENT_PAGES) {
+      const type = pageType(f);
+      const b = await per(type);
+      const m = await mount(f, () => ({ status: 200, body: b }));
+      if (!m.doc.querySelector("#apLiveSignature [data-sig='" + type + "']")) missingSig.push(f);
+    }
+    check("T6. all 18 agent pages now render their own signature module", missingSig.length === 0, missingSig.join(", "));
   }
 
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED (" + passes + ")" : "CHECKS FAILED: " + failures + " failing, " + passes + " passing"));
