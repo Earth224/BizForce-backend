@@ -544,7 +544,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     /* Every storage key in the frontend, found by reading every page and script, must be on one of these lists.
        BEFORE (frontend c57bad5): sign-out cleared bf_token, bf_refresh, bf_user and the offline copy only, inline on each path.
        AFTER: one shared scripts/bf-session.js clearDevice() clears PER_USER on every path; KEPT stays, each for its reason. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions"];
+    /* NAMED BEFORE → AFTER (Oct 29 2026, Block 4b, the element palettes). BEFORE: PER_USER had 9 keys and bf_theme was KEPT.
+       AFTER: 10; bf_theme moved here from KEPT, so sign-out clears the member's cached themes (their look and their backdrop
+       photo's address) and the sign-in page shows the original look. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions", "bf_theme"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
@@ -555,9 +558,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
        NAMED BEFORE → AFTER (Oct 29 2026, Block 4a, the theme engine). BEFORE: KEPT had 15 keys. AFTER: 16; bf_theme is
        scripts/bf-theme.js's device display cache of the member's themes, read before first paint so a page shows its
-       look without a flash; it is applied only for the member it belongs to (or nobody), and bf-session.js names it. */
+       look without a flash; it is applied only for the member it belongs to (or nobody), and bf-session.js names it.
+       NAMED BEFORE → AFTER (Oct 29 2026, Block 4b). BEFORE: KEPT had 16 keys, bf_theme among them. AFTER: 15; bf_theme is on
+       PER_USER above, cleared at sign-out. */
     const KEPT = {
-      bf_theme: "the device's cache of the member's themes, applied before first paint",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
       tmx_chat_pos: "where the Termaximus chat box sits",

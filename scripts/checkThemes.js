@@ -41,7 +41,37 @@
         deleted with the account (DELETE_ORDER, and the photo found by
         lib/accountFiles.js's folder listing); migration 154 creates the table
         with RLS on and the two preference columns.
-     G  bf_theme is a KEPT device key (bf-session.js and checkOfflineMode).
+     G  bf_theme is the member's: sign-out clears it (bf-session.js
+        PER_USER_LOCAL, run in jsdom, and checkOfflineMode's PER_USER), and a
+        signed-out page applies none of it.
+     H  Block 4b, the element palettes: the buttons, the mist, the chat glow,
+        the guide's lettering and the wordmark.
+        H1 lib/themes.js and bf-theme.js hold the same defaults, sections and
+           Match everything rule; the validator covers every new key and
+           refuses raw CSS in each.
+        H2 Match everything derives EXACTLY by the documented rule (recomputed
+           here from the rule's own words), on the server and in the page.
+        H3 with no theme, every place renders today: each changed page, the
+           shared CSS, the mist's and the guide's CSS, read with every element
+           var() resolved to its fallback, is the text it was at 7e74ca8 (the
+           NAMED differences listed there); the stars' colours are the old
+           table's.
+        H4 no hard-coded colour is left in those elements: the wordmark on
+           every themed page that shows it (and the dashboard's two), every
+           primary button gradient on every themed page, the guide's
+           lettering, every colour the mist draws, the chat glow.
+        H5 in jsdom: a theme sets each element's tokens, only for the parts
+           not at the original; through all / page / pages; the mist's stops
+           follow the documented lightness rule.
+        H6 readability: unreadable button text, guide text or wordmark is
+           corrected (white or near-black text, a shaded gradient, a lightened
+           colour) to 4.5 / 4.5 / 3, never refused.
+        H7 reduced motion stops the mist, its stars and the chat glow.
+        H8 public pages and cards keep the owner's look: every UNTHEMED page
+           and digital-cards' card swatches are as they were, and a public page
+           wears no element token from the visitor's theme.
+        C12 … C19 the studio's new sections, presets, Match my theme, Match
+           everything, the resets, the preview and the meter.
 
    MUTATE=<name> edits the files IN MEMORY; MUTATE=all runs each in its own
    process. BIZFORCE_FRONTEND_DIR overrides the frontend location. No network,
@@ -58,12 +88,14 @@ const s = require("./_shared");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const BEFORE_COMMIT = "1b12268";   // the frontend before Phase A
+const ELEMENTS_BEFORE = "7e74ca8"; // the frontend before Block 4b (the element palettes)
 const MUTATE = process.env.MUTATE || "";
 
 const SERVER = "server.js", LIB = "lib/themes.js", YOURDATA = "lib/yourData.js", ACCFILES = "lib/accountFiles.js";
 const MIG = "supabase/migrations/154_member_themes.sql", OFFCHECK = "scripts/checkOfflineMode.js";
 const THEME = "scripts/bf-theme.js", STUDIO = "scripts/bf-theme-studio.js", SETTINGS = "settings.html";
 const SESSION = "scripts/bf-session.js", UI = "css/bizforce-ui.css", SHELL = "css/agent-shell.css";
+const PRESENCE = "scripts/termaximus-presence.js", GUIDE = "scripts/termaximus-guide.js";
 const PUBLIC_WITH_BACKDROP = ["seller.html", "blogindex.html", "blogpost.html", "listing.html", "suppressed.html", "vitality.html"];
 const UID = "53e6b330-d31c-4958-a10b-516397e7b9c9";
 const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -91,8 +123,10 @@ const MUTATIONS = {
   "alive-reduced-motion": [[THEME, "    var alive = t.alive === true && !reducedMotion(win || window);", "    var alive = t.alive === true;"],
     [THEME, "  :root[data-bf-alive=\\\"1\\\"] body::before { inset: 0; animation: none; will-change: auto; }\\n", "\\n"]],
   // the cache applied after paint (B)
-  "cache-after-paint": [[THEME, "    if (cache && (!uid || cache.uid === uid)) applyState(cache.state, win, doc);",
-    "    if (cache && (!uid || cache.uid === uid)) win.setTimeout(function () { applyState(cache.state, win, doc); }, 0);"]],
+  /* NAMED BEFORE → AFTER (Block 4b). BEFORE the anchor was "if (cache && (!uid || cache.uid === uid))": a signed-out
+     page applied the cache. AFTER: "if (cache && uid && cache.uid === uid)"; only the member it belongs to. */
+  "cache-after-paint": [[THEME, "    if (cache && uid && cache.uid === uid) applyState(cache.state, win, doc);",
+    "    if (cache && uid && cache.uid === uid) win.setTimeout(function () { applyState(cache.state, win, doc); }, 0);"]],
   // themes missing from the export (F)
   "themes-missing-from-export": [[YOURDATA, "  { table: \"member_themes\", group: \"account\",", "  { table: \"member_themes_gone\", group: \"account\","]],
   // a photo in another member's folder accepted (D)
@@ -103,8 +137,22 @@ const MUTATIONS = {
   "per-page-ignored": [[THEME, "    var id = (state.page_themes && state.page_themes[key]) || state.default_theme_id || null;", "    var id = state.default_theme_id || null;"]],
   // a route without its limiter (E)
   "route-unlimited": [[SERVER, "app.put(\"/api/themes/apply\", requireAuth, themesWriteLimiter, async function", "app.put(\"/api/themes/apply\", requireAuth, async function"]],
-  // bf_theme dropped from the KEPT list (G)
-  "kept-missing": [[OFFCHECK, "      bf_theme: \"the device's cache of the member's themes, applied before first paint\",\n", ""]]
+  /* NAMED BEFORE → AFTER (Block 4b). BEFORE: "kept-missing" dropped bf_theme from checkOfflineMode's KEPT list.
+     AFTER: bf_theme is on its PER_USER list, so the mutation drops it from there (G). */
+  "offline-inventory-missing": [[OFFCHECK, "\"mcTargetGoalConversions\", \"bf_theme\"];", "\"mcTargetGoalConversions\"];"]],
+  // ── Block 4b ──
+  // the mist keeping a hard-coded colour (H4)
+  "mist-hard-coded": [[PRESENCE, "    \"    rgba(var(--tmx-haze-1, 48,12,150),0.88)   0%,\",", "    \"    rgba(48,12,150,0.88)   0%,\","]],
+  // the wordmark missed on one page (H4)
+  "wordmark-missed": [["crm.html", "background:linear-gradient(90deg,var(--bf-mark-a, #22d3ee),var(--bf-mark-b, #a855f7))", "background:linear-gradient(90deg,#22d3ee,#a855f7)"]],
+  // Match everything using a different rule (H1, H2)
+  "match-rule-changed": [[LIB, "    guide_a: mixHex(a, W, 0.35), guide_b: mixHex(b, W, 0.35),", "    guide_a: mixHex(a, W, 0.4), guide_b: mixHex(b, W, 0.35),"]],
+  // button text left unreadable (H6, C)
+  "button-text-unreadable": [[THEME, "    if (!btn.original && btn.before < BTN_MIN) {", "    if (false) {"]],
+  // the visitor's theme on a public page (B6, H8)
+  "public-page-visitor-theme": [[THEME, "    if (UNTHEMED.indexOf(key) !== -1) return true;", "    if (false) return true;"]],
+  // bf_theme surviving sign-out (G)
+  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\"\n  ];", "    \"mcTargetGoalConversions\"\n  ];"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -123,7 +171,7 @@ function frontFile(f) {
 const ALL_PAGES = fs.readdirSync(FRONTEND).filter(f => f.endsWith(".html")).concat(
   fs.readdirSync(path.join(FRONTEND, "agents")).filter(f => f.endsWith(".html")).map(f => "agents/" + f));
 ALL_PAGES.forEach(f => { FILES[f] = frontFile(f); });
-[THEME, STUDIO, SESSION, UI, SHELL].forEach(f => { FILES[f] = frontFile(f); });
+[THEME, STUDIO, SESSION, UI, SHELL, PRESENCE, GUIDE].forEach(f => { FILES[f] = frontFile(f); });
 const APP_MAP = JSON.parse(fs.readFileSync(path.join(REPO, "lib/appMap.json"), "utf8"));
 
 if (MUTATE) {
@@ -309,7 +357,11 @@ const T1 = { id: "aaaaaaaa-0000-4000-8000-000000000001", name: "Ember", photo_ur
   theme: Object.assign({}, LIBX.DEFAULT_THEME, { glow_a: "#ff7a18", glow_b: "#ff2e63", glow_a_alpha: 0.18, glow_b_alpha: 0.16 }) };
 const T2 = { id: "aaaaaaaa-0000-4000-8000-000000000002", name: "Royal", photo_url: null,
   theme: Object.assign({}, LIBX.DEFAULT_THEME, { glow_a: "#6366f1", glow_b: "#f5c542", middle: "colour", bg: "#0a0a24", alive: true }) };
-const stateOf = (main, pages) => ({ themes: [T1, T2], default_theme_id: main, page_themes: pages || {}, pages: [] });
+/* Block 4b: a theme that colours every element (and leaves the corners at today's). */
+const T3 = { id: "aaaaaaaa-0000-4000-8000-000000000003", name: "Parts", photo_url: null,
+  theme: Object.assign({}, LIBX.DEFAULT_THEME, { btn_a: "#ff7a18", btn_b: "#ff2e63", btn_text: "#ffffff", mist_core: "#22c55e", mist_haze: "#14532d",
+    mist_spark: "#fde68a", chat_glow_a: "#f97316", chat_glow_b: "#db2777", guide_a: "#fb923c", guide_b: "#f472b6", mark_a: "#fb923c", mark_b: "#f43f5e" }) };
+const stateOf = (main, pages, themes) => ({ themes: themes || [T1, T2, T3], default_theme_id: main, page_themes: pages || {}, pages: [] });
 
 async function themePage(o) {
   const calls = [];
@@ -349,7 +401,11 @@ const cacheOf = (uid, state, ageMs) => ({ v: 1, uid: uid, fetched_at: Date.now()
   check("B3. ... and the member's own themes are fetched instead", p.calls.length === 1 && /\/api\/themes$/.test(p.calls[0].u) &&
     /^Bearer /.test(p.calls[0].opts.headers.Authorization));
   p = await themePage({ token: null, cache: cacheOf(UID, stateOf(T1.id)) });
-  check("B3. signed out, the device's cache is shown and nothing is fetched", p.get("--bf-glow-a") === "#ff7a18" && p.calls.length === 0);
+  /* NAMED BEFORE → AFTER (Block 4b). BEFORE: "signed out, the device's cache is shown and nothing is fetched"
+     (--bf-glow-a #ff7a18). AFTER: signed out, nothing of a member's theme is applied: sign-out clears bf_theme, and a
+     cache left by any other path is still not shown, so the sign-in page wears the original look. */
+  check("B3. signed out, no cached theme is applied (the sign-in page shows the original look) and nothing is fetched",
+    p.get("--bf-glow-a") === "" && p.w.BFTheme.THEME_TOKENS.every(t => p.get(t) === "") && p.calls.length === 0);
 
   // B4: re-apply only when different
   p = await themePage({ cache: cacheOf(UID, stateOf(T1.id), 120000), answer: stateOf(T2.id) });
@@ -672,7 +728,101 @@ async function studio() {
     /reduced motion/.test(rm.d.getElementById("tsAliveNote").textContent));
   check("C11. the preview's CSS also stops the drift under prefers-reduced-motion",
     /@media \(prefers-reduced-motion: reduce\) \{ \.ts-preview\[data-alive="1"\] \.ts-pv-glows \{[^}]*animation: none/.test(FILES[SETTINGS]));
+  check("C11. ... and the preview's mist and chat glow hold still there too",
+    /@media \(prefers-reduced-motion: reduce\) \{ \.ts-pv-core, \.ts-pv-spark, \.ts-pv-star, \.ts-pv-chatglow \{ animation: none; \} \}/.test(FILES[SETTINGS]));
   rm.w.close();
+
+  // ── Block 4b: every colour ──
+  const ev = await open({});
+  const e$ = id => ev.d.getElementById(id);
+  const efire = (el, type) => el.dispatchEvent(new ev.w.Event(type, { bubbles: true }));
+  const legendsEl = Array.prototype.map.call(ev.d.querySelectorAll("#tsElements > fieldset > legend"), l => l.textContent);
+  check("C12. five new sections, in the studio's style: \"Buttons\", \"Termaximus mist\", \"Chat glow\", \"Guide text\", \"BizForceAI wordmark\"",
+    JSON.stringify(legendsEl) === JSON.stringify(["Buttons", "Termaximus mist", "Chat glow", "Guide text", "BizForceAI wordmark"]), legendsEl.join(" · "));
+  const PART = ev.w.BFThemeStudio.PARTS;
+  const sectionOk = Array.prototype.every.call(ev.d.querySelectorAll("#tsElements > fieldset"), fs => {
+    const part = fs.getAttribute("data-el");
+    const names = Array.prototype.map.call(fs.querySelectorAll(".ts-el-preset"), b => b.textContent.trim());
+    const colours = PART[part].every(p => fs.querySelector("#" + p[1] + "Color[type=color]") && fs.querySelector("#" + p[1] + "Hex[type=text]"));
+    const acts = Array.prototype.map.call(fs.querySelectorAll(".ts-el-actions button"), b => b.textContent.trim());
+    return JSON.stringify(names) === JSON.stringify(["Original", "Ember", "Verdant", "Royal", "Rosé", "Mono"]) && colours &&
+      JSON.stringify(acts) === JSON.stringify(["Match my theme", part === "mist" ? "Reset mist to original" : "Reset this element"]);
+  });
+  check("C12. each has six presets (Original, Ember, Verdant, Royal, Rosé, Mono), a colour picker and a hex field for each of its colours, \"Match my theme\" and its reset",
+    sectionOk && PART.mist.length === 8);
+  check("C12. the mist's six palettes reach every mist colour, each preset differing", (() => {
+    const seen = ["original", "ember", "verdant", "royal", "rose", "mono"].map(id => JSON.stringify(ev.w.BFThemeStudio.partPreset("mist", id)));
+    return new Set(seen).size === 6 && seen.every(x => Object.keys(JSON.parse(x)).length === 8);
+  })());
+  const pv = e$("tsPreview");
+  check("C13. the live preview shows the mist, the chat glow, a button, a guide tip and the wordmark together",
+    [".ts-pv-mist", ".ts-pv-chatglow", ".ts-pv-btn", ".ts-pv-guide", ".ts-pv-mark", ".ts-pv-core", ".ts-pv-haze", ".ts-pv-spark"].every(sel => pv.querySelector(sel)));
+  check("C13. the preview starts from every element at the original, so it never shows the theme the page wears",
+    pv.style.getPropertyValue("--bf-btn-a") === "#06b6d4" && pv.style.getPropertyValue("--tmx-core-1") === "255, 255, 255" && pv.style.getPropertyValue("--tmx-chat-glow-c") === "168, 85, 247");
+  e$("tsBtnAHex").value = "#123456"; efire(e$("tsBtnAHex"), "change");
+  const btnNow = ev.w.BFTheme.readability(Object.assign({}, ev.w.BFTheme.DEFAULT_THEME, { btn_a: "#123456" })).elements.buttons;
+  check("C13. a part's colour shows at once in the preview (the button's gradient start #123456, as readability keeps its white lettering clear: " + btnNow.a + " → " + btnNow.b + ")",
+    pv.style.getPropertyValue("--bf-btn-a") === btnNow.a && pv.style.getPropertyValue("--bf-btn-b") === btnNow.b && btnNow.a !== "#06b6d4" && btnNow.ratio >= 4.5);
+  ev.d.querySelector(".ts-el-preset[data-el=mist][data-preset=ember]").click();
+  const emberMist = ev.w.BFThemeStudio.partPreset("mist", "ember");
+  check("C14. a mist palette fills every mist colour and is shown pressed, and the preview's mist follows",
+    Object.keys(emberMist).every(k => ev.w.BFTheme.normalTheme({}) && e$(PART.mist.filter(p => p[0] === k)[0][1] + "Hex").value === emberMist[k]) &&
+    ev.d.querySelector(".ts-el-preset[data-el=mist][data-preset=ember]").getAttribute("aria-pressed") === "true" &&
+    pv.style.getPropertyValue("--tmx-core-4") !== "60, 120, 255");
+  e$("tsMistWhisperHex").value = "#00ff00"; efire(e$("tsMistWhisperHex"), "change");
+  check("C14. full custom: one mist colour set by hand (the whisper) leaves the others, and the palette no longer shows pressed",
+    e$("tsMistWhisperHex").value === "#00ff00" && e$("tsMistCoreHex").value === emberMist.mist_core &&
+    ev.d.querySelector(".ts-el-preset[data-el=mist][data-preset=ember]").getAttribute("aria-pressed") === "false");
+  e$("tsGuideAHex").value = "red;}x"; efire(e$("tsGuideAHex"), "change");
+  check("C14. a part's hex field refuses what is not a colour, and says how", e$("tsGuideAHex").value === "#22d3ee" && /six hex digits/.test(e$("tsMsg").textContent));
+  e$("tsGlowAHex").value = "#ff7a18"; efire(e$("tsGlowAHex"), "change");
+  e$("tsGlowBHex").value = "#ff2e63"; efire(e$("tsGlowBHex"), "change");
+  ev.d.querySelector("[data-el-match=guide]").click();
+  const rule = ev.w.BFTheme.matchAll("#ff7a18", "#ff2e63");
+  check("C15. \"Match my theme\" takes that part's colours from the corners by the rule (guide text " + rule.guide_a + " → " + rule.guide_b + "), and only that part",
+    e$("tsGuideAHex").value === rule.guide_a && e$("tsGuideBHex").value === rule.guide_b && e$("tsBtnAHex").value === "#123456");
+  e$("tsMatchAll").checked = true; efire(e$("tsMatchAll"), "change");
+  const allKeys = Object.keys(rule);
+  const shown = () => { const o = {}; Object.keys(PART).forEach(pt => PART[pt].forEach(p => { o[p[0]] = e$(p[1] + "Hex").value; })); return o; };
+  check("C16. \"Match everything\": every part takes the rule's colours from the two corners at once", allKeys.every(k => shown()[k] === rule[k]));
+  check("C16. ... and while it is on the parts' own controls rest", e$("tsBtnAHex").disabled && ev.d.querySelector(".ts-el-preset[data-el=mark][data-preset=royal]").disabled);
+  e$("tsGlowAHex").value = "#6366f1"; efire(e$("tsGlowAHex"), "change");
+  const rule2 = ev.w.BFTheme.matchAll("#6366f1", "#ff2e63");
+  check("C16. change a corner and every part follows", allKeys.every(k => shown()[k] === rule2[k]));
+  e$("tsName").value = "Matched"; e$("tsSaveAs").click(); await settle();
+  const mrow = fake.db.member_themes.filter(r => r.name === "Matched")[0];
+  check("C16. saved, the theme holds match_all and exactly the derived colours", !!mrow && mrow.theme.match_all === true && allKeys.every(k => mrow.theme[k] === rule2[k]));
+  e$("tsMatchAll").checked = false; efire(e$("tsMatchAll"), "change");
+  check("C16. turned off, the derived colours stay where they are, for hand-tuning", allKeys.every(k => shown()[k] === rule2[k]) && !e$("tsBtnAHex").disabled);
+  e$("tsMarkBHex").value = "#abcdef"; efire(e$("tsMarkBHex"), "change");
+  e$("tsUpdate").click(); await settle();
+  const mrow2 = fake.db.member_themes.filter(r => r.name === "Matched")[0];
+  check("C16. ... and saving then keeps them, with the one tuned by hand", mrow2.theme.match_all === false && mrow2.theme.mark_b === "#abcdef" && mrow2.theme.btn_a === rule2.btn_a);
+  ev.d.querySelector("[data-el-reset=buttons]").click();
+  check("C17. \"Reset this element\" puts that part back to the original (the buttons), and nothing else",
+    e$("tsBtnAHex").value === "#06b6d4" && e$("tsBtnBHex").value === "#8b5cf6" && e$("tsBtnTextHex").value === "#ffffff" && e$("tsMarkBHex").value === "#abcdef");
+  ev.d.querySelector("[data-el-reset=mist]").click();
+  check("C17. \"Reset mist to original\" puts all eight mist colours back", PART.mist.every(p => e$(p[1] + "Hex").value === ev.w.BFTheme.DEFAULT_THEME[p[0]]) &&
+    ev.d.querySelector(".ts-el-preset[data-el=mist][data-preset=original]").getAttribute("aria-pressed") === "true");
+  e$("tsBtnAHex").value = "#888888"; efire(e$("tsBtnAHex"), "change");
+  e$("tsBtnBHex").value = "#999999"; efire(e$("tsBtnBHex"), "change");
+  e$("tsBtnTextHex").value = "#999999"; efire(e$("tsBtnTextHex"), "change");
+  e$("tsGuideAHex").value = "#222244"; efire(e$("tsGuideAHex"), "change");
+  const lines = Array.prototype.map.call(ev.d.querySelectorAll("#tsMeterElements li"), li => li.textContent);
+  check("C18. the meter lists each part: unreadable button text is set to near-black and guide text lightened, shown as \"Auto-protected\", the colours kept",
+    e$("tsMeterState").textContent === "Auto-protected" && /^Button text \d+\.\d:1, set to near-black so it stays clear\.$/.test(lines[0] || "") &&
+    /^Guide text \d+\.\d:1, lightened so it stays clear\.$/.test(lines[1] || "") && /^Wordmark \d+\.\d:1/.test(lines[2] || "") &&
+    e$("tsBtnTextHex").value === "#999999" && pv.style.getPropertyValue("--bf-btn-text") === "#050c1a", lines.join(" | "));
+  check("C18. ... and the meter's ratios pass (button text 4.5, guide text 4.5, wordmark 3)", (() => {
+    const r = lines.map(l => parseFloat((/(\d+\.\d):1/.exec(l) || [])[1]));
+    return r[0] >= 4.5 && r[1] >= 4.5 && r[2] >= 3;
+  })());
+  e$("tsResetAll").click(); await settle(); e$("tsResetAll").click(); await settle();
+  const defaults = ev.w.BFTheme.DEFAULT_THEME;
+  check("C19. \"Reset everything to the original\" puts every part of the editor back too, and every page on the original",
+    Object.keys(PART).every(pt => PART[pt].every(p => e$(p[1] + "Hex").value === defaults[p[0]])) && !e$("tsMatchAll").checked &&
+    ev.w.BFTheme.ELEMENT_TOKENS.every(t => ev.d.documentElement.style.getPropertyValue(t) === ""));
+  ev.w.close();
   await routesAndLib(lifted, fake);
 }
 
@@ -841,12 +991,313 @@ async function exportAndDelete() {
     /ADD COLUMN IF NOT EXISTS page_themes jsonb NOT NULL DEFAULT '\{\}'::jsonb/.test(mig));
   check("F4. it changes no existing row (no UPDATE, no DELETE)", !/^\s*(UPDATE|DELETE)\b/im.test(mig.replace(/^--.*$/gm, "")));
 
-  console.log("\n══ G. bf_theme is a KEPT device key ══");
+  /* NAMED BEFORE → AFTER (Block 4b). BEFORE: "G. bf_theme is a KEPT device key": bf-session.js named it LEFT ON
+     PURPOSE and checkOfflineMode listed it in KEPT. AFTER: it is the member's, on PER_USER_LOCAL and PER_USER, and
+     sign-out clears it (run below). */
+  console.log("\n══ G. bf_theme is the member's: sign-out clears it ══");
   const left = /LEFT ON PURPOSE[\s\S]*?\*\//.exec(FILES[SESSION]);
-  const perUser = /var PER_USER_LOCAL = \[[\s\S]*?\];/.exec(FILES[SESSION]);
-  check("G1. bf-session.js names bf_theme as left on purpose, and sign-out does not clear it", !!left && /bf_theme \(/.test(left[0]) && !!perUser && perUser[0].indexOf("bf_theme") === -1);
-  check("G1. checkOfflineMode's KEPT inventory has bf_theme", /const KEPT = \{[\s\S]*?\n      bf_theme: "/.test(FILES[OFFCHECK]));
+  const perUser = /var PER_USER_LOCAL = (\[[\s\S]*?\]);/.exec(FILES[SESSION]);
+  let perUserList = [];
+  try { perUserList = vm.runInNewContext(perUser[1]); } catch (e) { perUserList = []; }
+  check("G1. bf-session.js clears bf_theme at sign-out (PER_USER_LOCAL), and no longer names it as left on purpose",
+    perUserList.indexOf("bf_theme") !== -1 && !!left && left[0].indexOf("bf_theme") === -1);
+  check("G1. checkOfflineMode lists bf_theme on PER_USER, not on KEPT", /const PER_USER = \[[^\]]*"bf_theme"[^\]]*\];/.test(FILES[OFFCHECK]) &&
+    !/const KEPT = \{[^}]*\bbf_theme:/.test(FILES[OFFCHECK]));
   check("G1. bf-theme.js stores under that one key", /var CACHE_KEY = "bf_theme";/.test(FILES[THEME]) && (FILES[THEME].match(/localStorage\.setItem\(/g) || []).length === 1);
+  {
+    const dom = new JSDOM("<!DOCTYPE html><html><head></head><body></body></html>", { url: "https://bizforceai.net/settings.html", runScripts: "dangerously" });
+    const w = dom.window;
+    w.localStorage.setItem("bf_token", tokenFor(UID));
+    w.localStorage.setItem("bf_theme", JSON.stringify(cacheOf(UID, stateOf(T1.id))));
+    w.localStorage.setItem("tmx_presence_pos", "{\"x\":1}");
+    const sc = w.document.createElement("script");
+    sc.setAttribute("data-clear-only", "");
+    sc.textContent = FILES[SESSION];
+    w.document.head.appendChild(sc);
+    let ran = false;
+    try { w.BFSession.clearDevice(); ran = true; } catch (e) { ran = false; }
+    check("G2. signing out (bf-session.js clearDevice, run in jsdom) removes bf_theme with the token, and leaves a display choice",
+      ran && w.localStorage.getItem("bf_theme") === null && w.localStorage.getItem("bf_token") === null && w.localStorage.getItem("tmx_presence_pos") !== null);
+    w.close();
+  }
+  const p0 = await themePage({ token: null, cache: cacheOf(UID, stateOf(T3.id, {}, [T3])) });
+  check("G3. and the sign-in page after it wears none of the member's look, element tokens included", p0.w.BFTheme.THEME_TOKENS.every(t => p0.get(t) === ""));
+  p0.w.close();
+  return elements();
+}
+
+/* ── H. Block 4b: the element palettes ──────────────────────────────────── */
+function gitShow(commit, f) {
+  try { return lf(execFileSync("git", ["-C", FRONTEND, "show", commit + ":" + f], { encoding: "utf8", maxBuffer: 16 << 20 })); }
+  catch (e) { return null; }
+}
+/* Every element var() resolved to its fallback: what the page draws with no theme. */
+const ELEMENT_VAR = /var\(--(?:bf-btn-a|bf-btn-b|bf-btn-text|bf-mark-a|bf-mark-b|bf-guide-a|bf-guide-b|tmx-[a-z0-9-]+), ([^()]+?)\)/g;
+const unthemed = t => t.replace(ELEMENT_VAR, "$1");
+const BARE = /#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d/;
+/* The documented Match everything rule, recomputed from its own words. */
+function ruleMix(x, y, w) {
+  const a = [1, 3, 5].map(i => parseInt(x.slice(i, i + 2), 16)), b = [1, 3, 5].map(i => parseInt(y.slice(i, i + 2), 16));
+  return "#" + a.map((c, i) => Math.round(c + w * (b[i] - c)).toString(16).padStart(2, "0")).join("");
+}
+function documentedRule(A, B) {
+  const W = "#ffffff";
+  return { btn_a: A, btn_b: B, btn_text: W, mark_a: A, mark_b: B, guide_a: ruleMix(A, W, 0.35), guide_b: ruleMix(B, W, 0.35),
+    chat_glow_a: A, chat_glow_b: B, mist_core: A, mist_haze: B, mist_pulse: ruleMix(ruleMix(A, B, 0.5), W, 0.3), mist_spark: ruleMix(A, W, 0.6),
+    mist_star: ruleMix(B, W, 0.85), mist_dust: ruleMix(B, W, 0.5), mist_trail: ruleMix(A, W, 0.7), mist_whisper: ruleMix(B, W, 0.75) };
+}
+const styleArray = t => { const m = /style\.textContent = \[\n([\s\S]*?)\n  \]\.join\("\\n"\)/.exec(t); return m ? m[1] : null; };
+function ruleBodies(css, selRe) {
+  const out = []; const re = /([^{}]+)\{([^{}]*)\}/g; let m;
+  while ((m = re.exec(css))) { const sel = m[1].replace(/\/\*[\s\S]*?\*\//g, "").trim(); if (selRe.test(sel)) out.push({ sel, body: m[2] }); }
+  return out;
+}
+/* The rules of the mist's style array, read from its string literals. */
+function mistCss(text) {
+  const arr = styleArray(text);
+  if (!arr) return "";
+  try { return vm.runInNewContext("[" + arr.replace(/"\s*\+\s*_tmxCorner\.(root|chat)/g, "\"") + "]").join("\n"); } catch (e) { return ""; }
+}
+
+async function elements() {
+  console.log("\n══ H. the element palettes: buttons, the mist, the chat glow, the guide's lettering, the wordmark ══");
+  const FRONT_DEFAULT = (() => { const m = /var DEFAULT_THEME = (\{[\s\S]*?\});/.exec(FILES[THEME]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
+  const FRONT_ELEMENTS = (() => { const m = /var ELEMENTS = (\{[\s\S]*?\});/.exec(FILES[THEME]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
+  check("H1. lib/themes.js and bf-theme.js hold the same defaults (" + Object.keys(LIBX.DEFAULT_THEME).length + " keys) and the same five sections",
+    JSON.stringify(FRONT_DEFAULT) === JSON.stringify(LIBX.DEFAULT_THEME) && JSON.stringify(FRONT_ELEMENTS) === JSON.stringify(LIBX.ELEMENTS) &&
+    JSON.stringify(Object.keys(LIBX.ELEMENTS)) === JSON.stringify(["buttons", "mist", "chat", "guide", "mark"]));
+  const NEW_KEYS = LIBX.ELEMENT_KEYS.concat(["match_all"]);
+  check("H1. the brief's keys are all there: buttons 3, mist 8, chat glow 2, guide 2, wordmark 2, and match_all", NEW_KEYS.length === 18 &&
+    NEW_KEYS.every(k => Object.prototype.hasOwnProperty.call(LIBX.DEFAULT_THEME, k)), NEW_KEYS.join(","));
+  const v = x => LIBX.validateTheme(x, UID);
+  const notRefused = [];
+  LIBX.ELEMENT_KEYS.forEach(k => {
+    [["raw CSS", "red;} body{background:url(https://evil)}"], ["a CSS function", "url(https://evil/x.png)"], ["short hex", "#fff"], ["uppercase", "#FFFFFF"],
+     ["a var()", "var(--x)"], ["a number", 255]].forEach(([what, bad]) => { const r = v({ [k]: bad }); if (!r.error || r.key !== k) notRefused.push(k + " " + what); });
+    if (!v({ [k]: "#123abc" }).theme) notRefused.push(k + " (a good colour refused)");
+  });
+  ["yes", 1, null, "true"].forEach(bad => { const r = v({ match_all: bad }); if (!r.error || r.key !== "match_all") notRefused.push("match_all " + JSON.stringify(bad)); });
+  check("H1. the validator covers every new key: raw CSS, url(), var(), short or uppercase hex and numbers are refused, naming the key (" + (LIBX.ELEMENT_KEYS.length * 6 + 4) + " cases)",
+    notRefused.length === 0, notRefused.join(", "));
+  const old = { theme: { glow_a: "#00e5ff" } };   // a theme saved before Block 4b
+  check("H1. a theme saved before the new keys existed reads with today's values for them", !!v(old.theme).theme && LIBX.ELEMENT_KEYS.every(k => v(old.theme).theme[k] === LIBX.DEFAULT_THEME[k]));
+
+  // H2: Match everything
+  const pairs = [["#00e5ff", "#a855f7"], ["#ff7a18", "#ff2e63"], ["#000000", "#ffffff"], ["#123456", "#fedcba"], ["#34d399", "#22c55e"], ["#0a0a0a", "#0b0b0b"]];
+  const dom = new JSDOM("<!DOCTYPE html><html><head><script>" + FILES[THEME] + "</script></head><body></body></html>", { url: "https://bizforceai.net/crm.html", runScripts: "dangerously" });
+  const BT = dom.window.BFTheme;
+  const ruleWrong = pairs.filter(([A, B]) => JSON.stringify(LIBX.matchAll(A, B)) !== JSON.stringify(documentedRule(A, B)) || JSON.stringify(BT.matchAll(A, B)) !== JSON.stringify(documentedRule(A, B)));
+  check("H2. Match everything derives exactly by the documented rule, on the server and in the page (" + pairs.length + " corner pairs, 17 colours each)", ruleWrong.length === 0, ruleWrong.join(" | "));
+  const sent = Object.assign({}, LIBX.DEFAULT_THEME, { glow_a: "#ff7a18", glow_b: "#ff2e63", match_all: true, btn_a: "#000000", mist_core: "#111111" });
+  const saved = v(sent).theme;
+  check("H2. with Match everything on, the server stores the derived colours, whatever was sent for them", !!saved &&
+    Object.keys(documentedRule("#ff7a18", "#ff2e63")).every(k => saved[k] === documentedRule("#ff7a18", "#ff2e63")[k]));
+  const n = BT.normalTheme(Object.assign({}, sent));
+  check("H2. ... and the page derives the same", Object.keys(documentedRule("#ff7a18", "#ff2e63")).every(k => n[k] === saved[k]));
+  const off = v(Object.assign({}, saved, { match_all: false, guide_a: "#abcdef" })).theme;
+  check("H2. turned off, the derived colours are kept as saved (a starting point), and a hand-tuned one stays", !!off && off.match_all === false &&
+    off.btn_a === "#ff7a18" && off.mist_haze === "#ff2e63" && off.guide_a === "#abcdef");
+
+  // H3: today's look
+  const pageFiles = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
+  const changed = [], wrongText = [];
+  const NAMED_SOLID = "background:linear-gradient(90deg,#22d3ee,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent";
+  pageFiles.concat([UI]).forEach(f => {
+    if (f === SETTINGS) return;
+    const was = gitShow(ELEMENTS_BEFORE, f);
+    if (was === null) { wrongText.push(f + ": not readable at " + ELEMENTS_BEFORE); return; }
+    if (was === FILES[f]) return;
+    changed.push(f);
+    let now = unthemed(FILES[f]);
+    /* NAMED: artists and services drew a solid #22d3ee wordmark; it is now a gradient with both ends #22d3ee, which
+       paints the same colour, so the member's two wordmark colours can reach it. */
+    if (f === "artists.html" || f === "services.html") now = now.split(NAMED_SOLID).join("color:#22d3ee");
+    /* NAMED: the dashboard's "BIZFORCE AI" eyebrow gains the class bf-wordmark, and css/bizforce-ui.css the rule for it
+       and a comment documenting the element tokens. */
+    if (f === "dashboard.html") now = now.split("hq-eyebrow hero-pill bf-wordmark").join("hq-eyebrow hero-pill");
+    if (f === UI) {
+      now = now.replace(/\/\* THE ELEMENT TOKENS \(Block 4b\)[\s\S]*?\*\/\n\n/, "");
+      now = now.split("/* The dashboard's \"BIZFORCE AI\" eyebrow is the wordmark too. */\n.hq-eyebrow.bf-wordmark {\n  color: #22d3ee;\n}\n\n").join("");
+    }
+    if (now !== was) {
+      const a = now.split("\n"), b = was.split("\n"); let i = 0; while (i < a.length && a[i] === b[i]) i++;
+      wrongText.push(f + " line " + (i + 1) + ": " + JSON.stringify((a[i] || "").slice(0, 160)) + " was " + JSON.stringify((b[i] || "").slice(0, 160)));
+    }
+  });
+  check("H3. with no theme, each of the " + changed.length + " changed pages and css/bizforce-ui.css is, element var()s read as their fallbacks, exactly the text it was at " +
+    ELEMENTS_BEFORE + ": every wordmark and button keeps its colours, its place, its size and its motion", changed.length >= 50 && wrongText.length === 0, wrongText.join(" || "));
+  const setWas = gitShow(ELEMENTS_BEFORE, SETTINGS) || "";
+  const pick = (css, re) => ruleBodies(stylesOf(css), re).map(r => r.body).join("|");
+  check("H3. settings.html (which also gains the studio's new sections): its wordmark and its buttons are as they were",
+    unthemed(pick(FILES[SETTINGS], /^\.brand-badge$/)) === pick(setWas, /^\.brand-badge$/) && unthemed(pick(FILES[SETTINGS], /^\.btn$/)) === pick(setWas, /^\.btn$/) &&
+    pick(setWas, /^\.btn$/).length > 0);
+  const oldMist = gitShow(ELEMENTS_BEFORE, PRESENCE) || "", oldGuide = gitShow(ELEMENTS_BEFORE, GUIDE) || "";
+  check("H3. the mist's and the chat glow's CSS, resolved, is exactly today's (scripts/termaximus-presence.js)", !!styleArray(oldMist) && unthemed(styleArray(FILES[PRESENCE]) || "") === styleArray(oldMist));
+  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && unthemed(styleArray(FILES[GUIDE]) || "") === styleArray(oldGuide));
+  const oldStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(oldMist); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
+  const newStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(FILES[PRESENCE]); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
+  const tones = (() => { const m = /var STAR_TONES = (\{[\s\S]*?\});/.exec(FILES[PRESENCE]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
+  const toHex = ch => "#" + ch.split(",").map(x => Number(x).toString(16).padStart(2, "0")).join("");
+  const starWrong = !oldStars || !newStars || !tones || oldStars.length !== newStars.length ? ["tables not read"] : oldStars.map((o, i) => {
+    const nw = newStars[i], t = tones[nw[3]];
+    if (!t) return i + ": no tone";
+    const glow = "rgba(" + t[3].replace(/\s/g, "") + "," + nw[4].toFixed(2) + ")";
+    const same = o[3] === toHex(t[1]) && o[4] === glow && JSON.stringify(o.slice(0, 3).concat(o.slice(5))) === JSON.stringify(nw.slice(0, 3).concat(nw.slice(5)));
+    return same ? null : i + ": " + o[3] + " " + o[4] + " vs " + toHex(t[1]) + " " + glow;
+  }).filter(Boolean);
+  check("H3. the twelve sparkle stars keep their colours, glows, places, sizes and timings (the old table, row by row)", starWrong.length === 0, starWrong.join("; "));
+  const tonesMatchMist = tones && JSON.stringify([tones.star[1], tones.star[3]]) === JSON.stringify(BT.MIST.star) && JSON.stringify([tones.spark[1], tones.spark[3]]) === JSON.stringify(BT.MIST.spark);
+  check("H3. ... and their fallbacks are bf-theme.js's mist stops for the white and gold stars", !!tonesMatchMist);
+
+  // H4: no hard-coded colour left in the elements
+  const MARK_RULE = /^(\.brand-badge|\.site-brand|\.brand h1|\.topbar-brand-text|\.hq-eyebrow\.bf-wordmark)$/;
+  const MARK_EL = /class="(?:[^"]*\s)?(brand-badge|site-brand|topbar-brand-text|bf-wordmark)(?:\s[^"]*)?"|<section class="brand">\s*<h1>/;
+  const markMissing = [];
+  let markPages = 0;
+  pageFiles.forEach(f => {
+    if (!MARK_EL.test(FILES[f])) return;
+    markPages++;
+    const css = stylesOf(FILES[f]) + (/bizforce-ui\.css/.test(FILES[f]) ? "\n" + FILES[UI] : "");
+    const rules = ruleBodies(noComments(css), MARK_RULE).filter(r => /color|background/.test(r.body));
+    const bad = rules.filter(r => BARE.test(r.body.replace(ELEMENT_VAR, "")));
+    const uses = rules.some(r => /var\(--bf-mark-a, /.test(r.body));
+    if (!uses || bad.length) markMissing.push(f + (bad.length ? ": " + bad.map(r => r.sel + "{" + r.body.slice(0, 90) + "}").join(" ") : ": no wordmark token"));
+  });
+  check("H4. the wordmark reads --bf-mark-a / --bf-mark-b, with no colour of its own left, on every one of the " + markPages + " themed pages that show it (the dashboard's topbar and eyebrow, the home page, sign-in and every badge)",
+    markPages >= 50 && markMissing.length === 0, markMissing.join(" || "));
+  const GRAD_BARE = /linear-gradient\(\s*\d+deg\s*,\s*#[0-9a-fA-F]{3,6}\s*,\s*#[0-9a-fA-F]{3,6}\s*\)/;
+  const btnLeft = [];
+  let btnRules = 0;
+  pageFiles.concat([UI]).forEach(f => {
+    const css = noComments(f === UI ? FILES[f] : stylesOf(FILES[f]));
+    ruleBodies(css, /btn|button|cta/i).forEach(r => {
+      if (/theme-btn/.test(r.sel)) return;   // NAMED: digital-cards' card-theme swatches are a card's look
+      if (/var\(--bf-btn-a, /.test(r.body)) { btnRules++; if (/(^|[;\s])color\s*:\s*#/.test(r.body)) btnLeft.push(f + " " + r.sel + " (its lettering)"); return; }
+      if (GRAD_BARE.test(r.body)) btnLeft.push(f + " " + r.sel.slice(-50));
+    });
+  });
+  check("H4. every primary button gradient on every themed page reads --bf-btn-a / --bf-btn-b, and its lettering --bf-btn-text (" + btnRules + " button rules)",
+    btnRules >= 50 && btnLeft.length === 0, btnLeft.join(", "));
+  const guideCss = (() => { try { return vm.runInNewContext("[" + styleArray(FILES[GUIDE]) + "]").join("\n"); } catch (e) { return ""; } })();
+  const GUIDE_RULES = /^(#tmx-guide-tab-text|#tmx-guide-panel \.tmx-guide-header-text|#tmx-guide-panel \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-section--insights \.tmx-guide-label|#tmx-guide-panel \.tmx-guide-list li::marker|#tmx-guide-sheet-title|#tmx-guide-sheet \.tmx-guide-list li::marker)$/;
+  const gRules = ruleBodies(guideCss, GUIDE_RULES);
+  const gBad = gRules.filter(r => BARE.test(r.body.replace(ELEMENT_VAR, "")) || !/var\(--bf-guide-[ab], /.test(r.body));
+  check("H4. the guide's lettering (tab, heading, labels, markers, the phone sheet's title) reads --bf-guide-a / --bf-guide-b, with no colour of its own (" + gRules.length + " rules)",
+    gRules.length === 7 && gBad.length === 0, gBad.map(r => r.sel).join(", "));
+  const mc = mistCss(FILES[PRESENCE]);
+  const MIST_RULES = /^(#tmx-core|#tmx-core::after|#tmx-soul|\.tmx-blob-[abc]|#tmx-gold-[abc]|#tmx-shoot|#tmx-whisper|#tmx-chat-glow|\d+%(, ?\d+%)?)$/;
+  const mRules = ruleBodies(mc.replace(/@keyframes tmx-soul-cycle \{/, ""), MIST_RULES).filter(r => /background|color|box-shadow/.test(r.body) && !/translate|transform|opacity: 0\.\d+; transform/.test(r.body));
+  const mBad = mRules.filter(r => BARE.test(r.body.replace(ELEMENT_VAR, "")));
+  check("H4. every colour the mist draws (core, bloom, colour cycle, three blobs, gold streaks and dust, shooting star, whisper) and the chat glow reads a --tmx- token (" + mRules.length + " rules)",
+    mRules.length >= 14 && mBad.length === 0, mBad.map(r => r.sel + "{" + r.body.slice(0, 80)).join(" || "));
+  const starBuild = (() => { const a = FILES[PRESENCE].indexOf("  STARS.forEach(function (s) {"), b = FILES[PRESENCE].indexOf("  });", a); return a === -1 ? "" : FILES[PRESENCE].slice(a, b); })();
+  check("H4. ... and the stars are built from those tokens only, with no colour literal", starBuild.length > 0 && !BARE.test(starBuild) && /STAR_TONES\[s\[3\]\]/.test(starBuild));
+  const declared = BT.ELEMENT_TOKENS;
+  const used = (FILES[PRESENCE] + guideCss + Object.keys(FILES).filter(f => /\.html$|\.css$/.test(f)).map(f => FILES[f]).join("\n")).match(/var\(--(?:bf-btn-a|bf-btn-b|bf-btn-text|bf-mark-a|bf-mark-b|bf-guide-a|bf-guide-b|tmx-[a-z0-9-]+),/g) || [];
+  const usedNames = Array.from(new Set(used.map(u => u.slice(4, -1)))).concat(["--tmx-star-1", "--tmx-star-2", "--tmx-spark-1", "--tmx-spark-2"]);
+  check("H4. every element token a theme can set is drawn somewhere, and every one drawn is a token a theme sets (" + declared.length + ")",
+    declared.every(t => usedNames.indexOf(t) !== -1) && usedNames.every(t => declared.indexOf(t) !== -1), declared.filter(t => usedNames.indexOf(t) === -1).concat(usedNames.filter(t => declared.indexOf(t) === -1)).join(","));
+  const rr = RULE;
+  check("H4. none of the element tokens has a default in the rule, so each place keeps its own colour", declared.every(t => rr.indexOf(t + ":") === -1));
+
+  // H5: tokens, scopes, mist stops
+  let p = await themePage({ cache: cacheOf(UID, stateOf(null)) });
+  check("H5. with no theme, no element token is set on any page", BT.ELEMENT_TOKENS.every(t => p.get(t) === ""));
+  p.w.close();
+  const tok = BT.tokensFor(T3.theme, null, dom.window);
+  const families = { buttons: ["--bf-btn-a", "--bf-btn-b", "--bf-btn-text"], mark: ["--bf-mark-a", "--bf-mark-b"], guide: ["--bf-guide-a", "--bf-guide-b"], chat: ["--tmx-chat-glow-a", "--tmx-chat-glow-b", "--tmx-chat-glow-c"],
+    mist: ["--tmx-core-1", "--tmx-haze-1", "--tmx-spark-1"] };
+  const hasAll = (get, list) => list.every(t => get(t) !== "" && get(t) !== undefined);
+  check("H5. a theme that colours every part sets each part's tokens: buttons, wordmark, guide text, chat glow, mist",
+    Object.keys(families).every(k => hasAll(x => tok[x], families[k])) && tok["--bf-btn-a"] === "#ff7a18" && tok["--bf-mark-b"] === "#f43f5e" && tok["--tmx-chat-glow-a"] === "249, 115, 22");
+  check("H5. ... and only the mist parts it changed (core, haze, gold sparks): the rest of the mist keeps today's", ["core", "haze", "spark"].every(pt => BT.MIST[pt].every((s0, i) => tok["--tmx-" + pt + "-" + (i + 1)] !== undefined)) &&
+    ["pulse", "star", "dust", "trail", "whisper"].every(pt => BT.MIST[pt].every((s0, i) => tok["--tmx-" + pt + "-" + (i + 1)] === undefined)));
+  const lk = c => (Math.max(...c) + Math.min(...c)) / 2 / 255;
+  const ch = t => t.split(",").map(Number);
+  const stopWrong = [];
+  Object.keys(BT.MIST).forEach(pt => {
+    const key = ch(BT.MIST[pt][BT.MIST[pt].map(s0 => toHex(s0)).indexOf(LIBX.DEFAULT_THEME["mist_" + pt])] || "0,0,0");
+    const C = [34, 197, 94];
+    const got = BT.stopsFor(pt, "#22c55e");
+    BT.MIST[pt].forEach((s0, i) => {
+      const t = lk(ch(s0)) - lk(key);
+      const want = (t > 0 ? C.map(c => c + (t / (1 - lk(key))) * (255 - c)) : t < 0 ? C.map(c => c + (-t / lk(key)) * (0 - c)) : C).map(Math.round).join(", ");
+      if (!got || got[i] !== want) stopWrong.push(pt + "-" + (i + 1) + " " + (got && got[i]) + " vs " + want);
+    });
+    if (BT.stopsFor(pt, LIBX.DEFAULT_THEME["mist_" + pt]) !== null) stopWrong.push(pt + " at its original sets stops");
+  });
+  check("H5. a mist colour gives each of its part's stops that colour moved to the stop's own lightness today (all 37 stops), and its original sets none",
+    stopWrong.length === 0 && Object.keys(BT.MIST).reduce((a, k) => a + BT.MIST[k].length, 0) === 37, stopWrong.slice(0, 4).join("; "));
+  p = await themePage({ url: "https://bizforceai.net/crm.html", cache: cacheOf(UID, stateOf(T1.id, { "crm.html": T3.id, "seo.html": T3.id })) });
+  const crm = p;
+  check("H5. scope \"this page\" / \"selected pages\": CRM, given the parts theme, wears every part's tokens", Object.keys(families).every(k => hasAll(crm.get, families[k])) && crm.get("--bf-btn-a") === "#ff7a18");
+  crm.w.close();
+  p = await themePage({ url: "https://bizforceai.net/agents/seo", cache: cacheOf(UID, stateOf(T1.id, { "crm.html": T3.id, "seo.html": T3.id })) });
+  check("H5. ... and so does the other ticked page (seo)", Object.keys(families).every(k => hasAll(p.get, families[k])));
+  p.w.close();
+  p = await themePage({ url: "https://bizforceai.net/wallet.html", cache: cacheOf(UID, stateOf(T1.id, { "crm.html": T3.id, "seo.html": T3.id })) });
+  check("H5. ... while a page wearing the main theme (corners only) wears no element token", BT.ELEMENT_TOKENS.every(t => p.get(t) === "") && p.get("--bf-glow-a") === "#ff7a18");
+  p.w.BFTheme.applyState(stateOf(T3.id, {}));
+  check("H5. scope \"all pages\": the parts theme as the main theme reaches that page too", Object.keys(families).every(k => hasAll(p.get, families[k])));
+  p.w.BFTheme.applyState(stateOf(null, {}));
+  check("H5. reset everything: every element token is removed again", BT.ELEMENT_TOKENS.every(t => p.get(t) === ""));
+  p.w.close();
+
+  // H6: readability
+  const R = th => BT.readability(Object.assign({}, LIBX.DEFAULT_THEME, th));
+  const okOrig = R({});
+  check("H6. today's look: nothing is changed, and the meter's figures are there (buttons the original; guide " + okOrig.elements.guide.ratio.toFixed(2) + ":1, wordmark " + okOrig.elements.mark.ratio.toFixed(2) + ":1)",
+    okOrig.elements.buttons.original && !okOrig.elementsFixed && okOrig.elements.guide.ratio >= 4.5 && okOrig.elements.mark.ratio >= 3);
+  const grey = R({ btn_a: "#888888", btn_b: "#999999", btn_text: "#999999" });
+  const tg = BT.tokensFor(Object.assign({}, LIBX.DEFAULT_THEME, { btn_a: "#888888", btn_b: "#999999", btn_text: "#999999" }), null, dom.window);
+  check("H6. button text the colour of its button (1:1) is set to near-black, 4.5:1 or more on both ends, and the page gets that (" + grey.elements.buttons.ratio.toFixed(2) + ":1)",
+    grey.elements.buttons.fix === "text" && grey.elements.buttons.text === "#050c1a" && grey.elements.buttons.ratio >= 4.5 && tg["--bf-btn-text"] === "#050c1a");
+  const darkBtn = R({ btn_a: "#1e1b4b", btn_b: "#312e81", btn_text: "#1e1b4b" });
+  check("H6. dark button text on a dark button is set to white", darkBtn.elements.buttons.fix === "text" && darkBtn.elements.buttons.text === "#ffffff" && darkBtn.elements.buttons.ratio >= 4.5);
+  const split = R({ btn_a: "#555555", btn_b: "#bbbbbb", btn_text: "#999999" });
+  check("H6. a gradient neither white nor near-black can read on both ends is shaded, the least that passes, with white text (shade " + split.elements.buttons.shade + ", " + split.elements.buttons.ratio.toFixed(2) + ":1)",
+    split.elements.buttons.fix === "shade" && split.elements.buttons.text === "#ffffff" && split.elements.buttons.ratio >= 4.5 &&
+    BT.contrast(BT.rgbOf("#ffffff"), BT.rgbOf(split.elements.buttons.b)) >= 4.5 && (() => {
+      const less = Math.round(split.elements.buttons.shade * 100 - 1) / 100, b0 = BT.rgbOf("#bbbbbb");
+      return BT.contrast(BT.rgbOf("#ffffff"), b0.map(c => c * (1 - less))) < 4.5;
+    })());
+  const gd = R({ guide_a: "#222244", guide_b: "#a855f7", mark_a: "#101010", mark_b: "#a855f7" });
+  check("H6. guide text too dark for its panel is lightened to 4.5:1 (" + gd.elements.guide.ratio.toFixed(2) + "), and a wordmark too dark for the header to 3:1 (" + gd.elements.mark.ratio.toFixed(2) + ")",
+    gd.elements.guide.fix === "lighten" && gd.elements.guide.ratio >= 4.5 && gd.elements.mark.fix === "lighten" && gd.elements.mark.ratio >= 3 && gd.elementsFixed);
+  const brightBack = R({ middle: "colour", bg: "#ffffff", guide_a: "#7c3aed", guide_b: "#7c3aed", mark_a: "#7c3aed", mark_b: "#7c3aed" });
+  check("H6. on a white middle (the backdrop protected first), guide text and the wordmark still reach their marks", brightBack.elements.guide.ratio >= 4.5 && brightBack.elements.mark.ratio >= 3);
+  check("H6. nothing is refused: the stored colours stay as chosen", !!v({ btn_text: "#999999", btn_a: "#888888", btn_b: "#999999", guide_a: "#222244", mark_a: "#101010" }).theme &&
+    v({ btn_text: "#999999" }).theme.btn_text === "#999999");
+
+  // H7: motion
+  const still = (() => { const m = /var MIST_STILL = ([\s\S]*?);\n/.exec(FILES[PRESENCE]); try { return vm.runInNewContext(m[1]); } catch (e) { return ""; } })();
+  const animated = ruleBodies(mc, /^[#.][a-z-]+(::after)?$/).filter(r => /animation\s*:/.test(r.body)).map(r => r.sel.replace(/-[abc]$/, ""));
+  const stillSel = (/@media \(prefers-reduced-motion: reduce\) \{\s*([^{]+)\{ animation: none !important; \}/.exec(still) || [])[1] || "";
+  const notStilled = Array.from(new Set(animated)).filter(sel => sel !== "#tmx-chat" && stillSel.indexOf(sel) === -1 && !(sel === ".tmx-blob" && /\.tmx-blob\b/.test(stillSel)));
+  check("H7. under prefers-reduced-motion every animated part of the mist and the chat glow stops (" + Array.from(new Set(animated)).length + " animated selectors), the shooting star stays hidden",
+    /style\.textContent = \[[\s\S]*?\]\.join\("\\n"\) \+ MIST_STILL;/.test(FILES[PRESENCE]) && notStilled.length === 0 && /#tmx-shoot \{ animation: none !important; opacity: 0 !important; \}/.test(still), notStilled.join(","));
+  check("H7. ... and the stars stop wandering (the 35 s regrouping is skipped)", /setInterval\(function \(\) \{\n    \/\* Under reduced motion the stars stay where they are\. \*\/\n    if \(window\.matchMedia && window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)\.matches\) return;/.test(FILES[PRESENCE]));
+  check("H7. the mist and the chat glow keep their animations otherwise (the same keyframes and timings as today, H3), and the alive corners are as built (B7)",
+    /animation: tmx-chat-glow-breathe 5s ease-in-out infinite;/.test(mc) && /animation: tmx-core-glow 5\.5s ease-in-out infinite;/.test(mc));
+
+  // H8: public pages and cards
+  const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; return !f || gitShow(ELEMENTS_BEFORE, f) !== FILES[f]; });
+  check("H8. every public page (" + LIBX.UNTHEMED.length + ") is exactly as it was: their wordmarks and buttons keep the owner's look", pubChanged.length === 0, pubChanged.join(","));
+  const dcWas = gitShow(ELEMENTS_BEFORE, "digital-cards.html") || "";
+  check("H8. digital cards keep their own look: the card-theme swatches and the card's watermark are untouched",
+    pick(FILES["digital-cards.html"], /theme-btn/) === pick(dcWas, /theme-btn/) && pick(dcWas, /theme-btn/).length > 0 &&
+    pick(FILES["digital-cards.html"], /^\.card-watermark$/) === pick(dcWas, /^\.card-watermark$/));
+  const pubHit = [];
+  for (const k of ["seller.html", "listing.html", "blogpost.html", "card-view.html", "support.html"]) {
+    const q = await themePage({ url: "https://bizforceai.net/" + k, cache: cacheOf(UID, stateOf(T3.id)) });
+    if (BT.ELEMENT_TOKENS.some(t => q.get(t) !== "")) pubHit.push(k);
+    q.w.close();
+  }
+  p = await themePage({ url: "https://bizforceai.net/profile.html?id=" + OTHER, cache: cacheOf(UID, stateOf(T3.id)) });
+  if (BT.ELEMENT_TOKENS.some(t => p.get(t) !== "")) pubHit.push("profile.html?id=other");
+  p.w.close();
+  check("H8. a public page, or someone else's profile, wears none of the visitor's element colours, even if it loaded the engine", pubHit.length === 0, pubHit.join(","));
+  dom.window.close();
   finish();
 }
 
