@@ -1213,37 +1213,50 @@ const CN = [
   ["ads 6", adsTips, "Open \"Ad Copy\", enter the product, angle, platform and audience", ADS_FALSE,
     () => { const t = (configOf(ADS).tools || []).filter(x => x.label === "Ad Copy")[0];
       return !!t && t.runLabel === "Write the copy" && ["Product", "Angle", "Platform", "Audience"].every(l => t.fields.some(f => f.label === l)); }],
-  ["executive 1",exTips, "the plan runs none of them itself", EXEC_FALSE,
-    () => !!EXEC_PLAN && !/dispatchToolCall\(|handleAiTaskRequest\(/.test(EXEC_PLAN) && /'">Run this assignment<\/button>'/.test(AP_FILE) &&
-      /return fetch\(API_URL \+ "\/api\/assignments\/dispatch", \{/.test(AP_FILE)],
-  ["executive 2", exTips, "is checked against the tools that really exist", EXEC_FALSE,
-    () => /is_dispatchable: !!toolExists && problems\.length === 0 && inputCheck\.missing\.length === 0/.test(EXEC_PLAN) && /<span>Not runnable<\/span>/.test(AP_FILE) &&
-      offers(EXEC, "Executive Plan") && configOf(EXEC).tools[0].fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints"],
-  ["executive 3", exTips, "Begin with the \"Start here\" list", EXEC_FALSE,
-    () => /'<div class="ap-zone-label">Start here<\/div>'/.test(AP_FILE) && /'<div class="ap-zone-label">Order<\/div>'/.test(AP_FILE) &&
-      /Nothing can start yet — every assignment waits on another\./.test(AP_FILE) && /function orderExecutiveAssignments\(assignments\)/.test(SV) && /can_start_now: ordering\.waves\.length \? ordering\.waves\[0\] : \[\],/.test(EXEC_PLAN)],
   /* NAMED (Block 3a, Oct 29 2026): rows "executive 4" ("Assignments marked \"your own work\" are yours to do")
-     and "executive 5" ("only plan assignments can be run") covered a tip replaced by the Headquarters tip,
-     now "executive 8"; their proofs still hold in the code but no tip claims them. */
-  // NEW (Oct 28 2026): the Do tip; goal, horizon and constraints are the Executive Plan tool's fields, the goal alone required.
-  ["executive 6", exTips, "Open \"Executive Plan\", give it the goal", EXEC_FALSE,
-    () => { const t = configOf(EXEC).tools[0];
-      return !!t && t.label === "Executive Plan" && t.runLabel === "Build the plan" && t.fields.map(f => f.label).join("|") === "The goal|Horizon|Constraints" &&
-        t.fields.filter(f => f.required).length === 1 && t.fields[0].required === true; }],
-  /* NAMED (Block 3a, Oct 29 2026): row "executive 7" ("each assignment reads ready, refused, or its own run's
-     result, linked to the run") covered the Plans tip, replaced by the approval-queue tip, now "executive 9".
-     NEW: the Headquarters grid; each tile's five rows, and attention puts stalled and failed first. */
-  ["executive 8", exTips, "each tile shows an agent's Now, Last, Next, Approvals and Score", EXEC_FALSE,
-    () => FILES[EXEC].indexOf('<h2 class="hq-title" id="hqTitle">Headquarters</h2>') !== -1 && FILES[EXEC].indexOf('aria-label="Sorted by attention; press to sort A to Z">Sort: attention</button>') !== -1 &&
-      FILES[EXEC].indexOf('<script src="/scripts/bf-hq.js"></script>') !== -1 &&
-      FILES[HQ_JS].indexOf('b.appendChild(el("span", "hq-now", nowText(a)));') !== -1 &&
-      FILES[HQ_JS].indexOf('[["Last", lastText(a)], ["Next", nextText(a)], ["Approvals", approvalsText(a)], ["Score", scoreText(a)]]') !== -1 &&
-      FILES[HQ_JS].indexOf('if ((a.now && a.now.state === "stalled") || (a.runs && a.runs.failed_7d > 0)) return 0;') !== -1],
-  // NEW: the approval queue; Approve is sent only from a click, and the server re-checks the proposal before acting.
-  ["executive 9", exTips, "nothing is approved until you press \"Approve\"", EXEC_FALSE,
-    () => (FILES[HQ_JS].match(/decide\(/g) || []).length === 2 && FILES[HQ_JS].indexOf("    if (d) decide(d);\n") !== -1 &&
-      FILES[HQ_JS].indexOf('approve.setAttribute("data-hq-decide", "approve");') !== -1 && FILES[HQ_JS].indexOf('"/api/proposals/" + encodeURIComponent(id) + "/" + action') !== -1 &&
-      /app\.post\("\/api\/proposals\/:id\/approve", requireAuth, async function/.test(SV) && /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[/.test(SV)],
+     and "executive 5" ("only plan assignments can be run") covered a tip replaced by the Headquarters tip;
+     row "executive 7" ("each assignment reads ready, refused, or its own run's result") the Plans tip.
+     NAMED (Block 3b, Oct 29 2026): the entry was rewritten for Headquarters' act side, so these rows went with
+     their tips. BEFORE → AFTER, by fragment:
+       executive 1 "the plan runs none of them itself"          → executive 11 "press \"Run next\" for one assignment at a time"
+       executive 2 "is checked against the tools that really exist" → executive 12 "never runs from here; it opens its own page"
+       executive 3 "Begin with the \"Start here\" list"           → executive 13 "Running plans is switched off on the server"
+       executive 6 "Open \"Executive Plan\", give it the goal"    → executive 10 "pick an agent or \"Let the Executive decide\""
+       executive 8 "each tile shows an agent's Now, Last, …"    → executive 14 "changes only that agent's schedule"
+       executive 9 "nothing is approved until you press \"Approve\"" → (folded into 14's "\"Approval queue\" still holds what needs you")
+     Their proofs still hold in the code (checkExecutiveHQ H1 and H4 keep the grid and the queue); no tip claims them now. */
+  // NEW (Block 3b): the Do tip. Command, its agent picker headed by "Let the Executive decide", and Send, the only sender.
+  ["executive 10", exTips, "pick an agent or \"Let the Executive decide\"", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<h3 class="hq-console-title" id="hqConsoleTitle">Command</h3>') !== -1 &&
+      FILES[EXEC].indexOf('<button type="button" class="hq-btn hq-btn-go hq-send" id="hqSend">Send</button>') !== -1 &&
+      FILES[HQ_JS].indexOf('var first = el("option", null, "Let the Executive decide");') !== -1 &&
+      (FILES[HQ_JS].match(/\bsend\(/g) || []).length === 2 && FILES[HQ_JS].indexOf('if (t && t.closest && t.closest("#hqSend")) { send(); return; }') !== -1 &&
+      FILES[HQ_JS].indexOf('api("POST", "/api/ai/tasks", { agent_type: agent, prompt: text })') !== -1 &&
+      FILES[HQ_JS].indexOf('api("POST", "/api/agents/executive/plan", body)') !== -1],
+  // NEW (Block 3b): one dispatch per press; the server mints the chain at depth 0; runNext is reached only from the click.
+  ["executive 11", exTips, "press \"Run next\" for one assignment at a time", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<h3 class="hq-h" id="hqPlansTitle">Plan runner</h3>') !== -1 &&
+      FILES[HQ_JS].indexOf('act.dispatching[plan.id] ? "Running…" : "Run next"') !== -1 && (FILES[HQ_JS].match(/runNext\(/g) || []).length === 2 &&
+      FILES[HQ_JS].indexOf('api("POST", "/api/assignments/dispatch", { executive_task_id: planId, assignment_id: Number(next.id) })') !== -1 &&
+      /var chainId = crypto\.randomUUID\(\);/.test(SV) && /chain: \{ id: chainId, depth: 0, callsSoFar: 0 \}/.test(SV)],
+  // NEW (Block 3b): every tool that acts is the server's own list, and Headquarters only opens its page.
+  ["executive 12", exTips, "never runs from here; it opens its own page", EXEC_FALSE,
+    () => { const hq = (/var ACTING = (\{[\s\S]*?\n  \});/.exec(FILES[HQ_JS]) || [])[1] || "";
+      const server = ((/var CHAIN_NON_DISPATCHABLE_TOOLS = \[([\s\S]*?)\];/.exec(SV) || [])[1] || "").match(/"[a-z-]+\/[a-z-]+"/g) || [];
+      return server.length >= 7 && server.every(k => hq.indexOf(k + ": {") !== -1) && (hq.match(/"[a-z-]+\/[a-z-]+": \{/g) || []).length === server.length &&
+        FILES[HQ_JS].indexOf('name: "This one goes through approval on its own page."') !== -1; }],
+  // NEW (Block 3b): the If-stuck tip; the server says chaining's state, and the button is disabled with those words.
+  ["executive 13", exTips, "Running plans is switched off on the server", EXEC_FALSE,
+    () => /chaining_on: agentChainingEnabled\(\),/.test(SV) && FILES[HQ_JS].indexOf('var off = cc && cc.chaining_on === false;') !== -1 &&
+      FILES[HQ_JS].indexOf("run.disabled = off || !next || !!act.dispatching[plan.id];") !== -1 &&
+      FILES[HQ_JS].indexOf('bar.appendChild(el("span", "hq-muted", "Running plans is switched off on the server"));') !== -1 &&
+      FILES[HQ_JS].indexOf("function refusalOf(status, body) {") !== -1],
+  // NEW (Block 3b): Pause and Resume are the schedule routes, scoped to the caller; the approval queue is still on the page.
+  ["executive 14", exTips, "changes only that agent's schedule", EXEC_FALSE,
+    () => FILES[HQ_JS].indexOf('api("PUT", "/api/agent-schedules/" + encodeURIComponent(type) + "/" + what)') !== -1 &&
+      FILES[HQ_JS].indexOf('paused ? "Resume schedule" : "Pause schedule"') !== -1 &&
+      /app\.put\("\/api\/agent-schedules\/:agent_type\/pause", requireAuth,/.test(SV) && /app\.put\("\/api\/agent-schedules\/:agent_type\/resume", requireAuth,/.test(SV) &&
+      FILES[EXEC].indexOf('<h3 class="hq-h" id="hqQueueTitle">Approval queue</h3>') !== -1],
   ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],

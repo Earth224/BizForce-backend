@@ -36498,6 +36498,9 @@ app.get("/api/command-center", requireAuth, async function (req, res, next) {
     var sections = await Promise.all(reads);
     var body = {
       generated_at: now.toISOString(),
+      // Whether a plan's assignment can be dispatched at all (ENABLE_AGENT_CHAINING exactly "true"), so
+      // Headquarters can say so before a click rather than after a recorded refusal. A switch, not a figure.
+      chaining_on: agentChainingEnabled(),
       needs_you: sections[0],
       plans: sections[1],
       activity: sections[2],

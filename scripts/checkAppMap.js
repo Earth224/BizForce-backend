@@ -227,6 +227,11 @@ console.log("\n══ M4. routes, gates and tips ══");
     JSON.stringify(mapped("executive-agent.html", "#hqSort")) === JSON.stringify(["#hqSort", "Sorted by attention; press to sort A to Z", "b"]) &&
     JSON.stringify(mapped("calendar.html", "#calAgentRunsBtn")) === JSON.stringify(["#calAgentRunsBtn", "Agent runs", "b"]),
     JSON.stringify([mapped("executive-agent.html", "#hqSort"), mapped("calendar.html", "#calAgentRunsBtn")]));
+  // Block 3b (Oct 29 2026): Headquarters' command controls, Send and Speak, are in the map as the page labels them.
+  check("M4. Headquarters' command controls (executive-agent.html #hqSend \"Send\", #hqMic \"Speak\") are in the map",
+    JSON.stringify(mapped("executive-agent.html", "#hqSend")) === JSON.stringify(["#hqSend", "Send", "b"]) &&
+    JSON.stringify(mapped("executive-agent.html", "#hqMic")) === JSON.stringify(["#hqMic", "Speak", "b"]),
+    JSON.stringify([mapped("executive-agent.html", "#hqSend"), mapped("executive-agent.html", "#hqMic")]));
   const vm = require("vm");
   const g = readFront("scripts/termaximus-guide.js");
   const i = g.indexOf("var PAGE_GUIDANCE = {"), j = g.indexOf("\n  };", i);
