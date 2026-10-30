@@ -72,6 +72,16 @@
            wears no element token from the visitor's theme.
         C12 … C19 the studio's new sections, presets, Match my theme, Match
            everything, the resets, the preview and the meter.
+     I  Block 4c, the theme routes reachable. Live, "Save as…" got a 404: the
+        studio's base was window.API_URL or "", settings.html keeps API_URL
+        inside its own function, so every request was a relative /api/themes,
+        sent to Netlify. The fake pages here answer ONLY at the API's origin and
+        a route server.js registers (anything else is a stray: I1), and the
+        studio's fake page declares API_URL as settings.html does. I2 parses
+        every request from the studio's and bf-theme.js's code and matches it,
+        method and path, to server.js's routes before its catch-all 404; I3
+        runs server.js's CORS middleware for bizforceai.net's preflight of each
+        method; I1 runs every route in jsdom; I4 a failure names its status.
 
    MUTATE=<name> edits the files IN MEMORY; MUTATE=all runs each in its own
    process. BIZFORCE_FRONTEND_DIR overrides the frontend location. No network,
@@ -100,6 +110,15 @@ const PUBLIC_WITH_BACKDROP = ["seller.html", "blogindex.html", "blogpost.html", 
 const UID = "53e6b330-d31c-4958-a10b-516397e7b9c9";
 const OTHER = "11111111-2222-4333-8444-555555555555";
 const TAG = "<script src=\"/scripts/bf-theme.js\"></script>";
+/* The API's one origin. The fake pages below answer ONLY there, at a path
+   server.js registers; anything else (a relative "/api/themes", which goes to
+   Netlify, or a path the server lacks) is recorded in STRAY, answered as
+   Netlify answers it (404, not JSON), and fails I1. */
+const API_ORIGIN = "https://dynamic-prosperity-production-5382.up.railway.app";
+const STRAY = [];
+const HIT = new Set();   // "METHOD /route/:path" the studio reached in jsdom
+let OPEN_STUDIO = null;  // C's studio page opener, for I
+const NETLIFY_404 = () => ({ ok: false, status: 404, json: async () => { throw new SyntaxError("Unexpected token '<'"); } });
 
 const MUTATIONS = {
   // an inline backdrop left on one page (A)
@@ -152,7 +171,19 @@ const MUTATIONS = {
   // the visitor's theme on a public page (B6, H8)
   "public-page-visitor-theme": [[THEME, "    if (UNTHEMED.indexOf(key) !== -1) return true;", "    if (false) return true;"]],
   // bf_theme surviving sign-out (G)
-  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\"\n  ];", "    \"mcTargetGoalConversions\"\n  ];"]]
+  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\"\n  ];", "    \"mcTargetGoalConversions\"\n  ];"]],
+  // ── Block 4c: the theme routes reachable ──
+  // the live bug: the studio's base back to window.API_URL or "", a relative /api/themes (B, C, I)
+  "relative-themes-url": [[STUDIO, "  function api() { return T.apiOrigin(); }",
+    "  function api() { return (typeof window.API_URL === \"string\" && window.API_URL) || \"\"; }"]],
+  // a studio path the server does not register (I2, I1)
+  "studio-path-unregistered": [[STUDIO, "call(\"POST\", \"/api/themes/reset\", { scope: \"all\" }, \"reset\")", "call(\"POST\", \"/api/themes/reset-all\", { scope: \"all\" }, \"reset\")"]],
+  // the right path at the wrong method (I2, I1, C6)
+  "studio-method-mismatch": [[STUDIO, "call(\"PUT\", \"/api/themes/apply\", body, \"apply\")", "call(\"POST\", \"/api/themes/apply\", body, \"apply\")"]],
+  // PUT missing from CORS (I3)
+  "cors-put-missing": [[SERVER, "res.setHeader(\"Access-Control-Allow-Methods\", \"GET,POST,PUT,PATCH,DELETE,OPTIONS\");", "res.setHeader(\"Access-Control-Allow-Methods\", \"GET,POST,PATCH,DELETE,OPTIONS\");"]],
+  // a failure that hides its status again (I4)
+  "error-hides-status": [[STUDIO, "throw new Error(\"Couldn't \" + what + \" (\" + res.status + (res.ok ? \", not JSON\" : \"\") + \"). Try again.\");", "throw new Error(\"That did not work. Try again.\");"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -375,6 +406,8 @@ async function themePage(o) {
       w.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {} });
       w.fetch = (u, opts) => {
         calls.push({ u: String(u), opts });
+        const method = ((opts && opts.method) || "GET").toUpperCase();
+        if (String(u) !== API_ORIGIN + "/api/themes" || method !== "GET") { STRAY.push("bf-theme.js " + method + " " + u); return Promise.resolve(NETLIFY_404()); }
         const p = Promise.resolve({ ok: true, json: async () => JSON.parse(JSON.stringify(o.answer || stateOf(null))) });
         p.catch(() => {});
         return p;
@@ -398,7 +431,9 @@ const cacheOf = (uid, state, ageMs) => ({ v: 1, uid: uid, fetched_at: Date.now()
   check("B2. with no cache and no theme, nothing is set: the page's own look", p.get("--bf-glow-a") === "" && p.alive() === null);
   p = await themePage({ cache: cacheOf(OTHER, stateOf(T1.id)), answer: stateOf(null) });
   check("B3. another member's cache is never applied", p.w.__firstBody.glowA === "" && p.get("--bf-glow-a") === "");
-  check("B3. ... and the member's own themes are fetched instead", p.calls.length === 1 && /\/api\/themes$/.test(p.calls[0].u) &&
+  /* NAMED BEFORE → AFTER (Block 4c). BEFORE: the URL had only to end in /api/themes. AFTER: it is exactly the API's
+     origin + /api/themes; a relative or foreign one is a stray (I1). */
+  check("B3. ... and the member's own themes are fetched instead, at " + API_ORIGIN + "/api/themes", p.calls.length === 1 && p.calls[0].u === API_ORIGIN + "/api/themes" &&
     /^Bearer /.test(p.calls[0].opts.headers.Authorization));
   p = await themePage({ token: null, cache: cacheOf(UID, stateOf(T1.id)) });
   /* NAMED BEFORE → AFTER (Block 4b). BEFORE: "signed out, the device's cache is shown and nothing is fetched"
@@ -599,23 +634,35 @@ async function studio() {
   const panelEnd = FILES[SETTINGS].indexOf("</section>", panelAt) + "</section>".length;
   check("C0. settings.html has the Theme panel, and a Theme entry in its navigation",
     panelAt !== -1 && /<button type="button" class="sidebar-item" data-target="theme">\s*<span>Theme<\/span>/.test(FILES[SETTINGS]));
-  check("C0. settings.html loads bf-theme-studio.js after its own script, and #theme opens the section",
-    FILES[SETTINGS].indexOf("<script src=\"/scripts/bf-theme-studio.js\"></script>") > FILES[SETTINGS].indexOf("var API_URL") &&
+  /* NAMED BEFORE → AFTER (Block 4c). BEFORE: "loads bf-theme-studio.js after its own script" (after the text
+     "var API_URL"), and the fake page declared a GLOBAL var API_URL = "https://api.test" — which the real page does not,
+     so a studio relying on window.API_URL passed here and failed live. AFTER: the studio loads after bf-theme.js (whose
+     apiOrigin it uses), and the fake page declares API_URL exactly as settings.html does: inside its own function. */
+  const settingsDecl = /<script>\s*\(function \(\) \{\s*var API_URL = "([^"]+)";/.exec(FILES[SETTINGS]);
+  check("C0. settings.html loads bf-theme-studio.js after bf-theme.js, and #theme opens the section",
+    FILES[SETTINGS].indexOf("<script src=\"/scripts/bf-theme-studio.js\"></script>") > FILES[SETTINGS].indexOf(TAG) && FILES[SETTINGS].indexOf(TAG) !== -1 &&
     /if \(window\.location\.hash === "#theme"\) activateSection\("theme"\);/.test(FILES[SETTINGS]));
+  check("C0. settings.html keeps its API_URL inside its own function (so window.API_URL is unset where the studio runs), and this fake page does the same",
+    !!settingsDecl && settingsDecl[1] === API_ORIGIN && !/^var API_URL\s*=/m.test(FILES[SETTINGS]));
   const panel = FILES[SETTINGS].slice(panelAt, panelEnd);
   async function open(o) {
     const calls = [];
     const html = "<!DOCTYPE html><html><head><script>" + FILES[THEME] + "</script></head><body>" + panel +
-      "<script>var API_URL = \"https://api.test\";</script><script>" + FILES[STUDIO] + "</script></body></html>";
+      "<script>(function () { var API_URL = \"" + API_ORIGIN + "\"; })();</script><script>" + FILES[STUDIO] + "</script></body></html>";
     const dom = new JSDOM(html, {
       url: o.url || "https://bizforceai.net/settings.html?page=crm.html", runScripts: "dangerously", pretendToBeVisual: true,
       beforeParse(w) {
         w.localStorage.setItem("bf_token", tokenFor(UID));
         w.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {} });
         w.fetch = (u, opts) => {
-          const url = new URL(String(u));
           const method = ((opts && opts.method) || "GET").toLowerCase();
+          if (String(u).indexOf(API_ORIGIN + "/") !== 0) { calls.push(method + " " + u); STRAY.push("studio " + method.toUpperCase() + " " + u + " (not the API's origin)"); return Promise.resolve(NETLIFY_404()); }
+          const url = new URL(String(u));
           calls.push(method + " " + url.pathname);
+          const hit = match(lifted.routes, method, url.pathname);
+          if (!hit) STRAY.push("studio " + method.toUpperCase() + " " + url.pathname + " (not a route in server.js)");
+          else HIT.add(method.toUpperCase() + " " + hit.r.path);
+          if (o.netlify && method !== "get") return Promise.resolve(NETLIFY_404());
           const body = opts && typeof opts.body === "string" ? JSON.parse(opts.body) : undefined;
           const p = (url.pathname === "/api/themes" && method === "get" && o.failGet ? Promise.resolve({ status: 500, body: { error: "down" } }) :
             callRoute(lifted, method, url.pathname, body)).then(r => ({ ok: r.status < 400, status: r.status, json: async () => r.body }));
@@ -627,6 +674,7 @@ async function studio() {
     await new Promise(r => setTimeout(r, 40));
     return { w: dom.window, d: dom.window.document, calls, dom };
   }
+  OPEN_STUDIO = open;
   const settle = () => new Promise(r => setTimeout(r, 30));
   const st = await open({});
   const $ = id => st.d.getElementById(id);
@@ -1298,7 +1346,138 @@ async function elements() {
   p.w.close();
   check("H8. a public page, or someone else's profile, wears none of the visitor's element colours, even if it loaded the engine", pubHit.length === 0, pubHit.join(","));
   dom.window.close();
+  if (OPEN_STUDIO) await reach(OPEN_STUDIO); else check("I0. the studio could be opened for I", false);
   finish();
+}
+
+/* ── I. Block 4c: every theme request reaches the API ──────────────────────
+   The live bug: on bizforceai.net "Save as…" said "That did not work. Try
+   again." with a 404 for api/themes. The studio's base was window.API_URL or
+   "", and settings.html keeps its API_URL inside its own function, so every
+   request was a relative /api/themes, sent to Netlify. I proves the studio and
+   bf-theme.js call the API's origin at the exact paths and methods server.js
+   registers (parsed from server.js, before its catch-all 404), that CORS lets
+   bizforceai.net send each of those methods with Authorization, and that a
+   failure names its status. */
+function serverRoutes() {
+  const src = FILES[SERVER], out = [], re = /\napp\.(get|post|put|delete|patch)\(\s*"([^"]+)"/g;
+  let m;
+  while ((m = re.exec(src))) out.push({ method: m[1].toUpperCase(), path: m[2], at: m.index });
+  return out;
+}
+/* The route Express would run for METHOD url: the first registered one that matches. */
+function expressPick(routes, method, url) {
+  return routes.find(r => r.method === method && new RegExp("^" + r.path.replace(/:[A-Za-z_]+/g, "[^/]+") + "$").test(url)) || null;
+}
+function studioRequests() {
+  const out = [], src = FILES[STUDIO].replace(/\/\*[\s\S]*?\*\//g, "");
+  let m;
+  const reCall = /\bcall\("(GET|POST|PUT|DELETE|PATCH)", "(\/api\/[^"]*)"(\s*\+\s*encodeURIComponent\([^)]*\))?/g;
+  while ((m = reCall.exec(src))) out.push({ from: "bf-theme-studio.js", method: m[1], path: m[2] + (m[3] ? ":id" : "") });
+  const reSend = /\bsend\("[^"]+", "(\/api\/[^"]*)", \{ method: "(GET|POST|PUT|DELETE|PATCH)"/g;
+  while ((m = reSend.exec(src))) out.push({ from: "bf-theme-studio.js", method: m[2], path: m[1] });
+  const literals = (src.match(/"\/api\//g) || []).length;
+  const tsrc = FILES[THEME].replace(/\/\*[\s\S]*?\*\//g, "");
+  const reTheme = /\bfetch\(origin \+ "(\/api\/[^"]*)", \{ headers:/g;
+  while ((m = reTheme.exec(tsrc))) out.push({ from: "bf-theme.js", method: "GET", path: m[1] });
+  return { calls: out, studioLiterals: literals, themeLiterals: (tsrc.match(/"\/api\//g) || []).length };
+}
+async function reach(open) {
+  console.log("\n══ I. every theme request reaches the API: its origin, server.js's exact paths and methods, CORS, a failure that names its status ══");
+  const routes = serverRoutes();
+  const catchAll = FILES[SERVER].indexOf("\napp.use(function (req, res) {\n  return res.status(404)");
+  const themeRoutes = routes.filter(r => r.path.indexOf("/api/themes") === 0);
+  check("I2. server.js registers the seven theme routes, each before its catch-all 404",
+    themeRoutes.length === 7 && catchAll !== -1 && themeRoutes.every(r => r.at < catchAll), themeRoutes.map(r => r.method + " " + r.path).join(", "));
+  const req = studioRequests();
+  const sample = T1.id;
+  const picked = req.calls.map(c => {
+    const url = c.path.replace(":id", sample);
+    const r = expressPick(routes, c.method, url);
+    return Object.assign({}, c, { route: r });
+  });
+  const missing = picked.filter(c => !c.route || c.route.path.indexOf("/api/themes") !== 0 || c.route.at > catchAll ||
+    (c.path.endsWith(":id") && !/\/:[A-Za-z_]+$/.test(c.route.path)));
+  check("I2. every request the studio and bf-theme.js make (" + picked.length + ", parsed from their code) is a route server.js registers, at that method and path",
+    picked.length >= 9 && missing.length === 0 && req.studioLiterals === picked.filter(c => c.from === "bf-theme-studio.js").length &&
+    req.themeLiterals === picked.filter(c => c.from === "bf-theme.js").length,
+    missing.map(c => c.from + " " + c.method + " " + c.path + " → " + (c.route ? c.route.method + " " + c.route.path : "no route")).join("; ") +
+    " | literals " + req.studioLiterals + "/" + req.themeLiterals + ", parsed " + picked.length);
+  console.log("      " + picked.map(c => c.method + " " + c.path + " → " + (c.route ? c.route.path : "none")).join("\n      "));
+  check("I2. PUT /api/themes/apply is registered before PUT /api/themes/:id, so \"apply\" is never read as an id",
+    (expressPick(routes, "PUT", "/api/themes/apply") || {}).path === "/api/themes/apply");
+  check("I2. the studio sends every request through one function (send), and bf-theme.js through apiOrigin: one fetch( each",
+    (FILES[STUDIO].match(/\bfetch\(/g) || []).length === 1 && /return fetch\(base \+ path, opts\)/.test(FILES[STUDIO]) &&
+    (FILES[THEME].match(/\bfetch\(/g) || []).length === 1);
+
+  // CORS, run: the middleware lifted from server.js answers bizforceai.net's preflight for each method
+  const src = FILES[SERVER];
+  const ca = src.indexOf("function corsAllowedOrigins(env) {");
+  const mwAt = src.indexOf("app.use(function (req, res, next) {\n  const origin = req.headers.origin;", ca);
+  const mwEnd = src.indexOf("\n  next();\n});\n", mwAt);
+  let mw = null;
+  try {
+    const ctx = { isProductionEnv: () => true, process: { env: {} }, app: { use(fn) { mw = fn; } } };
+    vm.createContext(ctx);
+    vm.runInContext(src.slice(ca, mwEnd + "\n  next();\n});\n".length), ctx);
+  } catch (e) { mw = null; }
+  const methods = Array.from(new Set(picked.map(c => c.method)));
+  const corsBad = [];
+  if (!mw || ca === -1 || mwAt === -1 || mwEnd === -1) corsBad.push("the CORS middleware was not found in server.js");
+  else for (const meth of methods.concat(["OPTIONS"])) {
+    const res = { headers: {}, code: 200, ended: false, setHeader(k, v) { this.headers[k.toLowerCase()] = String(v); }, status(c) { this.code = c; return this; }, end() { this.ended = true; } };
+    let nexted = false;
+    mw({ method: "OPTIONS", headers: { origin: "https://bizforceai.net", "access-control-request-method": meth, "access-control-request-headers": "authorization,content-type" } }, res, () => { nexted = true; });
+    const allowM = (res.headers["access-control-allow-methods"] || "").split(",").map(x => x.trim().toUpperCase());
+    const allowH = (res.headers["access-control-allow-headers"] || "").split(",").map(x => x.trim().toLowerCase());
+    if (res.headers["access-control-allow-origin"] !== "https://bizforceai.net" || allowM.indexOf(meth) === -1 ||
+      allowH.indexOf("authorization") === -1 || allowH.indexOf("content-type") === -1 || res.code !== 204 || !res.ended || nexted) corsBad.push(meth + " " + JSON.stringify(res.headers));
+  }
+  check("I3. CORS (server.js's middleware, run): bizforceai.net's preflight is answered 204 for " + methods.join(", ") + ", with Authorization and Content-Type allowed",
+    corsBad.length === 0 && methods.length >= 4 && /\nconst allowedOrigins = corsAllowedOrigins\(process\.env\);\n\napp\.use\(function \(req, res, next\) \{/.test(src) &&
+    mwAt < themeRoutes[0].at && !/app\.use\(cors\(/.test(src), corsBad.join("; "));
+
+  // the studio, run: every route it calls is reached at the API's origin
+  const st = await open({});
+  const $ = id => st.d.getElementById(id);
+  const settle = () => new Promise(r => setTimeout(r, 30));
+  $("tsName").value = "Reach";
+  $("tsSaveAs").click(); await settle();
+  $("tsUpdate").click(); await settle();
+  const li = () => Array.prototype.filter.call(st.d.querySelectorAll("#tsSavedList li"), x => /Reach/.test(x.textContent))[0];
+  const btn = (row, text) => row && Array.prototype.filter.call(row.querySelectorAll("button"), b => b.textContent === text)[0];
+  const rb = btn(li(), "Rename"); if (rb) rb.click();
+  const input = st.d.querySelector("#tsSavedList li input[type=text]");
+  if (input) input.value = "Reached";
+  const sb = btn(input && input.parentNode, "Save name"); if (sb) sb.click(); await settle();
+  const renamed = /Renamed\./.test($("tsMsg").textContent);
+  st.w.URL.createObjectURL = () => "blob:x"; st.w.URL.revokeObjectURL = () => {};
+  st.w.HTMLCanvasElement.prototype.getContext = () => { throw new Error("no canvas in jsdom"); };   // the studio then assumes the brightest
+  st.w.Image = function () { const img = this; setTimeout(() => img.onload && img.onload(), 0); };
+  Object.defineProperty($("tsPhotoFile"), "files", { configurable: true, value: [new st.w.File([Buffer.from([0xff, 0xd8, 0xff, 0xe0])], "a.jpg", { type: "image/jpeg" })] });
+  st.d.getElementById("tsPhotoFile").dispatchEvent(new st.w.Event("change", { bubbles: true })); await settle(); await settle();
+  const delRow = Array.prototype.filter.call(st.d.querySelectorAll("#tsSavedList li"), x => /Reached/.test(x.textContent))[0];
+  const db = btn(delRow, "Delete"); if (db) { db.click(); db.click(); } await settle();
+  const deleted = /deleted\./.test($("tsMsg").textContent);
+  st.w.close();
+  const needed = Array.from(new Set(picked.filter(c => c.route).map(c => c.method + " " + c.route.path)));
+  const notHit = needed.filter(x => !HIT.has(x));
+  check("I1. run in jsdom, the studio reached every one of those routes (" + needed.length + ") at " + API_ORIGIN + " — save as, save, rename, the photo, delete, apply, reset, load",
+    notHit.length === 0 && renamed && deleted, "not reached: " + notHit.join(", ") + " | renamed " + renamed + ", deleted " + deleted);
+
+  // a failure names its status
+  const nf = await open({ netlify: true });
+  nf.d.getElementById("tsSaveAs").click(); await settle();
+  const nfMsg = nf.d.getElementById("tsMsg").textContent;
+  nf.w.close();
+  check("I4. a 404 that is not the API's answer (Netlify's) says so with its status: \"Couldn't save (404). Try again.\"", nfMsg === "Couldn't save (404). Try again.", nfMsg);
+  const fg = await open({ failGet: true });
+  const fgMsg = fg.d.getElementById("tsMsg").textContent;
+  fg.w.close();
+  check("I4. the server's own words are kept, with the status: \"down (500)\"", fgMsg === "down (500)", fgMsg);
+
+  check("I1. no request from bf-theme.js or the studio, in any test above, went anywhere but the API's origin at a route server.js registers",
+    STRAY.length === 0, Array.from(new Set(STRAY)).slice(0, 8).join("; "));
 }
 
 let finished = false;
