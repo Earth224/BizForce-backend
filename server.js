@@ -7361,6 +7361,219 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── Member themes (lib/themes.js, migration 154) ─────────────────────────
+   Settings → Theme saves named looks and says which page wears which.
+   Every route is requireAuth and limited per account, and answers only the
+   caller's own rows. A theme is validated against lib/themes.js's closed
+   schema before it is written: never raw CSS, never a URL, only the member's
+   own photo path. Page keys are the app map's themed pages. The photo is
+   uploaded through this server (not a signed URL) so its bytes are checked:
+   at most 5 MB, and a JPEG, PNG or WebP by its first bytes as well as its
+   label. scripts/checkThemes.js runs every rule here against a fake API. */
+const memberThemes = require("./lib/themes");
+const THEME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/* Reads: every page asks once a minute at most (scripts/bf-theme.js). */
+const themesLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  keyGenerator: function (req) { return "themes:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many theme requests. Try again in a few minutes.", reason: "rate_limited" }
+});
+const themesWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "themes-write:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many theme changes. Try again in a few minutes.", reason: "rate_limited" }
+});
+const themePhotoLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyGenerator: function (req) { return "theme-photo:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Twenty backdrop photos an hour at most. Try again later.", reason: "rate_limited" }
+});
+const themePhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: memberThemes.PHOTO_MAX_BYTES, files: 1 }
+});
+
+async function readThemeState(userId) {
+  const [list, prefs] = await Promise.all([
+    supabase.from("member_themes").select("id, name, theme, created_at, updated_at")
+      .eq("user_id", userId).order("created_at", { ascending: true }),
+    supabase.from("user_preferences").select("default_theme_id, page_themes")
+      .eq("user_id", userId).maybeSingle()
+  ]);
+  if (list.error) throw list.error;
+  if (prefs.error) throw prefs.error;
+  return { themes: list.data || [], prefs: prefs.data || { default_theme_id: null, page_themes: {} } };
+}
+
+function themeStateReply(state) {
+  const allowed = memberThemes.themedPages(APP_MAP);
+  const ids = state.themes.map(function (t) { return t.id; });
+  return {
+    themes: state.themes.map(function (t) {
+      const photo = t.theme && t.theme.photo;
+      return {
+        id: t.id, name: t.name, theme: t.theme, created_at: t.created_at, updated_at: t.updated_at,
+        photo_url: photo ? supabase.storage.from("bf-public").getPublicUrl(photo).data.publicUrl : null
+      };
+    }),
+    default_theme_id: ids.indexOf(state.prefs.default_theme_id) !== -1 ? state.prefs.default_theme_id : null,
+    page_themes: memberThemes.cleanPageThemes(state.prefs.page_themes, allowed, ids),
+    pages: memberThemes.themedPageList(APP_MAP)
+  };
+}
+
+async function writeThemePrefs(userId, prefs) {
+  const { error } = await supabase.from("user_preferences").upsert({
+    user_id: userId,
+    default_theme_id: prefs.default_theme_id,
+    page_themes: prefs.page_themes
+  }, { onConflict: "user_id" });
+  if (error) throw error;
+}
+
+/* A photo no saved theme uses any more is removed. A failure is logged and
+   left: the account delete still finds it under theme-photos/<id>/. */
+async function removeUnusedThemePhotos(userId, candidates) {
+  const state = await readThemeState(userId);
+  const used = memberThemes.photosIn(state.themes);
+  const unused = (candidates || []).filter(function (p) { return p && used.indexOf(p) === -1 && memberThemes.ownPhotoPath(p, userId); });
+  if (!unused.length) return;
+  const { error } = await supabase.storage.from("bf-public").remove(unused);
+  if (error) console.error("[themes] unused photo removal failed for user " + userId + ": " + (error.message || error));
+}
+
+app.get("/api/themes", requireAuth, themesLimiter, async function (req, res, next) {
+  try {
+    return res.json(themeStateReply(await readThemeState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/themes", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    const name = memberThemes.validateName(req.body && req.body.name);
+    if (name.error) return res.status(400).json({ error: name.error });
+    const checked = memberThemes.validateTheme(req.body && req.body.theme, req.user.id);
+    if (checked.error) return res.status(400).json({ error: checked.error, key: checked.key });
+    const { count, error: countError } = await supabase.from("member_themes")
+      .select("id", { count: "exact", head: true }).eq("user_id", req.user.id);
+    if (countError) throw countError;
+    if ((count || 0) >= memberThemes.MAX_THEMES) {
+      return res.status(400).json({ error: "You can keep " + memberThemes.MAX_THEMES + " themes. Delete one to save another." });
+    }
+    const { data, error } = await supabase.from("member_themes")
+      .insert({ user_id: req.user.id, name: name.name, theme: checked.theme })
+      .select("id").single();
+    if (error) throw error;
+    const reply = themeStateReply(await readThemeState(req.user.id));
+    reply.created_id = data.id;
+    return res.status(201).json(reply);
+  } catch (error) { next(error); }
+});
+
+/* Registered before PUT /api/themes/:id, so "apply" is never read as an id. */
+app.put("/api/themes/apply", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    const state = await readThemeState(req.user.id);
+    const ids = state.themes.map(function (t) { return t.id; });
+    const next_ = memberThemes.applyScope(state.prefs, req.body, memberThemes.themedPages(APP_MAP), ids);
+    if (next_.error) return res.status(400).json({ error: next_.error });
+    await writeThemePrefs(req.user.id, next_.prefs);
+    return res.json(themeStateReply(await readThemeState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+app.put("/api/themes/:id", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    if (!THEME_ID_PATTERN.test(req.params.id)) return res.status(404).json({ error: "Theme not found." });
+    const updates = { updated_at: new Date().toISOString() };
+    if (req.body && req.body.name !== undefined) {
+      const name = memberThemes.validateName(req.body.name);
+      if (name.error) return res.status(400).json({ error: name.error });
+      updates.name = name.name;
+    }
+    if (req.body && req.body.theme !== undefined) {
+      const checked = memberThemes.validateTheme(req.body.theme, req.user.id);
+      if (checked.error) return res.status(400).json({ error: checked.error, key: checked.key });
+      updates.theme = checked.theme;
+    }
+    if (!updates.name && !updates.theme) return res.status(400).json({ error: "Send a new name or a new theme." });
+    const { data: before, error: readError } = await supabase.from("member_themes")
+      .select("theme").eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (readError) throw readError;
+    if (!before) return res.status(404).json({ error: "Theme not found." });
+    const { error } = await supabase.from("member_themes").update(updates).eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    if (updates.theme) await removeUnusedThemePhotos(req.user.id, [before.theme && before.theme.photo]);
+    return res.json(themeStateReply(await readThemeState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/themes/:id", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    if (!THEME_ID_PATTERN.test(req.params.id)) return res.status(404).json({ error: "Theme not found." });
+    const { data: before, error: readError } = await supabase.from("member_themes")
+      .select("id, theme").eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (readError) throw readError;
+    if (!before) return res.status(404).json({ error: "Theme not found." });
+    const { error } = await supabase.from("member_themes").delete().eq("id", req.params.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    /* Pages that wore it go back to the main theme; the main theme itself
+       goes back to the original if it was this one. */
+    const state = await readThemeState(req.user.id);
+    const ids = state.themes.map(function (t) { return t.id; });
+    await writeThemePrefs(req.user.id, {
+      default_theme_id: ids.indexOf(state.prefs.default_theme_id) !== -1 ? state.prefs.default_theme_id : null,
+      page_themes: memberThemes.cleanPageThemes(state.prefs.page_themes, memberThemes.themedPages(APP_MAP), ids)
+    });
+    await removeUnusedThemePhotos(req.user.id, [before.theme && before.theme.photo]);
+    return res.json(themeStateReply(await readThemeState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+app.post("/api/themes/reset", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    const state = await readThemeState(req.user.id);
+    const ids = state.themes.map(function (t) { return t.id; });
+    const next_ = memberThemes.resetScope(state.prefs, req.body, memberThemes.themedPages(APP_MAP), ids);
+    if (next_.error) return res.status(400).json({ error: next_.error });
+    await writeThemePrefs(req.user.id, next_.prefs);
+    return res.json(themeStateReply(await readThemeState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+/* The backdrop photo: one file, field "photo", at most 5 MB, a JPEG, PNG or
+   WebP by its label AND its first bytes. Stored in bf-public at
+   theme-photos/<member id>/<time>.<ext>, the member's own folder, which the
+   account delete removes (lib/accountFiles.js). Answers { path, url }; the
+   path is what a theme may hold. */
+app.post("/api/themes/photo", requireAuth, themePhotoLimiter, function (req, res, next) {
+  themePhotoUpload.single("photo")(req, res, async function (uploadError) {
+    try {
+      if (uploadError) {
+        const tooBig = uploadError.code === "LIMIT_FILE_SIZE";
+        return res.status(tooBig ? 413 : 400).json({ error: tooBig ? "A backdrop photo is at most 5 MB." : "Send one photo, as the field \"photo\"." });
+      }
+      const checked = memberThemes.checkPhoto(req.file);
+      if (checked.error) return res.status(checked.error.indexOf("5 MB") !== -1 ? 413 : 400).json({ error: checked.error });
+      const storagePath = memberThemes.photoPathFor(req.user.id, Date.now(), checked.ext);
+      const { error } = await supabase.storage.from("bf-public")
+        .upload(storagePath, req.file.buffer, { contentType: checked.contentType, upsert: false });
+      if (error) return res.status(502).json({ error: "The photo could not be stored. Try again." });
+      return res.status(201).json({ path: storagePath, url: supabase.storage.from("bf-public").getPublicUrl(storagePath).data.publicUrl });
+    } catch (error) { next(error); }
+  });
+});
+
 /* GET /api/profile/:username WAS DELETED (launch hardening, 2026-10-27). It
    answered anyone, with no sign-in, select("*") from profiles: the account's
    email, contact_phone, subscription_plan and subscription_status among them.

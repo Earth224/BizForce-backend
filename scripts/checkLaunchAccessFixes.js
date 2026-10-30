@@ -91,7 +91,7 @@ const MUTATIONS = {
   // #7: "Welcome back" for everyone, first visit or not
   "welcome-back-always": [[DASH, "  if (!isFinite(created) || (nowMs - created) < FIRST_VISIT_MS) return line;\n", ""]],
   // #8: a page missing bf-session
-  "page-missing-bf-session": [["my-purchases.html", "<head>\n<script src=\"/scripts/bf-session.js\"></script>\n", "<head>\n"]],
+  "page-missing-bf-session": [["my-purchases.html", "<script src=\"/scripts/bf-theme.js\"></script>\n<script src=\"/scripts/bf-session.js\"></script>\n", "<script src=\"/scripts/bf-theme.js\"></script>\n"]],
   // #8: a public page loads bf-session.js for signed-out visitors too
   "public-page-session-always": [["seller.html", "    if (localStorage.getItem(\"bf_token\")) {\n      document.write(", "    if (true) {\n      document.write("]]
 };
@@ -459,7 +459,12 @@ function loadAgentPage(file, handlers) {
   /* ── F. #8 bf-session.js on the five pages ───────────────────────────── */
   console.log("\n══ F. #8 bf-session.js on ai-agents, index, my-purchases, profile and seller ══");
   const TAG = '<script src="/scripts/bf-session.js"></script>';
-  const headOf = t => t.slice(t.indexOf("<head>"), t.indexOf("</head>"));
+  /* NAMED BEFORE → AFTER (Oct 29 2026, Block 4a, the theme engine). BEFORE: bf-session.js was the first script in
+     each head. AFTER: scripts/bf-theme.js is the first element of <head> on every themed page (it only sets the
+     backdrop's tokens, before first paint, and redirects nobody), so bf-session.js must be the first script AFTER it.
+     The theme tag, when it opens the head, is set aside here; checkThemes A1 proves it is first. */
+  const THEME_TAG = '<head>\n<script src="/scripts/bf-theme.js"></script>\n';
+  const headOf = t => { const h = t.slice(t.indexOf("<head>"), t.indexOf("</head>")); return h.indexOf(THEME_TAG) === 0 ? "<head>\n" + h.slice(THEME_TAG.length) : h; };
   SESSION_PAGES.forEach(f => {
     const h = headOf(SRC[f]);
     const firstScript = h.indexOf("<script");

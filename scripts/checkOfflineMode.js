@@ -552,8 +552,12 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     const SESSION_KEYS = ["bf_tmx_trail"];
     /* NAMED BEFORE → AFTER (Oct 29 2026, "Termaximus chat box can be moved like the mist"). BEFORE: KEPT had 14 keys.
        AFTER: 15; tmx_chat_pos is where the Termaximus chat box was dragged (scripts/termaximus-presence.js), a device
-       preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
+       preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Oct 29 2026, Block 4a, the theme engine). BEFORE: KEPT had 15 keys. AFTER: 16; bf_theme is
+       scripts/bf-theme.js's device display cache of the member's themes, read before first paint so a page shows its
+       look without a flash; it is applied only for the member it belongs to (or nobody), and bf-session.js names it. */
     const KEPT = {
+      bf_theme: "the device's cache of the member's themes, applied before first paint",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
       tmx_chat_pos: "where the Termaximus chat box sits",

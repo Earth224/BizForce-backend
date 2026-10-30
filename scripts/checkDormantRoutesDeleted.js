@@ -144,7 +144,16 @@ const ADDED = [
   ["get", "/api/agents/:type/live"],            // one agent's live activity, at most 3 KB (total 343 -> 344)
   // NAMED (Oct 29 2026, Executive Headquarters, Block 3a): BEFORE 344 routes; AFTER 345, adding the calendar's
   // read of the caller's own schedules, requireAuth only, writing nothing, calling no model (checkExecutiveHQ H6)
-  ["get", "/api/agents/live/calendar"]          // each schedule's runs in a range of at most 62 days (total 344 -> 345)
+  ["get", "/api/agents/live/calendar"],         // each schedule's runs in a range of at most 62 days (total 344 -> 345)
+  // NAMED (Oct 29 2026, the theme engine, Block 4a): BEFORE 345 routes; AFTER 352, adding its seven routes, each
+  // requireAuth and limited per account, each answering only the caller's own themes and preferences (checkThemes E1–E8)
+  ["get", "/api/themes"],                       // the member's saved themes, main theme, page themes and the themed page list (total 345 -> 346)
+  ["post", "/api/themes"],                      // save a named theme, validated against the closed schema; 30 at most (total 346 -> 347)
+  ["put", "/api/themes/apply"],                 // apply one to all pages, this page or selected pages (total 347 -> 348)
+  ["put", "/api/themes/:id"],                   // rename it or change it (total 348 -> 349)
+  ["delete", "/api/themes/:id"],                // delete it; pages that wore it go back to the main theme (total 349 -> 350)
+  ["post", "/api/themes/reset"],                // a page, some pages, or everything back to the original (total 350 -> 351)
+  ["post", "/api/themes/photo"]                 // the backdrop photo: 5 MB, JPEG, PNG or WebP by its bytes, in the member's folder (total 351 -> 352)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

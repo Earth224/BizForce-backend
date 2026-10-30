@@ -244,7 +244,9 @@ const EXPECTED_STORAGE = {
   "post /api/bizbook/books/:id/generate-from-content": "a generated book file",
   "post /api/bizbook/books/create-from-content":    "a generated book file",
   "post /api/cover-wraps/:id/bg-image":             "a background image",
-  "post /api/editor/image":                         "an editor image"
+  "post /api/editor/image":                         "an editor image",
+  // NAMED (Oct 29 2026, the theme engine): the member's backdrop photo, checked by its bytes, at most 5 MB
+  "post /api/themes/photo":                         "a backdrop photo, bf-public theme-photos/<member id>/"
 };
 
 /* Login-only routes that write only the account's own records. */
@@ -310,7 +312,12 @@ const EXPECTED_OWN = [
   // reads and unlisted. AFTER they reach blogRefToken (the Analytics and SEO arrivals), whose crypto hash .update( this
   // file's WRITES pattern reads as a write, the same way the learning view is listed for loadArrivals. They write
   // nothing; checkAgentLive holds every query they make to the caller's own rows and to reads.
-  "get /api/agents/live", "get /api/agents/:type/live"
+  "get /api/agents/live", "get /api/agents/:type/live",
+  // NAMED (Oct 29 2026, the theme engine, Block 4a; effectful login-only 133 -> 138, with the photo upload in
+  // EXPECTED_STORAGE): BEFORE no member themes. AFTER a member saves, changes, deletes, applies and resets their own
+  // looks; every row is theirs (member_themes, their own user_preferences), served to no one else, and nothing calls the
+  // model. Deliberately ungated, like every display preference: how the app looks never needs a subscription.
+  "post /api/themes", "put /api/themes/apply", "put /api/themes/:id", "delete /api/themes/:id", "post /api/themes/reset"
 ];
 
 /* Unauthenticated routes that write. */

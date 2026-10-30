@@ -564,8 +564,12 @@ async function donations() {
 function rdAgent() {
   console.log("\n══ 3. rd-agent.html renews or redirects an expired session ══");
   const head = RD_AGENT.slice(0, RD_AGENT.indexOf("</head>"));
-  const scripts = [...head.matchAll(/<script\b[^>]*>/g)].map(m => m[0]);
-  check("3. the first script in its head is /scripts/bf-session.js", scripts[0] === "<script src=\"/scripts/bf-session.js\"></script>".replace("</script>", "") || scripts[0] === "<script src=\"/scripts/bf-session.js\">", scripts[0]);
+  /* NAMED BEFORE → AFTER (Oct 29 2026, Block 4a, the theme engine). BEFORE: bf-session.js was the head's first script.
+     AFTER: scripts/bf-theme.js opens the head of every themed page (it only sets the backdrop's tokens before first
+     paint, and never redirects), so bf-session.js is the first script after it. checkThemes A1 proves the theme tag. */
+  const all = [...head.matchAll(/<script\b[^>]*>/g)].map(m => m[0]);
+  const scripts = all[0] === "<script src=\"/scripts/bf-theme.js\">" ? all.slice(1) : all;
+  check("3. the first script in its head, after the theme tag, is /scripts/bf-session.js", all[0] === "<script src=\"/scripts/bf-theme.js\">" && scripts[0] === "<script src=\"/scripts/bf-session.js\">", all.slice(0, 2).join(" "));
   check("3. and the head has no inline token check left", !/localStorage\.getItem\("bf_token"\)/.test(head) && (head.match(/bf-session\.js/g) || []).length === 1);
   check("3. scripts/bf-session.js exists", fs.existsSync(path.join(FRONTEND, "scripts", "bf-session.js")));
 }
