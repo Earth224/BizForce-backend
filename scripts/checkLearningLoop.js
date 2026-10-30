@@ -21,8 +21,8 @@
         per member per run, changed by rating again; another member's run is a
         404 and writes nothing; an unfinished run, an unknown reason and a
         comment over 200 characters are refused.
-     B. Examples: only a 👍 run can be pinned; at most five per member per
-        agent, the sixth unpinning the oldest; a 👎 unpins.
+     B. Examples: only a Helpful run can be pinned; at most five per member per
+        agent, the sixth unpinning the oldest; a Not helpful unpins.
      C. The prompt: memberGuidanceFor uses only the member's own runs (a pin
         pointing at another member's run is not used), at most the newest two,
         within the 6,000-character budget (about 1,500 tokens), each at most
@@ -31,7 +31,7 @@
         the safety rules and the approval status (the prompt above it is
         byte-identical to the prompt without it), and in
         toolGenerateWithOneRetry it follows the route's whole prompt.
-     E. Preferences: a suggestion appears only at three 👎 with one reason, is
+     E. Preferences: a suggestion appears only at three Not helpful with one reason, is
         never stored by being shown, is saved only when accepted, and only
         while offered; at most eight, at most 80 characters, edited and
         removed by their owner only.
@@ -49,7 +49,7 @@
         lower priority than every rule.
      J. The page, RUN in jsdom: the honest copy, the score, "Your examples",
         the preferences, the exact words the agent is told, the rating bar
-        (👍 sends a PUT; "Use this as an example" a pin), and run.html.
+        (Helpful sends a PUT; "Use this as an example" a pin), and run.html.
 
    Nothing here touches the network or a real database.
 
@@ -105,7 +105,7 @@ const MUTATIONS = {
   "rail-reads-preferences": [[SV_FILE, "function fdaRailViolations(profile, text) {\n  if (!profile || !profile.fdaDiseaseClaims) return [];\n",
     "function fdaRailViolations(profile, text) {\n  if (!profile || !profile.fdaDiseaseClaims || /bold health claims/i.test(String(text))) return [];\n"]],
   // feedback is missing from the data export
-  "feedback-not-exported": [[YD, '  { table: "agent_feedback", group: "agents", what: "Your 👍 and 👎 ratings of agent runs, their reasons and comments, and which runs you pinned as examples.", owner: ["user_id"], onDelete: "delete" },\n', ""]],
+  "feedback-not-exported": [[YD, '  { table: "agent_feedback", group: "agents", what: "Your Helpful and Not helpful ratings of agent runs, their reasons and comments, and which runs you pinned as examples.", owner: ["user_id"], onDelete: "delete" },\n', ""]],
   // feedback is not deleted with the account
   "feedback-not-deleted": [[YD, '  "agent_feedback", "agent_preferences", "agent_proposals", "ai_tasks",', '  "agent_preferences", "agent_proposals", "ai_tasks",']],
   // the sixth pin keeps all six
@@ -412,9 +412,9 @@ function bfProfileColumns() {
   console.log("\n══ A. one rating per member per run, changeable ══");
   CUR = makeDb(seed());
   let r = await rate(SAM, SAM_RUNS[0], { rating: "up" });
-  check("A1. a member rates their own run 👍", r.status === 200 && r.body.feedback && r.body.feedback.rating === "up" && fbRows(SAM, SAM_RUNS[0]).length === 1, JSON.stringify(r));
+  check("A1. a member rates their own run Helpful", r.status === 200 && r.body.feedback && r.body.feedback.rating === "up" && fbRows(SAM, SAM_RUNS[0]).length === 1, JSON.stringify(r));
   r = await rate(SAM, SAM_RUNS[0], { rating: "down", reason: "Too long", comment: "Half the length, please." });
-  check("A2. rating again changes it: one row, now 👎 with its reason and comment", r.status === 200 && fbRows(SAM, SAM_RUNS[0]).length === 1 &&
+  check("A2. rating again changes it: one row, now Not helpful with its reason and comment", r.status === 200 && fbRows(SAM, SAM_RUNS[0]).length === 1 &&
     fbRows(SAM, SAM_RUNS[0])[0].rating === "down" && fbRows(SAM, SAM_RUNS[0])[0].reason === "Too long" && fbRows(SAM, SAM_RUNS[0])[0].comment === "Half the length, please.");
   r = await rate(SAM, RITA_RUN, { rating: "up" });
   check("A3. another member's run is a 404 and nothing is written", r.status === 404 && CUR.t.agent_feedback.every(x => x.task_id !== RITA_RUN), JSON.stringify(r));
@@ -433,13 +433,13 @@ function bfProfileColumns() {
   check("A9. the six reasons are the brief's", JSON.stringify(LEARN.REASONS) === JSON.stringify(["Too long", "Too short", "Wrong tone", "Off topic", "Inaccurate", "Other"]));
 
   /* ── B. examples ──────────────────────────────────────────────────────── */
-  console.log("\n══ B. pinned examples: 👍 only, five per agent, newest replaces oldest ══");
+  console.log("\n══ B. pinned examples: Helpful only, five per agent, newest replaces oldest ══");
   CUR = makeDb(seed());
   r = await pin(SAM, SAM_RUNS[0]);
   check("B1. an unrated run cannot be pinned", r.status === 400);
   await rate(SAM, SAM_RUNS[0], { rating: "down" });
   r = await pin(SAM, SAM_RUNS[0]);
-  check("B2. a 👎 run cannot be pinned", r.status === 400 && !fbRows(SAM, SAM_RUNS[0])[0].pinned);
+  check("B2. a Not helpful run cannot be pinned", r.status === 400 && !fbRows(SAM, SAM_RUNS[0])[0].pinned);
   for (let i = 0; i < 6; i++) {
     await rate(SAM, SAM_RUNS[i], { rating: "up" });
     r = await pin(SAM, SAM_RUNS[i]);
@@ -449,7 +449,7 @@ function bfProfileColumns() {
   check("B3. the sixth pin keeps five: the oldest is unpinned", pinned.length === 5 && pinned.indexOf(SAM_RUNS[0]) === -1 && SAM_RUNS.slice(1, 6).every(id => pinned.indexOf(id) !== -1) &&
     r.body && JSON.stringify(r.body.unpinned) === JSON.stringify([SAM_RUNS[0]]), JSON.stringify(pinned));
   await rate(SAM, SAM_RUNS[5], { rating: "down", reason: "Inaccurate" });
-  check("B4. rating a pinned run 👎 unpins it", !fbRows(SAM, SAM_RUNS[5])[0].pinned && fbRows(SAM, SAM_RUNS[5])[0].pinned_at === null);
+  check("B4. rating a pinned run Not helpful unpins it", !fbRows(SAM, SAM_RUNS[5])[0].pinned && fbRows(SAM, SAM_RUNS[5])[0].pinned_at === null);
   await pin(SAM, SAM_RUNS[4], false);
   check("B5. a member removes an example", !fbRows(SAM, SAM_RUNS[4])[0].pinned);
   r = await pin(SAM, RITA_RUN);
@@ -515,7 +515,7 @@ function bfProfileColumns() {
   await rate(SAM, SAM_RUNS[0], { rating: "down", reason: "Too long" });
   await rate(SAM, SAM_RUNS[1], { rating: "down", reason: "Too long" });
   let lv2 = await learning(SAM);
-  check("E1. two 👎 \"Too long\" suggest nothing", lv2.status === 200 && lv2.body.suggestions.length === 0);
+  check("E1. two Not helpful \"Too long\" suggest nothing", lv2.status === 200 && lv2.body.suggestions.length === 0);
   r = await addPref(SAM, "Keep it shorter", "suggestion");
   check("E2. accepting a suggestion that is not being made is refused", r.status === 400 && CUR.t.agent_preferences.length === 0);
   await rate(SAM, SAM_RUNS[2], { rating: "down", reason: "Too long" });
@@ -552,7 +552,8 @@ function bfProfileColumns() {
   let sc = LEARN.scoreFrom(four, NOW);
   check("F1. four ratings: \"not enough ratings yet\", no share", sc.share === null && sc.enough === false && sc.label === "not enough ratings yet" && sc.rated === 4 && sc.based_on === "Based on 4 ratings you gave", JSON.stringify(sc));
   sc = LEARN.scoreFrom(four.concat([{ rating: "down", updated_at: at(5) }]), NOW);
-  check("F2. five ratings: 4 of 5 is 80%", sc.share === 0.8 && sc.percent === 80 && sc.enough === true && sc.label === "80% 👍" && sc.based_on === "Based on 5 ratings you gave", JSON.stringify(sc));
+  check("F2. five ratings: 4 of 5 is 80%", sc.share === 0.8 && sc.percent === 80 && sc.enough === true && /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): the label was 80% and a thumbs-up sign; it is "80% helpful" (lib/learningLoop.js). */
+    sc.label === "80% helpful" && sc.based_on === "Based on 5 ratings you gave", JSON.stringify(sc));
   sc = LEARN.scoreFrom(four.concat([{ rating: "down", updated_at: at(30) }]), NOW);
   check("F3. a rating exactly 30 days old is in the previous window", sc.rated === 4 && sc.share === null && sc.previous.rated === 1, JSON.stringify(sc));
   sc = LEARN.scoreFrom(four.concat([{ rating: "down", updated_at: new Date(NOW - 30 * DAY_MS + 1000).toISOString() }]), NOW);
@@ -593,7 +594,7 @@ function bfProfileColumns() {
   const ownJson = JSON.stringify(own.body || {});
   check("G1. a member who is not the owner gets a 404", notOwner.status === 404);
   const contentRow = own.body && own.body.agents && own.body.agents.find(a => a.agent_type === "content");
-  check("G2. the owner gets every member's ratings together, per agent: 6 rated, 4 👍", own.status === 200 && contentRow && contentRow.rated === 6 && contentRow.thumbs_up === 4, ownJson);
+  check("G2. the owner gets every member's ratings together, per agent: 6 rated, 4 Helpful", own.status === 200 && contentRow && contentRow.rated === 6 && contentRow.thumbs_up === 4, ownJson);
   check("G3. no member id, run id or comment is in the owner's view", !UUID.test(ownJson) && ownJson.indexOf("RITA-COMMENT") === -1 && ownJson.indexOf(SAM) === -1 &&
     own.body.agents.every(a => JSON.stringify(Object.keys(a)) === JSON.stringify(["agent_type", "rated", "thumbs_up", "percent", "label", "previous_rated", "previous_percent", "change_points", "arrow"])), ownJson);
 
@@ -653,7 +654,9 @@ function bfProfileColumns() {
   check("J1. the honest sentence, word for word, on every agent page (one shared script) and from the server", AP.indexOf('var LEARNING_COPY = "' + LEARN.HONEST_COPY + '";') !== -1 &&
     LEARN.HONEST_COPY === "Your ratings and pinned examples shape how this agent writes for you. The AI model itself does not change.");
   check("J2. the panel's headings and the pin label", ["How this agent learns from you", "Your examples", "What this agent knows about your preferences", "Use this as an example", "Exactly what this agent is told"].every(t => AP.indexOf(t) !== -1));
-  check("J3. the guide's common line tells members they can rate runs", /Rate runs 👍 or 👎 to tune the agent\./.test(ALL[GUIDE] || ""));
+  /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): BEFORE the common line said "Rate runs [thumbs up] or [thumbs down] to tune the
+     agent." AFTER it says "rate it Helpful or Not helpful.", the rating buttons' own visible words. */
+  check("J3. the guide's common line tells members they can rate runs", /; rate it Helpful or Not helpful\. /.test(ALL[GUIDE] || ""));
   let JSDOM = null;
   try { JSDOM = realRequire("jsdom").JSDOM; } catch (e) { JSDOM = null; }
   check("J4. jsdom is available", !!JSDOM);
@@ -713,7 +716,7 @@ function bfProfileColumns() {
       for (let i = 0; i < 6; i++) await new Promise(res => setTimeout(res, 0));
       const put = calls.find(c => c.method === "PUT");
       const pinBtn = hold.querySelector(".ap-rate-pin");
-      check("J13. 👍 sends one PUT for that run, and \"Use this as an example\" appears", !!put && /\/api\/agents\/feedback\//.test(put.url) && put.url.indexOf(SAM_RUNS[2]) !== -1 && JSON.parse(put.body).rating === "up" && pinBtn && !pinBtn.hidden && pinBtn.textContent === "Use this as an example");
+      check("J13. Helpful sends one PUT for that run, and \"Use this as an example\" appears", !!put && /\/api\/agents\/feedback\//.test(put.url) && put.url.indexOf(SAM_RUNS[2]) !== -1 && JSON.parse(put.body).rating === "up" && pinBtn && !pinBtn.hidden && pinBtn.textContent === "Use this as an example");
       check("J14. the reason offers the six choices and the comment is capped at 200", hold.querySelectorAll(".ap-rate-reason option").length === 7 && hold.querySelector(".ap-rate-comment").getAttribute("maxlength") === "200");
       calls.length = 0;
       pinBtn.click();

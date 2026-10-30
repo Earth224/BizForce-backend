@@ -560,8 +560,12 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        scripts/bf-theme.js's device display cache of the member's themes, read before first paint so a page shows its
        look without a flash; it is applied only for the member it belongs to (or nobody), and bf-session.js names it.
        NAMED BEFORE → AFTER (Oct 29 2026, Block 4b). BEFORE: KEPT had 16 keys, bf_theme among them. AFTER: 15; bf_theme is on
-       PER_USER above, cleared at sign-out. */
+       PER_USER above, cleared at sign-out.
+       NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: KEPT had 15 keys. AFTER: 16; bf_exec_tab is
+       the deck's last tab on this device (scripts/bf-exec-deck.js), a display choice like bf_active_calendar, so sign-out
+       leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
+      bf_exec_tab: "which tab the Executive command deck opens on",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
       tmx_chat_pos: "where the Termaximus chat box sits",

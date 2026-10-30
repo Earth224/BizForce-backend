@@ -1,5 +1,5 @@
 require("dotenv").config();
-console.log("🚀 NEW BUILD DEPLOYED:", new Date().toISOString());
+console.log("NEW BUILD DEPLOYED:", new Date().toISOString());
 const express = require("express");
 
 const helmet = require("helmet");
@@ -44,7 +44,7 @@ const {
 // while looking correct.
 const { Webhook: SvixWebhook } = require("svix");
 const { DateTime } = require("luxon");
-const { buildAgentSystemPrompt, useBillingPlans } = require("./config/brain");
+const { buildAgentSystemPrompt, useBillingPlans, NO_EMOJI_RULE } = require("./config/brain");
 const { RichText } = require("@atproto/api");
 const { startLeadRadar, bskyGate } = require("./leadRadar");
 const { runMastodonRadarOnce } = require("./mastodonRadar");
@@ -203,8 +203,9 @@ function icuHealth() {
 // Never throws, for the reason icuHealth never does.
 function graphemesCounted() {
   try {
-    // A family emoji: three people joined by zero-width joiners, one grapheme.
-    return !!GRAPHEME_SEGMENTER && countGraphemes("\u{1F468}\u200D\u{1F469}\u200D\u{1F467}") === 1;
+    /* A family emoji: three people joined by zero-width joiners, one grapheme.
+       A probe of the segmenter, built from code points and never shown. */
+    return !!GRAPHEME_SEGMENTER && countGraphemes(String.fromCodePoint(0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467)) === 1;
   } catch (err) {
     return false;
   }
@@ -489,7 +490,9 @@ const AGENT_SYSTEM_PROMPTS = {
    defined before this roster, so it carries a {{AGENT_COUNT}} slot rather
    than reading AGENT_SYSTEM_PROMPTS itself. */
 function oracleSystemPrompt() {
-  return ORACLE_SYSTEM_PROMPT.split("{{AGENT_COUNT}}").join(String(Object.keys(AGENT_SYSTEM_PROMPTS).length));
+  // The owner's no-emoji rule (config/brain.js NO_EMOJI_RULE), last, as the guide's persona carries it.
+  return ORACLE_SYSTEM_PROMPT.split("{{AGENT_COUNT}}").join(String(Object.keys(AGENT_SYSTEM_PROMPTS).length)) +
+    "\n\n" + NO_EMOJI_RULE;
 }
 
 // The name each agent type is shown under, copied from the seventeen
@@ -17623,7 +17626,7 @@ app.delete("/api/ai/tasks/:id", requireAuth, async function (req, res, next) {
 // THE LEARNING LOOP: each member's ratings, pinned examples and preferences.
 // ════════════════════════════════════════════════════════════════════════════
 /* THE MODEL DOES NOT LEARN, AND NOTHING HERE SAYS IT DOES. A member rates a run
-   👍 or 👎, may pin a 👍 run as an example, and keeps up to eight preferences per
+   Helpful or Not helpful, may pin a Helpful run as an example, and keeps up to eight preferences per
    agent. memberGuidanceFor turns the member's own pins and preferences into a
    block placed below every rule of that member's prompts for that agent
    (lib/learningLoop.js says how and how much). Every word of the block is
@@ -17717,7 +17720,7 @@ app.get("/api/agents/feedback/:taskId", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
-// Rate a run 👍 or 👎, with an optional reason and comment. One per member per run; rating again changes it.
+// Rate a run Helpful or Not helpful, with an optional reason and comment. One per member per run; rating again changes it.
 app.put("/api/agents/feedback/:taskId", requireAuth, async function (req, res, next) {
   try {
     var run = await learningOwnRun(req.user.id, req.params.taskId);
@@ -17729,7 +17732,7 @@ app.put("/api/agents/feedback/:taskId", requireAuth, async function (req, res, n
     var now = new Date().toISOString();
     var row = { task_id: run.id, user_id: req.user.id, agent_type: run.agent_type, rating: input.rating,
       reason: input.reason, comment: input.comment, updated_at: now };
-    // A 👎 run is no example: rating it down takes it out of the examples.
+    // A Not helpful run is no example: rating it down takes it out of the examples.
     if (input.rating === "down" || !existing) { row.pinned = false; row.pinned_at = null; }
     var saved = await supabase.from("agent_feedback").upsert(row, { onConflict: "task_id,user_id" }).select("*").single();
     if (saved.error) throw saved.error;
@@ -17737,7 +17740,7 @@ app.put("/api/agents/feedback/:taskId", requireAuth, async function (req, res, n
   } catch (error) { next(error); }
 });
 
-/* "Use this as an example": only a run rated 👍. At most five pinned per
+/* "Use this as an example": only a run rated Helpful. At most five pinned per
    member per agent; pinning a sixth unpins the oldest. */
 app.post("/api/agents/feedback/:taskId/pin", requireAuth, async function (req, res, next) {
   try {
@@ -17753,7 +17756,7 @@ app.post("/api/agents/feedback/:taskId/pin", requireAuth, async function (req, r
       return res.json({ feedback: learningFeedbackOut(off.data), unpinned: [] });
     }
     if (!existing || existing.rating !== "up") {
-      return res.status(400).json({ error: "Only a run you rated 👍 can be used as an example." });
+      return res.status(400).json({ error: "Only a run you rated Helpful can be used as an example." });
     }
     var others = await supabase.from("agent_feedback").select("task_id, pinned_at")
       .eq("user_id", req.user.id).eq("agent_type", existing.agent_type).eq("pinned", true)

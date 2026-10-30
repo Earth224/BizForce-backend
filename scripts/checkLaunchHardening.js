@@ -738,13 +738,19 @@ async function oracle() {
 
   // The persona's count is the roster's.
   const roster = n => { const o = {}; for (let i = 0; i < n; i++) o["agent" + i] = "x"; return o; };
-  const promptWith = r => { const c = { AGENT_SYSTEM_PROMPTS: r }; vm.createContext(c); vm.runInContext(definitionOf("ORACLE_SYSTEM_PROMPT") + "\n" + definitionOf("oracleSystemPrompt") + "\nthis.p = oracleSystemPrompt();", c); return c.p; };
+  /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): oracleSystemPrompt() was the persona with its count filled; it
+     now also ends with config/brain.js's NO_EMOJI_RULE (server.js takes it from the require at the top), so the
+     function runs here with that rule beside the roster. */
+  const RULE = require("../config/brain").NO_EMOJI_RULE;
+  const promptWith = r => { const c = { AGENT_SYSTEM_PROMPTS: r, NO_EMOJI_RULE: RULE }; vm.createContext(c); vm.runInContext(definitionOf("ORACLE_SYSTEM_PROMPT") + "\n" + definitionOf("oracleSystemPrompt") + "\nthis.p = oracleSystemPrompt();", c); return c.p; };
   const realRoster = (function () { const c = {}; vm.createContext(c); vm.runInContext(definitionOf("AGENT_SYSTEM_PROMPTS").replace(/^const /, "var "), c); return Object.keys(c.AGENT_SYSTEM_PROMPTS).length; })();
   const p18 = promptWith(roster(18)), p19 = promptWith(roster(19));
   check("6. the persona states the roster's own count: \"the 18 specialist agents\" for 18, \"the 19 specialist agents\" for 19",
     p18.indexOf("the 18 specialist agents") !== -1 && p19.indexOf("the 19 specialist agents") !== -1 && p19.indexOf("the 18 specialist agents") === -1);
   check("6. the real roster has 18 agents, and the persona says so with no \"twelve-plus\" and no unfilled slot",
     realRoster === 18 && promptWith(roster(realRoster)).indexOf("{{AGENT_COUNT}}") === -1 && SRC.indexOf("twelve-plus") === -1, realRoster);
+  check("6. ... and it ends with the no-emoji rule, after the persona", typeof RULE === "string" && RULE.length > 40 && p18.endsWith("\n\n" + RULE) &&
+    /NO_EMOJI_RULE \} = require\("\.\/config\/brain"\);/.test(SRC));
   check("6. the oracle route builds its prompt from oracleSystemPrompt()", /buildAgentSystemPrompt\(oracleSystemPrompt\(\), /.test(SRC) &&
     !/buildAgentSystemPrompt\(ORACLE_SYSTEM_PROMPT,/.test(SRC));
 }

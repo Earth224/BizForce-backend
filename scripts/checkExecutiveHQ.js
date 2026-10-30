@@ -523,7 +523,7 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   const tileOf = type => tiles.find(t => t.getAttribute("data-hq-agent") === type);
   const words = type => { const t = tileOf(type); return [t.querySelector(".hq-now").textContent].concat(hq.rowsOf(t).map(r => r.join(": "))); };
   const expect = {
-    seo: ["Running", "Last: Completed · " + WHEN(body.agents.seo.runs.last.finished_at), "Next: No schedule", "Approvals: None waiting", "Score: 2 up · 1 down"],
+    seo: ["Running", "Last: Completed · " + WHEN(body.agents.seo.runs.last.finished_at), "Next: No schedule", "Approvals: None waiting", "Score: 2 helpful · 1 not helpful"],   // NAMED (Oct 30 2026, no emojis): was "Score: 2 up · 1 down"
     content: ["Stalled", "Last: No runs yet", "Next: No schedule", "Approvals: None waiting", "Score: No ratings yet"],
     ads: ["Idle", "Last: Failed · " + WHEN(body.agents.ads.runs.last.finished_at), "Next: No schedule", "Approvals: None waiting", "Score: No ratings yet"],
     store: ["Idle", "Last: No runs yet", "Next: No schedule", "Approvals: 2 waiting", "Score: No ratings yet"],
@@ -605,19 +605,24 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   const spend = ccUser.spend.data;
   const money = n => "$" + Number(n).toFixed(2);
   const memberAlerts = hq.alerts();
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: the alerts linked to sections of one long
+     page (#commandCenterSection, #hqQueue, #ccSpend, #ccPlatformPanel). AFTER: each links to the deck tab that holds
+     where it is fixed: failed runs and approvals to #approvals (the queue and "Needs you"), spend and the platform
+     ceiling to #history (the Command Center's Spend and Platform panels). A link lands on a real tab or section. */
   const expectAlerts = [
-    { text: "1 failed run in 7 days", href: "#commandCenterSection", alert: true },
-    { text: "3 approvals waiting", href: "#hqQueue", alert: true },
+    { text: "1 failed run in 7 days", href: "#approvals", alert: true },
+    { text: "3 approvals waiting", href: "#approvals", alert: true },
     { text: NAME("content") + ": a run has been in progress over 10 minutes", href: "/run.html?id=content-stuck", alert: true },
     { text: NAME("operations") + " schedule paused after 3 failed runs", href: "/operations-agent.html", alert: true },
     { text: "Model calls today: 12 of 250", href: null, alert: false },
     { text: "Subscription active", href: "/billing.html", alert: false },
-    { text: "Spend this month: " + money(spend.usd) + " of " + money(spend.monthly_cap_usd), href: "#ccSpend", alert: false }
+    { text: "Spend this month: " + money(spend.usd) + " of " + money(spend.monthly_cap_usd), href: "#history", alert: false }
   ];
   check("H3. the member's alerts, each from /live or the Command Center, each linked where it is fixed",
     JSON.stringify(memberAlerts) === JSON.stringify(expectAlerts) && hq.alertsHead() === "4 alerts", JSON.stringify(memberAlerts));
   const targets = memberAlerts.filter(a => a.href && a.href[0] === "#").map(a => a.href.slice(1));
-  check("H3. every in-page link lands on a real section", targets.every(id => hq.doc.getElementById(id)), targets.join(","));
+  const landsOn = (doc, id) => !!(doc.getElementById(id) || (doc.getElementById("deckPanel-" + id) && doc.getElementById("deckTab-" + id)));
+  check("H3. every in-page link lands on a real deck tab or section", targets.length >= 3 && targets.every(id => landsOn(hq.doc, id)), targets.join(","));
   check("H3. a member sees no platform ceiling: no section, no figure", !("platform" in ccUser) && !/Platform ceiling|\$25\.00/.test(hq.doc.getElementById("hqAlerts").textContent) &&
     hq.doc.getElementById("ccPlatformPanel").style.display === "none", hq.doc.getElementById("hqAlerts").textContent);
   const quiet = await mountHQ({ live: () => ({ status: 200, body: liveBody({ empty: true, idle: true }) }) });
@@ -635,7 +640,7 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   const admin = await mountHQ({ user: OWNER });
   const ceil = ccOwner.platform && ccOwner.platform.data && ccOwner.platform.data.ceiling;
   check("H3. an admin's Headquarters shows today's platform ceiling, from the admin-only section",
-    !!ceil && admin.alerts().some(a => a.text === "Platform ceiling today: " + money(ceil.spent_usd) + " of " + money(ceil.cap_usd) && a.href === "#ccPlatformPanel"),
+    !!ceil && admin.alerts().some(a => a.text === "Platform ceiling today: " + money(ceil.spent_usd) + " of " + money(ceil.cap_usd) && a.href === "#history"),
     JSON.stringify([ceil, admin.alerts().map(a => a.text)]));
 
   console.log("\n══ H4. the approval queue: a click, one request, and nothing without one ══");
@@ -674,7 +679,10 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     (FILES[HQ].match(/decide\(/g) || []).length === 2 && FILES[HQ].indexOf("    if (d) decide(d);\n") !== -1 && (FILES[HQ].match(/\/api\/proposals\//g) || []).length === 1);
 
   console.log("\n══ H5. the Command Center in Headquarters ══");
-  check("H5. the shared script fills every Command Center panel in Headquarters", ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutbound", "ccSpend"]
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: six panels, ccPlans among them. AFTER:
+     five; the deck's Plans tab is the page's one plan board, so the Command Center's "Executive plans" panel is not
+     on this page (bf-command-center.js skips a panel that is not there; checkExecutiveDeck D4 asserts plans once). */
+  check("H5. the shared script fills every Command Center panel in Headquarters", !hq.doc.getElementById("ccPlans") && ["ccNeedsYou", "ccActivity", "ccAutopilot", "ccOutbound", "ccSpend"]
     .every(id => { const t = hq.doc.getElementById(id).textContent; return t && t !== "Loading…"; }) && /Read /.test(hq.doc.getElementById("ccStatus").textContent),
     hq.doc.getElementById("ccNeedsYou").textContent.slice(0, 120));
   check("H5. ...from scripts/bf-command-center.js, loaded right after the section, with no inline copy",
@@ -880,7 +888,10 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
       .map(id => [id, (c.find(r => r[0] === "[data-tool-toggle=\"" + id + "\"]") || [])[1] || null]);
   };
   const toolWrong = LIVE.AGENT_KEYS.filter(k => JSON.stringify(mapTools(AG[k].page)) !== JSON.stringify(HQ_TOOLS[k] || []));
-  check("H10. the tool picker's tools are each agent page's tools as the app map lists them", toolWrong.length === 0 && Object.keys(HQ_TOOLS).length === 17,
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: 17 agents with tools in the picker, the
+     Executive's "Executive Plan" among them. AFTER: 16; on the deck a plan is the box's own "Make a plan" mode, so
+     the Executive has no tool to pick, and the app map lists none for its page (lib/appMapBuild.js, deck: true). */
+  check("H10. the tool picker's tools are each agent page's tools as the app map lists them", toolWrong.length === 0 && Object.keys(HQ_TOOLS).length === 16 && !HQ_TOOLS.executive,
     toolWrong.map(k => k + ": " + JSON.stringify(mapTools(AG[k].page))).join(" | "));
   check("H10. the acting tools are exactly the server's CHAIN_NON_DISPATCHABLE_TOOLS",
     SERVER_ACTING.length >= 7 && JSON.stringify(Object.keys(HQ_ACTING).sort()) === JSON.stringify(SERVER_ACTING.slice().sort()), JSON.stringify([SERVER_ACTING, Object.keys(HQ_ACTING)]));
@@ -947,7 +958,9 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     pp.length === 1 && /\/api\/agents\/executive\/plan$/.test(pp[0].url) && JSON.stringify(pp[0].body) === JSON.stringify({ goal: "Open a second shop", horizon: "60 days" }), JSON.stringify(pp));
   const newPlan = pl2.doc.querySelector("[data-hq-plan='" + PLAN_NEW + "']");
   check("H11. the plan's assignments are on the board at once, and the Command Center is read again",
-    said(pl2) === "Plan ready. 2 assignments, 1 of them can run from here, one at a time, under Plan runner. See the plan" && !!newPlan &&
+    // NAMED (Oct 30 2026, the command deck): was "…one at a time, under Plan runner."; the board is the Plans tab, linked #plans.
+    said(pl2) === "Plan ready. 2 assignments, 1 of them can run from here, one at a time, on the Plans tab. See the plan" && !!newPlan &&
+    !!pl2.doc.querySelector("#hqCommandMsg a[href='#plans']") &&
     newPlan.querySelector(".hq-progress").textContent === "0 of 2 done · 0 failed · 2 waiting" && ccReads(pl2) === ccBefore + 1, said(pl2));
 
   console.log("\n══ H12. the plan runner: one assignment per click ══");
@@ -969,9 +982,16 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   check("H12. ...and its maths at the edges: no assignments, and a lone not-dispatchable one",
     P({ assignments: [] }) === "0 of 0 done · 0 failed · 0 waiting" && P({ assignments: [{ id: 1, is_dispatchable: false }] }) === "0 of 1 done · 0 failed · 1 waiting");
   const blockedLink = planEl(rn, PLAN_B).querySelector("[data-assignment='2'] a");
-  check("H12. a not-dispatchable assignment links to its agent's page; a ran one links to its run",
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the command deck). BEFORE: a done assignment linked to run.html. AFTER: it has
+     a "View result" button that opens the deck's result drawer (window.BFExecDeck.openRun), and run.html where no
+     deck is loaded, as here; a running one still links to its run. */
+  const viewBtn = planEl(rn, PLAN_A).querySelector("[data-assignment='1'] [data-hq-view='" + T(1) + "']");
+  const wentBefore = rn.went.length;
+  if (viewBtn) { viewBtn.click(); await settle(); }
+  check("H12. a not-dispatchable assignment links to its agent's page; a done one has \"View result\", which opens its run",
     !!blockedLink && blockedLink.getAttribute("href") === "/store-agent.html" && blockedLink.textContent === "Open the Store Agent page" &&
-    !!planEl(rn, PLAN_A).querySelector("[data-assignment='1'] a[href='/run.html?id=" + T(1) + "']"));
+    !!viewBtn && viewBtn.textContent === "View result" && rn.went.slice(wentBefore).join() === "/run.html?id=" + T(1) &&
+    !planEl(rn, PLAN_A).querySelector("[data-assignment='1'] a[href='/run.html?id=" + T(1) + "']"), rn.went.slice(wentBefore).join());
   const runA = planEl(rn, PLAN_A).querySelector("[data-hq-run-next]");
   check("H12. \"Run next\" names the next ready assignment (a refused one is ready again)",
     runA.getAttribute("aria-label") === "Run next: assignment 5, Ads Agent · copy" && !runA.disabled &&
@@ -1023,7 +1043,7 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   check("H13. a 429 PLATFORM_DAILY_SPEND_LIMIT: by name, in the server's own words, with no dollar figure",
     /^BizForce has reached today's AI usage limit/.test(ceilMsg) && rCeil.text === "The platform's daily AI limit is reached. " + ceilMsg && !/\$/.test(rCeil.text), rCeil.text);
   check("H13. a 429 from the daily cap: by name, in the server's own words, linked to today's count",
-    /^Daily model-call limit reached/.test(capMsg) && rCap.text === "Your daily model-call cap is reached. " + capMsg + " See today's count" && rCap.link === "#hqAlerts", rCap.text);
+    /^Daily model-call limit reached/.test(capMsg) && rCap.text === "Your daily model-call cap is reached. " + capMsg + " See today's count" && rCap.link === "#command", rCap.text);   // NAMED (Oct 30 2026): was #hqAlerts; the count is on the Command tab's alerts strip
   check("H13. a 429 from the per-minute limit: by name", rRate.text === "Too many requests. More than 20 AI requests in a minute. Wait a minute, then press it again.", rRate.text);
   check("H13. each: one request, and no send pulse", [r402, rCeil, rCap, rRate].every(r => r.posts === 1 && !r.pulse), JSON.stringify([r402, rCeil, rCap, rRate].map(r => [r.posts, r.pulse])));
   const dispatchSaid = async reply => {

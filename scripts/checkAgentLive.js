@@ -536,7 +536,9 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   async function mount(file, answerFor, o) {
     o = o || {};
     const raw = lf(fs.readFileSync(path.join(FRONTEND, file), "utf8"));
-    const config = (/<script>\s*(window\.AGENT_PROFILE_CONFIG = [\s\S]*?)<\/script>/.exec(raw) || [])[1];
+    let config = (/<script>\s*(window\.AGENT_PROFILE_CONFIG = [\s\S]*?)<\/script>/.exec(raw) || [])[1];
+    // o.noDeck: the Executive page as a plain agent page (its deck flag off), for the signature module's own tests.
+    if (o.noDeck && config) config = s.replaceOnce(config, "  deck: true,\n", "", "noDeck in " + file);
     const html = raw.replace(/<script[\s\S]*?<\/script>/g, "");
     const dom = new JSDOM(html, { url: "https://bizforceai.com/" + file, runScripts: "outside-only", pretendToBeVisual: true });
     const w = dom.window;
@@ -618,8 +620,9 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
   const lastA = seo.doc.querySelector("#apLive_last a");
   check("L5. Last opens run.html for that run", lastA && lastA.getAttribute("href") === "/run.html?id=seo-running" && /^In progress · /.test(seo.text("apLive_last")) &&
     seo.text("apLive_last_s") === "3 runs · 1 failed in 7 days", (lastA && lastA.getAttribute("href")) + " " + seo.text("apLive_last_s"));
-  check("L5. approvals and score from the member's rows: \"2 waiting\", \"▲ 2 ▼ 1\", \"1 pinned as examples\"",
-    seo.text("apLive_approvals") === "2 waiting" && seo.text("apLive_score") === "▲ 2 ▼ 1" && seo.text("apLive_score_s") === "1 pinned as examples",
+  // NAMED BEFORE → AFTER (Oct 30 2026, no emojis): the score was "▲ 2 ▼ 1"; it is in words, "2 helpful · 1 not helpful".
+  check("L5. approvals and score from the member's rows: \"2 waiting\", \"2 helpful · 1 not helpful\", \"1 pinned as examples\"",
+    seo.text("apLive_approvals") === "2 waiting" && seo.text("apLive_score") === "2 helpful · 1 not helpful" && seo.text("apLive_score_s") === "1 pinned as examples",
     seo.text("apLive_approvals") + " / " + seo.text("apLive_score"));
   check("L5. this month: the spend and \"Your model calls today: 1 of 250\"", /^\$0\.\d\d model spend$/.test(seo.text("apLive_month")) && seo.text("apLive_month_s") === "Your model calls today: 1 of 250",
     seo.text("apLive_month") + " / " + seo.text("apLive_month_s"));
@@ -1257,7 +1260,11 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     const per = async (type, user) => (await t2Call(type, null, user)).body;
     const accentOf = f => (/accentColor:\s*"([^"]+)"/.exec(fs.readFileSync(path.join(FRONTEND, f), "utf8")) || [])[1];
 
-    const mountWith = async (type, body) => { const m = await mount(PAGE_OF[type], () => ({ status: 200, body })); return m; };
+    /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: the Executive's Plans module was tested
+       on executive-agent.html as shipped. AFTER: that page is the command deck, whose Plans tab is its one plan board,
+       so its live panel draws no Plans module (asserted below). The module's own tests mount the page with the deck
+       flag off (o.noDeck); every other page mounts as shipped. */
+    const mountWith = async (type, body) => { const m = await mount(PAGE_OF[type], () => ({ status: 200, body }), { noDeck: type === "executive" }); return m; };
     const ex = await mountWith("executive", await per("executive"));
     const lis = [...ex.doc.querySelectorAll("#apLiveSignature [data-plan='plan-a'] li")].map(li => li.textContent);
     check("T6. Executive: each assignment marked, runs linked to run.html",
@@ -1318,10 +1325,16 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
     for (const f of AGENT_PAGES) {
       const type = pageType(f);
       const b = await per(type);
-      const m = await mount(f, () => ({ status: 200, body: b }));
+      const m = await mount(f, () => ({ status: 200, body: b }), { noDeck: type === "executive" });
       if (!m.doc.querySelector("#apLiveSignature [data-sig='" + type + "']")) missingSig.push(f);
     }
-    check("T6. all 18 agent pages now render their own signature module", missingSig.length === 0, missingSig.join(", "));
+    check("T6. all 18 agent pages render their own signature module (the Executive's with its deck flag off)", missingSig.length === 0, missingSig.join(", "));
+    {
+      const eb = await per("executive");
+      const deck = await mount(PAGE_OF.executive, () => ({ status: 200, body: eb }));
+      check("T6. the Executive command deck's live panel draws no Plans module: its Plans tab is the page's one plan board",
+        !!deck.doc.getElementById("apLiveSignature") && !deck.doc.querySelector("#apLiveSignature [data-sig]") && !!deck.doc.getElementById("apLive"));
+    }
   }
 
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED (" + passes + ")" : "CHECKS FAILED: " + failures + " failing, " + passes + " passing"));

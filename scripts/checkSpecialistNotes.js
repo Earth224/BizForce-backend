@@ -79,8 +79,13 @@ const ANALYTICS_ROSTER_NOW = "KPI and funnel review on figures you supply, repor
    swapped the roster lines only. AFTER: it also swaps exactly these three sentences of config/brain.js, which
    said social publishing was unavailable after backend 1b95c1c let members post to their own Bluesky. Each old
    sentence must be in BASELINE's prompt exactly once to swap, and every other byte must still be identical.
-   checkAgentBriefTruth 8 and 9 pin the new wording against the code. */
+   checkAgentBriefTruth 8 and 9 pin the new wording against the code.
+   NAMED BEFORE → AFTER (Oct 30 2026, no emojis). BEFORE: three swaps. AFTER: four; BRAIN_DIRECTIVES now ends with
+   config/brain.js's NO_EMOJI_RULE, appended after OUTPUT CHARACTERS' last sentence. The fourth swap is that sentence
+   for itself plus the rule, read from the module, so the rule's wording is pinned once (checkNoEmoji N6). */
 const SYSTEM_SWAPS = [
+  ["Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.",
+   "Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all." + "\n\n" + require("../config/brain").NO_EMOJI_RULE],
   ["Sending SMS and publishing to social accounts are currently unavailable; Lead Radar works on one account only; see Other systems.",
    "Sending SMS is currently unavailable; social posts can go only to a member's own connected Bluesky account; Lead Radar works on one account only; see Other systems."],
   ["SMS sending and social publishing are unavailable on every account, whatever the plan, and Lead Radar works only on",

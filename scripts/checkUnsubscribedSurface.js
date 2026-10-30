@@ -35,7 +35,7 @@
    delete() / rpc, and as spending if it reaches callAnthropicText or a model
    client. A multer upload middleware or a storage .upload counts as storage.
 
-   ⚠️ LIMITS, stated. Classification is by middleware NAME: a route that checks
+   WARNING: LIMITS, stated. Classification is by middleware NAME: a route that checks
    a subscription inside its handler reads as login-only, and an inline
    anonymous auth check reads as unauthenticated. Effects are found by text, so
    a write through a dynamic call (a function held in a variable or object)

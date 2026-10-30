@@ -99,6 +99,15 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const BEFORE_COMMIT = "1b12268";   // the frontend before Phase A
 const ELEMENTS_BEFORE = "7e74ca8"; // the frontend before Block 4b (the element palettes)
+/* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck and no emojis): H3 and H8 compared each page's
+   text TODAY with 7e74ca8, so any later edit to a page (a removed duplicate heading, an emoji drawn as an
+   SVG) read as a theme change. AFTER: the 7e74ca8 proof is made on each page as it stood at THEMES_DONE, the
+   frontend's last theme commit; and today's text must keep every theme-bearing line (a --bf- or --tmx- token
+   or var(), the wordmark class, the engine's script tag) exactly as it was there, in order. A line added since
+   may carry a theme token only through var(--token, fallback) (the deck's tabs wear the member's button
+   colours that way), so with no theme it draws its fallback. A later edit that touches no such line passes;
+   one that changes a colour, drops a wordmark's var(), or loads the engine on a public page does not. */
+const THEMES_DONE = "8ec140e";
 const MUTATE = process.env.MUTATE || "";
 
 const SERVER = "server.js", LIB = "lib/themes.js", YOURDATA = "lib/yourData.js", ACCFILES = "lib/accountFiles.js";
@@ -1149,14 +1158,30 @@ async function elements() {
   // H3: today's look
   const pageFiles = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
   const changed = [], wrongText = [];
+  const THEME_LINE = /--bf-|--tmx-|bf-wordmark|bf-theme/;
+  const themeLines = t => t.split("\n").filter(l => THEME_LINE.test(l)).join("\n");
+  const drift = [];
+  ALL_PAGES.concat([UI]).forEach(f => {
+    const done = gitShow(THEMES_DONE, f);
+    if (done === null) { if (THEME_LINE.test(FILES[f])) drift.push(f + ": not readable at " + THEMES_DONE); return; }
+    const now = themeLines(FILES[f]).split("\n"), was = themeLines(done).split("\n").filter(Boolean);
+    let j = 0; const added = [];
+    now.forEach(l => { if (j < was.length && l === was[j]) j++; else if (l) added.push(l); });
+    if (j < was.length) drift.push(f + ": lost or changed " + JSON.stringify(was[j].slice(0, 140)));
+    // an added line: each theme token in it is a var() with a fallback, and it is no engine tag
+    added.filter(l => l.indexOf(TAG) !== -1 || /var\(--(?:bf|tmx)-[a-z0-9-]+\)/.test(l) || l.replace(/var\(--(?:bf|tmx)-[a-z0-9-]+, [^()]+?\)/g, "").match(/--(?:bf|tmx)-/))
+      .forEach(l => drift.push(f + ": added " + JSON.stringify(l.trim().slice(0, 140))));
+  });
+  check("H3. since " + THEMES_DONE + " (the last theme commit) no page and not css/bizforce-ui.css changed a theme-bearing line: every --bf- and --tmx- token, wordmark and engine tag is as built",
+    drift.length === 0, drift.join(" || "));
   const NAMED_SOLID = "background:linear-gradient(90deg,#22d3ee,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent";
   pageFiles.concat([UI]).forEach(f => {
     if (f === SETTINGS) return;
-    const was = gitShow(ELEMENTS_BEFORE, f);
-    if (was === null) { wrongText.push(f + ": not readable at " + ELEMENTS_BEFORE); return; }
-    if (was === FILES[f]) return;
+    const was = gitShow(ELEMENTS_BEFORE, f), done = gitShow(THEMES_DONE, f);
+    if (was === null || done === null) { wrongText.push(f + ": not readable at " + (was === null ? ELEMENTS_BEFORE : THEMES_DONE)); return; }
+    if (was === done) return;
     changed.push(f);
-    let now = unthemed(FILES[f]);
+    let now = unthemed(done);
     /* NAMED: artists and services drew a solid #22d3ee wordmark; it is now a gradient with both ends #22d3ee, which
        paints the same colour, so the member's two wordmark colours can reach it. */
     if (f === "artists.html" || f === "services.html") now = now.split(NAMED_SOLID).join("color:#22d3ee");
@@ -1329,8 +1354,9 @@ async function elements() {
     /animation: tmx-chat-glow-breathe 5s ease-in-out infinite;/.test(mc) && /animation: tmx-core-glow 5\.5s ease-in-out infinite;/.test(mc));
 
   // H8: public pages and cards
-  const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; return !f || gitShow(ELEMENTS_BEFORE, f) !== FILES[f]; });
-  check("H8. every public page (" + LIBX.UNTHEMED.length + ") is exactly as it was: their wordmarks and buttons keep the owner's look", pubChanged.length === 0, pubChanged.join(","));
+  const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; return !f || gitShow(ELEMENTS_BEFORE, f) !== gitShow(THEMES_DONE, f) ||
+    themeLines(FILES[f]) !== themeLines(gitShow(THEMES_DONE, f)) || FILES[f].indexOf(TAG) !== -1; });
+  check("H8. every public page (" + LIBX.UNTHEMED.length + ") was exactly as it was through the theme work, keeps every theme-bearing line since, and loads no engine: their wordmarks and buttons keep the owner's look", pubChanged.length === 0, pubChanged.join(","));
   const dcWas = gitShow(ELEMENTS_BEFORE, "digital-cards.html") || "";
   check("H8. digital cards keep their own look: the card-theme swatches and the card's watermark are untouched",
     pick(FILES["digital-cards.html"], /theme-btn/) === pick(dcWas, /theme-btn/) && pick(dcWas, /theme-btn/).length > 0 &&

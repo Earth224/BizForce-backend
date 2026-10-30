@@ -124,8 +124,8 @@ const ADDED = [
   ["get", "/api/sitemap/support.xml"],         // the support pages members chose to list in search engines (total 327 -> 328)
   // NAMED (Oct 28 2026, the learning loop): BEFORE 328 routes; AFTER 336, adding its eight routes, each requireAuth
   ["get", "/api/agents/feedback/:taskId"],      // the member's rating of their own run, and its outcome (total 328 -> 329)
-  ["put", "/api/agents/feedback/:taskId"],      // rate a run 👍/👎 with a reason and comment; one per member per run (total 329 -> 330)
-  ["post", "/api/agents/feedback/:taskId/pin"], // "Use this as an example": 👍 runs only, five per agent (total 330 -> 331)
+  ["put", "/api/agents/feedback/:taskId"],      // rate a run Helpful or Not helpful with a reason and comment; one per member per run (total 329 -> 330)
+  ["post", "/api/agents/feedback/:taskId/pin"], // "Use this as an example": Helpful runs only, five per agent (total 330 -> 331)
   ["get", "/api/agents/:agentType/learning"],   // the score, outcomes, examples, preferences, suggestions and the exact guidance (total 331 -> 332)
   ["post", "/api/agents/:agentType/preferences"], // a preference typed or a suggestion accepted; eight at most (total 332 -> 333)
   ["put", "/api/agents/:agentType/preferences/:id"], // edit a preference (total 333 -> 334)

@@ -94,6 +94,17 @@ const PLATFORM_KNOWLEDGE = {
   }
 };
 
+/* NO EMOJI FOR MEMBERS. The owner's standing rule: BizForce is professional
+   software, and its own interface carries no emoji (scripts/checkNoEmoji.js
+   fails on one). What the agents and Termaximus write for a member is held to
+   the same rule, with one exception the member controls: their own explicit
+   request in the task. Last in BRAIN_DIRECTIVES, and appended to the guide's
+   persona (lib/guideAsk.js) and the Oracle's prompt (oracleSystemPrompt). In
+   BRAIN_DIRECTIVES it follows OUTPUT CHARACTERS, whose ban on emoji it keeps
+   and whose one exception it names, so the two never disagree. */
+const NO_EMOJI_RULE =
+  "NO EMOJI. BizForce is professional software. Do not use emoji, pictographs or emoji-style symbols in anything you write for the member: results, drafts, replies and summaries alike. The one exception is the member's own instruction: only when the member explicitly asks for emoji in this request may you use them, and then for emoji alone; every other rule you hold still applies.";
+
 const BRAIN_DIRECTIVES =
   "REASONING & PROBLEM-SOLVING. Before answering, think it through: break the request into its component parts, weigh the realistic options for each, check your own logic for gaps or contradictions, and converge on the strongest concrete answer. That thinking is not part of the reply. Begin with the answer itself, and never write a section that narrates your reasoning, your reading of the request or these instructions. Be a problem-solver first — when the user brings a real business problem, work it through to a specific, actionable recommendation rather than a menu of generalities. Do not flatten genuine complexity into platitudes just to sound confident." +
   "\n\nCONTINUOUS IMPROVEMENT. Treat every business profile detail, prior task, live platform stat, and stored memory you're given as material to actually use, not background noise to skim past. Let that accumulated context sharpen each new answer: reference what is already known about this user's business, build on prior work instead of repeating it, and let guidance grow more specific the longer you work with them. This is adaptive intelligence grounded in real accumulated data — not a claim of independent awareness, feelings, or consciousness." +
@@ -130,7 +141,8 @@ const BRAIN_DIRECTIVES =
      the plain-text rule to the final user message where recency settles it
      outright. That fix protects one route. This one removes the contradiction
      itself, for all six buildAgentSystemPrompt callers and any added later. */
-  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII. That last allowance is the weakest rule you hold, and it yields: where your own agent prompt tells you not to use markdown or formatting characters, that prohibition wins outright and this sentence must never be read as licensing them. Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all.";
+  "\n\nOUTPUT CHARACTERS, absolutely enforced: plain ASCII text only. Absolutely no emoji, no decorative or novelty symbols, no unicode ornaments, no pictographs, no ASCII art, no arrows or bullet-glyph characters. Use only standard letters, numbers, and normal punctuation, with straight quotes and apostrophes. If you wish to stress a word, do it through phrasing, not symbols. This is a character-level rule about what you emit, and it binds every agent inheriting these directives — it does not forbid ordinary markdown where the task calls for it, since markdown is itself ASCII. That last allowance is the weakest rule you hold, and it yields: where your own agent prompt tells you not to use markdown or formatting characters, that prohibition wins outright and this sentence must never be read as licensing them. Some surfaces display your reply exactly as you write it, without rendering, and there a formatting character is shown to the reader raw in the middle of your sentence — which is worse than no formatting at all." +
+  "\n\n" + NO_EMOJI_RULE;
 
 /* NO INVENTED NUMBERS OR OFFERS — LAST IN EVERY PROMPT, NOT IN BRAIN_DIRECTIVES.
 
@@ -531,6 +543,7 @@ module.exports = {
   agentDescription,
   BRAIN_DIRECTIVES,
   NO_INVENTION_RULE,
+  NO_EMOJI_RULE,
   buildAgentSystemPrompt,
   SPECIALIST_NOTES_HEADER,
   useBillingPlans

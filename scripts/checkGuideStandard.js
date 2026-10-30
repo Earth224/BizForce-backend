@@ -95,7 +95,11 @@ const MUTATIONS = {
   // a tip restates its page's heading (S3)
   "restates-h1": [[GUIDE, '"Press \\"+ Add Customer\\", fill in', '"Customers: press \\"+ Add Customer\\", fill in']],
   // an entry drops to three tips (S1)
-  "three-tips": [[GUIDE, '      "Lost in another month? Press \\"Today\\" to come back."\n', ""], [GUIDE, '      "Tick \\"Recurring annually\\" for a birthday or an anniversary, and it repeats every year from one save.",\n',
+  /* NAMED BEFORE → AFTER (Oct 30 2026): the calendar had four tips, "Lost in another month?" last; db265c2 added a fifth
+     ("Agent runs") after it, so the old anchor (that tip with no comma) matched nothing. The mutation still leaves the
+     calendar three tips: it drops "Lost in another month?" and "Agent runs", and "Recurring annually" ends the list. */
+  "three-tips": [[GUIDE, '      "Lost in another month? Press \\"Today\\" to come back.",\n      "Press \\"Agent runs\\" to see when your agent schedules come due; it only reads, and a paused or switched-off schedule shows nothing, with why."\n', ""],
+    [GUIDE, '      "Tick \\"Recurring annually\\" for a birthday or an anniversary, and it repeats every year from one save.",\n',
     '      "Tick \\"Recurring annually\\" for a birthday or an anniversary, and it repeats every year from one save."\n']],
   // one of the 11 pages stops loading the guide (S7)
   "unguided-again": [["crm.html", GUIDE_TAG + "\n", ""]],
@@ -287,16 +291,21 @@ const commonWrong = SHOWN.filter(f => {
   const n = RENDERED[f].doc.querySelectorAll("#tmx-guide-panel [data-tmx-guide-common]").length;
   return n !== (COMMON_PAGES.indexOf(f) !== -1 ? 1 : 0);
 });
+/* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: at least 17 pages carried "Last run",
+   and the one agent page without it was the Content Agent. AFTER: at least 16; executive-agent.html lost its toolbar
+   Last-run line (a duplicate of the deck's History tab, which lists every run), so it shows no COMMON line either. */
 check("S5. in the panel, COMMON appears exactly once on each page with the \"Last run\" line and on no other page",
-  COMMON_PAGES.length >= 17 && commonWrong.length === 0, commonWrong.join(", "));
+  COMMON_PAGES.length >= 16 && commonWrong.length === 0, commonWrong.join(", "));
 const commonText = COMMON_PAGES.filter(f => { const el = RENDERED[f].doc.querySelector("#tmx-guide-panel [data-tmx-guide-common]"); return !el || el.textContent !== COMMON; });
 check("S5. it reads exactly as declared, below the page's own tips", commonText.length === 0 &&
   COMMON_PAGES.every(f => { const el = RENDERED[f].doc.querySelector("#tmx-guide-panel [data-tmx-guide-common]"); return el && el.previousElementSibling && el.previousElementSibling.matches("ul.tmx-guide-list"); }),
   commonText.join(", "));
 const commonNonAgent = COMMON_PAGES.filter(f => AGENT_URLS.indexOf(f) === -1);
 check("S5. every page with the \"Last run\" line is a registered agent page (AGENT_PAGE_URLS)", AGENT_URLS.length === 18 && commonNonAgent.length === 0, commonNonAgent.join(", "));
-check("S5. the one agent page without it is the Content Agent, which has no \"Last run\" line and says in its own first tip where the profile is set",
-  JSON.stringify(AGENT_URLS.filter(f => COMMON_PAGES.indexOf(f) === -1)) === '["agents/content.html"]' && /Business Profile/.test((ENTRIES["content.html"] || [""])[0]));
+check("S5. the two agent pages without it are the Content Agent, which says in its own first tip where the profile is set, and the Executive deck, whose tips name its History tab",
+  JSON.stringify(AGENT_URLS.filter(f => COMMON_PAGES.indexOf(f) === -1).sort()) === '["agents/content.html","executive-agent.html"]' &&
+  /Business Profile/.test((ENTRIES["content.html"] || [""])[0]) && /deck: true,/.test(FILES["executive-agent.html"]) &&
+  (ENTRIES["executive-agent.html"] || []).some(t => /"History" lists this agent's runs/.test(t)));
 
 /* ── S6. every guided page has its entry; no default ────────────────────── */
 console.log("\n══ S6. every page that shows the guide has its own entry ══");

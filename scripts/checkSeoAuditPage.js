@@ -561,6 +561,15 @@ const count = (h, needle) => h.split(needle).length - 1;
     });
   })(FRONTEND);
   let toolCount = 0, compared = 0;
+  /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis). BEFORE: a gate's title began with U+26A0 WARNING SIGN and a space.
+     AFTER: the title is words alone, after a drawn triangle (agent-profile.js GATE_ICON, an aria-hidden <svg>).
+     That one face is put back before the comparison, and it must be there to put back when a gate is drawn;
+     every other byte of every render must still match BEFORE's. */
+  const GATE_ICON_SRC = (/\n  var GATE_ICON = ('[^;]*);\n/.exec(NEW_SRC) || [])[1];
+  const GATE_ICON = GATE_ICON_SRC ? vm.runInNewContext(GATE_ICON_SRC) : null;
+  check("the gate's drawn triangle was read from agent-profile.js (an aria-hidden svg, no pictograph)",
+    !!GATE_ICON && /^<svg class="ap-gate-icon"[^>]* aria-hidden="true"/.test(GATE_ICON) && !/[\u{1F300}-\u{1FAFF}\u2600-\u27BF]/u.test(GATE_ICON));
+  const OLD_GATE_FACE = html => !GATE_ICON ? html : html.split('<div class="ap-gate-title">' + GATE_ICON).join('<div class="ap-gate-title">' + String.fromCodePoint(0x26A0) + ' ');
   pages.forEach(p => {
     let cfg;
     try { cfg = pageConfig(p); } catch (e) { check(path.relative(FRONTEND, p) + " config parses", false, e.message); return; }
@@ -572,6 +581,15 @@ const count = (h, needle) => h.split(needle).length - 1;
     const shared = Object.assign({}, cfg, { tools: (cfg.tools || []).filter(t => !t.adminOnly) });
     const o = load(OLD_SRC, shared), n = load(NEW_SRC, shared);
     const newTools = n.ap.TOOLS.filter(t => !(cfg.agentType === "seo" && t.id === "audit"));
+    /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: every page's tools markup was compared
+       as configured. AFTER: a deck page (deck: true, executive-agent.html) draws no tools, since its one command box
+       is the deck's; its TOOLS list is empty (so inject draws no tools block), and with the deck flag off its tools still draw exactly as at BEFORE. */
+    if (cfg.deck === true) {
+      const plain = Object.assign({}, shared); delete plain.deck;
+      check(rel + ": a deck page draws no tools, and with the deck off its tools markup is identical",
+        NEW_SRC.indexOf('          TOOLS.length ? toolsMarkup() : "",') !== -1 && n.ap.TOOLS.length === 0 && o.ap.toolsMarkup() === load(NEW_SRC, plain).ap.toolsMarkup() && o.ap.toolsMarkup() !== "");
+      return;
+    }
     if (rel !== "agents/seo.html") check(rel + ": tools markup identical", o.ap.toolsMarkup() === n.ap.toolsMarkup());
     newTools.forEach(t => {
       toolCount++;
@@ -584,7 +602,7 @@ const count = (h, needle) => h.split(needle).length - 1;
         { success: true, assignments: [{ id: 1, agent: "seo", tool: "seo/audit", task: "Audit", inputs: { url: "x" }, is_dispatchable: true }],
           execution_order: { can_start_now: [1] }, measured: { assignments: 1 }, task_id: "plan-1" }
       ];
-      const same = fixtures.every(d => o.ap.renderToolResult(t, d) === n.ap.renderToolResult(t, d));
+      const same = fixtures.every(d => o.ap.renderToolResult(t, d) === OLD_GATE_FACE(n.ap.renderToolResult(t, d)));
       compared += fixtures.length;
       check(rel + " · " + t.id + ": renders identically to " + BEFORE + " on 6 fixtures", same);
     });
@@ -594,8 +612,13 @@ const count = (h, needle) => h.split(needle).length - 1;
   // Demand signals on the R&D page added .ap-ds-* rules beside the .ap-seo-* ones.
   // NAMED (Oct 28 2026, the learning loop): BEFORE only .ap-seo-* and .ap-ds-* rules were added. AFTER the rating
   // bar's .ap-rate* and the learning panel's .ap-learn* rules are added too; every rule of BEFORE is still unchanged.
-  const removed = newStyle.replace(/\.ap-(?:seo-|ds-|rate|learn-)[^}]*\}/g, "");
-  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-*, .ap-ds-*, .ap-rate* and .ap-learn-* rules were added", !/\.ap-(?:seo-|ds-|rate|learn-)/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length);
+  // NAMED BEFORE → AFTER (Oct 30 2026, readable results and no emojis): the readable result's .ap-read-* rules, the
+  // stats card's .ap-chart-empty and .ap-stats-note, and the gate's .ap-gate-icon are added too. Still every rule of
+  // BEFORE is unchanged, and none of BEFORE's rules starts with an added prefix.
+  const removed = newStyle.replace(/\.ap-(?:seo-|ds-|rate|learn-|read-|chart-empty|stats-note|gate-icon)[^}]*\}/g, "");
+  check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-*, .ap-ds-*, .ap-rate*, .ap-learn-*, .ap-read-*, .ap-chart-empty, .ap-stats-note and .ap-gate-icon rules were added",
+    !/\.ap-(?:seo-|ds-|rate|learn-|read-|chart-empty|stats-note|gate-icon)/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length,
+    removed.length + " vs " + oldStyle.length);
   console.log("    (" + pages.length + " agent pages, " + toolCount + " other tools, " + compared + " renders compared)");
 
 

@@ -25,7 +25,7 @@
                       customer row, refuse a row holding a different id, and
                       the subscriptions → profiles write order
 
-   ⚠️ THE DATABASE IS FAKE. Supabase is a stub that answers the select / upsert
+   WARNING: THE DATABASE IS FAKE. Supabase is a stub that answers the select / upsert
    / update shapes the function uses today, and the expected writes are typed
    out here. A renamed column, a changed table, a different onConflict target
    or a constraint the real subscriptions table would reject would NOT be

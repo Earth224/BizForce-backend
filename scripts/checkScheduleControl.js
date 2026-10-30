@@ -33,7 +33,7 @@
          a member checks entitlement (fail closed), and each that does not is
          a named exception with its reason
 
-   ⚠️ THE DATABASE IS FAKE. It applies eq / in / or filters and update /
+   WARNING: THE DATABASE IS FAKE. It applies eq / in / or filters and update /
    upsert / delete the way PostgREST would for these shapes; it does not know
    the live columns. Migration 143 must be applied for the real reads to work.
 

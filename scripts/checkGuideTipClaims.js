@@ -937,7 +937,8 @@ const hqTips = tipsFor("dashboard.html"), dirTips = tipsFor("ai-agents.html"), m
 const walTips = tipsFor("wallet.html"), certTips = tipsFor("certifications.html");
 const SV = FILES[SERVER];
 const CC_JS = "scripts/bf-command-center.js", HQ_JS = "scripts/bf-hq.js";
-[CC_JS, HQ_JS].forEach(readFrontend);
+const DECK_JS = "scripts/bf-exec-deck.js";
+[CC_JS, HQ_JS, DECK_JS].forEach(readFrontend);
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
 const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
@@ -1224,18 +1225,28 @@ const CN = [
        executive 6 "Open \"Executive Plan\", give it the goal"    → executive 10 "pick an agent or \"Let the Executive decide\""
        executive 8 "each tile shows an agent's Now, Last, …"    → executive 14 "changes only that agent's schedule"
        executive 9 "nothing is approved until you press \"Approve\"" → (folded into 14's "\"Approval queue\" still holds what needs you")
-     Their proofs still hold in the code (checkExecutiveHQ H1 and H4 keep the grid and the queue); no tip claims them now. */
-  // NEW (Block 3b): the Do tip. Command, its agent picker headed by "Let the Executive decide", and Send, the only sender.
-  ["executive 10", exTips, "pick an agent or \"Let the Executive decide\"", EXEC_FALSE,
+     Their proofs still hold in the code (checkExecutiveHQ H1 and H4 keep the grid and the queue); no tip claims them now.
+     NAMED (Oct 30 2026, the Executive command deck): the entry names the deck's six tabs. BEFORE → AFTER, by fragment:
+       executive 10 "pick an agent or \"Let the Executive decide\""   → executive 10 "pick an agent or \"Executive decides\"" (the chip's
+                    words; the task POST is now { agent_type, prompt } plus task_type when the Executive's "Kind of task" is on)
+       executive 11 "press \"Run next\" for one assignment at a time" → executive 11 "\"Run next\" sends one assignment per press"
+                    (the board's heading is "Plans", the tab's own name, not "Plan runner")
+       executive 13 "Running plans is switched off on the server"    → executive 13 "running plans is switched off on the server" (mid-sentence)
+       executive 14 "changes only that agent's schedule"            → unchanged fragment; the tip now opens with "Approvals"
+       (none)                                                       → executive 15 "lists this agent's runs, 10 a page" (History) */
+  // NEW (Block 3b): the Do tip. Command, its agent picker headed by "Executive decides", and Send, the only sender.
+  ["executive 10", exTips, "pick an agent or \"Executive decides\"", EXEC_FALSE,
     () => FILES[EXEC].indexOf('<h3 class="hq-console-title" id="hqConsoleTitle">Command</h3>') !== -1 &&
       FILES[EXEC].indexOf('<button type="button" class="hq-btn hq-btn-go hq-send" id="hqSend">Send</button>') !== -1 &&
-      FILES[HQ_JS].indexOf('var first = el("option", null, "Let the Executive decide");') !== -1 &&
+      FILES[EXEC].indexOf('data-hq-mode="task" aria-pressed="false">Do a task</button>') !== -1 &&
+      FILES[EXEC].indexOf('data-hq-mode="plan" aria-pressed="true">Make a plan</button>') !== -1 &&
+      FILES[HQ_JS].indexOf('var c = el("button", "hq-chip", k === DECIDE ? "Executive decides" : AGENTS[k].name);') !== -1 &&
       (FILES[HQ_JS].match(/\bsend\(/g) || []).length === 2 && FILES[HQ_JS].indexOf('if (t && t.closest && t.closest("#hqSend")) { send(); return; }') !== -1 &&
-      FILES[HQ_JS].indexOf('api("POST", "/api/ai/tasks", { agent_type: agent, prompt: text })') !== -1 &&
+      FILES[HQ_JS].indexOf('var task = { agent_type: agent, prompt: text };') !== -1 && FILES[HQ_JS].indexOf('api("POST", "/api/ai/tasks", task)') !== -1 &&
       FILES[HQ_JS].indexOf('api("POST", "/api/agents/executive/plan", body)') !== -1],
   // NEW (Block 3b): one dispatch per press; the server mints the chain at depth 0; runNext is reached only from the click.
-  ["executive 11", exTips, "press \"Run next\" for one assignment at a time", EXEC_FALSE,
-    () => FILES[EXEC].indexOf('<h3 class="hq-h" id="hqPlansTitle">Plan runner</h3>') !== -1 &&
+  ["executive 11", exTips, "\"Run next\" sends one assignment per press", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<h3 class="hq-h" id="hqPlansTitle">Plans</h3>') !== -1 &&
       FILES[HQ_JS].indexOf('act.dispatching[plan.id] ? "Running…" : "Run next"') !== -1 && (FILES[HQ_JS].match(/runNext\(/g) || []).length === 2 &&
       FILES[HQ_JS].indexOf('api("POST", "/api/assignments/dispatch", { executive_task_id: planId, assignment_id: Number(next.id) })') !== -1 &&
       /var chainId = crypto\.randomUUID\(\);/.test(SV) && /chain: \{ id: chainId, depth: 0, callsSoFar: 0 \}/.test(SV)],
@@ -1246,7 +1257,7 @@ const CN = [
       return server.length >= 7 && server.every(k => hq.indexOf(k + ": {") !== -1) && (hq.match(/"[a-z-]+\/[a-z-]+": \{/g) || []).length === server.length &&
         FILES[HQ_JS].indexOf('name: "This one goes through approval on its own page."') !== -1; }],
   // NEW (Block 3b): the If-stuck tip; the server says chaining's state, and the button is disabled with those words.
-  ["executive 13", exTips, "Running plans is switched off on the server", EXEC_FALSE,
+  ["executive 13", exTips, "running plans is switched off on the server", EXEC_FALSE,
     () => /chaining_on: agentChainingEnabled\(\),/.test(SV) && FILES[HQ_JS].indexOf('var off = cc && cc.chaining_on === false;') !== -1 &&
       FILES[HQ_JS].indexOf("run.disabled = off || !next || !!act.dispatching[plan.id];") !== -1 &&
       FILES[HQ_JS].indexOf('bar.appendChild(el("span", "hq-muted", "Running plans is switched off on the server"));') !== -1 &&
@@ -1256,7 +1267,16 @@ const CN = [
     () => FILES[HQ_JS].indexOf('api("PUT", "/api/agent-schedules/" + encodeURIComponent(type) + "/" + what)') !== -1 &&
       FILES[HQ_JS].indexOf('paused ? "Resume schedule" : "Pause schedule"') !== -1 &&
       /app\.put\("\/api\/agent-schedules\/:agent_type\/pause", requireAuth,/.test(SV) && /app\.put\("\/api\/agent-schedules\/:agent_type\/resume", requireAuth,/.test(SV) &&
-      FILES[EXEC].indexOf('<h3 class="hq-h" id="hqQueueTitle">Approval queue</h3>') !== -1],
+      FILES[EXEC].indexOf('<h3 class="hq-h" id="hqQueueTitle">Approval queue</h3>') !== -1 &&
+      FILES[EXEC].indexOf('id="deckTab-approvals" data-deck-tab="approvals"') !== -1 && FILES[EXEC].indexOf('id="deckTab-agents" data-deck-tab="agents"') !== -1],
+  // NEW (Oct 30 2026): the History tab, 10 runs a page from the member's own ai_tasks, and "View result" opening the drawer.
+  ["executive 15", exTips, "lists this agent's runs, 10 a page", EXEC_FALSE,
+    () => FILES[DECK_JS].indexOf('var PAGE_SIZE = 10;') !== -1 &&
+      FILES[DECK_JS].indexOf('fetch(API_URL + "/api/ai/tasks?agent_type=executive&limit=100"') !== -1 &&
+      FILES[DECK_JS].indexOf('fetch(API_URL + "/api/ai/tasks/" + encodeURIComponent(id)') !== -1 &&
+      FILES[HQ_JS].indexOf('var vr = el("button", "hq-btn", "View result");') !== -1 &&
+      FILES[EXEC].indexOf('id="deckTab-history" data-deck-tab="history"') !== -1 && FILES[EXEC].indexOf('id="deckTab-settings" data-deck-tab="settings"') !== -1 &&
+      /app\.get\("\/api\/ai\/tasks", requireAuth,/.test(SV) && /\.eq\("user_id", req\.user\.id\)/.test(SV)],
   ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],

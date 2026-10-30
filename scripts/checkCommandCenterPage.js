@@ -400,7 +400,7 @@ async function page(serve, opts) {
     if (html.indexOf("id=\"" + elId + "\"") === -1) return null;
     const tag = new RegExp("<[a-z0-9]+[^>]*id=\"" + elId + "\"[^>]*>").exec(html)[0];
     els[elId] = { id: elId, innerHTML: "", textContent: "", disabled: false, listeners: {},
-      style: { display: /display:none/.test(tag) ? "none" : "" },
+      style: { display: /display:none/.test(tag) ? "none" : "" }, dataset: { ccQueue: (/data-cc-queue="([^"]*)"/.exec(tag) || [])[1] },
       addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); } };
     return els[elId];
   };
@@ -715,17 +715,41 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
 
   /* ── 9. one Command Center, two pages ─────────────────────────────────── */
   console.log("\n══ 9. the shared Command Center on the dashboard and in Headquarters ══");
-  const loadsAfterSection = f => /<\/section>\s*(?:<script src="\/scripts\/bf-hq\.js"><\/script>\s*)?<script src="\/scripts\/bf-command-center\.js"><\/script>/.test(FILES[f]) &&
-    (FILES[f].match(/<script src="\/scripts\/bf-command-center\.js"><\/script>/g) || []).length === 1;
-  check("both pages load scripts/bf-command-center.js once, right after the section; neither keeps an inline copy",
-    [DASH, EXEC].every(loadsAfterSection) && [DASH, EXEC].every(f => FILES[f].indexOf("(function commandCenter() {") === -1));
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck):
+     BEFORE  both pages loaded bf-command-center.js right after the section (Headquarters with bf-hq.js between);
+             both sections carried the same 11 ids; the same answer drew all six panels word for word on both.
+     AFTER   the dashboard is unchanged. On executive-agent.html the section sits on the deck's History tab and
+             the scripts load at the end of the page, bf-hq.js, then bf-command-center.js, then bf-exec-deck.js;
+             its section has no ccPlans (the Plans tab's board is the page's one plan view) and no ccNeedsYou, so
+             9 ids, the dashboard's less those two; "Needs you" (still id ccNeedsYou, once on the page) moved out
+             of the section onto the Approvals tab, beside the approval queue
+             (data-cc-queue="elsewhere"), so it counts the proposals and points at the queue instead of listing
+             them again. Every other panel is still word for word. */
+  const loadsAfterSection = f => /<\/section>\s*(?:<script src="\/scripts\/bf-hq\.js"><\/script>\s*)?<script src="\/scripts\/bf-command-center\.js"><\/script>/.test(FILES[f]);
+  const loadsOnce = f => (FILES[f].match(/<script src="\/scripts\/bf-command-center\.js"><\/script>/g) || []).length === 1;
+  const at = src => FILES[EXEC].indexOf('<script src="/scripts/' + src + '"></script>');
+  check("both pages load scripts/bf-command-center.js once (the dashboard right after the section; the deck after bf-hq.js and before bf-exec-deck.js); neither keeps an inline copy",
+    loadsAfterSection(DASH) && [DASH, EXEC].every(loadsOnce) && at("bf-hq.js") !== -1 && at("bf-hq.js") < at("bf-command-center.js") &&
+    at("bf-command-center.js") < at("bf-exec-deck.js") && [DASH, EXEC].every(f => FILES[f].indexOf("(function commandCenter() {") === -1));
   const ids = f => (FILES[f].match(/<section id="commandCenterSection"[\s\S]*?<\/section>/) || [""])[0].match(/id="[A-Za-z]+"/g) || [];
-  check("both pages carry the same Command Center markup ids", JSON.stringify(ids(DASH)) === JSON.stringify(ids(EXEC)) && ids(DASH).length === 11,
+  check("both pages carry the same Command Center markup ids, but for the deck's ccPlans (none) and ccNeedsYou (once, on its Approvals tab)",
+    ids(DASH).length === 11 && ids(DASH).indexOf('id="ccPlans"') !== -1 && ids(DASH).indexOf('id="ccNeedsYou"') !== -1 &&
+    JSON.stringify(ids(DASH).filter(i => i !== 'id="ccPlans"' && i !== 'id="ccNeedsYou"')) === JSON.stringify(ids(EXEC)) &&
+    FILES[EXEC].indexOf('id="ccPlans"') === -1 && (FILES[EXEC].match(/id="ccNeedsYou"/g) || []).length === 1 &&
+    FILES[EXEC].indexOf('id="deckPanel-approvals"') !== -1 && FILES[EXEC].indexOf('id="deckPanel-approvals"') < FILES[EXEC].indexOf('id="ccNeedsYou"') &&
+    FILES[EXEC].indexOf('id="ccNeedsYou"') < FILES[EXEC].indexOf('id="deckPanel-history"'),
     JSON.stringify([ids(DASH), ids(EXEC)]));
   const onDash = await page(live(full, OWNER)), onExec = await page(live(full, OWNER), { file: EXEC });
-  check("the same answer renders the same panels, word for word, on both pages",
-    PANEL_IDS.concat(["ccPlatform"]).every(k => onDash.panel(k) === onExec.panel(k) && onDash.panel(k).length > 0) &&
-    onExec.els.ccPlatformPanel.style.display === "", PANEL_IDS.filter(k => onDash.panel(k) !== onExec.panel(k)).join(","));
+  const SAME = PANEL_IDS.filter(k => k !== "ccPlans" && k !== "ccNeedsYou").concat(["ccPlatform"]);
+  check("the same answer renders the same panels, word for word, on both pages (all but the deck's plans and Needs you)",
+    SAME.every(k => onDash.panel(k) === onExec.panel(k) && onDash.panel(k).length > 0) && onExec.panel("ccPlans") === "" &&
+    onExec.els.ccPlatformPanel.style.display === "", SAME.filter(k => onDash.panel(k) !== onExec.panel(k)).join(","));
+  const nyRows = fullBody.needs_you.data.pending_proposals.rows;
+  const strip = h => h.replace(/<div class="cc-sub">Proposals waiting for you<\/div>[\s\S]*?(?=<div class="cc-sub">|$)/, "");
+  check("the deck's Needs you counts the proposals and points at the approval queue, names none, and is otherwise word for word",
+    onExec.text("ccNeedsYou").indexOf(nyRows.length + " proposals wait in the approval queue above.") !== -1 &&
+    nyRows.every(r => onExec.panel("ccNeedsYou").indexOf(r.title) === -1) && nyRows.every(r => onDash.panel("ccNeedsYou").indexOf(r.title) !== -1) &&
+    strip(onExec.panel("ccNeedsYou")) === strip(onDash.panel("ccNeedsYou")) && strip(onDash.panel("ccNeedsYou")).length > 0, onExec.text("ccNeedsYou").slice(0, 300));
   const memberExec = await page(live(full, USER), { file: EXEC });
   check("in Headquarters, a member's Command Center keeps the platform panel hidden and empty",
     memberExec.els.ccPlatformPanel.style.display === "none" && memberExec.panel("ccPlatform") === "");

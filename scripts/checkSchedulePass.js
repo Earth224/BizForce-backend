@@ -18,7 +18,7 @@
      f. one plan lookup per user per pass, including when it throws
      g. autonomy off: not run, and the plan is never looked up
 
-   ⚠️ THE DATABASE IS FAKE. Supabase, getUserPlan and runScheduledAgentTask
+   WARNING: THE DATABASE IS FAKE. Supabase, getUserPlan and runScheduledAgentTask
    are stubs shaped like the calls the function makes today. A renamed column,
    a changed table or a different query shape in agent_schedules or
    agent_autonomy would NOT be caught here; this proves the pass's decisions,

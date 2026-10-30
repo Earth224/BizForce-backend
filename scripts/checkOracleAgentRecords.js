@@ -107,8 +107,11 @@ function loadBrain() {
 const BRAIN_MOD = loadBrain();
 
 /* ── the route, lifted ────────────────────────────────────────────────────── */
+/* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): server.js's require of config/brain gave buildAgentSystemPrompt and
+   useBillingPlans; it now gives NO_EMOJI_RULE too, which oracleSystemPrompt() appends. It is supplied from the
+   brain as the other two are. */
 const STUBS = new Set(["supabase", "console", "process", "require", "module", "app", "Anthropic", "requireAuth",
-  "requireActiveSubscription", "aiLimiter", "oracleChatLimiter", "buildAgentSystemPrompt", "useBillingPlans", "Buffer", "URL", "setTimeout", "setImmediate", "fetch"]);
+  "requireActiveSubscription", "aiLimiter", "oracleChatLimiter", "buildAgentSystemPrompt", "useBillingPlans", "NO_EMOJI_RULE", "Buffer", "URL", "setTimeout", "setImmediate", "fetch"]);
 const SPANS = [];
 {
   const re = /^(?:(?:async )?function [A-Za-z_$][A-Za-z0-9_$]*[(]|app[.][a-z]+[(])/gm; let m;
@@ -311,7 +314,7 @@ async function ask(seed, opts) {
     process: { env: Object.assign({}, ENV, o.env || {}) },
     console: { log: (...a) => logs.push(a.join(" ")), error: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push(a.join(" ")) },
     Anthropic, requireAuth() {}, requireActiveSubscription() {}, aiLimiter() {}, oracleChatLimiter() {},
-    buildAgentSystemPrompt: BRAIN_MOD.buildAgentSystemPrompt, useBillingPlans: BRAIN_MOD.useBillingPlans,
+    buildAgentSystemPrompt: BRAIN_MOD.buildAgentSystemPrompt, useBillingPlans: BRAIN_MOD.useBillingPlans, NO_EMOJI_RULE: BRAIN_MOD.NO_EMOJI_RULE,
     AsyncLocalStorage: require("async_hooks").AsyncLocalStorage,
     decodeHTML: rq("entities").decodeHTML, decodeHTMLAttribute: rq("entities").decodeHTMLAttribute,
     DateTime: rq("luxon").DateTime, encrypt: rq("./lib/apiKeyCrypto").encrypt, decrypt: rq("./lib/apiKeyCrypto").decrypt,

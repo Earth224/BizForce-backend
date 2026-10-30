@@ -145,7 +145,9 @@ const MAP = JSON.parse(FILES[MAPF]);
 /* lib/guideAsk.js, compiled from FILES so a mutation of it is the one that runs. */
 const G = (function () {
   const m = { exports: {} };
-  vm.runInNewContext(FILES[LIB], { module: m, exports: m.exports, require: rq, Number, JSON, Object, Array, String }, { filename: LIB });
+  /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): BEFORE, its require was server.js's. AFTER, lib/guideAsk.js's own
+     (createRequire at the file), because the persona now takes config/brain.js's NO_EMOJI_RULE by "../config/brain". */
+  vm.runInNewContext(FILES[LIB], { module: m, exports: m.exports, require: require("module").createRequire(path.join(REPO, LIB)), Number, JSON, Object, Array, String }, { filename: LIB });
   return m.exports;
 })();
 
@@ -473,7 +475,16 @@ async function main() {
     const differ = names.filter(n => { const a = fnOf(FILES[PRESENCE], n), b = fnOf(BASE_PRESENCE, n); return !a || a !== b; });
     check("G6. the Oracle's " + names.length + " functions in the mist are byte-identical to frontend " + FRONT_BASE, differ.length === 0, differ.join(","));
     const markupOf = src => { const a = src.indexOf("  chat.innerHTML =\n"); return a === -1 ? null : src.slice(a, src.indexOf("</div>';\n", a)); };
-    check("G6. ... and so is the mist's chat markup (header, messages, attachments, the Oracle's input)", !!markupOf(FILES[PRESENCE]) && markupOf(FILES[PRESENCE]) === markupOf(BASE_PRESENCE));
+    /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): the attach button's face was the paperclip emoji, as a hex
+       character reference; it is now a drawn paperclip, one <svg> (currentColor, aria-hidden) inside the same button
+       with the same aria-label. Each side's face is set aside before the comparison (BEFORE's must be that one
+       reference, AFTER's that one svg); every other byte must still match. */
+    const ATTACH_FACE = /(<button id="tmx-chat-attach" type="button" aria-label="Attach files">)<svg [^>]*aria-hidden="true"[^>]*>(?:(?!<\/svg>)[\s\S])*<\/svg>(<\/button>)/;
+    const BASE_FACE = /(<button id="tmx-chat-attach" type="button" aria-label="Attach files">)&#x[0-9A-F]{5};(<\/button>)/;
+    const faceless = (src, re) => src && src.replace(re, "$1(face)$2");
+    check("G6. ... and so is the mist's chat markup (header, messages, attachments, the Oracle's input), but for the attach button's drawn face",
+      !!markupOf(FILES[PRESENCE]) && ATTACH_FACE.test(markupOf(FILES[PRESENCE])) && BASE_FACE.test(markupOf(BASE_PRESENCE) || "") &&
+      faceless(markupOf(FILES[PRESENCE]), ATTACH_FACE) === faceless(markupOf(BASE_PRESENCE), BASE_FACE));
     const oracleOf = src => { const a = src.indexOf('app.post("/api/oracle", '); return a === -1 ? null : src.slice(a, s.braceMatch(src, src.indexOf("async function (req, res, next) {", a) + 31)); };
     check("G6. POST /api/oracle is byte-identical to backend " + BACK_BASE, !!oracleOf(SRC) && oracleOf(SRC) === oracleOf(BASE_SERVER));
   }
