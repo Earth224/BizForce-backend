@@ -98,6 +98,10 @@ const MUTATIONS = {
   "ticker-scrolls-under-reduced-motion": [[BOOMBOX, "        if (loaded && !still) tr.appendChild(span(\"bbx-ticker-text\", text, true));\n        tk.setAttribute(\"data-scroll\", loaded && !still ? \"true\" : \"false\");",
     "        if (loaded) tr.appendChild(span(\"bbx-ticker-text\", text, true));\n        tk.setAttribute(\"data-scroll\", loaded ? \"true\" : \"false\");"]],
   // the missing tables shown as "Internal server error"
+  // the live dashboard's bug: the player decides its mode while the page is still parsed (G1/G2 live order)
+  "music-mode-at-parse-time": [[MUSIC, "  if (document.readyState === \"loading\") document.addEventListener(\"DOMContentLoaded\", run);\n  else run();\n})();", "  run();\n})();"]],
+  // a start that fails leaves nothing on the page (G2 live order)
+  "start-failure-silent": [[MUSIC, "    doc.body.appendChild(b);\n  }\n  window.__bfMusicStartFailed = startFailed;", "  }\n  window.__bfMusicStartFailed = startFailed;"]],
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -1386,6 +1390,137 @@ async function boomboxChecks(c) {
     !/Internal server error|Loading your music/.test(nsText), NS.document.querySelector(".bfm-queue li").textContent);
   check("G12. no emoji in anything the boombox draws or says", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + boxOf(D).textContent + boxOf(F).textContent));
   await nowPlayingChecks(c);
+  await liveOrderChecks();
+}
+
+/* ── G1/G2, live order: the real page files, their scripts run as a browser runs them ──
+   NAMED BEFORE → AFTER (Oct 31 2026, "The boombox always appears"). BEFORE: G1 and G2 built a test page of
+   their own, with the mist's tag BEFORE the boombox and the player, and evaluated those scripts after it. The
+   live dashboard lists bf-music.js BEFORE termaximus-presence.js; bf-music.js decided its mode as it ran,
+   found no mist tag yet, stepped aside silently, and no boombox ever appeared, while G1 and G2 passed.
+   AFTER: these checks open the REAL page files. Each script tag runs as the browser runs it: at its own
+   place while the page is parsed, before the tags after it exist (jsdom does not block its parser on an
+   external script, so each one is inlined there and given its real src as it starts), and a script added
+   later (bf-session.js loading the player at DOMContentLoaded) is served by its real URL and runs when it
+   arrives, after the page is parsed. The API answers as live does: at once with an empty library, never
+   (slow), with an error, with the 503 of a library not set up yet; and with no BroadcastChannel. */
+/* The server's 503 for a library not set up yet (G11 holds the route to it). */
+const LIVE_NOT_SET_UP = "Music isn't set up yet on the server (migration 155). Nothing is lost.";
+function frontText(rel) {
+  const key = "F:" + rel;
+  return FILES[key] !== undefined && FILES[key] !== null ? lf(FILES[key]) : lf(fs.readFileSync(path.join(FRONTEND, rel), "utf8"));
+}
+function livePage(file, o) {
+  o = o || {};
+  const { requestInterceptor, VirtualConsole } = require("jsdom");
+  const script = rel => o.serve && o.serve[rel] !== undefined ? o.serve[rel] : frontText(rel);
+  let html = frontText(file);
+  if (o.dropMusicTag) html = html.split('<script src="/scripts/bf-music.js"></script>').join("");
+  html = html.replace(/<script src="(\/scripts\/[a-z0-9-]+\.js)"([^>]*)><\/script>/g, (m, src, attrs) =>
+    "<script" + attrs + ">document.currentScript.setAttribute(\"src\", " + JSON.stringify(src) + ");\n" +
+    script(src.slice(1)).replace(/<\/script/gi, "<\\/script") + "\n</script>");
+  const warns = [];
+  const vc = new VirtualConsole();
+  vc.on("warn", (...a) => warns.push(a.join(" ")));
+  const served = [];
+  const dom = new JSDOM(html, {
+    url: "https://bizforceai.net/" + file.replace(/\.html$/, ""), runScripts: "dangerously", pretendToBeVisual: true, virtualConsole: vc,
+    resources: { interceptors: [requestInterceptor(request => {
+      const u = new URL(request.url);
+      if (u.origin === "https://bizforceai.net" && /^\/scripts\/[a-z0-9-]+\.js$/.test(u.pathname) && fs.existsSync(path.join(FRONTEND, u.pathname))) {
+        served.push(u.pathname);
+        return new Response(script(u.pathname.slice(1)), { headers: { "Content-Type": "application/javascript" } });
+      }
+      return new Response("", { status: 404 });
+    })] },
+    beforeParse(win) {
+      win.localStorage.setItem("bf_token", TOKEN);
+      win.matchMedia = q => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+      win.AudioContext = FakeAudioContext; win.Audio = makeFakeAudio(win);
+      win.BroadcastChannel = o.noChannel ? undefined : class extends FakeBC { constructor(n) { super(n); this.win = win; } };
+      win.requestAnimationFrame = () => 0; win.cancelAnimationFrame = () => {};
+      win.HTMLCanvasElement.prototype.getContext = () => null;
+      win.scrollTo = () => {};
+      win.fetch = u => {
+        const url = String(u);
+        if (/\/api\/music$/.test(url)) {
+          if (o.api === "slow") return new Promise(() => {});
+          if (o.api === "error") return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: "Internal server error" }) });
+          if (o.api === "503") return Promise.resolve({ ok: false, status: 503, json: async () => ({ error: LIVE_NOT_SET_UP, reason: "music_not_set_up" }) });
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ tracks: [], playlists: [], bytes_used: 0, caps: { file_bytes: 26214400, total_bytes: 262144000, playlists: 50 } }) });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({}), text: async () => "{}" });
+      };
+    }
+  });
+  return { w: dom.window, warns, served, dom };
+}
+async function untilBox(w, ms) {
+  for (let t = 0; t < ms; t += 25) {
+    if (w.document.querySelector(".bfm-float .bbx") || w.document.getElementById("bfmFail")) break;
+    await wait(25);
+  }
+  return w.document.querySelector(".bfm-float .bbx");
+}
+async function liveOrderChecks() {
+  console.log("\n══ G1/G2, live order: the real page files, their scripts in their real order ══");
+  const dash = frontText("dashboard.html");
+  check("G2. live order: the dashboard lists bf-music.js before termaximus-presence.js (the order the live page runs them in), so the player must not depend on it",
+    dash.indexOf('<script src="/scripts/bf-music.js"></script>') !== -1 && dash.indexOf('<script src="/scripts/bf-music.js"></script>') < dash.indexOf('<script src="/scripts/termaximus-presence.js"></script>'));
+  const scenarios = [["the API answers at once (an empty library)", {}], ["the API never answers (slow)", { api: "slow" }], ["the API errors (500)", { api: "error" }],
+    ["the library is not set up (503)", { api: "503" }], ["no BroadcastChannel", { noChannel: true }]];
+  for (const [what, o] of scenarios) {
+    const p = livePage("dashboard.html", o);
+    const box = await untilBox(p.w, 3000);
+    const anchor = p.w.document.querySelector("[data-bf-boombox-anchor]");
+    check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, in its box beside the logo, with no warning",
+      !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && box.closest(".bfm-float").getAttribute("data-state") === "box" &&
+      !p.w.document.getElementById("bfmFail") && p.warns.filter(x => /\[boombox\]/.test(x)).length === 0,
+      JSON.stringify({ box: !!box, mode: p.w.BFMusic && p.w.BFMusic.mode, bbx: p.w.document.querySelectorAll("[class*=bbx]").length, warns: p.warns.slice(0, 2) }));
+    if (o.api === "503") {
+      await wait(50);
+      const msg = p.w.document.querySelector(".bfm-msg");
+      check("G2. ... and with the library not set up it says so inside the boombox", !!msg && msg.textContent === LIVE_NOT_SET_UP, msg && msg.textContent);
+    }
+    p.w.close();
+  }
+  // a player that arrives after the page has loaded (readyState complete)
+  const late = livePage("dashboard.html", { dropMusicTag: true });
+  await wait(30);
+  const lateState = late.w.document.readyState;
+  const s = late.w.document.createElement("script");
+  s.src = "/scripts/bf-music.js";
+  late.w.document.body.appendChild(s);
+  const lateBox = await untilBox(late.w, 3000);
+  check("G2. live order: bf-music.js arriving after the page has loaded (readyState " + lateState + ") still draws the boombox", lateState === "complete" && !!lateBox,
+    lateState + " " + !!lateBox);
+  late.w.close();
+  // a start that fails says so: a warning and a small tag, never nothing
+  const broken = livePage("dashboard.html", { serve: { "scripts/bf-boombox.js": "window.BFBoombox = { mount: function () { throw new Error(\"the drawing failed\"); } };" } });
+  await untilBox(broken.w, 3000);
+  const tag = broken.w.document.getElementById("bfmFail");
+  check("G2. live order: a boombox that cannot start warns \"[boombox] ...\" in the console and shows a small \"Music couldn't start — reload\" tag",
+    !!tag && tag.textContent === "Music couldn't start — reload" && broken.warns.some(x => /^\[boombox\] Music couldn't start — reload: the drawing failed/.test(x)),
+    JSON.stringify({ tag: tag && tag.textContent, warns: broken.warns.slice(0, 2) }));
+  broken.w.close();
+  // every signed-in mist page, as the real file loads it
+  const pages = fs.readdirSync(FRONTEND).filter(f => /\.html$/.test(f)).sort()
+    .concat(fs.readdirSync(path.join(FRONTEND, "agents")).filter(f => /\.html$/.test(f)).sort().map(f => "agents/" + f));
+  const UNTH = (/var UNTHEMED = \[([\s\S]*?)\]/.exec(FILES[THEME]) || ["", ""])[1].match(/"[^"]+"/g).map(x => JSON.parse(x));
+  const signedIn = pages.filter(f => {
+    const h = frontText(f);
+    return /<script src="\/scripts\/termaximus-presence\.js"><\/script>/.test(h) && UNTH.indexOf(f.replace(/^agents\//, "")) === -1 && f !== "music-popout.html" &&
+      (/<script src="\/scripts\/bf-session\.js"><\/script>/.test(h) || /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>/.test(h));
+  });
+  const missing = [];
+  for (let i = 0; i < signedIn.length; i += 6) {
+    const batch = signedIn.slice(i, i + 6);
+    const opened = batch.map(f => ({ f, p: livePage(f, {}) }));
+    for (const x of opened) { if (!(await untilBox(x.p.w, 4000))) missing.push(x.f); }
+    opened.forEach(x => x.p.w.close());
+  }
+  check("G1. live order: on every signed-in mist page, the real file loaded as the browser loads it, the boombox is drawn (" + signedIn.length + " pages, the 7 agents/ pages among them)",
+    missing.length === 0 && signedIn.length === 54 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
 }
 
 /* ── G13. now playing ───────────────────────────────────────────────────── */
