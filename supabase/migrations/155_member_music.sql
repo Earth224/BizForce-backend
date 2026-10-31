@@ -9,7 +9,7 @@
 -- bf-public. A library is private to its member.
 --
 -- 1. member_tracks: one row per uploaded file. storage_path is the file's
---    place in bf-music, always `<the member's id>/<time>.<ext>` (the CHECK
+--    place in bf-music, always `<the member's id>/<time>-<random>.<ext>` (the CHECK
 --    below; lib/music.js ownTrackPath is the same rule in the API). The size
 --    limit is lib/music.js FILE_MAX_BYTES (25 MB); the per-member total
 --    (MEMBER_TOTAL_BYTES, 250 MB) is enforced by the API before upload.

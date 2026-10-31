@@ -7643,7 +7643,7 @@ app.get("/api/music", requireAuth, musicLimiter, async function (req, res, next)
 
 /* One file, field "track", at most 25 MB, MP3/M4A/AAC/Ogg/Opus/FLAC/WAV by
    its first bytes, and only while the library stays within its total. Stored
-   at bf-music/<member id>/<time>.<ext>. */
+   at bf-music/<member id>/<time>-<random>.<ext>. */
 app.post("/api/music/tracks", requireAuth, musicUploadLimiter, function (req, res, next) {
   musicUpload.single("track")(req, res, async function (uploadError) {
     try {
