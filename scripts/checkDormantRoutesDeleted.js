@@ -163,7 +163,11 @@ const ADDED = [
   ["get", "/api/music/tracks/:id/url"],         // a signed URL for 10 minutes, never a public one (total 356 -> 357)
   ["post", "/api/music/playlists"],             // a playlist of the member's own tracks; 50 at most (total 357 -> 358)
   ["put", "/api/music/playlists/:id"],          // rename it, or its tracks in a new order (total 358 -> 359)
-  ["delete", "/api/music/playlists/:id"]        // delete it; its tracks stay (total 359 -> 360)
+  ["delete", "/api/music/playlists/:id"],       // delete it; its tracks stay (total 359 -> 360)
+  // NAMED (Oct 31 2026, profile designs, migration 156): BEFORE 360 routes; AFTER 362, adding its two routes,
+  // each requireAuth and rate-limited, each writing only the caller's own profile (checkProfileDesign C0–C8)
+  ["put", "/api/bfp/profile/design"],           // save the design, checked against the closed schema, or one of the member's own saved themes as its theme (total 360 -> 361)
+  ["delete", "/api/bfp/profile/design"]         // "Reset profile design": back to the default look (total 361 -> 362)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

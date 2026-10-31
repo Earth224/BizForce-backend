@@ -386,8 +386,15 @@ function bfProfileColumns() {
 
   /* ── P. the public profile ─────────────────────────────────────────────── */
   console.log("\n══ P. GET /api/bfp/profile/:userId answers public columns only ══");
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs, migration 156). BEFORE: 19 public columns, 23 in all; P4
+     compared every public value with the stored one. AFTER: profile_design is public too (20 public, 24 in all), but
+     only as lib/profileDesign.js publicDesign makes it: the stored value re-checked against the closed schema, or
+     null. So P4 compares it with publicDesign's answer, P4b shows a valid stored design goes out, and P5 still counts
+     the RAW stored design as a leak if it ever appears (checkProfileDesign C4–C7 hold the rest). */
   const PUBLIC = ["username", "display_name", "title", "tagline", "bio", "avatar_url", "banner_url", "accent_color", "font_style",
-    "show_products", "show_portfolio", "show_music", "show_card", "show_videos", "location", "website", "social_links", "skills", "industry"];
+    "show_products", "show_portfolio", "show_music", "show_card", "show_videos", "location", "website", "social_links", "skills", "industry", "profile_design"];
+  const AS_VALIDATED = ["profile_design"];
+  const PD = require(path.join(__dirname, "..", "lib", "profileDesign.js"));
   const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at"];
   const migCols = bfProfileColumns();
   check("P1. every bf_profiles column of the migrations is classified, public or private (" + migCols.length + " columns)",
@@ -401,10 +408,17 @@ function bfProfileColumns() {
   CUR = makeDb(Object.assign(seed(), { bf_profiles: [full] }));
   const prof = await hit("get /api/bfp/profile/:userId", null, {}, { userId: RITA });
   const body = JSON.stringify(prof.body || {});
-  const leaked = Object.keys(full).filter(c => PUBLIC.indexOf(c) === -1 && body.indexOf(String(full[c])) !== -1);
+  const leaked = Object.keys(full).filter(c => (PUBLIC.indexOf(c) === -1 || AS_VALIDATED.indexOf(c) !== -1) && body.indexOf(String(full[c])) !== -1);
   check("P3. the profile answer holds exactly the public columns", prof.status === 200 && prof.body && prof.body.profile &&
     JSON.stringify(Object.keys(prof.body.profile).sort()) === JSON.stringify(PUBLIC.slice().sort()), JSON.stringify(prof.body && prof.body.profile && Object.keys(prof.body.profile)));
-  check("P4. every public value is there", PUBLIC.every(c => prof.body && prof.body.profile && prof.body.profile[c] === full[c]));
+  check("P4. every public value is there, the design as validated (a stored value that is no design goes out as null)",
+    PUBLIC.every(c => prof.body && prof.body.profile && (AS_VALIDATED.indexOf(c) !== -1 ? JSON.stringify(prof.body.profile[c]) === JSON.stringify(PD.publicDesign(full[c], RITA)) : prof.body.profile[c] === full[c])) &&
+    prof.body.profile.profile_design === null);
+  CUR = makeDb(Object.assign(seed(), { bf_profiles: [Object.assign({}, full, { profile_design: Object.assign(JSON.parse(JSON.stringify(PD.DEFAULT_DESIGN)), { layout: "classic" }) })] }));
+  const profD = await hit("get /api/bfp/profile/:userId", null, {}, { userId: RITA });
+  check("P4b. a valid stored design goes out, re-checked", profD.status === 200 && profD.body.profile && profD.body.profile.profile_design && profD.body.profile.profile_design.layout === "classic" &&
+    JSON.stringify(profD.body.profile.profile_design) === JSON.stringify(PD.publicDesign(Object.assign(JSON.parse(JSON.stringify(PD.DEFAULT_DESIGN)), { layout: "classic" }), RITA)));
+  CUR = makeDb(Object.assign(seed(), { bf_profiles: [full] }));
   check("P5. no private value appears anywhere in the answer (id, user_id, timestamps, email, phone, Stripe id, notes)", leaked.length === 0 && body.indexOf(RITA) === -1, leaked.join(","));
   check("P6. support_links is still answered", prof.body && Array.isArray(prof.body.support_links));
 

@@ -7448,7 +7448,9 @@ async function writeThemePrefs(userId, prefs) {
    left: the account delete still finds it under theme-photos/<id>/. */
 async function removeUnusedThemePhotos(userId, candidates) {
   const state = await readThemeState(userId);
-  const used = memberThemes.photosIn(state.themes);
+  const profileWears = await profileDesignPhotoOf(userId);
+  if (profileWears === undefined) return;   // the profile could not be read: keep every photo
+  const used = memberThemes.photosIn(state.themes).concat(profileWears ? [profileWears] : []);
   const unused = (candidates || []).filter(function (p) { return p && used.indexOf(p) === -1 && memberThemes.ownPhotoPath(p, userId); });
   if (!unused.length) return;
   const { error } = await supabase.storage.from("bf-public").remove(unused);
@@ -41192,6 +41194,9 @@ app.get("/support/:username", supportPageLimiter, async function (req, res) {
     if (!member || !(await ownerPagePublic(member.user_id))) return res.status(404).send(supportPage.render({ state: "none" }));
     const got = await readMemberSupport(member.user_id);
     const view = supportPage.viewFor(member, got.row);
+    // The page wears the member's profile design, validated; a design that cannot be read is the default look.
+    const designRead = await supabase.from("bf_profiles").select("profile_design").eq("user_id", member.user_id).maybeSingle();
+    if (!designRead.error && designRead.data) Object.assign(view, { design: profileDesignReply(designRead.data.profile_design, member.user_id) });
     res.set("Cache-Control", "public, max-age=60");
     return res.status(view.state === "none" ? 404 : 200).send(supportPage.render(view));
   } catch (err) {
@@ -44789,21 +44794,97 @@ app.get("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
     const { data, error } = await supabase
       .from("bf_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
     if (error) throw error;
-    return res.json({ profile: data });
+    const design = profileDesignReply(data && data.profile_design, req.user.id);
+    if (data) data.profile_design = design.design;
+    return res.json({ profile: data, design_photo_url: design.photo_url });
   } catch (error) { next(error); }
 });
 
 /* THE PUBLIC PROFILE IS AN ALLOW-LIST. Every bf_profiles column (migrations
-   009, 010 and 040) is either here, because the member writes it to show it on
-   their public page, or left out: id (the row's internal id), user_id (the
-   account id), created_at and updated_at. A column added later, by a
-   migration or by hand, is private until it is named here. The owner's own
+   009, 010, 040 and 156) is either here, because the member writes it to show
+   it on their public page, or left out: id (the row's internal id), user_id
+   (the account id), created_at and updated_at. A column added later, by a
+   migration or by hand, is private until it is named here. profile_design
+   (migration 156) is public only as the validated design: the route below
+   replaces the stored value with lib/profileDesign.js publicDesign, which is
+   the design re-checked against its closed schema, or null. The owner's own
    GET /api/bfp/profile/me still reads every column. */
 const BF_PUBLIC_PROFILE_COLUMNS = [
   "username", "display_name", "title", "tagline", "bio", "avatar_url", "banner_url",
   "accent_color", "font_style", "show_products", "show_portfolio", "show_music", "show_card", "show_videos",
-  "location", "website", "social_links", "skills", "industry"
+  "location", "website", "social_links", "skills", "industry", "profile_design"
 ];
+
+/* PROFILE DESIGNS (lib/profileDesign.js, migration 156). What a visitor may
+   see of a stored design: the design re-validated against its closed schema
+   (null when there is none, or it no longer passes), and the public URL of
+   the member's own theme photo when the design's theme wears one. */
+function profileDesignReply(stored, ownerId) {
+  const PD = require("./lib/profileDesign");
+  const design = PD.publicDesign(stored, ownerId);
+  const photo = PD.photoOf(design);
+  return { design: design, photo_url: photo ? supabase.storage.from("bf-public").getPublicUrl(photo).data.publicUrl : null };
+}
+/* The theme photo the member's profile design wears: a path, null for none,
+   or undefined when the profile could not be read. */
+async function profileDesignPhotoOf(ownerId) {
+  const read = await supabase.from("bf_profiles").select("profile_design").eq("user_id", ownerId).maybeSingle();
+  if (read.error) return undefined;
+  return require("./lib/profileDesign").photoOf(read.data ? read.data.profile_design : null);
+}
+/* The member's own grid and video ids: a saved order keeps only these. */
+async function profileDesignOwnIds(ownerId) {
+  const [grid, vids] = await Promise.all([
+    supabase.from("profile_portfolio").select("id").eq("user_id", ownerId),
+    supabase.from("bf_videos").select("id").eq("user_id", ownerId)
+  ]);
+  if (grid.error) throw grid.error;
+  if (vids.error) throw vids.error;
+  return { grid: (grid.data || []).map(function (r) { return r.id; }), videos: (vids.data || []).map(function (r) { return r.id; }) };
+}
+
+/* "Customise profile" saves here. Body { design }: the whole design, checked
+   against lib/profileDesign.js's closed schema; a refusal names the key and
+   writes nothing. Or { theme_id }: one of the member's own saved themes
+   (Settings, Theme, "My public profile") becomes the profile's theme, the
+   rest of the design kept. The answer is the stored design as a visitor
+   will see it. */
+app.put("/api/bfp/profile/design", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    const PD = require("./lib/profileDesign");
+    const body = req.body || {};
+    let input;
+    if (Object.prototype.hasOwnProperty.call(body, "theme_id")) {
+      if (typeof body.theme_id !== "string" || !THEME_ID_PATTERN.test(body.theme_id)) return res.status(400).json({ error: "That theme is not one of yours." });
+      const own = await supabase.from("member_themes").select("theme").eq("id", body.theme_id).eq("user_id", req.user.id).maybeSingle();
+      if (own.error) throw own.error;
+      if (!own.data) return res.status(404).json({ error: "That theme is not one of yours." });
+      const cur = await supabase.from("bf_profiles").select("profile_design").eq("user_id", req.user.id).maybeSingle();
+      if (cur.error) throw cur.error;
+      input = Object.assign({}, PD.publicDesign(cur.data && cur.data.profile_design, req.user.id) || PD.DEFAULT_DESIGN, { theme: own.data.theme });
+    } else {
+      input = body.design;
+    }
+    const checked = PD.validateDesign(input, req.user.id, await profileDesignOwnIds(req.user.id));
+    if (checked.error) return res.status(400).json({ error: checked.error, key: checked.key });
+    const { data, error } = await supabase.from("bf_profiles")
+      .upsert({ user_id: req.user.id, profile_design: checked.design, updated_at: nowIso() }, { onConflict: "user_id" })
+      .select("profile_design").single();
+    if (error) throw error;
+    const reply = profileDesignReply(data && data.profile_design, req.user.id);
+    return res.json({ profile_design: reply.design, design_photo_url: reply.photo_url });
+  } catch (error) { next(error); }
+});
+
+/* "Reset profile design": back to the page's default look. */
+app.delete("/api/bfp/profile/design", requireAuth, themesWriteLimiter, async function (req, res, next) {
+  try {
+    const { error } = await supabase.from("bf_profiles")
+      .update({ profile_design: null, updated_at: nowIso() }).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ profile_design: null, design_photo_url: null });
+  } catch (error) { next(error); }
+});
 
 app.get("/api/bfp/profile/:userId", async function (req, res, next) {
   try {
@@ -44813,8 +44894,11 @@ app.get("/api/bfp/profile/:userId", async function (req, res, next) {
     const { data, error } = await supabase
       .from("bf_profiles").select(BF_PUBLIC_PROFILE_COLUMNS.join(", ")).eq("user_id", userId).maybeSingle();
     if (error) throw error;
+    // The design goes out only as validated (lib/profileDesign.js publicDesign), never as stored.
+    const design = profileDesignReply(data && data.profile_design, userId);
+    if (data) data.profile_design = design.design;
     // Of the member's support settings, only the normalized links (URLs rebuilt) are public here.
-    return res.json({ profile: data, support_links: data ? await publicSupportLinks(userId) : [] });
+    return res.json({ profile: data, design_photo_url: design.photo_url, support_links: data ? await publicSupportLinks(userId) : [] });
   } catch (error) { next(error); }
 });
 
@@ -45126,11 +45210,14 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
 
     const { data: seller, error: sellerError } = await supabase
       .from("bf_profiles")
-      .select("user_id, username, display_name, avatar_url, banner_url, tagline, bio, accent_color, font_style, location, website, social_links, skills, show_products, show_portfolio, show_music, show_card, show_videos")
+      .select("user_id, username, display_name, avatar_url, banner_url, tagline, bio, accent_color, font_style, location, website, social_links, skills, show_products, show_portfolio, show_music, show_card, show_videos, profile_design")
       .ilike("username", handle)
       .maybeSingle();
     if (sellerError) throw sellerError;
     if (!seller) return res.status(404).json({ error: "seller not found" });
+    // The storefront wears the member's profile design, validated, never as stored.
+    const sellerDesign = profileDesignReply(seller.profile_design, seller.user_id);
+    seller.profile_design = sellerDesign.design;
     // Served only while its owner is entitled; otherwise it reads as not found.
     if (!(await ownerPagePublic(seller.user_id))) return res.status(404).json({ error: "seller not found" });
 
@@ -45187,6 +45274,7 @@ app.get("/api/bfp/seller/:handle", async function (req, res, next) {
       portfolio: portfolio,
       music: music,
       videos: videos,
+      design_photo_url: sellerDesign.photo_url,
       support_links: await publicSupportLinks(userId)
     });
   } catch (error) { next(error); }

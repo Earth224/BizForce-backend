@@ -140,7 +140,9 @@ const MUTATIONS = {
   // the visitor's theme applied to a public page: seller.html loads the engine (A)
   "public-page-loads-theme": [["seller.html", "<head>\n", "<head>\n" + TAG + "\n"]],
   // ... or profile.html wears the visitor's theme on someone else's profile (B)
-  "profile-visitor-theme": [[THEME, "      return !!id && id !== signedInId(win);", "      return false;"]],
+  // NAMED BEFORE → AFTER (Oct 31 2026, profile designs): the line it searched, "return !!id && id !== signedInId(win);",
+  // now also counts the editor's preview (bf_preview=1) as a public view; the mutation still makes no profile public.
+  "profile-visitor-theme": [[THEME, "      return !!id && (id !== signedInId(win) || preview);", "      return false;"]],
   // raw CSS accepted as a colour (D)
   "raw-css-accepted": [[LIB, "var HEX = /^#[0-9a-f]{6}$/;", "var HEX = /^.+$/;"]],
   // a page key not validated (D, C, E)
@@ -557,7 +559,7 @@ const cacheOf = (uid, state, ageMs) => ({ v: 1, uid: uid, fetched_at: Date.now()
 
 /* ── the routes, lifted from server.js, over a fake database ────────────── */
 function fakeDb() {
-  const db = { member_themes: [], user_preferences: [], uploads: [], removed: [], writes: [] };
+  const db = { member_themes: [], user_preferences: [], bf_profiles: [], profile_portfolio: [], bf_videos: [], uploads: [], removed: [], writes: [] };
   let n = 0;
   function from(table) {
     const st = { filters: [], op: "select", payload: null, head: false };
@@ -618,7 +620,7 @@ function liftRoutes(fake) {
   function requireAuth(req, res, next) { next(); }
   const ctx = {
     console: { log() {}, error() {}, warn() {} },
-    require: name => { if (name === "./lib/themes") return LIBX; throw new Error("unexpected require " + name); },
+    require: name => { if (name === "./lib/themes") return LIBX; if (name === "./lib/profileDesign") return require(path.join(REPO, "lib/profileDesign.js")); throw new Error("unexpected require " + name); },
     rateLimit: o => { const fn = function (req, res, next) { next(); }; fn.__limiter = o; limiters.push(fn); return fn; },
     multer: Object.assign(o => ({
       single: field => (req, res, cb) => {
@@ -633,7 +635,27 @@ function liftRoutes(fake) {
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });
   vm.createContext(ctx);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs). BEFORE: the theme routes' block was all that was lifted.
+     AFTER: removeUnusedThemePhotos also keeps the photo the member's profile design wears, read by
+     profileDesignPhotoOf (defined with the profile routes), so that function is lifted too, as written, over the
+     same fake database (a member with no profile row wears no design photo). */
+  const pdAt = src.indexOf("async function profileDesignPhotoOf(ownerId) {");
+  if (pdAt === -1) throw new Error("profileDesignPhotoOf was not found in server.js");
+  vm.runInContext(src.slice(pdAt, src.indexOf("\n}\n", pdAt) + 3), ctx);
   vm.runInContext(src.slice(a, b), ctx);
+  /* ... and the studio's "My public profile" scope saves through PUT /api/bfp/profile/design { theme_id }, so that
+     route (with its DELETE, and the helpers it calls) is lifted as written too, after the theme block whose
+     THEME_ID_PATTERN and themesWriteLimiter it uses. */
+  ctx.nowIso = () => "2026-10-31T00:00:00.000Z";
+  ["function profileDesignReply(stored, ownerId) {", "async function profileDesignOwnIds(ownerId) {"].forEach(sig => {
+    const at = src.indexOf(sig);
+    if (at === -1) throw new Error(sig + " was not found in server.js");
+    vm.runInContext(src.slice(at, src.indexOf("\n}\n", at) + 3), ctx);
+  });
+  const pa = src.indexOf("app.put(\"/api/bfp/profile/design\"");
+  const pdel = src.indexOf("app.delete(\"/api/bfp/profile/design\"");
+  if (pa === -1 || pdel === -1 || pdel < pa) throw new Error("the profile design routes were not found in server.js");
+  vm.runInContext(src.slice(pa, src.indexOf("\n});\n", pdel) + 5), ctx);
   return { routes, limiters, requireAuth };
 }
 function match(routes, method, url) {
@@ -983,11 +1005,20 @@ async function routesAndLib(lifted) {
   console.log("\n══ E. the routes ══");
   if (!lifted) { check("E0. the routes could be lifted", false); return exportAndDelete(); }
   const want = [["get", "/api/themes"], ["post", "/api/themes"], ["put", "/api/themes/apply"], ["put", "/api/themes/:id"], ["delete", "/api/themes/:id"], ["post", "/api/themes/reset"], ["post", "/api/themes/photo"]];
-  const got = lifted.routes.map(r => r.method + " " + r.path);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs). BEFORE: every lifted route was a theme route. AFTER: the
+     profile design's PUT and DELETE are lifted after the theme block (for the studio's "My public profile"), so E1
+     reads the theme block's own seven, and E1b the two that follow it. */
+  const themeOwn = lifted.routes.filter(r => r.path.indexOf("/api/themes") === 0);
+  const after = lifted.routes.filter(r => r.path.indexOf("/api/themes") !== 0);
+  const got = themeOwn.map(r => r.method + " " + r.path);
   check("E1. seven routes: GET/POST /api/themes, PUT/DELETE /api/themes/:id, PUT /api/themes/apply, POST /api/themes/reset, POST /api/themes/photo",
     JSON.stringify(got) === JSON.stringify(want.map(w => w.join(" "))), got.join(", "));
-  const gated = lifted.routes.filter(r => r.mw[0] === lifted.requireAuth && r.mw[1] && r.mw[1].__limiter && /^(themes|themes-write|theme-photo):x$/.test(r.mw[1].__limiter.keyGenerator({ user: { id: "x" } })));
-  check("E1. each is requireAuth, then a limiter keyed per account", gated.length === 7, lifted.routes.filter(r => gated.indexOf(r) === -1).map(r => r.method + " " + r.path).join(", "));
+  const gated = themeOwn.filter(r => r.mw[0] === lifted.requireAuth && r.mw[1] && r.mw[1].__limiter && /^(themes|themes-write|theme-photo):x$/.test(r.mw[1].__limiter.keyGenerator({ user: { id: "x" } })));
+  check("E1. each is requireAuth, then a limiter keyed per account", gated.length === 7, themeOwn.filter(r => gated.indexOf(r) === -1).map(r => r.method + " " + r.path).join(", "));
+  check("E1b. after them, only PUT and DELETE /api/bfp/profile/design, each requireAuth then the theme write limiter",
+    after.map(r => r.method + " " + r.path).join(",") === "put /api/bfp/profile/design,delete /api/bfp/profile/design" &&
+    after.every(r => r.mw[0] === lifted.requireAuth && r.mw[1] && r.mw[1].__limiter && r.mw[1].__limiter.keyGenerator({ user: { id: "x" } }) === "themes-write:x"),
+    after.map(r => r.method + " " + r.path).join(","));
   check("E1. PUT /api/themes/apply is registered before PUT /api/themes/:id", got.indexOf("put /api/themes/apply") < got.indexOf("put /api/themes/:id"));
   const fake = fakeDb(); const L = liftRoutes(fake);
   let r = await callRoute(L, "post", "/api/themes", { name: "X", theme: { glow_a: "red;}" } });
@@ -1500,7 +1531,10 @@ async function reach(open) {
     const r = expressPick(routes, c.method, url);
     return Object.assign({}, c, { route: r });
   });
-  const missing = picked.filter(c => !c.route || c.route.path.indexOf("/api/themes") !== 0 || c.route.at > catchAll ||
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs). BEFORE: every studio request was an /api/themes route.
+     AFTER: so is every one but PUT /api/bfp/profile/design, the "My public profile" scope (checkProfileDesign C3). */
+  const STUDIO_ROUTE = p => p.indexOf("/api/themes") === 0 || p === "/api/bfp/profile/design";
+  const missing = picked.filter(c => !c.route || !STUDIO_ROUTE(c.route.path) || c.route.at > catchAll ||
     (c.path.endsWith(":id") && !/\/:[A-Za-z_]+$/.test(c.route.path)));
   check("I2. every request the studio and bf-theme.js make (" + picked.length + ", parsed from their code) is a route server.js registers, at that method and path",
     picked.length >= 9 && missing.length === 0 && req.studioLiterals === picked.filter(c => c.from === "bf-theme-studio.js").length &&
@@ -1555,6 +1589,13 @@ async function reach(open) {
   if (input) input.value = "Reached";
   const sb = btn(input && input.parentNode, "Save name"); if (sb) sb.click(); await settle();
   const renamed = /Renamed\./.test($("tsMsg").textContent);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs): the studio's fourth scope, "My public profile". */
+  const toProfile = st.d.querySelector("input[name=tsScope][value=profile]");
+  if (toProfile) { toProfile.checked = true; toProfile.dispatchEvent(new st.w.Event("change", { bubbles: true })); }
+  $("tsApply").click(); await settle();
+  const onProfile = /^Applied to your public profile\./.test($("tsApplyMsg").textContent);
+  const allScope = st.d.querySelector("input[name=tsScope][value=all]");
+  if (allScope) { allScope.checked = true; allScope.dispatchEvent(new st.w.Event("change", { bubbles: true })); }
   st.w.URL.createObjectURL = () => "blob:x"; st.w.URL.revokeObjectURL = () => {};
   st.w.HTMLCanvasElement.prototype.getContext = () => { throw new Error("no canvas in jsdom"); };   // the studio then assumes the brightest
   st.w.Image = function () { const img = this; setTimeout(() => img.onload && img.onload(), 0); };
@@ -1567,7 +1608,7 @@ async function reach(open) {
   const needed = Array.from(new Set(picked.filter(c => c.route).map(c => c.method + " " + c.route.path)));
   const notHit = needed.filter(x => !HIT.has(x));
   check("I1. run in jsdom, the studio reached every one of those routes (" + needed.length + ") at " + API_ORIGIN + " — save as, save, rename, the photo, delete, apply, reset, load",
-    notHit.length === 0 && renamed && deleted, "not reached: " + notHit.join(", ") + " | renamed " + renamed + ", deleted " + deleted);
+    notHit.length === 0 && renamed && deleted && onProfile, "not reached: " + notHit.join(", ") + " | renamed " + renamed + ", deleted " + deleted + ", on the profile " + onProfile);
 
   // a failure names its status
   const nf = await open({ netlify: true });

@@ -276,6 +276,11 @@ function allowedAt(f, t, i) {
     if (ruleRanges(t, /\.card-|\.texture-|\.text-fx-|\.theme-btn|\.cust-/, true).some(([a, b]) => i >= a && i < b)) return "a digital card's own look";
   }
   if (f === "profile.html" && /accent|--pa\b|data-color|colorPicker/.test(lineAt(t, i))) return "the profile's own accent (the member's data)";
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs). BEFORE: no such exception. AFTER: a profile design's
+     default ring colour, ring_color "#22d3ee" in DEFAULT, mirrored exactly from lib/profileDesign.js
+     DEFAULT_DESIGN (checkProfileDesign D0): the member's data, like the profile's own accent, not a page colour. */
+  if (f === "scripts/bf-profile-design.js" && /^\s*photo: \{ size: "m", shape: "circle", ring: "solid", ring_width: 3, ring_glow: 0\.5, ring_color: "#22d3ee" \},$/.test(lineAt(t, i)))
+    return "a profile design's default ring colour (the member's data)";
   return null;
 }
 const leftover = [], allowedCount = {};

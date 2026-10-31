@@ -326,7 +326,12 @@ const EXPECTED_OWN = [
   // keeps their own playlists; every row is theirs (member_tracks, member_playlists), served to no one else, and nothing
   // calls the model. Deliberately ungated, like the themes: listening to one's own music never needs a subscription.
   "put /api/music/tracks/:id", "delete /api/music/tracks/:id",
-  "post /api/music/playlists", "put /api/music/playlists/:id", "delete /api/music/playlists/:id"
+  "post /api/music/playlists", "put /api/music/playlists/:id", "delete /api/music/playlists/:id",
+  // NAMED (Oct 31 2026, profile designs, migration 156; effectful login-only 144 -> 146): BEFORE no profile design.
+  // AFTER a member saves and resets their own profile's design (bf_profiles.profile_design, their own row), checked
+  // against a closed schema; visitors read it only as validated. Nothing calls the model. Deliberately ungated, like
+  // the themes: how a member's own profile looks never needs a subscription (checkProfileDesign C0–C8).
+  "put /api/bfp/profile/design", "delete /api/bfp/profile/design"
 ];
 
 /* Unauthenticated routes that write. */

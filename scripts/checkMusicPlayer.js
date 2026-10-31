@@ -31,6 +31,14 @@
         setLiveEnergy (--bf-live-energy); the theme keys validated.
      F  MEMORY AND WORDING: bf_music is cleared at sign-out and never applied
         to another member; no emoji in anything the player shows.
+     G  THE BOOMBOX: on every signed-in page (with the mist) and never on a
+        public page or a card; where it sits, how it moves, what it keeps;
+        and G13, NOW PLAYING: the VFD scrolls "Title — Artist", the LED ticker
+        "NN / TT · Title · Artist · Playlist name", the "Now playing" sweep
+        once per new track (never on a pause, a resume or a page change), the
+        tag's marquee only when its title overflows, all of it still under
+        reduced motion and paused while hidden, one announcement per track,
+        and "No track loaded" with nothing scrolling when nothing is loaded.
 
    MUTATE=<name> edits the files IN MEMORY; MUTATE=all runs each in its own
    process. BIZFORCE_FRONTEND_DIR overrides the frontend location. No network,
@@ -48,6 +56,8 @@ const SERVER = "server.js", LIBM = "lib/music.js", YOURDATA = "lib/yourData.js",
 const MUSIC = "F:scripts/bf-music.js", THEME = "F:scripts/bf-theme.js", SESSION = "F:scripts/bf-session.js", STUDIO = "F:scripts/bf-theme-studio.js";
 const DASH = "F:dashboard.html", POPOUT = "F:music-popout.html", SETTINGS = "F:settings.html", TERMS = "F:terms.html", PRIVACY = "F:privacy.html";
 const GUIDE = "F:scripts/termaximus-guide.js", BOOMBOX = "F:scripts/bf-boombox.js", PRESENCE = "F:scripts/termaximus-presence.js";
+/* A signed-in page whose mist tag a mutation can take away (G1 reads the pages through FILES). */
+const CRM = "F:crm.html";
 const UID = "aaaaaaaa-0000-4000-8000-000000000001";
 const OTHER = "bbbbbbbb-0000-4000-8000-000000000002";
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
@@ -79,6 +89,14 @@ const MUTATIONS = {
   "motion-under-reduced-motion": [[MUSIC, "    if (reducedMotion()) { c.setAttribute(\"data-viz\", \"static\"); drawStatic(c); if (BOX) BOX.still(); return; }\n", ""]],
   // a capability of the old Music panel lost from the expanded view (Mix)
   "capability-lost": [[MUSIC, "      '<div class=\"bfm-row\">' +\n        '<label for=\"bfmMix\">Mix</label>", "      '<div class=\"bfm-row\" hidden>' +\n        '<label for=\"bfmMixGone\">Mix</label>"]],
+  // a signed-in page without the mist, so without the boombox (crm.html)
+  "signed-in-page-missing-boombox": [[CRM, "<script src=\"/scripts/termaximus-presence.js\"></script>\n", ""]],
+  // the "Now playing" sweep firing when playback resumes, not only when a new track starts
+  "sweep-on-resume": [[BOOMBOX, "    var lastKey = null, seenStarts,", "    var lastKey = null, wasPlaying = false, seenStarts,"],
+    [BOOMBOX, "        if (seenStarts !== undefined && v.starts !== seenStarts && loaded) sweep();\n", "        if (seenStarts !== undefined && (v.starts !== seenStarts || (v.playing && !wasPlaying)) && loaded) sweep();\n        wasPlaying = !!v.playing;\n"]],
+  // the LED ticker scrolling under prefers-reduced-motion
+  "ticker-scrolls-under-reduced-motion": [[BOOMBOX, "        if (loaded && !still) tr.appendChild(span(\"bbx-ticker-text\", text, true));\n        tk.setAttribute(\"data-scroll\", loaded && !still ? \"true\" : \"false\");",
+    "        if (loaded) tr.appendChild(span(\"bbx-ticker-text\", text, true));\n        tk.setAttribute(\"data-scroll\", loaded ? \"true\" : \"false\");"]],
   // the missing tables shown as "Internal server error"
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
@@ -91,7 +109,7 @@ function readInto(key) {
   FILES[key] = fs.existsSync(p) ? lf(fs.readFileSync(p, "utf8")) : null;
 }
 [SERVER, LIBM, YOURDATA, MIGRATION, "lib/accountFiles.js", "lib/legal.js", "lib/legalPages.js", "lib/themes.js",
-  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE].forEach(readInto);
+  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE, CRM].forEach(readInto);
 if (FILES[MUSIC] === null) { console.log("    FAIL  frontend not found at " + FRONTEND + " (set BIZFORCE_FRONTEND_DIR)"); process.exit(1); }
 
 if (MUTATE) {
@@ -376,8 +394,10 @@ const upload = (buffer, name, mimetype) => ({ field: "track", buffer, originalna
   const sql = FILES[MIGRATION] || "";
   const migNames = fs.readdirSync(path.join(REPO, "supabase", "migrations"));
   const nums = migNames.map(n => Number((/^(\d+)_/.exec(n) || [])[1])).filter(n => n);
-  check("A13. migration 155_member_music.sql is the next free number, and the only 155", !!FILES[MIGRATION] && migNames.filter(n => /^155_/.test(n)).length === 1 && Math.max.apply(null, nums) === 155 &&
-    nums.filter(n => n === 154).length >= 1);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, profile designs). BEFORE: "the next free number": 155 was the highest
+     migration. AFTER: 156_profile_design.sql follows it, so 155 is checked as the only 155, right after 154. */
+  check("A13. migration 155_member_music.sql is the only 155, the number after 154", !!FILES[MIGRATION] && migNames.filter(n => /^155_/.test(n)).length === 1 &&
+    nums.filter(n => n === 154).length >= 1 && nums.filter(n => n > 155).every(n => n >= 156));
   check("A13. it creates member_tracks and member_playlists with RLS on, and the bucket PRIVATE at 25 MB",
     /CREATE TABLE IF NOT EXISTS public\.member_tracks/.test(sql) && /CREATE TABLE IF NOT EXISTS public\.member_playlists/.test(sql) &&
     /ALTER TABLE public\.member_tracks ENABLE ROW LEVEL SECURITY;/.test(sql) && /ALTER TABLE public\.member_playlists ENABLE ROW LEVEL SECURITY;/.test(sql) &&
@@ -1026,12 +1046,24 @@ async function boomboxChecks(c) {
   const UNTHEMED = (/var UNTHEMED = \[([\s\S]*?)\]/.exec(FILES[THEME]) || ["", ""])[1].match(/"[^"]+"/g).map(x => JSON.parse(x));
   /* A mist page with the session guard gets the player (bf-session.js loads it); a public page
      without the guard never loads it. A card or other public view (bf-theme's UNTHEMED) is tried
-     with the player loaded all the same, and must still show no boombox. */
-  const want = [], refuse = [], wrong = [];
+     with the player loaded all the same, and must still show no boombox.
+     NAMED BEFORE → AFTER (Oct 31 2026, the mist and the boombox on every signed-in page). BEFORE: 33 pages,
+     and a signed-in page without the mist (settings, crm, calendar and 12 more) simply had neither.
+     AFTER: every signed-in page carries both. A signed-in page is one with the session guard, or
+     settings.html, whose guard-free bf-session.js tag asks for the player with data-music. Its
+     pages are counted exactly (SIGNED_IN_PAGES), and one without the mist fails here. */
+  const SIGNED_IN_PAGES = 47;
+  const signedInTag = html => /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html) ||
+    /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>/.test(html);
+  const want = [], refuse = [], wrong = [], noMist = [], signedIn = [];
   for (const f of pages) {
-    const html = lf(fs.readFileSync(path.join(FRONTEND, f), "utf8"));
+    const html = lf(FILES["F:" + f] !== undefined && FILES["F:" + f] !== null ? FILES["F:" + f] : fs.readFileSync(path.join(FRONTEND, f), "utf8"));
+    if (signedInTag(html) && UNTHEMED.indexOf(f) === -1 && f !== "music-popout.html") {
+      signedIn.push(f);
+      if (!/<script src="\/scripts\/termaximus-presence\.js"><\/script>/.test(html)) noMist.push(f);
+    }
     if (!/termaximus-presence\.js/.test(html) || f === "music-popout.html") continue;
-    const guarded = /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html);
+    const guarded = signedInTag(html);
     const card = UNTHEMED.indexOf(f) !== -1;
     const expected = guarded && !card;
     (expected ? want : refuse).push(f);
@@ -1039,13 +1071,33 @@ async function boomboxChecks(c) {
     const on = await presenceOn(f, html);
     if (on !== expected) wrong.push(f + (on ? " has it" : " lacks it"));
   }
-  check("G1. the boombox is on every signed-in page that has the mist (" + want.length + " pages)", want.length >= 30 && wrong.filter(x => / lacks it$/.test(x)).length === 0, wrong.join(", "));
+  check("G1. every signed-in page carries the mist (" + signedIn.length + " signed-in pages, settings.html among them)",
+    noMist.length === 0 && signedIn.length === SIGNED_IN_PAGES && signedIn.indexOf("settings.html") !== -1 && signedIn.indexOf("crm.html") !== -1 && signedIn.indexOf("calendar.html") !== -1,
+    "without the mist: " + noMist.join(", ") + "; " + signedIn.length + " pages");
+  check("G1. the boombox is on every signed-in page (" + want.length + " pages)", want.length === SIGNED_IN_PAGES && wrong.filter(x => / lacks it$/.test(x)).length === 0, wrong.join(", ") + " " + want.length);
   check("G1. ... and never on a public page or a card, even with the player loaded (" + refuse.join(", ") + ")",
     refuse.indexOf("card-view.html") !== -1 && wrong.filter(x => / has it$/.test(x)).length === 0, wrong.join(", "));
   const loaders = pages.filter(f => /\/scripts\/bf-music\.js/.test(fs.readFileSync(path.join(FRONTEND, f), "utf8")));
   const sessionLoads = /bf-music\.js/.test(FILES[SESSION]);
   check("G1. the player loads only where a member is signed in: through the session guard, or on the dashboard and the pop-out",
     sessionLoads && loaders.every(f => f === "dashboard.html" || f === "music-popout.html"), loaders.join());
+  /* settings.html: bf-session.js loaded data-clear-only data-music runs no guard, and loads the
+     player only while a member is signed in. */
+  const sessionWith = (token, attrs) => {
+    const added = [];
+    const doc = { readyState: "complete", currentScript: { hasAttribute: n => attrs.indexOf(n) !== -1 }, addEventListener() {},
+      querySelector: () => null, createElement: () => ({}), body: { appendChild: tag => added.push(tag.src) } };
+    const store = { getItem: k => (k === "bf_token" ? token : null), setItem() {}, removeItem() {} };
+    const replaced = [];
+    vm.runInNewContext(FILES[SESSION], { window: { location: { replace: u => replaced.push(u) } }, document: doc, localStorage: store, sessionStorage: { length: 0, key: () => null },
+      console, indexedDB: { deleteDatabase() {} } });
+    return { added, replaced };
+  };
+  const setIn = sessionWith(TOKEN, ["data-clear-only", "data-music"]), setOut = sessionWith(null, ["data-clear-only", "data-music"]);
+  const appIn = sessionWith(TOKEN, ["data-clear-only"]);
+  check("G1. settings.html's bf-session.js (data-clear-only data-music) loads the player when a member is signed in, never when signed out, and runs no guard; app.html's (no data-music) never",
+    setIn.added.join() === "/scripts/bf-music.js" && setOut.added.length === 0 && setIn.replaced.length === 0 && setOut.replaced.length === 0 && appIn.added.length === 0,
+    JSON.stringify([setIn, setOut, appIn]));
 
   /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */
   const D = await openPage(base);
@@ -1207,15 +1259,19 @@ async function boomboxChecks(c) {
   const live = scaleOf(q1(".bbx-cone"));
   check("G7. playing, bf-music.js's frame loop drives it from the analyser: the cones out, the reels turning",
     live > 1.05 && angleOf(q1(".bbx-reel")) > 0 && MO.BFMusic._levels().bass > 0.5, live);
-  check("G7. a long title scrolls on the display (two copies, the second hidden from screen readers), and the title is announced",
-    q1(".bbx-marquee").getAttribute("data-long") === "true" && MO.document.querySelectorAll(".bbx-scroll span").length === 2 &&
-    MO.document.querySelectorAll(".bbx-scroll span")[1].getAttribute("aria-hidden") === "true" && q1(".bfm-live").getAttribute("aria-live") === "polite" &&
+  /* NAMED BEFORE → AFTER (Oct 31 2026, now playing). BEFORE: only a title over 16 characters scrolled
+     (data-long, two bare spans). AFTER: the VFD scrolls "Title — Artist" whenever a track is loaded
+     (data-scroll, two .bbx-vfd-copy, the second hidden from screen readers); G13 covers the rest. */
+  check("G7. a loaded track scrolls on the display (two copies, the second hidden from screen readers), and the title is announced",
+    q1(".bbx-marquee").getAttribute("data-scroll") === "true" && MO.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy").length === 2 &&
+    MO.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy")[1].getAttribute("aria-hidden") === "true" && q1(".bfm-live").getAttribute("aria-live") === "polite" &&
     q1(".bfm-live").textContent === "Now playing: A Very Long Title For The Marquee by Artist");
   setHidden(MO, true);
   const hidAt = bx.motion().angle;
   frames(MO, 5);
   check("G7. hidden, it stops: no frame runs, nothing turns, and the marquee is paused", bx.motion().angle === hidAt && MO.__raf.length === 0 &&
-    boxOf(MO).getAttribute("data-hidden") === "true" && /\.bfm\[data-hidden=true\] \.bbx-marquee \.bbx-scroll\{animation-play-state:paused\}/.test(BX));
+    /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE the one marquee rule; AFTER the VFD, the ticker, the tag and the sweep in one rule. */
+    boxOf(MO).getAttribute("data-hidden") === "true" && /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep\{animation-play-state:paused\}/.test(BX));
   setHidden(MO, false);
   MO.BFMusic.pause(); await settle();
   frames(MO, 150);
@@ -1226,8 +1282,10 @@ async function boomboxChecks(c) {
   const rm = RM.BFMusic._box().motion();
   check("G7. under reduced motion it is still while playing: no frame, the speakers and reels at rest, a still level on the display, no scrolling title",
     (RM.__rafRequests || 0) === 0 && rm.speed === 0 && rm.cone === 0 && rm.angle === 0 && boxOf(RM).getAttribute("data-still") === "true" &&
-    RM.document.querySelector(".bfm-viz").getAttribute("data-viz") === "static" && RM.document.querySelector(".bbx-marquee").getAttribute("data-long") === "false" &&
-    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-marquee \.bbx-scroll\{animation:none!important\}/.test(BX), JSON.stringify(rm));
+    /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE data-long and the one marquee in the media query; AFTER data-scroll, and every moving part. */
+    RM.document.querySelector(".bfm-viz").getAttribute("data-viz") === "static" && RM.document.querySelector(".bbx-marquee").getAttribute("data-scroll") === "false" &&
+    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,\.bbx-ticker-track,\.bfm-tag-scroll,\.bbx-sweep,\.bbx-ticker\{animation:none!important\}\.bbx-sweep\{display:none\}/.test(BX), JSON.stringify(rm));
+  await nowPlayingReducedChecks(RM, T4);
   RM.BFMusic.pause();
   SPECTRUM.level = 0;
 
@@ -1327,6 +1385,142 @@ async function boomboxChecks(c) {
     NS.document.querySelector(".bfm-queue li").textContent === NOT_SET_UP && NS.document.querySelector(".bfm-msg").textContent === NOT_SET_UP &&
     !/Internal server error|Loading your music/.test(nsText), NS.document.querySelector(".bfm-queue li").textContent);
   check("G12. no emoji in anything the boombox draws or says", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + boxOf(D).textContent + boxOf(F).textContent));
+  await nowPlayingChecks(c);
+}
+
+/* ── G13. now playing ───────────────────────────────────────────────────── */
+const vfdText = w => { const c = w.document.querySelector(".bbx-scroll .bbx-vfd-copy"); return c ? c.textContent : null; };
+const tickerText = w => { const c = w.document.querySelector(".bbx-ticker-track .bbx-ticker-text"); return c ? c.textContent : null; };
+async function nowPlayingChecks(c) {
+  console.log("\n══ G13. now playing: the VFD, the LED ticker, the sweep, the tag ══");
+  const { base, add, T1, T2 } = c;
+  /* The CSS as the page has it: bf-boombox.js builds some rules from its constants. */
+  const N = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const nb = N.BFMusic._box(), root = boxOf(N), bbx = N.document.querySelector(".bbx");
+  const q1 = s => N.document.querySelector(s);
+  const BX = (N.document.getElementById("bf-boombox-style") || {}).textContent || "";
+  /* nothing loaded */
+  nb.render({});
+  check("G13. with nothing loaded the VFD and the ticker say \"No track loaded\", nothing scrolls, nothing is announced",
+    vfdText(N) === "No track loaded" && tickerText(N) === "No track loaded" && q1(".bbx-marquee").getAttribute("data-scroll") === "false" &&
+    q1(".bbx-ticker").getAttribute("data-scroll") === "false" && N.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy").length === 1 &&
+    N.document.querySelectorAll(".bbx-ticker-text").length === 1 && q1(".bfm-live").textContent === "" && q1(".bfm-tag-title").textContent === "No track loaded",
+    vfdText(N) + " | " + tickerText(N));
+  /* a track, from the real player */
+  const lib = N.BFMusic.library().tracks.map(t => t.id);
+  gesture(N); N.BFMusic.playTrack(T1); await settle();
+  const one = N.BFMusic.library().tracks.find(t => t.id === T1);
+  const pos = lib.indexOf(T1) + 1, tot = lib.length;
+  const two = n => (n < 10 ? "0" : "") + n;
+  check("G13. the VFD scrolls \"Title — Artist\" while a track is loaded: two copies, the second hidden from screen readers",
+    vfdText(N) === one.title + " — Artist" && q1(".bbx-marquee").getAttribute("data-scroll") === "true" &&
+    N.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy").length === 2 && N.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy")[1].getAttribute("aria-hidden") === "true" &&
+    q1(".bbx-marquee").getAttribute("title") === one.title + " — Artist", vfdText(N));
+  const secs = parseFloat(q1(".bbx-scroll").style.getPropertyValue("--bbx-scroll-s"));
+  const line = one.title + " — Artist", hold = 0.12;
+  const rate = line.length / (secs * (1 - hold));
+  check("G13. at a readable pace (at most 6 characters a second, at least 6 s a loop), holding still at the start of each loop (0% to 12%), by transform only",
+    secs >= 6 && rate <= 6 && /@keyframes bbx-loop\{0%,12%\{transform:translateX\(0\)\}100%\{transform:translateX\(-50%\)\}\}/.test(BX) &&
+    /\.bbx-marquee\[data-scroll=true\] \.bbx-scroll\{display:inline-block;animation:bbx-loop var\(--bbx-scroll-s, 10s\) linear infinite\}/.test(BX) &&
+    /color:var\(--bf-accent-a, #22d3ee\);text-shadow:0 0 2px currentColor,0 0 6px rgba\(var\(--bf-accent-a-rgb/.test(BX), secs + "s " + rate.toFixed(2));
+  const longT = "x".repeat(150);
+  nb.render({ title: longT, artist: "A" });
+  const lsecs = parseFloat(q1(".bbx-scroll").style.getPropertyValue("--bbx-scroll-s"));
+  const lrate = (longT + " — A").length / (lsecs * (1 - hold));
+  check("G13. a long line keeps the same readable pace (" + lrate.toFixed(1) + " characters a second)", lrate >= 3 && lrate <= 6, lsecs);
+  N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.play(); await settle();
+  check("G13. the LED ticker sits along the top under the handle and reads \"NN / TT · Title · Artist · Playlist name\" (" + tickerText(N) + ")",
+    tickerText(N) === two(pos) + " / " + two(tot) + " · " + one.title + " · Artist · All tracks" && q1(".bbx-ticker").getAttribute("aria-hidden") === "true" &&
+    q1(".bbx-ticker").getAttribute("data-scroll") === "true" && N.document.querySelectorAll(".bbx-ticker-text").length === 2 &&
+    /\.bbx-ticker\{position:absolute;left:36px;top:26px;width:242px;height:9px;/.test(BX) && /\.bbx-ticker::after\{[^}]*background-size:2px 2px\}/.test(BX), tickerText(N));
+  const pl = N.BFMusic.library().playlists.find(p => (p.track_ids || []).indexOf(T2) !== -1 && (p.track_ids || []).length > 1);
+  if (pl) {
+    N.BFMusic.choosePlaylist(pl.id); await settle(); N.BFMusic.playTrack(T2); await settle();
+    const ids = N.BFMusic.state().queue, at = ids.indexOf(T2) + 1;
+    check("G13. on a playlist the ticker counts that queue and names it (" + tickerText(N) + ")",
+      tickerText(N) === two(at) + " / " + two(ids.length) + " · " + N.BFMusic.library().tracks.find(t => t.id === T2).title + " · Artist · " + pl.name, tickerText(N));
+    N.BFMusic.choosePlaylist(""); await settle();
+  } else check("G13. a playlist with T2 and one more track exists to test the ticker's playlist name", false);
+  /* the sweep */
+  const s0 = nb.sweeps();
+  N.BFMusic.playTrack(T1); await settle();
+  check("G13. a new track starts the neon \"Now playing\" sweep across the face, once", nb.sweeps() === s0 + 1 && bbx.getAttribute("data-sweep") === "on" &&
+    q1(".bbx-sweep").textContent === "Now playing" && q1(".bbx-sweep").getAttribute("aria-hidden") === "true" &&
+    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep 1\.2s cubic-bezier\(\.3,\.6,\.4,1\) 1 both\}/.test(BX) &&
+    /@keyframes bbx-sweep\{0%\{transform:translateX\(-150%\);opacity:0\}18%\{opacity:1\}82%\{opacity:1\}100%\{transform:translateX\(150%\);opacity:0\}\}/.test(BX) &&
+    /\.bbx\[data-sweep=on\] \.bbx-ticker\{opacity:0\}/.test(BX), nb.sweeps() - s0);
+  N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.play(); await settle();
+  N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.toggle(); await settle(); N.BFMusic.seek(20); await settle();
+  check("G13. a pause and a resume (twice), and a seek, start no sweep", nb.sweeps() === s0 + 1 && N.BFMusic.playing(), nb.sweeps() - s0);
+  await wait(N.BFBoombox.SWEEP_MS + 150);
+  check("G13. after about 1.2 s the sweep is done and the ticker settles in (opacity only)", bbx.getAttribute("data-sweep") === "done" &&
+    /\.bbx\[data-sweep=done\] \.bbx-ticker\{animation:bbx-settle \.45s ease-out 1 both\}/.test(BX) && /@keyframes bbx-settle\{from\{opacity:0\}to\{opacity:1\}\}/.test(BX) && N.BFBoombox.SWEEP_MS === 1200);
+  N.BFMusic.next(); await settle();
+  check("G13. Next is a new track: one more sweep", nb.sweeps() === s0 + 2);
+  /* the announcement, once per track */
+  const live = q1(".bfm-live");
+  const said = live.textContent;
+  live.textContent = "MARK";
+  N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.play(); await settle(); N.BFMusic.seek(5); await settle(); N.BFMusic.setVolume(0.3); await settle();
+  check("G13. the announcement is made once per track: a pause, a resume, a seek or a volume change never repeats it, and the scrolling copies are not live",
+    live.textContent === "MARK" && /^Now playing: .+ by Artist$/.test(said) && !q1(".bbx-marquee").closest("[aria-live]") && !q1(".bbx-ticker").closest("[aria-live]"), said);
+  N.BFMusic.next(); await settle();
+  check("G13. ... and the next track is announced", /^Now playing: .+ by Artist$/.test(live.textContent) && live.textContent !== "MARK", live.textContent);
+  /* the tag's marquee */
+  nb.setState("tag");
+  nb.render({ title: "One", artist: "Artist", tagText: "One" });
+  const clip = q1(".bfm-tag-clip");
+  check("G13. a short title on the minimised tag does not scroll", clip.getAttribute("data-overflow") === "false" && !q1(".bfm-tag-ghost") && q1(".bfm-tag-title").textContent === "One");
+  const long = "A Title Much Longer Than The Minimised Tag Can Hold";
+  nb.render({ title: long, artist: "Artist", tagText: long });
+  check("G13. a title longer than the tag scrolls as a marquee: a second copy hidden from screen readers, the whole title as the tooltip",
+    clip.getAttribute("data-overflow") === "true" && !!q1(".bfm-tag-ghost") && q1(".bfm-tag-ghost").getAttribute("aria-hidden") === "true" &&
+    q1(".bfm-tag-title").textContent === long && clip.getAttribute("title") === long &&
+    /\.bfm-tag-clip\[data-overflow=true\] \.bfm-tag-scroll\{display:inline-block;animation:bbx-loop/.test(BX));
+  /* measured where the tag is laid out */
+  Object.defineProperty(clip, "clientWidth", { configurable: true, get: () => 160 });
+  const tt = q1(".bfm-tag-title");
+  tt.getBoundingClientRect = () => ({ width: 120 + (clip.getAttribute("data-overflow") === "true" ? 28 : 0) });
+  nb.render({ title: long, artist: "Artist", tagText: long });
+  const fits = clip.getAttribute("data-overflow") === "false" && !q1(".bfm-tag-ghost");
+  tt.getBoundingClientRect = () => ({ width: 260 + (clip.getAttribute("data-overflow") === "true" ? 28 : 0) });
+  nb.render({ title: long + ".", artist: "Artist", tagText: long + "." });
+  check("G13. laid out, the tag is measured: 120 px of title in 160 px stays still, 260 px scrolls", fits && clip.getAttribute("data-overflow") === "true");
+  nb.setState("box");
+  /* hidden */
+  setHidden(N, true);
+  check("G13. while the tab is hidden every scrolling part and the sweep are paused", root.getAttribute("data-hidden") === "true" &&
+    /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep\{animation-play-state:paused\}/.test(BX));
+  setHidden(N, false);
+  N.BFMusic.pause(); await settle();
+  /* the next page carries on: no sweep */
+  const left = JSON.parse(JSON.stringify(Object.assign({}, N.BFMusic.state(), { was_playing: true })));
+  closeOne(N);
+  const P = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
+  const t0 = Date.now();
+  while (!P.BFMusic.playing() && Date.now() - t0 < 2000) await wait(20);
+  check("G13. when the next page carries the track on, no sweep runs: it is not a new track", P.BFMusic.playing() && P.BFMusic._box().sweeps() === 0 &&
+    P.document.querySelector(".bbx").getAttribute("data-sweep") === "off", P.BFMusic._box().sweeps());
+  P.BFMusic.next(); await settle();
+  check("G13. ... and the next new track there sweeps", P.BFMusic._box().sweeps() === 1);
+  P.BFMusic.pause(); await settle(); closeOne(P);
+}
+/* Under reduced motion: still, an ellipsis, the whole line as the tooltip, no sweep. */
+async function nowPlayingReducedChecks(RM, track) {
+  const q1 = s => RM.document.querySelector(s), bx = RM.BFMusic._box();
+  const t = RM.BFMusic.library().tracks.find(x => x.id === track);
+  RM.BFMusic.next(); await settle();
+  const now = RM.BFMusic.library().tracks.find(x => x.id === RM.BFMusic.state().track_id);
+  check("G13. under reduced motion the VFD and the ticker hold still: one copy each, cut short with an ellipsis, the whole line as the tooltip",
+    q1(".bbx-marquee").getAttribute("data-scroll") === "false" && q1(".bbx-ticker").getAttribute("data-scroll") === "false" &&
+    RM.document.querySelectorAll(".bbx-scroll .bbx-vfd-copy").length === 1 && RM.document.querySelectorAll(".bbx-ticker-text").length === 1 &&
+    q1(".bbx-marquee").getAttribute("title") === now.title + " — Artist" && / · Artist · All tracks$/.test(q1(".bbx-ticker").getAttribute("title")) &&
+    /\.bbx-marquee\{position:relative;height:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;/.test(FILES[BOOMBOX]), q1(".bbx-ticker").getAttribute("title"));
+  bx.setState("tag");
+  bx.render({ title: "A Title Much Longer Than The Minimised Tag Can Hold", artist: "Artist", tagText: "A Title Much Longer Than The Minimised Tag Can Hold" });
+  check("G13. ... the tag's long title does not scroll either, and no sweep has run", q1(".bfm-tag-clip").getAttribute("data-overflow") === "false" && !q1(".bfm-tag-ghost") &&
+    q1(".bfm-tag-clip").getAttribute("title") === "A Title Much Longer Than The Minimised Tag Can Hold" && bx.sweeps() === 0 && q1(".bbx").getAttribute("data-sweep") === "off", t && t.title);
+  bx.setState("box");
 }
 
 function legalPages_musicText() { const lp = require("../lib/legalPages"); return lp.musicTerms().join(" ") + " " + lp.musicPrivacySentence(); }

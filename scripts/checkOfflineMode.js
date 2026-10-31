@@ -668,8 +668,12 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       } catch (e) { why = String(e); }
       const v = verdict(ls, ss, idb);
       check("IV4. settings.html Sign Out does the same (here with no connection)", ok && v.ok, why || v.why);
+      /* NAMED BEFORE → AFTER (Oct 31 2026, the mist and the boombox on every signed-in page). BEFORE: the tag was
+         exactly <script src="/scripts/bf-session.js" data-clear-only></script>. AFTER: it also carries data-music, which
+         loads only the music player when signed in (checkMusicPlayer G1); data-clear-only, its place in the head and the
+         clear-only return in bf-session.js are unchanged. */
       check("IV5. settings.html loads bf-session.js data-clear-only, in the head, so its own no-renewal sign-out stands",
-        /<script src="\/scripts\/bf-session\.js" data-clear-only><\/script>\n  <script src="\/scripts\/bf-offline\.js"><\/script>\n<\/head>/.test(FILES[SETTINGS]));
+        /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>\n  <script src="\/scripts\/bf-offline\.js"><\/script>\n<\/head>/.test(FILES[SETTINGS]));
     }
     // bf-session.js ending a session that cannot be renewed
     {
