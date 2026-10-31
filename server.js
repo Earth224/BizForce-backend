@@ -7625,6 +7625,13 @@ async function readMusicState(userId) {
   return { tracks: tracks.data || [], playlists: playlists.data || [] };
 }
 
+/* Before migration 155 the tables are missing: 503 and a plain sentence, not the
+   global handler's "Internal server error". Anything else is still an error. */
+function musicFailed(res, next, error) {
+  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: "music_not_set_up" });
+  return next(error);
+}
+
 function musicStateReply(state) {
   return {
     tracks: state.tracks.map(memberMusic.publicTrack),
@@ -7638,7 +7645,7 @@ function musicStateReply(state) {
 app.get("/api/music", requireAuth, musicLimiter, async function (req, res, next) {
   try {
     return res.json(musicStateReply(await readMusicState(req.user.id)));
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 /* One file, field "track", at most 25 MB, MP3/M4A/AAC/Ogg/Opus/FLAC/WAV by
@@ -7665,7 +7672,7 @@ app.post("/api/music/tracks", requireAuth, musicUploadLimiter, function (req, re
         throw error;
       }
       return res.status(201).json({ track: memberMusic.publicTrack(data), used_bytes: memberMusic.usedBytes(state.tracks) + checked.size });
-    } catch (error) { next(error); }
+    } catch (error) { musicFailed(res, next, error); }
   });
 });
 
@@ -7680,7 +7687,7 @@ app.put("/api/music/tracks/:id", requireAuth, musicWriteLimiter, async function 
     if (error) throw error;
     if (!data) return res.status(404).json({ error: "Track not found." });
     return res.json({ track: memberMusic.publicTrack(data) });
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 /* The row, the file, and the track's place in every playlist. */
@@ -7706,7 +7713,7 @@ app.delete("/api/music/tracks/:id", requireAuth, musicWriteLimiter, async functi
       if (removed.failures.length) console.error("[music] file removal queued for user " + req.user.id + ": " + removed.failures[0].error);
     }
     return res.json(Object.assign({ deleted: true }, musicStateReply(await readMusicState(req.user.id))));
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 /* A signed URL for one of the member's tracks, valid SIGNED_URL_SECONDS. */
@@ -7721,7 +7728,7 @@ app.get("/api/music/tracks/:id/url", requireAuth, musicLimiter, async function (
       .createSignedUrl(track.storage_path, memberMusic.SIGNED_URL_SECONDS);
     if (signError || !signed || !signed.signedUrl) return res.status(502).json({ error: "The track could not be opened just now. Try again." });
     return res.json({ url: signed.signedUrl, expires_at: new Date(Date.now() + memberMusic.SIGNED_URL_SECONDS * 1000).toISOString() });
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 async function ownTrackIds(userId) {
@@ -7746,7 +7753,7 @@ app.post("/api/music/playlists", requireAuth, musicWriteLimiter, async function 
     const reply = musicStateReply(await readMusicState(req.user.id));
     reply.created_id = data.id;
     return res.status(201).json(reply);
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 /* A new name, or the tracks in their new order (reorder, add, remove). */
@@ -7771,7 +7778,7 @@ app.put("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async functi
     if (error) throw error;
     if (!data) return res.status(404).json({ error: "Playlist not found." });
     return res.json(musicStateReply(await readMusicState(req.user.id)));
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 
 app.delete("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async function (req, res, next) {
@@ -7782,7 +7789,7 @@ app.delete("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async fun
     if (error) throw error;
     if (!data || !data.length) return res.status(404).json({ error: "Playlist not found." });
     return res.json(musicStateReply(await readMusicState(req.user.id)));
-  } catch (error) { next(error); }
+  } catch (error) { musicFailed(res, next, error); }
 });
 /* ── end of members' music ──────────────────────────────────────────────── */
 

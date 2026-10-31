@@ -47,7 +47,7 @@ const MUTATE = process.env.MUTATE || "";
 const SERVER = "server.js", LIBM = "lib/music.js", YOURDATA = "lib/yourData.js", MIGRATION = "supabase/migrations/155_member_music.sql";
 const MUSIC = "F:scripts/bf-music.js", THEME = "F:scripts/bf-theme.js", SESSION = "F:scripts/bf-session.js", STUDIO = "F:scripts/bf-theme-studio.js";
 const DASH = "F:dashboard.html", POPOUT = "F:music-popout.html", SETTINGS = "F:settings.html", TERMS = "F:terms.html", PRIVACY = "F:privacy.html";
-const GUIDE = "F:scripts/termaximus-guide.js";
+const GUIDE = "F:scripts/termaximus-guide.js", BOOMBOX = "F:scripts/bf-boombox.js", PRESENCE = "F:scripts/termaximus-presence.js";
 const UID = "aaaaaaaa-0000-4000-8000-000000000001";
 const OTHER = "bbbbbbbb-0000-4000-8000-000000000002";
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
@@ -68,7 +68,19 @@ const MUTATIONS = {
   // the visualiser drawing while the page is hidden
   "viz-when-hidden": [[MUSIC, "    if (doc.hidden || reducedMotion()) return;", "    if (reducedMotion()) return;"]],
   // the music library missing from the data export
-  "export-missing-music": [[YOURDATA, "{ table: \"member_tracks\", group: \"profile\",", "{ table: \"member_tracks\", group: \"profile\", export: false, exportWhy: \"left out\","]]
+  "export-missing-music": [[YOURDATA, "{ table: \"member_tracks\", group: \"profile\",", "{ table: \"member_tracks\", group: \"profile\", export: false, exportWhy: \"left out\","]],
+  // the boombox on a public page (a card, reset-password, verify-email)
+  "boombox-on-public-page": [[MUSIC, "    if (!T || T.publicView(T.pageKey())) return null;\n", ""]],
+  // the tag scrolling away with the page
+  "tag-not-fixed": [[BOOMBOX, "\".bfm-float{position:fixed;", "\".bfm-float{position:absolute;"]],
+  // the speakers pulsing while paused
+  "speakers-move-while-paused": [[BOOMBOX, "var bass = playing ? clamp01(lv && lv.bass) : 0;", "var bass = clamp01(lv && lv.bass);"]],
+  // the speakers and reels moving under prefers-reduced-motion
+  "motion-under-reduced-motion": [[MUSIC, "    if (reducedMotion()) { c.setAttribute(\"data-viz\", \"static\"); drawStatic(c); if (BOX) BOX.still(); return; }\n", ""]],
+  // a capability of the old Music panel lost from the expanded view (Mix)
+  "capability-lost": [[MUSIC, "      '<div class=\"bfm-row\">' +\n        '<label for=\"bfmMix\">Mix</label>", "      '<div class=\"bfm-row\" hidden>' +\n        '<label for=\"bfmMixGone\">Mix</label>"]],
+  // the missing tables shown as "Internal server error"
+  "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 
@@ -79,7 +91,7 @@ function readInto(key) {
   FILES[key] = fs.existsSync(p) ? lf(fs.readFileSync(p, "utf8")) : null;
 }
 [SERVER, LIBM, YOURDATA, MIGRATION, "lib/accountFiles.js", "lib/legal.js", "lib/legalPages.js", "lib/themes.js",
-  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE].forEach(readInto);
+  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE].forEach(readInto);
 if (FILES[MUSIC] === null) { console.log("    FAIL  frontend not found at " + FRONTEND + " (set BIZFORCE_FRONTEND_DIR)"); process.exit(1); }
 
 if (MUTATE) {
@@ -426,11 +438,16 @@ const upload = (buffer, name, mimetype) => ({ field: "track", buffer, originalna
 
   /* ── D. the player ────────────────────────────────────────────────────── */
   console.log("\n══ D. the player, in jsdom with fake Web Audio and a fake BroadcastChannel ══");
-  check("D0. the dashboard has the console (#bfMusicPanel in #musicSection) and loads bf-music.js",
-    /<section id="musicSection" class="bf-section"[^>]*>\s*<div id="bfMusicPanel"><\/div>\s*<\/section>/.test(FILES[DASH]) && FILES[DASH].indexOf('<script src="/scripts/bf-music.js"></script>') !== -1);
-  check("D0. music-popout.html is the pop-out: #bfMusicPopout, the theme, the session guard and the player",
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: the dashboard had a Music panel
+     (#bfMusicPanel in #musicSection). AFTER: no panel; the logo is the boombox's anchor and the page loads
+     bf-boombox.js before bf-music.js; every capability of the panel is in the boombox's expanded view (G2). */
+  const boomboxTag = '<script src="/scripts/bf-boombox.js"></script>', musicTag = '<script src="/scripts/bf-music.js"></script>';
+  check("D0. the dashboard: the old Music panel is gone, the logo is the boombox's anchor, and it loads bf-boombox.js then bf-music.js",
+    !/musicSection|bfMusicPanel/.test(FILES[DASH]) && /class="topbar-brand"[^>]*data-bf-boombox-anchor/.test(FILES[DASH]) &&
+    FILES[DASH].indexOf(boomboxTag) !== -1 && FILES[DASH].indexOf(boomboxTag) < FILES[DASH].indexOf(musicTag));
+  check("D0. music-popout.html is the pop-out: #bfMusicPopout, the theme, the session guard, the boombox and the player",
     !!FILES[POPOUT] && /<div id="bfMusicPopout"><\/div>/.test(FILES[POPOUT]) && FILES[POPOUT].indexOf('<script src="/scripts/bf-theme.js"></script>') !== -1 &&
-    FILES[POPOUT].indexOf('<script src="/scripts/bf-session.js"></script>') !== -1 && FILES[POPOUT].indexOf('<script src="/scripts/bf-music.js"></script>') !== -1);
+    FILES[POPOUT].indexOf('<script src="/scripts/bf-session.js"></script>') !== -1 && FILES[POPOUT].indexOf(boomboxTag) !== -1 && FILES[POPOUT].indexOf(boomboxTag) < FILES[POPOUT].indexOf(musicTag));
   const appMap = JSON.parse(fs.readFileSync(path.join(REPO, "lib", "appMap.json"), "utf8"));
   check("D0. the app map knows the pop-out page", JSON.stringify(appMap).indexOf("music-popout.html") !== -1);
   await playerChecks();
@@ -446,7 +463,9 @@ class FakeBC {
   constructor(name) { this.name = name; this.onmessage = null; this.closed = false; BUS.chans.push(this); }
   postMessage(m) {
     const data = JSON.stringify(m);
-    BUS.chans.filter(c => c !== this && c.name === this.name && !c.closed).forEach(c => {
+    // A closed window neither sends nor hears (its page is gone).
+    if (this.win && this.win.__closed) return;
+    BUS.chans.filter(c => c !== this && c.name === this.name && !c.closed && !(c.win && c.win.__closed)).forEach(c => {
       BUS.pending++;
       setTimeout(() => {
         BUS.pending--;
@@ -522,24 +541,59 @@ function themeCache(theme) {
   return JSON.stringify({ v: 1, uid: UID, fetched_at: Date.now() + 3600 * 1000, state: { themes: [{ id: "th-1", name: "Mine", theme: theme }], default_theme_id: "th-1", page_themes: {} } });
 }
 
+/* The page under test. A boombox page ("float") is any app page that loads the
+   mist; the dashboard also has the logo the boombox sits beside. jsdom lays
+   nothing out, so sizes come from data-size (the mist, the chat box) or the
+   boombox's own state (the tag 290 x 40, the boombox 320 x 176, with the
+   library 320 x 484), and places from the inline left and top. */
+const MIST_TAG = '<script src="/scripts/termaximus-presence.js"></script>';
+function layoutStub(win) {
+  const HE = win.HTMLElement.prototype;
+  const size = el => {
+    const ds = el.getAttribute && el.getAttribute("data-size");
+    if (ds) { const [sw, sh] = ds.split("x").map(Number); return { w: sw, h: sh }; }
+    if (el.classList && el.classList.contains("bfm-float")) {
+      const box = el.getAttribute("data-state") === "box", lib = el.getAttribute("data-library") === "true";
+      return box ? { w: 320, h: lib ? 484 : 176 } : { w: 290, h: 40 };
+    }
+    return { w: 0, h: 0 };
+  };
+  Object.defineProperty(HE, "offsetWidth", { configurable: true, get() { return size(this).w; } });
+  Object.defineProperty(HE, "offsetHeight", { configurable: true, get() { return size(this).h; } });
+  HE.getBoundingClientRect = function () {
+    if (this.hasAttribute("data-bf-boombox-anchor")) return { left: 16, top: 10, right: 200, bottom: 50, width: 184, height: 40, x: 16, y: 10 };
+    const z = size(this), l = parseFloat(this.style.left), t = parseFloat(this.style.top);
+    const left = isNaN(l) ? 16 : l, top = isNaN(t) ? (this.classList.contains("bfm-float") ? win.innerHeight - 16 - z.h : 0) : t;
+    return { left, top, right: left + z.w, bottom: top + z.h, width: z.w, height: z.h, x: left, y: top };
+  };
+  win.__w = win.__w || 1280; win.__h = 800;
+  Object.defineProperty(win, "innerWidth", { configurable: true, get: () => win.__w });
+  Object.defineProperty(win, "innerHeight", { configurable: true, get: () => win.__h });
+}
 async function openPage(o) {
   const calls = [];
+  const page = o.popout ? "music-popout.html" : o.mini ? "crm.html" : o.page || "dashboard.html";
+  const anchor = page === "dashboard.html" ? '<header class="topbar"><a class="topbar-brand" data-bf-boombox-anchor href="/dashboard">BizForceAI</a></header>' : "";
   const html = "<!DOCTYPE html><html><head><script>" + FILES[THEME] + "</script></head><body>" +
-    (o.popout ? '<div id="bfMusicPopout"></div>' : o.mini ? "<main>page</main>" : '<section id="musicSection"><div id="bfMusicPanel"></div></section>') +
-    "<script>" + FILES[MUSIC] + "</script></body></html>";
+    (o.popout ? '<div id="bfMusicPopout"></div>' : o.mini ? "<main>page</main>" : anchor + "<main>page</main>" + (o.extra || "") + MIST_TAG) +
+    (o.mini ? "" : "<script>" + FILES[BOOMBOX] + "</script>") + "<script>" + FILES[MUSIC] + "</script></body></html>";
   const raf = [];
   let w;
   const dom = new JSDOM(html, {
-    url: "https://bizforceai.net/" + (o.popout ? "music-popout.html" : o.mini ? "crm.html" : "dashboard.html"), runScripts: "dangerously", pretendToBeVisual: true,
+    url: "https://bizforceai.net/" + page, runScripts: "dangerously", pretendToBeVisual: true,
     beforeParse(win) {
       w = win;
+      if (o.width) win.__w = o.width;
+      layoutStub(win);
+      if (o.blockPlay) win.__blockPlay = true;
       win.localStorage.setItem("bf_token", TOKEN);
       if (o.store) win.localStorage.setItem("bf_music", JSON.stringify(o.store));
+      if (o.boombox) win.localStorage.setItem("bf_boombox", JSON.stringify(o.boombox));
       win.localStorage.setItem("bf_theme", themeCache(o.theme || MUSIC_THEME));
       win.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {}, addListener() {} });
       win.Audio = makeFakeAudio(win);
       win.AudioContext = FakeAudioContext;
-      win.BroadcastChannel = FakeBC;
+      win.BroadcastChannel = class extends FakeBC { constructor(n) { super(n); this.win = win; } };
       win.requestAnimationFrame = f => { raf.push(f); win.__rafRequests = (win.__rafRequests || 0) + 1; return raf.length; };
       win.cancelAnimationFrame = () => {};
       win.HTMLCanvasElement.prototype.getContext = () => null;
@@ -550,7 +604,9 @@ async function openPage(o) {
         calls.push(method + " " + url.pathname);
         if (url.origin !== API) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
         const body = opts && typeof opts.body === "string" ? JSON.parse(opts.body) : undefined;
-        return callRoute(o.lifted, method, url.pathname, body).then(r => ({ ok: r.status < 400, status: r.status, json: async () => r.body }));
+        // A route that calls next(error) meets server.js's global handler: 500, "Internal server error".
+        return callRoute(o.lifted, method, url.pathname, body).then(r => r, () => ({ status: 500, body: { error: "Internal server error" } }))
+          .then(r => ({ ok: r.status < 400, status: r.status, json: async () => r.body }));
       };
       win.XMLHttpRequest = class {
         constructor() { this.upload = {}; this.headers = {}; }
@@ -583,7 +639,12 @@ function setHidden(w, hidden) {
   w.document.dispatchEvent(new w.Event("visibilitychange"));
 }
 function gesture(w, kind) { w.document.dispatchEvent(new w.Event(kind || "pointerdown", { bubbles: true })); }
-function click(w, sel) { const b = w.document.querySelector(sel); if (!b) return false; gesture(w); b.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); return true; }
+// A press on the control itself (it bubbles to the document, the page's first interaction), then the click.
+function click(w, sel) {
+  const b = w.document.querySelector(sel); if (!b) return false;
+  b.dispatchEvent(new w.MouseEvent("pointerdown", { bubbles: true })); b.dispatchEvent(new w.MouseEvent("pointerup", { bubbles: true }));
+  b.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); return true;
+}
 function closeAll() { WINS.forEach(w => { w.__closed = true; try { w.close(); } catch (e) { /* closed */ } }); BUS.chans.forEach(c => c.close()); }
 const near = (a, b, eps) => Math.abs(a - b) <= (eps || 0.02);
 
@@ -603,10 +664,13 @@ async function playerChecks() {
   /* D1. the controls */
   const A = await openPage(base);
   const BM = A.BFMusic;
-  check("D1. the dashboard console is built, with every control as a drawn icon button (no emoji) and the exact autoplay words",
-    BM && BM.mode === "panel" && !!A.document.querySelector(".bfm-console [data-act=toggle] svg") && !!A.document.querySelector("[data-act=shuffle] svg") &&
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: mode "panel", the keys in .bfm-console and a
+     .bfm-volume slider. AFTER: mode "float", the keys are the boombox's piano keys (.bbx-keys) and the volume is
+     its rotary dial (.bbx-dial, a slider). */
+  check("D1. the dashboard's boombox is built, with every control as a drawn icon button (no emoji) and the exact autoplay words",
+    BM && BM.mode === "float" && !!A.document.querySelector(".bbx-keys [data-act=toggle] svg") && !!A.document.querySelector("[data-act=shuffle] svg") &&
     !!A.document.querySelector("[data-act=repeat] svg") && !!A.document.querySelector("[data-act=mute] svg") && !!A.document.querySelector("[data-act=popout] svg") &&
-    !!A.document.querySelector(".bfm-seek") && !!A.document.querySelector(".bfm-volume") && !!A.document.querySelector(".bfm-mix") && !!A.document.querySelector(".bfm-playlist") &&
+    !!A.document.querySelector(".bfm-seek") && !!A.document.querySelector(".bbx-dial[role=slider]") && !!A.document.querySelector(".bfm-mix") && !!A.document.querySelector(".bfm-playlist") &&
     !!A.document.querySelector(".bfm-queue") && !!A.document.querySelector(".bfm-drop") && A.document.getElementById("bfmAutoplayNote").textContent === "Starts on your first click — browsers don't allow sound before that." &&
     A.document.querySelector("label[for=bfmAutoplay]").textContent === "Play when I open BizForce");
   check("D1. it reads the library: three tracks in the queue, in library order", BM.state().queue.join() === [T1, T2, T3].join() && A.document.querySelectorAll(".bfm-queue .bfm-item").length === 3);
@@ -734,7 +798,7 @@ async function playerChecks() {
   clearInterval(watch);
   check("D6. the handoff: the page goes silent first and the pop-out plays on from the same track and place; never two at once",
     !A.BFMusic.playing() && B.BFMusic.playing() && B.BFMusic.audible() && B.BFMusic.state().track_id === T2 && near(B.BFMusic.position(), 33, 0.01) && violations.length === 0,
-    "A " + A.BFMusic.playing() + " B " + B.BFMusic.playing() + " " + violations.slice(0, 3).join("; "));
+    "A " + A.BFMusic.playing() + " B " + B.BFMusic.playing() + " audible " + B.BFMusic.audible() + " track " + (B.BFMusic.state().track_id === T2) + " at " + B.BFMusic.position() + " " + violations.slice(0, 3).join("; "));
   B.BFMusic._tick(); await settle();
   check("D6. the page shows \"Playing in the pop-out player\"", A.BFMusic.popoutAlive() && A.document.querySelector(".bfm-remote").textContent === "Playing in the pop-out player" &&
     A.document.querySelector(".bfm").getAttribute("data-remote") === "true");
@@ -899,13 +963,372 @@ async function playerChecks() {
   check("F2. it remembers the track, the position, the volume and the queue for the member signed in", saved.uid === UID && saved.track_id === T2 && near(saved.position, 61, 0.01) && near(saved.volume, 0.5) && Array.isArray(saved.queue) && saved.queue.length >= 3,
     JSON.stringify(saved));
   const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u;
-  const shown = [FILES[MUSIC], FILES[POPOUT], FILES[LIBM], legalPages_musicText(), A.document.body.textContent];
-  check("F3. no emoji in the player, the pop-out, the library rules, the music Terms, or anything the console shows", shown.every(t => !EMOJI.test(t || "")), shown.map(t => EMOJI.test(t || "")).join());
+  const shown = [FILES[MUSIC], FILES[BOOMBOX], FILES[POPOUT], FILES[LIBM], legalPages_musicText(), A.document.body.textContent];
+  check("F3. no emoji in the player, the boombox, the pop-out, the library rules, the music Terms, or anything the boombox shows", shown.every(t => !EMOJI.test(t || "")), shown.map(t => EMOJI.test(t || "")).join());
   const tip = (FILES[GUIDE].match(/"dashboard\.html": \[[\s\S]*?\]/) || [""])[0];
-  check("F4. the dashboard's guide names the music console's own labels", /Under \\"Music\\", drop your own files and press \\"Play\\"; \\"Pop out\\" keeps it playing/.test(tip));
+  /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: the tip named the panel ("Under \"Music\" ...
+     press \"Play\""). AFTER: it names the boombox beside the logo and its own keys, "Library" and "Pop out". */
+  check("F4. the dashboard's guide names the boombox and its own labels, \"Library\" and \"Pop out\"",
+    /Beside the logo, the boombox plays your own music; \\"Library\\" holds your tracks and uploads, and \\"Pop out\\" keeps it playing between pages\./.test(tip) &&
+    !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") && /Pop out/.test(A.document.querySelector(".bfm-panel [data-act=popout]").textContent));
   ear.close();
+  await boomboxChecks({ db, lifted, base, add, T1, T2, T3 });
   closeAll();
 }
+/* ── G. the boombox ─────────────────────────────────────────────────────── */
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const ptr = (w, el, type, x, y) => el.dispatchEvent(new w.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+const key = (w, el, k, more) => el.dispatchEvent(new w.KeyboardEvent("keydown", Object.assign({ key: k, bubbles: true, cancelable: true }, more || {})));
+const boxOf = w => w.document.querySelector(".bfm-float");
+const prefsOf = w => JSON.parse(w.localStorage.getItem("bf_boombox") || "{}");
+const spot = w => { const r = boxOf(w); return r ? [parseFloat(r.style.left), parseFloat(r.style.top)] : null; };
+const scaleOf = el => el ? parseFloat((/scale\((-?[\d.]+)\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
+const angleOf = el => el ? parseFloat((/rotate\((-?[\d.]+)deg\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
+const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+function closeOne(w) { w.__closed = true; try { w.close(); } catch (e) { /* closed */ } }
+/* One frame of bf-music.js's loop, n times, 1/60 s apart. */
+function frames(w, n) { for (let i = 0; i < n; i++) { const list = w.__raf.splice(0); list.forEach(f => f((w.__ft = (w.__ft || 1000) + 1000 / 60))); } }
+/* A real page's script tags for the mist, with the player inlined; whether the boombox appears. */
+async function presenceOn(file, html) {
+  const mist = (html.match(/<script[^>]*termaximus-presence\.js[^>]*><\/script>/g) || []).join("");
+  const page = "<!DOCTYPE html><html><head><script>" + FILES[THEME] + "</script></head><body><main>page</main>" + mist +
+    "<script>" + FILES[BOOMBOX] + "</script><script>" + FILES[MUSIC] + "</script></body></html>";
+  const dom = new JSDOM(page, { url: "https://bizforceai.net/" + file, runScripts: "dangerously", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.localStorage.setItem("bf_token", TOKEN);
+      win.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
+      win.AudioContext = FakeAudioContext; win.Audio = makeFakeAudio(win); win.BroadcastChannel = undefined;
+      win.requestAnimationFrame = () => 0; win.cancelAnimationFrame = () => {};
+      win.HTMLCanvasElement.prototype.getContext = () => null;
+      win.fetch = () => new Promise(() => {});
+    } });
+  await wait(5);   // the player builds on DOMContentLoaded
+  const on = !!dom.window.document.querySelector(".bfm-float");
+  dom.window.close();
+  return on;
+}
+function missingClient(fallback) {
+  const from = table => {
+    const err = { code: "PGRST205", message: "Could not find the table 'public." + table + "' in the schema cache", hint: "Perhaps you meant the table 'public.member_playlists'", details: null };
+    const b = new Proxy({}, { get(t, k) { return k === "then" ? (res, rej) => Promise.resolve({ data: null, error: err }).then(res, rej) : () => b; } });
+    return b;
+  };
+  return { client: { from, storage: fallback.client.storage, rpc: fallback.client.rpc } };
+}
+
+async function boomboxChecks(c) {
+  console.log("\n══ G. the boombox: where it sits, how it moves, what it keeps ══");
+  const { db, base, add, T1, T2 } = c;
+  const BX = FILES[BOOMBOX] || "";
+
+  /* G1. on every signed-in page that has the mist; never on a public page or a card */
+  const pages = fs.readdirSync(FRONTEND).filter(f => /\.html$/.test(f)).sort();
+  const UNTHEMED = (/var UNTHEMED = \[([\s\S]*?)\]/.exec(FILES[THEME]) || ["", ""])[1].match(/"[^"]+"/g).map(x => JSON.parse(x));
+  /* A mist page with the session guard gets the player (bf-session.js loads it); a public page
+     without the guard never loads it. A card or other public view (bf-theme's UNTHEMED) is tried
+     with the player loaded all the same, and must still show no boombox. */
+  const want = [], refuse = [], wrong = [];
+  for (const f of pages) {
+    const html = lf(fs.readFileSync(path.join(FRONTEND, f), "utf8"));
+    if (!/termaximus-presence\.js/.test(html) || f === "music-popout.html") continue;
+    const guarded = /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html);
+    const card = UNTHEMED.indexOf(f) !== -1;
+    const expected = guarded && !card;
+    (expected ? want : refuse).push(f);
+    if (!guarded && !card) { if (/bf-music\.js|bf-boombox\.js/.test(html)) wrong.push(f + " has it"); continue; }
+    const on = await presenceOn(f, html);
+    if (on !== expected) wrong.push(f + (on ? " has it" : " lacks it"));
+  }
+  check("G1. the boombox is on every signed-in page that has the mist (" + want.length + " pages)", want.length >= 30 && wrong.filter(x => / lacks it$/.test(x)).length === 0, wrong.join(", "));
+  check("G1. ... and never on a public page or a card, even with the player loaded (" + refuse.join(", ") + ")",
+    refuse.indexOf("card-view.html") !== -1 && wrong.filter(x => / has it$/.test(x)).length === 0, wrong.join(", "));
+  const loaders = pages.filter(f => /\/scripts\/bf-music\.js/.test(fs.readFileSync(path.join(FRONTEND, f), "utf8")));
+  const sessionLoads = /bf-music\.js/.test(FILES[SESSION]);
+  check("G1. the player loads only where a member is signed in: through the session guard, or on the dashboard and the pop-out",
+    sessionLoads && loaders.every(f => f === "dashboard.html" || f === "music-popout.html"), loaders.join());
+
+  /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */
+  const D = await openPage(base);
+  const DR = boxOf(D);
+  check("G2. on the dashboard it opens as the boombox in the top bar, 12 px right of the BizForce AI logo and level with it",
+    !!DR && DR.getAttribute("data-state") === "box" && DR.style.left === "212px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
+  click(D, "[data-act=bbx-library]");
+  const CAPS = [["play and pause", ".bbx-keys [data-act=toggle]"], ["previous", ".bbx-keys [data-act=prev]"], ["next", ".bbx-keys [data-act=next]"],
+    ["shuffle", ".bbx-keys [data-act=shuffle]"], ["repeat", ".bbx-keys [data-act=repeat]"], ["mute", ".bbx-low [data-act=mute]"], ["volume", ".bbx-dial[role=slider]"],
+    ["seek", ".bbx-display .bfm-seek"], ["the time", ".bbx-display .bfm-cur"], ["the live strip", ".bbx-display .bfm-viz"],
+    ["Spectrum", ".bfm-panel [data-view=spectrum]"], ["Waveform", ".bfm-panel [data-view=wave]"], ["Mix", ".bfm-panel .bfm-mix"],
+    ["the playlists", ".bfm-panel .bfm-playlist"], ["new playlist", ".bfm-panel [data-act=pl-new]"], ["rename playlist", ".bfm-panel [data-act=pl-rename]"],
+    ["delete playlist", ".bfm-panel [data-act=pl-delete]"], ["the queue", ".bfm-panel .bfm-queue"], ["a draggable queue item", ".bfm-panel .bfm-item[draggable=true]"],
+    ["upload (the drop zone)", ".bfm-panel .bfm-drop"], ["the file picker", ".bfm-panel [data-act=choose]"], ["choose files", ".bfm-panel [data-act=choose]"], ["Play when I open BizForce", ".bfm-panel #bfmAutoplay"],
+    ["Pop out", ".bfm-panel [data-act=popout]"]];
+  const lost = CAPS.filter(([name, sel]) => { const el = DR.querySelector(sel); return !el || !!el.closest("[hidden]"); }).map(x => x[0]);
+  const labelled = D.document.querySelector("label[for=bfmMix]") && D.document.querySelector("label[for=bfmPlaylist]") && D.document.querySelector("label[for=bfmAutoplay]");
+  check("G2. every capability of the old Music panel is reachable in the expanded view, with its label (" + CAPS.length + ")",
+    lost.length === 0 && !!labelled && DR.getAttribute("data-library") === "true", lost.join(", "));
+  const unlabelled = Array.prototype.filter.call(DR.querySelectorAll("button, input, select, [role=slider], [tabindex='0']"), el => {
+    if (el.closest("[hidden]") || el.getAttribute("aria-label") || el.getAttribute("aria-labelledby")) return false;
+    if (el.id && D.document.querySelector("label[for=" + el.id + "]")) return false;
+    return !(el.textContent || "").trim();
+  }).map(el => el.outerHTML.slice(0, 60));
+  check("G2. every control is labelled (an aria-label, a label, or its own words)", unlabelled.length === 0, unlabelled.join(" | "));
+
+  /* G3. fixed on screen, under the mist and the chat */
+  const cs = D.getComputedStyle(DR);
+  check("G3. it is fixed on screen (computed position: fixed), and its CSS says so", cs.position === "fixed" && /"\.bfm-float\{position:fixed;/.test(BX), cs.position);
+  const zOf = re => Number((re.exec(FILES[PRESENCE]) || [0, "NaN"])[1]);
+  const glowZ = zOf(/tmx-chat-glow-wrap[\s\S]{0,400}?z-?[iI]ndex["']?\s*[:=]\s*["']?(\d+)/), Zb = D.BFBoombox.Z;
+  check("G3. the z-order: the boombox (" + Zb + ") sits under the chat box's glow and the mist (2147483646, 2147483647), as its header documents",
+    Number(cs.zIndex) === Zb && Zb < 2147483646 && /Z-ORDER, low to high: the page; the boombox \(2147483000\); the chat box's\s+glow \(2147483646\); the chat box and the mist \(2147483647\)/.test(BX), cs.zIndex + " " + glowZ);
+
+  /* G4. dragged like the mist, clamped, moved by the keys, remembered, reset */
+  const F = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const FR = boxOf(F), tag = F.document.querySelector(".bfm-tag"), grabAt = F.document.querySelector(".bfm-tag-title");
+  check("G4. on any other page it starts as the tag, bottom left", FR.getAttribute("data-state") === "tag" && spot(F).join() === "16," + (800 - 40 - 16));
+  ptr(F, grabAt, "pointerdown", 100, 700); ptr(F, grabAt, "pointermove", 103, 702);
+  const under = spot(F).join();
+  ptr(F, grabAt, "pointermove", 300, 500); ptr(F, grabAt, "pointerup", 300, 500);
+  check("G4. a press becomes a drag only past the mist's 6 px; then it follows the pointer and is saved on release",
+    F.BFBoombox.DRAG_THRESHOLD === 6 && under === "16,744" && spot(F).join() === "216,544" && prefsOf(F).left === 216 && prefsOf(F).top === 544, under + " " + spot(F));
+  ptr(F, grabAt, "pointerdown", 300, 500); ptr(F, grabAt, "pointermove", 9000, 9000); ptr(F, grabAt, "pointerup", 9000, 9000);
+  const far = spot(F).join();
+  ptr(F, grabAt, "pointerdown", 300, 500); ptr(F, grabAt, "pointermove", -9000, -9000); ptr(F, grabAt, "pointerup", -9000, -9000);
+  check("G4. it is clamped fully on screen, at every edge", far === (1280 - 290) + "," + (800 - 40) && spot(F).join() === "0,0", far + " " + spot(F));
+  const mistSrc = (/function _tmxClampPosition\(left, top, el\) \{[\s\S]*?\n  \}\n/.exec(FILES[PRESENCE]) || [""])[0];
+  let same = !!mistSrc;
+  if (same) {
+    const fakeWin = { innerWidth: 1280, innerHeight: 800 };
+    const mistClamp = new Function("window", "root", mistSrc + "\nreturn _tmxClampPosition;")(fakeWin, null);
+    [[-50, -50, 290, 40], [5000, 5000, 290, 40], [400, 300, 320, 484], [1100, 790, 320, 176], [10, 10, 2000, 2000]].forEach(([l, t, ew, eh]) => {
+      const el = { offsetWidth: ew, offsetHeight: eh };
+      if (JSON.stringify(mistClamp(l, t, el)) !== JSON.stringify(F.BFBoombox.clampPosition(l, t, el))) same = false;
+    });
+  }
+  check("G4. the clamp is the mist's own rule (_tmxClampPosition), giving the same place for the same inputs", same);
+  tag.focus();
+  key(F, tag, "ArrowRight"); key(F, tag, "ArrowDown", { shiftKey: true });
+  check("G4. the arrow keys move the focused tag 10 px, 40 with Shift, and it is saved", spot(F).join() === "10,40" && prefsOf(F).left === 10 && prefsOf(F).top === 40, spot(F));
+  key(F, tag, "Home");
+  check("G4. Home resets it to its default place and forgets the saved one", spot(F).join() === "16,744" && !("left" in prefsOf(F)));
+  ptr(F, grabAt, "pointerdown", 100, 700); ptr(F, grabAt, "pointermove", 2000, 700); ptr(F, grabAt, "pointerup", 2000, 700);
+  F.__w = 900; F.dispatchEvent(new F.Event("resize"));
+  check("G4. a smaller window re-clamps it, so it stays fully on screen", spot(F)[0] === 900 - 290, spot(F));
+  F.__w = 1280; F.dispatchEvent(new F.Event("resize"));
+  click(F, "[data-act=bbx-expand]");
+  ptr(F, F.document.querySelector(".bbx-body-grip"), "pointerdown", 100, 100); ptr(F, F.document.querySelector(".bbx-body-grip"), "pointermove", 140, 60);
+  ptr(F, F.document.querySelector(".bbx-body-grip"), "pointerup", 140, 60);
+  const moved = spot(F).join();
+  click(F, "[data-act=bbx-reset]");
+  check("G4. the boombox's handle drags it too, and the reset key puts it back and keeps the focus on the handle",
+    moved === (1280 - 320) + "," + (800 - 484 - 40) && spot(F).join() === "16," + (800 - 484 - 16) && !("left" in prefsOf(F)) &&
+    F.document.activeElement === F.document.querySelector(".bbx-body-grip"), moved + " " + spot(F));
+  const K = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: { state: "tag", left: 400, top: 300 } }));
+  const K2 = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
+  check("G4. its place and whether it is minimised are remembered on this device (bf_boombox), even on the dashboard",
+    spot(K).join() === "400,300" && boxOf(K).getAttribute("data-state") === "tag" && boxOf(K2).getAttribute("data-state") === "tag" && K.BFBoombox.STORE_KEY === "bf_boombox");
+
+  /* G5. the tag and the boombox */
+  const expand = F.document.querySelector("[data-act=bbx-expand]");
+  click(F, "[data-act=bbx-minimise]");
+  check("G5. Minimise turns it into the tag, moves the focus to Expand, and remembers it",
+    FR.getAttribute("data-state") === "tag" && F.document.activeElement === expand && expand.getAttribute("aria-expanded") === "false" && prefsOf(F).state === "tag");
+  click(F, "[data-act=bbx-expand]");
+  check("G5. Expand opens the boombox with the library, focuses its Play key, and remembers it",
+    FR.getAttribute("data-state") === "box" && FR.getAttribute("data-library") === "true" && expand.getAttribute("aria-expanded") === "true" &&
+    F.document.activeElement === F.document.querySelector(".bbx-keys [data-act=toggle]") && prefsOf(F).state === "box");
+  key(F, F.document.activeElement, "Escape");
+  check("G5. Escape returns it to the tag, with the focus on Expand", FR.getAttribute("data-state") === "tag" && F.document.activeElement === expand);
+  const tagKeys = ["toggle", "next", "bbx-expand"].every(a => !!tag.querySelector("[data-act=" + a + "]"));
+  check("G5. the tag holds the title, a tiny wave, play/pause, next and expand", tagKeys && tag.querySelectorAll(".bfm-tag-wave span").length === 5 && !!tag.querySelector(".bfm-tag-title"));
+
+  /* G6. never over the mist or the open chat box */
+  const MIST = '<div id="tmx-presence-root" data-size="120x120" style="position:fixed;left:400px;top:60px"></div>';
+  const N = await openPage(Object.assign({}, base, { extra: MIST }));
+  const mistR = N.document.getElementById("tmx-presence-root").getBoundingClientRect();
+  const nr = () => boxOf(N).getBoundingClientRect();
+  check("G6. where the mist would cover it, it is nudged aside, and stays on screen",
+    !overlaps(nr(), mistR) && nr().left >= 0 && nr().right <= 1280 && nr().top >= 0 && nr().bottom <= 800, JSON.stringify(nr()));
+  const chat = N.document.createElement("div");
+  chat.id = "tmx-chat"; chat.setAttribute("data-size", "360x480");
+  const at = nr();
+  chat.style.left = at.left + "px"; chat.style.top = at.top + "px"; chat.style.pointerEvents = "auto";
+  N.document.body.appendChild(chat);
+  N.BFMusic._box().nudge();
+  const chatR = chat.getBoundingClientRect();
+  check("G6. ... and so is the open chat box", !overlaps(nr(), chatR) && !overlaps(nr(), mistR), JSON.stringify(nr()) + " " + JSON.stringify(chatR));
+  check("G6. the nudge runs when it is placed, when a drag ends, and every 1.5 s (the chat box opens and moves on its own)",
+    /function place\(\)[\s\S]*?nudge\(\);[\s\S]*?\n    \}/.test(BX) && /if \(drag\.moved\) \{ nudge\(\); saveSpot\(\); \}/.test(BX) && /setInterval\(function \(\) \{ if \(state && !drag\.on\) nudge\(\); \}, 1500\)/.test(BX));
+
+  /* G7. the motion */
+  const MO = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const bx = MO.BFMusic._box(), q1 = s => MO.document.querySelector(s);
+  bx.rest();
+  for (let i = 0; i < 30; i++) bx.animate({ bass: 1, highs: 1, level: 1 }, false, 1 / 60);
+  check("G7. paused, nothing moves: loud levels leave the cones, caps and tweeters at rest, the LEDs dark and the reels still",
+    scaleOf(q1(".bbx-cone")) === 1 && scaleOf(q1(".bbx-cap")) === 1 && angleOf(q1(".bbx-reel")) === 0 && q1(".bbx-leds span").style.opacity === "0.18" && bx.motion().speed === 0,
+    q1(".bbx-cone").style.transform + " " + q1(".bbx-reel").style.transform);
+  for (let i = 0; i < 30; i++) bx.animate({ bass: 1, highs: 1, level: 1 }, true, 1 / 60);
+  const full = scaleOf(q1(".bbx-cone")), fullCap = scaleOf(q1(".bbx-cap")), dome = Number(q1(".bbx-tweeter-dome").style.opacity);
+  const litFull = Array.prototype.filter.call(MO.document.querySelectorAll(".bbx-leds span"), l => l.style.opacity === "1").length;
+  bx.rest();
+  for (let i = 0; i < 30; i++) bx.animate({ bass: 0.3, highs: 0, level: 0.5 }, true, 1 / 60);
+  const third = scaleOf(q1(".bbx-cone"));
+  const litHalf = Array.prototype.filter.call(MO.document.querySelectorAll(".bbx-leds[data-side=left] span"), l => l.style.opacity === "1").length;
+  check("G7. the woofer cones and caps scale with the bass: full bass 1 + " + MO.BFBoombox.CONE_PULSE + " (caps 1 + " + MO.BFBoombox.CAP_PULSE + "), 0.3 of it 0.3 as far",
+    near(full, 1 + MO.BFBoombox.CONE_PULSE, 0.002) && near(fullCap, 1 + MO.BFBoombox.CAP_PULSE, 0.002) && near(third - 1, 0.3 * MO.BFBoombox.CONE_PULSE, 0.002), full + " " + fullCap + " " + third);
+  check("G7. the tweeters shimmer with the highs, and the LEDs light with the level (all 12 at full, 3 of 6 a side at half)",
+    dome > 0.95 && Number(q1(".bbx-tweeter-dome").style.opacity) === 0.55 && litFull === 12 && litHalf === 3, dome + " " + litFull + " " + litHalf);
+  bx.rest();
+  const angles = [];
+  for (let i = 0; i < 120; i++) { bx.animate({ bass: 0, highs: 0, level: 0 }, true, 1 / 60); angles.push(angleOf(q1(".bbx-reel"))); }
+  const steady = (angles[119] - angles[118] + 360) % 360;
+  const slowing = [];
+  for (let i = 0; i < 120; i++) { bx.animate({ bass: 0, highs: 0, level: 0 }, false, 1 / 60); slowing.push(angleOf(q1(".bbx-reel"))); }
+  const steps = slowing.map((a, i) => (a - (i ? slowing[i - 1] : angles[119]) + 360) % 360);
+  const stopAt = steps.findIndex(s => s === 0);
+  check("G7. the reels turn steadily while playing (even in silence), then slow to a stop within 2 s of a pause, every step slower",
+    steady > 3 && stopAt > 10 && stopAt <= 120 && steps.slice(0, stopAt).every((s, i) => i === 0 || s <= steps[i - 1] + 0.02) && steps.slice(stopAt).every(s => s === 0), steady + " " + stopAt);
+  const styled = Array.prototype.filter.call(MO.document.querySelectorAll(".bbx *, .bfm-tag *"), el => {
+    for (let i = 0; i < el.style.length; i++) if (["transform", "opacity", "--bbx-scroll-s"].indexOf(el.style.item(i)) === -1) return true;
+    return false;
+  }).map(el => el.getAttribute("class") + ": " + el.getAttribute("style"));
+  const styleProps = new Set((BX.match(/\.style\.(\w+)\s*=(?!=)/g) || []).map(x => /\.style\.(\w+)/.exec(x)[1]));
+  const placeOnly = (BX.match(/\w+\.style\.(left|top|right|bottom)\s*=/g) || []).every(x => /^root\./.test(x));
+  const frames_ = (BX.match(/@keyframes [\w-]+\{[\s\S]*?\}\}/g) || []);
+  const kfOk = frames_.length >= 2 && frames_.every(k => (k.match(/[\w-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity"));
+  const transOk = (BX.match(/transition:[^;}"]+/g) || []).every(t => t.split(",").every(p => /^(transition:)?\s*transform\b/.test(p.trim()) || /none/.test(p)));
+  check("G7. all motion is transform or opacity: the moving parts' styles, every keyframe and transition; only the root's place is left/top",
+    styled.length === 0 && [...styleProps].every(p => ["transform", "opacity", "left", "top", "right", "bottom"].indexOf(p) !== -1) && placeOnly && kfOk && transOk,
+    styled.slice(0, 3).join(" | ") + " " + [...styleProps].join());
+  const T4 = await add("A Very Long Title For The Marquee", 210);
+  await MO.BFMusic.loadLibrary(true);
+  SPECTRUM.level = 230;
+  gesture(MO); MO.BFMusic.playTrack(T4); await settle();
+  frames(MO, 20);
+  const live = scaleOf(q1(".bbx-cone"));
+  check("G7. playing, bf-music.js's frame loop drives it from the analyser: the cones out, the reels turning",
+    live > 1.05 && angleOf(q1(".bbx-reel")) > 0 && MO.BFMusic._levels().bass > 0.5, live);
+  check("G7. a long title scrolls on the display (two copies, the second hidden from screen readers), and the title is announced",
+    q1(".bbx-marquee").getAttribute("data-long") === "true" && MO.document.querySelectorAll(".bbx-scroll span").length === 2 &&
+    MO.document.querySelectorAll(".bbx-scroll span")[1].getAttribute("aria-hidden") === "true" && q1(".bfm-live").getAttribute("aria-live") === "polite" &&
+    q1(".bfm-live").textContent === "Now playing: A Very Long Title For The Marquee by Artist");
+  setHidden(MO, true);
+  const hidAt = bx.motion().angle;
+  frames(MO, 5);
+  check("G7. hidden, it stops: no frame runs, nothing turns, and the marquee is paused", bx.motion().angle === hidAt && MO.__raf.length === 0 &&
+    boxOf(MO).getAttribute("data-hidden") === "true" && /\.bfm\[data-hidden=true\] \.bbx-marquee \.bbx-scroll\{animation-play-state:paused\}/.test(BX));
+  setHidden(MO, false);
+  MO.BFMusic.pause(); await settle();
+  frames(MO, 150);
+  check("G7. after a pause the speakers come to rest and the reels stop, and the loop ends", scaleOf(q1(".bbx-cone")) === 1 && bx.motion().speed === 0 && MO.__raf.length === 0,
+    q1(".bbx-cone").style.transform + " " + bx.motion().speed);
+  const RM = await openPage(Object.assign({}, base, { page: "tasks.html", reduce: true }));
+  gesture(RM); RM.BFMusic.playTrack(T4); await settle(); frames(RM, 10);
+  const rm = RM.BFMusic._box().motion();
+  check("G7. under reduced motion it is still while playing: no frame, the speakers and reels at rest, a still level on the display, no scrolling title",
+    (RM.__rafRequests || 0) === 0 && rm.speed === 0 && rm.cone === 0 && rm.angle === 0 && boxOf(RM).getAttribute("data-still") === "true" &&
+    RM.document.querySelector(".bfm-viz").getAttribute("data-viz") === "static" && RM.document.querySelector(".bbx-marquee").getAttribute("data-long") === "false" &&
+    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-marquee \.bbx-scroll\{animation:none!important\}/.test(BX), JSON.stringify(rm));
+  RM.BFMusic.pause();
+  SPECTRUM.level = 0;
+
+  /* G8. continuity across pages */
+  const P1 = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  gesture(P1); P1.BFMusic.playTrack(T2); await settle(); P1.BFMusic.seek(50); P1.BFMusic.setVolume(0.4);
+  P1.dispatchEvent(new P1.Event("pagehide"));
+  const left = JSON.parse(P1.localStorage.getItem("bf_music") || "{}");
+  check("G8. leaving a page while it plays saves the track, the place, the queue, the volume, and that it was playing",
+    left.was_playing === true && left.track_id === T2 && near(left.position, 50, 0.01) && near(left.volume, 0.4) && left.queue.length >= 3, JSON.stringify(left));
+  P1.BFMusic.pause(); closeOne(P1);
+  const t0 = Date.now();
+  const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
+  while (!P2.BFMusic.playing() && Date.now() - t0 < 2000) await wait(20);
+  const took = Date.now() - t0;
+  check("G8. the next page carries on by itself, from the same track and place, with the same queue and volume, within a second (" + took + " ms)",
+    P2.BFMusic.playing() && P2.BFMusic.state().track_id === T2 && near(P2.BFMusic.position(), 50, 0.01) && near(P2.BFMusic.state().volume, 0.4) &&
+    P2.BFMusic.state().queue.join() === left.queue.join() && took < 1000 && P2.BFMusic.RESUME_WAIT_MS <= 500, took);
+  P2.BFMusic.pause(); await settle(); closeOne(P2);
+  const P3 = await openPage(Object.assign({}, base, { page: "tasks.html", store: left, blockPlay: true }));
+  await wait(P3.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  const ttag = P3.document.querySelector(".bfm-tag-title");
+  check("G8. where the browser will not play before a tap, the tag says \"Tap to resume\" and nothing is heard",
+    !P3.BFMusic.playing() && !P3.BFMusic.audible() && P3.BFMusic.armed() && ttag.textContent === "Tap to resume: Two" &&
+    P3.document.querySelector(".bfm-tag").getAttribute("data-resume") === "true", ttag.textContent + " " + P3.BFMusic.playing());
+  P3.__blockPlay = false;
+  gesture(P3); await settle();
+  check("G8. ... and the tap resumes it at the saved place", P3.BFMusic.playing() && P3.BFMusic.state().track_id === T2 && near(P3.BFMusic.position(), 50, 0.01));
+  P3.BFMusic.pause(); await settle(); closeOne(P3);
+  check("G8. the help text says so, word for word", F.document.querySelector(".bfm-continuity").textContent === "Moving between pages pauses for a moment. For unbroken music, use Pop out." &&
+    F.BFMusic.CONTINUITY_NOTE === "Moving between pages pauses for a moment. For unbroken music, use Pop out.");
+
+  /* G9. with the pop-out playing, each page's boombox is its remote and moves with it.
+     The levels come every 33 ms and count for 400 ms; with two dozen jsdom windows each
+     hearing every message the harness's own clock falls behind that, so the windows the
+     rest of the check does not use are closed first. */
+  WINS.filter(w => w !== D && w !== F).forEach(closeOne);
+  const R1 =await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const POP = await openPage(Object.assign({}, base, { popout: true }));
+  SPECTRUM.level = 230;
+  gesture(POP); POP.BFMusic.playTrack(T1); await settle(); POP.BFMusic._tick();
+  // The page follows levels no older than 400 ms, so its frames run as soon as they arrive.
+  for (let i = 0; i < 75 && !(R1.BFMusic._levels().bass > 0.5); i++) await wait(20);
+  frames(R1, 20);
+  const rCone = scaleOf(R1.document.querySelector(".bbx-cone"));
+  check("G9. while the pop-out plays, a page's speakers move with the pop-out's levels, and the page plays nothing itself",
+    R1.BFMusic.popoutAlive() && !R1.BFMusic.playing() && rCone > 1.05 && R1.BFMusic._levels().bass > 0.5 && audibleCount() === 1, rCone + " " + JSON.stringify(R1.BFMusic._levels()) + " pop " + POP.BFMusic.playing() + " " + JSON.stringify(POP.BFMusic._levels()) + " alive " + R1.BFMusic.popoutAlive() + " audible " + audibleCount());
+  check("G9. ... and its tag says where the music is", /^Playing in the pop-out player: One$/.test(R1.document.querySelector(".bfm-tag-title").textContent), R1.document.querySelector(".bfm-tag-title").textContent);
+  click(R1, ".bfm-tag [data-act=toggle]"); await settle();
+  check("G9. the tag's play/pause is the pop-out's remote", !POP.BFMusic.playing() && !R1.BFMusic.playing());
+  POP.BFMusic._tick(); await wait(120); await settle();
+  const rafLeft = R1.__raf.length;
+  frames(R1, 120);
+  check("G9. ... and when the pop-out pauses, the page's speakers come to rest", scaleOf(R1.document.querySelector(".bbx-cone")) === 1 && R1.BFMusic._box().motion().speed === 0,
+    rafLeft + " " + JSON.stringify(R1.BFMusic._box().motion()) + " " + JSON.stringify(R1.BFMusic._levels()) + " " + POP.BFMusic.playing());
+  click(R1, ".bfm-tag [data-act=next]"); await settle();
+  check("G9. the tag's Next goes to the pop-out too", POP.BFMusic.state().track_id !== T1 && !R1.BFMusic.playing());
+  POP.BFMusic.pause();
+  POP.dispatchEvent(new POP.Event("pagehide")); closeOne(POP); await settle();
+  SPECTRUM.level = 0;
+
+  /* G10. phones: docked at the bottom, a bottom sheet */
+  const PH = await openPage(Object.assign({}, base, { page: "tasks.html", width: 600 }));
+  const PR = boxOf(PH), ptag = PH.document.querySelector(".bfm-tag-title");
+  ptr(PH, ptag, "pointerdown", 50, 780); ptr(PH, ptag, "pointermove", 250, 500); ptr(PH, ptag, "pointerup", 250, 500);
+  key(PH, PH.document.querySelector(".bfm-tag"), "ArrowUp");
+  check("G10. at 860 px and narrower the tag docks to the bottom edge: no dragging, no arrow-key moves",
+    PR.getAttribute("data-dock") === "phone" && PR.style.left === "" && PR.style.top === "" && !("left" in prefsOf(PH)) && PH.BFBoombox.PHONE_MAX === 860 &&
+    /\.bfm-float\[data-dock=phone\]\{left:0!important;right:0;top:auto!important;bottom:0!important;/.test(BX));
+  click(PH, "[data-act=bbx-expand]");
+  check("G10. expanding opens a bottom sheet", PR.getAttribute("data-state") === "box" && PR.getAttribute("data-dock") === "phone" &&
+    /\.bfm-float\[data-dock=phone\]\[data-state=box\]\{max-height:88vh;overflow:auto;/.test(BX));
+  PH.__w = 1280; PH.dispatchEvent(new PH.Event("resize"));
+  check("G10. widened, it leaves the dock and is placed on screen again", PR.getAttribute("data-dock") === "desktop" && PR.getAttribute("data-placed") === "true");
+
+  /* G11. before migration 155: 503 and a plain sentence */
+  const NOT_SET_UP = "Music isn't set up yet on the server (migration 155). Nothing is lost.";
+  const liftedMissing = liftRoutes(missingClient(db));
+  // next(error) is server.js's global handler: 500, "Internal server error".
+  const served = (...a) => callRoute(...a).catch(() => ({ status: 500, body: { error: "Internal server error" } }));
+  const r503 = await served(liftedMissing, "get", "/api/music");
+  const pl503 = await served(liftedMissing, "post", "/api/music/playlists", { name: "Run", track_ids: [] });
+  check("G11. with the music tables missing (PostgREST PGRST205), the library answers 503 with the plain sentence, and so does every music route",
+    r503.status === 503 && r503.body.error === NOT_SET_UP && r503.body.reason === "music_not_set_up" && M.NOT_SET_UP === NOT_SET_UP && pl503.status === 503, JSON.stringify(r503) + " " + JSON.stringify(pl503));
+  const otherErr = { client: { from: () => new Proxy({}, { get(t, k) { return k === "then" ? (res) => res({ data: null, error: { code: "08006", message: "connection failure" } }) : function () { return this; }; } }), storage: db.client.storage, rpc: db.client.rpc } };
+  let passed = false;
+  try { await callRoute(liftRoutes(otherErr), "get", "/api/music"); } catch (e) { passed = true; }
+  check("G11. any other failure still goes to the error handler; a table named only in the hint is not \"missing\"",
+    passed && M.missingTable({ code: "PGRST205", message: "Could not find the table 'public.member_tracks' in the schema cache" }) &&
+    M.missingTable({ code: "42P01", message: "relation \"public.member_playlists\" does not exist" }) &&
+    !M.missingTable({ code: "PGRST205", message: "Could not find the table 'public.contacts' in the schema cache", hint: "Perhaps you meant the table 'public.member_tracks'" }) &&
+    !M.missingTable(null));
+  const NS = await openPage({ lifted: liftedMissing, page: "tasks.html" });
+  await settle(20);
+  const nsText = boxOf(NS).textContent;   // body.textContent would include the inlined scripts
+  check("G11. the player shows that sentence where \"Loading your music...\" was, never \"Internal server error\"",
+    NS.document.querySelector(".bfm-queue li").textContent === NOT_SET_UP && NS.document.querySelector(".bfm-msg").textContent === NOT_SET_UP &&
+    !/Internal server error|Loading your music/.test(nsText), NS.document.querySelector(".bfm-queue li").textContent);
+  check("G12. no emoji in anything the boombox draws or says", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + boxOf(D).textContent + boxOf(F).textContent));
+}
+
 function legalPages_musicText() { const lp = require("../lib/legalPages"); return lp.musicTerms().join(" ") + " " + lp.musicPrivacySentence(); }
 function masterGain(w) { const m = w.BFMusic._master(); return m ? m.gain.value : NaN; }
 

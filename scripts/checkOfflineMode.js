@@ -565,9 +565,13 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        PER_USER above, cleared at sign-out.
        NAMED BEFORE → AFTER (Oct 30 2026, the Executive command deck). BEFORE: KEPT had 15 keys. AFTER: 16; bf_exec_tab is
        the deck's last tab on this device (scripts/bf-exec-deck.js), a display choice like bf_active_calendar, so sign-out
-       leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
+       leaves it and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: KEPT had 16 keys. AFTER: 17; bf_boombox is where
+       the music boombox sits on this device and whether it is minimised (scripts/bf-boombox.js), a display choice like
+       tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
       bf_exec_tab: "which tab the Executive command deck opens on",
+      bf_boombox: "where the music boombox sits and whether it is minimised",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
       tmx_chat_pos: "where the Termaximus chat box sits",
