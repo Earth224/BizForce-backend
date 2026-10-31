@@ -2,7 +2,7 @@
    checkThemes.js — the theme engine and the Theme Studio (Block 4a).
 
    WHAT IT PROVES
-     A  Phase A. The 57 app pages and css/agent-shell.css draw the backdrop
+     A  Phase A. The 58 app pages and css/agent-shell.css draw the backdrop
         from ONE token rule (scripts/bf-theme.js), with no inline backdrop
         left, and bf-theme.js is the first thing in each page's <head>. With no
         theme saved, each page renders TODAY's backdrop: the rule's defaults
@@ -169,8 +169,10 @@ const MUTATIONS = {
   // a route without its limiter (E)
   "route-unlimited": [[SERVER, "app.put(\"/api/themes/apply\", requireAuth, themesWriteLimiter, async function", "app.put(\"/api/themes/apply\", requireAuth, async function"]],
   /* NAMED BEFORE → AFTER (Block 4b). BEFORE: "kept-missing" dropped bf_theme from checkOfflineMode's KEPT list.
-     AFTER: bf_theme is on its PER_USER list, so the mutation drops it from there (G). */
-  "offline-inventory-missing": [[OFFCHECK, "\"mcTargetGoalConversions\", \"bf_theme\"];", "\"mcTargetGoalConversions\"];"]],
+     AFTER: bf_theme is on its PER_USER list, so the mutation drops it from there (G).
+     NAMED BEFORE → AFTER (Oct 30 2026, the music player). BEFORE the anchor ended the list at "bf_theme"]. AFTER bf_music
+     follows it, so the anchor is "bf_theme", "bf_music"]; the same mutation: bf_theme dropped, bf_music kept. */
+  "offline-inventory-missing": [[OFFCHECK, "\"mcTargetGoalConversions\", \"bf_theme\", \"bf_music\"];", "\"mcTargetGoalConversions\", \"bf_music\"];"]],
   // ── Block 4b ──
   // the mist keeping a hard-coded colour (H4)
   "mist-hard-coded": [[PRESENCE, "    \"    rgba(var(--tmx-haze-1, 48,12,150),0.88)   0%,\",", "    \"    rgba(48,12,150,0.88)   0%,\","]],
@@ -188,7 +190,9 @@ const MUTATIONS = {
   // the visitor's theme on a public page (B6, H8)
   "public-page-visitor-theme": [[THEME, "    if (UNTHEMED.indexOf(key) !== -1) return true;", "    if (false) return true;"]],
   // bf_theme surviving sign-out (G)
-  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\"\n  ];", "    \"mcTargetGoalConversions\"\n  ];"]],
+  // NAMED BEFORE → AFTER (Oct 30 2026, the music player): BEFORE "bf_theme" closed PER_USER_LOCAL; AFTER "bf_music" follows
+  // it. The same mutation: bf_theme dropped from the list, bf_music left.
+  "theme-survives-signout": [[SESSION, "    \"mcTargetGoalConversions\",\n    \"bf_theme\",\n    \"bf_music\"\n  ];", "    \"mcTargetGoalConversions\",\n    \"bf_music\"\n  ];"]],
   // ── Block 4c: the theme routes reachable ──
   // the live bug: the studio's base back to window.API_URL or "", a relative /api/themes (B, C, I)
   "relative-themes-url": [[STUDIO, "  function api() { return T.apiOrigin(); }",
@@ -330,11 +334,16 @@ function layersOf(bg) {
 }
 
 /* ── A. Phase A ─────────────────────────────────────────────────────────── */
-console.log("\n══ A. the 57 pages and agent-shell draw one token rule, and today's look by default ══");
+console.log("\n══ A. the 58 pages and agent-shell draw one token rule, and today's look by default ══");
 const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
+/* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce music player). BEFORE: 57 pages loaded bf-theme.js. AFTER: 58;
+   music-popout.html, the player's pop-out, is new and wears the member's theme. It did not exist at the commits the
+   "as it was" proofs read (A4, H3), so it is left out of those and held to A1 to A3 and H3's rule for added lines:
+   every theme token it carries is a var() with a fallback, and its only engine tag is the first one in <head>. */
+const NEW_PAGES = ["music-popout.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
-check("A1. 57 pages load scripts/bf-theme.js", THEMED.length === 57, THEMED.length);
+check("A1. 58 pages load scripts/bf-theme.js", THEMED.length === 58 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
 const firstInHead = THEMED.filter(f => { const m = /<head>\s*([\s\S]*?)\n/.exec(FILES[f]); return !m || m[1].trim() !== TAG; });
 check("A1. ... as the first element of <head>, before any style or script", firstInHead.length === 0, firstInHead.join(", "));
 const inlineLeft = THEMED.concat([SHELL]).filter(f => /body::before\s*\{[^{}]*background/i.test(noComments(f === SHELL ? FILES[f] : stylesOf(FILES[f]))));
@@ -351,7 +360,7 @@ const mapNotThemed = mapKeys.filter(k => !THEMED.some(f => keyOfFile(f) === k)).
 check("A3. UNTHEMED is the same in lib/themes.js and scripts/bf-theme.js", JSON.stringify(frontUnthemed) === JSON.stringify(LIBX.UNTHEMED));
 check("A3. ... and is exactly the app map's pages that do not load bf-theme.js", JSON.stringify(LIBX.UNTHEMED.slice().sort()) === JSON.stringify(mapNotThemed),
   "map-not-themed: " + mapNotThemed.join(",") + " | UNTHEMED: " + LIBX.UNTHEMED.join(","));
-check("A3. the themed pages the server accepts are the 57 that load bf-theme.js", JSON.stringify(LIBX.themedPages(APP_MAP)) === JSON.stringify(THEMED.map(keyOfFile).sort()));
+check("A3. the themed pages the server accepts are the 58 that load bf-theme.js", JSON.stringify(LIBX.themedPages(APP_MAP)) === JSON.stringify(THEMED.map(keyOfFile).sort()));
 
 const ruleRoot = rulesOf(RULE, /^:where\(:root\)$/)[0] || {};
 const ruleHtml = rulesOf(RULE, /^html::before$/)[0] || {};
@@ -362,7 +371,7 @@ function before(f) {
 }
 const wrong = [], zWrong = [];
 let compared = 0;
-THEMED.concat([SHELL]).forEach(f => {
+THEMED.filter(f => NEW_PAGES.indexOf(f) === -1).concat([SHELL]).forEach(f => {
   const old = before(f);
   if (old === null) { wrong.push(f + ": not readable at " + BEFORE_COMMIT); return; }
   const oldCss = f === SHELL ? old : stylesOf(old);
@@ -379,7 +388,7 @@ THEMED.concat([SHELL]).forEach(f => {
   const newZ = [resolveVars(ruleBody["z-index"] || "", vars), resolveVars(ruleHtml["z-index"] || "", vars)];
   if (newZ[0] !== oldZ || newZ[1] !== oldZ) zWrong.push(f + ": " + newZ.join("/") + " vs " + oldZ);
 });
-check("A4. with no theme, every one of the 57 pages and agent-shell renders the backdrop it had at " + BEFORE_COMMIT +
+check("A4. with no theme, every one of the 57 pages that existed and agent-shell renders the backdrop it had at " + BEFORE_COMMIT +
   ": the same gradients, positions, shapes, colours, alphas and stops, layer by layer (" + compared + " compared)",
   compared === 58 && wrong.length === 0, wrong.join(" || "));
 check("A5. ... at the same z-index (run.html stays below its content at -1)", zWrong.length === 0, zWrong.join(", "));
@@ -989,7 +998,7 @@ async function routesAndLib(lifted) {
   const row = fake.db.member_themes[0];
   check("E2. a good theme is stored, clamped, under the caller's id, and the answer lists it with the page list",
     r.status === 201 && row && row.user_id === UID && row.theme.glow_a === "#112233" && row.theme.glow_a_alpha === 1 &&   // NAMED (Block 4d): BEFORE 0.5, the old ceiling; AFTER 1
-    r.body.created_id === row.id && r.body.pages.length === 57);
+    r.body.created_id === row.id && r.body.pages.length === 58);
   fake.db.member_themes.push({ id: "bbbbbbbb-0000-4000-8000-000000000009", user_id: OTHER, name: "Theirs", theme: LIBX.DEFAULT_THEME });
   r = await callRoute(L, "get", "/api/themes");
   check("E3. GET answers only the caller's themes", r.body.themes.length === 1 && r.body.themes[0].id === row.id);
@@ -1212,7 +1221,7 @@ async function elements() {
   const themeLines = t => t.split("\n").filter(l => THEME_LINE.test(l)).join("\n");
   const drift = [];
   ALL_PAGES.concat([UI]).forEach(f => {
-    const done = gitShow(THEMES_DONE, f);
+    const done = NEW_PAGES.indexOf(f) !== -1 ? TAG : gitShow(THEMES_DONE, f);   // a new page: all its theme lines are added lines
     if (done === null) { if (THEME_LINE.test(FILES[f])) drift.push(f + ": not readable at " + THEMES_DONE); return; }
     /* NAMED BEFORE → AFTER (Block 4d, every gradient follows the theme). BEFORE: today's lines as they stand. AFTER:
        today's lines with the Block 4d token forms read as their fallbacks (scripts/_unthemed.js), so a converted
@@ -1237,7 +1246,7 @@ async function elements() {
     drift.length === 0, drift.join(" || "));
   const NAMED_SOLID = "background:linear-gradient(90deg,#22d3ee,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent";
   pageFiles.concat([UI]).forEach(f => {
-    if (f === SETTINGS) return;
+    if (f === SETTINGS || NEW_PAGES.indexOf(f) !== -1) return;
     const was = gitShow(ELEMENTS_BEFORE, f), done = gitShow(THEMES_DONE, f);
     if (was === null || done === null) { wrongText.push(f + ": not readable at " + (was === null ? ELEMENTS_BEFORE : THEMES_DONE)); return; }
     if (was === done) return;

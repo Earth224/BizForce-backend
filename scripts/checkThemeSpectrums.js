@@ -57,6 +57,7 @@ const { unthemed } = require("./_unthemed");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const BEFORE = "5dcfa3c";   // the frontend before Block 4d
+const AFTER = "74f1d37";    // the frontend commit that landed Block 4d
 const SMOOTH = 0.36;
 const MUTATE = process.env.MUTATE || "";
 const THEME = "scripts/bf-theme.js", STUDIO = "scripts/bf-theme-studio.js", SETTINGS = "settings.html", LIB = "lib/themes.js";
@@ -193,8 +194,13 @@ const HAND = {
   "scripts/termaximus-guide.js": "two settings tips rewritten: checkThemes.js H3 pins its CSS, checkGuideStandard its tips",
   [PROFILE_JS]: "a chart colour left as var() by the browser is resolved (S2)"
 };
+/* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce music player). BEFORE: S1 diffed the WORKING TREE against
+   ${BEFORE}, so every later frontend edit (the music player's dashboard section, the rebuilt Terms) read as a
+   Block 4d conversion gone wrong. AFTER: it proves Block 4d's own commit, ${BEFORE}..${AFTER}: the files that
+   commit changed, as that commit left them. Later edits are proved by their own checks; the palette scan (N)
+   still reads the working tree. */
 let diffFiles = [];
-try { diffFiles = execFileSync("git", ["-C", FRONTEND, "diff", "--name-only", BEFORE], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").filter(Boolean); }
+try { diffFiles = execFileSync("git", ["-C", FRONTEND, "diff", "--name-only", BEFORE, AFTER], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().split("\n").filter(Boolean); }
 catch (e) { diffFiles = null; }
 const proofWrong = [];
 let proved = 0;
@@ -203,13 +209,15 @@ let proved = 0;
   const was = gitShow(BEFORE, f);
   if (was === null) { proofWrong.push(f + ": new since " + BEFORE); return; }
   proved++;
-  const now = unthemed(FILES[f]);
+  const at4d = gitShow(AFTER, f);
+  if (at4d === null) { proofWrong.push(f + ": missing at " + AFTER); return; }
+  const now = unthemed(at4d);
   if (now !== was) {
     const a = now.split("\n"), b = was.split("\n"); let i = 0; while (i < a.length && a[i] === b[i]) i++;
     proofWrong.push(f + " line " + (i + 1) + ": " + JSON.stringify((a[i] || "").slice(0, 120)) + " was " + JSON.stringify((b[i] || "").slice(0, 120)));
   }
 });
-check("S1. every one of the " + proved + " files Phase C converted reads, each token at its fallback, exactly as it did at " + BEFORE,
+check("S1. every one of the " + proved + " files Phase C converted reads, each token at its fallback, exactly as it did at " + BEFORE + " (as " + AFTER + " left it)",
   diffFiles !== null && proved >= 60 && proofWrong.length === 0, proofWrong.slice(0, 4).join(" || "));
 check("S1. the files edited by hand are only the named five, each proved on its own: " + Object.keys(HAND).join(", "),
   diffFiles !== null && diffFiles.filter(f => HAND[f]).length === Object.keys(HAND).length);

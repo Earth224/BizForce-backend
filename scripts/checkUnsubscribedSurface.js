@@ -246,7 +246,10 @@ const EXPECTED_STORAGE = {
   "post /api/cover-wraps/:id/bg-image":             "a background image",
   "post /api/editor/image":                         "an editor image",
   // NAMED (Oct 29 2026, the theme engine): the member's backdrop photo, checked by its bytes, at most 5 MB
-  "post /api/themes/photo":                         "a backdrop photo, bf-public theme-photos/<member id>/"
+  "post /api/themes/photo":                         "a backdrop photo, bf-public theme-photos/<member id>/",
+  // NAMED (Oct 30 2026, members' music library): a member's own audio file, checked by its bytes, at most 25 MB and
+  // 250 MB in all, in the PRIVATE bucket bf-music under <member id>/ (checkMusicPlayer A2-A6)
+  "post /api/music/tracks":                         "a member's own audio file, private bf-music <member id>/"
 };
 
 /* Login-only routes that write only the account's own records. */
@@ -317,7 +320,13 @@ const EXPECTED_OWN = [
   // EXPECTED_STORAGE): BEFORE no member themes. AFTER a member saves, changes, deletes, applies and resets their own
   // looks; every row is theirs (member_themes, their own user_preferences), served to no one else, and nothing calls the
   // model. Deliberately ungated, like every display preference: how the app looks never needs a subscription.
-  "post /api/themes", "put /api/themes/apply", "put /api/themes/:id", "delete /api/themes/:id", "post /api/themes/reset"
+  "post /api/themes", "put /api/themes/apply", "put /api/themes/:id", "delete /api/themes/:id", "post /api/themes/reset",
+  // NAMED (Oct 30 2026, members' music library; effectful login-only 138 -> 143, with the upload in EXPECTED_STORAGE):
+  // BEFORE no music library. AFTER a member renames and deletes their own tracks (deleting removes the file too) and
+  // keeps their own playlists; every row is theirs (member_tracks, member_playlists), served to no one else, and nothing
+  // calls the model. Deliberately ungated, like the themes: listening to one's own music never needs a subscription.
+  "put /api/music/tracks/:id", "delete /api/music/tracks/:id",
+  "post /api/music/playlists", "put /api/music/playlists/:id", "delete /api/music/playlists/:id"
 ];
 
 /* Unauthenticated routes that write. */

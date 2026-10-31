@@ -10,7 +10,7 @@
 
      I. Inventory. Every file is found, through every kind of record (a
         bf-public URL in a column, inside JSON, inside text, URL-encoded; a
-        bare bf-books or bf-digital-goods path in a column, in JSON text, in a
+        bare bf-books, bf-digital-goods or bf-music path in a column, in JSON text, in a
         design object, in book content) and through the member's folders
         alone (orphans, nested folders, more than one page of a listing).
     II. The delete. Every one of those files is removed; the files of
@@ -247,18 +247,21 @@ function makeStorage(files) {
       "custom/sub/" + A + "/nested.png", "music/" + A + "/orphan.mp3"],
     "bf-books": [A + "/book.pdf", A + "/book.epub", A + "/cover.png", A + "/wrap_1_bg.png", A + "/editorimg_1.png",
       A + "/wrap_2_bg.png", A + "/wrap_2_region.png", A + "/wrap_2_layer.png", A + "/sub/deep.png", A + "/orphan.pdf"],
-    "bf-digital-goods": [A + "/unsold.zip", A + "/orphan.zip"]
+    "bf-digital-goods": [A + "/unsold.zip", A + "/orphan.zip"],
+    "bf-music": [A + "/1730000000000-0a1b2c3d.mp3", A + "/1730000000001-0a1b2c3e.flac"]
   };
   for (let i = 0; i < 1200; i++) DEL["bf-books"].push(A + "/bulk/" + String(i).padStart(4, "0") + ".png");
   /* Recorded only, in a row: the folder alone would not find them (or they are in no folder listing). */
   const RECORD_ONLY = ["bf-public/custom/sub/" + A + "/nested.png"];
   /* Found only through the member's folders. */
-  const FOLDER_ONLY = ["bf-public/music/" + A + "/orphan.mp3", "bf-books/" + A + "/sub/deep.png", "bf-books/" + A + "/orphan.pdf", "bf-digital-goods/" + A + "/orphan.zip"];
+  const FOLDER_ONLY = ["bf-public/music/" + A + "/orphan.mp3", "bf-books/" + A + "/sub/deep.png", "bf-books/" + A + "/orphan.pdf", "bf-digital-goods/" + A + "/orphan.zip",
+    "bf-music/" + A + "/1730000000001-0a1b2c3e.flac"];
   /* A's, but bought by B. */
   const KEEP = { "bf-public": ["marketplace-media/" + A + "/sold-cover.png"], "bf-digital-goods": [A + "/sold.pdf", A + "/sold2.pdf"] };
   /* Other members'. */
   const OTHERS = { "bf-public": ["avatars/" + B + "/me.png", "avatars/" + L + "/me.png", "marketplace-media/" + B + "/ebook.png"],
-    "bf-books": [B + "/book.pdf", L + "/book.pdf"], "bf-digital-goods": [B + "/ebook.pdf", L + "/x.zip"] };
+    "bf-books": [B + "/book.pdf", L + "/book.pdf"], "bf-digital-goods": [B + "/ebook.pdf", L + "/x.zip"],
+    "bf-music": [B + "/1730000000000-0a1b2c3d.mp3", L + "/1730000000000-0a1b2c3d.mp3"] };
   const flat = m => [].concat(...Object.keys(m).map(b => m[b].map(k => b + "/" + k))).sort();
 
   function seedTables() {
@@ -293,6 +296,8 @@ function makeStorage(files) {
     put("marketplace_orders", { id: "O1", buyer_id: B, seller_id: A, listing_id: "S", is_digital: true, digital_file_path: A + "/sold.pdf", digital_file_name: "Guide.pdf" });
     put("marketplace_orders", { id: "O2", buyer_id: B, seller_id: A, listing_id: "S2", is_digital: true });
     put("marketplace_orders", { id: "O3", buyer_id: A, seller_id: B, listing_id: "LB", is_digital: true, digital_file_path: B + "/ebook.pdf" });
+    put("member_tracks", { id: "mtr-A", user_id: A, title: "Night Drive", storage_path: A + "/1730000000000-0a1b2c3d.mp3", mime: "audio/mpeg", size_bytes: 9000 });
+    put("member_tracks", { id: "mtr-B", user_id: B, title: "Bob's", storage_path: B + "/1730000000000-0a1b2c3d.mp3", mime: "audio/mpeg", size_bytes: 9000 });
     put("subscriptions", { id: "sub-A", user_id: A, status: "canceled" });
     return t;
   }
@@ -333,10 +338,14 @@ function makeStorage(files) {
     const ids = owned.map(f => f.bucket + "/" + f.path);
     const want = flat(DEL).concat(flat(KEEP));
     const missing = want.filter(k => ids.indexOf(k) === -1), extra = ids.filter(k => want.indexOf(k) === -1);
-    check("I1. every file of A's is found: " + want.length + " across the three buckets", missing.length === 0, "missing: " + missing.slice(0, 5).join(", "));
+    /* NAMED BEFORE → AFTER (Oct 30 2026, members' music library, migration 155).
+       BEFORE: three buckets (bf-public, bf-books, bf-digital-goods), and FILE_TABLES had no member_tracks.
+       AFTER: four: bf-music holds each member's private uploads under <member id>/, recorded bare in member_tracks;
+       A has one recorded track and one orphan there, bob and lou (whose id begins with A's) one each. */
+    check("I1. every file of A's is found: " + want.length + " across the four buckets", missing.length === 0, "missing: " + missing.slice(0, 5).join(", "));
     check("I2. and nothing that is not A's: not bob's, not lou's (whose id begins with A's), though A's rows point at them", extra.length === 0, "extra: " + extra.join(", "));
     check("I3. each file once", new Set(ids).size === ids.length, ids.length + " listed, " + new Set(ids).size + " distinct");
-    check("I4. each with its bucket and why it is A's", owned.every(f => ["bf-public", "bf-books", "bf-digital-goods"].indexOf(f.bucket) !== -1 && /^(recorded in \w+|in bf-[\w-]+ under )/.test(f.reason)));
+    check("I4. each with its bucket and why it is A's", owned.every(f => ["bf-public", "bf-books", "bf-digital-goods", "bf-music"].indexOf(f.bucket) !== -1 && /^(recorded in \w+|in bf-[\w-]+ under )/.test(f.reason)));
     const why = k => (owned.find(f => f.bucket + "/" + f.path === k) || {}).reason || "";
     const byRecord = {
       "users": "bf-public/avatars/" + A + "/user.png", "profiles": "bf-public/banners/" + A + "/banner.png", "bf_profiles": "bf-public/avatars/" + A + "/bfp.png",
@@ -344,7 +353,8 @@ function makeStorage(files) {
       "profile_videos": "bf-public/videos/" + A + "/clip.mp4", "bf_music_tracks": "bf-public/music/" + A + "/track.mp3", "bf_videos": "bf-public/custom/sub/" + A + "/nested.png",
       "digital_cards": "bf-public/card-media/" + A + "/layout.png", "content_library": "bf-public/products/" + A + "/in text.png",
       "crowdfunding_campaigns": "bf-public/marketplace-media/" + A + "/camp.png", "bizbooks": "bf-books/" + A + "/editorimg_1.png",
-      "cover_wraps": "bf-books/" + A + "/wrap_2_layer.png", "marketplace_listings": "bf-digital-goods/" + A + "/unsold.zip"
+      "cover_wraps": "bf-books/" + A + "/wrap_2_layer.png", "marketplace_listings": "bf-digital-goods/" + A + "/unsold.zip",
+      "member_tracks": "bf-music/" + A + "/1730000000000-0a1b2c3d.mp3"
     };
     const wrongWhy = Object.keys(byRecord).filter(t => why(byRecord[t]) !== "recorded in " + t);
     check("I5. found through each kind of record: a URL in a column, in JSON, in HTML text, URL-encoded; a bare path in a column, in JSON text, in a design object, in book content",

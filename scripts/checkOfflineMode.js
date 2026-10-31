@@ -546,8 +546,10 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        AFTER: one shared scripts/bf-session.js clearDevice() clears PER_USER on every path; KEPT stays, each for its reason. */
     /* NAMED BEFORE → AFTER (Oct 29 2026, Block 4b, the element palettes). BEFORE: PER_USER had 9 keys and bf_theme was KEPT.
        AFTER: 10; bf_theme moved here from KEPT, so sign-out clears the member's cached themes (their look and their backdrop
-       photo's address) and the sign-in page shows the original look. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions", "bf_theme"];
+       photo's address) and the sign-in page shows the original look.
+       NAMED BEFORE → AFTER (Oct 30 2026, the BizForce music player). BEFORE: PER_USER had 10 keys. AFTER: 11; bf_music
+       (the player's track, position, volume, queue and settings, for the member signed in) is cleared at sign-out. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions", "bf_theme", "bf_music"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages

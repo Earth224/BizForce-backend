@@ -153,7 +153,17 @@ const ADDED = [
   ["put", "/api/themes/:id"],                   // rename it or change it (total 348 -> 349)
   ["delete", "/api/themes/:id"],                // delete it; pages that wore it go back to the main theme (total 349 -> 350)
   ["post", "/api/themes/reset"],                // a page, some pages, or everything back to the original (total 350 -> 351)
-  ["post", "/api/themes/photo"]                 // the backdrop photo: 5 MB, JPEG, PNG or WebP by its bytes, in the member's folder (total 351 -> 352)
+  ["post", "/api/themes/photo"],                // the backdrop photo: 5 MB, JPEG, PNG or WebP by its bytes, in the member's folder (total 351 -> 352)
+  // NAMED (Oct 30 2026, members' music library, migration 155): BEFORE 352 routes; AFTER 360, adding its eight
+  // routes, each requireAuth and rate-limited, each answering only the caller's own tracks and playlists (checkMusicPlayer A1–A12)
+  ["get", "/api/music"],                        // the member's tracks, playlists, bytes used and the caps; never a storage path (total 352 -> 353)
+  ["post", "/api/music/tracks"],                // upload: 25 MB, audio by its bytes, within 250 MB in all, in the private bucket (total 353 -> 354)
+  ["put", "/api/music/tracks/:id"],             // rename it, or change its artist (total 354 -> 355)
+  ["delete", "/api/music/tracks/:id"],          // delete it, its file, and its place in every playlist (total 355 -> 356)
+  ["get", "/api/music/tracks/:id/url"],         // a signed URL for 10 minutes, never a public one (total 356 -> 357)
+  ["post", "/api/music/playlists"],             // a playlist of the member's own tracks; 50 at most (total 357 -> 358)
+  ["put", "/api/music/playlists/:id"],          // rename it, or its tracks in a new order (total 358 -> 359)
+  ["delete", "/api/music/playlists/:id"]        // delete it; its tracks stay (total 359 -> 360)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

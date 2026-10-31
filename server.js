@@ -7577,6 +7577,215 @@ app.post("/api/themes/photo", requireAuth, themePhotoLimiter, function (req, res
   });
 });
 
+/* ── Members' music (lib/music.js, migration 155) ─────────────────────────
+   A member's own library: files in the PRIVATE bucket bf-music under their
+   own folder, played through signed URLs that expire (never a public URL),
+   and playlists of their own tracks in order. Every route is the member's
+   own (requireAuth) and rate-limited. scripts/checkMusicPlayer.js runs these
+   routes, lifted from this file, over a fake database and storage. */
+const memberMusic = require("./lib/music");
+const musicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  keyGenerator: function (req) { return "music:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many music requests. Try again in a few minutes.", reason: "rate_limited" }
+});
+const musicWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "music-write:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many library changes. Try again in a few minutes.", reason: "rate_limited" }
+});
+const musicUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "music-upload:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Sixty uploads an hour at most. Try again later.", reason: "rate_limited" }
+});
+const musicUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: memberMusic.FILE_MAX_BYTES, files: 1 }
+});
+
+async function readMusicState(userId) {
+  const [tracks, playlists] = await Promise.all([
+    supabase.from("member_tracks").select("id, title, artist, duration_secs, storage_path, mime, size_bytes, created_at")
+      .eq("user_id", userId).order("created_at", { ascending: true }),
+    supabase.from("member_playlists").select("id, name, track_ids, created_at, updated_at")
+      .eq("user_id", userId).order("created_at", { ascending: true })
+  ]);
+  if (tracks.error) throw tracks.error;
+  if (playlists.error) throw playlists.error;
+  return { tracks: tracks.data || [], playlists: playlists.data || [] };
+}
+
+function musicStateReply(state) {
+  return {
+    tracks: state.tracks.map(memberMusic.publicTrack),
+    playlists: state.playlists.map(function (p) { return { id: p.id, name: p.name, track_ids: p.track_ids || [], created_at: p.created_at, updated_at: p.updated_at }; }),
+    used_bytes: memberMusic.usedBytes(state.tracks),
+    cap_bytes: memberMusic.MEMBER_TOTAL_BYTES,
+    file_max_bytes: memberMusic.FILE_MAX_BYTES
+  };
+}
+
+app.get("/api/music", requireAuth, musicLimiter, async function (req, res, next) {
+  try {
+    return res.json(musicStateReply(await readMusicState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+/* One file, field "track", at most 25 MB, MP3/M4A/AAC/Ogg/Opus/FLAC/WAV by
+   its first bytes, and only while the library stays within its total. Stored
+   at bf-music/<member id>/<time>.<ext>. */
+app.post("/api/music/tracks", requireAuth, musicUploadLimiter, function (req, res, next) {
+  musicUpload.single("track")(req, res, async function (uploadError) {
+    try {
+      if (uploadError) {
+        const tooBig = uploadError.code === "LIMIT_FILE_SIZE";
+        return res.status(tooBig ? 413 : 400).json({ error: tooBig ? "A music file is at most " + memberMusic.mb(memberMusic.FILE_MAX_BYTES) + "." : "Send one music file, as the field \"track\"." });
+      }
+      const state = await readMusicState(req.user.id);
+      const checked = memberMusic.checkUpload(req.file, memberMusic.usedBytes(state.tracks));
+      if (checked.error) return res.status(checked.status).json({ error: checked.error });
+      const row = memberMusic.trackRow(req.user.id, req.file, checked, req.body, Date.now());
+      if (!memberMusic.ownTrackPath(row.storage_path, req.user.id)) return res.status(400).json({ error: "The file could not be placed in your library." });
+      const { error: upError } = await supabase.storage.from(memberMusic.BUCKET)
+        .upload(row.storage_path, req.file.buffer, { contentType: checked.mime, upsert: false });
+      if (upError) return res.status(502).json({ error: "The file could not be stored. Try again." });
+      const { data, error } = await supabase.from("member_tracks").insert(row).select("id, title, artist, duration_secs, mime, size_bytes, created_at").single();
+      if (error) {
+        await supabase.storage.from(memberMusic.BUCKET).remove([row.storage_path]);
+        throw error;
+      }
+      return res.status(201).json({ track: memberMusic.publicTrack(data), used_bytes: memberMusic.usedBytes(state.tracks) + checked.size });
+    } catch (error) { next(error); }
+  });
+});
+
+app.put("/api/music/tracks/:id", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    if (!memberMusic.UUID.test(req.params.id)) return res.status(404).json({ error: "Track not found." });
+    const checked = memberMusic.trackUpdates(req.body);
+    if (checked.error) return res.status(400).json({ error: checked.error });
+    checked.updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabase.from("member_tracks").update(checked.updates)
+      .eq("id", req.params.id).eq("user_id", req.user.id).select("id, title, artist, duration_secs, mime, size_bytes, created_at").maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Track not found." });
+    return res.json({ track: memberMusic.publicTrack(data) });
+  } catch (error) { next(error); }
+});
+
+/* The row, the file, and the track's place in every playlist. */
+app.delete("/api/music/tracks/:id", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    if (!memberMusic.UUID.test(req.params.id)) return res.status(404).json({ error: "Track not found." });
+    const { data: track, error: readError } = await supabase.from("member_tracks")
+      .select("id, storage_path").eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (readError) throw readError;
+    if (!track) return res.status(404).json({ error: "Track not found." });
+    const { error } = await supabase.from("member_tracks").delete().eq("id", track.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    const state = await readMusicState(req.user.id);
+    for (const p of state.playlists) {
+      if ((p.track_ids || []).indexOf(track.id) === -1) continue;
+      const { error: plError } = await supabase.from("member_playlists")
+        .update({ track_ids: p.track_ids.filter(function (id) { return id !== track.id; }), updated_at: new Date().toISOString() })
+        .eq("id", p.id).eq("user_id", req.user.id);
+      if (plError) throw plError;
+    }
+    if (memberMusic.ownTrackPath(track.storage_path, req.user.id)) {
+      const removed = await accountFiles.removeFiles({ supabase: supabase, storage: supabase.storage, files: [{ bucket: memberMusic.BUCKET, path: track.storage_path }] });
+      if (removed.failures.length) console.error("[music] file removal queued for user " + req.user.id + ": " + removed.failures[0].error);
+    }
+    return res.json(Object.assign({ deleted: true }, musicStateReply(await readMusicState(req.user.id))));
+  } catch (error) { next(error); }
+});
+
+/* A signed URL for one of the member's tracks, valid SIGNED_URL_SECONDS. */
+app.get("/api/music/tracks/:id/url", requireAuth, musicLimiter, async function (req, res, next) {
+  try {
+    if (!memberMusic.UUID.test(req.params.id)) return res.status(404).json({ error: "Track not found." });
+    const { data: track, error } = await supabase.from("member_tracks")
+      .select("id, storage_path").eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (error) throw error;
+    if (!track || !memberMusic.ownTrackPath(track.storage_path, req.user.id)) return res.status(404).json({ error: "Track not found." });
+    const { data: signed, error: signError } = await supabase.storage.from(memberMusic.BUCKET)
+      .createSignedUrl(track.storage_path, memberMusic.SIGNED_URL_SECONDS);
+    if (signError || !signed || !signed.signedUrl) return res.status(502).json({ error: "The track could not be opened just now. Try again." });
+    return res.json({ url: signed.signedUrl, expires_at: new Date(Date.now() + memberMusic.SIGNED_URL_SECONDS * 1000).toISOString() });
+  } catch (error) { next(error); }
+});
+
+async function ownTrackIds(userId) {
+  const { data, error } = await supabase.from("member_tracks").select("id").eq("user_id", userId);
+  if (error) throw error;
+  return (data || []).map(function (t) { return t.id; });
+}
+
+app.post("/api/music/playlists", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    const name = memberMusic.playlistName(req.body && req.body.name);
+    if (name.error) return res.status(400).json({ error: name.error });
+    const tracks = memberMusic.playlistTracks((req.body && req.body.track_ids) || [], await ownTrackIds(req.user.id));
+    if (tracks.error) return res.status(400).json({ error: tracks.error });
+    const { count, error: countError } = await supabase.from("member_playlists")
+      .select("id", { count: "exact", head: true }).eq("user_id", req.user.id);
+    if (countError) throw countError;
+    if ((count || 0) >= memberMusic.MAX_PLAYLISTS) return res.status(400).json({ error: "You can keep " + memberMusic.MAX_PLAYLISTS + " playlists. Delete one to make another." });
+    const { data, error } = await supabase.from("member_playlists")
+      .insert({ user_id: req.user.id, name: name.name, track_ids: tracks.track_ids }).select("id").single();
+    if (error) throw error;
+    const reply = musicStateReply(await readMusicState(req.user.id));
+    reply.created_id = data.id;
+    return res.status(201).json(reply);
+  } catch (error) { next(error); }
+});
+
+/* A new name, or the tracks in their new order (reorder, add, remove). */
+app.put("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    if (!memberMusic.UUID.test(req.params.id)) return res.status(404).json({ error: "Playlist not found." });
+    const updates = {};
+    if (req.body && req.body.name !== undefined) {
+      const name = memberMusic.playlistName(req.body.name);
+      if (name.error) return res.status(400).json({ error: name.error });
+      updates.name = name.name;
+    }
+    if (req.body && req.body.track_ids !== undefined) {
+      const tracks = memberMusic.playlistTracks(req.body.track_ids, await ownTrackIds(req.user.id));
+      if (tracks.error) return res.status(400).json({ error: tracks.error });
+      updates.track_ids = tracks.track_ids;
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: "Send a new name or the tracks in order." });
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabase.from("member_playlists").update(updates)
+      .eq("id", req.params.id).eq("user_id", req.user.id).select("id").maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Playlist not found." });
+    return res.json(musicStateReply(await readMusicState(req.user.id)));
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    if (!memberMusic.UUID.test(req.params.id)) return res.status(404).json({ error: "Playlist not found." });
+    const { data, error } = await supabase.from("member_playlists").delete()
+      .eq("id", req.params.id).eq("user_id", req.user.id).select("id");
+    if (error) throw error;
+    if (!data || !data.length) return res.status(404).json({ error: "Playlist not found." });
+    return res.json(musicStateReply(await readMusicState(req.user.id)));
+  } catch (error) { next(error); }
+});
+/* ── end of members' music ──────────────────────────────────────────────── */
+
 /* GET /api/profile/:username WAS DELETED (launch hardening, 2026-10-27). It
    answered anyone, with no sign-in, select("*") from profiles: the account's
    email, contact_phone, subscription_plan and subscription_status among them.
