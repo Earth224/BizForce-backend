@@ -472,7 +472,11 @@ async function main() {
   {
     const fnOf = (src, name) => { const at = src.indexOf("\n  function " + name + "("); return at === -1 ? null : src.slice(at, s.braceMatch(src, src.indexOf("{", at))); };
     const names = ["addMsg", "removeHistoryFailure", "showHistoryFailure", "loadChatHistory", "openChat", "closeChat", "_openGlitch", "_closeGlitch", "_renderAttachInfo", "sendMsg"];
-    const differ = names.filter(n => { const a = fnOf(FILES[PRESENCE], n), b = fnOf(BASE_PRESENCE, n); return !a || a !== b; });
+    /* NAMED BEFORE -> AFTER (Oct 30 2026, Block 4d): showHistoryFailure's retry button now reads its cyan from the
+       theme tokens, each with that cyan as its fallback. Today's side is read through scripts/_unthemed.js (every
+       token resolved to its fallback, which checkThemeSpectrums proves is the page as it was); every byte must then
+       match, as before. */
+    const differ = names.filter(n => { const a = fnOf(require("./_unthemed").unthemed(FILES[PRESENCE]), n), b = fnOf(BASE_PRESENCE, n); return !a || a !== b; });
     check("G6. the Oracle's " + names.length + " functions in the mist are byte-identical to frontend " + FRONT_BASE, differ.length === 0, differ.join(","));
     const markupOf = src => { const a = src.indexOf("  chat.innerHTML =\n"); return a === -1 ? null : src.slice(a, src.indexOf("</div>';\n", a)); };
     /* NAMED BEFORE → AFTER (Oct 30 2026, no emojis): the attach button's face was the paperclip emoji, as a hex

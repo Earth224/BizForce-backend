@@ -615,7 +615,10 @@ const count = (h, needle) => h.split(needle).length - 1;
   // NAMED BEFORE → AFTER (Oct 30 2026, readable results and no emojis): the readable result's .ap-read-* rules, the
   // stats card's .ap-chart-empty and .ap-stats-note, and the gate's .ap-gate-icon are added too. Still every rule of
   // BEFORE is unchanged, and none of BEFORE's rules starts with an added prefix.
-  const removed = newStyle.replace(/\.ap-(?:seo-|ds-|rate|learn-|read-|chart-empty|stats-note|gate-icon)[^}]*\}/g, "");
+  // NAMED BEFORE -> AFTER (Oct 30 2026, Block 4d): every colour of the original palette in these rules now reads a
+  // theme token with that colour as its fallback. Today's style is read through scripts/_unthemed.js (each token
+  // resolved to its fallback); then every rule of BEFORE must still be unchanged, as before.
+  const removed = require("./_unthemed").unthemed(newStyle).replace(/\.ap-(?:seo-|ds-|rate|learn-|read-|chart-empty|stats-note|gate-icon)[^}]*\}/g, "");
   check("styles: " + BEFORE + "'s rules are all unchanged; only .ap-seo-*, .ap-ds-*, .ap-rate*, .ap-learn-*, .ap-read-*, .ap-chart-empty, .ap-stats-note and .ap-gate-icon rules were added",
     !/\.ap-(?:seo-|ds-|rate|learn-|read-|chart-empty|stats-note|gate-icon)/.test(oldStyle) && removed === oldStyle && newStyle.length > oldStyle.length,
     removed.length + " vs " + oldStyle.length);

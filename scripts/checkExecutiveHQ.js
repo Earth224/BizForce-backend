@@ -559,7 +559,9 @@ const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.htm
 
   const AG = (() => { const box = {}; vm.runInNewContext("var out = " + /var AGENTS = (\{[\s\S]*?\n  \});/.exec(FILES[HQ])[1] + ";", box); return box.out; })();
   const pageOf = {}, accentOf = {};
-  AGENT_PAGES.forEach(f => { const src = fs.readFileSync(path.join(FRONTEND, f), "utf8"); const t = (/agentType:\s*"([a-z_]+)"/.exec(src) || [])[1];
+  /* NAMED BEFORE -> AFTER (Oct 30 2026, Block 4d): an agent page's accentColor is now a theme-token read with its
+     own colour as the fallback; each page is read through scripts/_unthemed.js, so its accent is still that colour. */
+  AGENT_PAGES.forEach(f => { const src = require("./_unthemed").unthemed(fs.readFileSync(path.join(FRONTEND, f), "utf8")); const t = (/agentType:\s*"([a-z_]+)"/.exec(src) || [])[1];
     pageOf[t] = "/" + f; accentOf[t] = (/accentColor:\s*"([^"]+)"/.exec(src) || [])[1]; });
   const mapWrong = LIVE.AGENT_KEYS.filter(k => !AG[k] || AG[k].page !== pageOf[k] || AG[k].accent !== accentOf[k]);
   check("H1. each tile's page and accent are that agent page's own (its agentType and accentColor)", mapWrong.length === 0 && Object.keys(AG).length === 18, mapWrong.join(","));
