@@ -53,6 +53,23 @@
         the crossfader setting the Mix and showing it; the fader setting the
         master gain; the meters L/R where the sound splits, else level and
         peak; and the bar on the member's own profile only.
+     I  THREE STAGES, PIN OR FOLLOW, THE MIXER'S SPACING (Oct 31 2026): no page
+        header or logo moved (every page's header markup as at 9750ee2); the
+        volume fader, its handle and its VOL label never overlap the L/R
+        meters at min, mid or max, in Chrome and Black, at desktop and phone
+        size (computed boxes); the dashboard's first stage is the drawn ICON
+        beside the logo, with no bar, no boombox and no audio; icon -> bar ->
+        boombox and back, Escape one stage at a time; other pages show
+        nothing without music and the bar or the boombox while it is on;
+        "Close to icon" keeps the music (the icon's equaliser) and "Stop
+        music" takes the player off other pages; the stage remembered on the
+        device and the account; Pinned not fixed, scrolling with the page,
+        never dragged, Reset hidden; Follow me fixed; the position and stage
+        validated, saved and restored; the accessible names; no emoji.
+        NAMED BEFORE → AFTER (Oct 31 2026, three stages): G, H and the live
+        order checks that expected the bar first now expect the icon on the
+        dashboard, and a page other than the dashboard is given music
+        (liveOn) where it must show the bar.
 
    MUTATE=<name> edits the files IN MEMORY; MUTATE=all runs each in its own
    process. BIZFORCE_FRONTEND_DIR overrides the frontend location. No network,
@@ -118,7 +135,23 @@ const MUTATIONS = {
   // a start that fails leaves nothing on the page (G2 live order)
   "start-failure-silent": [[MUSIC, "    doc.body.appendChild(b);\n  }\n  window.__bfMusicStartFailed = startFailed;", "  }\n  window.__bfMusicStartFailed = startFailed;"]],
   // H: the boombox opens expanded on a first visit
-  "auto-expanded-on-first-load": [[BOOMBOX, "    var state = popout ? \"box\" : (prefs.state === \"box\" ? \"box\" : \"tag\");", "    var state = popout ? \"box\" : (prefs.state === \"tag\" ? \"tag\" : \"box\");"]],
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the anchor was mount's "prefs.state === \"box\" ? \"box\" : \"tag\"". AFTER: the first
+     stage is decided in stageOf (the icon on the dashboard, the bar elsewhere); the mutation makes it the boombox there. */
+  "auto-expanded-on-first-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"box\"; }"]],
+  // I: the bar shown on the dashboard's first visit, not the icon
+  "bar-on-first-dashboard-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"tag\"; }"]],
+  // I: the player shown on another page with no music playing
+  "player-shown-without-music": [[BOOMBOX, "function away() { return !popout && !home && (state === \"icon\" || !live); }", "function away() { return !popout && !home && state === \"icon\"; }"]],
+  // I: the volume fader's lane moved back over the R meter
+  "fader-overlaps-meter": [[BOOMBOX, "\".bbx-vol{left:268px;top:2px;width:30px;height:40px}\"", "\".bbx-vol{left:246px;top:2px;width:30px;height:40px}\""]],
+  // I: Pinned still fixed on screen
+  "pinned-still-fixed": [[BOOMBOX, "    \".bfm-float[data-pinned=true]:not([data-dock=phone]){position:absolute}\",\n", ""]],
+  // I: Escape skipping a stage (the boombox straight to the icon)
+  "escape-skips-a-stage": [[BOOMBOX, "      if (state === \"box\") setState(\"tag\", focus);", "      if (state === \"box\") setState(\"icon\", focus);"]],
+  // I: an unvalidated position value accepted by the server
+  "position-unvalidated": [[LIBM, "    if (POSITIONS.indexOf(input.position) === -1) return { error: \"The position is follow or pinned.\", field: \"position\" };\n", ""]],
+  // I: a page header changed (the dashboard's logo block)
+  "header-changed": [[DASH, "  <div class=\"topbar-brand\" data-bf-boombox-anchor>", "  <div class=\"topbar-brand topbar-brand-moved\" data-bf-boombox-anchor>"]],
   // H: the default without a logo moved back to the bottom left
   "default-bottom-left": [[BOOMBOX, "      return { left: EDGE, top: EDGE };", "      return { left: EDGE, top: window.innerHeight - EDGE - BAR_H };"]],
   // H: a Pop out key back on the boombox's face
@@ -136,7 +169,9 @@ const MUTATIONS = {
   // H: an EQ band past ±12 dB accepted by the server
   "server-eq-unvalidated": [[LIBM, "|| Math.abs(n) > EQ_MAX_DB) {", ") {"]],
   // H: the Escape key leaving the library open
-  "escape-keeps-library": [[BOOMBOX, "        if (library) setLibrary(false, true); else setState(\"tag\", true);", "        setState(\"tag\", true);"]],
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "if (library) setLibrary(false, true); else setState(\"tag\", true);". AFTER: Escape
+     steps back one stage (stepBack), the library first. */
+  "escape-keeps-library": [[BOOMBOX, "        if (state === \"box\" && library) setLibrary(false, true); else stepBack(true);", "        stepBack(true);"]],
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -628,7 +663,8 @@ function themeCache(theme) {
    slides out beside it and does not change its size), and places from the
    inline left and top.
    NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the tag 290 x 40, the boombox 320 x 176, with the library
-   320 x 484. AFTER: the bar 300 x 40 and the boombox 440 x 250 (bf-boombox.js's BAR_W/BAR_H, BOX_W/BOX_H). */
+   320 x 484. AFTER: the bar 300 x 40 and the boombox 440 x 250 (bf-boombox.js's BAR_W/BAR_H, BOX_W/BOX_H).
+   NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the bar or the boombox. AFTER: the icon too, 40 x 36 (ICON_W/ICON_H). */
 const MIST_TAG = '<script src="/scripts/termaximus-presence.js"></script>';
 function layoutStub(win) {
   const HE = win.HTMLElement.prototype;
@@ -636,7 +672,8 @@ function layoutStub(win) {
     const ds = el.getAttribute && el.getAttribute("data-size");
     if (ds) { const [sw, sh] = ds.split("x").map(Number); return { w: sw, h: sh }; }
     if (el.classList && el.classList.contains("bfm-float")) {
-      return el.getAttribute("data-state") === "box" ? { w: 440, h: 250 } : { w: 300, h: 40 };
+      const st = el.getAttribute("data-state");
+      return st === "box" ? { w: 440, h: 250 } : st === "icon" ? { w: 40, h: 36 } : { w: 300, h: 40 };
     }
     return { w: 0, h: 0 };
   };
@@ -672,6 +709,8 @@ async function openPage(o) {
       win.localStorage.setItem("bf_token", TOKEN);
       if (o.store) win.localStorage.setItem("bf_music", JSON.stringify(o.store));
       if (o.boombox) win.localStorage.setItem("bf_boombox", JSON.stringify(o.boombox));
+      /* music already on in this tab's session (bf-music.js LIVE_KEY): with a track paused mid-way, another page shows the player */
+      if (o.live) win.sessionStorage.setItem("bf_music_live", UID);
       win.localStorage.setItem("bf_theme", themeCache(o.theme || MUSIC_THEME));
       win.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {}, addListener() {} });
       win.Audio = makeFakeAudio(win);
@@ -845,7 +884,17 @@ async function playerChecks() {
 
   /* D4. play when I open BizForce */
   const autoStore = { v: 1, uid: UID, autoplay: true, track_id: T2, position: 12, queue: [T1, T2, T3] };
-  const P = await openPage(Object.assign({}, base, { store: autoStore }));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the dashboard opened as the bar and armed. AFTER: its first stage is
+     the icon, where no audio starts, so autoplay never arms there (checked just below); P is a dashboard left as the bar. */
+  const PI = await openPage(Object.assign({}, base, { store: autoStore }));
+  await settle(20);
+  const armedAtIcon = PI.BFMusic.armed();
+  gesture(PI, "keydown"); await settle();
+  check("D4. in the icon stage (the dashboard's first visit) \"Play when I open BizForce\" arms nothing and plays nothing, even after a press",
+    PI.document.querySelector(".bfm-float").getAttribute("data-state") === "icon" && !armedAtIcon && !PI.BFMusic.playing() &&
+    AUDIOS.filter(x => x.win === PI).reduce((n, x) => n + x.plays, 0) === 0, PI.BFMusic.armed() + " " + PI.document.querySelector(".bfm-float").getAttribute("data-state"));
+  closeOne(PI);
+  const P = await openPage(Object.assign({}, base, { store: autoStore, boombox: { state: "tag" } }));
   await settle(20);
   const playsBefore = AUDIOS.filter(x => x.win === P).reduce((n, x) => n + x.plays, 0);
   check("D4. with \"Play when I open BizForce\" on, the page arms and plays nothing before an interaction",
@@ -893,6 +942,9 @@ async function playerChecks() {
   check("D6. the page shows \"Playing in the pop-out player\"", A.BFMusic.popoutAlive() && A.document.querySelector(".bfm-remote").textContent === "Playing in the pop-out player" &&
     A.document.querySelector(".bfm").getAttribute("data-remote") === "true");
   A.BFMusic.play(); await settle();
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: counted at once. AFTER: the relayed Play reaches the pop-out, which (the page heard
+     playing within 1.5 s) starts at gain 0 and rises after RELEASE_WAIT_MS on the audio clock; a race, so let that audio time pass first. */
+  for (let i = 0; i < 150 && !B.BFMusic.audible(); i++) { await wait(10); CLOCK.t += 0.01; }
   check("D6. while the pop-out is open the page plays nothing itself", !A.BFMusic.playing() && audibleCount() === 1);
 
   /* D7. the relay */
@@ -1061,10 +1113,13 @@ async function playerChecks() {
   /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: the tip named the panel ("Under \"Music\" ...
      press \"Play\""). AFTER: it names the boombox beside the logo and its own keys, "Library" and "Pop out".
      NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "Library" and "Pop out". AFTER: the bar beside the logo, "Library" sliding out the tracks, and
-     "Keep playing between pages" (no Pop out key any more). */
-  check("F4. the dashboard's guide names the bar, the boombox and its own labels, \"Library\" and \"Keep playing between pages\"",
-    /The bar beside the logo is your music: press it for the boombox, then \\"Library\\" to slide out your tracks; \\"Keep playing between pages\\" carries it on\./.test(tip) &&
-    !/Pop out/.test(tip) && !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") &&
+     "Keep playing between pages" (no Pop out key any more).
+     NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "The bar beside the logo is your music: press it for the boombox, then \"Library\" ...;
+     \"Keep playing between pages\" carries it on." AFTER: the icon beside the logo, then the bar, then the boombox; "Library" and "Close to icon". */
+  check("F4. the dashboard's guide names the icon, the bar, the boombox and its own labels, \"Library\" and \"Close to icon\"",
+    /The small boombox icon beside the logo is your music: press it for the bar, then the boombox; \\"Library\\" slides out your tracks, \\"Close to icon\\" tucks it away\./.test(tip) &&
+    !/Pop out/.test(tip) && !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") && !!A.document.querySelector(".bfm-icon[aria-label='Open music']") &&
+    A.document.querySelectorAll("[data-act=bbx-close][aria-label='Close to icon']").length === 2 &&
     /^Keep playing between pages \(opens a small window\)$/.test(A.document.querySelector(".bfm-panel [data-act=keep-playing]").textContent.trim()));
   ear.close();
   await boomboxChecks({ db, lifted, base, add, T1, T2, T3 });
@@ -1076,6 +1131,16 @@ const ptr = (w, el, type, x, y) => el.dispatchEvent(new w.MouseEvent(type, { bub
 const key = (w, el, k, more) => el.dispatchEvent(new w.KeyboardEvent("keydown", Object.assign({ key: k, bubbles: true, cancelable: true }, more || {})));
 const boxOf = w => w.document.querySelector(".bfm-float");
 const prefsOf = w => JSON.parse(w.localStorage.getItem("bf_boombox") || "{}");
+/* The stage is remembered on the account too, and a new device (a jsdom window has its own storage) adopts it.
+   Before a check of a FIRST visit: let any pending save land (PLAYER_SAVE_MS), then forget the account's stage. */
+async function freshStage(db) {
+  await wait(800); await settle();
+  const row = (db.T.user_preferences || []).find(r => r.user_id === UID);
+  if (row && row.music_player) delete row.music_player.stage;
+}
+/* A page where music is on: this session has played, and a track sits paused mid-way (bf-music.js musicOn). */
+const liveOn = (T1, o) => Object.assign({ live: true, store: { v: 1, uid: UID, track_id: T1, position: 5 } }, o || {});
+const shown = w => { const r = boxOf(w); return !!r && r.getAttribute("data-away") !== "true" && w.getComputedStyle(r).display !== "none"; };
 const spot = w => { const r = boxOf(w); return r ? [parseFloat(r.style.left), parseFloat(r.style.top)] : null; };
 const scaleOf = el => el ? parseFloat((/scale\((-?[\d.]+)\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
 const angleOf = el => el ? parseFloat((/rotate\((-?[\d.]+)deg\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
@@ -1175,12 +1240,18 @@ async function boomboxChecks(c) {
     JSON.stringify([setIn, setOut, appIn]));
 
   /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */
+  await freshStage(db);
   const D = await openPage(base);
   const DR = boxOf(D);
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the dashboard opened as the boombox. AFTER: every page starts as the bar; on the dashboard it
-     sits 12 px right of the logo, centred on the header's height (the stub's logo is 16…200 x 10…50). */
-  check("G2. on the dashboard it starts as the bar in the top bar, 12 px right of the BizForce AI logo and level with it",
-    !!DR && DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
+     sits 12 px right of the logo, centred on the header's height (the stub's logo is 16…200 x 10…50).
+     NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the bar at (212, 10). AFTER: the dashboard starts as the 40 x 36 icon, centred the same way
+     (212, 12); "Open music" opens the bar at (212, 10). */
+  check("G2. on the dashboard it starts as the icon in the top bar, 12 px right of the BizForce AI logo and level with it",
+    !!DR && DR.getAttribute("data-state") === "icon" && DR.style.left === "212px" && DR.style.top === "12px", DR && DR.getAttribute("style"));
+  click(D, "[data-act=bbx-open]");
+  check("G2. ... and \"Open music\" opens the bar in its place, level with the logo", DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px",
+    DR.getAttribute("style"));
   click(D, "[data-act=bbx-expand]");
   click(D, "[data-act=bbx-library]");
   const CAPS = [["play and pause", ".bbx-keys [data-act=toggle]"], ["previous", ".bbx-keys [data-act=prev]"], ["next", ".bbx-keys [data-act=next]"],
@@ -1215,12 +1286,15 @@ async function boomboxChecks(c) {
     Number(cs.zIndex) === Zb && Zb < 2147483646 && /Z-ORDER, low to high: the page; the boombox \(2147483000\); the chat box's\s+glow \(2147483646\); the chat box and the mist \(2147483647\)/.test(BX), cs.zIndex + " " + glowZ);
 
   /* G4. dragged like the mist, clamped, moved by the keys, remembered, reset */
-  const F = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: tasks.html showed the bar with no music. AFTER: a page other than the dashboard shows the
+     player only while music is on, so F is tasks.html with a track paused mid-way in this session (liveOn); the bar's mechanics are the same. */
+  await freshStage(db);
+  const F = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html" })));
   const FR = boxOf(F), tag = F.document.querySelector(".bfm-tag"), grabAt = F.document.querySelector(".bfm-tag-title");
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: a page without the logo started bottom left (16, 744). AFTER: top left, 16 px in (16, 16);
      the bottom-left default is gone. Drags and clamps use the bar's 300 x 40 and the boombox's 440 x 250. */
-  check("G4. on a page without the logo header it starts as the bar, top left with a 16 px margin", FR.getAttribute("data-state") === "tag" && spot(F).join() === "16,16" &&
-    F.BFBoombox.EDGE === 16, spot(F));
+  check("G4. on a page without the logo header, with music on, it shows as the bar, top left with a 16 px margin", FR.getAttribute("data-state") === "tag" && spot(F).join() === "16,16" &&
+    F.BFBoombox.EDGE === 16 && shown(F), spot(F));
   ptr(F, grabAt, "pointerdown", 100, 100); ptr(F, grabAt, "pointermove", 103, 102);
   const under = spot(F).join();
   ptr(F, grabAt, "pointermove", 300, 300); ptr(F, grabAt, "pointerup", 300, 300);
@@ -1281,7 +1355,9 @@ async function boomboxChecks(c) {
 
   /* G6. never over the mist or the open chat box */
   const MIST = '<div id="tmx-presence-root" data-size="120x120" style="position:fixed;left:400px;top:60px"></div>';
-  const N = await openPage(Object.assign({}, base, { extra: MIST }));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the dashboard's first visit, the bar. AFTER: that is the icon, always in place (never
+     nudged); N is a dashboard left as the bar (Follow me), the one that moves. */
+  const N = await openPage(Object.assign({}, base, { extra: MIST, boombox: { state: "tag" } }));
   const mistR = N.document.getElementById("tmx-presence-root").getBoundingClientRect();
   const nr = () => boxOf(N).getBoundingClientRect();
   check("G6. where the mist would cover it, it is nudged aside, and stays on screen",
@@ -1295,7 +1371,9 @@ async function boomboxChecks(c) {
   const chatR = chat.getBoundingClientRect();
   check("G6. ... and so is the open chat box", !overlaps(nr(), chatR) && !overlaps(nr(), mistR), JSON.stringify(nr()) + " " + JSON.stringify(chatR));
   check("G6. the nudge runs when it is placed, when a drag ends, and every 1.5 s (the chat box opens and moves on its own)",
-    /function place\(\)[\s\S]*?nudge\(\);[\s\S]*?\n    \}/.test(BX) && /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "nudge(); saveSpot(); }". AFTER: the library's side is chosen again too. */ /if \(drag\.moved\) \{ nudge\(\); saveSpot\(\); side\(\); \}/.test(BX) && /setInterval\(function \(\) \{ if \(state && !drag\.on\) nudge\(\); \}, 1500\)/.test(BX));
+    /function place\(\)[\s\S]*?nudge\(\);[\s\S]*?\n    \}/.test(BX) && /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "nudge(); saveSpot(); }". AFTER: the library's side is chosen again too. */ /if \(drag\.moved\) \{ nudge\(\); saveSpot\(\); side\(\); \}/.test(BX) &&
+    /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "if (state && !drag.on) nudge();". AFTER: not while it is away (nothing shown). */
+    /setInterval\(function \(\) \{ if \(state && !drag\.on && !away\(\)\) nudge\(\); \}, 1500\)/.test(BX));
 
   /* G7. the motion */
   const MO = await openPage(Object.assign({}, base, { page: "tasks.html" }));
@@ -1493,6 +1571,7 @@ async function boomboxChecks(c) {
   await nowPlayingChecks(c);
   await liveOrderChecks();
   await mixerChecks(c);
+  await stageChecks(c);
 }
 
 /* ── H. the boombox-mixer ───────────────────────────────────────────────── */
@@ -1507,13 +1586,22 @@ async function mixerChecks(c) {
   const BX = FILES[BOOMBOX] || "";
 
   /* H1. the bar first, on every page; its place; what it remembers */
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: a first visit started as the bar on the dashboard AND on a page without the logo.
+     AFTER: the dashboard starts as the icon (40 x 36, at 212, 12), and another page shows nothing without music (TH); with music on (T, liveOn)
+     it is the bar, top left. The bar beside the logo is still at (212, 10) once the icon opens it. */
+  await freshStage(db);
   const D = await openPage(base), DR = boxOf(D);
-  const T = await openPage(Object.assign({}, base, { page: "tasks.html" })), TR = boxOf(T);
-  check("H1. a first visit starts as the bar, never the boombox: the dashboard and a page without the logo, with the library shut",
-    DR.getAttribute("data-state") === "tag" && TR.getAttribute("data-state") === "tag" && DR.getAttribute("data-library") === "false" &&
-    D.document.querySelector("[data-act=bbx-expand]").getAttribute("aria-expanded") === "false", DR.getAttribute("data-state") + " " + TR.getAttribute("data-state"));
-  check("H1. beside the logo it sits 12 px to the right, centred on the header (212, 10); with no logo header, the top-left corner (16, 16); never bottom left",
-    spot(D).join() === "212,10" && spot(T).join() === "16,16" && T.BFMusic._box().defaultSpot().top === 16 && D.BFBoombox.GAP === 12, spot(D) + " " + spot(T));
+  const TH = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const T = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html" }))), TR = boxOf(T);
+  check("H1. a first visit never starts as the boombox: the dashboard is the icon, a page without music shows nothing, and with music on it is the bar; the library shut",
+    DR.getAttribute("data-state") === "icon" && TR.getAttribute("data-state") === "tag" && shown(T) && !shown(TH) && boxOf(TH).getAttribute("data-away") === "true" &&
+    DR.getAttribute("data-library") === "false" && D.document.querySelector("[data-act=bbx-expand]").getAttribute("aria-expanded") === "false",
+    DR.getAttribute("data-state") + " " + TR.getAttribute("data-state") + " " + shown(TH));
+  closeOne(TH);
+  const iconAt = spot(D).join();
+  click(D, "[data-act=bbx-open]");
+  check("H1. beside the logo it sits 12 px to the right, centred on the header (the icon 212, 12; the bar 212, 10); with no logo header, the top-left corner (16, 16); never bottom left",
+    iconAt === "212,12" && spot(D).join() === "212,10" && spot(T).join() === "16,16" && T.BFMusic._box().defaultSpot().top === 16 && D.BFBoombox.GAP === 12, iconAt + " " + spot(D) + " " + spot(T));
   /* a logo at the right end of its header: the bar goes to its left, still level with it */
   const RL = await openPage(Object.assign({}, base, { page: "crm.html", extra: '<nav class="top-nav" data-size="1280x60"><span class="brand-badge" data-bf-boombox-anchor>BizForce AI</span></nav>' }));
   const rlSpot = RL.BFMusic._box().defaultSpot();
@@ -1524,14 +1612,14 @@ async function mixerChecks(c) {
     TR.getAttribute("data-state") === "box" && spot(T).join() === "16,16" && 16 + 440 <= 1280 && 16 + 250 <= 800 && TR.getAttribute("data-library") === "false");
   /* each jsdom window has its own storage, so the next page is given what this one saved (bf_boombox) */
   check("H1. pressing it is saved: bf_boombox says the boombox, with the library shut", prefsOf(T).state === "box" && prefsOf(T).library === false, JSON.stringify(prefsOf(T)));
-  const T2 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T) }));
-  check("H1. the boombox is remembered: the next page opens it again", boxOf(T2).getAttribute("data-state") === "box" && prefsOf(T2).state === "box");
+  const T2 = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html", boombox: prefsOf(T) })));
+  check("H1. the boombox is remembered: the next page opens it again", boxOf(T2).getAttribute("data-state") === "box" && prefsOf(T2).state === "box" && shown(T2));
   click(T2, "[data-act=bbx-minimise]");
-  const T3 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T2) }));
+  const T3 = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html", boombox: prefsOf(T2) })));
   check("H1. ... and so is the bar, at the same spot", boxOf(T3).getAttribute("data-state") === "tag" && spot(T3).join() === "16,16" && prefsOf(T3).state === "tag");
   const Dg = T3.document.querySelector(".bfm-tag-title");
   ptr(T3, Dg, "pointerdown", 50, 30); ptr(T3, Dg, "pointermove", 450, 330); ptr(T3, Dg, "pointerup", 450, 330);
-  const T4 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T3) }));
+  const T4 = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html", boombox: prefsOf(T3) })));
   click(T4, "[data-act=bbx-expand]");
   const dragged = spot(T4).join();
   click(T4, "[data-act=bbx-reset]");
@@ -1544,8 +1632,9 @@ async function mixerChecks(c) {
   check("H2. no Pop out anywhere on the boombox or the bar: no popout key, no \"Pop out\" words",
     !D.document.querySelector("[data-act=popout]") && !/Pop out/i.test(DR.textContent) && !/Pop out/.test(BX) &&
     !Array.prototype.some.call(DR.querySelectorAll("[aria-label],[title]"), el => /pop.?out/i.test((el.getAttribute("aria-label") || "") + (el.getAttribute("title") || ""))), fkeys.join());
-  check("H2. the body's keys are piano keys with drawn icons and names: Mute, Library, Reset position, Minimise (" + fkeys.length + ")",
-    fkeys.join() === "mute:Mute:true,bbx-library:Library:true,bbx-reset:Reset position:true,bbx-minimise:Minimise:true" &&
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: Mute, Library, Reset position, Minimise. AFTER: and Close to icon, two rows of three. */
+  check("H2. the body's keys are piano keys with drawn icons and names: Mute, Library, Reset position, Minimise, Close to icon (" + fkeys.length + ")",
+    fkeys.join() === "mute:Mute:true,bbx-library:Library:true,bbx-reset:Reset position:true,bbx-minimise:Minimise:true,bbx-close:Close to icon:true" &&
     /"\.bbx-keys button,\.bbx-fkeys button\{/.test(BX) && !!DR.querySelector(".bbx-deck .bbx-fkeys"), fkeys.join());
 
   /* H3. the library slides out; Escape slides it back; no window */
@@ -1635,9 +1724,12 @@ async function mixerChecks(c) {
     bad[5].body.field === "eq.sub" && bad[6].body.field === "eq.bass", JSON.stringify(bad.map(r => r.status + ":" + r.body.field)));
   const still = await callRoute(lifted, "get", "/api/music/player");
   check("H5. ... and a refused change changes nothing", still.body.player.finish === "black" && still.body.player.eq.bass === 3.5);
-  check("H5. lib/music.js: two finishes, three bands, ±12 dB; a stored value is read safely whatever it holds",
-    M.FINISHES.join() === "chrome,black" && M.EQ_BANDS.join() === "bass,mid,treble" && M.EQ_MAX_DB === 12 &&
-    JSON.stringify(M.storedPlayer({ finish: "neon", eq: { bass: 40, mid: "x", treble: -2 } })) === JSON.stringify({ finish: "chrome", eq: { bass: 0, mid: 0, treble: -2 } }) &&
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: storedPlayer gave { finish, eq }. AFTER: { finish, eq, position, stage }, a bad
+     position read as "follow" and a bad stage as null (each page then decides). */
+  check("H5. lib/music.js: two finishes, three bands, ±12 dB, two positions, three stages; a stored value is read safely whatever it holds",
+    M.FINISHES.join() === "chrome,black" && M.EQ_BANDS.join() === "bass,mid,treble" && M.EQ_MAX_DB === 12 && M.POSITIONS.join() === "follow,pinned" && M.STAGES.join() === "icon,tag,box" &&
+    JSON.stringify(M.storedPlayer({ finish: "neon", eq: { bass: 40, mid: "x", treble: -2 }, position: "glued", stage: "huge" })) ===
+      JSON.stringify({ finish: "chrome", eq: { bass: 0, mid: 0, treble: -2 }, position: "follow", stage: null }) &&
     JSON.stringify(M.storedPlayer(null)) === JSON.stringify(M.playerDefaults()));
   const noCol = { client: { from: tbl => tbl !== "user_preferences" ? db.client.from(tbl) : new Proxy({}, { get(x, k) { return k === "then" ? res => res({ data: null, error: { code: "PGRST204", message: "Could not find the 'music_player' column of 'user_preferences' in the schema cache" } }) : function () { return this; }; } }),
     storage: db.client.storage, rpc: db.client.rpc } };
@@ -1649,15 +1741,19 @@ async function mixerChecks(c) {
   const NC = await openPage({ lifted: liftedNoCol, page: "tasks.html" });
   await settle(20);
   NC.BFMusic.setFinish("black"); await wait(NC.BFMusic.PLAYER_SAVE_MS || 650); await wait(150); await settle();
-  check("H5. ... and the player says the finish and EQ are kept on this device for now, and keeps them",
-    NC.document.querySelector(".bfm-player-note").textContent === "Your finish and EQ are kept on this device for now." && JSON.parse(NC.localStorage.getItem("bf_music")).finish === "black",
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "Your finish and EQ are kept on this device for now." AFTER: the position too. */
+  check("H5. ... and the player says the finish, EQ and position are kept on this device for now, and keeps them",
+    NC.document.querySelector(".bfm-player-note").textContent === "Your finish, EQ and position are kept on this device for now." && JSON.parse(NC.localStorage.getItem("bf_music")).finish === "black",
     NC.document.querySelector(".bfm-player-note").textContent);
   closeOne(NC);
   const mig = FILES[MIGRATION_157] || "";
   check("H5. migration 157 adds user_preferences.music_player (jsonb), held to an object of at most 1 KB",
     /alter table (public\.)?user_preferences\s+add column if not exists music_player jsonb/i.test(mig) && /jsonb_typeof\(music_player\) = 'object'/.test(mig) && /pg_column_size\(music_player\) <= 1024/.test(mig),
     mig.slice(0, 160));
-  check("H5. the data page says user_preferences holds the player's finish and EQ", /your music player's finish and EQ/.test(FILES[YOURDATA] || ""));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "your music player's finish and EQ". AFTER: its finish, EQ, position and last view. */
+  check("H5. the data page says user_preferences holds the player's finish, EQ, position and last view",
+    /your music player's finish, EQ, position and last view \(icon, bar or boombox\)/.test(FILES[YOURDATA] || "") &&
+    /your music player(?:'|&#39;)s finish, EQ, position and last view \(icon, bar or boombox\)/.test(FILES[PRIVACY] || ""));
 
   /* H6. the EQ: three filters on the way to the speakers, clamped, keyed, kept */
   const E = await openPage(Object.assign({}, base, { page: "tasks.html" }));
@@ -1766,13 +1862,18 @@ async function mixerChecks(c) {
     /\.bbx-face\{/.test(svgSrc) && /\.bbx-face::before\{/.test(svgSrc) && /@keyframes bbx-sheen\{/.test(svgSrc) && /@keyframes bbx-rim\{/.test(svgSrc) && /@keyframes bbx-bar-sheen\{/.test(svgSrc));
 
   /* H11. the profile: the member's own, never a visitor's or the preview */
-  const own = await openPage(Object.assign({}, base, { page: "profile.html" }));
-  const ownId = await openPage(Object.assign({}, base, { page: "profile.html?id=" + UID }));
-  const visit = await openPage(Object.assign({}, base, { page: "profile.html?id=" + OTHER }));
-  const prev = await openPage(Object.assign({}, base, { page: "profile.html?id=" + UID + "&bf_preview=1" }));
-  check("H11. on the member's own profile it shows, as the bar; a visitor (another member's id) and the preview get none",
-    !!boxOf(own) && boxOf(own).getAttribute("data-state") === "tag" && !!boxOf(ownId) && !boxOf(visit) && !boxOf(prev),
-    [!!boxOf(own), !!boxOf(ownId), !!boxOf(visit), !!boxOf(prev)].join());
+  /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the own profile showed the bar always. AFTER: it follows every page but the dashboard:
+     mounted for the owner only, shown (as the bar) only while music is on; without music nothing shows. A visitor and the preview get none at all. */
+  await freshStage(db);
+  const own = await openPage(Object.assign({}, base, liveOn(T1, { page: "profile.html" })));
+  const ownId = await openPage(Object.assign({}, base, liveOn(T1, { page: "profile.html?id=" + UID })));
+  const ownQuiet = await openPage(Object.assign({}, base, { page: "profile.html?id=" + UID }));
+  const visit = await openPage(Object.assign({}, base, liveOn(T1, { page: "profile.html?id=" + OTHER })));
+  const prev = await openPage(Object.assign({}, base, liveOn(T1, { page: "profile.html?id=" + UID + "&bf_preview=1" })));
+  check("H11. on the member's own profile it shows as the bar only while music is on (nothing without it); a visitor (another member's id) and the preview get none",
+    shown(own) && boxOf(own).getAttribute("data-state") === "tag" && shown(ownId) && !!boxOf(ownQuiet) && !shown(ownQuiet) && !boxOf(visit) && !boxOf(prev),
+    [shown(own), shown(ownId), shown(ownQuiet), !!boxOf(visit), !!boxOf(prev)].join());
+  closeOne(ownQuiet);
   const prof = FILES[PROFILE] || "";
   check("H11. profile.html loads the session guard (and so the player) only for a signed-in visitor, and carries the mist",
     /document\.write\('<scr' \+ 'ipt src="\/scripts\/bf-session\.js"><\/scr' \+ 'ipt>'\)/.test(prof) && /<script src="\/scripts\/termaximus-presence\.js"><\/script>/.test(prof));
@@ -1781,6 +1882,278 @@ async function mixerChecks(c) {
   /* H12. no emoji */
   check("H12. no emoji in the mixer, the panel, the settings or the pop-out", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + FILES[MUSIC] + SETTINGS_PICK + pop + DR.textContent));
   closeOne(D); closeOne(T);
+}
+
+/* ── I. three stages, pin or follow, the mixer's spacing (Oct 31 2026) ─────────
+   The owner's final adjustments: the headers stay as they were; the deck's
+   parts never overlap; the dashboard starts as the icon; icon -> bar ->
+   boombox and back; other pages show the player only while music is on;
+   the stage and the position are remembered and validated. */
+const HEADER_BASE = "9750ee2";   // the frontend before these adjustments: every page's header as the owner left it
+const headerOf = html => (lf(html).match(/<header\b[\s\S]*?<\/header>|<nav\b[^>]*\btop-nav\b[\s\S]*?<\/nav>|<[^>]*data-bf-boombox-anchor[^>]*>/g) || []).join("\n");
+/* The deck's parts as laid out by the boombox's own stylesheet (computed), in deck pixels, scaled by the phone's --bbx-fit. */
+function deckBoxes(w) {
+  const r = boxOf(w), q = s => r.querySelector(s), cs = el => w.getComputedStyle(el), px = v => parseFloat(v) || 0;
+  const fit = parseFloat(r.style.getPropertyValue("--bbx-fit")) || 1;
+  const slot = el => ({ left: px(cs(el).left), top: px(cs(el).top), width: px(cs(el).width), height: px(cs(el).height) });
+  const scale = b => ({ left: b.left * fit, top: b.top * fit, right: (b.left + b.width) * fit, bottom: (b.top + b.height) * fit });
+  const meters = slot(q(".bbx-meters")), lane = slot(q(".bbx-vol")), fd = slot(q(".bbx-fader")), cap0 = slot(q(".bbx-fader-cap"));
+  const ty = parseFloat((/translateY\((-?[\d.]+)px\)/.exec(q(".bbx-fader-cap").style.transform) || [0, "NaN"])[1]);
+  const track = { left: lane.left + fd.left, top: lane.top + fd.top, width: fd.width, height: fd.height };
+  const cap = { left: track.left + cap0.left, top: track.top + cap0.top + ty, width: cap0.width, height: cap0.height };
+  const lblEl = q(".bbx-vol .bbx-lbl"), ls = slot(lblEl);
+  const label = { left: lane.left + ls.left, top: lane.top + ls.top, width: ls.width, height: 7 };
+  const xs = slot(q(".bbx-xfade")), xcap = slot(q(".bbx-xf-cap"));
+  const tx = parseFloat((/translateX\((-?[\d.]+)px\)/.exec(q(".bbx-xf-cap").style.transform) || [0, "0"])[1]);
+  const xfCap = { left: xs.left + xcap.left + tx, top: xs.top, width: xcap.width, height: 30 };
+  return { fit, ty, meters: scale(meters), track: scale(track), cap: scale(cap), label: scale(label), fkeys: scale(slot(q(".bbx-fkeys"))), xfCap: scale(xfCap),
+    lane: scale(lane), labelShown: cs(lblEl).display !== "none" && lblEl.textContent === "Vol" && px(cs(lblEl).width) > 0 };
+}
+async function stageChecks(c) {
+  console.log("\n══ I. three stages (icon, bar, boombox), pin or follow, and the mixer's spacing ══");
+  const { db, lifted, base, T1, T2 } = c;
+  const BX = FILES[BOOMBOX] || "";
+  const css = el => el.ownerDocument.defaultView.getComputedStyle(el);
+
+  /* I1. no header and no logo moved: every page's header markup as it was */
+  const { execFileSync } = require("child_process");
+  let basePages = [], gitErr = "";
+  try { basePages = execFileSync("git", ["-C", FRONTEND, "ls-tree", "-r", "--name-only", HEADER_BASE], { encoding: "utf8" }).split("\n").filter(f => /\.html$/.test(f)); }
+  catch (e) { gitErr = e.message; }
+  const changedHeaders = [], withHeader = [];
+  for (const f of basePages) {
+    let was = "";
+    try { was = headerOf(execFileSync("git", ["-C", FRONTEND, "show", HEADER_BASE + ":" + f], { encoding: "utf8", maxBuffer: 1 << 26 })); } catch (e) { changedHeaders.push(f + " unreadable"); continue; }
+    if (!was) continue;
+    withHeader.push(f);
+    const now = fs.existsSync(path.join(FRONTEND, f)) ? headerOf(frontText(f)) : "";
+    if (now !== was) changedHeaders.push(f);
+  }
+  check("I1. no header or logo order changed on any page: the header markup of every page (" + withHeader.length + " with one) is identical to " + HEADER_BASE + "'s",
+    !gitErr && withHeader.length >= 40 && withHeader.indexOf("dashboard.html") !== -1 && changedHeaders.length === 0, gitErr || changedHeaders.slice(0, 6).join(", "));
+
+  /* I2. the mixer's spacing: the meters and the fader each in their own slot, at every fader position, both finishes, desktop and phone */
+  const overlapping = [];
+  let labelOk = true, inDeck = true, gaps = [];
+  const MX = await openPage(Object.assign({}, base, { boombox: { state: "box" } }));
+  const PHX = await openPage(Object.assign({}, base, { boombox: { state: "box" }, width: 390 }));
+  for (const [where, w] of [["desktop", MX], ["phone", PHX]]) {
+    const bx = w.BFMusic._box();
+    for (const fin of ["chrome", "black"]) {
+      bx.setFinish(fin);
+      for (const v of [0, 0.5, 1]) {
+        bx.setVolume(v); bx.setMix(v * 12);
+        const b = deckBoxes(w), tag = where + " " + fin + " " + v;
+        if (isNaN(b.ty)) overlapping.push(tag + " no fader transform");
+        [["meters", "fader track", b.meters, b.track], ["meters", "fader handle", b.meters, b.cap], ["meters", "VOL label", b.meters, b.label],
+          ["fader handle", "VOL label", b.cap, b.label], ["meters", "keys", b.meters, b.fkeys], ["fader handle", "keys", b.cap, b.fkeys],
+          ["crossfader", "meters", b.xfCap, b.meters]].forEach(([n1, n2, x, y]) => { if (overlaps(x, y)) overlapping.push(tag + ": " + n1 + " x " + n2); });
+        if (!b.labelShown) labelOk = false;
+        const deckW = 378 * b.fit, deckH = 44 * b.fit;
+        [b.meters, b.lane, b.cap, b.label, b.fkeys, b.xfCap].forEach(x => { if (x.left < 0 || x.top < 0 || x.right > deckW + 0.01 || x.bottom > deckH + 0.01) inDeck = false; });
+        gaps.push(Math.min(b.track.left, b.cap.left) - b.meters.right);
+      }
+    }
+    if (where === "phone") check("I2. on a phone the boombox is scaled (--bbx-fit " + deckBoxes(w).fit + ") and the spacing scales with it", w.document.querySelector(".bfm-float").getAttribute("data-dock") === "phone" && deckBoxes(w).fit < 1);
+  }
+  check("I2. the volume fader never overlaps the L/R meters: at min, mid and max, in Chrome and Black, at desktop and phone size (computed boxes; the smallest gap " + Math.min.apply(null, gaps).toFixed(1) + " px)",
+    overlapping.length === 0 && Math.min.apply(null, gaps) >= 4, overlapping.slice(0, 4).join(" | "));
+  check("I2. ... the meters, the fader's lane and its \"VOL\" label, the Mix and the keys each have their own slot inside the deck, and \"Vol\" is visible",
+    labelOk && inDeck && BX.indexOf('".bbx-vol{left:268px;top:2px;width:30px;height:40px}"') !== -1 && /\.bbx-meters\{left:216px;top:2px;width:44px;height:40px;display:flex;justify-content:center/.test(BX));
+  closeOne(MX); closeOne(PHX);
+
+  /* I3. the dashboard's first visit: the ICON beside the logo, nothing else, no audio */
+  await freshStage(db);
+  const DI = await openPage(base), DIR = boxOf(DI);
+  await settle(20);
+  const icon = DI.document.querySelector(".bfm-icon");
+  const signed = () => DI.__calls.filter(x => /\/url$/.test(x)).length;
+  check("I3. the dashboard's first stage is the icon beside the logo (212, 12): the bar and the boombox are not shown, and no audio has started",
+    DIR.getAttribute("data-state") === "icon" && DIR.getAttribute("data-home") === "true" && DIR.getAttribute("data-away") === "false" && spot(DI).join() === "212,12" &&
+    css(icon).display === "block" && css(DI.document.querySelector(".bfm-tag")).display === "none" && css(DI.document.querySelector(".bbx")).display === "none" &&
+    css(DI.document.querySelector(".bfm-drawer")).display === "none" && !DI.BFMusic.playing() && AUDIOS.filter(x => x.win === DI).every(a => a.plays === 0) && signed() === 0,
+    DIR.getAttribute("data-state") + " " + spot(DI) + " " + css(icon).display);
+  check("I3. the icon is a small drawn SVG boombox in the finish's tokens (chrome or black), with a sheen, named \"Open music\"",
+    icon.tagName === "BUTTON" && icon.getAttribute("aria-label") === "Open music" && !!icon.querySelector("svg.bfm-icon-art #bbxIconBody") &&
+    /stop-color:var\(--bbx-m1\)/.test(icon.innerHTML) && /stop-color:var\(--bbx-h1\)/.test(icon.innerHTML) && !!icon.querySelector(".bfm-icon-sheen") &&
+    /bbx-icon-sheen/.test(css(icon.querySelector(".bfm-icon-sheen")).animation) && DI.BFBoombox.ICON_W === 40 && DI.BFBoombox.ICON_H === 36);
+  const PI3 = await openPage(Object.assign({}, base, { width: 390 }));
+  check("I3. the icon is in place (pinned, never fixed or dragged), and on a phone it stays beside the logo, not docked",
+    DIR.getAttribute("data-pinned") === "true" && css(DIR).position === "absolute" && boxOf(PI3).getAttribute("data-state") === "icon" &&
+    boxOf(PI3).getAttribute("data-dock") === "desktop" && spot(PI3).join() === "212,12", boxOf(PI3).getAttribute("data-dock") + " " + spot(PI3));
+  closeOne(PI3);
+
+  /* I4. icon -> bar -> boombox, and back; Escape one stage at a time */
+  click(DI, "[data-act=bbx-open]");
+  const expand = DI.document.querySelector("[data-act=bbx-expand]");
+  const s1 = DIR.getAttribute("data-state"), f1 = DI.document.activeElement === expand;
+  DI.document.querySelector(".bfm-tag-title").dispatchEvent(new DI.MouseEvent("click", { bubbles: true }));
+  const s2 = DIR.getAttribute("data-state"), f2 = DI.document.activeElement === DI.document.querySelector(".bbx-keys [data-act=toggle]");
+  check("I4. the icon opens the bar (the focus on \"Open the boombox\"); a press on the bar opens the boombox (the focus on Play)",
+    s1 === "tag" && f1 && s2 === "box" && f2 && css(DI.document.querySelector(".bbx")).display === "block" && css(DI.document.querySelector(".bfm-tag")).display === "none", s1 + " " + s2);
+  key(DI, DI.document.activeElement, "Escape");
+  const e1 = DIR.getAttribute("data-state"), ef1 = DI.document.activeElement === expand;
+  key(DI, DI.document.activeElement, "Escape");
+  const e2 = DIR.getAttribute("data-state"), ef2 = DI.document.activeElement === icon;
+  key(DI, DI.document.activeElement, "Escape");
+  check("I4. Escape steps back one stage at a time: the boombox to the bar (focus on Open the boombox), the bar to the icon (focus on the icon), and no further",
+    e1 === "tag" && ef1 && e2 === "icon" && ef2 && DIR.getAttribute("data-state") === "icon", e1 + " " + e2);
+  click(DI, "[data-act=bbx-open]"); click(DI, "[data-act=bbx-expand]"); click(DI, "[data-act=bbx-library]");
+  key(DI, DI.document.querySelector("[data-act=bbx-library]"), "Escape");
+  const libFirst = DIR.getAttribute("data-state") === "box" && DIR.getAttribute("data-library") === "false";
+  click(DI, "[data-act=bbx-minimise]");
+  const minTag = DIR.getAttribute("data-state") === "tag";
+  key(DI, DI.document.querySelector(".bfm-tag"), "Enter");
+  const enterBox = DIR.getAttribute("data-state") === "box";
+  click(DI, ".bbx-fkeys [data-act=bbx-close]");
+  const boxToIcon = DIR.getAttribute("data-state") === "icon";
+  click(DI, "[data-act=bbx-open]"); click(DI, ".bfm-tag [data-act=bbx-close]");
+  check("I4. with the library out, Escape slides it back first; Minimise steps back to the bar; Enter on the bar opens the boombox; \"Close to icon\" on the boombox's body and on the bar goes to the icon",
+    libFirst && minTag && enterBox && boxToIcon && DIR.getAttribute("data-state") === "icon", [libFirst, minTag, enterBox, boxToIcon].join());
+  const names = [["Open music", ".bfm-icon"], ["Open the boombox", ".bfm-tag [data-act=bbx-expand]"], ["Close to icon", ".bfm-tag [data-act=bbx-close]"],
+    ["Close to icon", ".bbx-fkeys [data-act=bbx-close]"], ["Stop music", ".bfm-tag [data-act=stop]"], ["Stop music", ".bbx-keys [data-act=stop]"]];
+  const misnamed = names.filter(([n, sel]) => { const el = DI.document.querySelector(sel); return !el || el.tagName !== "BUTTON" || el.getAttribute("aria-label") !== n || !el.querySelector("svg"); }).map(x => x[1]);
+  check("I4. the accessible names: \"Open music\", \"Open the boombox\", \"Close to icon\" (the bar and the boombox), \"Stop music\" (the bar and the boombox), each a button with a drawn icon",
+    misnamed.length === 0, misnamed.join(", "));
+
+  /* I5. other pages: nothing without music; the bar or the boombox follows while it plays */
+  await freshStage(db);
+  const Q0 = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const quiet = !shown(Q0) && boxOf(Q0).getAttribute("data-away") === "true" && css(boxOf(Q0)).display === "none";
+  gesture(Q0); Q0.BFMusic.playTrack(T1); await settle();
+  check("I5. on a page other than the dashboard nothing shows without music; when music plays there, the bar appears",
+    quiet && Q0.BFMusic.playing() && shown(Q0) && boxOf(Q0).getAttribute("data-state") === "tag" && Q0.sessionStorage.getItem("bf_music_live") === UID, quiet + " " + shown(Q0));
+  click(Q0, "[data-act=bbx-expand]");
+  Q0.BFMusic.seek(30);
+  Q0.dispatchEvent(new Q0.Event("pagehide"));
+  const leftQ = JSON.parse(Q0.localStorage.getItem("bf_music") || "{}"), prefsQ = prefsOf(Q0);
+  Q0.BFMusic.pause(); closeOne(Q0);
+  const Q1 = await openPage(Object.assign({}, base, { page: "crm.html", store: leftQ, boombox: prefsQ }));
+  const atOnce = shown(Q1) && boxOf(Q1).getAttribute("data-state") === "box";
+  for (let i = 0; i < 200 && !Q1.BFMusic.playing(); i++) await wait(5);
+  check("I5. the next page, while the music carries on, shows the player at once at its last stage (the boombox), and it plays",
+    atOnce && Q1.BFMusic.playing() && shown(Q1) && boxOf(Q1).getAttribute("data-state") === "box", atOnce + " " + Q1.BFMusic.playing());
+  Q1.BFMusic.pause(); await settle();
+  check("I5. paused mid-track in this session it stays", !Q1.BFMusic.playing() && shown(Q1) && Q1.BFMusic.musicOn());
+  const Q2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: { v: 1, uid: UID, track_id: T1, position: 40 } }));
+  check("I5. ... but a track left paused in another session (no music this session) shows nothing", !shown(Q2) && !Q2.BFMusic.musicOn());
+  closeOne(Q2);
+
+  /* I6. Close to icon keeps the music and shows the equaliser; Stop takes the player off the other pages */
+  gesture(Q1); Q1.BFMusic.play(); await settle();
+  click(Q1, ".bbx-fkeys [data-act=bbx-close]");
+  check("I6. on another page, \"Close to icon\" keeps the music playing and the player leaves that page (the icon lives on the dashboard)",
+    Q1.BFMusic.playing() && boxOf(Q1).getAttribute("data-state") === "icon" && !shown(Q1));
+  Q1.BFMusic.pause(); closeOne(Q1); await settle();
+  const DQ = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
+  gesture(DQ); DQ.BFMusic.playTrack(T2); await settle();
+  click(DQ, ".bfm-tag [data-act=bbx-close]");
+  const eq = DQ.document.querySelector(".bfm-icon-eq"), bars = eq ? eq.querySelectorAll("span") : [];
+  check("I6. on the dashboard, \"Close to icon\" keeps the music playing and the icon shows a tiny animated equaliser",
+    DQ.BFMusic.playing() && boxOf(DQ).getAttribute("data-state") === "icon" && boxOf(DQ).getAttribute("data-playing") === "true" && shown(DQ) &&
+    css(eq).display === "flex" && bars.length === 4 && /bbx-icon-eq/.test(css(bars[0]).animation) && /@keyframes bbx-icon-eq\{from\{transform:scaleY\(\.25\)\}to\{transform:scaleY\(1\)\}\}/.test(BX),
+    css(eq).display + " " + (bars[0] && css(bars[0]).animation));
+  DQ.BFMusic.pause(); await settle();
+  check("I6. ... paused, the equaliser goes", css(eq).display === "none");
+  click(DQ, "[data-act=bbx-open]");
+  gesture(DQ); DQ.BFMusic.play(); await settle(); CLOCK.t += 1; await settle();
+  click(DQ, ".bfm-tag [data-act=stop]"); await settle();
+  check("I6. \"Stop music\" stops it, back to the start of the track, and ends this session's music (the dashboard keeps its bar)",
+    !DQ.BFMusic.playing() && DQ.BFMusic.position() === 0 && DQ.sessionStorage.getItem("bf_music_live") === null && shown(DQ) && boxOf(DQ).getAttribute("data-state") === "tag");
+  const QS = await openPage(Object.assign({}, base, { page: "tasks.html", store: JSON.parse(DQ.localStorage.getItem("bf_music")), boombox: prefsOf(DQ),
+    live: DQ.sessionStorage.getItem("bf_music_live") === UID }));
+  await wait(QS.BFMusic.RESUME_WAIT_MS + 100); await settle();
+  check("I6. ... and after a stop the other pages show nothing", !shown(QS) && !QS.BFMusic.playing());
+  closeOne(QS);
+  const QP = await openPage(Object.assign({}, base, liveOn(T1, { page: "tasks.html", boombox: { state: "box" } })));
+  gesture(QP); QP.BFMusic.play(); await settle();
+  const before = shown(QP) && QP.BFMusic.playing();
+  click(QP, ".bbx-keys [data-act=stop]"); await settle();
+  check("I6. the boombox's own \"Stop music\" on another page stops it and the player leaves that page", before && !QP.BFMusic.playing() && !shown(QP), before + " " + shown(QP));
+  closeOne(QP);
+
+  /* I7. the stage is remembered: on this device, and on the account for a new device */
+  click(DQ, "[data-act=bbx-expand]");
+  await wait((DQ.BFMusic.PLAYER_SAVE_MS || 600) + 200); await settle();
+  const rowS = (db.T.user_preferences || []).find(r => r.user_id === UID);
+  check("I7. the stage is remembered on this device (bf_boombox) and on the account (user_preferences.music_player.stage)",
+    prefsOf(DQ).state === "box" && !!rowS && rowS.music_player.stage === "box", JSON.stringify([prefsOf(DQ), rowS && rowS.music_player]));
+  const DN = await openPage(base);
+  await settle(20);
+  const DN2 = await openPage(Object.assign({}, base, { boombox: { state: "icon" } }));
+  await settle(20);
+  check("I7. a new device adopts the account's stage (the boombox); a device's own remembered stage wins over it (the icon)",
+    boxOf(DN).getAttribute("data-state") === "box" && boxOf(DN2).getAttribute("data-state") === "icon", boxOf(DN).getAttribute("data-state") + " " + boxOf(DN2).getAttribute("data-state"));
+  closeOne(DN); closeOne(DN2);
+
+  /* I8. Position: Follow me / Pinned */
+  click(DQ, "[data-act=bbx-minimise]");
+  const DR = boxOf(DQ);
+  const followFixed = css(DR).position === "fixed" && DR.getAttribute("data-pinned") === "false";
+  const pick = DQ.document.querySelector(".bfm-position-pick[value=pinned]");
+  pick.checked = true; pick.dispatchEvent(new DQ.Event("change", { bubbles: true }));
+  const pinnedNow = DR.getAttribute("data-pinned") === "true" && DR.getAttribute("data-position") === "pinned" && css(DR).position === "absolute";
+  const reset = DQ.document.querySelector("[data-act=bbx-reset]");
+  const was = spot(DQ).join();
+  const grab = DQ.document.querySelector(".bfm-tag-title");
+  ptr(DQ, grab, "pointerdown", 100, 100); ptr(DQ, grab, "pointermove", 400, 400); ptr(DQ, grab, "pointerup", 400, 400);
+  const tagEl = DQ.document.querySelector(".bfm-tag"); tagEl.focus(); key(DQ, tagEl, "ArrowRight");
+  const still = spot(DQ).join() === was && !("left" in prefsOf(DQ));
+  try { Object.defineProperty(DQ, "scrollY", { configurable: true, get: () => 300 }); Object.defineProperty(DQ, "pageYOffset", { configurable: true, get: () => 300 }); } catch (e) { /* fixed */ }
+  DQ.BFMusic._box().place();
+  const scrolled = spot(DQ).join();
+  check("I8. Follow me is fixed on screen; Pinned is not fixed (position: absolute), sits in its home spot beside the logo and scrolls with the page (300 px down it is 310, in the page)",
+    followFixed && pinnedNow && was === "212,10" && scrolled === "212,310", [followFixed, pinnedNow, was, scrolled].join(" "));
+  check("I8. pinned it cannot be dragged or nudged by the keys, and \"Reset position\" is hidden",
+    still && reset.hidden === true && css(reset).display === "none", still + " " + reset.hidden);
+  click(DQ, "[data-act=bbx-expand]");
+  check("I8. it applies to the boombox too: pinned, absolute, in its home spot", DR.getAttribute("data-state") === "box" && css(DR).position === "absolute" && spot(DQ).join() === "212,310");
+  try { Object.defineProperty(DQ, "scrollY", { configurable: true, get: () => 0 }); Object.defineProperty(DQ, "pageYOffset", { configurable: true, get: () => 0 }); } catch (e) { /* fixed */ }
+  await wait((DQ.BFMusic.PLAYER_SAVE_MS || 600) + 200); await settle();
+  const rowP = (db.T.user_preferences || []).find(r => r.user_id === UID);
+  check("I8. the position is saved on this device (bf_music) and on the account (PUT /api/music/player)",
+    JSON.parse(DQ.localStorage.getItem("bf_music")).placement === "pinned" && rowP.music_player.position === "pinned", JSON.stringify(rowP && rowP.music_player));
+  const PN = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
+  await settle(20);
+  check("I8. ... and restored: a new device adopts Pinned from the account, and its panel shows it",
+    boxOf(PN).getAttribute("data-pinned") === "true" && css(boxOf(PN)).position === "absolute" && PN.document.querySelector(".bfm-position-pick[value=pinned]").checked);
+  closeOne(PN);
+  const SETPOS = (/<div class="ts-choices" id="bfmPositionSetting"[\s\S]*?<\/div>/.exec(FILES[SETTINGS] || "") || [""])[0];
+  const SP = await openPage(Object.assign({}, base, liveOn(T1, { page: "settings.html", extra: SETPOS, boombox: { state: "tag" } })));
+  await settle(20);
+  const shownPinned = SP.document.querySelector("#bfmPositionSetting input[value=pinned]").checked;
+  const fol = SP.document.querySelector("#bfmPositionSetting input[value=follow]");
+  fol.checked = true; fol.dispatchEvent(new SP.Event("change", { bubbles: true }));
+  const spR = boxOf(SP);
+  const dragFrom = spot(SP).join();
+  const g2 = SP.document.querySelector(".bfm-tag-title");
+  ptr(SP, g2, "pointerdown", 100, 100); ptr(SP, g2, "pointermove", 200, 150); ptr(SP, g2, "pointerup", 200, 150);
+  check("I8. Settings → Theme → Music has \"Music player position: Follow me / Pinned\", showing the member's and changing it; Follow me is fixed and draggable again",
+    !!SETPOS && /role="radiogroup"/.test(SETPOS) && /Music player position/.test(SETPOS) && /> Follow me</.test(SETPOS) && /> Pinned</.test(SETPOS) && shownPinned &&
+    SP.BFMusic.state().placement === "follow" && spR.getAttribute("data-pinned") === "false" && css(spR).position === "fixed" && spot(SP).join() !== dragFrom &&
+    !SP.document.querySelector("[data-act=bbx-reset]").hidden && SP.document.querySelector(".bfm-position-pick[value=follow]").checked,
+    dragFrom + " " + spot(SP) + " " + shownPinned);
+  const posAfter = (FILES[SETTINGS] || "").indexOf('id="bfmPositionSetting"') > (FILES[SETTINGS] || "").indexOf('id="bfmFinishSetting"');
+  check("I8. ... beside the finish, in the music settings", posAfter);
+  closeOne(SP);
+  const put = body => callRoute(lifted, "put", "/api/music/player", body);
+  const okP = await put({ position: "pinned", stage: "icon" });
+  const badP = await Promise.all([{ position: "glued" }, { position: 1 }, { stage: "huge" }, { stage: null }, { position: "follow", place: "x" }].map(put));
+  const keep = await callRoute(lifted, "get", "/api/music/player");
+  check("I8. the server validates them: \"follow\" or \"pinned\", \"icon\", \"tag\" or \"box\"; anything else is a 400 with its field, and changes nothing",
+    okP.status === 200 && okP.body.player.position === "pinned" && okP.body.player.stage === "icon" &&
+    badP.every(r => r.status === 400 && typeof r.body.error === "string") && badP[0].body.field === "position" && badP[1].body.field === "position" &&
+    badP[2].body.field === "stage" && badP[3].body.field === "stage" && badP[4].body.field === "place" && badP[0].body.error === "The position is follow or pinned." &&
+    keep.body.player.position === "pinned" && keep.body.player.stage === "icon", JSON.stringify(badP.map(r => r.status + ":" + r.body.field)));
+  const v0 = M.playerSettings({ position: "pinned" }, { finish: "black", eq: { bass: 2 } });
+  check("I8. lib/music.js playerSettings: a position alone keeps the saved finish and EQ",
+    !v0.error && v0.value.finish === "black" && v0.value.eq.bass === 2 && v0.value.position === "pinned" && v0.value.stage === null, JSON.stringify(v0));
+  await put({ position: "follow" });
+  closeOne(DQ); closeOne(DI);
+
+  /* I9. no emoji in anything new */
+  const EMO = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u;
+  check("I9. no emoji in the icon, the bar, the boombox, the position setting or the guide", !EMO.test(BX + FILES[MUSIC] + SETPOS + FILES[GUIDE]));
 }
 
 /* ── G1/G2, live order: the real page files, their scripts run as a browser runs them ──
@@ -1863,9 +2236,12 @@ async function liveOrderChecks() {
     const p = livePage("dashboard.html", o);
     const box = await untilBox(p.w, 3000);
     const anchor = p.w.document.querySelector("[data-bf-boombox-anchor]");
-    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: drawn as the boombox. AFTER: drawn, and shown as the bar beside the logo. */
-    check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, shown as the bar beside the logo, with no warning",
-      !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && box.closest(".bfm-float").getAttribute("data-state") === "tag" &&
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: drawn as the boombox. AFTER: drawn, and shown as the bar beside the logo.
+       NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: shown as the bar. AFTER: shown as the icon beside the logo (the first visit). */
+    const fl = box && box.closest(".bfm-float");
+    check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, shown as the icon beside the logo, with no warning",
+      !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && fl.getAttribute("data-state") === "icon" && fl.getAttribute("data-away") === "false" &&
+      fl.getAttribute("data-home") === "true" && !!fl.querySelector(".bfm-icon[aria-label='Open music']") &&
       !p.w.document.getElementById("bfmFail") && p.warns.filter(x => /\[boombox\]/.test(x)).length === 0,
       JSON.stringify({ box: !!box, mode: p.w.BFMusic && p.w.BFMusic.mode, bbx: p.w.document.querySelectorAll("[class*=bbx]").length, warns: p.warns.slice(0, 2) }));
     if (o.api === "503") {

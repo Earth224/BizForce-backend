@@ -83,10 +83,14 @@ const MUTATIONS = {
   "app-keeps-copy": [[APP, "if (!localStorage.getItem(\"bf_token\") && window.BFSession) window.BFSession.clearDevice();", "if (false) window.BFSession.clearDevice();"]],
   // sign-out leaving bizforce_ai_mailbox
   "signout-leaves-mailbox": [[SESSION, "    \"bizforce_ai_mailbox\", \"bf_agent_memories\",\n", "    \"bf_agent_memories\",\n"]],
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the music player's three stages). BEFORE: the two anchors below were
+     [\"bf_tmx_insight:\", \"bf_tmx_trail\"]. AFTER: the list ends with \"bf_music_live\", and each mutation keeps it. */
   // the Termaximus insights cached for the tab survive sign-out
-  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_trail\"];"]],
+  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_trail\", \"bf_music_live\"];"]],
   // the Guide mode page trail survives sign-out
-  "trail-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\"];"]],
+  "trail-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_music_live\"];"]],
+  // the music player's session flag left at sign-out (Oct 31 2026)
+  "music-live-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];"]],
   // data-clear-only still runs the session guard (app.html would redirect to itself)
   "clear-only-runs-guard": [[SESSION, "  if (thisScript && thisScript.hasAttribute && thisScript.hasAttribute(\"data-clear-only\")) return;\n", ""]],
   // a write button left enabled offline
@@ -554,7 +558,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
        in this tab (scripts/termaximus-presence.js), a per-member session key, so IV0 lists it and sign-out clears it. */
-    const SESSION_KEYS = ["bf_tmx_trail"];
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the music player's three stages). BEFORE: ["bf_tmx_trail"]. AFTER: and bf_music_live, the
+       music player's "music has played in this tab and was not stopped" (scripts/bf-music.js LIVE_KEY), per member, cleared at sign-out. */
+    const SESSION_KEYS = ["bf_tmx_trail", "bf_music_live"];
     /* NAMED BEFORE → AFTER (Oct 29 2026, "Termaximus chat box can be moved like the mist"). BEFORE: KEPT had 14 keys.
        AFTER: 15; tmx_chat_pos is where the Termaximus chat box was dragged (scripts/termaximus-presence.js), a device
        preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
@@ -612,7 +618,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
         key: i => [...m.keys()][i] || null, get length() { return m.size; } };
     }
     const full = token => { const o = {}; PER_USER.forEach(k => { o[k] = "x"; }); Object.keys(KEPT).forEach(k => { o[k] = "kept"; }); if (token) o.bf_token = TOKEN; else delete o.bf_token; return o; };
-    const sess = () => store({ [SESSION_PREFIX + "dashboard.html"]: "{\"text\":\"your insight\"}", bf_tmx_trail: "[{\"page\":\"crm.html\",\"t\":1}]", "unrelated-tab-key": "stays" });
+    const sess = () => store({ [SESSION_PREFIX + "dashboard.html"]: "{\"text\":\"your insight\"}", bf_tmx_trail: "[{\"page\":\"crm.html\",\"t\":1}]", bf_music_live: "uid", "unrelated-tab-key": "stays" });
     function verdict(ls, ss, idb) {
       const left = PER_USER.filter(k => ls.getItem(k) !== null), lost = Object.keys(KEPT).filter(k => ls.getItem(k) !== "kept");
       const ok = left.length === 0 && lost.length === 0 && ss.getItem(SESSION_PREFIX + "dashboard.html") === null && ss.getItem("unrelated-tab-key") === "stays" &&
