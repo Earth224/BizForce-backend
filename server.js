@@ -2720,7 +2720,27 @@ function emailMarketingSerial(key, fn) {
   return run;
 }
 
+/* G20, recorded. The checks below are unchanged and still decide; this wrapper
+   only notes what they said and hands back exactly what they returned or threw.
+   The member is the contact's owner, once read; a refusal before the contact is
+   read is filed under the owner the caller names. */
 async function sendMarketingEmail(options) {
+  var seen = { ownerId: null, passed: false };
+  var target = "contact:" + String((options && options.contactId) || "none");
+  var sent;
+  try {
+    sent = await sendMarketingEmailChecked(options, seen);
+  } catch (sendErr) {
+    var g20 = seen.passed ? { result: "pass" }
+      : { result: "fail", code: (sendErr && sendErr.code === "marketing_refused") ? sendErr.reason : "gate_error" };
+    recordGateDecision(seen.ownerId || (options && options.ownerId) || null, "marketing_email", target, { G20: g20 });
+    throw sendErr;
+  }
+  recordGateDecision(seen.ownerId || (options && options.ownerId) || null, "marketing_email", target, { G20: { result: "pass" } });
+  return sent;
+}
+
+async function sendMarketingEmailChecked(options, seen) {
   var opts = options || {};
   var contactId = opts.contactId;
   var subject = opts.subject;
@@ -2782,6 +2802,7 @@ async function sendMarketingEmail(options) {
   var contact = contactRead.data;
   if (!contact || !contact.email) throw emailMarketingRefusal("no_contact", "the contact does not exist or has no email address.");
   if (!contact.owner_id) throw emailMarketingRefusal("no_owner", "the contact has no owner, so no daily cap can be applied.");
+  if (seen) seen.ownerId = contact.owner_id;
   var address = String(contact.email).trim().toLowerCase();
 
   // ── 3. Suppression ───────────────────────────────────────────────────────
@@ -2851,6 +2872,7 @@ async function sendMarketingEmail(options) {
     var footerHtml = footer.html;
     var footerText = footer.text;
 
+    if (seen) seen.passed = true;
     return sendEmail({
       contactId: contactId,
       to:        contact.email,
@@ -3278,6 +3300,100 @@ function isOwnerAccount(userId) {
   return typeof userId === "string" && userId === OWNER_ACCOUNT_ID;
 }
 
+/* ── GATE DECISIONS (intelligence layer B1) ─────────────────────────────────
+   Every gated action writes ONE gate_decisions row (migration 158) saying which
+   gates ran, in order, and what each said: pass, fail, bypass (the owner pass)
+   or not_reached. lib/gates.js evaluates it, purely, from what the gates
+   observed; the gates themselves still decide, exactly as before, and every
+   refusal is still built by the code that always built it.
+
+   THE RECORD NEVER DECIDES. It is written after the decision, without being
+   awaited, and nothing reads its result. A write that fails, or a lib that
+   cannot be loaded, is logged as "[gates] record not written" and the answer
+   stands: fail-open for the record only. No user, no record: there is no member
+   to file it under.
+
+   lib/gates.js is required inline, not at the top, so the harnesses that lift
+   these functions into a vm do not have to carry it.
+
+   Retention is 90 days (design section 1.5); the sweep comes in block B2. */
+function recordGateDecision(userId, action, target, observed) {
+  try {
+    if (!userId) return Promise.resolve(false);
+    var gateLib = require("./lib/gates");
+    var decision = gateLib.evaluate(action, { observed: observed || {} });
+    var gateRow = {
+      user_id: userId,
+      action: action,
+      target: gateLib.cleanTarget(target),
+      outcome: decision.outcome,
+      results: gateLib.toRecord(decision)
+    };
+    return Promise.resolve()
+      .then(function () { return supabase.from("gate_decisions").insert(gateRow); })
+      .then(function (written) {
+        if (written && written.error) {
+          gateRecordNotWritten(action, written.error);
+          return false;
+        }
+        return true;
+      }, function (writeErr) {
+        gateRecordNotWritten(action, writeErr);
+        return false;
+      });
+  } catch (recordErr) {
+    gateRecordNotWritten(action, recordErr);
+    return Promise.resolve(false);
+  }
+}
+
+function gateRecordNotWritten(action, err) {
+  try {
+    console.error("[gates] record not written (" + action + "): " + ((err && err.message) || String(err)));
+  } catch (logErr) { /* a log that fails changes nothing either */ }
+}
+
+/* What G9, G11 and G10 said, read from how the model-call gate ended. The code
+   runs G11's own setting check, then G9, then G11's count, then G10; a refusal's
+   code names the gate that refused. The owner's account is never held by G9,
+   so for the owner G9 is a bypass, never a pass. */
+function modelCallGateObservations(userId, refusal) {
+  var platform = isOwnerAccount(userId) ? { result: "bypass", code: "owner_pass" } : { result: "pass" };
+  if (!refusal) return { G9: platform, G11: { result: "pass" }, G10: { result: "pass" } };
+  var refusalCode = (refusal && typeof refusal.code === "string") ? refusal.code : "";
+  if (refusalCode.indexOf("PLATFORM_") === 0) return { G9: { result: "fail", code: refusalCode } };
+  if (refusalCode === "DAILY_MODEL_CALL_LIMIT_MISCONFIGURED") return { G11: { result: "fail", code: refusalCode } };
+  if (refusalCode === "DAILY_MODEL_CALL_LIMIT") return { G9: platform, G11: { result: "fail", code: refusalCode } };
+  if (refusalCode.indexOf("MONTHLY_MODEL_SPEND_LIMIT") === 0) {
+    return { G9: platform, G11: { result: "pass" }, G10: { result: "fail", code: refusalCode } };
+  }
+  return { G9: platform, G11: { result: "fail", code: "gate_error" } };
+}
+
+/* G12 for a request that is let through: the owner and an exempt admin are
+   passed over, which is a bypass; a subscriber passes. */
+function entitlementGateObservation(planState) {
+  if (planState && planState.access_reason === "owner") return { result: "bypass", code: "owner_pass" };
+  if (planState && planState.exempt === true) return { result: "bypass", code: "admin_exempt" };
+  return { result: "pass" };
+}
+
+function gateRouteKey(req) {
+  return String(req.method || "").toLowerCase() + " " + ((req.route && req.route.path) || "");
+}
+
+/* G19 and G12 for a dispatch, from the refused_reason dispatchToolCallSteps
+   answered. handler_error means the tool ran and failed: the gates let it run. */
+var DISPATCH_ENTITLEMENT_REFUSALS = ["user_missing", "entitlement_unknown", "not_entitled"];
+function dispatchGateObservations(dispatched) {
+  var refusedReason = dispatched && dispatched.refused_reason;
+  if (!refusedReason || refusedReason === "handler_error") return { G19: { result: "pass" }, G12: { result: "pass" } };
+  if (DISPATCH_ENTITLEMENT_REFUSALS.indexOf(refusedReason) !== -1) {
+    return { G19: { result: "pass" }, G12: { result: "fail", code: refusedReason } };
+  }
+  return { G19: { result: "fail", code: refusedReason } };
+}
+
 /* `user` is optional. requireActiveSubscription already holds req.user, so it
    passes it and costs nothing; the four enforce* callers have only a userId, so
    the role is looked up for them. Looked up rather than assumed, because a gate
@@ -3672,6 +3788,7 @@ async function publicOwnersAmong(userIds) {
 }
 
 async function requireActiveSubscription(req, res, next) {
+  var gateRecorded = false;
   try {
     /* req.user is passed so the role is read from the row requireAuth already
        fetched rather than looked up a second time on every gated request. */
@@ -3679,6 +3796,8 @@ async function requireActiveSubscription(req, res, next) {
 
     if (!planState.active) {
       const key = String(req.method || "").toLowerCase() + " " + ((req.route && req.route.path) || "");
+      gateRecorded = true;
+      recordGateDecision(req.user.id, "route_access", "route:" + key, { G12: { result: "fail", code: "subscription_required" } });
       return res.status(402).json(subscriptionRequiredBody(planState, key));
     }
 
@@ -3691,8 +3810,13 @@ async function requireActiveSubscription(req, res, next) {
        know should not have to re-derive it, and `active` alone cannot tell it. */
     req.planExempt = planState.exempt === true;
     req.planAccessReason = planState.access_reason;
+    gateRecorded = true;
+    recordGateDecision(req.user.id, "route_access", "route:" + gateRouteKey(req), { G12: entitlementGateObservation(planState) });
     next();
   } catch (error) {
+    if (!gateRecorded) {
+      recordGateDecision(req && req.user && req.user.id, "route_access", "route:" + gateRouteKey(req), { G12: { result: "fail", code: "plan_unreadable" } });
+    }
     next(error);
   }
 }
@@ -11906,8 +12030,10 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
     }
     if (pending && SUBSCRIPTION_GATED_PROPOSAL_ACTIONS.indexOf(pending.action_type) !== -1 &&
         await refuseUnlessSubscribed(req, res, "approve " + pending.action_type)) {
+      recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: { result: "fail", code: "subscription_required" } });
       return;
     }
+    var approveG3 = (pending && SUBSCRIPTION_GATED_PROPOSAL_ACTIONS.indexOf(pending.action_type) !== -1) ? { result: "pass" } : null;
 
     // Claim the proposal first: pending -> executing in a single conditional
     // update, so two concurrent approvals cannot both execute it.
@@ -11928,12 +12054,14 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
     }
 
     if (!claimed) {
+      recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "fail", code: "not_pending" } });
       return res.status(409).json({ error: "Proposal not found or no longer pending" });
     }
 
     const executor = PROPOSAL_EXECUTORS[claimed.action_type];
 
     if (!executor) {
+      recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "fail", code: "no_executor" } });
       const { data: unexecuted, error: unexecutedError } = await supabase
         .from("agent_proposals")
         .update({
@@ -11953,6 +12081,8 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
         proposal: unexecuted
       });
     }
+
+    recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "pass", code: "approved" } });
 
     // The executor sees only the stored row — never anything from this
     // request body, which the approver could otherwise use to alter the
@@ -14247,7 +14377,23 @@ function unreadableModelCallLimitError(raw) {
    So the count failing proceeds and logs loudly. The log is how the gap becomes
    visible rather than silent — the same reason the ledger's own failures are
    logged as MISSING LEDGER ENTRY rather than as generic errors. */
+/* The model-call gate, recorded: G9, G11 and G10 as one decision. The steps
+   below decide, unchanged; this hands back exactly what they returned, or
+   rethrows the very error they threw. */
 async function enforceDailyModelCallLimit(userId, route) {
+  var modelCallTarget = "route:" + String(route || "none");
+  var allowed;
+  try {
+    allowed = await enforceDailyModelCallLimitSteps(userId, route);
+  } catch (refusal) {
+    recordGateDecision(userId, "model_call", modelCallTarget, modelCallGateObservations(userId, refusal));
+    throw refusal;
+  }
+  recordGateDecision(userId, "model_call", modelCallTarget, modelCallGateObservations(userId, null));
+  return allowed;
+}
+
+async function enforceDailyModelCallLimitSteps(userId, route) {
   var limit = modelCallDailyLimit();
 
   if (limit === null) {
@@ -16878,6 +17024,8 @@ if (memoryResult.error) {
     }
 
     var taskRecord = pendingInsert.data;
+    recordGateDecision(userId, "task_run", "ai_task:" + String((taskRecord && taskRecord.id) || "none"),
+      { G2: requiresApproval ? { result: "fail", code: "high_risk" } : { result: "pass" } });
 setImmediate(function () {
   processAiTask(taskRecord.id, userId, agentType, taskType, finalPrompt, requiresApproval, userPrompt, modelChoice.model, modelChoice.thinking).catch(function (error) {
     console.error("Async AI task failed:", error);
@@ -36198,7 +36346,23 @@ function chainRefusal(reason, detail) {
   return { ok: false, status: null, body: null, refused_reason: reason, detail: detail || null };
 }
 
+/* G19 and G12 for a dispatch, recorded. dispatchToolCallSteps decides,
+   unchanged; this hands back the very object it answered, or rethrows. */
 async function dispatchToolCall(options) {
+  var dispatchOpts = options || {};
+  var dispatchTarget = "tool:" + String(dispatchOpts.agentType || "").toLowerCase().trim() + "/" + String(dispatchOpts.tool || "").toLowerCase().trim();
+  var dispatched;
+  try {
+    dispatched = await dispatchToolCallSteps(options);
+  } catch (dispatchErr) {
+    recordGateDecision(dispatchOpts.userId, "dispatch", dispatchTarget, { G19: { result: "fail", code: "gate_error" } });
+    throw dispatchErr;
+  }
+  recordGateDecision(dispatchOpts.userId, "dispatch", dispatchTarget, dispatchGateObservations(dispatched));
+  return dispatched;
+}
+
+async function dispatchToolCallSteps(options) {
   var opts = options || {};
   var userId = opts.userId;
   var agentType = String(opts.agentType || "").toLowerCase().trim();
@@ -52686,6 +52850,7 @@ async function runEmailSequencePass(now, maxPerTick) {
       try {
         result = await sendMarketingEmail({
           contactId: enrollment.contact_id,
+          ownerId:   sequence.owner_id,
           subject:   step.subject,
           text:      step.body,
           html:      emailSequenceHtml(step.body),

@@ -629,7 +629,9 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
         : /createPassEntitlementCache\(\)/.test(pass) && /\.error \|\| !\w+\.plan\) \{/.test(pass) && /\.plan\.active !== true\) \{/.test(pass);
       check("S. " + tick + " → " + k.pass + " checks entitlement through getUserPlan, fail closed" + (k.why ? " (proved by " + k.why + ")" : ""), calls && gate);
     }
-    const chain = bodyOf("dispatchToolCall");
+    // NAMED (Oct 31 2026, gates B1): BEFORE bodyOf("dispatchToolCall"); AFTER bodyOf("dispatchToolCallSteps"). The
+    // dispatcher's body was renamed unchanged; dispatchToolCall is now the wrapper that records its gate decision.
+    const chain = bodyOf("dispatchToolCallSteps");
     check("S. agent chaining (dispatchToolCall, runs inside a member's task) refuses not_entitled and fails closed on entitlement_unknown",
       /planState = await getUserPlan\(userId\)/.test(chain) && /chainRefusal\("entitlement_unknown"/.test(chain) && /planState\.active !== true/.test(chain));
     check("S. createPassEntitlementCache reads getUserPlan, the function every gate uses",

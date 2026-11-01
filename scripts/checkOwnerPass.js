@@ -298,7 +298,9 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
     const KNOWN = ["subscriptionEntitlement in getUserPlan", "getUserPlan in refuseUnlessSubscribed", "getUserPlan in ownerPagePublic",
       "getUserPlan in requireActiveSubscription", "planLookup in createPassEntitlementCache",
       "getUserPlan in enforceAgentLimit", "getUserPlan in enforceTaskLimit", "getUserPlan in /api/auth/me", "getUserPlan in /api/agents",
-      "getUserPlan in dispatchToolCall", "getUserPlan in /api/agent-schedules", "subscriptionEntitlement in /api/stripe/checkout",
+      // NAMED (Oct 31 2026, gates B1): BEFORE "getUserPlan in dispatchToolCall"; AFTER "getUserPlan in dispatchToolCallSteps".
+      // The dispatcher's body was renamed unchanged, and dispatchToolCall is now the wrapper that records its decision. Still 17.
+      "getUserPlan in dispatchToolCallSteps", "getUserPlan in /api/agent-schedules", "subscriptionEntitlement in /api/stripe/checkout",
       "getUserPlan in /api/certifications/award", "getUserPlan in runAgentSchedulePass", "getUserPlan in __selfReviewPlanFor",
       // NAMED (Oct 29 2026, live activity): BEFORE 15 readers; AFTER 16. agentLiveBody reads .active only to
       // say whether a schedule will run (subscription_active, null if the read fails); it gates nothing.

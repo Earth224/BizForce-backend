@@ -358,7 +358,13 @@ function withoutRunId(body) { const c = JSON.parse(JSON.stringify(body || {})); 
     reads(r, "sms_subscribers").length > 0 && reads(r, "email_sequences").length > 0);
   const askedSeq = [].concat(...reads(r, "email_sequence_enrollments").map(q => (q.filters.find(f => f[0] === "in" && f[1] === "sequence_id") || [0, 0, ["(none)"]])[2]));
   check("A. enrollments are asked for the caller's own sequences only", JSON.stringify(askedSeq) === JSON.stringify([SEQ.owner]), JSON.stringify(askedSeq));
-  check("A. nothing was written but the tool run's own ai_tasks row", r.h.db.log.filter(q => q.op !== "select").every(q => q.table === "ai_tasks") &&
+  // NAMED (Oct 31 2026, gates B1). BEFORE: every write was the tool run's own ai_tasks row. AFTER: the real
+  // requireActiveSubscription also files its one G12 decision in gate_decisions (lib/gates.js, migration 158);
+  // that one route_access record is allowed, and nothing else.
+  check("A. nothing was written but the tool run's own ai_tasks row and the route's one gate record",
+    r.h.db.log.filter(q => q.op !== "select").every(q => q.table === "ai_tasks" ||
+      (q.table === "gate_decisions" && q.op === "insert" && [].concat(q.payload)[0].action === "route_access")) &&
+    r.h.db.log.filter(q => q.table === "gate_decisions").length === 1 &&
     r.h.db.log.some(q => q.table === "ai_tasks" && q.op === "insert"));
   check("B. no read asks for NULL-owner rows (no owner_id IS NULL, no OR)", r.h.db.log.every(q => !q.filters.some(f => f[0] === "or" || (f[0] === "is" && /owner_id|user_id/.test(f[1])))));
   check("B. the owner's brands are mrearthrose, other and swordvitality: the NULL-owner bizforce rows are not counted, and the registration row makes no brand",
@@ -469,8 +475,12 @@ function withoutRunId(body) { const c = JSON.parse(JSON.stringify(body || {})); 
   console.log("\n══ G. window_days and brand are refused, never coerced ══");
   for (const bad of [6, 731, "30", true, 0, 7.5]) {
     const rb = await post({ window_days: bad });
-    check("G. window_days " + JSON.stringify(bad) + " is a 400 naming the field, and nothing is read or recorded",
-      rb.status === 400 && rb.body && rb.body.field === "window_days" && /window_days/.test(rb.body.error || "") && rb.h.db.log.length === 0, rb.status + " " + JSON.stringify(rb.body));
+    // NAMED (Oct 31 2026, gates B1). BEFORE: the database log was empty. AFTER: the route's G12 decision is
+    // filed in gate_decisions (migration 158) before the handler refuses; that one insert, and nothing else.
+    check("G. window_days " + JSON.stringify(bad) + " is a 400 naming the field, and nothing is read or recorded but the route's gate record",
+      rb.status === 400 && rb.body && rb.body.field === "window_days" && /window_days/.test(rb.body.error || "") &&
+      rb.h.db.log.filter(q => q.table !== "gate_decisions").length === 0 && rb.h.db.log.filter(q => q.table === "gate_decisions" && q.op === "insert").length === 1,
+      rb.status + " " + JSON.stringify(rb.body));
   }
   for (const good of [7, 730]) {
     const rg = await post({ window_days: good });

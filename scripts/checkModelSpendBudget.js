@@ -108,7 +108,12 @@ const NAMES = ["MODEL_CALL_DAILY_LIMIT_DEFAULT", "modelCallDailyLimit", "modelCa
   "platformSpendToday", "platformSpendAlert", "platformDailySpendLimitError", "enforcePlatformDailySpendCeiling",
   // NAMED (Oct 27 2026, launch item #0): BEFORE platformSpendToday counted every account's rows. AFTER it leaves out test
   // accounts (lib/testAccounts.js), through platformSpendTestAccounts, so that is lifted too, with the real isTestAccount.
-  "platformSpendTestAccounts"];
+  "platformSpendTestAccounts",
+  // NAMED (Oct 31 2026, gates B1): BEFORE enforceDailyModelCallLimit held the steps itself. AFTER its body is
+  // enforceDailyModelCallLimitSteps, unchanged, and enforceDailyModelCallLimit is the wrapper that records the
+  // decision (lib/gates.js, migration 158), so those names are lifted too. This context has no require, so the
+  // record is never written here (it is logged "[gates] record not written"); nothing reaches gate_decisions.
+  "enforceDailyModelCallLimitSteps", "recordGateDecision", "gateRecordNotWritten", "modelCallGateObservations"];
 const def = name => { const d = definitionOf(SERVER, name); if (!d) throw new Error("not found in server.js: " + name); return d; };
 const logs = [];
 function lift(client, env) {
@@ -209,7 +214,8 @@ async function insert(rows) {
     !!refusal && refusal.message.indexOf("$" + spent.toFixed(2)) !== -1 && refusal.message.indexOf("$25.00") !== -1 &&
     /No model call was made for this request\./.test(refusal.message) && refusal.message.indexOf(month.resets_at) !== -1 && /\d+d \d+h\./.test(refusal.message),
     refusal && refusal.message);
-  const gate = def("enforceDailyModelCallLimit");
+  // NAMED (Oct 31 2026, gates B1): BEFORE def("enforceDailyModelCallLimit"); AFTER its steps, which now hold the body.
+  const gate = def("enforceDailyModelCallLimitSteps");
   check("8. code: the gate checks spend on every path that allows a counted user's call",
     gate.split("await enforceMonthlyModelSpendLimit(userId, route);").length - 1 === 3 &&
     gate.indexOf("await enforceMonthlyModelSpendLimit(userId, route);\n\n  return { allowed: true, counted: true") !== -1);

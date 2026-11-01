@@ -376,8 +376,12 @@ const P = "supplement_vitality";
   ];
   for (const [body, field, what] of BAD) {
     const r = await post(body);
-    check("F. " + what + ": 400 naming " + field + ", and nothing read or recorded", r.status === 400 && r.body && r.body.field === field &&
-      new RegExp(field).test(r.body.error) && r.h.db.log.length === 0, r.status + " " + JSON.stringify(r.body));
+    // NAMED (Oct 31 2026, gates B1). BEFORE: the database log was empty. AFTER: the real requireActiveSubscription
+    // files its one G12 decision in gate_decisions (migration 158) before the handler refuses; that one insert
+    // is allowed, and nothing else is read or recorded.
+    check("F. " + what + ": 400 naming " + field + ", and nothing read or recorded but the route's gate record", r.status === 400 && r.body && r.body.field === field &&
+      new RegExp(field).test(r.body.error) && r.h.db.log.filter(q => q.table !== "gate_decisions").length === 0 &&
+      r.h.db.log.filter(q => q.table === "gate_decisions" && q.op === "insert").length === 1, r.status + " " + JSON.stringify(r.body));
   }
   const unknown = await post({ text: "x", profile: "pharma" });
   check("F. the unknown-profile refusal lists the valid profiles", JSON.stringify(unknown.body && unknown.body.valid_profiles) === '["supplement_vitality"]');
@@ -389,7 +393,12 @@ const P = "supplement_vitality";
   console.log("\n══ G. no free tier ══");
   const g = await post({ text: TEXT, profile: P }, { plan: { active: false, plan: null, subscription: null, config: null, exempt: false, access_reason: "no_subscription" } });
   check("G. without an active subscription: 402", g.status === 402, g.status + " " + JSON.stringify(g.body).slice(0, 160));
-  check("G. and nothing was read or recorded", g.h.db.log.length === 0, g.h.db.log.map(q => q.table).join(","));
+  // NAMED (Oct 31 2026, gates B1). BEFORE: the database log was empty. AFTER: the refusal is filed as one
+  // blocked G12 decision in gate_decisions (migration 158); nothing else is read or recorded.
+  check("G. and nothing was read or recorded but the refusal's one blocked gate record",
+    g.h.db.log.filter(q => q.table !== "gate_decisions").length === 0 &&
+    g.h.db.log.filter(q => q.table === "gate_decisions" && q.op === "insert" && [].concat(q.payload)[0].outcome === "blocked").length === 1,
+    g.h.db.log.map(q => q.table).join(","));
   check("G. the gate in front of the handler is the real requireActiveSubscription", a.chain.some(f => f === a.h.ctx.__api.requireActiveSubscription));
 
   /* ── H. no model ─────────────────────────────────────────────────────── */

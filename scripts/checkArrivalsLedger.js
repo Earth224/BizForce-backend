@@ -395,7 +395,13 @@ const NO_LINK = "none of your posts carries a tracked link, so arrivals cannot b
   check("A. the owner's cross-account reads are exactly the unmatched count's three, one per table",
     ["content_library", "outreach_sends", "engine_visits"].every(tb => reads(r, tb).filter(isUnmatchedRead).length === 1) &&
     r.h.db.log.filter(q => q.op === "select" && q.table !== "ai_tasks").every(q => isUnmatchedRead(q) || scoped(q, OWNER) || (q.table === "engine_visits" && q.filters.some(f => f[0] === "in"))));
-  check("A. nothing was written but the tool run's own ai_tasks row", r.h.db.log.filter(q => q.op !== "select").every(q => q.table === "ai_tasks") &&
+  // NAMED (Oct 31 2026, gates B1). BEFORE: every write was the tool run's own ai_tasks row. AFTER: the real
+  // requireActiveSubscription also files its one G12 decision in gate_decisions (lib/gates.js, migration 158);
+  // that one route_access record is allowed, and nothing else.
+  check("A. nothing was written but the tool run's own ai_tasks row and the route's one gate record",
+    r.h.db.log.filter(q => q.op !== "select").every(q => q.table === "ai_tasks" ||
+      (q.table === "gate_decisions" && q.op === "insert" && [].concat(q.payload)[0].action === "route_access")) &&
+    r.h.db.log.filter(q => q.table === "gate_decisions").length === 1 &&
     r.h.db.log.some(q => q.table === "ai_tasks" && q.op === "insert"));
   check("B. weeks defaults to 12, and the window starts on the Monday 11 weeks before this one", m.weeks === 12 && m.window_start === WEEKS12[0], m.weeks + " " + m.window_start);
   const a1 = byRef[bl(OWNER, "ad-account-disabled")], a2 = byRef[bl(OWNER, "processor-dropped")];
@@ -521,8 +527,12 @@ const NO_LINK = "none of your posts carries a tracked link, so arrivals cannot b
   console.log("\n══ H. weeks is refused, never coerced ══");
   for (const bad of [0, 53, "12", true, 1.5, -1]) {
     const rv = await post({ weeks: bad });
-    check("H. weeks " + JSON.stringify(bad) + " is a 400 naming the field, and nothing is read or recorded",
-      rv.status === 400 && rv.body && rv.body.field === "weeks" && /weeks/.test(rv.body.error || "") && rv.h.db.log.length === 0, rv.status + " " + JSON.stringify(rv.body));
+    // NAMED (Oct 31 2026, gates B1). BEFORE: the database log was empty. AFTER: the route's G12 decision is
+    // filed in gate_decisions (migration 158) before the handler refuses; that one insert, and nothing else.
+    check("H. weeks " + JSON.stringify(bad) + " is a 400 naming the field, and nothing is read or recorded but the route's gate record",
+      rv.status === 400 && rv.body && rv.body.field === "weeks" && /weeks/.test(rv.body.error || "") &&
+      rv.h.db.log.filter(q => q.table !== "gate_decisions").length === 0 && rv.h.db.log.filter(q => q.table === "gate_decisions" && q.op === "insert").length === 1,
+      rv.status + " " + JSON.stringify(rv.body));
   }
   for (const good of [1, 52]) {
     const rg = await post({ weeks: good });

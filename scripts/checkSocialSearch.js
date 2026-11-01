@@ -431,8 +431,12 @@ const tagStr = (n) => "#t" + "abcdefghijklmnopqrstuvwxyz"[n % 26] + "x" + String
   ];
   for (const [field, body] of BAD) {
     const rv = await run(body);
-    check("D. " + JSON.stringify(body).slice(0, 90) + " → 400 naming " + field + ", nothing read or recorded",
-      rv.status === 400 && rv.body && rv.body.field === field && rv.body.error.indexOf(field) !== -1 && rv.h.db.log.length === 0 && rv.h.modelCalls.length === 0,
+    // NAMED (Oct 31 2026, gates B1). BEFORE: the database log was empty. AFTER: the route's G12 decision is
+    // filed in gate_decisions (migration 158) before the handler refuses; that one insert, and nothing else.
+    check("D. " + JSON.stringify(body).slice(0, 90) + " → 400 naming " + field + ", nothing read or recorded but the route's gate record",
+      rv.status === 400 && rv.body && rv.body.field === field && rv.body.error.indexOf(field) !== -1 &&
+      rv.h.db.log.filter(q => q.table !== "gate_decisions").length === 0 && rv.h.db.log.filter(q => q.table === "gate_decisions" && q.op === "insert").length === 1 &&
+      rv.h.modelCalls.length === 0,
       rv.status + " " + JSON.stringify(rv.body));
   }
   r = await run({ platform: "tiktok", target_phrase: "wool hat", caption: "wool hat", suggest_rewrites: false });
