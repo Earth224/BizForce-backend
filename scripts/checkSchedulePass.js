@@ -88,8 +88,14 @@ let code = [extractLine("var AGENT_SCHEDULE_FAILURES_TO_PAUSE = "), extract("var
   "function agentScheduleDaysInUtcMonth(now) {",
   "function agentScheduleEffectiveMonthDay(dayOfMonth, now) {",
   "function agentScheduleIsDue(row, now) {",
-  "async function runAgentSchedulePass(now, maxPerTick) {"
-].map(extract).join("\n\n");
+  "async function runAgentSchedulePass(now, maxPerTick) {",
+  "function scheduleGateFacts(row) {",
+  "function entitlementGateObservation(planState) {"
+].map(extract).join("\n\n") +
+  // NAMED (B2, Nov 1 2026): BEFORE the pass recorded nothing and asked no member gate. AFTER it records G18, G16 and
+  // G13 (recordGateDecision) and asks the member's own gates before the ceiling (memberGateCheck); checkGates J8 and M6
+  // prove both by output. Here the facts helpers are the real ones; the record and the member gates are stubbed (none).
+  "\n\nfunction recordGateDecision() { return Promise.resolve(true); }\nasync function memberGateCheck() { return null; }\nfunction memberGateSentence(b) { return String(b && b.name); }";
 
 if (MUTATE === "gate") {
   const GATE = "    if (entitlement.plan.active !== true) {\n";

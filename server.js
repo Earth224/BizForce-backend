@@ -3316,12 +3316,27 @@ function isOwnerAccount(userId) {
    lib/gates.js is required inline, not at the top, so the harnesses that lift
    these functions into a vm do not have to carry it.
 
-   Retention is 90 days (design section 1.5); the sweep comes in block B2. */
-function recordGateDecision(userId, action, target, observed) {
+   Retention is 90 days (design section 1.5); lib/gateDecisionsSweep.js deletes
+   older rows once a day (block B2).
+
+   extra (block B2), all optional:
+     gates   the gate order, for a route that gates only part of what it does
+             (G3, G14, G25 under route_access);
+     member  the member's own gate that blocked it ({ id, name } from
+             memberGateCheck): asked only after the platform gates let the
+             action through, so it can turn "ran" into "blocked" and nothing
+             else (lib/gates.js withMemberGate);
+     facts   the closed tokens the Decisions filter and the rule preview read
+             (agent, action type, channel, approved), never text or amounts.
+   The facts and member columns come with migration 159. Until it is applied a
+   row carrying them is refused for the unknown column (PGRST204), and the same
+   row is written once more without them, so B1's records keep coming. */
+function recordGateDecision(userId, action, target, observed, extra) {
   try {
     if (!userId) return Promise.resolve(false);
     var gateLib = require("./lib/gates");
-    var decision = gateLib.evaluate(action, { observed: observed || {} });
+    var more = extra || {};
+    var decision = gateLib.withMemberGate(gateLib.evaluate(action, { observed: observed || {} }, more.gates), more.member || null);
     var gateRow = {
       user_id: userId,
       action: action,
@@ -3329,8 +3344,22 @@ function recordGateDecision(userId, action, target, observed) {
       outcome: decision.outcome,
       results: gateLib.toRecord(decision)
     };
+    var gateFacts = gateLib.cleanFacts(more.facts);
+    if (gateFacts) gateRow.facts = gateFacts;
+    if (decision.member) {
+      gateRow.member_gate_id = decision.member.id;
+      gateRow.member_gate_name = decision.member.name;
+    }
+    var plainRow = { user_id: gateRow.user_id, action: gateRow.action, target: gateRow.target, outcome: gateRow.outcome, results: gateRow.results };
+    var carriesB2 = !!(gateFacts || decision.member);
     return Promise.resolve()
       .then(function () { return supabase.from("gate_decisions").insert(gateRow); })
+      .then(function (written) {
+        if (written && written.error && carriesB2 && written.error.code === "PGRST204") {
+          return supabase.from("gate_decisions").insert(plainRow);
+        }
+        return written;
+      })
       .then(function (written) {
         if (written && written.error) {
           gateRecordNotWritten(action, written.error);
@@ -3392,6 +3421,121 @@ function dispatchGateObservations(dispatched) {
     return { G19: { result: "pass" }, G12: { result: "fail", code: refusedReason } };
   }
   return { G19: { result: "fail", code: refusedReason } };
+}
+
+/* ── B2 helpers ─────────────────────────────────────────────────────────────
+   watchGateResponse notes the first body a handler sends, for the gates whose
+   code answers the request itself (G24's transfer path, G25's guide handler),
+   and stop() puts res.json back exactly as it was. Nothing is changed in what
+   is sent: the original json is called with the same arguments. */
+function watchGateResponse(res) {
+  var seen = { sent: false, body: null };
+  var hadOwnJson = Object.prototype.hasOwnProperty.call(res, "json");
+  var originalJson = res.json;
+  res.json = function (body) {
+    if (!seen.sent) { seen.sent = true; seen.body = body; }
+    return originalJson.apply(this, arguments);
+  };
+  return {
+    seen: seen,
+    stop: function () { if (hadOwnJson) res.json = originalJson; else delete res.json; }
+  };
+}
+
+/* A refusal body is one with an error and a reason token; a success has neither. */
+function refusalReasonOf(body) {
+  return body && typeof body === "object" && typeof body.error === "string" && typeof body.reason === "string" ? body.reason : null;
+}
+
+/* G24 from what the transfer path answered. */
+function bfcGateObservation(seen) {
+  var reason = refusalReasonOf(seen && seen.body);
+  return reason ? { result: "fail", code: reason } : { result: "pass" };
+}
+
+/* G25 from what the guide handler answered: its own two refusals fail; an
+   answer, or a model-limit refusal after its count let the question through,
+   passes; a request it could not read (400) reached no gate, so null. */
+var GUIDE_GATE_REFUSALS = ["guide_count_unreadable", "guide_daily_limit"];
+function guideGateObservation(seen) {
+  var body = seen && seen.body;
+  if (!body || typeof body !== "object") return null;
+  if (GUIDE_GATE_REFUSALS.indexOf(body.reason) !== -1) return { result: "fail", code: body.reason };
+  if (Array.isArray(body.steps) || typeof body.known === "boolean") return { result: "pass" };
+  if (typeof body.reason === "string" && body.reason) return { result: "pass" };
+  return null;
+}
+
+/* G14 from enforceAgentLimit's answer. */
+function agentLimitGateObservation(limit) {
+  if (limit && limit.allowed === true) return { result: "pass" };
+  var said = String((limit && limit.error) || "");
+  if (/not included/.test(said)) return { result: "fail", code: "not_in_plan" };
+  if (/limit reached/.test(said)) return { result: "fail", code: "agent_limit_reached" };
+  return { result: "fail", code: "subscription_required" };
+}
+
+/* What a member gate is told about a proposal: its own row's type, agent and
+   cost, and whether a person approved it (the approve route) or not (an
+   automatic run). */
+function proposalGateFacts(proposal, approved) {
+  var gateRules = require("./lib/gateRules");
+  var p = proposal || {};
+  var actionType = typeof p.action_type === "string" ? p.action_type : null;
+  var amount = Number(p.cost_amount);
+  return {
+    action_type: actionType,
+    agent: typeof p.agent_type === "string" ? p.agent_type : null,
+    channel: gateRules.channelFor(actionType),
+    approved: approved === true,
+    amount: Number.isFinite(amount) && amount >= 0 ? amount : 0
+  };
+}
+
+/* THE MEMBER'S OWN GATES (lib/gateRules.js, migration 159). Asked only after
+   every platform gate has let the action through: the first enabled gate whose
+   condition does not hold blocks, under its own name. Returns { id, name,
+   summary } or null.
+
+   IT CAN ONLY ADD RESTRICTIONS, and never decides anything else: a member gate
+   that cannot be read (the table missing before migration 159, a read error,
+   lib/gateRules.js not loading) is logged as "[member-gates] not read" and the
+   platform's decision stands. No user, no member gates. */
+async function memberGateCheck(userId, scope, facts) {
+  if (!userId) return null;
+  try {
+    var gateRules = require("./lib/gateRules");
+    var mine = await supabase
+      .from("member_gates")
+      .select("id, name, scope, rule, time_zone, enabled")
+      .eq("user_id", userId)
+      .eq("enabled", true)
+      .in("scope", [scope, "any"])
+      .order("created_at", { ascending: true })
+      .limit(gateRules.LIMITS.MAX_GATES);
+    if (mine.error) {
+      memberGatesNotRead(scope, mine.error);
+      return null;
+    }
+    return gateRules.firstBlock(mine.data || [], scope, facts, Date.now());
+  } catch (memberErr) {
+    memberGatesNotRead(scope, memberErr);
+    return null;
+  }
+}
+
+function memberGatesNotRead(scope, err) {
+  try {
+    console.error("[member-gates] not read (" + scope + "): " + ((err && err.message) || String(err)) + ". The platform's decision stands.");
+  } catch (logErr) { /* a log that fails changes nothing */ }
+}
+
+/* The sentence a member reads when their own gate stopped something. */
+function memberGateSentence(block) {
+  return "Your own gate \"" + block.name + "\" stopped this (" + (block.summary || "its condition did not hold") + "). Nothing was done.";
+}
+function memberGateRefusal(block) {
+  return { error: memberGateSentence(block), code: "member_gate", gate: block.name };
 }
 
 /* `user` is optional. requireActiveSubscription already holds req.user, so it
@@ -11000,7 +11144,11 @@ app.post("/api/agents", requireAuth, requireActiveSubscription, async function (
       return res.status(400).json({ error: AGENT_DESCRIPTION_FIXED, field: "description" });
     }
 
-    const limit = await enforceAgentLimit(req.user.id, type);
+    const limit = await enforceAgentLimit(req.user.id, type).catch(function (limitErr) {
+      recordGateDecision(req.user.id, "route_access", "route:post /api/agents", { G14: { result: "fail", code: "gate_error" } }, { gates: ["G14"] });
+      throw limitErr;
+    });
+    recordGateDecision(req.user.id, "route_access", "route:post /api/agents", { G14: agentLimitGateObservation(limit) }, { gates: ["G14"], facts: { agent: type } });
 
     if (!limit.allowed) {
       return res.status(403).json(limit);
@@ -12082,7 +12230,27 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
       });
     }
 
-    recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "pass", code: "approved" } });
+    /* The member's own gates, after G3 and G1 let it through. One that blocks
+       puts the proposal back to pending, as it was before the claim, so it can
+       be approved again once the gate allows it. */
+    var approveFacts = proposalGateFacts(claimed, true);
+    var approveBlock = await memberGateCheck(req.user.id, "proposal_approve", approveFacts);
+    if (approveBlock) {
+      recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "pass", code: "approved" } },
+        { member: approveBlock, facts: approveFacts });
+      var unclaimed = await supabase
+        .from("agent_proposals")
+        .update({ status: "pending", decided_at: null })
+        .eq("id", claimed.id)
+        .eq("user_id", req.user.id)
+        .eq("status", "executing");
+      if (unclaimed && unclaimed.error) {
+        console.error("[proposals/approve] a member gate stopped " + claimed.id + " but it could not be put back to pending: " + unclaimed.error.message);
+      }
+      return res.status(403).json(memberGateRefusal(approveBlock));
+    }
+    recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "pass", code: "approved" } },
+      { facts: approveFacts });
 
     // The executor sees only the stored row — never anything from this
     // request body, which the approver could otherwise use to alter the
@@ -18955,13 +19123,270 @@ function oracleMessageFrom(rawMessage, files) {
 /* Termaximus's Guide mode: verified steps from the generated app map. Signed in
    is enough (an unsubscribed member is capped tighter, so they can still find
    Billing); lib/guideAsk.js holds the whitelist, the caps and the verification. */
-app.post("/api/guide/ask", requireAuth, aiLimiter, guideAsk.createGuideAskHandler({
+/* G25, recorded around lib/guideAsk.js's handler, which decides and answers
+   unchanged: its body is noted (watchGateResponse) and recorded after. */
+function guideAskRecorded(handler) {
+  return async function guideAskWithRecord(req, res, next) {
+    var guideWatch = watchGateResponse(res);
+    try {
+      await handler(req, res, next);
+    } finally {
+      guideWatch.stop();
+    }
+    var guideSaid = guideGateObservation(guideWatch.seen);
+    if (guideSaid) recordGateDecision(req.user && req.user.id, "route_access", "route:post /api/guide/ask", { G25: guideSaid }, { gates: ["G25"] });
+  };
+}
+app.post("/api/guide/ask", requireAuth, aiLimiter, guideAskRecorded(guideAsk.createGuideAskHandler({
   map: APP_MAP,
   supabase: supabase,
   getPlan: getUserPlan,
   callModel: callGuideModel,
   utcDay: function () { return modelCallUtcDay(); }
-}));
+})));
+
+
+/* ═══ MEMBER GATES AND "WHY?" (intelligence layer B2) ═══════════════════════
+   A member's own gates (member_gates, migration 159; the language is
+   lib/gateRules.js) and the read side of gate_decisions: the Decisions list,
+   one decision, the decisions for a run or a proposal, and the rule preview.
+
+   READ ONLY FROM THE RECORDS. Every decision shown is a stored row turned into
+   words by lib/gates.js explain(): the gates in order, each result and the
+   fixed sentence for its stored code, and the member gate the row names.
+   Nothing is added that the row does not say, and every read is filtered on
+   the caller's own user_id.
+
+   THE PREVIEW READS ONLY: it counts what a rule would have done to the
+   caller's recorded decisions of the last 30 days and writes nothing. */
+const memberGatesLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "member-gates:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many gate requests in a short time. Try again in a few minutes. Nothing was changed.", reason: "rate_limited" }
+});
+const gateDecisionsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "gate-decisions:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests for your decisions in a minute. Try again shortly.", reason: "rate_limited" }
+});
+
+var MEMBER_GATE_KEYS = ["name", "scope", "rule", "time_zone", "enabled"];
+var DECISIONS_PER_PAGE = 20;
+var PREVIEW_DAYS = 30;
+var PREVIEW_MAX_ROWS = 2000;
+var DECISION_COLUMNS = "id, action, target, outcome, results, facts, member_gate_name, created_at";
+
+/* A gate's fields from a request body, checked against the closed language.
+   base is the stored gate for an edit (a partial body), null for a new one. */
+function memberGateInput(body, base) {
+  var gateRules = require("./lib/gateRules");
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "The request must be a JSON object.", field: "body" };
+  var extra = Object.keys(body).filter(function (k) { return MEMBER_GATE_KEYS.indexOf(k) === -1; });
+  if (extra.length) return { error: "Unknown field " + JSON.stringify(extra[0].slice(0, 40)) + ". A gate has name, scope, rule, time_zone and enabled.", field: extra[0].slice(0, 40) };
+  var merged = {
+    name: body.name !== undefined ? body.name : base && base.name,
+    scope: body.scope !== undefined ? body.scope : base && base.scope,
+    rule: body.rule !== undefined ? body.rule : base && base.rule,
+    time_zone: body.time_zone !== undefined ? body.time_zone : (base ? base.time_zone : "UTC"),
+    enabled: body.enabled !== undefined ? body.enabled : (base ? base.enabled : true)
+  };
+  var named = gateRules.validateName(merged.name);
+  if (!named.ok) return { error: named.error, field: "name" };
+  if (gateRules.SCOPES.indexOf(merged.scope) === -1) return { error: "The scope is one of " + gateRules.SCOPES.join(", ") + ".", field: "scope" };
+  var checked = gateRules.validateRule(merged.rule, merged.scope);
+  if (!checked.ok) return { error: checked.error, field: checked.path };
+  if (!gateRules.isTimeZone(merged.time_zone)) return { error: "The time zone is UTC or a name such as America/New_York.", field: "time_zone" };
+  if (typeof merged.enabled !== "boolean") return { error: "enabled is true or false.", field: "enabled" };
+  return { value: { name: named.name, scope: merged.scope, rule: checked.rule, time_zone: merged.time_zone, enabled: merged.enabled } };
+}
+
+function memberGateOut(row) {
+  var gateRules = require("./lib/gateRules");
+  return {
+    id: row.id, name: row.name, scope: row.scope, rule: row.rule, time_zone: row.time_zone, enabled: row.enabled === true,
+    created_at: row.created_at, updated_at: row.updated_at, summary: gateRules.summarize(row.rule, row.scope)
+  };
+}
+
+/* One stored decision as the "Why?" panel shows it, plus the agent the row names. */
+function decisionOut(row) {
+  var out = require("./lib/gates").explain(row);
+  out.agent = row && row.facts && typeof row.facts.agent === "string" ? row.facts.agent : null;
+  return out;
+}
+
+var MEMBER_GATE_ROW = "id, name, scope, rule, time_zone, enabled, created_at, updated_at";
+
+/* The closed language, for the rule builder. */
+app.get("/api/member-gates/language", requireAuth, function (req, res) {
+  res.json(require("./lib/gateRules").language());
+});
+
+app.get("/api/member-gates", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {
+  try {
+    var listed = await supabase.from("member_gates").select(MEMBER_GATE_ROW).eq("user_id", req.user.id).order("created_at", { ascending: true });
+    if (listed.error) {
+      console.error("[member-gates] list failed for " + req.user.id + ": " + listed.error.message);
+      return res.status(503).json({ error: "Your gates could not be read just now.", reason: "member_gates_unreadable" });
+    }
+    res.json({ gates: (listed.data || []).map(memberGateOut) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/member-gates", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {
+  try {
+    var gateRules = require("./lib/gateRules");
+    var input = memberGateInput(req.body, null);
+    if (input.error) return res.status(400).json({ error: input.error + " Nothing was saved.", field: input.field });
+    var held = await supabase.from("member_gates").select("id", { count: "exact", head: true }).eq("user_id", req.user.id);
+    if (held.error || typeof held.count !== "number") {
+      return res.status(503).json({ error: "Your gates could not be counted just now, so nothing was saved.", reason: "member_gates_unreadable" });
+    }
+    if (held.count >= gateRules.LIMITS.MAX_GATES) {
+      return res.status(400).json({ error: "An account can hold " + gateRules.LIMITS.MAX_GATES + " gates. Delete one first. Nothing was saved.", reason: "too_many_gates" });
+    }
+    var stamp = nowIso();
+    var made = await supabase.from("member_gates")
+      .insert(Object.assign({ user_id: req.user.id, created_at: stamp, updated_at: stamp }, input.value))
+      .select(MEMBER_GATE_ROW)
+      .single();
+    if (made.error) throw made.error;
+    res.status(201).json({ gate: memberGateOut(made.data) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/member-gates/:id", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "No gate with that id is yours." });
+    var found = await supabase.from("member_gates").select(MEMBER_GATE_ROW).eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (found.error) throw found.error;
+    if (!found.data) return res.status(404).json({ error: "No gate with that id is yours." });
+    var input = memberGateInput(req.body, found.data);
+    if (input.error) return res.status(400).json({ error: input.error + " Nothing was changed.", field: input.field });
+    var changed = await supabase.from("member_gates")
+      .update(Object.assign({ updated_at: nowIso() }, input.value))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select(MEMBER_GATE_ROW)
+      .maybeSingle();
+    if (changed.error) throw changed.error;
+    if (!changed.data) return res.status(404).json({ error: "No gate with that id is yours." });
+    res.json({ gate: memberGateOut(changed.data) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/member-gates/:id", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "No gate with that id is yours." });
+    var gone = await supabase.from("member_gates").delete().eq("id", req.params.id).eq("user_id", req.user.id).select("id");
+    if (gone.error) throw gone.error;
+    if (!(gone.data || []).length) return res.status(404).json({ error: "No gate with that id is yours." });
+    res.json({ deleted: true, id: req.params.id });
+  } catch (error) { next(error); }
+});
+
+/* "Test against my last 30 days": how many of the caller's recorded decisions
+   a rule would have stopped. READS ONLY. A decision the platform (or another
+   gate) already stopped is counted apart; one whose facts the record does not
+   hold (an amount is never recorded) is "could not judge", never a guess. */
+app.post("/api/member-gates/preview", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {
+  try {
+    var gateRules = require("./lib/gateRules");
+    var body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+    var scope = body.scope;
+    if (gateRules.SCOPES.indexOf(scope) === -1) return res.status(400).json({ error: "The scope is one of " + gateRules.SCOPES.join(", ") + ".", field: "scope" });
+    var checked = gateRules.validateRule(body.rule, scope);
+    if (!checked.ok) return res.status(400).json({ error: checked.error, field: checked.path });
+    var zone = body.time_zone === undefined ? "UTC" : body.time_zone;
+    if (!gateRules.isTimeZone(zone)) return res.status(400).json({ error: "The time zone is UTC or a name such as America/New_York.", field: "time_zone" });
+    var actions = scope === "any" ? ["proposal_approve", "proposal_auto_execute", "schedule_run"] : [scope];
+    var since = new Date(Date.now() - PREVIEW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    var recorded = await supabase
+      .from("gate_decisions")
+      .select("action, outcome, facts, created_at")
+      .eq("user_id", req.user.id)
+      .in("action", actions)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(PREVIEW_MAX_ROWS);
+    if (recorded.error) {
+      return res.status(503).json({ error: "Your recorded decisions could not be read just now.", reason: "decisions_unreadable" });
+    }
+    var rows = recorded.data || [];
+    var counts = { read: rows.length, considered: 0, would_block: 0, would_pass: 0, could_not_judge: 0, already_stopped: 0 };
+    rows.forEach(function (row) {
+      if (row.outcome !== "ran") { counts.already_stopped++; return; }
+      counts.considered++;
+      var facts = Object.assign({}, row.facts || {}, gateRules.factsAt(Date.parse(row.created_at), zone));
+      var holds = gateRules.evaluateRule(checked.rule, facts);
+      if (holds === true) counts.would_pass++;
+      else if (holds === false) counts.would_block++;
+      else counts.could_not_judge++;
+    });
+    res.json(Object.assign({ window_days: PREVIEW_DAYS, capped: rows.length >= PREVIEW_MAX_ROWS, summary: gateRules.summarize(checked.rule, scope) }, counts));
+  } catch (error) { next(error); }
+});
+
+/* The Decisions list: newest first, 20 a page, filtered by agent and outcome. */
+app.get("/api/gate-decisions", requireAuth, gateDecisionsLimiter, async function (req, res, next) {
+  try {
+    var gateRules = require("./lib/gateRules");
+    var gateLib = require("./lib/gates");
+    var agent = typeof req.query.agent === "string" && req.query.agent ? req.query.agent : null;
+    var outcome = typeof req.query.outcome === "string" && req.query.outcome ? req.query.outcome : null;
+    var page = req.query.page === undefined ? 1 : Number(req.query.page);
+    if (agent !== null && gateRules.AGENTS.indexOf(agent) === -1) return res.status(400).json({ error: "Unknown agent.", field: "agent" });
+    if (outcome !== null && gateLib.OUTCOMES.indexOf(outcome) === -1) return res.status(400).json({ error: "The outcome is ran, blocked or held_for_approval.", field: "outcome" });
+    if (!Number.isInteger(page) || page < 1 || page > 500) return res.status(400).json({ error: "The page is a whole number from 1 to 500.", field: "page" });
+    var from = (page - 1) * DECISIONS_PER_PAGE;
+    var query = supabase.from("gate_decisions").select(DECISION_COLUMNS, { count: "exact" }).eq("user_id", req.user.id);
+    if (agent) query = query.eq("facts->>agent", agent);
+    if (outcome) query = query.eq("outcome", outcome);
+    var listed = await query.order("created_at", { ascending: false }).range(from, from + DECISIONS_PER_PAGE - 1);
+    if (listed.error) {
+      console.error("[gate-decisions] list failed for " + req.user.id + ": " + listed.error.message);
+      return res.status(503).json({ error: "Your decisions could not be read just now.", reason: "decisions_unreadable" });
+    }
+    var total = typeof listed.count === "number" ? listed.count : null;
+    res.json({
+      decisions: (listed.data || []).map(decisionOut),
+      page: page,
+      per_page: DECISIONS_PER_PAGE,
+      total: total,
+      pages: total === null ? null : Math.max(1, Math.ceil(total / DECISIONS_PER_PAGE))
+    });
+  } catch (error) { next(error); }
+});
+
+/* The decisions recorded for one run, proposal or schedule (a "Why?" link). */
+var WHY_TARGET_RE = /^(proposal|ai_task|schedule):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+app.get("/api/gate-decisions/for", requireAuth, gateDecisionsLimiter, async function (req, res, next) {
+  try {
+    var target = typeof req.query.target === "string" ? req.query.target : "";
+    if (!WHY_TARGET_RE.test(target)) return res.status(400).json({ error: "The target is proposal:, ai_task: or schedule: and an id.", field: "target" });
+    var listed = await supabase.from("gate_decisions").select(DECISION_COLUMNS)
+      .eq("user_id", req.user.id).eq("target", target)
+      .order("created_at", { ascending: false }).limit(5);
+    if (listed.error) return res.status(503).json({ error: "Your decisions could not be read just now.", reason: "decisions_unreadable" });
+    res.json({ target: target, decisions: (listed.data || []).map(decisionOut) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/gate-decisions/:id", requireAuth, gateDecisionsLimiter, async function (req, res, next) {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "No decision with that id is yours." });
+    var one = await supabase.from("gate_decisions").select(DECISION_COLUMNS).eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (one.error) return res.status(503).json({ error: "Your decisions could not be read just now.", reason: "decisions_unreadable" });
+    if (!one.data) return res.status(404).json({ error: "No decision with that id is yours." });
+    res.json({ decision: decisionOut(one.data) });
+  } catch (error) { next(error); }
+});
 
 app.post("/api/oracle", requireAuth, requireActiveSubscription, oracleChatLimiter, oracleChatUpload.array("files", 8), async function (req, res, next) {
   try {
@@ -29630,6 +30055,15 @@ function blueskyFailureText(outcome, handle) {
    repeats every screen, and a refusal there marks the proposal failed, which
    nothing retries. Never called for a profile edit. */
 async function autoExecuteFiledProposal(proposal, executor) {
+  /* The member's own gates, asked before anything is claimed: one that blocks
+     leaves the proposal pending, for the member to approve by hand. */
+  var autoFacts = proposalGateFacts(proposal, false);
+  var autoBlock = await memberGateCheck(proposal.user_id, "proposal_auto_execute", autoFacts);
+  recordGateDecision(proposal.user_id, "proposal_auto_execute", "proposal:" + proposal.id, { G17: { result: "pass", code: "automation_on" } },
+    { member: autoBlock, facts: autoFacts });
+  if (autoBlock) {
+    return { ok: false, proposal: proposal, error: "your own gate \"" + autoBlock.name + "\" stopped it (" + autoBlock.summary + "); it waits for your approval" };
+  }
   var claim = await supabase
     .from("agent_proposals")
     .update({ status: "executing", decided_at: nowIso() })
@@ -29683,6 +30117,8 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
         return res.status(403).json({ error: SOCIAL_POST_CONNECT_FIRST, code: "not_connected" });
       }
       if (!GRAPHEME_SEGMENTER) {
+        recordGateDecision(userId, "social_post", "ai_task:none", { G8: { result: "fail", code: "graphemes_uncountable" } },
+          { facts: { agent: "social", action_type: "publish_social_post", channel: "bluesky", approved: false } });
         return res.status(503).json(BLUESKY_UNCOUNTABLE);
       }
 
@@ -29728,7 +30164,9 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
         return res.status(400).json({ error: "That run's post is empty. Nothing was filed." });
       }
       var graphemes = countGraphemes(text);
+      var socialGateFacts = { agent: "social", action_type: "publish_social_post", channel: "bluesky", approved: false };
       if (graphemes > BLUESKY_MAX_GRAPHEMES) {
+        recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "fail", code: "over_grapheme_limit" } }, { facts: socialGateFacts });
         return res.status(400).json({
           error: "That post is " + graphemes + " graphemes, over Bluesky's limit of " + BLUESKY_MAX_GRAPHEMES +
             ". It cannot be published as written. Nothing was filed."
@@ -29736,8 +30174,10 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
       }
       var claimsRefusal = blueskyClaimsRefusal(text);
       if (claimsRefusal) {
+        recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "fail", code: "claims_screen" } }, { facts: socialGateFacts });
         return res.status(400).json({ error: claimsRefusal.error + " Nothing was filed.", code: "claims_screen", violations: claimsRefusal.violations });
       }
+      recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "pass" } }, { facts: socialGateFacts });
 
       var draftInsert = await supabase
         .from("social_post_drafts")
@@ -30194,8 +30634,10 @@ app.put("/api/social/bluesky/automation", requireAuth, async function (req, res,
       });
     }
     if (wanted && await refuseUnlessSubscribed(req, res, "turn on automatic Bluesky posting")) {
+      recordGateDecision(req.user.id, "route_access", "route:put /api/social/bluesky/automation", { G3: { result: "fail", code: "subscription_required" } }, { gates: ["G3"] });
       return;
     }
+    if (wanted) recordGateDecision(req.user.id, "route_access", "route:put /api/social/bluesky/automation", { G3: { result: "pass" } }, { gates: ["G3"] });
     var before = !!(conn.data && conn.data.auto_post === true);
     if (conn.data && before !== wanted) {
       var stamp = nowIso();
@@ -41088,7 +41530,26 @@ app.post("/api/wallet/transfer", requireAuth, requireActiveSubscription, async f
    all again under the sender's wallet lock. A transfer's call to bfc_send is
    the six arguments it always was; only support adds p_kind and p_note
    (migration 150). It answers the request itself. */
+/* G24, recorded. bfcSendWithinLimitsSteps decides and answers, unchanged;
+   this notes the body it sent (watchGateResponse) and records it, and hands
+   back what it returned or rethrows what it threw. */
 async function bfcSendWithinLimits(req, res, send) {
+  var bfcTarget = "wallet:" + (send && send.support ? "support" : "transfer");
+  var bfcWatch = watchGateResponse(res);
+  var bfcAnswered;
+  try {
+    bfcAnswered = await bfcSendWithinLimitsSteps(req, res, send);
+  } catch (bfcErr) {
+    bfcWatch.stop();
+    recordGateDecision(req.user.id, "bfc_transfer", bfcTarget, { G24: { result: "fail", code: "gate_error" } });
+    throw bfcErr;
+  }
+  bfcWatch.stop();
+  recordGateDecision(req.user.id, "bfc_transfer", bfcTarget, { G24: bfcGateObservation(bfcWatch.seen) });
+  return bfcAnswered;
+}
+
+async function bfcSendWithinLimitsSteps(req, res, send) {
   const recipientId = send.recipientId;
   const byUsername = send.byUsername;
   const amount = send.amount;
@@ -41944,7 +42405,11 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     const LISTING_EDIT_FIELDS = ["title", "description", "price_bfc", "price_usd", "category", "tags", "media"];
     const pauseOnly = req.body.status === "paused" &&
       LISTING_EDIT_FIELDS.every(function (f) { return req.body[f] === undefined; });
-    if (!pauseOnly && await refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")) return;
+    if (!pauseOnly && await refuseUnlessSubscribed(req, res, "put /api/marketplace/listings/:id")) {
+      recordGateDecision(req.user.id, "route_access", "route:put /api/marketplace/listings/:id", { G3: { result: "fail", code: "subscription_required" } }, { gates: ["G3"] });
+      return;
+    }
+    if (!pauseOnly) recordGateDecision(req.user.id, "route_access", "route:put /api/marketplace/listings/:id", { G3: { result: "pass" } }, { gates: ["G3"] });
 
     const updates = { updated_at: nowIso() };
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
@@ -48980,6 +49445,10 @@ async function convertSingleLead(userId, lead, sharedSystemPrompt, dryRun) {
      that path is left exactly as it was. */
   if (!dryRun) {
     var outreachGate = await canSendOutreach(userId, lead);
+    /* G23 passed to get here: every caller hands over only leads whose
+       outreach_safe is true (the manual route refuses the rest, the pools filter). */
+    recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "pass" }, G22: outreachGate.allowed ? { result: "pass" } : { result: "fail", code: outreachGate.reason } },
+      { facts: { agent: "sales" } });
 
     if (!outreachGate.allowed) {
       console.log("[sales/convert] Skipped " + handle + " before drafting — " + outreachGate.reason + " (cap " + OUTREACH_DAILY_CAP + "/day). No model call billed, no attempt counted.");
@@ -50037,6 +50506,8 @@ app.post("/api/agents/sales/convert", requireAuth, requireActiveSubscription, ai
       }
 
       if (refusals.length) {
+        var unsuitableLead = refusals.filter(function (r) { return r.code === "not_screened" || r.code === "unsafe_recipient"; })[0];
+        if (unsuitableLead) recordGateDecision(userId, "outreach_send", "lead", { G23: { result: "fail", code: unsuitableLead.code } }, { facts: { agent: "sales" } });
         console.log("[sales/convert] Refused " + leadPostUri + " for user " + userId + " — " + refusals.map(function (r) { return r.code; }).join(", "));
         return res.status(422).json({
           error:   "This lead is not eligible for outreach: " + refusals.map(function (r) { return r.detail; }).join(" "),
@@ -52160,6 +52631,15 @@ async function runAgentSchedulePass(now, maxPerTick) {
     return agentScheduleIsDue(row, now);
   });
 
+  /* G18, recorded: a schedule that would be due this hour but for its pause.
+     agentScheduleIsDue stays the one place the pause is tested. */
+  (candidateResult.data || []).forEach(function (pausedRow) {
+    if (pausedRow && pausedRow.paused === true && agentScheduleIsDue(Object.assign({}, pausedRow, { paused: false }), now)) {
+      recordGateDecision(pausedRow.user_id, "schedule_run", "schedule:" + pausedRow.id, { G18: { result: "fail", code: "schedule_paused" } },
+        { facts: scheduleGateFacts(pausedRow) });
+    }
+  });
+
   if (!due.length) {
     console.log("[AgentSchedules] Nothing due at " + today + " " +
       (hour < 10 ? "0" : "") + hour + ":00 UTC.");
@@ -52224,6 +52704,8 @@ async function runAgentSchedulePass(now, maxPerTick) {
 
     if (!consented[schedule.user_id + "|" + schedule.agent_type]) {
       skippedNoAutonomy += 1;
+      recordGateDecision(schedule.user_id, "schedule_run", "schedule:" + schedule.id, { G18: { result: "pass" }, G16: { result: "fail", code: "autonomy_off" } },
+        { facts: scheduleGateFacts(schedule) });
       console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " +
         schedule.user_id + " — autonomy is not enabled for that agent. The schedule " +
         "says when; autonomy says whether, and it is off.");
@@ -52278,6 +52760,8 @@ async function runAgentSchedulePass(now, maxPerTick) {
 
     if (entitlement.error || !entitlement.plan) {
       skippedNotEntitled += 1;
+      recordGateDecision(schedule.user_id, "schedule_run", "schedule:" + schedule.id,
+        { G18: { result: "pass" }, G16: { result: "pass" }, G13: { result: "fail", code: "entitlement_unknown" } }, { facts: scheduleGateFacts(schedule) });
       noteFailure(schedule, "entitlement could not be determined, so it was not run: " +
         (entitlement.error
           ? ((entitlement.error && entitlement.error.message) || String(entitlement.error))
@@ -52288,6 +52772,8 @@ async function runAgentSchedulePass(now, maxPerTick) {
 
     if (entitlement.plan.active !== true) {
       skippedNotEntitled += 1;
+      recordGateDecision(schedule.user_id, "schedule_run", "schedule:" + schedule.id,
+        { G18: { result: "pass" }, G16: { result: "pass" }, G13: { result: "fail", code: "not_entitled" } }, { facts: scheduleGateFacts(schedule) });
       console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " +
         schedule.user_id + " — no active subscription (inactive_reason " +
         JSON.stringify(entitlement.plan.inactive_reason || null) + "). A schedule does not " +
@@ -52307,11 +52793,25 @@ async function runAgentSchedulePass(now, maxPerTick) {
        later the same day — the next tick is the next hour and the row no longer
        matches — so a permanently broken schedule costs at most one attempt per
        day, not one per hour, and cannot consume the ceiling on every tick. */
+    /* The member's own gates, after every platform gate above let it through
+       and before the ceiling, so a run their gate stops costs no attempt. */
+    var scheduleFacts = scheduleGateFacts(schedule);
+    var scheduleObserved = { G18: { result: "pass" }, G16: { result: "pass" }, G13: entitlementGateObservation(entitlement.plan) };
+    var scheduleBlock = await memberGateCheck(schedule.user_id, "schedule_run", scheduleFacts);
+    if (scheduleBlock) {
+      recordGateDecision(schedule.user_id, "schedule_run", "schedule:" + schedule.id, scheduleObserved, { member: scheduleBlock, facts: scheduleFacts });
+      console.log("[AgentSchedules] Skipped " + schedule.agent_type + " for user " + schedule.user_id +
+        " — the member's own gate stopped it. Not run, last_run_on not set.");
+      await recordScheduleOutcome(schedule, { last_run_status: "skipped_member_gate", last_error: memberGateSentence(scheduleBlock) });
+      continue;
+    }
+
     if (attempts >= maxPerTick) {
       ceilingReached = true;
       break;
     }
     attempts += 1;
+    recordGateDecision(schedule.user_id, "schedule_run", "schedule:" + schedule.id, scheduleObserved, { facts: scheduleFacts });
 
     try {
       var outcome = await runScheduledAgentTask(schedule);
@@ -52385,6 +52885,11 @@ async function runAgentSchedulePass(now, maxPerTick) {
     firstFailure: firstFailure,
     ceilingReached: ceilingReached
   };
+}
+
+/* What a member gate and the Decisions filter are told about a scheduled run. */
+function scheduleGateFacts(row) {
+  return { agent: row && typeof row.agent_type === "string" ? row.agent_type : null, action_type: "agent_task", channel: "agent", approved: false, amount: 0 };
 }
 
 var agentSchedulePassRunning = false;
@@ -53233,6 +53738,24 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] pendingStorageDeletionTick scheduled — 04:15 UTC daily, claimed through job_runs." + accountFiles.RETRY_JOB_NAME + ".");
   } else {
     console.log("[startup] pendingStorageDeletionTick disabled (ENABLE_STORAGE_DELETION_RETRY is exactly \"false\")");
+  }
+
+  /* Gate decisions older than 90 days: 04:30 UTC daily, claimed through
+     job_runs.gate_decisions_sweep (lib/gateDecisionsSweep.js). ON unless
+     ENABLE_GATE_DECISIONS_SWEEP is exactly "false": retention must not wait
+     on a variable. No boot-time run, for the reason the retention job above
+     gives. */
+  if (require("./lib/gateDecisionsSweep").gateDecisionsSweepEnabled(process.env)) {
+    cron.schedule("30 4 * * *", function () {
+      require("./lib/gateDecisionsSweep").gateDecisionsSweepTick(supabase).catch(function (err) {
+        console.error("[GateDecisionsSweep] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep; rows older than 90 days are deleted.");
+  } else {
+    console.log("[startup] gate decisions sweep disabled (ENABLE_GATE_DECISIONS_SWEEP is exactly \"false\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is

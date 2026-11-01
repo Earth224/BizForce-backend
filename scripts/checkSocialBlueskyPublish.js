@@ -328,7 +328,10 @@ function build(seedTables, opts) {
     propose: (user, body) => hit("post " + R_PROPOSE, user, body),
     put: (user, id, body) => hit("put " + R_PUT, user, body, { id }) };
 }
-const writes = db => db.log.filter(q => q.op !== "select");
+// NAMED (B2, Nov 1 2026): BEFORE every non-select was a write this check counted. AFTER propose-post records its G8/G7
+// decision in gate_decisions (fail-open, never awaited; checkGates J4 proves no answer changes), which is the gates'
+// record, not a draft or a proposal, so it is set aside here: "writes nothing" still means nothing was filed.
+const writes = db => db.log.filter(q => q.op !== "select" && q.table !== "gate_decisions");
 const draftOf = (db, id) => db.tables.social_post_drafts.find(d => d.id === id);
 const snapshot = db => JSON.stringify(db.tables);
 

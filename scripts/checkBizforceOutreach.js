@@ -153,6 +153,9 @@ async function draftRun(src, product, modelMessage) {
   const ctx = {
     supabase: fakeDb(), RichText: RichText, URL: URL, crypto: require("crypto"), console: { log() {}, warn() {}, error() {} }, process: { env: {} },
     canSendOutreach: async () => ({ allowed: true }),
+    // NAMED (B2, Nov 1 2026): BEFORE convertSingleLead recorded nothing. AFTER it records its G23/G22 decision
+    // (recordGateDecision, fail-open and never awaited; checkGates J5 proves no answer changes). Stubbed here.
+    recordGateDecision: () => Promise.resolve(true),
     callAnthropicText: async p => { prompts.push(p); return { text: JSON.stringify({ outreach_message: modelMessage, internal_analysis: "fixture" }), stopReason: "end_turn" }; },
     sendBlueskyReply: async (lead, text) => { sends.push(text); return { sent: true, uri: "at://fake/post" }; },
     sendMastodonReply: async (lead, text) => { sends.push(text); return { sent: true, uri: "https://fake/post" }; }

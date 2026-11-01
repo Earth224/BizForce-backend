@@ -129,7 +129,7 @@ function fakeDb(rows) {
 const writes = function (db) { return db.calls.filter(function (c) { return c.op !== "select"; }); };
 
 /* ── lifting ─────────────────────────────────────────────────────────────── */
-["insertListingWithSlug", "refuseUnlessSubscribed", "ownerPagePublic"].forEach(function (n) { MUT.STUBS.add(n); });
+["insertListingWithSlug", "refuseUnlessSubscribed", "ownerPagePublic", "recordGateDecision"].forEach(function (n) { MUT.STUBS.add(n); });
 function routeSource(method, routePath) {
   const sig = "app." + method + "(\"" + routePath + "\",";
   const start = SRC.indexOf(sig);
@@ -147,6 +147,9 @@ function context(db, extra) {
     process: { env: {} },
     requireAuth: 0, requireActiveSubscription: 0,
     refuseUnlessSubscribed: async function () { return false; },
+    // NAMED (B2, Nov 1 2026): BEFORE an edit recorded nothing. AFTER the listing edit records its G3 decision (a
+    // gate_decisions row; checkGates J2 proves no answer changes). Stubbed, so "nothing written" still means the listing.
+    recordGateDecision: function () { return Promise.resolve(true); },
     ownerPagePublic: async function () { return true; },
     // NAMED (Oct 28 2026, member support): BEFORE the storefront route's closure needed no require. AFTER it answers
     // support_links through publicSupportLinks, which lifts `const supportLinks = require("./lib/supportLinks")`.

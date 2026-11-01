@@ -370,8 +370,12 @@ const DONATE = routeSource("post", "/api/crowdfunding/campaigns/:id/donate");
 const TRANSFER = (function () {
   const route = routeSource("post", "/api/wallet/transfer");
   const at = SRC.indexOf("async function bfcSendWithinLimits(");
-  if (!route || at < 0) return null;
-  return route + "\n\n" + SRC.slice(at, s.braceMatch(SRC, SRC.indexOf(") {", at) + 2));
+  // NAMED (B2, Nov 1 2026): BEFORE the lines sat in bfcSendWithinLimits. AFTER they sit, byte for byte, in
+  // bfcSendWithinLimitsSteps, which bfcSendWithinLimits wraps to record its G24 decision (checkGates J6); both are read.
+  const steps = SRC.indexOf("async function bfcSendWithinLimitsSteps(");
+  if (!route || at < 0 || steps < 0) return null;
+  return route + "\n\n" + SRC.slice(at, s.braceMatch(SRC, SRC.indexOf(") {", at) + 2)) + "\n\n" +
+    SRC.slice(steps, s.braceMatch(SRC, SRC.indexOf(") {", steps) + 2));
 })();
 function bfcRoutes(db, env) {
   const handlers = {};

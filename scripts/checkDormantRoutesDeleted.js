@@ -171,7 +171,19 @@ const ADDED = [
   // NAMED (Oct 31 2026, the boombox-mixer, migration 157): BEFORE 362 routes; AFTER 364, adding the player's two
   // settings routes, each requireAuth and rate-limited, each the caller's own user_preferences row (checkMusicPlayer A12, H5)
   ["get", "/api/music/player"],                 // the member's finish and EQ, or the defaults (total 362 -> 363)
-  ["put", "/api/music/player"]                  // save the finish and EQ, checked against a closed shape, ±12 dB (total 363 -> 364)
+  ["put", "/api/music/player"],                 // save the finish and EQ, checked against a closed shape, ±12 dB (total 363 -> 364)
+  // NAMED (Nov 1 2026, member gates and "Why?", migration 159): BEFORE 364 routes; AFTER 373, adding its nine routes,
+  // each requireAuth and rate-limited, each reading or writing only the caller's own rows; the five member-gates
+  // routes also requireActiveSubscription (checkGates N)
+  ["get", "/api/member-gates/language"],         // the closed rule language the builder offers (total 364 -> 365)
+  ["get", "/api/member-gates"],                  // the member's own gates (total 365 -> 366)
+  ["post", "/api/member-gates"],                 // make one, the rule validated (total 366 -> 367)
+  ["put", "/api/member-gates/:id"],              // change one, the rule validated again (total 367 -> 368)
+  ["delete", "/api/member-gates/:id"],           // delete one (total 368 -> 369)
+  ["post", "/api/member-gates/preview"],         // test a rule against the last 30 days of decisions; reads only (total 369 -> 370)
+  ["get", "/api/gate-decisions"],                // the Decisions list, 20 a page, by agent and outcome (total 370 -> 371)
+  ["get", "/api/gate-decisions/for"],            // the newest decision for one run, proposal or action (total 371 -> 372)
+  ["get", "/api/gate-decisions/:id"]             // one decision, explained from its record (total 372 -> 373)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

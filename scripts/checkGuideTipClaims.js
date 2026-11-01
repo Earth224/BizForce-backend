@@ -938,7 +938,9 @@ const walTips = tipsFor("wallet.html"), certTips = tipsFor("certifications.html"
 const SV = FILES[SERVER];
 const CC_JS = "scripts/bf-command-center.js", HQ_JS = "scripts/bf-hq.js";
 const DECK_JS = "scripts/bf-exec-deck.js";
-[CC_JS, HQ_JS, DECK_JS].forEach(readFrontend);
+const WHY_JS = "scripts/bf-why.js";
+[CC_JS, HQ_JS, DECK_JS, WHY_JS].forEach(readFrontend);
+const GATES_LIB = fs.readFileSync(path.join(REPO, "lib/gates.js"), "utf8").replace(/\r\n/g, "\n");
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
 const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
@@ -1250,12 +1252,20 @@ const CN = [
       FILES[HQ_JS].indexOf('act.dispatching[plan.id] ? "Running…" : "Run next"') !== -1 && (FILES[HQ_JS].match(/runNext\(/g) || []).length === 2 &&
       FILES[HQ_JS].indexOf('api("POST", "/api/assignments/dispatch", { executive_task_id: planId, assignment_id: Number(next.id) })') !== -1 &&
       /var chainId = crypto\.randomUUID\(\);/.test(SV) && /chain: \{ id: chainId, depth: 0, callsSoFar: 0 \}/.test(SV)],
-  // NEW (Block 3b): every tool that acts is the server's own list, and Headquarters only opens its page.
-  ["executive 12", exTips, "never runs from here; it opens its own page", EXEC_FALSE,
-    () => { const hq = (/var ACTING = (\{[\s\S]*?\n  \});/.exec(FILES[HQ_JS]) || [])[1] || "";
-      const server = ((/var CHAIN_NON_DISPATCHABLE_TOOLS = \[([\s\S]*?)\];/.exec(SV) || [])[1] || "").match(/"[a-z-]+\/[a-z-]+"/g) || [];
-      return server.length >= 7 && server.every(k => hq.indexOf(k + ": {") !== -1) && (hq.match(/"[a-z-]+\/[a-z-]+": \{/g) || []).length === server.length &&
-        FILES[HQ_JS].indexOf('name: "This one goes through approval on its own page."') !== -1; }],
+  /* NAMED (B2, Nov 1 2026): two executive tips were rewritten for member gates and "Why?". BEFORE → AFTER, by fragment:
+       executive 12 "never runs from here; it opens its own page" → executive 16 "can only stop what the platform's checks let through"
+                    (its tip was replaced by the gates tip, so row 12 is retired with it; its proof still holds in the
+                    code, checkExecutiveHQ keeps the acting-tool list, and no tip claims it now)
+       executive 14 "changes only that agent's schedule"          → executive 14 "\"Pause schedule\" changes only that schedule"
+                    (the same proof, plus the Approvals tab's Decisions list and its "Why?") */
+  // NEW (B2): a member gate only adds restrictions; the builder and its 30-day test are on Settings; the test reads only.
+  ["executive 16", exTips, "can only stop what the platform's checks let through", EXEC_FALSE,
+    () => GATES_LIB.indexOf('  if (!decision || decision.outcome !== "ran" || !block) return decision;') !== -1 &&
+      FILES[WHY_JS].indexOf('<h3 class="hq-h" id="bfGateTitle">Your gates</h3>') !== -1 &&
+      FILES[WHY_JS].indexOf('id="bfGateTest">Test against my last 30 days</button>') !== -1 &&
+      FILES[EXEC].indexOf('<div id="deckMemberGates" role="region" aria-label="Your gates"></div>') !== -1 &&
+      FILES[EXEC].indexOf('<script src="/scripts/bf-why.js"></script>') !== -1 &&
+      SV.indexOf('app.post("/api/member-gates/preview", requireAuth, requireActiveSubscription, memberGatesLimiter,') !== -1],
   // NEW (Block 3b): the If-stuck tip; the server says chaining's state, and the button is disabled with those words.
   ["executive 13", exTips, "running plans is switched off on the server", EXEC_FALSE,
     () => /chaining_on: agentChainingEnabled\(\),/.test(SV) && FILES[HQ_JS].indexOf('var off = cc && cc.chaining_on === false;') !== -1 &&
@@ -1263,8 +1273,11 @@ const CN = [
       FILES[HQ_JS].indexOf('bar.appendChild(el("span", "hq-muted", "Running plans is switched off on the server"));') !== -1 &&
       FILES[HQ_JS].indexOf("function refusalOf(status, body) {") !== -1],
   // NEW (Block 3b): Pause and Resume are the schedule routes, scoped to the caller; the approval queue is still on the page.
-  ["executive 14", exTips, "changes only that agent's schedule", EXEC_FALSE,
-    () => FILES[HQ_JS].indexOf('api("PUT", "/api/agent-schedules/" + encodeURIComponent(type) + "/" + what)') !== -1 &&
+  ["executive 14", exTips, "\"Pause schedule\" changes only that schedule", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<div id="deckDecisions" role="region" aria-label="Decisions"></div>') !== -1 &&
+      FILES[WHY_JS].indexOf('<h3 class="hq-h" id="bfWhyDecisionsTitle">Decisions</h3>') !== -1 &&
+      FILES[WHY_JS].indexOf('aria-label="Why did this run, or not run?">Why?</button>') !== -1 &&
+      FILES[HQ_JS].indexOf('api("PUT", "/api/agent-schedules/" + encodeURIComponent(type) + "/" + what)') !== -1 &&
       FILES[HQ_JS].indexOf('paused ? "Resume schedule" : "Pause schedule"') !== -1 &&
       /app\.put\("\/api\/agent-schedules\/:agent_type\/pause", requireAuth,/.test(SV) && /app\.put\("\/api\/agent-schedules\/:agent_type\/resume", requireAuth,/.test(SV) &&
       FILES[EXEC].indexOf('<h3 class="hq-h" id="hqQueueTitle">Approval queue</h3>') !== -1 &&

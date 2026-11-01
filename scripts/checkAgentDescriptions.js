@@ -240,6 +240,11 @@ function build(rows, opts) {
     agentPageUrl: t => PAGES[t] || null,
     AGENT_SYSTEM_PROMPTS: TYPES.reduce((o, t) => { o[t] = "prompt"; return o; }, {}),
     enforceAgentLimit: async () => ({ allowed: true }),
+    // NAMED (B2, Nov 1 2026): BEFORE POST /api/agents recorded nothing. AFTER it records its G14 decision
+    // (recordGateDecision, fail-open and never awaited; checkGates J3 proves it changes no answer), so the lifted
+    // route needs both names. Stubbed here: what is recorded is not this check's subject.
+    recordGateDecision: () => Promise.resolve(true),
+    agentLimitGateObservation: () => ({ result: "pass" }),
     safeText: (v, n) => v == null ? "" : String(v).trim().slice(0, n)
   };
   vm.createContext(ctx);

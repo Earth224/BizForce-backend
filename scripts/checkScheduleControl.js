@@ -98,7 +98,13 @@ let RUNNER = [extractLine("var AGENT_SCHEDULE_FAILURES_TO_PAUSE = "), extract("v
   extract("function agentScheduleDaysInUtcMonth(now) {"),
   extract("function agentScheduleEffectiveMonthDay(dayOfMonth, now) {"),
   extract("function agentScheduleIsDue(row, now) {"),
-  extract("async function runAgentSchedulePass(now, maxPerTick) {")].join("\n\n");
+  extract("async function runAgentSchedulePass(now, maxPerTick) {"),
+  extract("function scheduleGateFacts(row) {"),
+  extract("function entitlementGateObservation(planState) {")].join("\n\n") +
+  // NAMED (B2, Nov 1 2026): BEFORE the pass recorded nothing and asked no member gate. AFTER it records G18, G16 and
+  // G13 (recordGateDecision) and asks the member's own gates before the ceiling (memberGateCheck); checkGates J8 and M6
+  // prove both by output. Here the facts helpers are the real ones; the record and the member gates are stubbed (none).
+  "\n\nfunction recordGateDecision() { return Promise.resolve(true); }\nasync function memberGateCheck() { return null; }\nfunction memberGateSentence(b) { return String(b && b.name); }";
 
 const FIELDS_DEFS = bodyOf("AGENT_SCHEDULE_FIELDS") + "\n" + bodyOf("AGENT_SCHEDULE_CARD_FIELDS");
 const GET_ROUTE = routeHandler('app.get("/api/agent-schedules", requireAuth, ');
@@ -370,9 +376,15 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
 
     let card = await cardFor(a, true);
     const lastA = card.text("apSchedLast");
-    check("R1.7 the card: \"Last run: <when> — failed. <reason>\"",
-      /^Last run: .+ — failed\. The task could not be started: the model provider refused the request \(quota exceeded\)$/.test(lastA) &&
+    /* NAMED BEFORE → AFTER (B2, Nov 1 2026). BEFORE a run that did not go ahead ended with its reason. AFTER a "Why?"
+       button follows it, opening the decisions recorded for that schedule (scripts/bf-why.js); R1.7, R4.8 and R5.6 now
+       end " Why?", and R1.7b checks the button. */
+    check("R1.7 the card: \"Last run: <when> — failed. <reason>\" and \"Why?\"",
+      /^Last run: .+ — failed\. The task could not be started: the model provider refused the request \(quota exceeded\) Why\?$/.test(lastA) &&
       card.el("apSchedLast").className.indexOf("failed") !== -1, lastA);
+    const whyBtn = card.el("apSchedLast").children.find(c => c.tagName === "BUTTON");
+    check("R1.7b ...the \"Why?\" button opens this schedule's decisions", !!whyBtn && whyBtn.getAttribute("data-bf-why") === "schedule:" + a.id &&
+      whyBtn.className === "bf-why-link", whyBtn ? whyBtn.getAttribute("data-bf-why") : "no button");
     check("R1.8 ...with no task link (none was created)", !card.el("apSchedLast").children.some(c => c.tagName === "A"));
     card = await cardFor(b, true);
     const link = card.el("apSchedLast").children.find(c => c.tagName === "A");
@@ -498,7 +510,7 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
     check("R4.7 the card: \"Paused while your subscription is inactive. Resumes automatically when it's active again.\"",
       card.text("apSchedState") === "Paused while your subscription is inactive. Resumes automatically when it's active again.", card.text("apSchedState"));
     check("R4.8 ...and the last run line: \"Last run: <when> — skipped: subscription not active\"",
-      /^Last run: .+ — skipped: subscription not active$/.test(card.text("apSchedLast")), card.text("apSchedLast"));
+      /^Last run: .+ — skipped: subscription not active Why\?$/.test(card.text("apSchedLast")), card.text("apSchedLast"));
     check("R4.9 ...Pause (not Resume) is offered: the member did not pause it", card.visible("apSchedPauseBtn") && !card.visible("apSchedResumeBtn"));
 
     w.plans.uL = ENTITLED;   // renewed at 12:00 on Monday 2026-10-12
@@ -530,7 +542,7 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       got.body.schedules.length === 2, JSON.stringify(got));
     const card = await cardFor(w.row("sX"), null);
     check("R5.6 the card claims nothing about the subscription, and shows the skip",
-      card.visible("apSchedState") === false && /— skipped: could not check subscription$/.test(card.text("apSchedLast")), card.text("apSchedLast"));
+      card.visible("apSchedState") === false && /— skipped: could not check subscription Why\?$/.test(card.text("apSchedLast")), card.text("apSchedLast"));
   }
 
   /* ── the card's controls ──────────────────────────────────────────────── */
@@ -592,7 +604,9 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
     // registered with the graceful shutdown, shutdownControl.trackInterval("tick", setInterval(tick, ms)), so either form counts.
     const iv = /^[ \t]*(?:shutdownControl\.trackInterval\("\w+", )?setInterval\((\w+),/gm;   // a statement, not a comment's example
     while ((m = iv.exec(SRC))) scheduled.add(m[1]);
-    const cr = /cron\.schedule\([^,]+, function \(\) \{\s*(?:var \w+ = [^;]+;\s*)?([\w.]+)\(/g;
+    // NAMED (B2, Nov 1 2026): BEFORE a cron callback started with a bare name. AFTER the gate decisions sweep is called as
+    // require("./lib/gateDecisionsSweep").gateDecisionsSweepTick(...), so a require()d module's function counts too.
+    const cr = /cron\.schedule\([^,]+, function \(\) \{\s*(?:var \w+ = [^;]+;\s*)?((?:require\("[^"]+"\)\.)?[\w.]+)\(/g;
     while ((m = cr.exec(SRC))) scheduled.add(m[1]);
     const KNOWN = {
       // acts for a member: its pass must check entitlement
@@ -608,7 +622,9 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       youtubeRetentionTick: { platform: "deletes YouTube lead rows older than 30 days, the platform's own radar data" },
       "opsAlerts.scanTick": { platform: "the owner's ops alert scan" },
       runNightlyBackup:     { platform: "the nightly backup" },
-      pendingStorageDeletionTick: { platform: "removes files of accounts already deleted (lib/accountFiles.js); there is no member left to be entitled" }
+      pendingStorageDeletionTick: { platform: "removes files of accounts already deleted (lib/accountFiles.js); there is no member left to be entitled" },
+      // NAMED (B2, Nov 1 2026): BEFORE 11 jobs; AFTER 12, with the 90-day sweep of gate_decisions (checkGates O).
+      "require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepTick": { platform: "deletes gate decisions older than 90 days, a retention rule; it acts for no member" }
     };
     const extra = [...scheduled].filter(n => !KNOWN[n]), missing = Object.keys(KNOWN).filter(n => !scheduled.has(n));
     check("S1. the scheduled jobs in server.js are exactly the " + Object.keys(KNOWN).length + " accounted for here (a new one must be classified)",

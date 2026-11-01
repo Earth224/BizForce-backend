@@ -1,6 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════════
    checkGates.js — one gate evaluator, one record per decision, and every
-   refusal byte-identical to what it was before (intelligence layer B1).
+   refusal byte-identical to what it was before (intelligence layer B1); every
+   remaining gate recorded, member gates that can only add restrictions, and
+   "Why?" answered from the records (intelligence layer B2).
 
    WHAT THIS PROVES
 
@@ -60,6 +62,49 @@
      target-unclean              a target is stored unchecked               → D
      record-user-swapped         the record is filed under the owner        → H, D
 
+   BLOCK B2 (baseline B1_HEAD, b096831, the commit before B2):
+     J. OLD VS NEW, BY OUTPUT, for every B2 adapter, each recording its
+        decision: G3 (automatic posting on, a listing edit), G14 (making an
+        agent), G8 and G7 (filing a Bluesky post), G23 and G22 (outreach: the
+        convert route's 422 and convertSingleLead), G24 (bfcSendWithinLimits,
+        whose body is b096831's byte for byte under a new name, and a wrapper
+        proved transparent), G25 (the guide route, its handler wrapped and
+        proved transparent), G18, G16 and G13 (the schedule pass) and G17
+        (autoExecuteFiledProposal).
+     K. THE LANGUAGE (lib/gateRules.js) refuses unknown fields and comparators,
+        a field outside its scope, a mismatched comparator, free text, objects
+        and code as values, trees deeper than 4 or wider than 12, lists over
+        10, rules over 4096 bytes, and names with markup; it evaluates nothing
+        as code, and a missing fact is never a yes.
+     L. PROPERTY: over thousands of random decisions and rules, a member gate
+        never turns a platform fail into a pass; it blocks a pass under its
+        own name, and blocks exactly when its rule is not shown to hold.
+     M. A MEMBER GATE BLOCKS WITH ITS OWN NAME: the approve route (403, the
+        proposal back to pending, nothing executed), the schedule pass
+        (skipped_member_gate, no attempt spent) and an automatic run (nothing
+        claimed); a holding, disabled, other-scope or other member's gate
+        changes nothing; an unreadable one leaves the platform's decision; and
+        platform refusals with random member gates present are identical.
+     N. THE ROUTES: CRUD validated and scoped to the caller; the Decisions list
+        pages 20 at a time newest first and filters by agent and outcome; one
+        decision and a target's decisions are the caller's own, explained by
+        lib/gates.js explain(); the 30-day preview only reads.
+     O. THE SWEEP deletes only rows older than 90 days, in batches of 500,
+        under its own job_runs claim, at 04:30 UTC, with no boot run.
+     P. "WHY?" in jsdom: each result kind (pass, fail, bypass, not_reached)
+        and the member gate shown from the record only; the Decisions list
+        pages and filters; the builder's summary equals the library's on
+        random rules; its test sends one read; the links are on the pages.
+     Q. member_gates is exported, deleted with the account and backed up.
+     R. Migration 159.   S. No emoji in what B2 added.
+
+   B2 MUTATIONS:
+     member-gate-flips-fail      withMemberGate turns a platform fail into ran  → L
+     unknown-field-accepted      the language accepts a field it does not know  → K, N
+     b2-refusal-message-changed  the over-300-graphemes message changes         → J4
+     sweep-deletes-recent        the sweep's cutoff is one day, not 90          → O
+     why-invents-reason          the panel writes its own sentence for a fail   → P
+
    Usage: node scripts/checkGates.js   (no database, no network)
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
@@ -71,6 +116,9 @@ const MUT = require("./_shared");
 
 const REPO = path.join(__dirname, "..");
 const PRE_GATES = "73a149a";
+// The commit before block B2: every B2 adapter is compared with it.
+const B1_HEAD = "b096831";
+const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 
 const MUTATIONS = {
   "refusal-message-changed": ["server",
@@ -99,7 +147,27 @@ const MUTATIONS = {
   "target-unclean": ["server",
     "      target: gateLib.cleanTarget(target),", "      target: String(target),"],
   "record-user-swapped": ["server",
-    "      user_id: userId,\n      action: action,", "      user_id: OWNER_ACCOUNT_ID,\n      action: action,"]
+    "      user_id: userId,\n      action: action,", "      user_id: OWNER_ACCOUNT_ID,\n      action: action,"],
+  // B2: a member gate turns a platform fail into a pass
+  "member-gate-flips-fail": ["gates",
+    "  if (!decision || decision.outcome !== \"ran\" || !block) return decision;\n",
+    "  if (!decision || !block) return decision;\n  if (decision.outcome !== \"ran\") return Object.assign({}, decision, { outcome: \"ran\" });\n"],
+  // B2: the language accepts a field it does not know
+  "unknown-field-accepted": ["rules",
+    "    if (typeof node.field !== \"string\" || !own(FIELDS, node.field)) return refuse(",
+    "    if (typeof node.field === \"string\" && !own(FIELDS, node.field)) return { ok: true, rule: { field: node.field, op: node.op, value: node.value } };\n    if (typeof node.field !== \"string\") return refuse("],
+  // B2: a refusal's wording changes (the over-limit Bluesky post)
+  "b2-refusal-message-changed": ["server",
+    "\". It cannot be published as written. Nothing was filed.\"",
+    "\". It cannot be published. Nothing was filed.\""],
+  // B2: the sweep deletes rows a day old
+  "sweep-deletes-recent": ["sweep",
+    "  return new Date(nowMs - GATE_DECISIONS_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();",
+    "  return new Date(nowMs - 1 * 24 * 60 * 60 * 1000).toISOString();"],
+  // B2: the Why panel writes its own sentence for a fail instead of the record's
+  "why-invents-reason": ["why",
+    "'<span class=\"bf-why-reason\">' + esc(g.reason) + '</span></li>';",
+    "'<span class=\"bf-why-reason\">' + esc(g.result === \"fail\" ? \"A platform rule stopped this.\" : g.reason) + '</span></li>';"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -118,7 +186,15 @@ const FILES = {
   server: read("server.js"),
   gates: read("lib/gates.js"),
   migration: read("supabase/migrations/158_gate_decisions.sql"),
-  backup: read("lib/backup.js")
+  backup: read("lib/backup.js"),
+  rules: read("lib/gateRules.js"),
+  sweep: read("lib/gateDecisionsSweep.js"),
+  migration159: read("supabase/migrations/159_member_gates.sql"),
+  why: fs.readFileSync(path.join(FRONTEND, "scripts/bf-why.js"), "utf8").replace(/\r\n/g, "\n"),
+  agentProfile: fs.readFileSync(path.join(FRONTEND, "scripts/agent-profile.js"), "utf8").replace(/\r\n/g, "\n"),
+  hq: fs.readFileSync(path.join(FRONTEND, "scripts/bf-hq.js"), "utf8").replace(/\r\n/g, "\n"),
+  deck: fs.readFileSync(path.join(FRONTEND, "scripts/bf-exec-deck.js"), "utf8").replace(/\r\n/g, "\n"),
+  execHtml: fs.readFileSync(path.join(FRONTEND, "executive-agent.html"), "utf8").replace(/\r\n/g, "\n")
 };
 if (MUTATE) {
   const m = MUTATIONS[MUTATE];
@@ -127,6 +203,7 @@ if (MUTATE) {
 }
 const OLD = execFileSync("git", ["show", PRE_GATES + ":server.js"], { cwd: REPO, maxBuffer: 64 << 20 }).toString("utf8").replace(/\r\n/g, "\n");
 const NEW = FILES.server;
+const B1_SRC = execFileSync("git", ["show", B1_HEAD + ":server.js"], { cwd: REPO, maxBuffer: 64 << 20 }).toString("utf8").replace(/\r\n/g, "\n");
 
 /* lib/gates.js, compiled from FILES.gates in an EMPTY context: no require, no
    process, no console. That it loads and evaluates there is the purity proof. */
@@ -139,6 +216,8 @@ function loadGates(src) {
   return m.exports;
 }
 const GATES = loadGates(FILES.gates);
+// lib/gateRules.js, the same way: it too needs nothing from outside.
+const RULES = loadGates(FILES.rules);
 const OWNER_ID = require(path.join(REPO, "lib/ownerAccount")).OWNER_ACCOUNT_ID;
 const MEMBER = "a0000000-0000-4000-8000-0000000000aa";
 const MEMBER_B = "b0000000-0000-4000-8000-0000000000bb";
@@ -224,7 +303,7 @@ function fakeDb(respond, gateWrite) {
         if (table === "gate_decisions") gateRows.push(JSON.parse(JSON.stringify(q.payload)));
         else writes.push({ table: table, op: q.op, payload: JSON.parse(JSON.stringify(q.payload || null)), filters: q.filters.slice() });
       }
-      if (table === "gate_decisions") {
+      if (table === "gate_decisions" && q.op !== "select") {
         if (gateWrite === "error") ran = Promise.resolve({ data: null, error: { message: "relation \"public.gate_decisions\" does not exist" } });
         else if (gateWrite === "reject") ran = Promise.reject(new Error("network down"));
         else ran = Promise.resolve({ data: null, error: null });
@@ -243,7 +322,7 @@ function fakeDb(respond, gateWrite) {
     ["eq", "neq", "in", "gte", "lte", "gt", "lt", "like", "ilike", "is", "not", "or", "contains"].forEach(f => {
       b[f] = function (c, v) { q.filters.push([f, c, v]); return b; };
     });
-    b.order = function () { return b; };
+    b.order = function (c, o) { q.order = [c, o || null]; return b; };
     b.limit = function (n) { q.limit = n; return b; };
     b.range = function (a, z) { q.range = [a, z]; return b; };
     b.maybeSingle = function () { q.shape = "maybeSingle"; return run(); };
@@ -280,6 +359,7 @@ function makeCtx(o) {
         if (o.gateWrite === "nolib") throw new Error("Cannot find module './lib/gates'");
         return GATES;
       }
+      if (p === "./lib/gateRules") return RULES;
       if (p === "./lib/legal" && o.legal) return o.legal;
       if (p.indexOf("./") === 0) return require(path.join(REPO, p));
       return require(p);
@@ -773,9 +853,17 @@ function compare(section, label, oldRun, newRun, expect) {
   check("H1. row level security is enabled on gate_decisions", /ALTER TABLE public\.gate_decisions ENABLE ROW LEVEL SECURITY;/.test(sqlCode));
   check("H2. the migration creates no policy and grants nothing", !/CREATE POLICY|GRANT /i.test(sqlCode));
   const usesOfTable = (NEW.match(/["']gate_decisions["']/g) || []).length;
-  check("H3. server.js touches gate_decisions in one place, an insert, and never reads it",
-    usesOfTable === 1 && /supabase\.from\("gate_decisions"\)\.insert\(gateRow\)/.test(NEW) && !/from\("gate_decisions"\)\s*\.select/.test(NEW), usesOfTable);
-  check("H4. no route serves gate_decisions yet", !/app\.(get|post|put|delete)\("\/api\/gate-decisions/.test(NEW));
+  /* NAMED BEFORE → AFTER (B2, Nov 1 2026). BEFORE H3 "server.js touches gate_decisions in one place, an insert, and never
+     reads it" (1 use) and H4 "no route serves gate_decisions yet". AFTER the "Why?" reads exist: 6 uses, the insert, its
+     one retry without the B2 columns, and four reads, each in a route that filters on the caller's user_id (N proves it
+     by output), and three routes serve it. */
+  const readsOfTable = NEW.split("from(\"gate_decisions\")").length - 1;
+  check("H3. server.js touches gate_decisions in six places: the insert, its one retry, and four reads, each naming the caller",
+    usesOfTable === 6 && /supabase\.from\("gate_decisions"\)\.insert\(gateRow\)/.test(NEW) && /supabase\.from\("gate_decisions"\)\.insert\(plainRow\)/.test(NEW) &&
+    readsOfTable === 6 && (NEW.match(/\.eq\("user_id", req\.user\.id\)/g) || []).length >= 4, usesOfTable + " uses, " + readsOfTable + " from() calls");
+  check("H4. exactly three routes serve gate_decisions, all signed in and rate-limited",
+    (NEW.match(/app\.(get|post|put|delete)\("\/api\/gate-decisions/g) || []).length === 3 &&
+    (NEW.match(/app\.get\("\/api\/gate-decisions[^"]*", requireAuth, gateDecisionsLimiter, /g) || []).length === 3);
   {
     const a = await routeGateRun("new", { active: false, inactive_reason: "no_subscription" }, MEMBER);
     const b = await routeGateRun("new", { active: true, exempt: false, access_reason: "subscription", plan: "all_access", config: {} }, MEMBER_B);
@@ -804,6 +892,980 @@ function compare(section, label, oldRun, newRun, expect) {
   check("I5. the per-member recent index", /CREATE INDEX IF NOT EXISTS gate_decisions_user_recent_idx\s+ON public\.gate_decisions \(user_id, created_at DESC\);/.test(sqlCode));
   check("I6. the per-action index", /CREATE INDEX IF NOT EXISTS gate_decisions_user_action_idx\s+ON public\.gate_decisions \(user_id, action, created_at DESC\);/.test(sqlCode));
   check("I7. retention: 90 days, the sweep in block B2", /RETENTION\. 90 days/.test(FILES.migration) && /comes in block B2/.test(FILES.migration) && GATES.RETENTION_DAYS === 90);
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     BLOCK B2: every remaining gate recorded, member gates, "Why?", the sweep
+     ═══════════════════════════════════════════════════════════════════════ */
+  DEFS.b1 = indexDefs(B1_SRC); SRC.b1 = B1_SRC;
+  const flush = async () => { for (let i = 0; i < 12; i++) await tick(); };
+  const UUID = n => "a" + String(n).padStart(7, "0") + "-0000-4000-8000-" + String(n).padStart(12, "0");
+  const MEMBER_C = "c0000000-0000-4000-8000-0000000000c1", MEMBER_D = "d0000000-0000-4000-8000-0000000000d1";
+  const ROUTE_STUBS = ["requireActiveSubscription", "aiLimiter", "memberGatesLimiter", "gateDecisionsLimiter", "rateLimit", "express"];
+  const noMw = { requireActiveSubscription: function requireActiveSubscription() {}, aiLimiter: function aiLimiter() {},
+    memberGatesLimiter: function memberGatesLimiter() {}, gateDecisionsLimiter: function gateDecisionsLimiter() {}, requireAuth: function requireAuth() {} };
+
+  /* An in-memory table set behind the scripted fake: eq, neq, in, gte, gt, lt, lte, order, range, limit, head counts. */
+  function memStore(tables) {
+    const T = tables; let seq = 0;
+    const val = (r, c) => { if (c.indexOf("->>") !== -1) { const p = c.split("->>"); return r[p[0]] && r[p[0]][p[1]] !== undefined ? String(r[p[0]][p[1]]) : null; } return r[c]; };
+    const match = (r, q) => q.filters.every(x => {
+      const f = x[0], c = x[1], v = x[2];
+      if (f === "eq") return val(r, c) === v;
+      if (f === "neq") return val(r, c) !== v;
+      if (f === "in") return v.indexOf(val(r, c)) !== -1;
+      if (f === "gte") return val(r, c) >= v;
+      if (f === "gt") return val(r, c) > v;
+      if (f === "lt") return val(r, c) < v;
+      if (f === "lte") return val(r, c) <= v;
+      throw new Error("memStore: the filter " + f + " is not modelled");
+    });
+    return function (q) {
+      if (!T[q.table]) T[q.table] = [];
+      const rows = T[q.table];
+      if (q.op === "insert") {
+        const list = (Array.isArray(q.payload) ? q.payload : [q.payload]).map(p => Object.assign({ id: "f0000000-0000-4000-8000-" + String(++seq).padStart(12, "0") }, JSON.parse(JSON.stringify(p))));
+        list.forEach(r => rows.push(r));
+        return { data: q.shape ? list[0] : list, error: null };
+      }
+      const hit = rows.filter(r => match(r, q));
+      if (q.op === "update") { hit.forEach(r => Object.assign(r, JSON.parse(JSON.stringify(q.payload)))); return { data: q.shape ? (hit[0] || null) : hit, error: null }; }
+      if (q.op === "delete") { T[q.table] = rows.filter(r => hit.indexOf(r) === -1); return { data: hit, error: null }; }
+      if (q.opts && q.opts.head) return { data: null, count: hit.length, error: null };
+      let out = hit.slice();
+      if (q.order) { const k = q.order[0], dir = q.order[1] && q.order[1].ascending === false ? -1 : 1; out.sort((a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0) * dir); }
+      const count = out.length;
+      if (q.range) out = out.slice(q.range[0], q.range[1] + 1);
+      if (q.limit) out = out.slice(0, q.limit);
+      if (q.shape) return { data: out[0] || null, error: null };
+      return { data: JSON.parse(JSON.stringify(out)), count: count, error: null };
+    };
+  }
+
+  /* One route, lifted from `which` (b1 = the commit before B2, new = today), run once. */
+  async function runRoute(which, key, sig, stubs, o, req) {
+    const c = makeCtx(Object.assign({}, o, { globals: Object.assign({}, noMw, o.globals || {}) }));
+    const grab = function () { c.handler = arguments[arguments.length - 1]; };
+    c.sandbox.app = { get: grab, post: grab, put: grab, delete: grab };
+    script(which, key, routeSource(which, sig), ROUTE_STUBS.concat(stubs || []), "x: 1").runInContext(c.sandbox);
+    const res = makeRes(); const nexts = [];
+    const thrown = await capture(() => c.handler(JSON.parse(JSON.stringify(req)), res, function (e) { nexts.push(e === undefined ? "next()" : errShape(e)); }));
+    await flush();
+    return { out: { res: resShape(res), next: nexts, thrown: thrown.thrown ? thrown : null }, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows, extra: o.extra ? o.extra() : undefined };
+  }
+  const recordOf = r => ({ user_id: r.user_id, action: r.action, target: r.target, outcome: r.outcome, results: r.results,
+    facts: r.facts === undefined ? null : r.facts, member_gate_name: r.member_gate_name === undefined ? null : r.member_gate_name });
+  const res3 = list => list.map(x => Object.assign({ gate: x[0], result: x[1] }, x[2] ? { code: x[2] } : {}));
+  /* B1_HEAD and today's runs compared; then today's records, exactly. */
+  function compareB2(section, label, o, n, records) {
+    const strip = logs => notGates(logs).filter(l => l.indexOf("[member-gates]") === -1);
+    const a = { out: o.out, logs: o.logs, writes: o.writes, extra: o.extra };
+    const b = { out: n.out, logs: strip(n.logs), writes: n.writes, extra: n.extra };
+    check(section + " " + label + ": identical to " + B1_HEAD, J(a) === J(b), "old " + J(a).slice(0, 500) + " | new " + J(b).slice(0, 500));
+    if (records === undefined) return;
+    const want = records.map(r => ({ user_id: r.user || MEMBER, action: r.action, target: r.target, outcome: r.outcome, results: res3(r.results),
+      facts: r.facts === undefined ? null : r.facts, member_gate_name: r.member === undefined ? null : r.member }));
+    const got = n.gateRows.map(recordOf);
+    check("D " + label + ": " + (want.length ? want.length + " record(s), " + want.map(w => w.outcome + " " + w.results.map(x => x.gate + ":" + x.result + (x.code ? "/" + x.code : "")).join(",")).join("; ") : "no record"),
+      J(got) === J(want), "got " + J(got).slice(0, 600) + " want " + J(want).slice(0, 600));
+    check("D " + label + ": nothing logged as unwritten", n.logs.every(l => l.indexOf("[gates]") === -1), J(n.logs.filter(l => l.indexOf("[gates]") !== -1)));
+  }
+
+  /* ═══ J. the B2 adapters, old vs new ═════════════════════════════════════ */
+  console.log("\n══ J. the B2 adapters: G3, G14, G8, G7, G23, G22, G24, G25, G18, G16, G13, G17 — old vs new ══");
+  check("J0. the B2 adapters are G3, G7, G8, G13, G14, G18, G22, G23, G24, G25",
+    J(GATES.GATES.filter(g => g.b2).map(g => g.id)) === J(["G3", "G7", "G8", "G13", "G14", "G18", "G22", "G23", "G24", "G25"]));
+  const planOf = p => async function () { if (p === "throws") throw new Error("plan read failed"); return JSON.parse(JSON.stringify(p)); };
+  const SUBSCRIBED = { active: true, exempt: false, access_reason: "subscription", plan: "all_access", config: { allowedAgents: ["seo", "sales", "content", "social"], maxAgents: 3 }, subscription: { status: "active" } };
+  const LAPSED = { active: false, inactive_reason: "no_subscription", plan: null, config: null, subscription: null };
+
+  /* J1. G3: turning automatic Bluesky posting on. */
+  {
+    const SIG = "app.put(\"/api/social/bluesky/automation\", requireAuth, async function (req, res, next) {";
+    const T = "route:put /api/social/bluesky/automation";
+    const run = (w, s) => runRoute(w, "auto", SIG, ["getUserPlan", "blueskyAutomationState"], {
+      respond: function (q) {
+        if (q.table === "member_social_connections" && q.op === "select") return { data: s.conn === undefined ? { status: "connected", auto_post: false } : s.conn, error: null };
+        if (q.table === "member_social_connections" && q.op === "update") return { data: [{ id: 1 }], error: null };
+        return null;
+      },
+      globals: { getUserPlan: planOf(s.plan || SUBSCRIBED), blueskyAutomationState: async () => ({ auto_post: "state" }) }
+    }, { user: { id: MEMBER, role: "user" }, body: s.body });
+    const CASES = [
+      { label: "auto_post not a boolean (400)", s: { body: { auto_post: "yes" } }, rec: [] },
+      { label: "turning it on, not connected (400)", s: { body: { auto_post: true }, conn: null }, rec: [] },
+      { label: "turning it on, the connection needs reconnecting (409)", s: { body: { auto_post: true }, conn: { status: "needs_reconnect", auto_post: false } }, rec: [] },
+      { label: "turning it on, not subscribed (402)", s: { body: { auto_post: true }, plan: LAPSED }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
+      { label: "turning it on, the plan unreadable (402)", s: { body: { auto_post: true }, plan: "throws" }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
+      { label: "turning it on, subscribed (200)", s: { body: { auto_post: true } }, rec: [{ action: "route_access", target: T, outcome: "ran", results: [["G3", "pass"]] }] },
+      { label: "turning it off, never gated (200)", s: { body: { auto_post: false }, plan: LAPSED, conn: { status: "connected", auto_post: true } }, rec: [] }
+    ];
+    for (const t of CASES) {
+      const o = await run("b1", t.s), n = await run("new", t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
+      check("J1 " + t.label + ": answered " + want, o.out.res.status === want && o.out.res.sent === 1, J(o.out));
+      compareB2("J1", t.label, o, n, t.rec);
+    }
+  }
+
+  /* J2. G3: editing a public listing (a pause is never gated). */
+  {
+    const SIG = "app.put(\"/api/marketplace/listings/:id\", requireAuth, async function (req, res, next) {";
+    const T = "route:put /api/marketplace/listings/:id";
+    const run = (w, s) => runRoute(w, "listing", SIG, ["getUserPlan"], {
+      respond: function (q) {
+        if (q.table === "marketplace_listings" && q.op === "select") return { data: s.missing ? null : { price_bfc: 10, status: "active" }, error: null };
+        if (q.table === "marketplace_listings" && q.op === "update") return { data: Object.assign({ id: "l-1" }, q.payload), error: null };
+        return null;
+      },
+      globals: { getUserPlan: planOf(s.plan || SUBSCRIBED) }
+    }, { user: { id: MEMBER, role: "user" }, params: { id: "l-1" }, body: s.body });
+    const CASES = [
+      { label: "a pause, not subscribed (200)", s: { body: { status: "paused" }, plan: LAPSED }, rec: [] },
+      { label: "a title edit, not subscribed (402)", s: { body: { title: "New" }, plan: LAPSED }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
+      { label: "a title edit, the plan unreadable (402)", s: { body: { title: "New" }, plan: "throws" }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G3", "fail", "subscription_required"]] }] },
+      { label: "a title edit, subscribed (200)", s: { body: { title: "New" } }, rec: [{ action: "route_access", target: T, outcome: "ran", results: [["G3", "pass"]] }] },
+      { label: "a title edit, subscribed, no such listing (404)", s: { body: { title: "New" }, missing: true }, rec: [{ action: "route_access", target: T, outcome: "ran", results: [["G3", "pass"]] }] }
+    ];
+    for (const t of CASES) {
+      const o = await run("b1", t.s), n = await run("new", t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
+      check("J2 " + t.label + ": answered " + want, o.out.res.status === want && o.out.res.sent === 1, J(o.out));
+      compareB2("J2", t.label, o, n, t.rec);
+    }
+  }
+
+  /* J3. G14: making an agent. */
+  {
+    const SIG = "app.post(\"/api/agents\", requireAuth, requireActiveSubscription, async function (req, res, next) {";
+    const T = "route:post /api/agents";
+    const run = (w, s) => runRoute(w, "agents", SIG, ["getUserPlan", "AGENT_SYSTEM_PROMPTS"], {
+      respond: function (q) {
+        if (q.table === "ai_agents" && q.opts && q.opts.head) return s.countError ? { data: null, count: null, error: { message: "count failed" } } : { data: null, count: s.count || 0, error: null };
+        return null;
+      },
+      globals: { getUserPlan: planOf(s.plan || SUBSCRIBED), AGENT_SYSTEM_PROMPTS: { seo: "x", sales: "x", content: "x", social: "x", ads: "x" } }
+    }, { user: { id: MEMBER, role: "user" }, body: Object.assign({ type: "seo", display_name: "Mine" }, s.body || {}) });
+    const rec = (outcome, code, facts) => [{ action: "route_access", target: T, outcome: outcome, results: [code ? ["G14", "fail", code] : ["G14", "pass"]], facts: facts }];
+    const CASES = [
+      { label: "an unknown agent type (400)", s: { body: { type: "ghost" } }, rec: [] },
+      { label: "not subscribed (403)", s: { plan: LAPSED }, rec: rec("blocked", "subscription_required", { agent: "seo" }) },
+      { label: "not in the plan (403)", s: { body: { type: "ads" } }, rec: rec("blocked", "not_in_plan", { agent: "ads" }) },
+      { label: "the agent limit reached (403)", s: { count: 3 }, rec: rec("blocked", "agent_limit_reached", { agent: "seo" }) },
+      { label: "the count unreadable (next(error))", s: { countError: true }, rec: [{ action: "route_access", target: T, outcome: "blocked", results: [["G14", "fail", "gate_error"]] }] },
+      { label: "made (201)", s: {}, rec: rec("ran", null, { agent: "seo" }) }
+    ];
+    for (const t of CASES) {
+      const o = await run("b1", t.s), n = await run("new", t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]) || null;
+      check("J3 " + t.label + ": " + (want ? "answered " + want : "passed to next(error)"), want ? o.out.res.status === want && o.out.res.sent === 1 : o.out.next.length === 1 && o.out.next[0].thrown === true, J(o.out));
+      compareB2("J3", t.label, o, n, t.rec);
+    }
+  }
+
+  /* J4. G8 and G7: filing a Bluesky post. */
+  const PROPOSE_SIG = "app.post(\"/api/agents/social/propose-post\", requireAuth, requireActiveSubscription, aiLimiter,";
+  {
+    const TASK = "d1000000-0000-4000-8000-0000000000d1";
+    const SEG = new Intl.Segmenter("en", { granularity: "grapheme" });
+    const run = (w, s) => runRoute(w, "propose", PROPOSE_SIG, ["blueskyPostingAccount", "GRAPHEME_SEGMENTER", "autoExecuteFiledProposal", "PROPOSAL_EXECUTORS"], {
+      respond: function (q) {
+        if (q.table === "ai_tasks") return { data: s.task === undefined ? { id: TASK, task_type: "social/post", status: "completed", output: { platform: "bluesky", post: s.text || "A calm morning at the shop." } } : s.task, error: null };
+        if (q.table === "social_post_drafts" && q.op === "insert") return { data: null, error: { message: "drafts refused in this check" } };
+        return null;
+      },
+      globals: { blueskyPostingAccount: async () => ({ kind: s.account || "member", row: { auto_post: false }, handle: "me.bsky.social" }), GRAPHEME_SEGMENTER: s.noSegmenter ? null : SEG,
+        autoExecuteFiledProposal: async () => { throw new Error("not reached in this check"); }, PROPOSAL_EXECUTORS: {} }
+    }, { user: { id: MEMBER, role: "user" }, body: { task_id: s.taskId || TASK } });
+    const facts = { action_type: "publish_social_post", agent: "social", channel: "bluesky", approved: false };
+    const rec = (results, target) => [{ action: "social_post", target: target || "ai_task:" + TASK, outcome: results.some(r => r[1] === "fail") ? "blocked" : "ran", results: results, facts: facts }];
+    const CASES = [
+      { label: "no account to post from (403)", s: { account: "none" }, rec: [] },
+      { label: "the account needs reconnecting (409)", s: { account: "needs_reconnect" }, rec: [] },
+      { label: "graphemes cannot be counted (503)", s: { noSegmenter: true }, rec: rec([["G8", "fail", "graphemes_uncountable"], ["G7", "not_reached"]], "ai_task:none") },
+      { label: "no such run (404)", s: { task: null }, rec: [] },
+      { label: "over 300 graphemes (400)", s: { text: "a".repeat(301) }, rec: rec([["G8", "fail", "over_grapheme_limit"], ["G7", "not_reached"]]) },
+      { label: "the claims screen refuses (400)", s: { text: "This tea cures cancer and diabetes, guaranteed." }, rec: rec([["G8", "pass"], ["G7", "fail", "claims_screen"]]), claims: true },
+      { label: "both pass, then the draft write fails (next(error))", s: {}, rec: rec([["G8", "pass"], ["G7", "pass"]]) }
+    ];
+    for (const t of CASES) {
+      const o = await run("b1", t.s), n = await run("new", t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]) || null;
+      check("J4 " + t.label + ": " + (want ? "answered " + want : "passed to next(error)") + (t.claims ? " with code claims_screen" : ""),
+        (want ? o.out.res.status === want && o.out.res.sent === 1 : o.out.next.length === 1) && (!t.claims || (o.out.res.body && o.out.res.body.code === "claims_screen")), J(o.out).slice(0, 300));
+      compareB2("J4", t.label, o, n, t.rec);
+    }
+  }
+
+  /* J5. G23 and G22: outreach. */
+  {
+    const constOf = name => vm.runInNewContext("(" + DEFS.new.get(name).replace(new RegExp("^(var|const|let) " + name + "\\s*=\\s*"), "").replace(/;\s*$/, "") + ")");
+    const BOOK = constOf("OUTREACH_BOOK_PRODUCT");
+    const lead = { author_handle: "reader.bsky.social", post_uri: "at://x/1", suggested_product: BOOK, post_text: "Any book on this?", outreach_safe: true };
+    const runLead = async (w, s) => {
+      const c = makeCtx({ globals: { canSendOutreach: async () => JSON.parse(JSON.stringify(s.gate)), callAnthropicText: async () => { throw new Error("no model in this check"); } } });
+      script(w, "lead", DEFS[w].get("convertSingleLead"), ["canSendOutreach", "callAnthropicText"], "convertSingleLead").runInContext(c.sandbox);
+      const out = await capture(() => c.sandbox.__api.convertSingleLead(MEMBER, JSON.parse(JSON.stringify(s.lead || lead)), "SYSTEM", s.dryRun === true));
+      await flush();
+      return { out: out, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows };
+    };
+    const facts = { agent: "sales" };
+    const LEADS = [
+      { label: "a lead with no offer (skipped first)", s: { lead: Object.assign({}, lead, { suggested_product: "nothing" }), gate: { allowed: true } }, rec: [] },
+      { label: "a dry run (never gated)", s: { dryRun: true, gate: { allowed: false, reason: "daily_cap_reached" } }, rec: [] },
+      { label: "the daily cap reached (skipped)", s: { gate: { allowed: false, reason: "daily_cap_reached" } },
+        rec: [{ action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "daily_cap_reached"]], facts: facts }] },
+      { label: "already contacted (skipped)", s: { gate: { allowed: false, reason: "already_contacted" } },
+        rec: [{ action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "pass"], ["G22", "fail", "already_contacted"]], facts: facts }] },
+      { label: "allowed, then drafting", s: { gate: { allowed: true } }, rec: [{ action: "outreach_send", target: "lead", outcome: "ran", results: [["G23", "pass"], ["G22", "pass"]], facts: facts }] }
+    ];
+    for (const t of LEADS) { const o = await runLead("b1", t.s), n = await runLead("new", t.s); compareB2("J5", t.label, o, n, t.rec); }
+    const SIG = "app.post(\"/api/agents/sales/convert\", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {";
+    const fresh = new FixedDate(FIXED - 2 * 24 * 3600 * 1000).toISOString();
+    const leadRow = o => Object.assign({ post_uri: "at://x/2", intent_score: 8, intent_reason: "asked", status: "scored", post_created_at: fresh, outreach_safe: true, reply_invited: true }, o);
+    const runConvert = (w, s) => runRoute(w, "convert", SIG, ["convertSingleLead"], {
+      respond: function (q) { if (q.table === "bsky_leads") return { data: s.lead, error: null }; return null; },
+      globals: { convertSingleLead: async () => ({ conversion: null, sent: false, send_reason: "stubbed", skipped: true }) }
+    }, { user: { id: s.user || OWNER_ID, role: "admin" }, body: { lead_post_uri: "at://x/2" } });
+    const CONVERT = [
+      { label: "the convert route, not the credential owner (403)", s: { user: MEMBER, lead: leadRow({}) }, rec: [] },
+      { label: "the convert route, a lead never screened (422)", s: { lead: leadRow({ outreach_safe: null }) },
+        rec: [{ user: OWNER_ID, action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "fail", "not_screened"], ["G22", "not_reached"]], facts: facts }] },
+      { label: "the convert route, an unsuitable recipient (422)", s: { lead: leadRow({ outreach_safe: false }) },
+        rec: [{ user: OWNER_ID, action: "outreach_send", target: "lead", outcome: "blocked", results: [["G23", "fail", "unsafe_recipient"], ["G22", "not_reached"]], facts: facts }] },
+      { label: "the convert route, suitable but replies not invited (422)", s: { lead: leadRow({ reply_invited: false }) }, rec: [] }
+    ];
+    for (const t of CONVERT) {
+      const o = await runConvert("b1", t.s), n = await runConvert("new", t.s);
+      const want = Number((/\((\d{3})\)/.exec(t.label) || [])[1]);
+      check("J5 " + t.label + ": answered " + want, o.out.res.status === want && o.out.res.sent === 1, J(o.out).slice(0, 300));
+      compareB2("J5", t.label, o, n, t.rec);
+    }
+  }
+
+  /* J6. G24: BizCash transfers and support. The body that decides is the old one, renamed. */
+  {
+    const oldBody = DEFS.b1.get("bfcSendWithinLimits"), newBody = DEFS.new.get("bfcSendWithinLimitsSteps") || "";
+    check("J6. bfcSendWithinLimitsSteps is " + B1_HEAD + "'s bfcSendWithinLimits, byte for byte, under a new name",
+      !!oldBody && newBody.replace("async function bfcSendWithinLimitsSteps(", "async function bfcSendWithinLimits(") === oldBody);
+    const calls = s => (s.match(/bfcSendWithinLimits\(/g) || []).length;
+    check("J6. every caller still calls bfcSendWithinLimits, as many as before", calls(B1_SRC) === calls(NEW), calls(B1_SRC) + " vs " + calls(NEW));
+    const STEPS = [
+      { label: "a limit refusal (429)", support: false, fn: (req, res) => { res.status(429).json({ error: "Daily limit reached.", reason: "daily_limit_reached" }); },
+        rec: [["G24", "fail", "daily_limit_reached"]], outcome: "blocked" },
+      { label: "a support refusal (403)", support: true, fn: (req, res) => { res.status(403).json({ error: "Support is off.", reason: "support_disabled" }); },
+        rec: [["G24", "fail", "support_disabled"]], outcome: "blocked" },
+      { label: "sent (200)", support: false, fn: (req, res) => { res.json({ ok: true, transfer_id: 7 }); return "done"; }, rec: [["G24", "pass"]], outcome: "ran" },
+      { label: "the steps throwing", support: false, fn: () => { throw new Error("rpc down"); }, rec: [["G24", "fail", "gate_error"]], outcome: "blocked" }
+    ];
+    for (const t of STEPS) {
+      const direct = async () => { const res = makeRes(); const ownBefore = Object.prototype.hasOwnProperty.call(res, "json"); const jsonBefore = res.json;
+        const r = await capture(() => t.fn({ user: { id: MEMBER } }, res, { support: t.support })); return { r: r, res: resShape(res), restored: ownBefore && res.json === jsonBefore }; };
+      const c = makeCtx({ globals: { bfcSendWithinLimitsSteps: async (req, res, send) => t.fn(req, res, send) } });
+      script("new", "bfc", DEFS.new.get("bfcSendWithinLimits"), ["bfcSendWithinLimitsSteps"], "bfcSendWithinLimits").runInContext(c.sandbox);
+      const res = makeRes(); const jsonBefore = res.json;
+      const r = await capture(() => c.sandbox.__api.bfcSendWithinLimits({ user: { id: MEMBER } }, res, { support: t.support }));
+      await flush();
+      const o = await direct();
+      check("J6 " + t.label + ": the wrapper answers, returns and throws exactly what the steps do, and puts res.json back",
+        J({ r: o.r, res: o.res }) === J({ r: r, res: resShape(res) }) && res.json === jsonBefore && o.restored, J(o) + " | " + J({ r: r, res: resShape(res) }));
+      const want = [{ user_id: MEMBER, action: "bfc_transfer", target: "wallet:" + (t.support ? "support" : "transfer"), outcome: t.outcome, results: res3(t.rec), facts: null, member_gate_name: null }];
+      check("D J6 " + t.label + ": one record, " + t.outcome, J(c.db.gateRows.map(recordOf)) === J(want), J(c.db.gateRows));
+    }
+  }
+
+  /* J7. G25: the guide's own refusals, recorded around its unchanged handler. */
+  {
+    const reg = s => { const i = s.indexOf("app.post(\"/api/guide/ask\""); return i < 0 ? "" : s.slice(i, s.indexOf(");\n", i) + 2); };
+    check("J7. the guide route is " + B1_HEAD + "'s, with the handler wrapped by guideAskRecorded and nothing else changed",
+      reg(B1_SRC).length > 0 && reg(NEW).replace("guideAskRecorded(guideAsk.createGuideAskHandler({", "guideAsk.createGuideAskHandler({").replace("})));", "}));") === reg(B1_SRC), reg(NEW).slice(0, 200));
+    const T = "route:post /api/guide/ask";
+    const HANDLERS = [
+      { label: "the guide's daily limit (429)", fn: (req, res) => { res.status(429).json({ error: "You have asked the guide enough today.", reason: "guide_daily_limit" }); }, rec: [["G25", "fail", "guide_daily_limit"]] },
+      { label: "the guide's count unreadable (503)", fn: (req, res) => { res.status(503).json({ error: "The guide could not count.", reason: "guide_count_unreadable" }); }, rec: [["G25", "fail", "guide_count_unreadable"]] },
+      { label: "an answer with steps (200)", fn: (req, res) => { res.json({ known: true, steps: [{ page: "/billing.html" }] }); }, rec: [["G25", "pass"]] },
+      { label: "no known answer (200)", fn: (req, res) => { res.json({ known: false, steps: [] }); }, rec: [["G25", "pass"]] },
+      { label: "a model-call limit after the guide let it through (429)", fn: (req, res) => { res.status(429).json({ error: "Daily limit.", reason: "DAILY_MODEL_CALL_LIMIT" }); }, rec: [["G25", "pass"]] },
+      { label: "an unreadable question (400)", fn: (req, res) => { res.status(400).json({ error: "Ask a question." }); }, rec: null },
+      { label: "the handler throwing", fn: () => { throw new Error("guide broke"); }, rec: null },
+      { label: "the handler passing an error on", fn: (req, res, next) => { next(new Error("guide failed")); }, rec: null },
+      { label: "no signed-in user", fn: (req, res) => { res.status(429).json({ error: "x", reason: "guide_daily_limit" }); }, rec: null, noUser: true }
+    ];
+    for (const t of HANDLERS) {
+      const req = t.noUser ? { body: { q: "where is billing" } } : { user: { id: MEMBER }, body: { q: "where is billing" } };
+      const runOld = async () => { const res = makeRes(); const nexts = []; const r = await capture(() => t.fn(req, res, e => nexts.push(errShape(e)))); return { r: r, res: resShape(res), next: nexts }; };
+      const c = makeCtx({});
+      script("new", "guide", DEFS.new.get("guideAskRecorded"), [], "guideAskRecorded").runInContext(c.sandbox);
+      const res = makeRes(); const jsonBefore = res.json; const nexts = [];
+      const r = await capture(() => c.sandbox.__api.guideAskRecorded(async (a, b, cnext) => t.fn(a, b, cnext))(req, res, e => nexts.push(errShape(e))));
+      await flush();
+      const o = await runOld();
+      check("J7 " + t.label + ": the answer, the error and next() are exactly the handler's, and res.json is put back",
+        J(o) === J({ r: r, res: resShape(res), next: nexts }) && res.json === jsonBefore, J(o) + " | " + J({ r: r, res: resShape(res), next: nexts }));
+      const want = t.rec ? [{ user_id: MEMBER, action: "route_access", target: T, outcome: t.rec[0][1] === "fail" ? "blocked" : "ran", results: res3(t.rec), facts: null, member_gate_name: null }] : [];
+      check("D J7 " + t.label + ": " + (t.rec ? "one record" : "no record"), J(c.db.gateRows.map(recordOf)) === J(want), J(c.db.gateRows));
+    }
+  }
+
+  /* J8. G18, G16, G13: the schedule pass. */
+  const NOW = new FixedDate("2026-10-15T15:00:00.000Z");
+  const sched = (n, user, agent, o) => Object.assign({ id: UUID(n), user_id: user, agent_type: agent, task_type: "general", prompt: "Plan the week", cadence: "daily", hour_utc: 15,
+    day_of_week: null, day_of_month: null, enabled: true, last_run_on: null, paused: false, consecutive_failures: 0 }, o || {});
+  const PLANS = { [MEMBER]: SUBSCRIBED, [MEMBER_B]: SUBSCRIBED, [MEMBER_C]: "throws", [MEMBER_D]: LAPSED,
+    [OWNER_ID]: { active: true, exempt: true, access_reason: "owner", plan: "all_access", config: {} } };
+  async function passRun(w, s) {
+    const ran = [];
+    const store = memStore({ member_gates: JSON.parse(JSON.stringify(s.gates || [])) });
+    const c = makeCtx({
+      respond: function (q) {
+        if (q.table === "agent_schedules" && q.op === "select") return { data: JSON.parse(JSON.stringify(s.rows)), error: null };
+        if (q.table === "agent_autonomy") return { data: s.autonomy, error: null };
+        if (q.table === "member_gates") return s.gatesError ? { data: null, error: { message: "relation \"public.member_gates\" does not exist" } } : store(q);
+        return null;
+      },
+      globals: {
+        getUserPlan: async function (u) { const p = PLANS[u]; if (p === "throws") throw new Error("plan read failed"); return JSON.parse(JSON.stringify(p || LAPSED)); },
+        runScheduledAgentTask: async function (row) { ran.push(row.id); return row.agent_type === "content" ? { ok: false, error: new Error("queue full") } : { ok: true, payload: { task: { id: "t-" + row.id.slice(-2) } } }; },
+        opsAlerts: { scheduleAutoPaused: async () => {} },
+        AGENT_SYSTEM_PROMPTS: { seo: "x", sales: "x", content: "x" }
+      }
+    });
+    script(w, "pass", DEFS[w].get("runAgentSchedulePass"), ["getUserPlan", "runScheduledAgentTask", "AGENT_SYSTEM_PROMPTS"], "runAgentSchedulePass").runInContext(c.sandbox);
+    const out = await capture(() => c.sandbox.__api.runAgentSchedulePass(NOW, s.max || 10));
+    await flush();
+    return { out: out, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows, extra: ran };
+  }
+  const autonomyAll = [MEMBER, MEMBER_B, MEMBER_C, MEMBER_D, OWNER_ID].reduce((a, u) => a.concat(["seo", "sales", "content", "ghost"].map(t => ({ user_id: u, agent_type: t }))), []);
+  const sfacts = agent => ({ action_type: "agent_task", agent: agent, channel: "agent", approved: false });
+  const PASS_ROWS = [
+    sched(1, MEMBER, "seo", { paused: true }),
+    sched(2, MEMBER_B, "seo"),
+    sched(3, MEMBER, "ghost"),
+    sched(4, MEMBER_C, "seo"),
+    sched(5, MEMBER_D, "seo"),
+    sched(6, MEMBER, "seo"),
+    sched(7, OWNER_ID, "sales"),
+    sched(8, MEMBER, "content"),
+    sched(9, MEMBER, "sales", { hour_utc: 9 })
+  ];
+  const AUT = autonomyAll.filter(a => !(a.user_id === MEMBER_B && a.agent_type === "seo"));
+  const passRecords = [
+    { user: MEMBER, action: "schedule_run", target: "schedule:" + UUID(1), outcome: "blocked", results: [["G18", "fail", "schedule_paused"], ["G16", "not_reached"], ["G13", "not_reached"]], facts: sfacts("seo") },
+    { user: MEMBER_B, action: "schedule_run", target: "schedule:" + UUID(2), outcome: "blocked", results: [["G18", "pass"], ["G16", "fail", "autonomy_off"], ["G13", "not_reached"]], facts: sfacts("seo") },
+    { user: MEMBER_C, action: "schedule_run", target: "schedule:" + UUID(4), outcome: "blocked", results: [["G18", "pass"], ["G16", "pass"], ["G13", "fail", "entitlement_unknown"]], facts: sfacts("seo") },
+    { user: MEMBER_D, action: "schedule_run", target: "schedule:" + UUID(5), outcome: "blocked", results: [["G18", "pass"], ["G16", "pass"], ["G13", "fail", "not_entitled"]], facts: sfacts("seo") },
+    { user: MEMBER, action: "schedule_run", target: "schedule:" + UUID(6), outcome: "ran", results: [["G18", "pass"], ["G16", "pass"], ["G13", "pass"]], facts: sfacts("seo") },
+    { user: OWNER_ID, action: "schedule_run", target: "schedule:" + UUID(7), outcome: "ran", results: [["G18", "pass"], ["G16", "pass"], ["G13", "bypass", "owner_pass"]], facts: sfacts("sales") },
+    { user: MEMBER, action: "schedule_run", target: "schedule:" + UUID(8), outcome: "ran", results: [["G18", "pass"], ["G16", "pass"], ["G13", "pass"]], facts: sfacts("content") }
+  ];
+  {
+    const o = await passRun("b1", { rows: PASS_ROWS, autonomy: AUT }), n = await passRun("new", { rows: PASS_ROWS, autonomy: AUT });
+    check("J8 the pass: three runs started (6, 7, 8) and the summary counts every skip", J(o.extra) === J([UUID(6), UUID(7), UUID(8)]) && o.out.returned && o.out.returned.launched === 2, J(o.out) + " " + J(o.extra));
+    compareB2("J8", "a pass reaching every gate: paused, autonomy off, invalid, plan unreadable, lapsed, ran, the owner, a failing run, not this hour", o, n, passRecords);
+    const twoRows = [sched(6, MEMBER, "seo"), sched(10, MEMBER, "sales")];
+    const o2 = await passRun("b1", { rows: twoRows, autonomy: AUT, max: 1 }), n2 = await passRun("new", { rows: twoRows, autonomy: AUT, max: 1 });
+    compareB2("J8", "the ceiling: the second schedule is never reached, so never recorded", o2, n2, [passRecords[4]]);
+    const o3 = await passRun("b1", { rows: PASS_ROWS, autonomy: AUT }), n3 = await passRun("new", { rows: PASS_ROWS, autonomy: AUT, gatesError: true });
+    compareB2("J8", "the member gates unreadable: the pass is unchanged", o3, n3, passRecords);
+    check("J8 the member gates unreadable: logged as not read, the platform's decision standing", n3.logs.some(l => /\[member-gates\] not read \(schedule_run\): .*The platform's decision stands\./.test(l)), J(n3.logs.filter(l => /member/.test(l))));
+  }
+
+  /* J9. G17: a proposal carried out automatically. */
+  const PROPOSAL = { id: PID, user_id: MEMBER, agent_type: "social", action_type: "publish_social_post", cost_amount: 0, status: "pending", payload: { text: "hi" } };
+  async function autoRun(w, s) {
+    const seen = [];
+    const store = memStore({ member_gates: JSON.parse(JSON.stringify(s.gates || [])) });
+    const c = makeCtx({
+      respond: function (q) {
+        if (q.table === "member_gates") return store(q);
+        if (q.table === "agent_proposals" && q.op === "update" && q.payload.status === "executing") return { data: s.claimed === false ? null : Object.assign({}, PROPOSAL, { status: "executing" }), error: null };
+        if (q.table === "agent_proposals" && q.op === "update") return { data: Object.assign({}, PROPOSAL, q.payload), error: null };
+        return null;
+      }
+    });
+    script(w, "autoexec", DEFS[w].get("autoExecuteFiledProposal"), [], "autoExecuteFiledProposal").runInContext(c.sandbox);
+    const exec = async row => { seen.push(row.id); if (s.execThrows) throw new Error("bluesky down"); return { uri: "at://post/1" }; };
+    const out = await capture(() => c.sandbox.__api.autoExecuteFiledProposal(JSON.parse(JSON.stringify(PROPOSAL)), exec));
+    await flush();
+    return { out: out, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows, extra: seen };
+  }
+  const autoFacts = { action_type: "publish_social_post", agent: "social", channel: "bluesky", approved: false };
+  {
+    const rec = [{ action: "proposal_auto_execute", target: "proposal:" + PID, outcome: "ran", results: [["G17", "pass", "automation_on"]], facts: autoFacts }];
+    for (const t of [{ label: "carried out", s: {} }, { label: "no longer pending", s: { claimed: false } }, { label: "the executor throwing", s: { execThrows: true } }]) {
+      const o = await autoRun("b1", t.s), n = await autoRun("new", t.s);
+      compareB2("J9", t.label, o, n, rec);
+    }
+  }
+
+  /* ═══ K. the rule language refuses everything outside it ═════════════════ */
+  console.log("\n══ K. lib/gateRules.js: a closed language ══");
+  {
+    const v = (rule, scope) => RULES.validateRule(rule, scope || "any");
+    const leaf = (f, op, value) => ({ field: f, op: op, value: value });
+    const refusedAt = (label, rule, scope, pathRe) => { const r = v(rule, scope); check("K " + label + ": refused", r.ok === false && typeof r.error === "string" && (!pathRe || pathRe.test(r.path)), J(r)); };
+    refusedAt("an unknown field (price)", leaf("price", "eq", 5), "proposal_approve", /\.field$/);
+    refusedAt("an unknown field (__proto__)", JSON.parse("{\"field\":\"__proto__\",\"op\":\"eq\",\"value\":1}"), "any", /\.field$/);
+    refusedAt("a field outside its scope (amount on a schedule)", leaf("amount", "lt", 5), "schedule_run", /\.field$/);
+    refusedAt("an unknown comparator (like)", leaf("agent", "like", "seo"), "any", /\.op$/);
+    refusedAt("an unknown comparator (regex)", leaf("agent", "regex", "^s"), "any", /\.op$/);
+    refusedAt("a comparator that does not fit (approved below)", leaf("approved", "lt", true), "any", /\.op$/);
+    refusedAt("free text as a value (agent \"seo; drop table\")", leaf("agent", "eq", "seo; drop table"), "any", /\.value$/);
+    refusedAt("an object as a value ($regex)", leaf("agent", "eq", { $regex: "s.*" }), "any", /\.value$/);
+    refusedAt("code as a value (a function)", leaf("hour", "eq", function () { return 1; }), "any", /\.value$/);
+    refusedAt("a string as the rule", "approved == true", "any");
+    refusedAt("an array as the rule", [leaf("approved", "eq", true)], "any");
+    refusedAt("a condition with a fourth key", Object.assign(leaf("approved", "eq", true), { note: "x" }), "any");
+    refusedAt("a group with a second key", { all: [leaf("approved", "eq", true)], any: [leaf("approved", "eq", true)] }, "any");
+    refusedAt("an empty group", { all: [] }, "any");
+    refusedAt("an hour of 24", leaf("hour", "eq", 24), "any", /\.value$/);
+    refusedAt("an hour of 1.5", leaf("hour", "eq", 1.5), "any", /\.value$/);
+    refusedAt("between, high first", leaf("hour", "between", [20, 9]), "any", /\.value$/);
+    refusedAt("a list naming a value twice", leaf("weekday", "in", ["mon", "mon"]), "any", /\.value\[1\]$/);
+    refusedAt("a list of 11", leaf("hour", "in", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), "any", /\.value$/);
+    let deep = leaf("approved", "eq", true); for (let i = 0; i < 4; i++) deep = { not: deep };
+    refusedAt("five levels deep", deep, "any");
+    let ok4 = leaf("approved", "eq", true); for (let i = 0; i < 3; i++) ok4 = { not: ok4 };
+    check("K four levels deep: accepted", v(ok4).ok === true, J(v(ok4)));
+    const wide = n => ({ all: Array.from({ length: n }, (x, i) => leaf("hour", "neq", i)) });
+    refusedAt("13 conditions in one group", wide(13), "any");
+    check("K 12 conditions: accepted", v(wide(12)).ok === true);
+    refusedAt("13 conditions across groups", { any: [wide(7), wide(6)] }, "any");
+    refusedAt("over 4096 bytes", { all: [leaf("weekday", "in", ["mon"])].concat([{ field: "agent", op: "in", value: ["seo"], pad: "x".repeat(5000) }]) }, "any");
+    refusedAt("an unknown scope", leaf("approved", "eq", true), "everything", /^scope$/);
+    const good = { all: [leaf("approved", "eq", true), leaf("weekday", "in", ["mon", "tue", "wed", "thu", "fri"]), { not: leaf("hour", "gt", 21) }] };
+    const g = v(good);
+    check("K a good rule is accepted as a clean copy", g.ok === true && J(g.rule) === J(good) && g.rule !== good && g.rule.all[1].value !== good.all[1].value);
+    check("K its summary: \"Go ahead only if approved AND on a weekday AND NOT after 22:00\"", RULES.summarize(good, "any") === "Go ahead only if approved AND on a weekday AND NOT after 22:00", RULES.summarize(good, "any"));
+    check("K a summary is empty for a rule that does not validate", RULES.summarize(leaf("price", "eq", 1), "any") === "");
+    check("K names: letters, digits, spaces and . , ' ( ) & : - only, 1 to 60",
+      RULES.validateName("Weekdays only").ok && RULES.validateName("  Trim me  ").name === "Trim me" && !RULES.validateName("<script>").ok && !RULES.validateName("").ok &&
+      !RULES.validateName("x".repeat(61)).ok && RULES.validateName("x".repeat(60)).ok && !RULES.validateName("Stop \"now\"").ok && !RULES.validateName(42).ok);
+    check("K time zones: UTC and known IANA names only",
+      RULES.isTimeZone("UTC") && RULES.isTimeZone("America/New_York") && !RULES.isTimeZone("Mars/Olympus") && !RULES.isTimeZone("UTC; drop") && !RULES.isTimeZone(""));
+    const code = FILES.rules.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    check("K nothing in the language is evaluated as code or a pattern: no eval, Function, new RegExp, require, process or with",
+      !/\beval\(|\bFunction\(|new RegExp|\brequire\(|\bprocess\.|\bwith \(/.test(code));
+    check("K evaluation is three-valued: a missing fact is never read as yes",
+      RULES.evaluateRule(leaf("amount", "lt", 5), {}) === null && RULES.evaluateRule({ not: leaf("amount", "lt", 5) }, {}) === null &&
+      RULES.evaluateRule({ any: [leaf("amount", "lt", 5), leaf("approved", "eq", true)] }, { approved: true }) === true);
+    const blk = RULES.firstBlock([{ id: "g1", name: "Needs an amount", scope: "proposal_approve", rule: leaf("amount", "lt", 5), time_zone: "UTC", enabled: true }], "proposal_approve", {}, FIXED);
+    check("K a gate whose fact is missing blocks (act only if shown to hold)", blk && blk.name === "Needs an amount", J(blk));
+    check("K the language served is exactly the library's", J(RULES.language().fields.hour) === J({ type: "int", label: "the hour (your time zone)", min: 0, max: 23, comparators: ["eq", "neq", "in", "not_in", "lt", "lte", "gt", "gte", "between"] }));
+  }
+
+  /* ═══ L. PROPERTY: a member gate never turns a fail into a pass ══════════ */
+  console.log("\n══ L. PROPERTY: random rules and decisions; a member gate only adds restrictions ══");
+  function rng(seed) { let a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+  const pick = (r, list) => list[Math.floor(r() * list.length)];
+  function randomLeaf(r, scope) {
+    const f = pick(r, RULES.SCOPE_FIELDS[scope]); const spec = RULES.FIELDS[f];
+    const op = pick(r, Object.keys(RULES.COMPARATORS).filter(c => RULES.COMPARATORS[c].types.indexOf(spec.type) !== -1));
+    const one = () => spec.type === "enum" ? pick(r, spec.values) : spec.type === "bool" ? r() < 0.5 : spec.type === "int" ? Math.floor(r() * 24) : Math.floor(r() * 1000);
+    if (op === "in" || op === "not_in") { const out = []; const n = 1 + Math.floor(r() * 3); for (let i = 0; i < n; i++) { const x = one(); if (out.indexOf(x) === -1) out.push(x); } return { field: f, op: op, value: out }; }
+    if (op === "between") { const a = one(), b = one(); return { field: f, op: op, value: [Math.min(a, b), Math.max(a, b)] }; }
+    return { field: f, op: op, value: one() };
+  }
+  function randomRule(r, scope, depth) {
+    if (depth >= 3 || r() < 0.35) return randomLeaf(r, scope);
+    const k = r(); if (k < 0.2) return { not: randomRule(r, scope, depth + 1) };
+    const parts = []; const n = 1 + Math.floor(r() * 3); for (let i = 0; i < n; i++) parts.push(randomRule(r, scope, depth + 1));
+    return k < 0.6 ? { all: parts } : { any: parts };
+  }
+  function randomFacts(r) {
+    const f = {};
+    if (r() < 0.9) f.action_type = pick(r, RULES.ACTION_TYPES);
+    if (r() < 0.9) f.agent = pick(r, RULES.AGENTS);
+    if (r() < 0.9) f.channel = pick(r, RULES.CHANNELS);
+    if (r() < 0.9) f.approved = r() < 0.5;
+    if (r() < 0.7) f.amount = Math.floor(r() * 1000);
+    return f;
+  }
+  {
+    const r = rng(20261101);
+    let platformFails = 0, flipped = 0, ranBlocked = 0, wrongName = 0, unchangedWithout = 0, total = 0;
+    const actions = Object.keys(GATES.ACTION_GATES);
+    for (let i = 0; i < 4000; i++) {
+      const action = pick(r, actions); const obs = {};
+      GATES.ACTION_GATES[action].forEach(g => { const k = r(); if (k < 0.55) obs[g] = { result: "pass" }; else if (k < 0.8) obs[g] = { result: "fail", code: "x_" + Math.floor(r() * 9) }; else if (k < 0.9) obs[g] = { result: "bypass", code: "owner_pass" }; });
+      const d = GATES.evaluate(action, { observed: obs });
+      const scope = pick(r, RULES.SCOPES);
+      const rule = randomRule(r, scope, 1);
+      const gate = { id: "g" + i, name: "Gate " + i, scope: scope, rule: rule, time_zone: pick(r, ["UTC", "America/New_York", "Asia/Tokyo"]), enabled: true };
+      const block = RULES.firstBlock([gate], scope, randomFacts(r), FIXED + Math.floor(r() * 7 * 24) * 3600000);
+      const m = GATES.withMemberGate(d, block);
+      total++;
+      if (d.outcome !== "ran") { platformFails++; if (J(m) !== J(d)) flipped++; }
+      else if (block) { ranBlocked++; if (m.outcome !== "blocked" || !m.member || m.member.name !== block.name || J(m.results) !== J(d.results)) wrongName++; }
+      else if (J(m) !== J(d)) unchangedWithout++;
+    }
+    check("L1. over " + total + " random decisions and rules: a platform fail (" + platformFails + " of them) is returned exactly as it was, never ran", flipped === 0 && platformFails > 500, flipped + " changed");
+    check("L2. a pass a member gate stops (" + ranBlocked + ") becomes blocked under that gate's own name, the platform results untouched", wrongName === 0 && ranBlocked > 100, wrongName + " wrong");
+    check("L3. with no member gate blocking, the decision is unchanged", unchangedWithout === 0);
+    let agree = 0, disagree = 0, invalid = 0;
+    for (let i = 0; i < 3000; i++) {
+      const scope = pick(r, RULES.SCOPES); const rule = randomRule(r, scope, 1); const checked = RULES.validateRule(rule, scope);
+      if (!checked.ok) { invalid++; continue; }
+      const facts = randomFacts(r); const ms = FIXED + Math.floor(r() * 7 * 24) * 3600000;
+      const holds = RULES.evaluateRule(checked.rule, Object.assign({}, facts, RULES.factsAt(ms, "UTC")));
+      const b = RULES.firstBlock([{ id: "x", name: "X", scope: scope, rule: rule, time_zone: "UTC", enabled: true }], scope, facts, ms);
+      if ((holds === true) === (b === null)) agree++; else disagree++;
+    }
+    check("L4. a gate blocks exactly when its rule is not shown to hold (" + agree + " random rules, " + invalid + " too large and refused)", disagree === 0 && agree > 1500, disagree + " disagreed");
+    const neverRan = GATES.withMemberGate({ action: "dispatch", outcome: "blocked", results: [] }, { id: "g", name: "Always" });
+    check("L5. a blocked decision with a blocking gate stays blocked with no member named", neverRan.outcome === "blocked" && !neverRan.member);
+    const held = GATES.withMemberGate({ action: "task_run", outcome: "held_for_approval", results: [] }, { id: "g", name: "Always" });
+    check("L6. a held decision stays held", held.outcome === "held_for_approval" && !held.member);
+  }
+
+  /* ═══ M. a member gate blocks under its own name ═════════════════════════ */
+  console.log("\n══ M. a member gate blocks with its own name, and only after the platform let it through ══");
+  const WEEKENDS = { id: UUID(901), user_id: MEMBER, name: "Weekends only", scope: "proposal_approve", rule: { field: "weekday", op: "in", value: ["sat", "sun"] }, time_zone: "UTC", enabled: true, created_at: "2026-10-01T00:00:00Z" };
+  const THURSDAYS = Object.assign({}, WEEKENDS, { id: UUID(902), name: "Thursdays fine", rule: { field: "weekday", op: "eq", value: "thu" } });
+  async function approveB2(w, s) {
+    const executed = [];
+    const store = memStore({ member_gates: JSON.parse(JSON.stringify(s.gates || [])) });
+    const c = makeCtx({
+      respond: function (q) {
+        if (q.table === "member_gates") return s.gatesError ? { data: null, error: { message: "read failed" } } : store(q);
+        if (q.table === "agent_proposals" && q.op === "select") return { data: s.pending || null, error: null };
+        if (q.table === "agent_proposals" && q.op === "update" && q.payload.status === "executing") return { data: s.claim || null, error: null };
+        if (q.table === "agent_proposals" && q.op === "update") return { data: Object.assign({}, s.claim, q.payload), error: null };
+        if (q.table === "ai_agents" && q.op === "select") return { data: { id: "agent-1", tasks_completed: 4 }, error: null };
+        return null;
+      },
+      globals: {
+        getUserPlan: async () => ({ active: !!s.subscribed, inactive_reason: s.subscribed ? null : "no_subscription" }),
+        requireAuth: function requireAuth() {},
+        PROPOSAL_EXECUTORS: { publish_blog_post: async row => { executed.push(row.id); return { published: true }; }, calendar_type: async row => { executed.push(row.id); return { ok: 1 }; } }
+      }
+    });
+    const grab = function () { c.handler = arguments[arguments.length - 1]; };
+    c.sandbox.app = { post: grab };
+    script(w, "approveB2", routeSource(w, APPROVE), ["getUserPlan", "PROPOSAL_EXECUTORS"], "x: 1").runInContext(c.sandbox);
+    const res = makeRes(); const nexts = [];
+    await c.handler({ params: { id: PID }, user: { id: MEMBER, role: "user" }, body: {} }, res, function (e) { nexts.push(e === undefined ? "next()" : errShape(e)); });
+    await flush();
+    return { out: { res: resShape(res), next: nexts }, logs: c.logs, writes: c.db.writes, gateRows: c.db.gateRows, extra: executed };
+  }
+  const claimRow = { id: PID, user_id: MEMBER, agent_type: "seo", action_type: "publish_blog_post", status: "executing", payload: {} };
+  const approvedFacts = { action_type: "publish_blog_post", agent: "seo", channel: "blog", approved: true };
+  {
+    const ok = { pending: { action_type: "publish_blog_post" }, subscribed: true, claim: claimRow };
+    const n = await approveB2("new", Object.assign({ gates: [WEEKENDS] }, ok));
+    const sentence = "Your own gate \"Weekends only\" stopped this (Carry out an approved proposal only if at the weekend). Nothing was done.";
+    check("M1. approving on a Thursday with \"Weekends only\": 403, the gate's own name and its plain-English rule",
+      n.out.res.status === 403 && J(n.out.res.body) === J({ error: sentence, code: "member_gate", gate: "Weekends only" }), J(n.out));
+    check("M1. nothing was carried out, and the proposal went back to pending", n.extra.length === 0 &&
+      n.writes.some(x => x.table === "agent_proposals" && x.payload.status === "pending" && x.payload.decided_at === null && x.filters.some(f => f[0] === "eq" && f[1] === "status" && f[2] === "executing")), J(n.writes));
+    check("M1. the record: blocked, the platform's G3 and G1 passes kept, the member gate named",
+      J(n.gateRows.map(recordOf)) === J([{ user_id: MEMBER, action: "proposal_approve", target: "proposal:" + PID, outcome: "blocked", results: res3([["G3", "pass"], ["G1", "pass", "approved"]]),
+        facts: approvedFacts, member_gate_name: "Weekends only" }]) && n.gateRows[0].member_gate_id === WEEKENDS.id, J(n.gateRows));
+    const o2 = await approveB2("b1", ok), n2 = await approveB2("new", Object.assign({ gates: [THURSDAYS, Object.assign({}, WEEKENDS, { enabled: false }), Object.assign({}, WEEKENDS, { id: UUID(903), scope: "schedule_run" })] }, ok));
+    compareB2("M2", "a gate that holds, a disabled gate and a gate for another scope change nothing", o2, n2,
+      [{ action: "proposal_approve", target: "proposal:" + PID, outcome: "ran", results: [["G3", "pass"], ["G1", "pass", "approved"]], facts: approvedFacts }]);
+    const o3 = await approveB2("b1", ok), n3 = await approveB2("new", Object.assign({ gatesError: true, gates: [WEEKENDS] }, ok));
+    compareB2("M3", "member gates unreadable: the platform's decision stands", o3, n3,
+      [{ action: "proposal_approve", target: "proposal:" + PID, outcome: "ran", results: [["G3", "pass"], ["G1", "pass", "approved"]], facts: approvedFacts }]);
+    check("M3. …and it says so", n3.logs.some(l => /\[member-gates\] not read \(proposal_approve\): read failed\. The platform's decision stands\./.test(l)), J(n3.logs));
+    const other = Object.assign({}, WEEKENDS, { user_id: MEMBER_B });
+    const o4 = await approveB2("b1", ok), n4 = await approveB2("new", Object.assign({ gates: [other] }, ok));
+    compareB2("M4", "another member's gate is never asked", o4, n4,
+      [{ action: "proposal_approve", target: "proposal:" + PID, outcome: "ran", results: [["G3", "pass"], ["G1", "pass", "approved"]], facts: approvedFacts }]);
+    // PROPERTY, on the route: every platform refusal is byte-identical with any random member gate present, and names no member gate.
+    const r = rng(1101);
+    const FAILS = [{ label: "not pending (409)", s: {} }, { label: "not subscribed (402)", s: { pending: { action_type: "publish_blog_post" } } },
+      { label: "claimed by another approval (409)", s: { pending: { action_type: "publish_blog_post" }, subscribed: true } },
+      { label: "no executor (501)", s: { pending: { action_type: "mystery_type" }, claim: Object.assign({}, claimRow, { action_type: "mystery_type" }) } }];
+    let same = 0, diff = [];
+    for (let i = 0; i < 24; i++) {
+      const t = FAILS[i % FAILS.length];
+      const gates = [Object.assign({}, WEEKENDS, { id: UUID(950 + i), name: "Random " + i, rule: randomRule(r, "proposal_approve", 1), scope: pick(r, ["proposal_approve", "any"]) }), WEEKENDS];
+      const o = await approveB2("b1", t.s), n = await approveB2("new", Object.assign({ gates: gates }, t.s));
+      const ok1 = J({ out: o.out, writes: o.writes, extra: o.extra }) === J({ out: n.out, writes: n.writes, extra: n.extra }) && n.gateRows.every(x => x.member_gate_name === undefined && x.outcome === "blocked");
+      if (ok1) same++; else diff.push(t.label);
+    }
+    check("M5. PROPERTY: 24 platform refusals with random blocking member gates present are identical to " + B1_HEAD + ", and stay the platform's refusal", same === 24, J(diff));
+  }
+  {
+    const gate = { id: UUID(910), user_id: MEMBER, name: "No SEO runs", scope: "schedule_run", rule: { field: "agent", op: "neq", value: "seo" }, time_zone: "UTC", enabled: true, created_at: "2026-10-01T00:00:00Z" };
+    const rows = [sched(6, MEMBER, "seo"), sched(10, MEMBER, "sales")];
+    const n = await passRun("new", { rows: rows, autonomy: AUT, max: 1, gates: [gate] });
+    check("M6. a schedule the member's gate stops is not run, and the next one still runs under a ceiling of 1", J(n.extra) === J([UUID(10)]), J(n.extra));
+    const wrote = n.writes.filter(x => x.table === "agent_schedules" && x.filters.some(f => f[2] === UUID(6)));
+    check("M6. its row says skipped_member_gate, in the gate's own words, and last_run_on is not set",
+      wrote.length === 1 && wrote[0].payload.last_run_status === "skipped_member_gate" && wrote[0].payload.last_error === "Your own gate \"No SEO runs\" stopped this (Run a schedule only if the agent is not seo). Nothing was done." &&
+      !("last_run_on" in wrote[0].payload), J(wrote));
+    check("M6. the records: the stopped run blocked under \"No SEO runs\", the next one ran",
+      J(n.gateRows.map(recordOf)) === J([
+        { user_id: MEMBER, action: "schedule_run", target: "schedule:" + UUID(6), outcome: "blocked", results: res3([["G18", "pass"], ["G16", "pass"], ["G13", "pass"]]), facts: sfacts("seo"), member_gate_name: "No SEO runs" },
+        { user_id: MEMBER, action: "schedule_run", target: "schedule:" + UUID(10), outcome: "ran", results: res3([["G18", "pass"], ["G16", "pass"], ["G13", "pass"]]), facts: sfacts("sales"), member_gate_name: null }]), J(n.gateRows));
+    const lapsedGate = Object.assign({}, gate, { user_id: MEMBER_D, rule: { field: "agent", op: "eq", value: "nothing" } });
+    const o2 = await passRun("b1", { rows: PASS_ROWS, autonomy: AUT }), n2 = await passRun("new", { rows: PASS_ROWS, autonomy: AUT, gates: [lapsedGate, Object.assign({}, lapsedGate, { user_id: MEMBER_C }), Object.assign({}, lapsedGate, { user_id: MEMBER_B })] });
+    compareB2("M7", "the pass with always-blocking gates on members the platform already stopped", o2, n2, passRecords);
+  }
+  {
+    const gate = { id: UUID(920), user_id: MEMBER, name: "Approve posts myself", scope: "proposal_auto_execute", rule: { field: "approved", op: "eq", value: true }, time_zone: "UTC", enabled: true, created_at: "2026-10-01T00:00:00Z" };
+    const n = await autoRun("new", { gates: [gate] });
+    check("M8. an automatic run the member's gate stops: nothing claimed, nothing carried out, it waits for approval",
+      n.writes.length === 0 && n.extra.length === 0 && n.out.returned && n.out.returned.ok === false &&
+      n.out.returned.error === "your own gate \"Approve posts myself\" stopped it (Act automatically only if approved); it waits for your approval", J(n.out) + J(n.writes));
+    check("M8. the record: blocked under \"Approve posts myself\"", J(n.gateRows.map(recordOf)) === J([{ user_id: MEMBER, action: "proposal_auto_execute", target: "proposal:" + PID, outcome: "blocked",
+      results: res3([["G17", "pass", "automation_on"]]), facts: autoFacts, member_gate_name: "Approve posts myself" }]), J(n.gateRows));
+  }
+
+  /* ═══ N. the routes ══════════════════════════════════════════════════════ */
+  console.log("\n══ N. the member-gates and gate-decisions routes ══");
+  const MG = {
+    lang: "app.get(\"/api/member-gates/language\", requireAuth, function (req, res) {",
+    list: "app.get(\"/api/member-gates\", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {",
+    make: "app.post(\"/api/member-gates\", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {",
+    edit: "app.put(\"/api/member-gates/:id\", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {",
+    drop: "app.delete(\"/api/member-gates/:id\", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {",
+    preview: "app.post(\"/api/member-gates/preview\", requireAuth, requireActiveSubscription, memberGatesLimiter, async function (req, res, next) {",
+    decisions: "app.get(\"/api/gate-decisions\", requireAuth, gateDecisionsLimiter, async function (req, res, next) {",
+    forTarget: "app.get(\"/api/gate-decisions/for\", requireAuth, gateDecisionsLimiter, async function (req, res, next) {",
+    one: "app.get(\"/api/gate-decisions/:id\", requireAuth, gateDecisionsLimiter, async function (req, res, next) {"
+  };
+  Object.keys(MG).forEach(k => check("N0. " + k + " is mounted as declared" + (/member-gates", requireAuth, requireActiveSubscription|member-gates\/:id|preview/.test(MG[k]) ? ", with requireActiveSubscription and its limiter" : ""), NEW.indexOf(MG[k]) !== -1));
+  const queries = [];
+  const T = { member_gates: [], gate_decisions: [] };
+  const store = memStore(T);
+  async function mgCall(key, req) {
+    const c = makeCtx({ respond: function (q) { queries.push(q); return store(q); }, globals: noMw });
+    const grab = function () { c.handler = arguments[arguments.length - 1]; };
+    c.sandbox.app = { get: grab, post: grab, put: grab, delete: grab };
+    script("new", "mg-" + key, routeSource("new", MG[key]), ROUTE_STUBS, "x: 1").runInContext(c.sandbox);
+    const res = makeRes(); const nexts = [];
+    await c.handler(Object.assign({ user: { id: MEMBER, role: "user" }, params: {}, query: {}, body: {} }, JSON.parse(JSON.stringify(req || {}))), res, e => nexts.push(errShape(e)));
+    await flush();
+    return { status: res.statusCode, body: res.body, next: nexts, writes: c.db.writes, gateRows: c.db.gateRows };
+  }
+  {
+    const lang = await mgCall("lang");
+    check("N1. the language route serves lib/gateRules.js language()", J(lang.body) === J(RULES.language()));
+    const rule = { all: [{ field: "approved", op: "eq", value: true }, { field: "weekday", op: "in", value: ["mon", "tue", "wed", "thu", "fri"] }] };
+    const made = await mgCall("make", { body: { name: "Weekdays, approved", scope: "any", rule: rule } });
+    check("N2. a valid gate is saved (201) under the caller, with its summary", made.status === 201 && made.body.gate.name === "Weekdays, approved" && made.body.gate.summary === "Go ahead only if approved AND on a weekday" &&
+      T.member_gates.length === 1 && T.member_gates[0].user_id === MEMBER && T.member_gates[0].time_zone === "UTC" && T.member_gates[0].enabled === true, J(made.body));
+    const refusals = [
+      ["an unknown key", { name: "A", scope: "any", rule: rule, user_id: MEMBER_B }, "user_id"],
+      ["an unknown field in the rule", { name: "A", scope: "any", rule: { field: "price", op: "eq", value: 1 } }, "rule.field"],
+      ["an unknown comparator", { name: "A", scope: "any", rule: { field: "agent", op: "like", value: "seo" } }, "rule.op"],
+      ["free text in the rule", { name: "A", scope: "any", rule: { field: "agent", op: "eq", value: "anything at all" } }, "rule.value"],
+      ["a name with markup", { name: "<b>x</b>", scope: "any", rule: rule }, "name"],
+      ["an unknown scope", { name: "A", scope: "all", rule: rule }, "scope"],
+      ["an unknown time zone", { name: "A", scope: "any", rule: rule, time_zone: "Moon/Base" }, "time_zone"],
+      ["enabled not a boolean", { name: "A", scope: "any", rule: rule, enabled: "yes" }, "enabled"],
+      ["an array body", [1], "body"]
+    ];
+    for (const x of refusals) {
+      const r = await mgCall("make", { body: x[1] });
+      check("N2. refused (400), nothing saved: " + x[0], r.status === 400 && r.body.field === x[2] && /Nothing was saved\.$/.test(r.body.error) && T.member_gates.length === 1, J(r.body));
+    }
+    for (let i = 0; i < 19; i++) T.member_gates.push({ id: UUID(300 + i), user_id: MEMBER, name: "G" + i, scope: "any", rule: rule, time_zone: "UTC", enabled: true, created_at: "2026-10-02T00:00:" + String(i).padStart(2, "0") + "Z" });
+    const full = await mgCall("make", { body: { name: "One more", scope: "any", rule: rule } });
+    check("N2. the 21st gate is refused (400 too_many_gates)", full.status === 400 && full.body.reason === "too_many_gates" && T.member_gates.length === 20, J(full.body));
+    T.member_gates.splice(1);
+    T.member_gates.push({ id: UUID(400), user_id: MEMBER_B, name: "Theirs", scope: "any", rule: rule, time_zone: "UTC", enabled: true, created_at: "2026-10-03T00:00:00Z" });
+    const listed = await mgCall("list");
+    check("N3. the list is the caller's own gates only", listed.status === 200 && listed.body.gates.length === 1 && listed.body.gates[0].name === "Weekdays, approved", J(listed.body));
+    const theirs = await mgCall("edit", { params: { id: UUID(400) }, body: { enabled: false } });
+    check("N3. another member's gate cannot be changed (404), and is unchanged", theirs.status === 404 && T.member_gates[1].enabled === true, J(theirs.body));
+    const mineId = T.member_gates[0].id;
+    const partial = await mgCall("edit", { params: { id: mineId }, body: { enabled: false } });
+    check("N3. a partial edit keeps the rest and validates the whole gate again", partial.status === 200 && partial.body.gate.enabled === false && J(partial.body.gate.rule) === J(rule), J(partial.body));
+    const badEdit = await mgCall("edit", { params: { id: mineId }, body: { rule: { field: "hour", op: "eq", value: 25 } } });
+    check("N3. an edit to an invalid rule is refused (400), nothing changed", badEdit.status === 400 && /Nothing was changed\.$/.test(badEdit.body.error) && J(T.member_gates[0].rule) === J(rule), J(badEdit.body));
+    const dropTheirs = await mgCall("drop", { params: { id: UUID(400) } });
+    check("N3. another member's gate cannot be deleted (404)", dropTheirs.status === 404 && T.member_gates.length === 2);
+    const dropMine = await mgCall("drop", { params: { id: mineId } });
+    check("N3. the caller's own gate is deleted", dropMine.status === 200 && dropMine.body.deleted === true && T.member_gates.length === 1);
+    check("N4. every member_gates query names the caller's user_id", queries.filter(q => q.table === "member_gates" && q.op !== "insert").every(q => q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === MEMBER)),
+      J(queries.filter(q => q.table === "member_gates").map(q => q.filters)));
+  }
+  {
+    const base = Date.parse("2026-10-15T12:00:00.000Z");
+    const agents = ["seo", "sales", "content"], outcomes = ["ran", "blocked", "held_for_approval"];
+    for (let i = 0; i < 45; i++) T.gate_decisions.push({ id: UUID(500 + i), user_id: MEMBER, action: i % 2 ? "proposal_approve" : "schedule_run", target: "proposal:" + UUID(500 + i), outcome: outcomes[i % 3],
+      results: [{ gate: "G3", result: "pass" }, { gate: "G1", result: i % 3 === 1 ? "fail" : "pass", code: i % 3 === 1 ? "not_pending" : "approved" }], facts: { agent: agents[i % 3], approved: i % 2 === 1 },
+      member_gate_name: null, created_at: new Date(base - i * 3600000).toISOString() });
+    for (let i = 0; i < 5; i++) T.gate_decisions.push({ id: UUID(600 + i), user_id: MEMBER_B, action: "schedule_run", target: "schedule:" + UUID(600), outcome: "ran", results: [], facts: { agent: "seo" }, created_at: new Date(base).toISOString() });
+    queries.length = 0;
+    const p1 = await mgCall("decisions", { query: {} });
+    const ids = r => (r.body.decisions || []).map(d => d.id);
+    check("N5. the Decisions list: 20 a page, newest first, 45 in all, 3 pages", p1.status === 200 && p1.body.decisions.length === 20 && p1.body.total === 45 && p1.body.pages === 3 && p1.body.per_page === 20 &&
+      J(ids(p1)) === J(Array.from({ length: 20 }, (x, i) => UUID(500 + i))), J(ids(p1)).slice(0, 200));
+    const p3 = await mgCall("decisions", { query: { page: "3" } });
+    check("N5. page 3 is the last five", p3.body.decisions.length === 5 && J(ids(p3)) === J([40, 41, 42, 43, 44].map(i => UUID(500 + i))), J(ids(p3)));
+    const seo = await mgCall("decisions", { query: { agent: "seo" } });
+    check("N5. filtered by agent: seo only (15)", seo.body.total === 15 && seo.body.decisions.every(d => d.agent === "seo"), J(seo.body.total));
+    const blk = await mgCall("decisions", { query: { outcome: "blocked", agent: "sales" } });
+    check("N5. filtered by outcome and agent together", blk.body.total === 15 && blk.body.decisions.every(d => d.outcome === "blocked" && d.agent === "sales"), J(blk.body.total));
+    for (const [label, q] of [["page 0", { page: "0" }], ["page 2.5", { page: "2.5" }], ["page 501", { page: "501" }], ["an unknown agent", { agent: "hacker" }], ["an unknown outcome", { outcome: "maybe" }]]) {
+      const r = await mgCall("decisions", { query: q });
+      check("N5. refused (400): " + label, r.status === 400, J(r.body));
+    }
+    check("N5. no other member's decision is ever listed", [p1, p3, seo, blk].every(r => r.body.decisions.every(d => Number(d.id.slice(-12)) < 600)));
+    const forT = await mgCall("forTarget", { query: { target: "proposal:" + UUID(501) } });
+    check("N6. the decisions for one proposal: only that target's, the caller's own", forT.status === 200 && forT.body.decisions.length === 1 && forT.body.decisions[0].id === UUID(501), J(forT.body).slice(0, 300));
+    const forBad = await mgCall("forTarget", { query: { target: "contact:someone@example.com" } });
+    check("N6. a target that is not proposal:, ai_task: or schedule: and an id is refused (400)", forBad.status === 400, J(forBad.body));
+    const forTheirs = await mgCall("forTarget", { query: { target: "schedule:" + UUID(600) } });
+    check("N6. another member's schedule: nothing", forTheirs.status === 200 && forTheirs.body.decisions.length === 0, J(forTheirs.body));
+    const one = await mgCall("one", { params: { id: UUID(501) } });
+    check("N7. one decision, explained from its record by lib/gates.js explain()", one.status === 200 && J(one.body.decision) === J(Object.assign(GATES.explain(T.gate_decisions[1]), { agent: "sales" })), J(one.body).slice(0, 300));
+    const oneTheirs = await mgCall("one", { params: { id: UUID(600) } });
+    check("N7. another member's decision is not found (404)", oneTheirs.status === 404);
+    check("N7. every gate_decisions read names the caller's user_id", queries.filter(q => q.table === "gate_decisions").every(q => q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === MEMBER)));
+    check("N7. the decision reads wrote nothing", queries.filter(q => q.op !== "select").length === 0);
+    // The preview reads only.
+    queries.length = 0;
+    const before = J(T);
+    const pv = await mgCall("preview", { body: { scope: "any", rule: { field: "weekday", op: "in", value: ["sat", "sun"] }, time_zone: "UTC" } });
+    check("N8. the 30-day preview counts what the rule would have stopped", pv.status === 200 && pv.body.window_days === 30 && pv.body.read === 45 && pv.body.considered === 15 && pv.body.already_stopped === 30 &&
+      pv.body.would_block === 15 && pv.body.would_pass === 0 && pv.body.summary === "Go ahead only if at the weekend", J(pv.body));
+    const pv2 = await mgCall("preview", { body: { scope: "proposal_approve", rule: { field: "amount", op: "lt", value: 10 } } });
+    check("N8. a fact the records never hold (an amount) is \"could not judge\", never a guess", pv2.status === 200 && pv2.body.could_not_judge === pv2.body.considered && pv2.body.would_block === 0 && pv2.body.would_pass === 0, J(pv2.body));
+    const pv3 = await mgCall("preview", { body: { scope: "any", rule: { field: "price", op: "eq", value: 1 } } });
+    check("N8. an invalid rule is refused (400)", pv3.status === 400, J(pv3.body));
+    check("N8. THE PREVIEW ONLY READS: no insert, update, delete or upsert on any table, no decision recorded, the tables unchanged",
+      queries.every(q => q.op === "select") && queries.length === 2 && pv.writes.length === 0 && pv.gateRows.length === 0 && pv2.writes.length === 0 && J(T) === before, J(queries.map(q => q.table + " " + q.op)));
+    check("N8. the preview reads only the caller's decisions of the last 30 days", queries.every(q => q.table === "gate_decisions" && q.filters.some(f => f[0] === "eq" && f[1] === "user_id" && f[2] === MEMBER) &&
+      q.filters.some(f => f[0] === "gte" && f[1] === "created_at" && f[2] === new FixedDate(FIXED - 30 * 24 * 3600 * 1000).toISOString())), J(queries.map(q => q.filters)));
+  }
+
+  /* ═══ O. the sweep ═══════════════════════════════════════════════════════ */
+  console.log("\n══ O. the daily sweep: only rows older than 90 days, under its own claim ══");
+  {
+    const sweepLogs = [];
+    const sandbox = { console: { log: (...a) => sweepLogs.push(a.join(" ")), error: (...a) => sweepLogs.push("ERR " + a.join(" ")) }, process: { env: {} } };
+    vm.createContext(sandbox);
+    const m = { exports: {} };
+    vm.runInContext("(function (module, exports) {\n" + FILES.sweep + "\n})", sandbox)(m, m.exports);
+    const SW = m.exports;
+    const DAY = 24 * 3600 * 1000;
+    const now = Date.parse("2026-11-01T04:30:00.000Z");
+    function sweepDb(rows, jobRows) {
+      const db = { gate_decisions: rows, job_runs: jobRows || [], touched: new Set(), deletes: [] };
+      function from(table) {
+        db.touched.add(table);
+        const q = { table: table, op: "select", filters: [], payload: null, limit: null };
+        const b = {
+          select() { return b; }, insert(p) { q.op = "insert"; q.payload = p; return b; }, update(p) { q.op = "update"; q.payload = p; return b; }, delete() { q.op = "delete"; return b; },
+          eq(c, v) { q.filters.push(["eq", c, v]); return b; }, lt(c, v) { q.filters.push(["lt", c, v]); return b; }, in(c, v) { q.filters.push(["in", c, v]); return b; },
+          or(s) { q.filters.push(["or", s]); return b; }, order() { return b; }, limit(n) { q.limit = n; return b; },
+          then(res, rej) { return Promise.resolve().then(run).then(res, rej); }
+        };
+        function ok(r) { return q.filters.every(f => f[0] === "eq" ? r[f[1]] === f[2] : f[0] === "lt" ? r[f[1]] < f[2] : f[0] === "in" ? f[2].indexOf(r[f[1]]) !== -1 :
+          f[0] === "or" ? (r.last_run_on === null || r.last_run_on !== f[1].split("neq.")[1]) : true); }
+        function run() {
+          const list = db[table];
+          if (q.op === "insert") { if (list.some(r => r.job_name === q.payload.job_name)) return { data: null, error: { code: "23505", message: "duplicate" } }; list.push(Object.assign({}, q.payload)); return { data: [{ job_name: q.payload.job_name }], error: null }; }
+          const hit = list.filter(ok);
+          if (q.op === "update") { hit.forEach(r => Object.assign(r, q.payload)); return { data: hit.map(r => ({ job_name: r.job_name })), error: null }; }
+          if (q.op === "delete") { db.deletes.push(q.filters.slice()); db[table] = list.filter(r => hit.indexOf(r) === -1); return { data: hit.map(r => ({ id: r.id })), error: null }; }
+          const sorted = hit.slice().sort((a, b) => a.created_at < b.created_at ? -1 : 1);
+          return { data: (q.limit ? sorted.slice(0, q.limit) : sorted).map(r => ({ id: r.id })), error: null };
+        }
+        return b;
+      }
+      db.client = { from: from };
+      return db;
+    }
+    const at = (days, n) => ({ id: "row-" + n, user_id: MEMBER, created_at: new Date(now - days * DAY).toISOString() });
+    const ages = [0, 1, 30, 89.99, 90, 90.0001, 120, 400];
+    const db = sweepDb(ages.map((d, i) => at(d, i)), [{ job_name: "nightly_backup", last_run_on: "2026-11-01" }]);
+    const first = await SW.gateDecisionsSweepTick(db.client, now);
+    check("O1. the sweep deletes only rows created more than 90 days ago (a row exactly 90 days old waits a day)",
+      first.claimed === true && J(db.gate_decisions.map(r => r.id).sort()) === J(["row-0", "row-1", "row-2", "row-3", "row-4"]) && first.summary.rows_deleted === 3, J(db.gate_decisions.map(r => r.id)) + " " + J(first));
+    check("O1. every delete repeats the cutoff, so it can never reach a recent row whatever ids it is handed",
+      db.deletes.length >= 1 && db.deletes.every(f => f.some(x => x[0] === "lt" && x[1] === "created_at" && x[2] === new Date(now - 90 * DAY).toISOString()) && f.some(x => x[0] === "in")), J(db.deletes));
+    check("O2. its own claim: one job_runs row, gate_decisions_sweep, for the UTC day, closed with finished_at", db.job_runs.filter(r => r.job_name === "gate_decisions_sweep").length === 1 &&
+      db.job_runs.find(r => r.job_name === "gate_decisions_sweep").last_run_on === "2026-11-01" && !!db.job_runs.find(r => r.job_name === "gate_decisions_sweep").finished_at, J(db.job_runs));
+    check("O2. no other job's row is touched", J(db.job_runs.find(r => r.job_name === "nightly_backup")) === J({ job_name: "nightly_backup", last_run_on: "2026-11-01" }));
+    check("O2. it touches gate_decisions and job_runs only", J([...db.touched].sort()) === J(["gate_decisions", "job_runs"]));
+    db.gate_decisions.push(at(200, 99));
+    const again = await SW.gateDecisionsSweepTick(db.client, now + 3600000);
+    check("O3. a second tick the same UTC day finds the day claimed and deletes nothing", again.claimed === false && db.gate_decisions.some(r => r.id === "row-99"), J(again));
+    const nextDay = await SW.gateDecisionsSweepTick(db.client, now + DAY);
+    check("O3. the next UTC day claims again and sweeps (the 90-day row, now 91, goes too)", nextDay.claimed === true && !db.gate_decisions.some(r => r.id === "row-99" || r.id === "row-4"), J(nextDay));
+    const big = sweepDb(Array.from({ length: 1201 }, (x, i) => at(100 + i / 1000, i)).concat([at(10, "recent")]));
+    const bigRun = await SW.runGateDecisionsSweepPass(big.client, now);
+    check("O4. in batches of 500: 1201 old rows in 3 batches, the recent row kept", bigRun.batches === 3 && bigRun.rows_deleted === 1201 && big.gate_decisions.length === 1 && big.gate_decisions[0].id === "row-recent", J(bigRun));
+    check("O5. on by default; only ENABLE_GATE_DECISIONS_SWEEP exactly \"false\" turns it off",
+      SW.gateDecisionsSweepEnabled({}) === true && SW.gateDecisionsSweepEnabled({ ENABLE_GATE_DECISIONS_SWEEP: "False" }) === true && SW.gateDecisionsSweepEnabled({ ENABLE_GATE_DECISIONS_SWEEP: "false" }) === false);
+    const cronAt = NEW.indexOf("    cron.schedule(\"30 4 * * *\", function () {\n      require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepTick(supabase).catch(");
+    const listenAt = NEW.indexOf("shutdownControl.setServer(app.listen(PORT, function () {");
+    check("O6. server.js schedules it at 04:30 UTC inside the startup callback, gated by gateDecisionsSweepEnabled",
+      cronAt > listenAt && listenAt > 0 && NEW.slice(cronAt, cronAt + 400).indexOf("timezone: \"UTC\"") !== -1 &&
+      NEW.lastIndexOf("if (require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepEnabled(process.env)) {", cronAt) > listenAt);
+    check("O6. no boot-time run: the tick is called only from the cron callback", (NEW.match(/gateDecisionsSweepTick\(/g) || []).length === 1);
+    check("O7. the sweep reads the module's own constants: 90 days, batches of 500, job gate_decisions_sweep",
+      SW.GATE_DECISIONS_RETENTION_DAYS === 90 && SW.GATE_DECISIONS_SWEEP_BATCH === 500 && SW.GATE_DECISIONS_SWEEP_JOB_NAME === "gate_decisions_sweep" && GATES.RETENTION_DAYS === 90);
+  }
+
+  /* ═══ P. the Why panel and the Decisions list, in jsdom ══════════════════ */
+  console.log("\n══ P. \"Why?\": each result from the record only; the Decisions list pages and filters ══");
+  let JSDOM = null; try { JSDOM = require("jsdom").JSDOM; } catch (e) { JSDOM = null; }
+  check("P0. jsdom is available", !!JSDOM);
+  if (JSDOM) {
+    function page(html, answer) {
+      const dom = new JSDOM("<!doctype html><html><body>" + html + "</body></html>", { runScripts: "outside-only", url: "https://bizforceai.net/executive-agent.html" });
+      const calls = [];
+      dom.window.fetch = function (url, init) {
+        const u = String(url).replace("https://dynamic-prosperity-production-5382.up.railway.app", "");
+        calls.push({ method: (init && init.method) || "GET", url: u, body: init && init.body ? JSON.parse(init.body) : undefined });
+        const a = answer(u, init || {});
+        return Promise.resolve({ status: a.status || 200, ok: (a.status || 200) < 400, json: () => Promise.resolve(JSON.parse(J(a.body))) });
+      };
+      dom.window.eval(FILES.why);
+      return { dom: dom, w: dom.window, d: dom.window.document, calls: calls };
+    }
+    const LANG = JSON.parse(J(RULES.language()));
+    const row = { id: UUID(700), action: "proposal_approve", target: "proposal:" + PID, outcome: "blocked", created_at: "2026-10-15T12:00:00.000Z", facts: { agent: "seo" },
+      results: [{ gate: "G3", result: "pass" }, { gate: "G15", result: "bypass", code: "owner_pass" }, { gate: "G1", result: "fail", code: "not_pending" }, { gate: "G12", result: "not_reached" }],
+      member_gate_name: "Weekends only" };
+    const explained = Object.assign(GATES.explain(row), { agent: "seo" });
+    const P = page("", u => u.indexOf("/api/gate-decisions/for") === 0 ? { body: { target: "proposal:" + PID, decisions: [explained] } } : { body: LANG });
+    const btn = P.d.createElement("button"); btn.setAttribute("data-bf-why", "proposal:" + PID); P.d.body.appendChild(btn);
+    btn.click(); await flush();
+    const panel = P.d.querySelector(".bf-why-panel");
+    check("P1. a \"Why?\" click reads GET /api/gate-decisions/for for that target", P.calls.some(c => c.method === "GET" && c.url === "/api/gate-decisions/for?target=" + encodeURIComponent("proposal:" + PID)), J(P.calls));
+    check("P1. the panel says \"Why did this run, or not run?\"", panel && !panel.hidden && P.d.getElementById("bfWhyTitle").textContent === "Why did this run, or not run?");
+    const lis = [...panel.querySelectorAll(".bf-why-gate")];
+    check("P2. each gate is shown in the record's order, one per result", J(lis.map(l => l.getAttribute("data-gate"))) === J(["G3", "G15", "G1", "G12"]));
+    const kinds = { pass: "Pass", bypass: "Bypass", fail: "Fail", not_reached: "Not reached" };
+    row.results.forEach((r, i) => {
+      const li = lis[i]; const g = GATES.GATES.find(x => x.id === r.gate);
+      check("P2. " + r.result + ": shown as \"" + kinds[r.result] + "\" with " + r.gate + "'s registered name and the REASONS sentence for its stored code",
+        !!li && li.getAttribute("data-result") === r.result && li.querySelector(".bf-why-result").textContent === kinds[r.result] &&
+        li.querySelector(".bf-why-gate-name").textContent === g.name && li.querySelector(".bf-why-reason").textContent === GATES.reasonFor(r.result, r.code || null),
+        li ? li.textContent : "missing");
+    });
+    const mem = panel.querySelector(".bf-why-member");
+    check("P3. the member gate that blocked it, by its own name, with the member_gate sentence", !!mem && mem.querySelector(".bf-why-member-name").textContent === "Weekends only" &&
+      mem.querySelector(".bf-why-reason").textContent === GATES.REASONS.member_gate, mem ? mem.textContent : "missing");
+    const reasonsShown = [...panel.querySelectorAll(".bf-why-reason")].map(x => x.textContent);
+    check("P4. FROM RECORDS ONLY: every sentence shown is one the record's results and member gate produce, and nothing else",
+      J(reasonsShown) === J(explained.gates.map(x => x.reason).concat([explained.member.reason])), J(reasonsShown));
+    const P2 = page("", u => u.indexOf("/for") !== -1 ? { body: { decisions: [] } } : { body: LANG });
+    P2.w.BFWhy.open("ai_task:" + PID); await flush();
+    check("P5. no record: \"No decision was recorded for this. Decisions are kept for 90 days.\"", P2.d.querySelector(".bf-why-body").textContent === "No decision was recorded for this. Decisions are kept for 90 days.");
+    const noMember = Object.assign({}, explained, { member: null });
+    const P3 = page("", () => ({ body: LANG }));
+    const frag = P3.d.createElement("div"); frag.innerHTML = P3.w.BFWhy.decisionHtml(noMember);
+    check("P5. a record that names no member gate shows none", !frag.querySelector(".bf-why-member"));
+    const hostile = GATES.explain({ id: "x", action: "dispatch", outcome: "blocked", results: [{ gate: "G99", result: "boom", code: "<img src=x onerror=alert(1)>" }], member_gate_name: "<b>x</b>" });
+    frag.innerHTML = P3.w.BFWhy.decisionHtml(hostile);
+    check("P5. a malformed record is shown as not_reached with the generic sentence, and nothing in it becomes markup",
+      frag.querySelectorAll("img,b").length === 0 && frag.querySelector(".bf-why-gate").getAttribute("data-result") === "not_reached" &&
+      frag.querySelector(".bf-why-reason").textContent === GATES.reasonFor("not_reached", null), frag.innerHTML.slice(0, 300));
+    // The Decisions list.
+    const all = Array.from({ length: 45 }, (x, i) => ({ id: UUID(800 + i), action: "schedule_run", target: "schedule:" + UUID(800 + i), outcome: ["ran", "blocked", "held_for_approval"][i % 3],
+      created_at: new Date(Date.parse("2026-10-15T12:00:00Z") - i * 3600000).toISOString(), facts: { agent: ["seo", "sales", "content"][i % 3] }, results: [{ gate: "G18", result: "pass" }], member_gate_name: null }));
+    const serve = u => {
+      if (u.indexOf("/api/member-gates/language") === 0) return { body: LANG };
+      const q = new URL("https://x" + u).searchParams; const pg = Number(q.get("page"));
+      const hit = all.filter(r => (!q.get("agent") || r.facts.agent === q.get("agent")) && (!q.get("outcome") || r.outcome === q.get("outcome")));
+      return { body: { decisions: hit.slice((pg - 1) * 20, pg * 20).map(r => Object.assign(GATES.explain(r), { agent: r.facts.agent })), page: pg, per_page: 20, total: hit.length, pages: Math.max(1, Math.ceil(hit.length / 20)) } };
+    };
+    const L = page("<div id=\"deckDecisions\"></div>", serve);
+    await flush();
+    const items = () => [...L.d.querySelectorAll("#bfWhyList .bf-why-item")];
+    const lists = () => L.calls.filter(c => c.url.indexOf("/api/gate-decisions") === 0).map(c => c.url);
+    check("P6. the Decisions list mounts on HQ (#deckDecisions): \"Decisions\", page 1 of 3, 20 rows, Prev disabled",
+      L.d.getElementById("bfWhyDecisionsTitle").textContent === "Decisions" && items().length === 20 && L.d.getElementById("bfWhyAt").textContent === "Page 1 of 3" &&
+      L.d.getElementById("bfWhyPrev").disabled === true && L.d.getElementById("bfWhyNext").disabled === false && J(lists()) === J(["/api/gate-decisions?page=1"]), J(lists()));
+    L.d.getElementById("bfWhyNext").click(); await flush();
+    L.d.getElementById("bfWhyNext").click(); await flush();
+    check("P6. Next pages through: page 3 has the last 5, Next disabled", items().length === 5 && L.d.getElementById("bfWhyAt").textContent === "Page 3 of 3" && L.d.getElementById("bfWhyNext").disabled === true &&
+      J(lists().slice(-2)) === J(["/api/gate-decisions?page=2", "/api/gate-decisions?page=3"]));
+    L.d.getElementById("bfWhyPrev").click(); await flush();
+    check("P6. Prev goes back a page", L.d.getElementById("bfWhyAt").textContent === "Page 2 of 3" && lists().slice(-1)[0] === "/api/gate-decisions?page=2");
+    const agentSel = L.d.getElementById("bfWhyAgent");
+    check("P7. the agent filter lists every agent the language knows", [...agentSel.options].slice(1).map(o => o.value).join() === RULES.AGENTS.join());
+    agentSel.value = "seo"; agentSel.dispatchEvent(new L.w.Event("change", { bubbles: true })); await flush();
+    check("P7. choosing an agent asks for page 1 of that agent's decisions", lists().slice(-1)[0] === "/api/gate-decisions?page=1&agent=seo" && items().length === 15 && L.d.getElementById("bfWhyAt").textContent === "Page 1 of 1");
+    const outSel = L.d.getElementById("bfWhyOutcome");
+    outSel.value = "held_for_approval"; outSel.dispatchEvent(new L.w.Event("change", { bubbles: true })); await flush();
+    check("P7. and the outcome filter narrows it further", lists().slice(-1)[0] === "/api/gate-decisions?page=1&agent=seo&outcome=held_for_approval" && items().length === 0 &&
+      L.d.getElementById("bfWhyListNote").textContent === "No decisions match.");
+    outSel.value = ""; outSel.dispatchEvent(new L.w.Event("change", { bubbles: true })); await flush();
+    items()[0].querySelector("[data-bf-why-decision]").click(); await flush();
+    check("P8. a row's \"Why?\" opens that decision from the list's own record, with no other read", L.d.querySelector(".bf-why-panel .bf-why-decision").getAttribute("data-decision") === UUID(800) &&
+      lists().slice(-1)[0] === "/api/gate-decisions?page=1&agent=seo");
+    // The builder's summary is the library's.
+    const r = rng(77);
+    let agreeS = 0, wrongS = [];
+    for (let i = 0; i < 600; i++) {
+      const scope = pick(r, RULES.SCOPES); const checked = RULES.validateRule(randomRule(r, scope, 1), scope);
+      if (!checked.ok) continue;
+      const front = P3.w.BFWhy.summarize(JSON.parse(J(checked.rule)), scope, LANG);
+      if (front === RULES.summarize(checked.rule, scope)) agreeS++; else if (wrongS.length < 3) wrongS.push(front + " | " + RULES.summarize(checked.rule, scope));
+    }
+    check("P9. the builder's live plain-English summary equals lib/gateRules.js summarize() on " + agreeS + " random rules", wrongS.length === 0 && agreeS > 300, J(wrongS));
+    // The builder: Settings, and its test only reads.
+    const Bd = page("<div id=\"deckMemberGates\"></div>", u => u.indexOf("/language") !== -1 ? { body: LANG } : u.indexOf("/preview") !== -1 ? { body: { window_days: 30, read: 4, considered: 3, would_block: 1, would_pass: 2, could_not_judge: 0, already_stopped: 1, summary: "x", capped: false } } : { body: { gates: [] } });
+    await flush();
+    check("P10. the rule builder mounts on Settings (#deckMemberGates): \"Your gates\" and the only-adds sentence",
+      Bd.d.getElementById("bfGateTitle").textContent === "Your gates" && Bd.d.getElementById("deckMemberGates").textContent.indexOf("A gate you set can only stop an action the platform's own checks let through. It never lets through anything they refused.") !== -1);
+    const before = Bd.calls.length;
+    Bd.d.getElementById("bfGateTest").click(); await flush();
+    const after = Bd.calls.slice(before);
+    check("P10. \"Test against my last 30 days\" sends one POST to /api/member-gates/preview and nothing else", after.length === 1 && after[0].method === "POST" && after[0].url === "/api/member-gates/preview" &&
+      RULES.validateRule(after[0].body.rule, after[0].body.scope).ok, J(after));
+    check("P10. the builder offers AND, OR and NOT", /value="all"/.test(Bd.d.getElementById("deckMemberGates").innerHTML) && /value="any"/.test(Bd.d.getElementById("deckMemberGates").innerHTML) && /NOT/.test(Bd.d.getElementById("deckMemberGates").textContent));
+  }
+  check("P11. \"Why?\" sits beside runs and proposals on the agent page, and beside a schedule run that did not go ahead",
+    FILES.agentProfile.indexOf("whyLinkHtml(\"ai_task:\" + t.id)") !== -1 && FILES.agentProfile.indexOf("whyLinkHtml(\"proposal:\" + d.proposal_id)") !== -1 &&
+    FILES.agentProfile.indexOf("why.setAttribute(\"data-bf-why\", \"schedule:\" + row.id);") !== -1 && FILES.agentProfile.indexOf("s.src = \"/scripts/bf-why.js\";") !== -1);
+  check("P11. …and in the HQ queues: approvals by proposal, the run history by task",
+    FILES.hq.indexOf("why.setAttribute(\"data-bf-why\", \"proposal:\" + p.id);") !== -1 && FILES.deck.indexOf("why.setAttribute(\"data-bf-why\", \"ai_task:\" + task.id);") !== -1 &&
+    FILES.execHtml.indexOf("<script src=\"/scripts/bf-why.js\"></script>") !== -1);
+
+  /* ═══ Q. export, deletion and backup ═════════════════════════════════════ */
+  console.log("\n══ Q. member_gates is exported, deleted with the account and backed up ══");
+  {
+    const yd = require(path.join(REPO, "lib/yourData"));
+    const e = yd.DATA.filter(x => x.table === "member_gates");
+    check("Q1. member_gates is in DATA once: group agents, owner user_id, onDelete delete", e.length === 1 && e[0].group === "agents" && J(e[0].owner) === J(["user_id"]) && e[0].onDelete === "delete", J(e));
+    check("Q2. member_gates is in DELETE_ORDER once", yd.DELETE_ORDER.filter(t => t === "member_gates").length === 1);
+    check("Q3. the foreign key cascades with the account", /user_id\s+uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE/.test(FILES.migration159));
+    const bk = require(path.join(REPO, "lib/backup"));
+    check("Q4. lib/backup.js backs it up", Array.isArray(bk.BACKUP_TABLES) && bk.BACKUP_TABLES.indexOf("member_gates") !== -1);
+  }
+
+  /* ═══ R. migration 159 ═══════════════════════════════════════════════════ */
+  console.log("\n══ R. migration 159 ══");
+  {
+    const files = fs.readdirSync(path.join(REPO, "supabase/migrations"));
+    const sql = FILES.migration159.replace(/--[^\n]*/g, "");
+    check("R1. 159_member_gates.sql exists and is the only migration numbered 159", files.filter(f => /^159_/.test(f)).length === 1 && files.indexOf("159_member_gates.sql") !== -1);
+    check("R2. member_gates: id, user_id, name (1 to 60), scope, rule (a jsonb object of at most 4096 bytes), time_zone, enabled, created_at, updated_at",
+      ["id          uuid PRIMARY KEY DEFAULT gen_random_uuid()", "name        text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60)",
+        "rule        jsonb NOT NULL CHECK (jsonb_typeof(rule) = 'object' AND pg_column_size(rule) <= 4096)", "enabled     boolean NOT NULL DEFAULT true",
+        "created_at  timestamptz NOT NULL DEFAULT now()", "updated_at  timestamptz NOT NULL DEFAULT now()"].every(x => sql.indexOf(x) !== -1) && RULES.LIMITS.NAME_MAX === 60 && RULES.LIMITS.MAX_BYTES === 4096);
+    const scopes = (/scope\s+text NOT NULL CHECK \(scope IN \(([^)]*)\)\)/.exec(sql) || [])[1];
+    check("R3. the scope list equals lib/gateRules.js SCOPES", !!scopes && J(scopes.match(/'[a-z_]+'/g).map(x => x.slice(1, -1))) === J(RULES.SCOPES.slice()), scopes);
+    check("R4. row level security on, with no policy and no grant", /ALTER TABLE public\.member_gates ENABLE ROW LEVEL SECURITY;/.test(sql) && !/CREATE POLICY|GRANT /i.test(sql));
+    check("R5. gate_decisions gains facts (an object of at most 512 bytes), member_gate_id and member_gate_name, all nullable",
+      /ADD COLUMN IF NOT EXISTS facts jsonb\s+CHECK \(facts IS NULL OR \(jsonb_typeof\(facts\) = 'object' AND pg_column_size\(facts\) <= 512\)\)/.test(sql) &&
+      /ADD COLUMN IF NOT EXISTS member_gate_id uuid,/.test(sql) && /ADD COLUMN IF NOT EXISTS member_gate_name text/.test(sql));
+    check("R6. the sweep's index on created_at", /CREATE INDEX IF NOT EXISTS gate_decisions_created_idx\s+ON public\.gate_decisions \(created_at\);/.test(sql));
+    const m143 = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^143_/.test(f)).map(f => read("supabase/migrations/" + f)).join("\n");
+    const statusList = s => { const m = /last_run_status IS NULL OR last_run_status IN \(([^)]*)\)/i.exec(s); return m ? m[1].match(/'[a-z_]+'/g).map(x => x.slice(1, -1)) : null; };
+    check("R7. last_run_status gains skipped_member_gate, keeping every value migration 143 allowed",
+      !!statusList(m143) && J(statusList(sql)) === J(statusList(m143).concat(["skipped_member_gate"])), J(statusList(sql)) + " vs " + J(statusList(m143)));
+    check("R8. the migration only creates, alters and indexes: no DROP TABLE, DELETE, UPDATE or TRUNCATE", !/DROP TABLE|DELETE FROM|UPDATE public|TRUNCATE/i.test(sql));
+  }
+
+  /* ═══ S. no emoji in anything B2 added ═══════════════════════════════════ */
+  {
+    const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u;
+    const named = { "lib/gateRules.js": FILES.rules, "lib/gateDecisionsSweep.js": FILES.sweep, "159_member_gates.sql": FILES.migration159, "scripts/bf-why.js": FILES.why, "lib/gates.js": FILES.gates };
+    check("S1. no emoji in lib/gateRules.js, lib/gateDecisionsSweep.js, migration 159, bf-why.js or lib/gates.js", Object.keys(named).every(k => !EMOJI.test(named[k])),
+      Object.keys(named).filter(k => EMOJI.test(named[k])).join(", "));
+  }
 
   console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED (" + passes + ")" : "CHECKS FAILED: " + failures + " failing, " + passes + " passing"));
   process.exit(failures === 0 ? 0 : 1);

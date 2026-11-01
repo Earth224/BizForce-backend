@@ -119,6 +119,8 @@ function harness(modelText) {
     supabase: fakeDb(writes), RichText: RichText, URL: URL, console: { log() {}, warn() {}, error() {} },
     process: { env: {} },
     canSendOutreach: async function () { return { allowed: true }; },
+    // NAMED (B2, Nov 1 2026): convertSingleLead now records its G23/G22 decision (checkGates J5); stubbed here.
+    recordGateDecision: function () { return Promise.resolve(true); },
     callAnthropicText: async function (prompt) { prompts.push(prompt); return { text: modelText, stopReason: "end_turn" }; },
     sendBlueskyReply: async function (lead, text) { sends.push({ via: "bluesky", text: text }); return { sent: true, uri: "at://fake/post" }; },
     sendMastodonReply: async function (lead, text) { sends.push({ via: "mastodon", text: text }); return { sent: true, uri: "https://fake/post" }; }

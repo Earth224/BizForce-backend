@@ -141,7 +141,11 @@ const MUTATIONS = {
   // I: the bar shown on the dashboard's first visit, not the icon
   "bar-on-first-dashboard-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"tag\"; }"]],
   // I: the player shown on another page with no music playing
-  "player-shown-without-music": [[BOOMBOX, "function away() { return !popout && !home && (state === \"icon\" || !live); }", "function away() { return !popout && !home && state === \"icon\"; }"]],
+  /* NAMED re-anchor (Part 0). BEFORE: anchored on away() as "!home && (state === icon || !live)". AFTER: the same
+     mutant (shown whatever the music) on today's away(), which is "!home && !live". */
+  "player-shown-without-music": [[BOOMBOX, "function away() { return !popout && !home && !live; }", "function away() { return !popout && !home && false; }"]],
+  /* Part 0: the old gap back. Closing to the icon off the dashboard hides the player again, so nothing there can stop the music. */
+  "no-stop-off-dashboard": [[BOOMBOX, "function away() { return !popout && !home && !live; }", "function away() { return !popout && !home && (state === \"icon\" || !live); }"]],
   // I: the volume fader's lane moved back over the R meter
   "fader-overlaps-meter": [[BOOMBOX, "\".bbx-vol{left:268px;top:2px;width:30px;height:40px}\"", "\".bbx-vol{left:246px;top:2px;width:30px;height:40px}\""]],
   // I: Pinned still fixed on screen
@@ -2039,12 +2043,37 @@ async function stageChecks(c) {
   check("I5. ... but a track left paused in another session (no music this session) shows nothing", !shown(Q2) && !Q2.BFMusic.musicOn());
   closeOne(Q2);
 
-  /* I6. Close to icon keeps the music and shows the equaliser; Stop takes the player off the other pages */
+  /* I6. Close to icon keeps the music and shows the equaliser; off the dashboard a floating icon keeps a stop within reach; Stop takes the player off the other pages
+     NAMED pin change (Part 0, the music gap). BEFORE: "on another page, Close to icon keeps the music playing and the player
+     leaves that page (the icon lives on the dashboard)", asserting !shown. AFTER: the floating icon stays on that page while the
+     music is on, at the player's last position by the position rule; it opens the bar, whose Stop ends the music and the icon. */
   gesture(Q1); Q1.BFMusic.play(); await settle();
+  const Q1R = boxOf(Q1), atPlayer = spot(Q1).join();
   click(Q1, ".bbx-fkeys [data-act=bbx-close]");
-  check("I6. on another page, \"Close to icon\" keeps the music playing and the player leaves that page (the icon lives on the dashboard)",
-    Q1.BFMusic.playing() && boxOf(Q1).getAttribute("data-state") === "icon" && !shown(Q1));
-  Q1.BFMusic.pause(); closeOne(Q1); await settle();
+  const fIcon = Q1.document.querySelector(".bfm-icon"), fEq = Q1.document.querySelector(".bfm-icon-eq");
+  const fBars = fEq ? fEq.querySelectorAll("span") : [];
+  check("I6. on another page, \"Close to icon\" while music plays keeps it playing and leaves a small floating icon, the drawn boombox with its animated equaliser",
+    Q1.BFMusic.playing() && Q1R.getAttribute("data-state") === "icon" && shown(Q1) && css(fIcon).display === "block" && !!fIcon.querySelector("svg.bfm-icon-art #bbxIconBody") &&
+    Q1R.getAttribute("data-playing") === "true" && css(fEq).display === "flex" && fBars.length === 4 && /bbx-icon-eq/.test(css(fBars[0]).animation),
+    [Q1.BFMusic.playing(), Q1R.getAttribute("data-state"), shown(Q1), css(fIcon).display, css(fEq).display].join(" "));
+  check("I6. ... where the player was, by the Follow me rule: fixed on screen and not pinned",
+    Q1R.getAttribute("data-pinned") === "false" && css(Q1R).position === "fixed" && spot(Q1).join() === atPlayer, Q1R.getAttribute("data-pinned") + " " + css(Q1R).position + " " + spot(Q1) + " vs " + atPlayer);
+  click(Q1, ".bfm-icon");
+  const fOpened = Q1R.getAttribute("data-state") === "tag" && shown(Q1) && !!Q1.document.querySelector(".bfm-tag [data-act=stop]");
+  click(Q1, ".bfm-tag [data-act=stop]"); await settle();
+  check("I6. ... pressed, it opens the bar, and the bar's \"Stop music\" stops the music and the player leaves that page",
+    fOpened && !Q1.BFMusic.playing() && !shown(Q1), fOpened + " " + Q1.BFMusic.playing() + " " + shown(Q1));
+  closeOne(Q1); await settle();
+  const QF = await openPage(Object.assign({}, base, liveOn(T1, { page: "crm.html", boombox: { state: "icon" } })));
+  QF.localStorage.setItem("bf_music", JSON.stringify(Object.assign(JSON.parse(QF.localStorage.getItem("bf_music") || "{}"), { placement: "pinned" })));
+  QF.BFMusic.setPosition("pinned");
+  gesture(QF); QF.BFMusic.play(); await settle();
+  const QFR = boxOf(QF);
+  const fPinned = shown(QF) && QFR.getAttribute("data-state") === "icon" && QFR.getAttribute("data-pinned") === "true" && css(QFR).position === "absolute";
+  QF.BFMusic.stop(); await settle();
+  check("I6. a page opened at the icon stage while music is on shows the floating icon, by the Pinned rule (absolute, in its home spot); when the music stops, it disappears",
+    fPinned && !QF.BFMusic.playing() && !shown(QF), fPinned + " " + shown(QF));
+  closeOne(QF); await settle();
   const DQ = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
   gesture(DQ); DQ.BFMusic.playTrack(T2); await settle();
   click(DQ, ".bfm-tag [data-act=bbx-close]");

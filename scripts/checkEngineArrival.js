@@ -138,6 +138,8 @@ const LEAD = { id: "lead-1", post_uri: "at://did:plc:abcxyz123/app.bsky.feed.pos
 async function draftRun(src, product, modelMessage, lead) {
   const ctx = liftAll(src), prompts = [], sends = [];
   ctx.canSendOutreach = async () => ({ allowed: true });
+  // NAMED (B2, Nov 1 2026): convertSingleLead now records its G23/G22 decision (checkGates J5); stubbed here.
+  ctx.recordGateDecision = () => Promise.resolve(true);
   ctx.callAnthropicText = async p => { prompts.push(p); return { text: JSON.stringify({ outreach_message: modelMessage, internal_analysis: "fixture" }), stopReason: "end_turn" }; };
   ctx.sendBlueskyReply = async (l, text) => { sends.push(text); return { sent: true, uri: "at://fake/post" }; };
   ctx.sendMastodonReply = async (l, text) => { sends.push(text); return { sent: true, uri: "https://fake/post" }; };

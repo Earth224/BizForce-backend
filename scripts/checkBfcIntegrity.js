@@ -153,7 +153,13 @@ const CATALOG_ROUTE = routeSource(SERVER, 'app.get("/api/certifications/catalog"
 // NAMED (Oct 28 2026, member support): BEFORE the transfer route held the limits, the hold, the
 // recipient check, the 24-hour total and the bfc_send call itself. AFTER those lines, unchanged, sit in
 // bfcSendWithinLimits, which the route and POST /api/wallet/support both call; the route is read with it.
-let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"') + "\n\n" + functionSource(SERVER, "bfcSendWithinLimits");
+// NAMED (B2, Nov 1 2026): BEFORE bfcSendWithinLimits held those lines itself. AFTER they sit, byte for byte, in
+// bfcSendWithinLimitsSteps, and bfcSendWithinLimits records its G24 decision around them (checkGates J6 proves the
+// body is unchanged and the wrapper transparent). The steps and the wrapper's helpers are read with it; the record
+// itself is stubbed here, since what is recorded is checkGates' subject, not this one's.
+let TRANSFER = routeSource(SERVER, 'app.post("/api/wallet/transfer"') + "\n\n" +
+  ["bfcSendWithinLimits", "bfcSendWithinLimitsSteps", "watchGateResponse", "refusalReasonOf", "bfcGateObservation"].map(n => functionSource(SERVER, n)).join("\n\n") +
+  "\n\nfunction recordGateDecision() { return Promise.resolve(true); }";
 const TRANSFER_CONSTS = blockSource(SERVER, "const BFC_RECIPIENT_UUID = ", "  unknown_sender:        400\n};\n");
 // The transfer's success answer carries bfcDisclaimer: BFC_NOTICE (launch audit #9; checkBfcNotice holds its text).
 const NOTICE_CONST = blockSource(SERVER, "const BFC_NOTICE = ", "its rules or availability may change.\";\n");

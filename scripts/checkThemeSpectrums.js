@@ -224,8 +224,22 @@ check("S1. the files edited by hand are only the named five, each proved on its 
 const oldProfile = gitShow(BEFORE, PROFILE_JS) || "";
 const NEW_V = /    var v = function \(name, fallback\) \{\n[\s\S]*?\n    \};\n/;
 const OLD_V = "    var v = function (name, fallback) { var x = cs ? String(cs.getPropertyValue(name) || \"\").trim() : \"\"; return x || fallback; };\n";
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did",
-  NEW_V.test(FILES[PROFILE_JS]) && unthemed(FILES[PROFILE_JS].replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
+/* NAMED BEFORE → AFTER (B2, Nov 1 2026). BEFORE the file was compared as it stands. AFTER B2 added "Why?" to the agent
+   page in four places: the schedule card's button, a link beside each queued proposal and each run, and the
+   whyLinkHtml/loadWhy section before the boot line (checkGates P11 pins them). Each is cut out, exactly once, before
+   the comparison, so the proof of Block 4d's one hand edit is unchanged. A missing or doubled addition fails S2. */
+function withoutB2(text) {
+  let t = text, ok = true;
+  const cut = (from, to) => { const a = t.indexOf(from); const b = a < 0 ? -1 : t.indexOf(to, a); if (a < 0 || b < 0 || t.indexOf(from, a + 1) !== -1) { ok = false; return; } t = t.slice(0, a) + t.slice(b + to.length); };
+  cut("      /* A run that did not go ahead: \"Why?\" opens", "        lastEl.appendChild(why);\n      }\n");
+  cut("            (d.proposal_id ? whyLinkHtml(\"proposal:\" + d.proposal_id) : '') +\n", "\n");
+  cut("          (t.id ? whyLinkHtml(\"ai_task:\" + t.id) : '') +\n", "\n");
+  cut("  /* ── \"Why?\" (scripts/bf-why.js)", "  document.addEventListener(\"DOMContentLoaded\", loadWhy);\n\n");
+  return ok ? t : null;
+}
+const profileNow = withoutB2(FILES[PROFILE_JS]);
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions set aside)",
+  profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);
 /* Every key the old answer has, the new one has with the same value (the new one may say more: each element's

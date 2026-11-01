@@ -190,10 +190,13 @@ function closureOf(root, stubs) {
 // The whole app.post("/api/guide/ask", ...) statement, as server.js has it.
 const ROUTE_SIG = 'app.post("/api/guide/ask",';
 const routeAt = SRC.indexOf(ROUTE_SIG);
-const ROUTE_SRC = routeAt === -1 ? null : SRC.slice(routeAt, SRC.indexOf("}));\n", routeAt) + 4);
+// NAMED (B2, Nov 1 2026): BEFORE the statement ended "}));" (the handler passed straight to app.post). AFTER the handler
+// is wrapped by guideAskRecorded, which records its G25 decision and changes no answer (checkGates J7), so it ends
+// "})));". The wrapper is lifted with the route; its record is stubbed below (recordGateDecision).
+const ROUTE_SRC = routeAt === -1 ? null : SRC.slice(routeAt, SRC.indexOf("})));\n", routeAt) + 5);
 const STUBS = new Set(["supabase", "console", "process", "require", "module", "app", "Buffer", "URL", "setTimeout", "setImmediate", "fetch",
   "requireAuth", "requireActiveSubscription", "aiLimiter", "Date", "Math", "JSON", "Object", "Number", "String", "Array", "Promise", "Error",
-  "OWNER_ACCOUNT_ID", "isTestAccount", "Anthropic", "resolveAnthropicKey", "guideAsk", "APP_MAP", "getUserPlan"]);
+  "OWNER_ACCOUNT_ID", "isTestAccount", "Anthropic", "resolveAnthropicKey", "guideAsk", "APP_MAP", "getUserPlan", "recordGateDecision"]);
 
 /* ── an in-memory database that records every write ──────────────────────── */
 const clone = x => JSON.parse(JSON.stringify(x));
@@ -270,6 +273,7 @@ function wired(rows, script, dbOpts) {
     Anthropic, resolveAnthropicKey: { withSource: async () => ({ key: "stub-key", source: "platform", reason: "no_stored_key" }) },
     guideAsk: G, APP_MAP: MAP, getUserPlan: async id => ({ active: id === SUBSCRIBER }),
     requireAuth: AUTH, aiLimiter: LIMITER, requireActiveSubscription: SUBGATE,
+    recordGateDecision: function () { return Promise.resolve(true); },
     app: { post(p) { routes[p] = Array.prototype.slice.call(arguments, 1); } }
   };
   vm.createContext(ctx);

@@ -240,7 +240,10 @@ const visibleAndCode = html => html.replace(/<!--[\s\S]*?-->/g, "");
   // NAMED (Oct 28 2026, member support): BEFORE the transfer route held the limits, the hold, the
   // recipient check, the 24-hour total and the bfc_send call itself. AFTER those lines, unchanged, sit in
   // bfcSendWithinLimits, which the route and POST /api/wallet/support both call; the route is read with it.
-  const transferRoute = routeText("app.post(\"/api/wallet/transfer\", requireAuth,") + "\n\n" + routeText("async function bfcSendWithinLimits(");
+  // NAMED (B2, Nov 1 2026): BEFORE those lines sat in bfcSendWithinLimits. AFTER they sit, byte for byte, in
+  // bfcSendWithinLimitsSteps, which bfcSendWithinLimits wraps to record its G24 decision (checkGates J6); both are read.
+  const transferRoute = routeText("app.post(\"/api/wallet/transfer\", requireAuth,") + "\n\n" + routeText("async function bfcSendWithinLimits(") +
+    "\n\n" + routeText("async function bfcSendWithinLimitsSteps(");
   check("both wallet routes are found", getRoute.length > 200 && transferRoute.length > 200);
   /* Every answer a caller can succeed with: res.json(…) or res.status(2xx).json(…). */
   function successAnswers(code) {

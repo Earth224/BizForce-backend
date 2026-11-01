@@ -177,7 +177,13 @@ const EXPECTED_GATED = [
   // NAMED (Oct 28 2026, members connect their own Bluesky; gated 63 -> 65): BEFORE no member connection. AFTER
   // connecting a Bluesky account and filing a profile update need a subscription (requireActiveSubscription);
   // disconnecting and reading the status never do.
-  "post /api/social/bluesky/connect", "post /api/social/bluesky/propose-profile"
+  "post /api/social/bluesky/connect", "post /api/social/bluesky/propose-profile",
+  // NAMED (Nov 1 2026, member gates, migration 159; gated 65 -> 70): BEFORE no member gate. AFTER a member reads,
+  // makes, changes, deletes and tests their own gates with a subscription (requireActiveSubscription,
+  // memberGatesLimiter), because a gate governs agents that only run with one. The rule language and the
+  // Decisions reads stay login-only: a member can always see why something ran (checkGates N).
+  "get /api/member-gates", "post /api/member-gates", "put /api/member-gates/:id", "delete /api/member-gates/:id",
+  "post /api/member-gates/preview"
 ];
 
 const EXPECTED_ADMIN = [
@@ -336,7 +342,11 @@ const EXPECTED_OWN = [
   // AFTER a member saves their own player's finish and EQ (user_preferences.music_player, their own row), checked
   // against a closed shape (±12 dB); served to no one else, and nothing calls the model. Deliberately ungated, like
   // the themes and the music library (checkMusicPlayer H5).
-  "put /api/music/player"
+  "put /api/music/player",
+  // NAMED (Nov 1 2026, every gate recorded; effectful login-only 147 -> 148): BEFORE the guide wrote nothing. AFTER
+  // each answer or refusal the guide gives records its G25 decision (gate_decisions, the caller's own row, kept 90
+  // days, served only to them through "Why?"); the answer itself is unchanged and calls no model (checkGates J).
+  "post /api/guide/ask"
 ];
 
 /* Unauthenticated routes that write. */

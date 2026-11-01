@@ -131,6 +131,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `ENABLE_AGENT_SCHEDULES` | off | Exactly `true` runs members' scheduled agent runs every hour. |
 | `AGENT_SCHEDULE_MAX_PER_TICK` | `25` | Scheduled runs per hourly run. |
 | `ENABLE_STORAGE_DELETION_RETRY` | on | On unless exactly `false`: the daily retry that removes a deleted account's files from Storage. |
+| `ENABLE_GATE_DECISIONS_SWEEP` | on | On unless exactly `false`: the daily sweep that deletes gate decisions older than 90 days. |
 | `BFC_TRANSFER_MAX` | `1000` | The most BFC one send or donation may move. |
 | `BFC_TRANSFER_DAILY_CAP` | `2000` | BFC one account may send and donate in 24 hours. |
 | `BFC_TRANSFER_HOLD_DAYS` | `7` | Days a new account must wait before it may send BFC. |
@@ -148,6 +149,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `youtubeRetentionTick`: delete YouTube data older than 30 days | cron `0 9 * * *`, UTC | on unless `ENABLE_YOUTUBE_RETENTION` is exactly `false` |
 | ops alert scan (`lib/opsAlert.js` scanTick) | cron `*/30 * * * *`, UTC | on unless `ENABLE_OPS_ALERTS` is exactly `false` |
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
+| `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |
 | `reminderTick`: calendar push reminders | every 60 seconds | always, when `server.js` is the program |
