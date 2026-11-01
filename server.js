@@ -7793,6 +7793,43 @@ app.delete("/api/music/playlists/:id", requireAuth, musicWriteLimiter, async fun
     return res.json(musicStateReply(await readMusicState(req.user.id)));
   } catch (error) { musicFailed(res, next, error); }
 });
+
+/* The boombox-mixer's own settings (lib/music.js playerSettings): the finish,
+   chrome or black, and the three EQ bands, saved per member in
+   user_preferences.music_player (migration 157). Before that migration the
+   column is missing: 503 and PLAYER_NOT_SET_UP, and the player keeps them on
+   the device. `saved` says whether the member has saved any yet. */
+async function readMusicPlayer(userId) {
+  const { data, error } = await supabase.from("user_preferences").select("music_player").eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data && data.music_player ? data.music_player : null;
+}
+function musicPlayerFailed(res, next, error) {
+  if (memberMusic.missingPlayerColumn(error)) return res.status(503).json({ error: memberMusic.PLAYER_NOT_SET_UP, reason: "music_player_not_set_up" });
+  return next(error);
+}
+app.get("/api/music/player", requireAuth, musicLimiter, async function (req, res, next) {
+  try {
+    const stored = await readMusicPlayer(req.user.id);
+    return res.json({ player: memberMusic.storedPlayer(stored), saved: !!stored });
+  } catch (error) { musicPlayerFailed(res, next, error); }
+});
+app.put("/api/music/player", requireAuth, musicWriteLimiter, async function (req, res, next) {
+  try {
+    const current = await readMusicPlayer(req.user.id);
+    const checked = memberMusic.playerSettings(req.body, current);
+    if (checked.error) return res.status(400).json({ error: checked.error, field: checked.field });
+    const now = new Date().toISOString();
+    const up = await supabase.from("user_preferences").update({ music_player: checked.value, updated_at: now })
+      .eq("user_id", req.user.id).select("user_id");
+    if (up.error) throw up.error;
+    if (!up.data || !up.data.length) {
+      const ins = await supabase.from("user_preferences").insert({ user_id: req.user.id, music_player: checked.value, updated_at: now }).select("user_id");
+      if (ins.error) throw ins.error;
+    }
+    return res.json({ player: checked.value, saved: true });
+  } catch (error) { musicPlayerFailed(res, next, error); }
+});
 /* ── end of members' music ──────────────────────────────────────────────── */
 
 /* GET /api/profile/:username WAS DELETED (launch hardening, 2026-10-27). It

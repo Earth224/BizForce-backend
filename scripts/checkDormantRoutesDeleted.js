@@ -167,7 +167,11 @@ const ADDED = [
   // NAMED (Oct 31 2026, profile designs, migration 156): BEFORE 360 routes; AFTER 362, adding its two routes,
   // each requireAuth and rate-limited, each writing only the caller's own profile (checkProfileDesign C0–C8)
   ["put", "/api/bfp/profile/design"],           // save the design, checked against the closed schema, or one of the member's own saved themes as its theme (total 360 -> 361)
-  ["delete", "/api/bfp/profile/design"]         // "Reset profile design": back to the default look (total 361 -> 362)
+  ["delete", "/api/bfp/profile/design"],        // "Reset profile design": back to the default look (total 361 -> 362)
+  // NAMED (Oct 31 2026, the boombox-mixer, migration 157): BEFORE 362 routes; AFTER 364, adding the player's two
+  // settings routes, each requireAuth and rate-limited, each the caller's own user_preferences row (checkMusicPlayer A12, H5)
+  ["get", "/api/music/player"],                 // the member's finish and EQ, or the defaults (total 362 -> 363)
+  ["put", "/api/music/player"]                  // save the finish and EQ, checked against a closed shape, ±12 dB (total 363 -> 364)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

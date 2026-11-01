@@ -331,7 +331,12 @@ const EXPECTED_OWN = [
   // AFTER a member saves and resets their own profile's design (bf_profiles.profile_design, their own row), checked
   // against a closed schema; visitors read it only as validated. Nothing calls the model. Deliberately ungated, like
   // the themes: how a member's own profile looks never needs a subscription (checkProfileDesign C0–C8).
-  "put /api/bfp/profile/design", "delete /api/bfp/profile/design"
+  "put /api/bfp/profile/design", "delete /api/bfp/profile/design",
+  // NAMED (Oct 31 2026, the boombox-mixer, migration 157; effectful login-only 146 -> 147): BEFORE no player settings.
+  // AFTER a member saves their own player's finish and EQ (user_preferences.music_player, their own row), checked
+  // against a closed shape (±12 dB); served to no one else, and nothing calls the model. Deliberately ungated, like
+  // the themes and the music library (checkMusicPlayer H5).
+  "put /api/music/player"
 ];
 
 /* Unauthenticated routes that write. */

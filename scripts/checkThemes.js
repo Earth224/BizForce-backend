@@ -1184,6 +1184,28 @@ function documentedRule(A, B, M) {
 const sortedJson = o => JSON.stringify(Object.keys(o).sort().map(k => [k, o[k]]));
 /* Every Block 4d token form resolved to its fallback (scripts/_unthemed.js), then every element var(). */
 const resolved4d = t => unthemed(require("./_unthemed").unthemed(t));
+/* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer: one scrollbar everywhere). BEFORE: the guide panel, the
+   chat and the guide's answer styled scrollbars of their own, and a public page had no scrollbar rule. AFTER: those
+   own scrollbar rules are gone (one rule, BF-SCROLLBARS, from bf-theme.js, css/bizforce-ui.css or inline, proved by
+   scripts/checkScrollbars.js), so the OLD text is read without them: a scrollbar-width / scrollbar-color line, and
+   a ::-webkit-scrollbar rule to its closing brace. A page's text is read without the BF-SCROLLBARS block. */
+function withoutOwnScrollbars(text) {
+  if (text === null || text === undefined) return text;
+  const out = []; let skipping = false;
+  const un = l => (/^\s*"(.*)",?\s*$/.exec(l) || [0, l])[1];
+  for (const L of String(text).split("\n")) {
+    const c = un(L);
+    if (skipping) { if (c.indexOf("}") !== -1) skipping = false; continue; }
+    if (/::-webkit-scrollbar/.test(c)) { if (/\{[^}]*\}/.test(c)) continue; if (c.indexOf("{") !== -1) skipping = true; continue; }
+    if (/^\s*scrollbar-(width|color)\s*:[^;]*;\s*(scrollbar-(width|color)\s*:[^;]*;\s*)?$/.test(c)) continue;
+    out.push(L);
+  }
+  return out.join("\n");
+}
+function withoutScrollbarBlock(text) {
+  if (text === null || text === undefined) return text;
+  return String(text).replace(/<style id="bf-scrollbars">\n\/\* BF-SCROLLBARS:BEGIN[\s\S]*?\/\* BF-SCROLLBARS:END \*\/\n<\/style>\n/g, "");
+}
 const styleArray = t => { const m = /style\.textContent = \[\n([\s\S]*?)\n  \]\.join\("\\n"\)/.exec(t); return m ? m[1] : null; };
 function ruleBodies(css, selRe) {
   const out = []; const re = /([^{}]+)\{([^{}]*)\}/g; let m;
@@ -1307,8 +1329,8 @@ async function elements() {
     resolved4d(pick(FILES[SETTINGS], /^\.brand-badge$/)) === pick(setWas, /^\.brand-badge$/) && resolved4d(pick(FILES[SETTINGS], /^\.btn$/)) === pick(setWas, /^\.btn$/) &&
     pick(setWas, /^\.btn$/).length > 0);
   const oldMist = gitShow(ELEMENTS_BEFORE, PRESENCE) || "", oldGuide = gitShow(ELEMENTS_BEFORE, GUIDE) || "";
-  check("H3. the mist's and the chat glow's CSS, resolved, is exactly today's (scripts/termaximus-presence.js)", !!styleArray(oldMist) && resolved4d(styleArray(FILES[PRESENCE]) || "") === styleArray(oldMist));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d()
-  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && resolved4d(styleArray(FILES[GUIDE]) || "") === styleArray(oldGuide));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d()
+  check("H3. the mist's and the chat glow's CSS, resolved, is exactly today's (scripts/termaximus-presence.js)", !!styleArray(oldMist) && resolved4d(styleArray(FILES[PRESENCE]) || "") === withoutOwnScrollbars(styleArray(oldMist)));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
+  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && resolved4d(styleArray(FILES[GUIDE]) || "") === withoutOwnScrollbars(styleArray(oldGuide)));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
   const oldStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(oldMist); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const newStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(FILES[PRESENCE]); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const tones = (() => { const m = /var STAR_TONES = (\{[\s\S]*?\});/.exec(FILES[PRESENCE]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
@@ -1464,7 +1486,7 @@ async function elements() {
 
   // H8: public pages and cards
   const pubChanged = LIBX.UNTHEMED.filter(k => { const f = ALL_PAGES.filter(x => keyOfFile(x) === k)[0]; return !f || gitShow(ELEMENTS_BEFORE, f) !== gitShow(THEMES_DONE, f) ||
-    themeLines(FILES[f]) !== themeLines(gitShow(THEMES_DONE, f)) || FILES[f].indexOf(TAG) !== -1; });
+    themeLines(withoutScrollbarBlock(FILES[f])) !== themeLines(gitShow(THEMES_DONE, f)) || FILES[f].indexOf(TAG) !== -1; });   // NAMED (boombox-mixer): without the one scrollbar block
   check("H8. every public page (" + LIBX.UNTHEMED.length + ") was exactly as it was through the theme work, keeps every theme-bearing line since, and loads no engine: their wordmarks and buttons keep the owner's look", pubChanged.length === 0, pubChanged.join(","));
   const dcWas = gitShow(ELEMENTS_BEFORE, "digital-cards.html") || "";
   check("H8. digital cards keep their own look: the card-theme swatches and the card's watermark are untouched",

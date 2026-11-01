@@ -39,6 +39,20 @@
         tag's marquee only when its title overflows, all of it still under
         reduced motion and paused while hidden, one announcement per track,
         and "No track loaded" with nothing scrolling when nothing is loaded.
+     H  THE BOOMBOX-MIXER: it starts as the bar on every page, beside the logo
+        or in the top-left corner (never bottom left), and remembers the bar or
+        the boombox and its place; no Pop out on the face, the body's keys
+        (Library, Minimise, Reset position) drawn and named; the library slides
+        out by transform and closes on its key or Escape, never opening a
+        window, while "Keep playing between pages" opens one only when chosen;
+        the finish (Chrome / Black) on the boombox AND the bar, kept on the
+        device and the account (GET/PUT /api/music/player, validated, 503
+        before migration 157), chosen in the panel or Settings; the EQ's three
+        filters (low shelf 120 Hz, peaking 1 kHz, high shelf 6 kHz) clamped to
+        ±12 dB, with keys, a centre detent and a double-click reset, and kept;
+        the crossfader setting the Mix and showing it; the fader setting the
+        master gain; the meters L/R where the sound splits, else level and
+        peak; and the bar on the member's own profile only.
 
    MUTATE=<name> edits the files IN MEMORY; MUTATE=all runs each in its own
    process. BIZFORCE_FRONTEND_DIR overrides the frontend location. No network,
@@ -58,6 +72,7 @@ const DASH = "F:dashboard.html", POPOUT = "F:music-popout.html", SETTINGS = "F:s
 const GUIDE = "F:scripts/termaximus-guide.js", BOOMBOX = "F:scripts/bf-boombox.js", PRESENCE = "F:scripts/termaximus-presence.js";
 /* A signed-in page whose mist tag a mutation can take away (G1 reads the pages through FILES). */
 const CRM = "F:crm.html";
+const MIGRATION_157 = "supabase/migrations/157_user_preferences_music_player.sql", PROFILE = "F:profile.html";
 const UID = "aaaaaaaa-0000-4000-8000-000000000001";
 const OTHER = "bbbbbbbb-0000-4000-8000-000000000002";
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
@@ -102,6 +117,26 @@ const MUTATIONS = {
   "music-mode-at-parse-time": [[MUSIC, "  if (document.readyState === \"loading\") document.addEventListener(\"DOMContentLoaded\", run);\n  else run();\n})();", "  run();\n})();"]],
   // a start that fails leaves nothing on the page (G2 live order)
   "start-failure-silent": [[MUSIC, "    doc.body.appendChild(b);\n  }\n  window.__bfMusicStartFailed = startFailed;", "  }\n  window.__bfMusicStartFailed = startFailed;"]],
+  // H: the boombox opens expanded on a first visit
+  "auto-expanded-on-first-load": [[BOOMBOX, "    var state = popout ? \"box\" : (prefs.state === \"box\" ? \"box\" : \"tag\");", "    var state = popout ? \"box\" : (prefs.state === \"tag\" ? \"tag\" : \"box\");"]],
+  // H: the default without a logo moved back to the bottom left
+  "default-bottom-left": [[BOOMBOX, "      return { left: EDGE, top: EDGE };", "      return { left: EDGE, top: window.innerHeight - EDGE - BAR_H };"]],
+  // H: a Pop out key back on the boombox's face
+  "pop-out-on-the-face": [[BOOMBOX, "        '<button type=\"button\" data-act=\"bbx-reset\"", "        '<button type=\"button\" data-act=\"popout\" aria-label=\"Pop out\">' + svg(\"expand\", 12) + \"</button>\" +\n        '<button type=\"button\" data-act=\"bbx-reset\""]],
+  // H: the library key opening a window instead of sliding the panel out
+  "panel-opens-a-window": [[BOOMBOX, "      else if (act === \"bbx-library\") setLibrary(!library);", "      else if (act === \"bbx-library\") { setLibrary(!library); window.open(\"/music-popout.html\", \"bf-music-popout\"); }"]],
+  // H: an EQ gain past ±12 dB reaching the filter
+  "eq-gain-unclamped": [[MUSIC, "    S.eq[band] = clampDb(db);", "    S.eq[band] = Number(db);"],
+    [MUSIC, "if (filters[b]) filters[b].gain.value = clampDb(S.eq[b]); }); }", "if (filters[b]) filters[b].gain.value = Number(S.eq[b]); }); }"]],
+  // H: the bar painted in fixed colours, so the finish never reaches it
+  "finish-not-on-the-bar": [[BOOMBOX, "color:var(--bbx-ink);background:\" + BRUSH + \",\" + METAL + \";border:1px solid rgba(0,0,0,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.85)",
+    "color:#1b2030;background:linear-gradient(180deg,#ffffff,#a7adb9);border:1px solid rgba(0,0,0,.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.85)"]],
+  // H: the boombox shown to a visitor of someone else's profile
+  "profile-boombox-to-visitor": [[THEME, "    if (key === \"profile.html\") {\n      var id = null, preview = false;", "    if (key === \"profile-never.html\") {\n      var id = null, preview = false;"]],
+  // H: an EQ band past ±12 dB accepted by the server
+  "server-eq-unvalidated": [[LIBM, "|| Math.abs(n) > EQ_MAX_DB) {", ") {"]],
+  // H: the Escape key leaving the library open
+  "escape-keeps-library": [[BOOMBOX, "        if (library) setLibrary(false, true); else setState(\"tag\", true);", "        setState(\"tag\", true);"]],
   "503-as-internal-error": [[SERVER, "  if (memberMusic.missingTable(error)) return res.status(503).json({ error: memberMusic.NOT_SET_UP, reason: \"music_not_set_up\" });\n", ""]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -113,7 +148,7 @@ function readInto(key) {
   FILES[key] = fs.existsSync(p) ? lf(fs.readFileSync(p, "utf8")) : null;
 }
 [SERVER, LIBM, YOURDATA, MIGRATION, "lib/accountFiles.js", "lib/legal.js", "lib/legalPages.js", "lib/themes.js",
-  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE, CRM].forEach(readInto);
+  MUSIC, THEME, SESSION, STUDIO, DASH, POPOUT, SETTINGS, TERMS, PRIVACY, GUIDE, BOOMBOX, PRESENCE, CRM, MIGRATION_157, PROFILE].forEach(readInto);
 if (FILES[MUSIC] === null) { console.log("    FAIL  frontend not found at " + FRONTEND + " (set BIZFORCE_FRONTEND_DIR)"); process.exit(1); }
 
 if (MUTATE) {
@@ -392,8 +427,9 @@ const upload = (buffer, name, mimetype) => ({ field: "track", buffer, originalna
   check("A11. deleting a playlist leaves its tracks", r.status === 200 && fake.T.member_playlists.length === 0 && fake.T.member_tracks.length === 2);
 
   const musicRoutes = lifted.routes.filter(x => /^\/api\/music/.test(x.path));
-  check("A12. all " + musicRoutes.length + " music routes (list, upload, rename, delete, URL, playlists create, change, delete) require sign-in first and are rate-limited",
-    musicRoutes.length === 8 && musicRoutes.every(x => x.mw[0] === lifted.requireAuth && x.mw.slice(1).some(f => f.__limiter)));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: 8 music routes. AFTER: 10, with GET and PUT /api/music/player (the finish and the EQ). */
+  check("A12. all " + musicRoutes.length + " music routes (list, upload, rename, delete, URL, playlists create, change, delete, the player's settings read and saved) require sign-in first and are rate-limited",
+    musicRoutes.length === 10 && musicRoutes.filter(x => x.path === "/api/music/player").map(x => x.method).sort().join() === "get,put" && musicRoutes.every(x => x.mw[0] === lifted.requireAuth && x.mw.slice(1).some(f => f.__limiter)));
 
   const sql = FILES[MIGRATION] || "";
   const migNames = fs.readdirSync(path.join(REPO, "supabase", "migrations"));
@@ -519,17 +555,37 @@ class FakeParam {
     return v;
   }
 }
-const SPECTRUM = { level: 0 };
+/* SPECTRUM.level drives the frequency bins; SPECTRUM.left / .right (0 … 1) the two channels' waveforms, a
+   square wave of that amplitude, whose RMS is the amplitude itself. FAKE_AUDIO.split false takes the
+   channel splitter away (a browser without one), FAKE_AUDIO.biquad false the filters.
+   NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: gains, analysers and sources only, and a flat waveform. AFTER: the EQ's three BiquadFilters
+   (type, frequency, Q, gain), a ChannelSplitter feeding a meter analyser per channel, and every connection
+   recorded (node.out) so the chain can be read. */
+const SPECTRUM = { level: 0, left: 0, right: 0 };
+const FAKE_AUDIO = { split: true, biquad: true };
+const node = extra => Object.assign({ out: [], connect(dst, outIdx) { this.out.push(dst); if (dst && dst.__meter && outIdx !== undefined) dst.channel = outIdx; return dst; } }, extra);
 class FakeAudioContext {
-  constructor() { this.sampleRate = 48000; this.state = "running"; this.destination = {}; }
+  constructor() { this.sampleRate = 48000; this.state = "running"; this.destination = node({ __destination: true }); this.filters = []; this.splitters = []; }
   get currentTime() { return CLOCK.t; }
-  createGain() { return { gain: new FakeParam(1), connect() {} }; }
+  createGain() { return node({ gain: new FakeParam(1) }); }
   createAnalyser() {
-    return { fftSize: 2048, get frequencyBinCount() { return this.fftSize / 2; }, smoothingTimeConstant: 0, connect() {},
+    return node({ fftSize: 2048, get frequencyBinCount() { return this.fftSize / 2; }, smoothingTimeConstant: 0, __meter: true, channel: null,
       getByteFrequencyData(a) { for (let i = 0; i < a.length; i++) a[i] = i < 8 ? SPECTRUM.level : Math.round(SPECTRUM.level / 3); },
-      getByteTimeDomainData(a) { a.fill(128); } };
+      getByteTimeDomainData(a) {
+        const amp = this.channel === 0 ? SPECTRUM.left : this.channel === 1 ? SPECTRUM.right : 0;
+        const d = Math.round(Math.max(0, Math.min(1, amp)) * 127);
+        for (let i = 0; i < a.length; i++) a[i] = 128 + (i % 2 ? d : -d);
+      } });
   }
-  createMediaElementSource(el) { return { el, connect() {} }; }
+  get createBiquadFilter() {
+    if (!FAKE_AUDIO.biquad) return undefined;
+    return () => { const f = node({ type: "lowpass", frequency: new FakeParam(350), Q: new FakeParam(1), gain: new FakeParam(0), detune: new FakeParam(0) }); this.filters.push(f); return f; };
+  }
+  get createChannelSplitter() {
+    if (!FAKE_AUDIO.split) return undefined;
+    return n => { const sp = node({ channels: n }); this.splitters.push(sp); return sp; };
+  }
+  createMediaElementSource(el) { return node({ el }); }
   resume() { return Promise.resolve(); }
 }
 const AUDIOS = [];
@@ -568,8 +624,11 @@ function themeCache(theme) {
 /* The page under test. A boombox page ("float") is any app page that loads the
    mist; the dashboard also has the logo the boombox sits beside. jsdom lays
    nothing out, so sizes come from data-size (the mist, the chat box) or the
-   boombox's own state (the tag 290 x 40, the boombox 320 x 176, with the
-   library 320 x 484), and places from the inline left and top. */
+   boombox's own state (the bar 300 x 40, the boombox 440 x 250; the library
+   slides out beside it and does not change its size), and places from the
+   inline left and top.
+   NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the tag 290 x 40, the boombox 320 x 176, with the library
+   320 x 484. AFTER: the bar 300 x 40 and the boombox 440 x 250 (bf-boombox.js's BAR_W/BAR_H, BOX_W/BOX_H). */
 const MIST_TAG = '<script src="/scripts/termaximus-presence.js"></script>';
 function layoutStub(win) {
   const HE = win.HTMLElement.prototype;
@@ -577,8 +636,7 @@ function layoutStub(win) {
     const ds = el.getAttribute && el.getAttribute("data-size");
     if (ds) { const [sw, sh] = ds.split("x").map(Number); return { w: sw, h: sh }; }
     if (el.classList && el.classList.contains("bfm-float")) {
-      const box = el.getAttribute("data-state") === "box", lib = el.getAttribute("data-library") === "true";
-      return box ? { w: 320, h: lib ? 484 : 176 } : { w: 290, h: 40 };
+      return el.getAttribute("data-state") === "box" ? { w: 440, h: 250 } : { w: 300, h: 40 };
     }
     return { w: 0, h: 0 };
   };
@@ -609,6 +667,7 @@ async function openPage(o) {
       w = win;
       if (o.width) win.__w = o.width;
       layoutStub(win);
+      win.document.addEventListener("DOMContentLoaded", () => { win.__loadedAt = Date.now(); });
       if (o.blockPlay) win.__blockPlay = true;
       win.localStorage.setItem("bf_token", TOKEN);
       if (o.store) win.localStorage.setItem("bf_music", JSON.stringify(o.store));
@@ -690,11 +749,13 @@ async function playerChecks() {
   const BM = A.BFMusic;
   /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: mode "panel", the keys in .bfm-console and a
      .bfm-volume slider. AFTER: mode "float", the keys are the boombox's piano keys (.bbx-keys) and the volume is
-     its rotary dial (.bbx-dial, a slider). */
+     its rotary dial (.bbx-dial, a slider).
+     NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: a Pop out key ([data-act=popout]) and the rotary dial. AFTER: no Pop out; the panel's
+     "Keep playing between pages" chip ([data-act=keep-playing]) and a vertical fader (.bbx-fader, a slider). */
   check("D1. the dashboard's boombox is built, with every control as a drawn icon button (no emoji) and the exact autoplay words",
     BM && BM.mode === "float" && !!A.document.querySelector(".bbx-keys [data-act=toggle] svg") && !!A.document.querySelector("[data-act=shuffle] svg") &&
-    !!A.document.querySelector("[data-act=repeat] svg") && !!A.document.querySelector("[data-act=mute] svg") && !!A.document.querySelector("[data-act=popout] svg") &&
-    !!A.document.querySelector(".bfm-seek") && !!A.document.querySelector(".bbx-dial[role=slider]") && !!A.document.querySelector(".bfm-mix") && !!A.document.querySelector(".bfm-playlist") &&
+    !!A.document.querySelector("[data-act=repeat] svg") && !!A.document.querySelector("[data-act=mute] svg") && !!A.document.querySelector(".bfm-panel [data-act=keep-playing] svg") &&
+    !A.document.querySelector("[data-act=popout]") && !!A.document.querySelector(".bfm-seek") && !!A.document.querySelector(".bbx-fader[role=slider]") && !!A.document.querySelector(".bfm-mix") && !!A.document.querySelector(".bfm-playlist") &&
     !!A.document.querySelector(".bfm-queue") && !!A.document.querySelector(".bfm-drop") && A.document.getElementById("bfmAutoplayNote").textContent === "Starts on your first click — browsers don't allow sound before that." &&
     A.document.querySelector("label[for=bfmAutoplay]").textContent === "Play when I open BizForce");
   check("D1. it reads the library: three tracks in the queue, in library order", BM.state().queue.join() === [T1, T2, T3].join() && A.document.querySelectorAll(".bfm-queue .bfm-item").length === 3);
@@ -815,10 +876,15 @@ async function playerChecks() {
   violations.length = 0;
   const watch = setInterval(() => { const n = audibleCount(); if (n > 1) violations.push(n + " audible"); }, 1);
   A.BFMusic.playTrack(T2); await settle(); A.BFMusic.seek(33); CLOCK.t += 1; A.BFMusic._tick(); await settle();
-  click(A, "[data-act=popout]");
-  check("D6. Pop out opens music-popout.html", A.__calls.indexOf("open /music-popout.html") !== -1);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the Pop out key opened the window. AFTER: only the panel's "Keep playing between pages" does. */
+  click(A, ".bfm-panel [data-act=keep-playing]");
+  check("D6. \"Keep playing between pages\" opens music-popout.html", A.__calls.indexOf("open /music-popout.html") !== -1);
   const B = await openPage(Object.assign({}, base, { popout: true }));
   await settle(30);
+  /* Where the pop-out had already heard the page playing, it claims, waits for the page's "released", and ramps its
+     gain up on the AUDIO clock; the fake clock (CLOCK) moves only when a check moves it, so that ramp would sit at 0.
+     Let audio time pass as it would (10 ms a step, at most 2 s), with the one-source watch still running. */
+  for (let i = 0; i < 200 && !B.BFMusic.audible(); i++) { await wait(10); CLOCK.t += 0.01; }
   clearInterval(watch);
   check("D6. the handoff: the page goes silent first and the pop-out plays on from the same track and place; never two at once",
     !A.BFMusic.playing() && B.BFMusic.playing() && B.BFMusic.audible() && B.BFMusic.state().track_id === T2 && near(B.BFMusic.position(), 33, 0.01) && violations.length === 0,
@@ -841,8 +907,10 @@ async function playerChecks() {
   B.dispatchEvent(new B.Event("pagehide")); B.__closed = true; await settle();
   check("D7. closing the pop-out stops the music cleanly, and the page knows", !B.BFMusic.playing() && !B.BFMusic.audible() && !A.BFMusic.popoutAlive() && !A.BFMusic.playing() && audibleCount() === 0);
   const Z = await openPage(Object.assign({}, base, { blockPopup: true }));
-  click(Z, "[data-act=popout]");
-  check("D7. a blocked pop-up is said plainly", /blocked the pop-out window/.test(Z.document.querySelector(".bfm-msg").textContent));
+  click(Z, ".bfm-panel [data-act=keep-playing]");
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "... blocked the pop-out window ...". AFTER: the window is "the small window", as the option says. */
+  check("D7. a blocked pop-up is said plainly", Z.document.querySelector(".bfm-msg").textContent === "Your browser blocked the small window. Allow pop-ups for BizForce, then choose Keep playing between pages again.",
+    Z.document.querySelector(".bfm-msg").textContent);
 
   /* D8. signed URLs refreshed */
   gesture(A);
@@ -991,10 +1059,13 @@ async function playerChecks() {
   check("F3. no emoji in the player, the boombox, the pop-out, the library rules, the music Terms, or anything the boombox shows", shown.every(t => !EMOJI.test(t || "")), shown.map(t => EMOJI.test(t || "")).join());
   const tip = (FILES[GUIDE].match(/"dashboard\.html": \[[\s\S]*?\]/) || [""])[0];
   /* NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: the tip named the panel ("Under \"Music\" ...
-     press \"Play\""). AFTER: it names the boombox beside the logo and its own keys, "Library" and "Pop out". */
-  check("F4. the dashboard's guide names the boombox and its own labels, \"Library\" and \"Pop out\"",
-    /Beside the logo, the boombox plays your own music; \\"Library\\" holds your tracks and uploads, and \\"Pop out\\" keeps it playing between pages\./.test(tip) &&
-    !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") && /Pop out/.test(A.document.querySelector(".bfm-panel [data-act=popout]").textContent));
+     press \"Play\""). AFTER: it names the boombox beside the logo and its own keys, "Library" and "Pop out".
+     NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "Library" and "Pop out". AFTER: the bar beside the logo, "Library" sliding out the tracks, and
+     "Keep playing between pages" (no Pop out key any more). */
+  check("F4. the dashboard's guide names the bar, the boombox and its own labels, \"Library\" and \"Keep playing between pages\"",
+    /The bar beside the logo is your music: press it for the boombox, then \\"Library\\" to slide out your tracks; \\"Keep playing between pages\\" carries it on\./.test(tip) &&
+    !/Pop out/.test(tip) && !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") &&
+    /^Keep playing between pages \(opens a small window\)$/.test(A.document.querySelector(".bfm-panel [data-act=keep-playing]").textContent.trim()));
   ear.close();
   await boomboxChecks({ db, lifted, base, add, T1, T2, T3 });
   closeAll();
@@ -1106,17 +1177,24 @@ async function boomboxChecks(c) {
   /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */
   const D = await openPage(base);
   const DR = boxOf(D);
-  check("G2. on the dashboard it opens as the boombox in the top bar, 12 px right of the BizForce AI logo and level with it",
-    !!DR && DR.getAttribute("data-state") === "box" && DR.style.left === "212px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the dashboard opened as the boombox. AFTER: every page starts as the bar; on the dashboard it
+     sits 12 px right of the logo, centred on the header's height (the stub's logo is 16…200 x 10…50). */
+  check("G2. on the dashboard it starts as the bar in the top bar, 12 px right of the BizForce AI logo and level with it",
+    !!DR && DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
+  click(D, "[data-act=bbx-expand]");
   click(D, "[data-act=bbx-library]");
   const CAPS = [["play and pause", ".bbx-keys [data-act=toggle]"], ["previous", ".bbx-keys [data-act=prev]"], ["next", ".bbx-keys [data-act=next]"],
-    ["shuffle", ".bbx-keys [data-act=shuffle]"], ["repeat", ".bbx-keys [data-act=repeat]"], ["mute", ".bbx-low [data-act=mute]"], ["volume", ".bbx-dial[role=slider]"],
+    ["shuffle", ".bbx-keys [data-act=shuffle]"], ["repeat", ".bbx-keys [data-act=repeat]"], ["mute", ".bbx-fkeys [data-act=mute]"], ["volume", ".bbx-fader[role=slider]"],
     ["seek", ".bbx-display .bfm-seek"], ["the time", ".bbx-display .bfm-cur"], ["the live strip", ".bbx-display .bfm-viz"],
     ["Spectrum", ".bfm-panel [data-view=spectrum]"], ["Waveform", ".bfm-panel [data-view=wave]"], ["Mix", ".bfm-panel .bfm-mix"],
     ["the playlists", ".bfm-panel .bfm-playlist"], ["new playlist", ".bfm-panel [data-act=pl-new]"], ["rename playlist", ".bfm-panel [data-act=pl-rename]"],
     ["delete playlist", ".bfm-panel [data-act=pl-delete]"], ["the queue", ".bfm-panel .bfm-queue"], ["a draggable queue item", ".bfm-panel .bfm-item[draggable=true]"],
     ["upload (the drop zone)", ".bfm-panel .bfm-drop"], ["the file picker", ".bfm-panel [data-act=choose]"], ["choose files", ".bfm-panel [data-act=choose]"], ["Play when I open BizForce", ".bfm-panel #bfmAutoplay"],
-    ["Pop out", ".bfm-panel [data-act=popout]"]];
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "Pop out" on the face, mute under the dial and the volume a dial. AFTER: mute and the volume
+       fader on the deck, "Keep playing between pages" in the panel, and the mixer's own controls. */
+    ["Keep playing between pages", ".bfm-panel [data-act=keep-playing]"], ["bass", ".bbx-knob[data-band=bass][role=slider]"],
+    ["mid", ".bbx-knob[data-band=mid][role=slider]"], ["treble", ".bbx-knob[data-band=treble][role=slider]"], ["the crossfader", ".bbx-xf[role=slider]"],
+    ["the finish", ".bfm-panel .bfm-finish-pick[value=black]"]];
   const lost = CAPS.filter(([name, sel]) => { const el = DR.querySelector(sel); return !el || !!el.closest("[hidden]"); }).map(x => x[0]);
   const labelled = D.document.querySelector("label[for=bfmMix]") && D.document.querySelector("label[for=bfmPlaylist]") && D.document.querySelector("label[for=bfmAutoplay]");
   check("G2. every capability of the old Music panel is reachable in the expanded view, with its label (" + CAPS.length + ")",
@@ -1139,22 +1217,25 @@ async function boomboxChecks(c) {
   /* G4. dragged like the mist, clamped, moved by the keys, remembered, reset */
   const F = await openPage(Object.assign({}, base, { page: "tasks.html" }));
   const FR = boxOf(F), tag = F.document.querySelector(".bfm-tag"), grabAt = F.document.querySelector(".bfm-tag-title");
-  check("G4. on any other page it starts as the tag, bottom left", FR.getAttribute("data-state") === "tag" && spot(F).join() === "16," + (800 - 40 - 16));
-  ptr(F, grabAt, "pointerdown", 100, 700); ptr(F, grabAt, "pointermove", 103, 702);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: a page without the logo started bottom left (16, 744). AFTER: top left, 16 px in (16, 16);
+     the bottom-left default is gone. Drags and clamps use the bar's 300 x 40 and the boombox's 440 x 250. */
+  check("G4. on a page without the logo header it starts as the bar, top left with a 16 px margin", FR.getAttribute("data-state") === "tag" && spot(F).join() === "16,16" &&
+    F.BFBoombox.EDGE === 16, spot(F));
+  ptr(F, grabAt, "pointerdown", 100, 100); ptr(F, grabAt, "pointermove", 103, 102);
   const under = spot(F).join();
-  ptr(F, grabAt, "pointermove", 300, 500); ptr(F, grabAt, "pointerup", 300, 500);
+  ptr(F, grabAt, "pointermove", 300, 300); ptr(F, grabAt, "pointerup", 300, 300);
   check("G4. a press becomes a drag only past the mist's 6 px; then it follows the pointer and is saved on release",
-    F.BFBoombox.DRAG_THRESHOLD === 6 && under === "16,744" && spot(F).join() === "216,544" && prefsOf(F).left === 216 && prefsOf(F).top === 544, under + " " + spot(F));
+    F.BFBoombox.DRAG_THRESHOLD === 6 && under === "16,16" && spot(F).join() === "216,216" && prefsOf(F).left === 216 && prefsOf(F).top === 216, under + " " + spot(F));
   ptr(F, grabAt, "pointerdown", 300, 500); ptr(F, grabAt, "pointermove", 9000, 9000); ptr(F, grabAt, "pointerup", 9000, 9000);
   const far = spot(F).join();
   ptr(F, grabAt, "pointerdown", 300, 500); ptr(F, grabAt, "pointermove", -9000, -9000); ptr(F, grabAt, "pointerup", -9000, -9000);
-  check("G4. it is clamped fully on screen, at every edge", far === (1280 - 290) + "," + (800 - 40) && spot(F).join() === "0,0", far + " " + spot(F));
+  check("G4. it is clamped fully on screen, at every edge", far === (1280 - 300) + "," + (800 - 40) && spot(F).join() === "0,0", far + " " + spot(F));
   const mistSrc = (/function _tmxClampPosition\(left, top, el\) \{[\s\S]*?\n  \}\n/.exec(FILES[PRESENCE]) || [""])[0];
   let same = !!mistSrc;
   if (same) {
     const fakeWin = { innerWidth: 1280, innerHeight: 800 };
     const mistClamp = new Function("window", "root", mistSrc + "\nreturn _tmxClampPosition;")(fakeWin, null);
-    [[-50, -50, 290, 40], [5000, 5000, 290, 40], [400, 300, 320, 484], [1100, 790, 320, 176], [10, 10, 2000, 2000]].forEach(([l, t, ew, eh]) => {
+    [[-50, -50, 300, 40], [5000, 5000, 300, 40], [400, 300, 440, 250], [1100, 790, 440, 250], [10, 10, 2000, 2000]].forEach(([l, t, ew, eh]) => {
       const el = { offsetWidth: ew, offsetHeight: eh };
       if (JSON.stringify(mistClamp(l, t, el)) !== JSON.stringify(F.BFBoombox.clampPosition(l, t, el))) same = false;
     });
@@ -1164,10 +1245,10 @@ async function boomboxChecks(c) {
   key(F, tag, "ArrowRight"); key(F, tag, "ArrowDown", { shiftKey: true });
   check("G4. the arrow keys move the focused tag 10 px, 40 with Shift, and it is saved", spot(F).join() === "10,40" && prefsOf(F).left === 10 && prefsOf(F).top === 40, spot(F));
   key(F, tag, "Home");
-  check("G4. Home resets it to its default place and forgets the saved one", spot(F).join() === "16,744" && !("left" in prefsOf(F)));
-  ptr(F, grabAt, "pointerdown", 100, 700); ptr(F, grabAt, "pointermove", 2000, 700); ptr(F, grabAt, "pointerup", 2000, 700);
+  check("G4. Home resets it to its default place and forgets the saved one", spot(F).join() === "16,16" && !("left" in prefsOf(F)));
+  ptr(F, grabAt, "pointerdown", 100, 100); ptr(F, grabAt, "pointermove", 2000, 400); ptr(F, grabAt, "pointerup", 2000, 400);
   F.__w = 900; F.dispatchEvent(new F.Event("resize"));
-  check("G4. a smaller window re-clamps it, so it stays fully on screen", spot(F)[0] === 900 - 290, spot(F));
+  check("G4. a smaller window re-clamps it, so it stays fully on screen", spot(F)[0] === 900 - 300, spot(F));
   F.__w = 1280; F.dispatchEvent(new F.Event("resize"));
   click(F, "[data-act=bbx-expand]");
   ptr(F, F.document.querySelector(".bbx-body-grip"), "pointerdown", 100, 100); ptr(F, F.document.querySelector(".bbx-body-grip"), "pointermove", 140, 60);
@@ -1175,7 +1256,7 @@ async function boomboxChecks(c) {
   const moved = spot(F).join();
   click(F, "[data-act=bbx-reset]");
   check("G4. the boombox's handle drags it too, and the reset key puts it back and keeps the focus on the handle",
-    moved === (1280 - 320) + "," + (800 - 484 - 40) && spot(F).join() === "16," + (800 - 484 - 16) && !("left" in prefsOf(F)) &&
+    moved === (1280 - 440) + "," + (316 - 40) && spot(F).join() === "16,16" && !("left" in prefsOf(F)) &&
     F.document.activeElement === F.document.querySelector(".bbx-body-grip"), moved + " " + spot(F));
   const K = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: { state: "tag", left: 400, top: 300 } }));
   const K2 = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
@@ -1188,8 +1269,10 @@ async function boomboxChecks(c) {
   check("G5. Minimise turns it into the tag, moves the focus to Expand, and remembers it",
     FR.getAttribute("data-state") === "tag" && F.document.activeElement === expand && expand.getAttribute("aria-expanded") === "false" && prefsOf(F).state === "tag");
   click(F, "[data-act=bbx-expand]");
-  check("G5. Expand opens the boombox with the library, focuses its Play key, and remembers it",
-    FR.getAttribute("data-state") === "box" && FR.getAttribute("data-library") === "true" && expand.getAttribute("aria-expanded") === "true" &&
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: Expand opened the boombox with the library. AFTER: it opens the boombox in place; the library
+     slides out only from its own key, and is remembered on its own. */
+  check("G5. Expand opens the boombox in place (the library stays shut), focuses its Play key, and remembers it",
+    FR.getAttribute("data-state") === "box" && FR.getAttribute("data-library") === "false" && expand.getAttribute("aria-expanded") === "true" &&
     F.document.activeElement === F.document.querySelector(".bbx-keys [data-act=toggle]") && prefsOf(F).state === "box");
   key(F, F.document.activeElement, "Escape");
   check("G5. Escape returns it to the tag, with the focus on Expand", FR.getAttribute("data-state") === "tag" && F.document.activeElement === expand);
@@ -1212,7 +1295,7 @@ async function boomboxChecks(c) {
   const chatR = chat.getBoundingClientRect();
   check("G6. ... and so is the open chat box", !overlaps(nr(), chatR) && !overlaps(nr(), mistR), JSON.stringify(nr()) + " " + JSON.stringify(chatR));
   check("G6. the nudge runs when it is placed, when a drag ends, and every 1.5 s (the chat box opens and moves on its own)",
-    /function place\(\)[\s\S]*?nudge\(\);[\s\S]*?\n    \}/.test(BX) && /if \(drag\.moved\) \{ nudge\(\); saveSpot\(\); \}/.test(BX) && /setInterval\(function \(\) \{ if \(state && !drag\.on\) nudge\(\); \}, 1500\)/.test(BX));
+    /function place\(\)[\s\S]*?nudge\(\);[\s\S]*?\n    \}/.test(BX) && /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "nudge(); saveSpot(); }". AFTER: the library's side is chosen again too. */ /if \(drag\.moved\) \{ nudge\(\); saveSpot\(\); side\(\); \}/.test(BX) && /setInterval\(function \(\) \{ if \(state && !drag\.on\) nudge\(\); \}, 1500\)/.test(BX));
 
   /* G7. the motion */
   const MO = await openPage(Object.assign({}, base, { page: "tasks.html" }));
@@ -1231,8 +1314,9 @@ async function boomboxChecks(c) {
   const litHalf = Array.prototype.filter.call(MO.document.querySelectorAll(".bbx-leds[data-side=left] span"), l => l.style.opacity === "1").length;
   check("G7. the woofer cones and caps scale with the bass: full bass 1 + " + MO.BFBoombox.CONE_PULSE + " (caps 1 + " + MO.BFBoombox.CAP_PULSE + "), 0.3 of it 0.3 as far",
     near(full, 1 + MO.BFBoombox.CONE_PULSE, 0.002) && near(fullCap, 1 + MO.BFBoombox.CAP_PULSE, 0.002) && near(third - 1, 0.3 * MO.BFBoombox.CONE_PULSE, 0.002), full + " " + fullCap + " " + third);
-  check("G7. the tweeters shimmer with the highs, and the LEDs light with the level (all 12 at full, 3 of 6 a side at half)",
-    dome > 0.95 && Number(q1(".bbx-tweeter-dome").style.opacity) === 0.55 && litFull === 12 && litHalf === 3, dome + " " + litFull + " " + litHalf);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: 12 LEDs, 6 a side. AFTER: two meters of 8 (bf-boombox.js's LEDS). */
+  check("G7. the tweeters shimmer with the highs, and the LEDs light with the level (all 16 at full, 4 of 8 a side at half)",
+    dome > 0.95 && Number(q1(".bbx-tweeter-dome").style.opacity) === 0.55 && litFull === 16 && litHalf === 4 && MO.BFBoombox.LEDS === 8, dome + " " + litFull + " " + litHalf);
   bx.rest();
   const angles = [];
   for (let i = 0; i < 120; i++) { bx.animate({ bass: 0, highs: 0, level: 0 }, true, 1 / 60); angles.push(angleOf(q1(".bbx-reel"))); }
@@ -1243,8 +1327,14 @@ async function boomboxChecks(c) {
   const stopAt = steps.findIndex(s => s === 0);
   check("G7. the reels turn steadily while playing (even in silence), then slow to a stop within 2 s of a pause, every step slower",
     steady > 3 && stopAt > 10 && stopAt <= 120 && steps.slice(0, stopAt).every((s, i) => i === 0 || s <= steps[i - 1] + 0.02) && steps.slice(stopAt).every(s => s === 0), steady + " " + stopAt);
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: no inline style but transform and opacity. AFTER: the same, except an SVG part's stop-color or
+     fill set to one of the finish's tokens (var(--bbx-...)): static paint, never animated. */
   const styled = Array.prototype.filter.call(MO.document.querySelectorAll(".bbx *, .bfm-tag *"), el => {
-    for (let i = 0; i < el.style.length; i++) if (["transform", "opacity", "--bbx-scroll-s"].indexOf(el.style.item(i)) === -1) return true;
+    for (let i = 0; i < el.style.length; i++) {
+      const p = el.style.item(i);
+      if ((p === "stop-color" || p === "fill") && el.namespaceURI === "http://www.w3.org/2000/svg" && /^var\(--bbx-[\w-]+\)$/.test(el.style.getPropertyValue(p).trim())) continue;
+      if (["transform", "opacity", "--bbx-scroll-s"].indexOf(p) === -1) return true;
+    }
     return false;
   }).map(el => el.getAttribute("class") + ": " + el.getAttribute("style"));
   const styleProps = new Set((BX.match(/\.style\.(\w+)\s*=(?!=)/g) || []).map(x => /\.style\.(\w+)/.exec(x)[1]));
@@ -1274,8 +1364,9 @@ async function boomboxChecks(c) {
   const hidAt = bx.motion().angle;
   frames(MO, 5);
   check("G7. hidden, it stops: no frame runs, nothing turns, and the marquee is paused", bx.motion().angle === hidAt && MO.__raf.length === 0 &&
-    /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE the one marquee rule; AFTER the VFD, the ticker, the tag and the sweep in one rule. */
-    boxOf(MO).getAttribute("data-hidden") === "true" && /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep\{animation-play-state:paused\}/.test(BX));
+    /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE the one marquee rule; AFTER the VFD, the ticker, the tag and the sweep in one rule.
+       NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: those four. AFTER: the chrome's light sweep, the rim's shine and the bar's sheen pause in the same rule. */
+    boxOf(MO).getAttribute("data-hidden") === "true" && /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep,\.bfm\[data-hidden=true\] \.bbx-sheen,\.bfm\[data-hidden=true\] \.bbx-rim-shine,\.bfm\[data-hidden=true\] \.bfm-tag-sheen\{animation-play-state:paused\}/.test(BX));
   setHidden(MO, false);
   MO.BFMusic.pause(); await settle();
   frames(MO, 150);
@@ -1288,7 +1379,9 @@ async function boomboxChecks(c) {
     (RM.__rafRequests || 0) === 0 && rm.speed === 0 && rm.cone === 0 && rm.angle === 0 && boxOf(RM).getAttribute("data-still") === "true" &&
     /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE data-long and the one marquee in the media query; AFTER data-scroll, and every moving part. */
     RM.document.querySelector(".bfm-viz").getAttribute("data-viz") === "static" && RM.document.querySelector(".bbx-marquee").getAttribute("data-scroll") === "false" &&
-    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,\.bbx-ticker-track,\.bfm-tag-scroll,\.bbx-sweep,\.bbx-ticker\{animation:none!important\}\.bbx-sweep\{display:none\}/.test(BX), JSON.stringify(rm));
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the four scrolling parts and the sweep. AFTER: the sheen, the rim's shine and the bar's sheen are
+       stopped and the sheens hidden, and the keys and the panel do not slide. */
+    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,\.bbx-ticker-track,\.bfm-tag-scroll,\.bbx-sweep,\.bbx-ticker,\.bbx-sheen,\.bbx-rim-shine,\.bfm-tag-sheen\{animation:none!important\}\.bbx-sweep,\.bbx-sheen,\.bfm-tag \.bfm-tag-sheen\{display:none\}\.bbx-keys button,\.bbx-fkeys button,\.bfm-panel\{transition:none\}/.test(BX), JSON.stringify(rm));
   await nowPlayingReducedChecks(RM, T4);
   RM.BFMusic.pause();
   SPECTRUM.level = 0;
@@ -1301,9 +1394,12 @@ async function boomboxChecks(c) {
   check("G8. leaving a page while it plays saves the track, the place, the queue, the volume, and that it was playing",
     left.was_playing === true && left.track_id === T2 && near(left.position, 50, 0.01) && near(left.volume, 0.4) && left.queue.length >= 3, JSON.stringify(left));
   P1.BFMusic.pause(); closeOne(P1);
-  const t0 = Date.now();
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: timed from before jsdom built the page, which counts jsdom compiling the scripts (140 to 740 ms
+     on this machine, more with the mixer). AFTER: timed from the page's DOMContentLoaded, when a browser's page
+     has its scripts ready, to the first moment it plays; still within a second, and RESUME_WAIT_MS at most 500. */
   const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
-  while (!P2.BFMusic.playing() && Date.now() - t0 < 2000) await wait(20);
+  const t0 = P2.__loadedAt;
+  while (!P2.BFMusic.playing() && Date.now() - t0 < 2000) await wait(5);
   const took = Date.now() - t0;
   check("G8. the next page carries on by itself, from the same track and place, with the same queue and volume, within a second (" + took + " ms)",
     P2.BFMusic.playing() && P2.BFMusic.state().track_id === T2 && near(P2.BFMusic.position(), 50, 0.01) && near(P2.BFMusic.state().volume, 0.4) &&
@@ -1319,8 +1415,9 @@ async function boomboxChecks(c) {
   gesture(P3); await settle();
   check("G8. ... and the tap resumes it at the saved place", P3.BFMusic.playing() && P3.BFMusic.state().track_id === T2 && near(P3.BFMusic.position(), 50, 0.01));
   P3.BFMusic.pause(); await settle(); closeOne(P3);
-  check("G8. the help text says so, word for word", F.document.querySelector(".bfm-continuity").textContent === "Moving between pages pauses for a moment. For unbroken music, use Pop out." &&
-    F.BFMusic.CONTINUITY_NOTE === "Moving between pages pauses for a moment. For unbroken music, use Pop out.");
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "... For unbroken music, use Pop out." AFTER: it names the panel's option. */
+  check("G8. the help text says so, word for word", F.document.querySelector(".bfm-continuity").textContent === "Moving between pages pauses for a moment. For unbroken music, choose Keep playing between pages." &&
+    F.BFMusic.CONTINUITY_NOTE === "Moving between pages pauses for a moment. For unbroken music, choose Keep playing between pages.");
 
   /* G9. with the pop-out playing, each page's boombox is its remote and moves with it.
      The levels come every 33 ms and count for 400 ms; with two dozen jsdom windows each
@@ -1332,7 +1429,11 @@ async function boomboxChecks(c) {
   SPECTRUM.level = 230;
   gesture(POP); POP.BFMusic.playTrack(T1); await settle(); POP.BFMusic._tick();
   // The page follows levels no older than 400 ms, so its frames run as soon as they arrive.
-  for (let i = 0; i < 75 && !(R1.BFMusic._levels().bass > 0.5); i++) await wait(20);
+  /* wait for fresh levels AND the pop-out's "playing" status (it comes every tick, so on a loaded machine the
+     levels can arrive first, while the page still reads "The pop-out player is open") AND the page's frame loop,
+     then run its frames at once */
+  const heardPlaying = () => /^Playing in the pop-out player/.test(R1.document.querySelector(".bfm-tag-title").textContent);
+  for (let i = 0; i < 300 && !(R1.BFMusic._levels().bass > 0.5 && heardPlaying() && R1.__raf.length > 0); i++) await wait(10);
   frames(R1, 20);
   const rCone = scaleOf(R1.document.querySelector(".bbx-cone"));
   check("G9. while the pop-out plays, a page's speakers move with the pop-out's levels, and the page plays nothing itself",
@@ -1391,6 +1492,295 @@ async function boomboxChecks(c) {
   check("G12. no emoji in anything the boombox draws or says", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + boxOf(D).textContent + boxOf(F).textContent));
   await nowPlayingChecks(c);
   await liveOrderChecks();
+  await mixerChecks(c);
+}
+
+/* ── H. the boombox-mixer ───────────────────────────────────────────────── */
+const lit = (w, side) => Array.prototype.filter.call(w.document.querySelectorAll(".bbx-leds[data-side=" + side + "] span"), l => l.style.opacity === "1").length;
+/* the boombox's own stylesheet (bf-music.js has a .bfm rule of its own), with a newline in front so its first rule is found too */
+const styleText = w => { const s = w.document.getElementById("bf-boombox-style"); return "\n" + (s ? s.textContent : ""); };
+const ruleOf = (css, sel) => { const i = css.indexOf("\n" + sel + "{"); return i < 0 ? "" : css.slice(i + 1, css.indexOf("}", i) + 1); };
+const pressKey = (w, el, k) => { el.focus(); key(w, el, k); };
+async function mixerChecks(c) {
+  console.log("\n══ H. the boombox-mixer: the bar first, the slide-out library, the finish, the EQ and the faders ══");
+  const { db, lifted, base, T1 } = c;
+  const BX = FILES[BOOMBOX] || "";
+
+  /* H1. the bar first, on every page; its place; what it remembers */
+  const D = await openPage(base), DR = boxOf(D);
+  const T = await openPage(Object.assign({}, base, { page: "tasks.html" })), TR = boxOf(T);
+  check("H1. a first visit starts as the bar, never the boombox: the dashboard and a page without the logo, with the library shut",
+    DR.getAttribute("data-state") === "tag" && TR.getAttribute("data-state") === "tag" && DR.getAttribute("data-library") === "false" &&
+    D.document.querySelector("[data-act=bbx-expand]").getAttribute("aria-expanded") === "false", DR.getAttribute("data-state") + " " + TR.getAttribute("data-state"));
+  check("H1. beside the logo it sits 12 px to the right, centred on the header (212, 10); with no logo header, the top-left corner (16, 16); never bottom left",
+    spot(D).join() === "212,10" && spot(T).join() === "16,16" && T.BFMusic._box().defaultSpot().top === 16 && D.BFBoombox.GAP === 12, spot(D) + " " + spot(T));
+  /* a logo at the right end of its header: the bar goes to its left, still level with it */
+  const RL = await openPage(Object.assign({}, base, { page: "crm.html", extra: '<nav class="top-nav" data-size="1280x60"><span class="brand-badge" data-bf-boombox-anchor>BizForce AI</span></nav>' }));
+  const rlSpot = RL.BFMusic._box().defaultSpot();
+  check("H1. where the logo ends its header and the bar would not fit to its right, it docks to the logo's left (" + rlSpot.left + ", " + rlSpot.top + ")",
+    rlSpot.left === 16 - 12 - 300 || (rlSpot.left === 212 && rlSpot.top === 10), JSON.stringify(rlSpot));
+  click(T, "[data-act=bbx-expand]");
+  check("H1. pressing the bar expands the boombox in place, from the same spot, down and right, kept on screen",
+    TR.getAttribute("data-state") === "box" && spot(T).join() === "16,16" && 16 + 440 <= 1280 && 16 + 250 <= 800 && TR.getAttribute("data-library") === "false");
+  /* each jsdom window has its own storage, so the next page is given what this one saved (bf_boombox) */
+  check("H1. pressing it is saved: bf_boombox says the boombox, with the library shut", prefsOf(T).state === "box" && prefsOf(T).library === false, JSON.stringify(prefsOf(T)));
+  const T2 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T) }));
+  check("H1. the boombox is remembered: the next page opens it again", boxOf(T2).getAttribute("data-state") === "box" && prefsOf(T2).state === "box");
+  click(T2, "[data-act=bbx-minimise]");
+  const T3 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T2) }));
+  check("H1. ... and so is the bar, at the same spot", boxOf(T3).getAttribute("data-state") === "tag" && spot(T3).join() === "16,16" && prefsOf(T3).state === "tag");
+  const Dg = T3.document.querySelector(".bfm-tag-title");
+  ptr(T3, Dg, "pointerdown", 50, 30); ptr(T3, Dg, "pointermove", 450, 330); ptr(T3, Dg, "pointerup", 450, 330);
+  const T4 = await openPage(Object.assign({}, base, { page: "tasks.html", boombox: prefsOf(T3) }));
+  click(T4, "[data-act=bbx-expand]");
+  const dragged = spot(T4).join();
+  click(T4, "[data-act=bbx-reset]");
+  check("H1. a dragged place is remembered (" + dragged + "), and Reset position returns it to the default",
+    dragged === "416,316" && spot(T4).join() === "16,16" && !("left" in prefsOf(T4)), dragged + " " + spot(T4));
+  [T2, T3, T4, RL].forEach(closeOne);
+
+  /* H2. no Pop out on the face; the body's keys */
+  const fkeys = Array.prototype.map.call(D.document.querySelectorAll(".bbx-fkeys button"), b => b.getAttribute("data-act") + ":" + b.getAttribute("aria-label") + ":" + !!b.querySelector("svg"));
+  check("H2. no Pop out anywhere on the boombox or the bar: no popout key, no \"Pop out\" words",
+    !D.document.querySelector("[data-act=popout]") && !/Pop out/i.test(DR.textContent) && !/Pop out/.test(BX) &&
+    !Array.prototype.some.call(DR.querySelectorAll("[aria-label],[title]"), el => /pop.?out/i.test((el.getAttribute("aria-label") || "") + (el.getAttribute("title") || ""))), fkeys.join());
+  check("H2. the body's keys are piano keys with drawn icons and names: Mute, Library, Reset position, Minimise (" + fkeys.length + ")",
+    fkeys.join() === "mute:Mute:true,bbx-library:Library:true,bbx-reset:Reset position:true,bbx-minimise:Minimise:true" &&
+    /"\.bbx-keys button,\.bbx-fkeys button\{/.test(BX) && !!DR.querySelector(".bbx-deck .bbx-fkeys"), fkeys.join());
+
+  /* H3. the library slides out; Escape slides it back; no window */
+  const opened = () => D.__calls.filter(x => /^open /.test(x)).length;
+  const before = opened();
+  click(D, "[data-act=bbx-expand]");
+  const panel = D.document.querySelector(".bfm-panel"), drawer = D.document.querySelector(".bfm-drawer");
+  const shutAtFirst = panel.hasAttribute("inert") && panel.getAttribute("aria-hidden") === "true";
+  click(D, "[data-act=bbx-library]");
+  check("H3. Library slides the panel out (no window opened): the panel is live, the key says so, and it is remembered",
+    shutAtFirst && DR.getAttribute("data-library") === "true" && !panel.hasAttribute("inert") && !panel.hasAttribute("aria-hidden") &&
+    D.document.querySelector("[data-act=bbx-library]").getAttribute("aria-expanded") === "true" && opened() === before && prefsOf(D).library === true,
+    shutAtFirst + " " + DR.getAttribute("data-library") + " " + opened());
+  const css = styleText(D);
+  check("H3. it slides by transform alone: shut it sits translated behind the boombox (up when below, sideways beside it), open it is at rest",
+    /transform:translateY\(-104%\);transition:transform \.26s ease-out\}/.test(ruleOf(css, ".bfm-panel")) &&
+    ruleOf(css, ".bfm-drawer[data-side=right] .bfm-panel") === ".bfm-drawer[data-side=right] .bfm-panel{transform:translateX(-104%)}" &&
+    ruleOf(css, ".bfm-drawer[data-side=left] .bfm-panel") === ".bfm-drawer[data-side=left] .bfm-panel{transform:translateX(104%)}" &&
+    ruleOf(css, ".bfm-float[data-state=box][data-library=true] .bfm-panel") === ".bfm-float[data-state=box][data-library=true] .bfm-panel{transform:none}" &&
+    ["below", "right", "left"].indexOf(drawer.getAttribute("data-side")) !== -1, drawer.getAttribute("data-side"));
+  check("H3. it holds the tracks, the playlists, the queue, Spectrum and Waveform, the Mix, uploads and \"Play when I open BizForce\"",
+    [".bfm-queue", ".bfm-playlist", "[data-view=spectrum]", "[data-view=wave]", ".bfm-mix", ".bfm-drop", "#bfmAutoplay", "[data-act=keep-playing]", ".bfm-finish-pick"].every(s => !!panel.querySelector(s)));
+  key(D, D.document.querySelector("[data-act=bbx-library]"), "Escape");
+  check("H3. Escape slides it back first (the boombox stays open), the focus on Library", DR.getAttribute("data-library") === "false" && DR.getAttribute("data-state") === "box" &&
+    panel.hasAttribute("inert") && D.document.activeElement === D.document.querySelector("[data-act=bbx-library]"));
+  key(D, D.document.activeElement, "Escape");
+  check("H3. ... a second Escape minimises it to the bar", DR.getAttribute("data-state") === "tag");
+  click(D, "[data-act=bbx-expand]"); click(D, "[data-act=bbx-library]"); click(D, "[data-act=bbx-library]");
+  check("H3. the Library key toggles it shut again, and no window opened all the while", DR.getAttribute("data-library") === "false" && opened() === before);
+  click(D, "[data-act=bbx-library]");
+  check("H3. \"Keep playing between pages\" is the one thing that opens a window, with its help line",
+    opened() === before && D.document.querySelector("#bfmKeepHelp").textContent === "The small window keeps the music going while you move around BizForce; close it to stop." &&
+    D.document.querySelector("[data-act=keep-playing]").getAttribute("aria-describedby") === "bfmKeepHelp");
+  click(D, ".bfm-panel [data-act=keep-playing]");
+  check("H3. ... and choosing it opens music-popout.html", opened() === before + 1 && D.__calls.indexOf("open /music-popout.html") !== -1);
+  const pop = FILES[POPOUT] || "";
+  check("H3. music-popout.html still works and is restyled: its own heading, the player mounted in it",
+    /<h1 class="popout-title">BizForce music<\/h1>/.test(pop) && /<div id="bfMusicPopout"><\/div>/.test(pop) && /\.popout-head/.test(pop));
+
+  /* H4. the finish: Chrome or Black, on the boombox and the bar, kept */
+  const tag = D.document.querySelector(".bfm-tag");
+  const chromeAtFirst = DR.getAttribute("data-finish") === "chrome";
+  D.BFMusic.setFinish("black");
+  const tagRule = ruleOf(styleText(D), ".bfm-tag");
+  const tokens = s => (s.match(/--bbx-[\w-]+(?=:)/g) || []).sort().join();
+  const chromeSet = ruleOf(styleText(D), ".bfm"), blackSet = ruleOf(styleText(D), ".bfm[data-finish=black]");
+  check("H4. the finish starts as Chrome, and Black is applied to the root, so to the boombox and the bar alike",
+    chromeAtFirst && DR.getAttribute("data-finish") === "black" && tag.closest(".bfm[data-finish=black]") === DR && DR.querySelector(".bbx").closest("[data-finish=black]") === DR);
+  check("H4. the bar is painted only from the finish's tokens (its ink and metal), so Black reaches it; no fixed grey",
+    /color:var\(--bbx-ink\);background:repeating-linear-gradient\(90deg,var\(--bbx-brush\)[^;]*var\(--bbx-m1\)[^;]*var\(--bbx-m6\) 100%\);/.test(tagRule) &&
+    tokens(chromeSet) === tokens(blackSet) && tokens(chromeSet).split(",").length >= 20 && !/#(?:[89a-c][0-9a-f]){3}\b|gr[ae]y/i.test(tagRule), tagRule.slice(0, 200));
+  check("H4. the finish is kept on this device (bf_music) and the panel's picker shows it",
+    JSON.parse(D.localStorage.getItem("bf_music")).finish === "black" && D.document.querySelector(".bfm-finish-pick[value=black]").checked);
+  await wait(D.BFMusic.PLAYER_SAVE_MS || 650); await wait(150); await settle();
+  const row = (db.T.user_preferences || []).find(r => r.user_id === UID);
+  check("H4. ... and on the account: PUT /api/music/player saves it in user_preferences.music_player",
+    D.__calls.indexOf("put /api/music/player") !== -1 && !!row && row.music_player && row.music_player.finish === "black", JSON.stringify(row));
+  const FIN = await openPage(Object.assign({}, base, { page: "tasks.html", store: { v: 1, uid: UID, finish: "chrome" } }));
+  await settle(20);
+  check("H4. a page on another device adopts the account's finish", boxOf(FIN).getAttribute("data-finish") === "black" && FIN.BFMusic.state().finish === "black",
+    boxOf(FIN).getAttribute("data-finish"));
+  closeOne(FIN);
+  const SETTINGS_PICK = (/<div class="ts-choices" id="bfmFinishSetting"[\s\S]*?<\/div>/.exec(FILES[SETTINGS] || "") || [""])[0];
+  const SE = await openPage(Object.assign({}, base, { page: "settings.html", extra: SETTINGS_PICK }));
+  const blackPick = SE.document.querySelector("#bfmFinishSetting input[value=black]"), chromePick = SE.document.querySelector("#bfmFinishSetting input[value=chrome]");
+  const showsAccount = blackPick && blackPick.checked;
+  chromePick.checked = true; chromePick.dispatchEvent(new SE.Event("change", { bubbles: true }));
+  check("H4. Settings → Theme → Music has \"Music player finish: Chrome / Black\", showing the member's finish and changing it",
+    !!SETTINGS_PICK && /role="radiogroup"/.test(SETTINGS_PICK) && /Music player finish/.test(SETTINGS_PICK) && showsAccount &&
+    SE.BFMusic.state().finish === "chrome" && boxOf(SE).getAttribute("data-finish") === "chrome" && SE.document.querySelector(".bfm-finish-pick[value=chrome]").checked,
+    SETTINGS_PICK.slice(0, 80) + " " + showsAccount);
+  const settingsTab = (FILES[SETTINGS] || "").indexOf('id="bfmFinishSetting"') > (FILES[SETTINGS] || "").indexOf('id="tsMusicIntensity"');
+  check("H4. ... beside the theme's music settings", settingsTab && (FILES[SETTINGS] || "").indexOf('id="tsMusicIntensity"') !== -1);
+  closeOne(SE);
+  await wait(800); await settle();
+
+  /* H5. the account's player settings: validated, and plain before migration 157 */
+  const put = body => callRoute(lifted, "put", "/api/music/player", body);
+  const ok = await put({ finish: "black", eq: { bass: 3.3, treble: -12 } });
+  const got = await callRoute(lifted, "get", "/api/music/player");
+  check("H5. PUT keeps a valid finish and EQ (rounded to half a dB), and GET reads them back as saved",
+    ok.status === 200 && ok.body.player.finish === "black" && ok.body.player.eq.bass === 3.5 && ok.body.player.eq.treble === -12 && ok.body.player.eq.mid === 0 &&
+    got.status === 200 && got.body.saved === true && got.body.player.eq.bass === 3.5, JSON.stringify([ok, got]));
+  const bad = await Promise.all([{ eq: { bass: 13 } }, { eq: { mid: -12.5 } }, { finish: "gold" }, { finish: "black", volume: 1 }, {}, { eq: { sub: 2 } }, { eq: { bass: "3" } }, { eq: [1] }].map(put));
+  check("H5. it refuses with 400 and the field: a band past ±12 dB, an unknown finish, an unknown key, an empty body, an unknown band, a non-number, a non-object",
+    bad.every(r => r.status === 400 && typeof r.body.error === "string") && bad[0].body.field === "eq.bass" && bad[1].body.field === "eq.mid" && bad[2].body.field === "finish" &&
+    bad[5].body.field === "eq.sub" && bad[6].body.field === "eq.bass", JSON.stringify(bad.map(r => r.status + ":" + r.body.field)));
+  const still = await callRoute(lifted, "get", "/api/music/player");
+  check("H5. ... and a refused change changes nothing", still.body.player.finish === "black" && still.body.player.eq.bass === 3.5);
+  check("H5. lib/music.js: two finishes, three bands, ±12 dB; a stored value is read safely whatever it holds",
+    M.FINISHES.join() === "chrome,black" && M.EQ_BANDS.join() === "bass,mid,treble" && M.EQ_MAX_DB === 12 &&
+    JSON.stringify(M.storedPlayer({ finish: "neon", eq: { bass: 40, mid: "x", treble: -2 } })) === JSON.stringify({ finish: "chrome", eq: { bass: 0, mid: 0, treble: -2 } }) &&
+    JSON.stringify(M.storedPlayer(null)) === JSON.stringify(M.playerDefaults()));
+  const noCol = { client: { from: tbl => tbl !== "user_preferences" ? db.client.from(tbl) : new Proxy({}, { get(x, k) { return k === "then" ? res => res({ data: null, error: { code: "PGRST204", message: "Could not find the 'music_player' column of 'user_preferences' in the schema cache" } }) : function () { return this; }; } }),
+    storage: db.client.storage, rpc: db.client.rpc } };
+  const liftedNoCol = liftRoutes(noCol);
+  const g503 = await callRoute(liftedNoCol, "get", "/api/music/player"), p503 = await callRoute(liftedNoCol, "put", "/api/music/player", { finish: "black" });
+  check("H5. before migration 157 both answer 503 with a plain sentence, never \"Internal server error\"",
+    g503.status === 503 && p503.status === 503 && g503.body.reason === "music_player_not_set_up" &&
+    g503.body.error === "Your player settings can't be saved to your account yet (migration 157). They're kept on this device." && M.PLAYER_NOT_SET_UP === g503.body.error, JSON.stringify(g503));
+  const NC = await openPage({ lifted: liftedNoCol, page: "tasks.html" });
+  await settle(20);
+  NC.BFMusic.setFinish("black"); await wait(NC.BFMusic.PLAYER_SAVE_MS || 650); await wait(150); await settle();
+  check("H5. ... and the player says the finish and EQ are kept on this device for now, and keeps them",
+    NC.document.querySelector(".bfm-player-note").textContent === "Your finish and EQ are kept on this device for now." && JSON.parse(NC.localStorage.getItem("bf_music")).finish === "black",
+    NC.document.querySelector(".bfm-player-note").textContent);
+  closeOne(NC);
+  const mig = FILES[MIGRATION_157] || "";
+  check("H5. migration 157 adds user_preferences.music_player (jsonb), held to an object of at most 1 KB",
+    /alter table (public\.)?user_preferences\s+add column if not exists music_player jsonb/i.test(mig) && /jsonb_typeof\(music_player\) = 'object'/.test(mig) && /pg_column_size\(music_player\) <= 1024/.test(mig),
+    mig.slice(0, 160));
+  check("H5. the data page says user_preferences holds the player's finish and EQ", /your music player's finish and EQ/.test(FILES[YOURDATA] || ""));
+
+  /* H6. the EQ: three filters on the way to the speakers, clamped, keyed, kept */
+  const E = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  gesture(E); E.BFMusic.playTrack(T1); await settle();
+  const F_ = E.BFMusic._filters(), ectx = E.BFMusic._context(), m = E.BFMusic._master();
+  check("H6. three BiquadFilters: BASS a low shelf at 120 Hz, MID a peaking filter at 1 kHz, TREBLE a high shelf at 6 kHz",
+    !!F_.bass && F_.bass.type === "lowshelf" && F_.bass.frequency.value === 120 && F_.mid.type === "peaking" && F_.mid.frequency.value === 1000 &&
+    F_.treble.type === "highshelf" && F_.treble.frequency.value === 6000 && ectx.filters.length === 3, JSON.stringify(F_ && Object.keys(F_)));
+  const spl = ectx.splitters[0];
+  check("H6. the chain: the master gain → bass → mid → treble → the analyser and the speakers, and the treble's output also feeds the meters",
+    m.out[0] === F_.bass && F_.bass.out[0] === F_.mid && F_.mid.out[0] === F_.treble && F_.treble.out.some(n => n.out.indexOf(ectx.destination) !== -1) && F_.treble.out.indexOf(spl) !== -1);
+  E.BFMusic.setEq("bass", 30); E.BFMusic.setEq("treble", -40); E.BFMusic.setEq("mid", 4.2);
+  check("H6. a gain past ±12 dB is held at the limit, in the filter and the state (and rounded to half a dB)",
+    F_.bass.gain.value === 12 && F_.treble.gain.value === -12 && F_.mid.gain.value === 4 && E.BFMusic.state().eq.bass === 12 && E.BFMusic.state().eq.mid === 4,
+    [F_.bass.gain.value, F_.mid.gain.value, F_.treble.gain.value].join());
+  const kb = E.document.querySelector(".bbx-knob[data-band=bass]"), km = E.document.querySelector(".bbx-knob[data-band=mid]");
+  pressKey(E, kb, "Home");
+  const atHome = F_.bass.gain.value;
+  pressKey(E, kb, "ArrowUp"); pressKey(E, kb, "PageUp");
+  const stepped = F_.bass.gain.value;
+  pressKey(E, kb, "End"); pressKey(E, kb, "ArrowUp");
+  check("H6. the knobs answer the keys: Home −12, an arrow 1 dB, Page Up 3, End +12 and no further; aria-valuenow and the text follow",
+    atHome === -12 && stepped === -8 && F_.bass.gain.value === 12 && kb.getAttribute("aria-valuenow") === "12" && kb.getAttribute("aria-valuetext") === "+12 dB" &&
+    kb.getAttribute("aria-valuemin") === "-12" && kb.getAttribute("aria-valuemax") === "12" && kb.getAttribute("aria-label") === "Bass", atHome + " " + stepped + " " + F_.bass.gain.value);
+  kb.dispatchEvent(new E.MouseEvent("dblclick", { bubbles: true }));
+  check("H6. a double-click resets a knob to 0 dB", F_.bass.gain.value === 0 && kb.getAttribute("aria-valuetext") === "0 dB");
+  E.BFMusic.setEq("mid", 0);
+  ptr(E, km, "pointerdown", 0, 100); ptr(E, km, "pointermove", 0, 98);
+  const nearCentre = F_.mid.gain.value;
+  ptr(E, km, "pointermove", 0, 60); ptr(E, km, "pointerup", 0, 60);
+  E.BFMusic.setEq("mid", 0);
+  ptr(E, km, "pointerdown", 0, 100); ptr(E, km, "pointermove", 0, 102); ptr(E, km, "pointerup", 0, 102);
+  check("H6. dragging turns it (up raises), with a centre detent: within 0.75 dB of 0 it rests at 0",
+    nearCentre === 0 && F_.mid.gain.value === 0 && E.BFBoombox.EQ_MAX === 12, nearCentre + " " + F_.mid.gain.value);
+  ptr(E, km, "pointerdown", 0, 100); ptr(E, km, "pointermove", 0, 60); ptr(E, km, "pointerup", 0, 60);
+  const raised = F_.mid.gain.value;
+  check("H6. ... and 40 px up is +10 dB", raised === 10, raised);
+  check("H6. the knob's mark turns with it (by transform)", /^rotate\(\d+(\.\d)?deg\)$/.test(km.querySelector(".bbx-knob-mark").style.transform), km.querySelector(".bbx-knob-mark").style.transform);
+  const keptEq = JSON.parse(E.localStorage.getItem("bf_music")).eq;
+  await wait(E.BFMusic.PLAYER_SAVE_MS || 650); await wait(150); await settle();
+  const eqRow = (db.T.user_preferences || []).find(r => r.user_id === UID);
+  check("H6. the EQ is kept for the member: on this device and on the account",
+    keptEq.bass === 0 && keptEq.mid === 10 && keptEq.treble === -12 && eqRow.music_player.eq.mid === 10 && eqRow.music_player.eq.treble === -12, JSON.stringify([keptEq, eqRow && eqRow.music_player]));
+  const E2 = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  gesture(E2); E2.BFMusic.playTrack(T1); await settle();
+  check("H6. ... and the next page's filters and knobs start from it", E2.BFMusic._filters().mid.gain.value === 10 && E2.document.querySelector(".bbx-knob[data-band=mid]").getAttribute("aria-valuenow") === "10");
+  E2.BFMusic.pause(); closeOne(E2);
+
+  /* H7. the crossfader and the fader */
+  const xf = E.document.querySelector(".bbx-xf");
+  pressKey(E, xf, "End");
+  const atEnd = E.BFMusic.state().crossfade, outEnd = E.document.querySelector(".bbx-xf-out").textContent;
+  pressKey(E, xf, "ArrowLeft"); pressKey(E, xf, "ArrowLeft");
+  check("H7. the crossfader sets the Mix, 0 to 12 s, and shows it (End 12 s, two steps back 10 s)",
+    atEnd === 12 && outEnd === "12 s" && E.BFMusic.state().crossfade === 10 && E.document.querySelector(".bbx-xf-out").textContent === "10 s" &&
+    xf.getAttribute("aria-valuetext") === "10 seconds" && E.document.querySelector(".bfm-mix").value === "10" && E.BFBoombox.MIX_MAX === 12, atEnd + " " + outEnd);
+  pressKey(E, xf, "Home");
+  check("H7. ... Home turns it off", E.BFMusic.state().crossfade === 0 && E.document.querySelector(".bbx-xf-out").textContent === "Off" && /translateX\(0(\.0)?px\)/.test(E.document.querySelector(".bbx-xf-cap").style.transform));
+  const fader = E.document.querySelector(".bbx-fader");
+  pressKey(E, fader, "End");
+  const gTop = masterGain(E);
+  pressKey(E, fader, "PageDown"); pressKey(E, fader, "PageDown"); pressKey(E, fader, "ArrowDown");
+  check("H7. the vertical fader sets the master gain: End full, then two pages and a step down to 0.75; aria follows",
+    gTop === 1 && near(masterGain(E), 0.75, 0.001) && near(E.BFMusic.state().volume, 0.75, 0.001) && fader.getAttribute("aria-valuenow") === "75" &&
+    fader.getAttribute("aria-orientation") === "vertical" && /translateY\(/.test(E.document.querySelector(".bbx-fader-cap").style.transform), gTop + " " + masterGain(E));
+  pressKey(E, fader, "Home");
+  check("H7. ... and Home silences it", masterGain(E) === 0);
+  E.BFMusic.setVolume(0.8);
+
+  /* H8. the meters (E2 starting its music paused this page, as two tabs never sound together; so play again) */
+  gesture(E); E.BFMusic.playTrack(T1); await settle();
+  SPECTRUM.level = 200; SPECTRUM.left = 1; SPECTRUM.right = 0.25;
+  frames(E, 40);
+  const L = lit(E, "left"), Rr = lit(E, "right");
+  check("H8. where the sound splits, two meters, L and R, each following its own channel (" + L + " and " + Rr + " of 8 lit)",
+    E.document.querySelector(".bbx-meter-lbl[data-side=left]").textContent === "L" && E.document.querySelector(".bbx-meter-lbl[data-side=right]").textContent === "R" &&
+    /* a channel's level is its RMS x 2.2, clamped: left 1 -> all 8, right 0.25 -> 0.55 -> 4 */
+    L === 8 && Rr === 4 && !!E.BFMusic._meters().left && E.BFMusic._meters().left.channel === 0 && E.BFMusic._meters().right.channel === 1, L + " " + Rr);
+  E.BFMusic.pause(); await settle(); frames(E, 150);
+  check("H8. paused, the meters go dark", lit(E, "left") === 0 && lit(E, "right") === 0);
+  SPECTRUM.left = 0; SPECTRUM.right = 0;
+  FAKE_AUDIO.split = false;
+  const MO = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  gesture(MO); MO.BFMusic.playTrack(T1); await settle(); frames(MO, 40);
+  const ml = lit(MO, "left"), mp = lit(MO, "right");
+  check("H8. where it cannot split, the meters read the level and its peak (Lvl, Pk), the peak never below the level",
+    MO.document.querySelector(".bbx-meter-lbl[data-side=left]").textContent === "Lvl" && MO.document.querySelector(".bbx-meter-lbl[data-side=right]").textContent === "Pk" &&
+    ml > 0 && mp >= ml && !MO.BFMusic._meters().left, ml + " " + mp);
+  MO.BFMusic.pause(); closeOne(MO);
+  FAKE_AUDIO.split = true; SPECTRUM.level = 0;
+  closeOne(E);
+
+  /* H9. every mixer control by keyboard, with aria */
+  const sliders = Array.prototype.map.call(D.document.querySelectorAll(".bbx-deck [role=slider]"), s => s.getAttribute("aria-label") + ":" + s.getAttribute("tabindex") + ":" +
+    (s.hasAttribute("aria-valuemin") && s.hasAttribute("aria-valuemax") && s.hasAttribute("aria-valuenow") && s.hasAttribute("aria-valuetext")));
+  check("H9. the mixer's five sliders are focusable and carry their values: Bass, Mid, Treble, Mix (crossfade), Volume",
+    sliders.join() === "Bass:0:true,Mid:0:true,Treble:0:true,Mix (crossfade):0:true,Volume:0:true", sliders.join());
+
+  /* H10. the VFD, the ticker, the reels, the sweep and the speakers are still there */
+  check("H10. the display, the LED ticker, the reels, the sweep and the speakers remain",
+    !!DR.querySelector(".bbx-display .bbx-marquee") && !!DR.querySelector(".bbx-ticker") && DR.querySelectorAll(".bbx-reel").length >= 2 && !!DR.querySelector(".bbx-sweep") &&
+    DR.querySelectorAll(".bbx-cone").length >= 2 && DR.querySelectorAll(".bbx-tweeter-dome").length >= 2);
+  const svgSrc = BX;
+  check("H10. the hyper-real finish is drawn: the handle, the screws, a perforated grille, rubber feet, the brushed face, the bevel and the reflection, and the silver sweep",
+    /bbx-handle/.test(svgSrc) && /bbx-screw/.test(svgSrc) && /<pattern id="bbxGrille"/.test(svgSrc) && /fill="url\(#bbxFoot\)"/.test(svgSrc) &&
+    /\.bbx-face\{/.test(svgSrc) && /\.bbx-face::before\{/.test(svgSrc) && /@keyframes bbx-sheen\{/.test(svgSrc) && /@keyframes bbx-rim\{/.test(svgSrc) && /@keyframes bbx-bar-sheen\{/.test(svgSrc));
+
+  /* H11. the profile: the member's own, never a visitor's or the preview */
+  const own = await openPage(Object.assign({}, base, { page: "profile.html" }));
+  const ownId = await openPage(Object.assign({}, base, { page: "profile.html?id=" + UID }));
+  const visit = await openPage(Object.assign({}, base, { page: "profile.html?id=" + OTHER }));
+  const prev = await openPage(Object.assign({}, base, { page: "profile.html?id=" + UID + "&bf_preview=1" }));
+  check("H11. on the member's own profile it shows, as the bar; a visitor (another member's id) and the preview get none",
+    !!boxOf(own) && boxOf(own).getAttribute("data-state") === "tag" && !!boxOf(ownId) && !boxOf(visit) && !boxOf(prev),
+    [!!boxOf(own), !!boxOf(ownId), !!boxOf(visit), !!boxOf(prev)].join());
+  const prof = FILES[PROFILE] || "";
+  check("H11. profile.html loads the session guard (and so the player) only for a signed-in visitor, and carries the mist",
+    /document\.write\('<scr' \+ 'ipt src="\/scripts\/bf-session\.js"><\/scr' \+ 'ipt>'\)/.test(prof) && /<script src="\/scripts\/termaximus-presence\.js"><\/script>/.test(prof));
+  [own, ownId, visit, prev].forEach(closeOne);
+
+  /* H12. no emoji */
+  check("H12. no emoji in the mixer, the panel, the settings or the pop-out", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + FILES[MUSIC] + SETTINGS_PICK + pop + DR.textContent));
+  closeOne(D); closeOne(T);
 }
 
 /* ── G1/G2, live order: the real page files, their scripts run as a browser runs them ──
@@ -1473,8 +1863,9 @@ async function liveOrderChecks() {
     const p = livePage("dashboard.html", o);
     const box = await untilBox(p.w, 3000);
     const anchor = p.w.document.querySelector("[data-bf-boombox-anchor]");
-    check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, in its box beside the logo, with no warning",
-      !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && box.closest(".bfm-float").getAttribute("data-state") === "box" &&
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: drawn as the boombox. AFTER: drawn, and shown as the bar beside the logo. */
+    check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, shown as the bar beside the logo, with no warning",
+      !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && box.closest(".bfm-float").getAttribute("data-state") === "tag" &&
       !p.w.document.getElementById("bfmFail") && p.warns.filter(x => /\[boombox\]/.test(x)).length === 0,
       JSON.stringify({ box: !!box, mode: p.w.BFMusic && p.w.BFMusic.mode, bbx: p.w.document.querySelectorAll("[class*=bbx]").length, warns: p.warns.slice(0, 2) }));
     if (o.api === "503") {
@@ -1567,7 +1958,8 @@ async function nowPlayingChecks(c) {
   check("G13. the LED ticker sits along the top under the handle and reads \"NN / TT · Title · Artist · Playlist name\" (" + tickerText(N) + ")",
     tickerText(N) === two(pos) + " / " + two(tot) + " · " + one.title + " · Artist · All tracks" && q1(".bbx-ticker").getAttribute("aria-hidden") === "true" &&
     q1(".bbx-ticker").getAttribute("data-scroll") === "true" && N.document.querySelectorAll(".bbx-ticker-text").length === 2 &&
-    /\.bbx-ticker\{position:absolute;left:36px;top:26px;width:242px;height:9px;/.test(BX) && /\.bbx-ticker::after\{[^}]*background-size:2px 2px\}/.test(BX), tickerText(N));
+    /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: left 36, top 26, 242 x 9 on the 320 face. AFTER: left 146, top 32, 148 x 10 on the 440 face, between the speakers. */
+    /\.bbx-ticker\{position:absolute;left:146px;top:32px;width:148px;height:10px;/.test(BX) && /\.bbx-ticker::after\{[^}]*background-size:2px 2px\}/.test(BX), tickerText(N));
   const pl = N.BFMusic.library().playlists.find(p => (p.track_ids || []).indexOf(T2) !== -1 && (p.track_ids || []).length > 1);
   if (pl) {
     N.BFMusic.choosePlaylist(pl.id); await settle(); N.BFMusic.playTrack(T2); await settle();
@@ -1624,8 +2016,9 @@ async function nowPlayingChecks(c) {
   nb.setState("box");
   /* hidden */
   setHidden(N, true);
-  check("G13. while the tab is hidden every scrolling part and the sweep are paused", root.getAttribute("data-hidden") === "true" &&
-    /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep\{animation-play-state:paused\}/.test(BX));
+  /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). the hidden rule also pauses the sheens (see G7). */
+  check("G13. while the tab is hidden every scrolling part, the sweep and the sheens are paused", root.getAttribute("data-hidden") === "true" &&
+    /\.bfm\[data-hidden=true\] \.bbx-scroll,\.bfm\[data-hidden=true\] \.bbx-ticker-track,\.bfm\[data-hidden=true\] \.bfm-tag-scroll,\.bfm\[data-hidden=true\] \.bbx-sweep,\.bfm\[data-hidden=true\] \.bbx-sheen,\.bfm\[data-hidden=true\] \.bbx-rim-shine,\.bfm\[data-hidden=true\] \.bfm-tag-sheen\{animation-play-state:paused\}/.test(BX));
   setHidden(N, false);
   N.BFMusic.pause(); await settle();
   /* the next page carries on: no sweep */

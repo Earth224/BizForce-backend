@@ -253,8 +253,11 @@ const SQL = [
 ].join("\n");
 check("B1. 156_profile_design.sql is exactly: the jsonb column, and a CHECK that it is an object of at most 16384 bytes", sqlBody === SQL, sqlBody);
 const migs = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-check("B1. it is the only 156 and the latest, after 155", migs.filter(f => /^156_/.test(f)).length === 1 && migs.filter(f => /^155_/.test(f)).length === 1 &&
-  Math.max(...migs.map(f => parseInt(f, 10))) === 156);
+/* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: 156 was the latest migration. AFTER:
+   157_user_preferences_music_player.sql follows it, so 156 is checked as the only 156, after 155, with
+   every later number above it. */
+check("B1. it is the only 156, after 155, and every later migration is numbered above it", migs.filter(f => /^156_/.test(f)).length === 1 && migs.filter(f => /^155_/.test(f)).length === 1 &&
+  migs.map(f => parseInt(f, 10)).filter(n => n > 156).every(n => n >= 157));
 const cols = /const BF_PUBLIC_PROFILE_COLUMNS = \[([\s\S]*?)\];/.exec(FILES[SERVER]);
 const COLS = cols ? cols[1].match(/"[a-z_]+"/g).map(x => x.slice(1, -1)) : [];
 check("B2. profile_design is in the public allow-list, user_id and id are not", COLS.indexOf("profile_design") !== -1 && COLS.indexOf("user_id") === -1 && COLS.indexOf("id") === -1, COLS.join(","));

@@ -351,6 +351,10 @@ function server(seed, opts) {
        resolved from server.js's directory as server.js resolves it. */
     require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
+    /* NAMED BEFORE → AFTER (Oct 31 2026). BEFORE: no isTestAccount; the lifted platformSpendTestAccounts reached it only
+       when today's usage rows were non-empty, so the check passed or threw "isTestAccount is not defined" by the date.
+       AFTER: server.js's own top-level import (lib/testAccounts.js), as server.js has it. */
+    isTestAccount: require("../lib/testAccounts").isTestAccount,
     process: { env: Object.assign({}, o.env === undefined ? ENV_SET : o.env) },
     console: { log() {}, error() {}, warn() {} },
     requireAuth: function requireAuth(req, res, next) { req.user = { id: req.headers.user, role: ROLES[req.headers.user] }; next(); },

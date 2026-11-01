@@ -350,6 +350,10 @@ function build(seed, opts) {
        resolved from server.js's directory as server.js resolves it. */
     require: require("module").createRequire(path.join(REPO, "server.js")),
     nowIso: () => new Date().toISOString(),
+    /* NAMED BEFORE → AFTER (Oct 31 2026). BEFORE: no isTestAccount; the lifted platformSpendTestAccounts reached it only
+       when today's fake usage rows were non-empty, so the check passed or threw "isTestAccount is not defined" by the
+       date. AFTER: server.js's own top-level import (lib/testAccounts.js), as server.js has it. */
+    isTestAccount: require("../lib/testAccounts").isTestAccount,
     process: { env: Object.assign({}, o.env === undefined ? ENV_SET : o.env) },
     console: { log: m => logs.push(String(m)), error: (...a) => logs.push(a.map(String).join(" ")), warn: m => logs.push(String(m)) },
     requireAuth: function requireAuth(req, res, next) { req.user = { id: req.headers.user, role: USERS[req.headers.user].role }; next(); },
@@ -599,7 +603,12 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
      platform spend for its ceiling (platformSpendToday: model_calls with no user_id
      filter, across every account), so that read joins platform's exemptions here,
      and the two checks after "platform: absent for a non-admin" hold it to the admin. */
-  const platformLedgerRead = q => q.table === "model_calls" && !q.filters.some(f => f[0] === "eq" && f[1] === "user_id");
+  /* NAMED BEFORE → AFTER (Oct 31 2026, found when UTC reached Nov 1). BEFORE: platform's only exemption was the
+     model_calls ledger read. On the 1st of a month (UTC) the fixture's rows dated MONTH_START are TODAY's, so
+     platformSpendTestAccounts also runs and reads users (id, email) for those accounts, to leave test accounts out
+     of the ceiling. AFTER: that read is platform's too (admin-only, as the checks below hold the ledger read). */
+  const platformLedgerRead = q => (q.table === "model_calls" && !q.filters.some(f => f[0] === "eq" && f[1] === "user_id")) ||
+    (q.table === "users" && q.filters.some(f => f[0] === "in" && f[1] === "id"));
   check("every query of every table was scoped to the caller (user_id or owner_id), except platform's",
     b.db.log.filter(q => ["job_runs", "radar_status", "email_sequence_enrollments"].indexOf(q.table) === -1 && !platformLedgerRead(q))
       .every(q => q.filters.some(f => f[0] === "eq" && (f[1] === "user_id" || f[1] === "owner_id"))),
