@@ -209,7 +209,14 @@ const ADDED = [
   ["put", "/api/executive/cycles/:id"],          // the member edits the drafted review and next plan (total 386 -> 387)
   ["post", "/api/executive/cycles/:id/approve"], // approve; the next plan may then start through the plan route (total 387 -> 388)
   ["post", "/api/executive/cycles/:id/discard"], // discard the draft; the cycle is open again (total 388 -> 389)
-  ["post", "/api/executive/cycles/:id/supersede"] // set a cycle aside (total 389 -> 390)
+  ["post", "/api/executive/cycles/:id/supersede"], // set a cycle aside (total 389 -> 390)
+  // NAMED (Nov 1 2026, Termaximus answers from records B10): BEFORE 390 routes; AFTER 393, adding its three routes,
+  // each requireAuth, each reading only the caller's own rows; the button answer and the suggestions are
+  // recordsLimiter-limited and make no model call; the typed question is aiLimiter-limited and makes one Haiku
+  // call inside Guide mode's daily allowance (checkTermaximusRecords B, C, D, E)
+  ["get", "/api/guide/records/answer"],           // a button's question answered by template from the member's own record (total 390 -> 391)
+  ["post", "/api/guide/records"],                 // a typed question: the model picks one offered record id; the answer is the template (total 391 -> 392)
+  ["get", "/api/guide/suggestions"]               // ready-made triggers offered by rule from the member's own numbers; writes nothing (total 392 -> 393)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

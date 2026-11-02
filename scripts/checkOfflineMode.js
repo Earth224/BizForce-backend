@@ -574,9 +574,13 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        leaves it and bf-session.js's LEFT ON PURPOSE list names it.
        NAMED BEFORE → AFTER (Oct 30 2026, the BizForce boombox). BEFORE: KEPT had 16 keys. AFTER: 17; bf_boombox is where
        the music boombox sits on this device and whether it is minimised (scripts/bf-boombox.js), a display choice like
-       tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
+       tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Nov 1 2026, B10, Termaximus's suggestions). BEFORE: KEPT had 17 keys. AFTER: 18; bf_tmx_not_now
+       is which suggestions were set aside with "Not now" on this device and until when (scripts/termaximus-presence.js):
+       fixed rule names and times, no member data, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
       bf_exec_tab: "which tab the Executive command deck opens on",
+      bf_tmx_not_now: "which Termaximus suggestions were set aside with Not now on this device",
       bf_boombox: "where the music boombox sits and whether it is minimised",
       bf_editor_theme: "the editor's look", bf_recent_highlights: "the editor's recent colours", bf_recent_textcolors: "the editor's recent colours",
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",

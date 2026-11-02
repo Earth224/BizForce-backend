@@ -947,6 +947,7 @@ const NETWORK_JS = FILES[NET_JS];
 const CYCLES_JS = FILES[CYC_JS];
 const TRIGGERS_LIB = fs.readFileSync(path.join(REPO, "lib/triggers.js"), "utf8").replace(/\r\n/g, "\n");
 const GATES_LIB = fs.readFileSync(path.join(REPO, "lib/gates.js"), "utf8").replace(/\r\n/g, "\n");
+const RECORDS_LIB = fs.readFileSync(path.join(REPO, "lib/termaximusRecords.js"), "utf8").replace(/\r\n/g, "\n");
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
 const CERT_CREDIT = /if \(becameEarned\) \{[\s\S]{0,400}?if \(creditPlan && creditPlan\.active === true\) \{\s*try \{\s*await creditWallet\(req\.user\.id, 100, "Certification earned: " \+ certId\);/;
@@ -1334,6 +1335,19 @@ const CN = [
       FILES[HQ_JS].indexOf('var vr = el("button", "hq-btn", "View result");') !== -1 &&
       FILES[EXEC].indexOf('id="deckTab-history" data-deck-tab="history"') !== -1 && FILES[EXEC].indexOf('id="deckTab-settings" data-deck-tab="settings"') !== -1 &&
       /app\.get\("\/api\/ai\/tasks", requireAuth,/.test(SV) && /\.eq\("user_id", req\.user\.id\)/.test(SV)],
+  /* NAMED (B10, Nov 1 2026): the History tip now names "Ask Termaximus" too. BEFORE "\"History\" lists this agent's runs,
+       10 a page; a row, or a Done card's \"View result\", opens its result beside the page." AFTER "\"History\" lists this
+       agent's runs, 10 a page; \"Ask Termaximus\" by a decision, trigger or link answers from its record alone." Row 15
+       keeps its fragment and proof unchanged; executive 20 is NEW, the Termaximus part. */
+  // NEW (B10): the button questions are answered by the fixed templates of lib/termaximusRecords.js from the member's
+  // own row (checkTermaximusRecords proves zero model calls and that the model's words are never the answer).
+  ["executive 20", exTips, "\"Ask Termaximus\" by a decision, trigger or link answers from its record alone", EXEC_FALSE,
+    () => FILES[WHY_JS].indexOf('aria-label="Ask Termaximus about this decision">Ask Termaximus</button>') !== -1 &&
+      FILES[TRG_JS].indexOf(' fires next">Ask Termaximus</button>\' : "")') !== -1 &&
+      NETWORK_JS.indexOf("'\">Ask Termaximus</button>';") !== -1 &&
+      SV.indexOf('app.get("/api/guide/records/answer", requireAuth, recordsLimiter,') !== -1 &&
+      RECORDS_LIB.indexOf("var NO_RECORD = \"There is no record of that.\";") !== -1 &&
+      !/callModel|callGuideModel|messages\.create/.test(SV.slice(SV.indexOf('app.get("/api/guide/records/answer"'), SV.indexOf('app.post("/api/guide/records"')))],
   ["vertical 1", vmTips, "Nothing about the industry is researched", VERT_FALSE,
     () => /industry_research_performed: false,/.test(SV) && /web_search_performed: false/.test(SV) && /"NOTHING ABOUT THIS INDUSTRY WAS RESEARCHED\./.test(SV) &&
       (SV.match(/app\.post\("\/api\/agents\/vertical_marketing\//g) || []).length === 3 && !!VERT_CLAIMS && !/fetch\(|safeFetch|guardedFetch/.test(VERT_CLAIMS)],

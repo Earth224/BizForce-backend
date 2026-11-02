@@ -19367,6 +19367,101 @@ app.post("/api/guide/ask", requireAuth, aiLimiter, guideAskRecorded(guideAsk.cre
   utcDay: function () { return modelCallUtcDay(); }
 })));
 
+/* ═══ TERMAXIMUS ANSWERS FROM RECORDS (intelligence layer B10) ═══════════════
+   lib/termaximusRecords.js holds the templates, the subject list the model is
+   shown, the check on what it picks and the suggestion rules.
+
+     GET  /api/guide/records/answer   a button's question: { intent, subject,
+                                      window }; the template from the member's
+                                      own row. ZERO model calls.
+     POST /api/guide/records          a typed question: one Haiku call inside
+                                      Guide mode's own daily allowance (route
+                                      "guide", callGuideModel: the server's
+                                      limits, then the ledger), which only
+                                      picks one offered subject id; the answer
+                                      is the same template, never its words.
+     GET  /api/guide/suggestions      ready-made triggers offered by rule from
+                                      the member's own numbers. Writes nothing.
+
+   Login is enough (as for Guide mode); every read names the caller's user_id. */
+const recordsLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "records:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many questions about your records in a short time. Try again in a few minutes.", reason: "rate_limited" }
+});
+
+/* G25 for the typed question, recorded as the guide's is: the handler answers
+   unchanged, and what it sent decides the observation. */
+function recordsAskWithGateRecord(recordsHandler) {
+  return async function recordsAskRecorded(req, res, next) {
+    var recordsWatch = watchGateResponse(res);
+    try {
+      await recordsHandler(req, res, next);
+    } finally {
+      recordsWatch.stop();
+    }
+    var recordsSaid = guideGateObservation(recordsWatch.seen);
+    if (recordsSaid) recordGateDecision(req.user && req.user.id, "route_access", "route:post /api/guide/records", { G25: recordsSaid }, { gates: ["G25"] });
+  };
+}
+
+function recordsContext() {
+  return {
+    supabase: supabase,
+    env: process.env,
+    nowMs: Date.now(),
+    graph: agentNetworkGraph(),
+    triggerColumns: require("./lib/triggerRunner").TRIGGER_ROW,
+    map: APP_MAP
+  };
+}
+
+app.get("/api/guide/records/answer", requireAuth, recordsLimiter, async function (req, res, next) {
+  try {
+    var REC = require("./lib/termaximusRecords");
+    var asked = REC.validateButton(req.query);
+    if (asked.error) return res.status(400).json({ error: asked.error, field: asked.field });
+    var said;
+    try {
+      said = await REC.answerFor(recordsContext(), req.user.id, asked.intent, asked.subject, asked.window);
+    } catch (readErr) {
+      console.error("[guide/records] read failed for " + req.user.id + ": " + ((readErr && readErr.message) || readErr));
+      return res.status(503).json({ error: "That record could not be read just now.", reason: "records_unreadable" });
+    }
+    res.json(said);
+  } catch (error) { next(error); }
+});
+
+app.post("/api/guide/records", requireAuth, aiLimiter, recordsAskWithGateRecord(require("./lib/termaximusRecords").createRecordsAskHandler({
+  map: APP_MAP,
+  supabase: supabase,
+  env: process.env,
+  now: function () { return Date.now(); },
+  graph: function () { return agentNetworkGraph(); },
+  triggerColumns: require("./lib/triggerRunner").TRIGGER_ROW,
+  getPlan: getUserPlan,
+  callModel: callGuideModel,
+  utcDay: function recordsUtcDay() { return modelCallUtcDay(); }
+})));
+
+app.get("/api/guide/suggestions", requireAuth, recordsLimiter, async function (req, res, next) {
+  try {
+    var REC = require("./lib/termaximusRecords");
+    var suggestNow = Date.now();
+    var runnerDeps = triggerDeps();
+    var offered = await REC.suggestionsFor({
+      supabase: supabase,
+      nowMs: suggestNow,
+      metric: function (t) { return require("./lib/triggerRunner").metricValue(runnerDeps, req.user.id, t, suggestNow); }
+    }, req.user.id);
+    res.json(offered);
+  } catch (error) { next(error); }
+});
+
+
 
 /* ═══ MEMBER GATES AND "WHY?" (intelligence layer B2) ═══════════════════════
    A member's own gates (member_gates, migration 159; the language is

@@ -363,7 +363,13 @@ const EXPECTED_OWN = [
   // NAMED (Nov 1 2026, every gate recorded; effectful login-only 147 -> 148): BEFORE the guide wrote nothing. AFTER
   // each answer or refusal the guide gives records its G25 decision (gate_decisions, the caller's own row, kept 90
   // days, served only to them through "Why?"); the answer itself is unchanged and calls no model (checkGates J).
-  "post /api/guide/ask"
+  "post /api/guide/ask",
+  // NAMED (Nov 1 2026, Termaximus answers from records B10; effectful login-only 149 -> 150): BEFORE no records
+  // question. AFTER a typed question about the member's own records records its G25 decision like the guide's and
+  // makes one Haiku call inside Guide mode's own daily allowance (30 subscribed, 5 not, counted from model_calls),
+  // through enforceDailyModelCallLimit and the ledger, so an unsubscribed member is capped exactly as in Guide mode.
+  // It reads only the caller's own rows and writes nothing else (checkTermaximusRecords C, D, F).
+  "post /api/guide/records"
 ];
 
 /* Unauthenticated routes that write. */
