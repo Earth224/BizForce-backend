@@ -102,7 +102,10 @@ const MUTATIONS = {
   // /live becomes a saved offline read, so an old copy can answer as live (L6)
   "live-in-saved-reads": [[OFFLINE, "  var SAVED_READS = [\n", '  var SAVED_READS = [\n    { path: /^\\/api\\/agents\\/[a-z_]+\\/live$/, what: "live activity" },\n']],
   // the agent pattern loses its exclusion, so /api/agents/live is saved as if it were an agent (L6)
-  "live-all-saved": [[OFFLINE, "agents\\/(?!live$)[a-z_]+$/", "agents\\/[a-z_]+$/"]],
+  /* NAMED (B6/B7, Nov 1 2026): the pattern also excludes /api/agents/network now. BEFORE the anchor was
+     "agents\\/(?!live$)[a-z_]+$/" -> "agents\\/[a-z_]+$/". AFTER it is "(?!live$|network$)" -> "(?!network$)": the same
+     mutant, the live exclusion alone removed (checkAgentNetwork U27 keeps the network one). */
+  "live-all-saved": [[OFFLINE, "agents\\/(?!live$|network$)[a-z_]+$/", "agents\\/(?!network$)[a-z_]+$/"]],
   // the daily-call count is trusted when it comes back null (L3)
   "null-count-trusted": [[SERVER, '    if (typeof counted.count !== "number") throw new Error("model calls today: the count did not come back");\n', ""]],
   // the scheduler switch is ignored, so a next run is promised that will not happen (L1)

@@ -425,10 +425,14 @@ function compare(section, label, oldRun, newRun, expect) {
   /* ═══ A. the registry ═══════════════════════════════════════════════════ */
   console.log("\n══ A. every inventory gate is registered ══");
   const ids = GATES.GATES.map(g => g.id);
-  const want = []; for (let i = 1; i <= 25; i++) want.push("G" + i);
-  check("A1. G1 to G25 are registered, in order, each once", J(ids) === J(want), J(ids));
-  check("A2. each gate has a name, a kind and an effect", GATES.GATES.every(g => typeof g.name === "string" && g.name.length > 2 &&
-    ["platform", "pass"].indexOf(g.kind) !== -1 && ["block", "require_approval", "bypass"].indexOf(g.effect) !== -1));
+  /* NAMED BEFORE -> AFTER (B6/B7, Nov 1 2026). BEFORE G1 to G25, each of kind platform or pass. AFTER G1 to G26: G26
+     "Member links" is the member's own switch on a link between two agents (lib/agentNetwork.js, migration 161), of
+     the new kind "member", effect block, adapted in neither B1 nor B2 (checkAgentNetwork proves its refusals and that
+     every other path records exactly as before). */
+  const want = []; for (let i = 1; i <= 26; i++) want.push("G" + i);
+  check("A1. G1 to G26 are registered, in order, each once", J(ids) === J(want), J(ids));
+  check("A2. each gate has a name, a kind and an effect; only G26 is of kind member", GATES.GATES.every(g => typeof g.name === "string" && g.name.length > 2 &&
+    (g.id === "G26" ? g.kind === "member" : ["platform", "pass"].indexOf(g.kind) !== -1) && ["block", "require_approval", "bypass"].indexOf(g.effect) !== -1));
   check("A3. the B1 adapters are G1, G2, G9, G10, G11, G12, G19, G20", J(GATES.GATES.filter(g => g.b1).map(g => g.id)) === J(["G1", "G2", "G9", "G10", "G11", "G12", "G19", "G20"]));
   check("A4. G2 holds for approval, G15 is the owner pass, every other gate blocks",
     GATES.GATES.every(g => g.effect === (g.id === "G2" ? "require_approval" : g.id === "G15" ? "bypass" : "block")));

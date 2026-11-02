@@ -188,7 +188,12 @@ const EXPECTED_GATED = [
   // changes, deletes and previews their own triggers with a subscription (requireActiveSubscription, triggersLimiter),
   // because a trigger acts only through agents that run with one. Reading the language, the list and the firings
   // history stays login-only: a member can always see what fired and why (checkTriggers G0).
-  "post /api/triggers", "put /api/triggers/:id", "delete /api/triggers/:id", "post /api/triggers/preview"
+  "post /api/triggers", "put /api/triggers/:id", "delete /api/triggers/:id", "post /api/triggers/preview",
+  // NAMED (Nov 1 2026, the agent network B6/B7, migration 161; gated 74 -> 75): BEFORE no network route. AFTER a member
+  // switches a declared link between two agents off or on with a subscription (requireActiveSubscription,
+  // networkLimiter), because the links carry work only agents with one can do. Reading the map and a link's runs
+  // stays login-only: a member can always see what flowed (checkAgentNetwork E0).
+  "put /api/agents/network/links"
 ];
 
 const EXPECTED_ADMIN = [

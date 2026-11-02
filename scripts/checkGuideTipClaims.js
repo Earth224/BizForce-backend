@@ -940,7 +940,9 @@ const CC_JS = "scripts/bf-command-center.js", HQ_JS = "scripts/bf-hq.js";
 const DECK_JS = "scripts/bf-exec-deck.js";
 const WHY_JS = "scripts/bf-why.js";
 const TRG_JS = "scripts/bf-triggers.js";
-[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS].forEach(readFrontend);
+const NET_JS = "scripts/bf-network.js";
+[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS, NET_JS].forEach(readFrontend);
+const NETWORK_JS = FILES[NET_JS];
 const TRIGGERS_LIB = fs.readFileSync(path.join(REPO, "lib/triggers.js"), "utf8").replace(/\r\n/g, "\n");
 const GATES_LIB = fs.readFileSync(path.join(REPO, "lib/gates.js"), "utf8").replace(/\r\n/g, "\n");
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
@@ -1295,6 +1297,19 @@ const CN = [
       /app\.put\("\/api\/agent-schedules\/:agent_type\/pause", requireAuth,/.test(SV) && /app\.put\("\/api\/agent-schedules\/:agent_type\/resume", requireAuth,/.test(SV) &&
       FILES[EXEC].indexOf('<h3 class="hq-h" id="hqQueueTitle">Approval queue</h3>') !== -1 &&
       FILES[EXEC].indexOf('id="deckTab-approvals" data-deck-tab="approvals"') !== -1 && FILES[EXEC].indexOf('id="deckTab-agents" data-deck-tab="agents"') !== -1],
+  /* NAMED (B6/B7, Nov 1 2026): the Approvals tip now names the Network map too. BEFORE "\"Approvals\" holds what needs
+       you and \"Decisions\", where \"Why?\" shows each check in order; on \"Agents\", \"Pause schedule\" changes only that
+       schedule." AFTER "... \"Decisions\" with \"Why?\"; on \"Agents\", \"Pause schedule\" changes only that schedule and
+       \"Network\" lights only real flow." Row 14's fragment and proof are unchanged; executive 18 is NEW, the Network part. */
+  // NEW (B6/B7): the Network map on the Agents tab lights a link only when its count of recorded runs is above 0
+  // (checkAgentNetwork proves the counts come only from the member's own rows and that a 0 link is never animated).
+  ["executive 18", exTips, "\"Network\" lights only real flow", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<div id="deckNetwork" role="region" aria-label="Agent network"></div>') !== -1 &&
+      FILES[EXEC].indexOf('<script src="/scripts/bf-network.js"></script>') !== -1 &&
+      NETWORK_JS.indexOf('<h3 id="bfnTitle">Network</h3>') !== -1 &&
+      NETWORK_JS.indexOf('function lit(e) { return typeof e.count === "number" && e.count > 0; }') !== -1 &&
+      NETWORK_JS.indexOf("var pulse = lit(e) && !calm ?") !== -1 &&
+      SV.indexOf('app.get("/api/agents/network", requireAuth, networkLimiter,') !== -1],
   // NEW (Oct 30 2026): the History tab, 10 runs a page from the member's own ai_tasks, and "View result" opening the drawer.
   ["executive 15", exTips, "lists this agent's runs, 10 a page", EXEC_FALSE,
     () => FILES[DECK_JS].indexOf('var PAGE_SIZE = 10;') !== -1 &&

@@ -193,7 +193,13 @@ const ADDED = [
   ["put", "/api/triggers/:id"],                  // change one or switch it on or off (total 376 -> 377)
   ["delete", "/api/triggers/:id"],               // delete one and its firings (total 377 -> 378)
   ["get", "/api/triggers/firings"],              // the firings history, 20 a page, each with its decision id (total 378 -> 379)
-  ["post", "/api/triggers/preview"]              // the last 30 days replayed; reads only (total 379 -> 380)
+  ["post", "/api/triggers/preview"],             // the last 30 days replayed; reads only (total 379 -> 380)
+  // NAMED (Nov 1 2026, the agent network B6/B7, migration 161): BEFORE 380 routes; AFTER 383, adding its three routes,
+  // each requireAuth and networkLimiter, each reading or writing only the caller's own rows; the switch also
+  // requireActiveSubscription (checkAgentNetwork C, D, E)
+  ["get", "/api/agents/network"],                // the 18 agents, the declared links and each link's recorded runs in a window (total 380 -> 381)
+  ["get", "/api/agents/network/edge"],           // one link's runs, 20 a page, each with run.html and Why? (total 381 -> 382)
+  ["put", "/api/agents/network/links"]           // switch a declared link off or on again; never add one (total 382 -> 383)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

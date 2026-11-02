@@ -1951,6 +1951,17 @@ async function orchestrateAgentWorkflow(options) {
       assignment_id: assignmentId,
       reason: "no_handoff_rule"
     });
+  } else if (targetAgent === "sales" && await memberLinkOff(userId, agentType, "sales")) {
+    /* B6/B7: the member switched this link off on the Network map. No Sales
+       pass runs; the refusal is recorded as G26. */
+    recordGateDecision(userId, "dispatch", "link:" + agentType + "/sales", { G26: { result: "fail", code: "link_disabled_by_member" } },
+      { gates: ["G26"], facts: { agent: "sales" } });
+    console.log("AGENT ORCHESTRATOR HANDOFF REFUSED", {
+      user_id: userId,
+      assignment_id: assignmentId,
+      source_agent: agentType,
+      reason: "link_disabled_by_member"
+    });
   } else if (targetAgent === "sales") {
     try {
       var salesProfileResult = await supabase
@@ -3535,6 +3546,30 @@ function memberGatesNotRead(scope, err) {
   try {
     console.error("[member-gates] not read (" + scope + "): " + ((err && err.message) || String(err)) + ". The platform's decision stands.");
   } catch (logErr) { /* a log that fails changes nothing */ }
+}
+
+/* ── MEMBER LINKS (intelligence layer B6 and B7, migration 161) ──────────────
+   True only when the member switched this link between two agents off on the
+   Network map (lib/agentNetwork.js linkSwitchedOff). A switch that cannot be
+   read, or a lib that cannot load, is logged as "[member-links] not read" and
+   the platform's decision stands: like a member gate, a switch can only add a
+   restriction. Each refusal it causes is recorded as G26 by its caller. */
+async function memberLinkOff(userId, fromAgent, toAgent) {
+  if (!userId) return false;
+  try {
+    return await require("./lib/agentNetwork").linkSwitchedOff(supabase, userId, fromAgent, toAgent);
+  } catch (linkErr) {
+    try {
+      console.error("[member-links] not read: " + ((linkErr && linkErr.message) || String(linkErr)) + ". The platform's decision stands.");
+    } catch (logErr) { /* a log that fails changes nothing */ }
+    return false;
+  }
+}
+
+/* The sentence a member reads when their own switch stopped work on a link. */
+function memberLinkSentence(fromAgent, toAgent) {
+  return "You switched off the link from " + fromAgent + " to " + toAgent +
+    " on the Network map, so nothing passed along it. Switch it on there to allow it.";
 }
 
 /* The sentence a member reads when their own gate stopped something. */
@@ -11102,6 +11137,131 @@ app.get("/api/agents/:type/live", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── THE AGENT NETWORK (intelligence layer B6 and B7) ─────────────────────────
+   lib/agentNetwork.js declares the links between the 18 agents, each one a
+   path by which one agent's work really reaches another and is recorded in a
+   row naming both ends: Executive plan dispatches (executive_dispatches, the
+   tools validated against TOOL_INPUT_SPECS and CHAIN_NON_DISPATCHABLE_TOOLS),
+   the Executive-to-Sales handoff, SEO posts published into the content
+   library, and Lead Radar posts read by R&D demand signals. agent_collaborations
+   is never drawn.
+
+     GET /api/agents/network          the nodes, the declared edges, and each
+                                      edge's count of runs that flowed in the
+                                      window (?window=90m, 24h, 7d; up to 30d),
+                                      from the member's own rows only
+     GET /api/agents/network/edge     one edge's runs, 20 a page, newest first,
+                                      each linked to run.html and "Why?"
+     PUT /api/agents/network/links    switch a declared link off or on again;
+                                      never add one (migration 161)
+
+   Reads need a login; the switch also needs an active subscription. All are
+   rate-limited per account. No model calls. Registered above
+   /api/agents/:type, which would otherwise swallow /api/agents/network. */
+const networkLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "network:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many network requests in a short time. Try again in a few minutes. Nothing was changed.", reason: "rate_limited" }
+});
+
+var NETWORK_RUNS_PER_PAGE = 20;
+var NETWORK_WINDOW_ERROR = "The window is a whole number of minutes, hours or days, such as 90m, 24h or 7d, up to 30 days.";
+
+/* The declared graph, from the live tool specs and the non-dispatchable list. */
+function agentNetworkGraph() {
+  return require("./lib/agentNetwork").buildGraph(Object.keys(TOOL_INPUT_SPECS), CHAIN_NON_DISPATCHABLE_TOOLS);
+}
+
+function agentNetworkSince(windowText, nowMs) {
+  var label = windowText === undefined ? "24h" : windowText;
+  var ms = require("./lib/agentNetwork").windowMs(label);
+  return ms ? { label: String(label), since: new Date(nowMs - ms).toISOString() } : null;
+}
+
+app.get("/api/agents/network", requireAuth, networkLimiter, async function (req, res, next) {
+  try {
+    var NET = require("./lib/agentNetwork");
+    var span = agentNetworkSince(req.query.window, Date.now());
+    if (!span) return res.status(400).json({ error: NETWORK_WINDOW_ERROR, field: "window" });
+    var graph = agentNetworkGraph();
+    var counted = await NET.edgeCounts(supabase, req.user.id, graph, span.since);
+    var switches = await NET.memberSwitches(supabase, req.user.id);
+    res.json({
+      window: span.label,
+      since: span.since,
+      centre: NET.CENTRE,
+      nodes: graph.nodes.map(function (k) { return { key: k, name: NET.name(k) }; }),
+      edges: graph.edges.map(function (e) {
+        return {
+          id: e.id, from: e.from, to: e.to,
+          kinds: e.sources.map(function (s) { return s.kind; }),
+          labels: e.sources.map(function (s) { return s.label; }),
+          tools: e.sources.reduce(function (all, s) { return all.concat(s.tools); }, []),
+          enabled: switches[e.id] !== false,
+          count: counted[e.id].count,
+          unavailable: counted[e.id].unavailable || null
+        };
+      }),
+      not_drawn: NET.NOT_DRAWN,
+      problems: graph.problems,
+      chain_limits: { depth: chainMaxDepth(), fanout: chainMaxFanout(), calls: chainMaxCalls() }
+    });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/agents/network/edge", requireAuth, networkLimiter, async function (req, res, next) {
+  try {
+    var NET = require("./lib/agentNetwork");
+    var graph = agentNetworkGraph();
+    var edgeFrom = typeof req.query.from === "string" ? req.query.from : "";
+    var edgeTo = typeof req.query.to === "string" ? req.query.to : "";
+    var edge = graph.edges.filter(function (e) { return e.from === edgeFrom && e.to === edgeTo; })[0];
+    if (!edge) return res.status(404).json({ error: "There is no declared link between those two agents.", reason: "link_not_declared" });
+    var span = agentNetworkSince(req.query.window, Date.now());
+    if (!span) return res.status(400).json({ error: NETWORK_WINDOW_ERROR, field: "window" });
+    var page = req.query.page === undefined ? 1 : Number(req.query.page);
+    if (!Number.isInteger(page) || page < 1 || page > 500) return res.status(400).json({ error: "The page is a whole number from 1 to 500.", field: "page" });
+    var runs;
+    try {
+      runs = await NET.edgeRuns(supabase, req.user.id, edge, span.since);
+    } catch (readErr) {
+      console.error("[network] runs not read for " + req.user.id + " on " + edge.id + ": " + ((readErr && readErr.message) || readErr));
+      return res.status(503).json({ error: "This link's runs could not be read just now.", reason: "runs_unreadable" });
+    }
+    var switches = await NET.memberSwitches(supabase, req.user.id);
+    var first = (page - 1) * NETWORK_RUNS_PER_PAGE;
+    res.json({
+      edge: { id: edge.id, from: edge.from, to: edge.to, enabled: switches[edge.id] !== false },
+      window: span.label,
+      since: span.since,
+      runs: runs.slice(first, first + NETWORK_RUNS_PER_PAGE).map(NET.runOut),
+      page: page,
+      per_page: NETWORK_RUNS_PER_PAGE,
+      total: runs.length,
+      pages: Math.max(1, Math.ceil(runs.length / NETWORK_RUNS_PER_PAGE))
+    });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/agents/network/links", requireAuth, requireActiveSubscription, networkLimiter, async function (req, res, next) {
+  try {
+    var NET = require("./lib/agentNetwork");
+    var asked = NET.validateSwitch(req.body, agentNetworkGraph());
+    if (!asked.ok) {
+      return res.status(400).json({ error: asked.error + " Nothing was changed.", field: asked.field, reason: asked.reason || "invalid" });
+    }
+    var saved = await NET.writeSwitch(supabase, req.user.id, asked.value, nowIso());
+    if (saved.error) {
+      console.error("[network] switch not saved for " + req.user.id + ": " + saved.error.message);
+      return res.status(503).json({ error: "The switch could not be saved just now. Nothing was changed.", reason: "switch_unsaved" });
+    }
+    res.json({ link: { from: saved.data.from_agent, to: saved.data.to_agent, enabled: saved.data.enabled, updated_at: saved.data.updated_at } });
+  } catch (error) { next(error); }
+});
+
 /* A LITERAL GET UNDER /api/agents MUST BE REGISTERED ABOVE THIS ROUTE.
 
    :type matches any single segment, so it swallows /api/agents/<word> for every
@@ -12255,6 +12415,24 @@ app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, ne
         console.error("[proposals/approve] a member gate stopped " + claimed.id + " but it could not be put back to pending: " + unclaimed.error.message);
       }
       return res.status(403).json(memberGateRefusal(approveBlock));
+    }
+    /* B6/B7: an SEO post goes into the content library along the seo>content
+       link. Switched off by the member, it is refused as G26 and the proposal
+       goes back to pending, so it can be approved once the link is on. */
+    if (claimed.agent_type === "seo" && claimed.action_type === "publish_blog_post" && await memberLinkOff(req.user.id, "seo", "content")) {
+      recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id,
+        { G3: approveG3, G1: { result: "pass", code: "approved" }, G26: { result: "fail", code: "link_disabled_by_member" } },
+        { gates: ["G3", "G1", "G26"], facts: approveFacts });
+      var backToPending = await supabase
+        .from("agent_proposals")
+        .update({ decided_at: null, status: "pending" })
+        .eq("status", "executing")
+        .eq("user_id", req.user.id)
+        .eq("id", claimed.id);
+      if (backToPending && backToPending.error) {
+        console.error("[proposals/approve] the seo>content link is off, but " + claimed.id + " could not be put back to pending: " + backToPending.error.message);
+      }
+      return res.status(403).json({ error: memberLinkSentence("seo", "content"), code: "link_disabled_by_member", reason: "link_disabled_by_member" });
     }
     recordGateDecision(req.user.id, "proposal_approve", "proposal:" + req.params.id, { G3: approveG3, G1: { result: "pass", code: "approved" } },
       { facts: approveFacts });
@@ -32691,6 +32869,13 @@ app.post("/api/agents/rd/demand-signals", requireAuth, requireActiveSubscription
       if (req.user.role !== "admin") {
         return res.status(403).json({ error: DEMAND_OWNER_ONLY });
       }
+      /* B6/B7: these runs read the Sales agent's Lead Radar posts, the
+         sales>rd link. Switched off by the member, refused as G26. */
+      if (await memberLinkOff(userId, "sales", "rd")) {
+        recordGateDecision(userId, "route_access", "link:sales/rd", { G26: { result: "fail", code: "link_disabled_by_member" } },
+          { gates: ["G26"], facts: { agent: "rd" } });
+        return res.status(403).json({ error: memberLinkSentence("sales", "rd"), reason: "link_disabled_by_member" });
+      }
 
       var theme = String(safeText(req.body.theme, 40) || "").toLowerCase().trim();
       if (DEMAND_THEMES.indexOf(theme) === -1) {
@@ -36981,6 +37166,16 @@ function chainRefusal(reason, detail) {
 async function dispatchToolCall(options) {
   var dispatchOpts = options || {};
   var dispatchTarget = "tool:" + String(dispatchOpts.agentType || "").toLowerCase().trim() + "/" + String(dispatchOpts.tool || "").toLowerCase().trim();
+  /* B6/B7: a dispatch that names the agent it comes from (fromAgent) travels a
+     link of the agent network, and a link the member switched off is refused
+     first, before anything is counted or spent, as G26. A dispatch without
+     fromAgent (a routine's steps) is exactly as before. */
+  if (dispatchOpts.fromAgent && await memberLinkOff(dispatchOpts.userId, dispatchOpts.fromAgent, dispatchOpts.agentType)) {
+    var linkTo = String(dispatchOpts.agentType || "").toLowerCase().trim();
+    recordGateDecision(dispatchOpts.userId, "dispatch", dispatchTarget, { G26: { result: "fail", code: "link_disabled_by_member" } },
+      { gates: ["G26", "G19", "G12"], facts: { agent: linkTo } });
+    return chainRefusal("link_disabled_by_member", memberLinkSentence(String(dispatchOpts.fromAgent), linkTo));
+  }
   var dispatched;
   try {
     dispatched = await dispatchToolCallSteps(options);
@@ -37366,6 +37561,7 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
       try {
         dispatched = await dispatchToolCall({
           userId: userId,
+          fromAgent: "executive",
           agentType: assignment.agent,
           tool: assignment.tool,
           // The stored, validated body. Never anything from this request.
