@@ -199,7 +199,17 @@ const ADDED = [
   // requireActiveSubscription (checkAgentNetwork C, D, E)
   ["get", "/api/agents/network"],                // the 18 agents, the declared links and each link's recorded runs in a window (total 380 -> 381)
   ["get", "/api/agents/network/edge"],           // one link's runs, 20 a page, each with run.html and Why? (total 381 -> 382)
-  ["put", "/api/agents/network/links"]           // switch a declared link off or on again; never add one (total 382 -> 383)
+  ["put", "/api/agents/network/links"],          // switch a declared link off or on again; never add one (total 382 -> 383)
+  // NAMED (Nov 1 2026, learning cycles B8/B9, migration 162): BEFORE 383 routes; AFTER 390, adding its seven routes,
+  // each requireAuth, each reading or writing only the caller's own plan_cycles rows; the six writes also
+  // requireActiveSubscription; the review is aiLimiter-limited and the rest cycleLimiter-limited (checkPlanCycles D, E, I)
+  ["get", "/api/executive/cycles"],              // the member's cycles, each against the one before (total 383 -> 384)
+  ["post", "/api/executive/cycles"],             // open the cycle for one finished plan of the member's (total 384 -> 385)
+  ["post", "/api/executive/cycles/:id/review"],  // measure, one model call, verified numbers, a draft (total 385 -> 386)
+  ["put", "/api/executive/cycles/:id"],          // the member edits the drafted review and next plan (total 386 -> 387)
+  ["post", "/api/executive/cycles/:id/approve"], // approve; the next plan may then start through the plan route (total 387 -> 388)
+  ["post", "/api/executive/cycles/:id/discard"], // discard the draft; the cycle is open again (total 388 -> 389)
+  ["post", "/api/executive/cycles/:id/supersede"] // set a cycle aside (total 389 -> 390)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

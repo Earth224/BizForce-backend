@@ -108,7 +108,9 @@ const MUTATIONS = {
   // History lists dry runs (D7)
   "history-shows-dry-runs": [[DECK, "history_rows_filter", "history_rows_filter"]],
   // an emoji added to a guide tip (D11)
-  "emoji-in-guide-tip": [[GUIDE, "\"On \\\"Plans\\\", \\\"Run next\\\" sends one assignment per press;", "\"On \\\"Plans\\\", \\\"Run next\\\" " + THUMB + " sends one assignment per press;"]],
+  // NAMED (B8/B9, Nov 1 2026): BEFORE the anchor ended "per press;" AFTER "per press," (the Plans tip now goes on to
+  // "Review this plan"); the same tip, the same emoji inserted at the same place.
+  "emoji-in-guide-tip": [[GUIDE, "\"On \\\"Plans\\\", \\\"Run next\\\" sends one assignment per press,", "\"On \\\"Plans\\\", \\\"Run next\\\" " + THUMB + " sends one assignment per press,"]],
   // the rating reverted to an emoji (D10)
   "rating-reverted-to-emoji": [[AP, "RATE_ICON_UP + '<span class=\"ap-rate-word\">Helpful</span></button>'", "'" + THUMB + "</button>'"]]
 };

@@ -249,8 +249,23 @@ function withoutB5(text) {
   back("        : row.paused_reason === \"trigger\" ? SCHED_WORDS.pausedTrigger : SCHED_WORDS.pausedOwner);\n", "        : SCHED_WORDS.pausedOwner);\n");
   return ok ? t : null;
 }
-const profileNow = withoutB5(withoutB2(FILES[PROFILE_JS]));
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions and B5's trigger pause words set aside)",
+/* NAMED BEFORE → AFTER (B8/B9, Nov 1 2026). BEFORE the file was compared with B2's additions cut and B5's put back.
+   AFTER the learning panel also offers the weekly review's lessons, in four additions: the #apLearnLessons slot, its
+   render call in renderLearning, the lessonsHtml section before loadLearning, and the "Add it" click branch
+   (checkPlanCycles U16 to U19 pin them). Each is cut out, exactly once, before the comparison. */
+function withoutB8(text) {
+  if (text === null) return null;
+  let t = text, ok = true;
+  const cut = (piece) => { const a = t.indexOf(piece); if (a < 0 || t.indexOf(piece, a + 1) !== -1) { ok = false; return; } t = t.slice(0, a) + t.slice(a + piece.length); };
+  cut("        '<div id=\"apLearnLessons\"></div>' +\n");
+  cut("    var lessonBox = document.getElementById(\"apLearnLessons\");\n    if (lessonBox) lessonBox.innerHTML = lessonsHtml(data.lessons, data.lessons_from);\n\n");
+  const a = t.indexOf("  /* LESSONS, offered and never saved by being shown."), b = a < 0 ? -1 : t.indexOf("  function loadLearning() {\n", a);
+  if (a < 0 || b < 0) ok = false; else t = t.slice(0, a) + t.slice(b);
+  cut("      } else if (t.getAttribute(\"data-accept-lesson\")) {\n        addPref(t.getAttribute(\"data-accept-lesson\"), \"lesson\");\n");
+  return ok ? t : null;
+}
+const profileNow = withoutB8(withoutB5(withoutB2(FILES[PROFILE_JS])));
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words and B8/B9's four lesson additions set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);

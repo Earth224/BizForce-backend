@@ -88,7 +88,9 @@ const ALLOW = {
 
 const MUTATIONS = {
   // an emoji in a guide tip (N2, N4)
-  "guide-tip-emoji": [[GUIDE, "\"On \\\"Plans\\\", \\\"Run next\\\" sends one assignment per press;", "\"On \\\"Plans\\\", \\\"Run next\\\" " + THUMB + " sends one assignment per press;"]],
+  // NAMED (B8/B9, Nov 1 2026): BEFORE the anchor ended "per press;" AFTER "per press," (the Plans tip now goes on to
+  // "Review this plan"); the same tip, the same emoji inserted at the same place.
+  "guide-tip-emoji": [[GUIDE, "\"On \\\"Plans\\\", \\\"Run next\\\" sends one assignment per press,", "\"On \\\"Plans\\\", \\\"Run next\\\" " + THUMB + " sends one assignment per press,"]],
   // the rating button back to a thumb in place of its drawn icon and word (N2)
   "rating-reverted-to-emoji": [[AP, "RATE_ICON_UP + '<span class=\"ap-rate-word\">Helpful</span></button>'", "'" + THUMB + "</button>'"]],
   // the attach button back to its entity (N2)

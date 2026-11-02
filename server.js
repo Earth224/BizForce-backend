@@ -55,6 +55,8 @@ const { OWNER_ACCOUNT_ID } = require("./lib/ownerAccount");
 const { isTestAccount } = require("./lib/testAccounts");
 const guideAsk = require("./lib/guideAsk");
 const LEARNING = require("./lib/learningLoop");
+const PLAN_CYCLE = require("./lib/planCycle");
+const LESSONS = require("./lib/lessons");
 const APP_MAP = require("./lib/appMap.json");
 const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
@@ -18572,6 +18574,18 @@ app.get("/api/agents/:agentType/learning", requireAuth, async function (req, res
     }
     var prefTexts = (prefs.data || []).map(function (p) { return p.text; });
 
+    /* LESSONS, offered and never saved by being shown: the ones the latest
+       weekly self-review derived by rule for this agent (lib/lessons.js),
+       less any the member already has. A failed read is null, not "none". */
+    var lessons = null, lessonsFrom = null;
+    try {
+      var latestReview = await learningLatestLessons(userId);
+      lessons = LESSONS.offeredFor(latestReview ? latestReview.lessons : null, agentType, prefTexts);
+      lessonsFrom = latestReview ? { period_start: latestReview.period_start, period_end: latestReview.period_end } : null;
+    } catch (err) {
+      lessons = null;
+    }
+
     var outcomes = null;
     try {
       var proposals = await learningProposals(userId, agentType);
@@ -18603,6 +18617,8 @@ app.get("/api/agents/:agentType/learning", requireAuth, async function (req, res
       examples: examples,
       preferences: (prefs.data || []).map(function (p) { return { id: p.id, text: p.text, source: p.source, created_at: p.created_at }; }),
       suggestions: LEARNING.suggestionsFrom(fb.data || [], prefTexts, nowMs),
+      lessons: lessons,
+      lessons_from: lessonsFrom,
       guidance: await memberGuidanceFor(userId, agentType),
       limits: { pinned: LEARNING.PIN_CAP, in_prompt: LEARNING.EXAMPLES_IN_PROMPT, preferences: LEARNING.PREF_CAP,
         preference_chars: LEARNING.PREF_MAX, comment_chars: LEARNING.COMMENT_MAX, min_ratings: LEARNING.MIN_RATINGS,
@@ -18610,6 +18626,16 @@ app.get("/api/agents/:agentType/learning", requireAuth, async function (req, res
     });
   } catch (error) { next(error); }
 });
+
+/* The latest weekly self-review's lessons (migration 162), or null when the
+   member has none. Throws when it cannot be read. */
+async function learningLatestLessons(userId) {
+  var got = await supabase.from("self_reviews").select("period_start, period_end, lessons")
+    .eq("user_id", userId).eq("period_type", "weekly")
+    .order("period_start", { ascending: false }).limit(1).maybeSingle();
+  if (got.error) throw got.error;
+  return got.data || null;
+}
 
 async function learningPrefTexts(userId, agentType) {
   var rows = await supabase.from("agent_preferences").select("id, text")
@@ -18627,7 +18653,7 @@ app.post("/api/agents/:agentType/preferences", requireAuth, async function (req,
     if (!LEARNING_AGENT_TYPE.test(agentType)) return res.status(400).json({ error: "Unknown agent" });
     var userId = req.user.id;
     var body = req.body || {};
-    var source = body.source === "suggestion" ? "suggestion" : "member";
+    var source = body.source === "suggestion" ? "suggestion" : (body.source === "lesson" ? "lesson" : "member");
     var text = LEARNING.cleanPreference(body.text);
     if (!text) return res.status(400).json({ error: "A preference is one line of " + LEARNING.PREF_MAX + " characters or fewer." });
     var current = await learningPrefTexts(userId, agentType);
@@ -18639,6 +18665,17 @@ app.post("/api/agents/:agentType/preferences", requireAuth, async function (req,
       var offered = LEARNING.suggestionsFrom(fb.data || [], current.map(function (p) { return p.text; }), Date.now());
       if (!offered.some(function (s) { return s.text === text; })) {
         return res.status(400).json({ error: "That is not a suggestion this agent is making now." });
+      }
+    }
+    /* A lesson is saved only here, only when the member accepts it, and only
+       while the latest weekly review still offers it to this agent. */
+    if (source === "lesson") {
+      var latestReview;
+      try { latestReview = await learningLatestLessons(userId); }
+      catch (err) { return res.status(503).json({ error: "Your lessons could not be read just now. Nothing was saved." }); }
+      var offeredLessons = LESSONS.offeredFor(latestReview ? latestReview.lessons : null, agentType, current.map(function (p) { return p.text; }));
+      if (!offeredLessons.some(function (l) { return l.text === text; })) {
+        return res.status(400).json({ error: "That is not a lesson this agent is offering now." });
       }
     }
     if (current.some(function (p) { return String(p.text).toLowerCase() === text.toLowerCase(); })) {
@@ -38052,6 +38089,18 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       var horizon = safeText(req.body.horizon || req.body.timeline, 200);
       var constraints = safeText(req.body.constraints, 1000);
 
+      /* A LEARNING CYCLE'S NEXT PLAN. With a cycle_id, this route starts the
+         next plan of an APPROVED cycle of the caller's, and nothing else: the
+         goal is the approved draft, and a cycle that is not approved, or whose
+         next plan already started, is refused here before anything is spent.
+         Without one, nothing below is touched. */
+      var cycleStart = null;
+      if (req.body.cycle_id !== undefined && req.body.cycle_id !== null) {
+        cycleStart = await planCycleStartCheck(userId, req.body.cycle_id);
+        if (cycleStart.refusal) return res.status(cycleStart.refusal.status).json(cycleStart.refusal.body);
+        goal = cycleStart.goal;
+      }
+
       if (!goal) {
         return res.status(400).json({
           error: "A goal is required — what the plan has to achieve."
@@ -38527,6 +38576,11 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       // record of it did not — the user still gets the work either way.
       var persisted = await run.complete(responseBody, attempt.completionExtra);
 
+      if (cycleStart) {
+        var cycleLink = await planCycleLinkNext(userId, cycleStart.cycle, run.taskId, persisted);
+        return res.json(Object.assign({}, responseBody, { task_id: run.taskId, persisted: persisted, cycle: cycleLink }));
+      }
+
       return res.json(Object.assign({}, responseBody, {
         task_id: run.taskId,
         persisted: persisted
@@ -38539,6 +38593,300 @@ app.post("/api/agents/executive/plan", requireAuth, requireActiveSubscription, a
       next(error);
     }
   });
+
+// ════════════════════════════════════════════════════════════════════════════
+// LEARNING CYCLES: review a finished plan, approve the next (B8 and B9).
+// ════════════════════════════════════════════════════════════════════════════
+/* A cycle is one finished Executive plan of the member's, what its assignments
+   recorded (lib/planCycle.js measuredFrom), a review of those results, and the
+   next plan the member approved. EACH CYCLE BUILDS ON RECORDED RESULTS. THE AI
+   MODEL ITSELF DOES NOT CHANGE, and every cycle the routes answer says so
+   (PLAN_CYCLE.CYCLE_COPY).
+
+   ONE MODEL CALL PER REVIEW, through callAnthropicText, so the platform's
+   model gates (G9, G11, G10) apply before anything is spent and the call is
+   ledgered in model_calls. At most one review per cycle in any 24 hours: the
+   day is claimed (reviewed_at, compare-and-set) before the call and given
+   back if the call is refused or fails. THE VERIFIER keeps only the
+   sentences whose numbers all appear in `measured` (PLAN_CYCLE.draftFrom).
+
+   THE NEXT PLAN STARTS ONLY AFTER APPROVAL, and only through POST
+   /api/agents/executive/plan with { cycle_id }: that route refuses a cycle
+   that is not approved, takes the goal from the approved draft, and runs
+   with its own middleware, its own model call and its own gates. Nothing here
+   runs a plan, and there is no timer.
+
+   OWN ROWS ONLY: every read and write carries .eq("user_id", req.user.id).
+   scripts/checkPlanCycles.js proves each of these. */
+const cycleLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "cycles:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many cycle requests in a short time. Try again in a few minutes. Nothing was changed.", reason: "rate_limited" }
+});
+
+async function planCycleOwnPlan(userId, planTaskId) {
+  if (!isValidUuid(planTaskId)) return null;
+  var got = await supabase.from("ai_tasks").select("id, user_id, task_type, status, created_at, output")
+    .eq("id", planTaskId).eq("user_id", userId).maybeSingle();
+  if (got.error) throw got.error;
+  return got.data && got.data.task_type === "executive/plan" ? got.data : null;
+}
+
+async function planCycleRow(userId, cycleId) {
+  if (!isValidUuid(cycleId)) return null;
+  var got = await supabase.from("plan_cycles").select("*").eq("id", cycleId).eq("user_id", userId).maybeSingle();
+  if (got.error) throw got.error;
+  return got.data || null;
+}
+
+/* The plan's recorded results. Each read is its own: one that fails is null,
+   and measuredFrom names it; nothing is counted as 0 on a failed read. */
+async function planCycleMeasure(userId, plan) {
+  var nowMs = Date.now();
+  var dispatches = null, toolTasks = null, proposals = null, ratings = null, arrivals = null;
+  try {
+    var d = await supabase.from("executive_dispatches").select("agent_type, outcome, tool_task_id, created_at")
+      .eq("user_id", userId).eq("plan_task_id", plan.id).limit(2000);
+    if (!d.error) dispatches = d.data || [];
+  } catch (err) { dispatches = null; }
+  if (dispatches) {
+    var ids = [];
+    dispatches.forEach(function (r) { if (r.outcome === "ran" && isValidUuid(r.tool_task_id) && ids.indexOf(r.tool_task_id) === -1) ids.push(r.tool_task_id); });
+    if (!ids.length) { toolTasks = []; proposals = []; ratings = []; }
+    else {
+      try {
+        var t = await supabase.from("ai_tasks").select("id, status").in("id", ids).eq("user_id", userId);
+        if (!t.error) toolTasks = t.data || [];
+      } catch (err) { toolTasks = null; }
+      try {
+        var p = await supabase.from("agent_proposals").select("status, decided_at, executed_at, payload")
+          .eq("user_id", userId).in("payload->>source_task_id", ids).limit(2000);
+        if (!p.error) proposals = p.data || [];
+      } catch (err) { proposals = null; }
+      try {
+        var f = await supabase.from("agent_feedback").select("task_id, rating").eq("user_id", userId).in("task_id", ids);
+        if (!f.error) ratings = f.data || [];
+      } catch (err) { ratings = null; }
+    }
+  }
+  try {
+    var loaded = await loadArrivals(userId, false);
+    var since = Date.parse(plan.created_at);
+    if (loaded && Array.isArray(loaded.posts && loaded.posts.rows) && Array.isArray(loaded.sends && loaded.sends.rows) &&
+        Array.isArray(loaded.visits && loaded.visits.rows) && isFinite(since)) {
+      arrivals = loaded.visits.rows.filter(function (v) {
+        var at = Date.parse(v.created_at);
+        return isFinite(at) && at >= since && at <= nowMs;
+      }).length;
+    }
+  } catch (err) { arrivals = null; }
+  return PLAN_CYCLE.measuredFrom({ plan: plan, dispatches: dispatches, toolTasks: toolTasks, proposals: proposals,
+    ratings: ratings, arrivals: arrivals, nowMs: nowMs });
+}
+
+async function planCyclePrevious(userId, row) {
+  if (!row || !row.previous_cycle_id) return null;
+  try { return await planCycleRow(userId, row.previous_cycle_id); } catch (err) { return null; }
+}
+
+/* For POST /api/agents/executive/plan with a cycle_id: the next plan starts
+   only from an approved cycle of the caller's whose next plan has not
+   started; the goal is the approved draft. */
+async function planCycleStartCheck(userId, cycleId) {
+  var refuse = function (status, code, error) { return { refusal: { status: status, body: { error: error, code: code } } }; };
+  if (!isValidUuid(cycleId)) return refuse(400, "cycle_not_found", "cycle_id names no cycle of yours.");
+  var row = await planCycleRow(userId, cycleId);
+  if (!row) return refuse(404, "cycle_not_found", "Cycle not found");
+  if (row.status !== "approved") return refuse(409, "cycle_not_approved", "This cycle's next plan has not been approved, so it does not start.");
+  if (row.next_plan_task_id) return refuse(409, "cycle_already_started", "This cycle's next plan has already started.");
+  var goal = safeText(row.next_plan_draft, PLAN_CYCLE.NEXT_PLAN_MAX);
+  if (!goal) return refuse(409, "cycle_no_next_plan", "This cycle has no next plan to start.");
+  return { cycle: row, goal: goal };
+}
+
+/* After the next plan's run is recorded: link it to the cycle and open the
+   cycle that builds on it. Never throws; what happened is in the answer. */
+async function planCycleLinkNext(userId, cycle, taskId, persisted) {
+  try {
+    if (!persisted || !isValidUuid(taskId)) return { linked: false, reason: "The new plan's record was not saved, so the cycle could not be linked to it." };
+    var link = await supabase.from("plan_cycles").update({ next_plan_task_id: taskId })
+      .eq("id", cycle.id).eq("user_id", userId).eq("status", "approved").is("next_plan_task_id", null).select("id");
+    if (link.error || !link.data || !link.data.length) {
+      return { linked: false, reason: link.error ? "The cycle could not be updated." : "Another plan was already started from this cycle." };
+    }
+    var next = await supabase.from("plan_cycles").insert({ user_id: userId, plan_task_id: taskId, previous_cycle_id: cycle.id, status: "open" })
+      .select("id").single();
+    return { linked: true, cycle_id: cycle.id, next_cycle_id: next.error ? null : next.data.id };
+  } catch (err) {
+    console.error("[cycles] linking the next plan failed for user " + userId + ": " + (err && err.message));
+    return { linked: false, reason: "The cycle could not be updated." };
+  }
+}
+
+app.get("/api/executive/cycles", requireAuth, cycleLimiter, async function (req, res, next) {
+  try {
+    var got = await supabase.from("plan_cycles").select("*").eq("user_id", req.user.id)
+      .order("created_at", { ascending: false }).limit(50);
+    if (got.error) {
+      return res.status(503).json({ error: "Your cycles could not be read just now. This is not an empty history.", copy: PLAN_CYCLE.CYCLE_COPY });
+    }
+    var rows = got.data || [];
+    var byId = {};
+    rows.forEach(function (r) { byId[r.id] = r; });
+    return res.json({
+      copy: PLAN_CYCLE.CYCLE_COPY,
+      cycles: rows.map(function (r) { return PLAN_CYCLE.cycleOut(r, r.previous_cycle_id ? byId[r.previous_cycle_id] || null : null); })
+    });
+  } catch (error) { next(error); }
+});
+
+// Open the cycle for one finished plan of the caller's (or answer the one already open).
+app.post("/api/executive/cycles", requireAuth, requireActiveSubscription, cycleLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var planTaskId = req.body ? req.body.plan_task_id : null;
+    var plan = await planCycleOwnPlan(userId, planTaskId);
+    if (!plan) return res.status(404).json({ error: "Plan not found", code: "plan_not_found" });
+    var existing = await supabase.from("plan_cycles").select("*").eq("user_id", userId).eq("plan_task_id", plan.id).maybeSingle();
+    if (existing.error) throw existing.error;
+    if (existing.data) {
+      return res.json({ cycle: PLAN_CYCLE.cycleOut(existing.data, await planCyclePrevious(userId, existing.data)), existing: true });
+    }
+    var parent = await supabase.from("plan_cycles").select("id").eq("user_id", userId).eq("next_plan_task_id", plan.id).maybeSingle();
+    if (parent.error) throw parent.error;
+    var made = await supabase.from("plan_cycles").insert({ user_id: userId, plan_task_id: plan.id,
+      previous_cycle_id: parent.data ? parent.data.id : null, status: "open" }).select("*").single();
+    if (made.error) throw made.error;
+    return res.json({ cycle: PLAN_CYCLE.cycleOut(made.data, await planCyclePrevious(userId, made.data)), existing: false });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/executive/cycles/:id/review", requireAuth, requireActiveSubscription, aiLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var row = await planCycleRow(userId, req.params.id);
+    var refusal = PLAN_CYCLE.reviewRefusal(row, Date.now());
+    if (refusal) return res.status(refusal.status).json({ error: refusal.error, code: refusal.code, next_at: refusal.next_at || null });
+    var plan = await planCycleOwnPlan(userId, row.plan_task_id);
+    if (!plan) return res.status(404).json({ error: "The plan for this cycle can no longer be read.", code: "plan_not_found" });
+
+    // (a) What the plan recorded.
+    var measured = await planCycleMeasure(userId, plan);
+
+    // The day's one review is claimed before anything is spent.
+    var claimedAt = new Date().toISOString();
+    var claim = supabase.from("plan_cycles").update({ reviewed_at: claimedAt })
+      .eq("id", row.id).eq("user_id", userId).in("status", ["open", "review_drafted"]);
+    claim = row.reviewed_at ? claim.eq("reviewed_at", row.reviewed_at) : claim.is("reviewed_at", null);
+    var claimed = await claim.select("id");
+    if (claimed.error) throw claimed.error;
+    if (!claimed.data || !claimed.data.length) {
+      return res.status(429).json({ error: "This plan was reviewed in the last 24 hours. One review per cycle per day.", code: "review_once_a_day", next_at: null });
+    }
+
+    // (b) ONE model call, through callAnthropicText: G9, G11 and G10 first, and the ledger.
+    var generation;
+    try {
+      generation = await callAnthropicText(PLAN_CYCLE.buildReviewPrompt(plan.output || {}, measured), PLAN_CYCLE.REVIEW_MAX_TOKENS, userId,
+        PLAN_CYCLE.REVIEW_MODEL, { user_id: userId, agent_type: "executive", route: PLAN_CYCLE.ROUTE });
+    } catch (modelErr) {
+      // Refused or failed: nothing was reviewed, so the day is given back.
+      await supabase.from("plan_cycles").update({ reviewed_at: row.reviewed_at || null })
+        .eq("id", row.id).eq("user_id", userId).eq("reviewed_at", claimedAt);
+      throw modelErr;
+    }
+
+    // (c) The verifier: only sentences whose numbers all appear in measured.
+    var draft = PLAN_CYCLE.draftFrom(generation && generation.text, measured);
+
+    // (d) Stored as a draft. Nothing runs from it until the member approves.
+    var saved = await supabase.from("plan_cycles").update({
+      status: "review_drafted",
+      measured: measured,
+      review_text: draft.review_text || null,
+      next_plan_draft: draft.next_plan_draft || null,
+      model: (generation && generation.model) || PLAN_CYCLE.REVIEW_MODEL
+    }).eq("id", row.id).eq("user_id", userId).select("*").single();
+    if (saved.error) {
+      console.error("[cycles] a review was written and paid for but could not be stored for user " + userId + ": " + saved.error.message);
+      return res.status(500).json({ error: "The review was written but could not be saved. Nothing else was changed.", code: "review_not_stored" });
+    }
+    return res.json({
+      cycle: PLAN_CYCLE.cycleOut(saved.data, await planCyclePrevious(userId, saved.data)),
+      verifier: { kept: draft.kept, dropped: draft.dropped.length, dropped_sentences: draft.dropped }
+    });
+  } catch (error) { next(error); }
+});
+
+/* The member's own words: { review_text, next_plan_draft }, either or both,
+   and nothing else. Only a drafted review is edited. */
+function planCycleEdits(body) {
+  var b = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  var extra = Object.keys(b).filter(function (k) { return k !== "review_text" && k !== "next_plan_draft"; });
+  if (extra.length) return { error: "Only review_text and next_plan_draft can be changed." };
+  var review = PLAN_CYCLE.cleanEdit(b.review_text, PLAN_CYCLE.REVIEW_TEXT_MAX);
+  var nextPlan = PLAN_CYCLE.cleanEdit(b.next_plan_draft, PLAN_CYCLE.NEXT_PLAN_MAX);
+  if ((review && review.error) || (nextPlan && nextPlan.error)) {
+    return { error: "The review is text of up to " + PLAN_CYCLE.REVIEW_TEXT_MAX + " characters and the next plan up to " + PLAN_CYCLE.NEXT_PLAN_MAX + "." };
+  }
+  var patch = {};
+  if (review !== undefined) patch.review_text = review || null;
+  if (nextPlan !== undefined) patch.next_plan_draft = nextPlan || null;
+  return { patch: patch };
+}
+
+async function planCycleChange(req, res, from, patch) {
+  var userId = req.user.id;
+  var row = await planCycleRow(userId, req.params.id);
+  if (!row) return res.status(404).json({ error: "Cycle not found", code: "cycle_not_found" });
+  if (from.indexOf(row.status) === -1) {
+    return res.status(409).json({ error: "This cycle is " + row.status.replace("_", " ") + ", so that cannot be done now.", code: "cycle_wrong_status" });
+  }
+  var saved = await supabase.from("plan_cycles").update(patch).eq("id", row.id).eq("user_id", userId).in("status", from).select("*");
+  if (saved.error) throw saved.error;
+  if (!saved.data || !saved.data.length) return res.status(409).json({ error: "This cycle changed while you were editing. Reload it.", code: "cycle_wrong_status" });
+  return res.json({ cycle: PLAN_CYCLE.cycleOut(saved.data[0], await planCyclePrevious(userId, saved.data[0])) });
+}
+
+app.put("/api/executive/cycles/:id", requireAuth, requireActiveSubscription, cycleLimiter, async function (req, res, next) {
+  try {
+    var edits = planCycleEdits(req.body);
+    if (edits.error) return res.status(400).json({ error: edits.error });
+    return await planCycleChange(req, res, ["review_drafted"], edits.patch);
+  } catch (error) { next(error); }
+});
+
+// (e) Approve. Only now may the next plan start, and only through the plan route.
+app.post("/api/executive/cycles/:id/approve", requireAuth, requireActiveSubscription, cycleLimiter, async function (req, res, next) {
+  try {
+    var edits = planCycleEdits(req.body);
+    if (edits.error) return res.status(400).json({ error: edits.error });
+    var row = await planCycleRow(req.user.id, req.params.id);
+    var nextPlan = edits.patch.next_plan_draft !== undefined ? edits.patch.next_plan_draft : (row && row.next_plan_draft);
+    if (row && row.status === "review_drafted" && !nextPlan) {
+      return res.status(400).json({ error: "Write the next plan's goal before approving.", code: "cycle_no_next_plan" });
+    }
+    return await planCycleChange(req, res, ["review_drafted"],
+      Object.assign({}, edits.patch, { status: "approved", approved_at: new Date().toISOString() }));
+  } catch (error) { next(error); }
+});
+
+// Discard the draft: the cycle is open again; the day's review stays used.
+app.post("/api/executive/cycles/:id/discard", requireAuth, requireActiveSubscription, cycleLimiter, async function (req, res, next) {
+  try {
+    return await planCycleChange(req, res, ["review_drafted"], { status: "open", review_text: null, next_plan_draft: null, model: null });
+  } catch (error) { next(error); }
+});
+
+// Set a cycle aside: superseded, and nothing more happens to it.
+app.post("/api/executive/cycles/:id/supersede", requireAuth, requireActiveSubscription, cycleLimiter, async function (req, res, next) {
+  try {
+    return await planCycleChange(req, res, ["open", "review_drafted"], { status: "superseded" });
+  } catch (error) { next(error); }
+});
 
 app.get("/api/dashboard", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {

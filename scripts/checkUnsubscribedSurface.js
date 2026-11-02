@@ -193,7 +193,14 @@ const EXPECTED_GATED = [
   // switches a declared link between two agents off or on with a subscription (requireActiveSubscription,
   // networkLimiter), because the links carry work only agents with one can do. Reading the map and a link's runs
   // stays login-only: a member can always see what flowed (checkAgentNetwork E0).
-  "put /api/agents/network/links"
+  "put /api/agents/network/links",
+  // NAMED (Nov 1 2026, learning cycles B8/B9, migration 162; gated 75 -> 81): BEFORE no cycle route. AFTER a member
+  // opens a cycle, reviews a plan (one model call), edits, approves, discards or sets aside a cycle with a subscription
+  // (requireActiveSubscription; the review aiLimiter, the rest cycleLimiter), because a review is a model call and an
+  // approved cycle starts a plan. Reading the cycle history stays login-only: a member can always see their results
+  // (checkPlanCycles D16).
+  "post /api/executive/cycles", "post /api/executive/cycles/:id/review", "put /api/executive/cycles/:id",
+  "post /api/executive/cycles/:id/approve", "post /api/executive/cycles/:id/discard", "post /api/executive/cycles/:id/supersede"
 ];
 
 const EXPECTED_ADMIN = [

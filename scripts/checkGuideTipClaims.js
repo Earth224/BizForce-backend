@@ -941,8 +941,10 @@ const DECK_JS = "scripts/bf-exec-deck.js";
 const WHY_JS = "scripts/bf-why.js";
 const TRG_JS = "scripts/bf-triggers.js";
 const NET_JS = "scripts/bf-network.js";
-[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS, NET_JS].forEach(readFrontend);
+const CYC_JS = "scripts/bf-cycles.js";
+[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS, NET_JS, CYC_JS].forEach(readFrontend);
 const NETWORK_JS = FILES[NET_JS];
+const CYCLES_JS = FILES[CYC_JS];
 const TRIGGERS_LIB = fs.readFileSync(path.join(REPO, "lib/triggers.js"), "utf8").replace(/\r\n/g, "\n");
 const GATES_LIB = fs.readFileSync(path.join(REPO, "lib/gates.js"), "utf8").replace(/\r\n/g, "\n");
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
@@ -1310,6 +1312,20 @@ const CN = [
       NETWORK_JS.indexOf('function lit(e) { return typeof e.count === "number" && e.count > 0; }') !== -1 &&
       NETWORK_JS.indexOf("var pulse = lit(e) && !calm ?") !== -1 &&
       SV.indexOf('app.get("/api/agents/network", requireAuth, networkLimiter,') !== -1],
+  /* NAMED (B8/B9, Nov 1 2026): the Plans tip now names "Review this plan" too. BEFORE "On \"Plans\", \"Run next\" sends
+       one assignment per press; if it is greyed out, running plans is switched off on the server." AFTER "On \"Plans\",
+       \"Run next\" sends one assignment per press, unless running plans is switched off on the server; \"Review this
+       plan\" starts nothing until you approve." Rows 11 and 13 keep their fragments and proofs unchanged; executive 19 is
+       NEW, the review part. */
+  // NEW (B8/B9): "Review this plan" drafts a review and a next plan; the next plan starts only from an approved cycle,
+  // through the plan route (checkPlanCycles proves the route refuses a cycle that is not approved).
+  ["executive 19", exTips, "\"Review this plan\" starts nothing until you approve", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<div id="deckCycles" role="region" aria-label="Plan cycles"></div>') !== -1 &&
+      FILES[EXEC].indexOf('<script src="/scripts/bf-cycles.js"></script>') !== -1 &&
+      CYCLES_JS.indexOf('(S.busy ? "Reviewing…" : "Review this plan")') !== -1 &&
+      CYCLES_JS.indexOf('return api("POST", "/api/agents/executive/plan", { goal: cycle.next_plan_draft || "", cycle_id: cycle.id })') !== -1 &&
+      SV.indexOf('if (row.status !== "approved") return refuse(409, "cycle_not_approved",') !== -1 &&
+      SV.indexOf('cycleStart = await planCycleStartCheck(userId, req.body.cycle_id);') !== -1],
   // NEW (Oct 30 2026): the History tab, 10 runs a page from the member's own ai_tasks, and "View result" opening the drawer.
   ["executive 15", exTips, "lists this agent's runs, 10 a page", EXEC_FALSE,
     () => FILES[DECK_JS].indexOf('var PAGE_SIZE = 10;') !== -1 &&
