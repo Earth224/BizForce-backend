@@ -237,8 +237,20 @@ function withoutB2(text) {
   cut("  /* ── \"Why?\" (scripts/bf-why.js)", "  document.addEventListener(\"DOMContentLoaded\", loadWhy);\n\n");
   return ok ? t : null;
 }
-const profileNow = withoutB2(FILES[PROFILE_JS]);
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions set aside)",
+/* NAMED BEFORE → AFTER (B5, Nov 1 2026). BEFORE the file was compared with B2's additions cut. AFTER the schedule card
+   also names a pause by a trigger: SCHED_WORDS gains pausedTrigger, and renderScheduleState picks it when paused_reason
+   is "trigger" (checkTriggers U9 pins both). Each is put back to its old text, exactly once, before the comparison. */
+function withoutB5(text) {
+  if (text === null) return null;
+  let t = text, ok = true;
+  const back = (now, was) => { const a = t.indexOf(now); if (a < 0 || t.indexOf(now, a + 1) !== -1) { ok = false; return; } t = t.slice(0, a) + was + t.slice(a + now.length); };
+  back("    lapsed:         \"Paused while your subscription is inactive. Resumes automatically when it's active again.\",\n    pausedTrigger:  \"Paused by one of your triggers. It will not run until you press Resume.\"\n",
+    "    lapsed:         \"Paused while your subscription is inactive. Resumes automatically when it's active again.\"\n");
+  back("        : row.paused_reason === \"trigger\" ? SCHED_WORDS.pausedTrigger : SCHED_WORDS.pausedOwner);\n", "        : SCHED_WORDS.pausedOwner);\n");
+  return ok ? t : null;
+}
+const profileNow = withoutB5(withoutB2(FILES[PROFILE_JS]));
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions and B5's trigger pause words set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);

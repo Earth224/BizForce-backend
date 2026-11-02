@@ -183,7 +183,12 @@ const EXPECTED_GATED = [
   // memberGatesLimiter), because a gate governs agents that only run with one. The rule language and the
   // Decisions reads stay login-only: a member can always see why something ran (checkGates N).
   "get /api/member-gates", "post /api/member-gates", "put /api/member-gates/:id", "delete /api/member-gates/:id",
-  "post /api/member-gates/preview"
+  "post /api/member-gates/preview",
+  // NAMED (Nov 1 2026, member triggers, migration 160; gated 70 -> 74): BEFORE no trigger. AFTER a member makes,
+  // changes, deletes and previews their own triggers with a subscription (requireActiveSubscription, triggersLimiter),
+  // because a trigger acts only through agents that run with one. Reading the language, the list and the firings
+  // history stays login-only: a member can always see what fired and why (checkTriggers G0).
+  "post /api/triggers", "put /api/triggers/:id", "delete /api/triggers/:id", "post /api/triggers/preview"
 ];
 
 const EXPECTED_ADMIN = [

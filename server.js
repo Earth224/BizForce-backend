@@ -3327,7 +3327,10 @@ function isOwnerAccount(userId) {
              action through, so it can turn "ran" into "blocked" and nothing
              else (lib/gates.js withMemberGate);
      facts   the closed tokens the Decisions filter and the rule preview read
-             (agent, action type, channel, approved), never text or amounts.
+             (agent, action type, channel, approved), never text or amounts;
+     id      (block B4) the row's id, made by the caller, so a trigger firing
+             can carry the id of the decision that let it through. Only a
+             uuid is used; anything else is dropped and the database makes one.
    The facts and member columns come with migration 159. Until it is applied a
    row carrying them is refused for the unknown column (PGRST204), and the same
    row is written once more without them, so B1's records keep coming. */
@@ -3351,6 +3354,10 @@ function recordGateDecision(userId, action, target, observed, extra) {
       gateRow.member_gate_name = decision.member.name;
     }
     var plainRow = { user_id: gateRow.user_id, action: gateRow.action, target: gateRow.target, outcome: gateRow.outcome, results: gateRow.results };
+    if (typeof more.id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(more.id)) {
+      gateRow.id = more.id;
+      plainRow.id = more.id;
+    }
     var carriesB2 = !!(gateFacts || decision.member);
     return Promise.resolve()
       .then(function () { return supabase.from("gate_decisions").insert(gateRow); })
@@ -19385,6 +19392,187 @@ app.get("/api/gate-decisions/:id", requireAuth, gateDecisionsLimiter, async func
     if (one.error) return res.status(503).json({ error: "Your decisions could not be read just now.", reason: "decisions_unreadable" });
     if (!one.data) return res.status(404).json({ error: "No decision with that id is yours." });
     res.json({ decision: decisionOut(one.data) });
+  } catch (error) { next(error); }
+});
+
+/* ── MEMBER TRIGGERS (intelligence layer B4) ──────────────────────────────────
+   A trigger watches one number from the member's own account (lib/triggers.js,
+   a closed list of nine) and, when it crosses the line the member set, raises
+   an alert, has an agent draft a task, or pauses an agent's schedules. The
+   hourly pass is lib/triggerRunner.js (scheduled below at :30 UTC, off unless
+   ENABLE_TRIGGERS is exactly "true"); every firing goes through lib/gates.js
+   as trigger_fire and is recorded on trigger_firings with its decision id.
+   Nothing a trigger does publishes or sends: a drafted task is a saved prompt
+   the member runs through the normal task route, where approval still holds.
+
+   Reads need a login; writes and the preview also need an active
+   subscription, and all are rate-limited per account. Every query is filtered
+   on the caller's user_id. THE PREVIEW READS ONLY: it says how often the
+   trigger would have fired in the last 30 days, and when, and writes nothing.
+   Migration 160 makes the tables. */
+const triggersLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "triggers:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many trigger requests in a short time. Try again in a few minutes. Nothing was changed.", reason: "rate_limited" }
+});
+
+var FIRINGS_PER_PAGE = 20;
+var FIRING_COLUMNS = "id, trigger_id, metric_value, threshold, fired_at, outcome, action_ref, gate_decision_id";
+
+/* What lib/triggerRunner.js is handed: the real reads, gates and records. */
+function triggerDeps() {
+  return {
+    supabase: supabase,
+    env: process.env,
+    now: function () { return new Date(); },
+    isOwner: isOwnerAccount,
+    /* The plan as the schedule pass reads it (getUserPlan, active === true),
+       once per member per pass; a lookup that throws is { error }. */
+    userPlan: async function (userId) {
+      try { return { plan: await getUserPlan(userId), error: null }; } catch (planErr) { return { plan: null, error: planErr }; }
+    },
+    planObservation: entitlementGateObservation,
+    spendCeiling: enforcePlatformDailySpendCeiling,
+    spendThisMonth: modelSpendThisMonth,
+    spendLimit: modelSpendMonthlyLimit,
+    blogRef: blogRefToken,
+    scoreFrom: LEARNING.scoreFrom,
+    record: recordGateDecision,
+    uuid: function () { return crypto.randomUUID(); },
+    log: function (message) { console.log(message); }
+  };
+}
+
+function triggerTickNow() {
+  return require("./lib/triggerRunner").triggerTick(triggerDeps());
+}
+
+function triggerOut(row) {
+  var T = require("./lib/triggers");
+  var t = T.fromRow(row);
+  t.summary = T.summarize(t);
+  return t;
+}
+
+app.get("/api/triggers/language", requireAuth, function (req, res) {
+  res.json(require("./lib/triggers").language({ owner: isOwnerAccount(req.user.id) }));
+});
+
+app.get("/api/triggers", requireAuth, triggersLimiter, async function (req, res, next) {
+  try {
+    var listed = await supabase.from("member_triggers").select(require("./lib/triggerRunner").TRIGGER_ROW)
+      .eq("user_id", req.user.id).order("created_at", { ascending: true });
+    if (listed.error) {
+      console.error("[triggers] list failed for " + req.user.id + ": " + listed.error.message);
+      return res.status(503).json({ error: "Your triggers could not be read just now.", reason: "triggers_unreadable" });
+    }
+    res.json({ triggers: (listed.data || []).map(triggerOut), enabled_on_server: require("./lib/triggers").triggersEnabled(process.env) });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/triggers", requireAuth, requireActiveSubscription, triggersLimiter, async function (req, res, next) {
+  try {
+    var T = require("./lib/triggers");
+    var input = T.validateTrigger(req.body, null, { owner: isOwnerAccount(req.user.id) });
+    if (!input.ok) return res.status(400).json({ error: input.error + " Nothing was saved.", field: input.field });
+    var held = await supabase.from("member_triggers").select("id", { count: "exact", head: true }).eq("user_id", req.user.id);
+    if (held.error || typeof held.count !== "number") {
+      return res.status(503).json({ error: "Your triggers could not be counted just now, so nothing was saved.", reason: "triggers_unreadable" });
+    }
+    if (held.count >= T.LIMITS.MAX_TRIGGERS) {
+      return res.status(400).json({ error: "An account can hold " + T.LIMITS.MAX_TRIGGERS + " triggers. Delete one first. Nothing was saved.", reason: "too_many_triggers" });
+    }
+    var stamp = nowIso();
+    var made = await supabase.from("member_triggers")
+      .insert(Object.assign({ user_id: req.user.id, created_at: stamp, updated_at: stamp }, T.toRow(input.value)))
+      .select(require("./lib/triggerRunner").TRIGGER_ROW)
+      .single();
+    if (made.error && made.error.code === "23505") return res.status(409).json({ error: "You already have a trigger with that name. Nothing was saved.", field: "name" });
+    if (made.error) throw made.error;
+    res.status(201).json({ trigger: triggerOut(made.data) });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/triggers/:id", requireAuth, requireActiveSubscription, triggersLimiter, async function (req, res, next) {
+  try {
+    var T = require("./lib/triggers");
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "No trigger with that id is yours." });
+    var found = await supabase.from("member_triggers").select(require("./lib/triggerRunner").TRIGGER_ROW)
+      .eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+    if (found.error) throw found.error;
+    if (!found.data) return res.status(404).json({ error: "No trigger with that id is yours." });
+    var input = T.validateTrigger(req.body, T.fromRow(found.data), { owner: isOwnerAccount(req.user.id) });
+    if (!input.ok) return res.status(400).json({ error: input.error + " Nothing was changed.", field: input.field });
+    var changed = await supabase.from("member_triggers")
+      .update(Object.assign({ updated_at: nowIso() }, T.toRow(input.value)))
+      .eq("id", req.params.id)
+      .eq("user_id", req.user.id)
+      .select(require("./lib/triggerRunner").TRIGGER_ROW)
+      .maybeSingle();
+    if (changed.error && changed.error.code === "23505") return res.status(409).json({ error: "You already have a trigger with that name. Nothing was changed.", field: "name" });
+    if (changed.error) throw changed.error;
+    if (!changed.data) return res.status(404).json({ error: "No trigger with that id is yours." });
+    res.json({ trigger: triggerOut(changed.data) });
+  } catch (error) { next(error); }
+});
+
+app.delete("/api/triggers/:id", requireAuth, requireActiveSubscription, triggersLimiter, async function (req, res, next) {
+  try {
+    if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "No trigger with that id is yours." });
+    var gone = await supabase.from("member_triggers").delete().eq("id", req.params.id).eq("user_id", req.user.id).select("id");
+    if (gone.error) throw gone.error;
+    if (!(gone.data || []).length) return res.status(404).json({ error: "No trigger with that id is yours." });
+    res.json({ deleted: true, id: req.params.id });
+  } catch (error) { next(error); }
+});
+
+/* The firings, newest first, 20 a page, each with its trigger's name and the
+   id of the decision that let it through (the "Why?" link). */
+app.get("/api/triggers/firings", requireAuth, triggersLimiter, async function (req, res, next) {
+  try {
+    var page = req.query.page === undefined ? 1 : Number(req.query.page);
+    if (!Number.isInteger(page) || page < 1 || page > 500) return res.status(400).json({ error: "The page is a whole number from 1 to 500.", field: "page" });
+    var from = (page - 1) * FIRINGS_PER_PAGE;
+    var listed = await supabase.from("trigger_firings").select(FIRING_COLUMNS, { count: "exact" })
+      .eq("user_id", req.user.id).order("fired_at", { ascending: false }).range(from, from + FIRINGS_PER_PAGE - 1);
+    if (listed.error) return res.status(503).json({ error: "Your firings could not be read just now.", reason: "firings_unreadable" });
+    var names = await supabase.from("member_triggers").select("id, name").eq("user_id", req.user.id);
+    if (names.error) return res.status(503).json({ error: "Your firings could not be read just now.", reason: "firings_unreadable" });
+    var nameOf = {};
+    (names.data || []).forEach(function (n) { nameOf[n.id] = n.name; });
+    var total = typeof listed.count === "number" ? listed.count : null;
+    res.json({
+      firings: (listed.data || []).map(function (f) {
+        return { id: f.id, trigger_id: f.trigger_id, trigger_name: nameOf[f.trigger_id] || null,
+          metric_value: f.metric_value === null ? null : Number(f.metric_value), threshold: f.threshold === null ? null : Number(f.threshold),
+          fired_at: f.fired_at, outcome: f.outcome, action_ref: f.action_ref, gate_decision_id: f.gate_decision_id };
+      }),
+      page: page, per_page: FIRINGS_PER_PAGE, total: total,
+      pages: total === null ? null : Math.max(1, Math.ceil(total / FIRINGS_PER_PAGE))
+    });
+  } catch (error) { next(error); }
+});
+
+/* How often a trigger would have fired in the last 30 days, and when. READS
+   ONLY. The name may be left out; everything else is validated as for a save. */
+app.post("/api/triggers/preview", requireAuth, requireActiveSubscription, triggersLimiter, async function (req, res, next) {
+  try {
+    var T = require("./lib/triggers");
+    var body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? Object.assign({}, req.body) : req.body;
+    if (body && typeof body === "object" && !Array.isArray(body) && body.name === undefined) body.name = "Preview";
+    var input = T.validateTrigger(body, null, { owner: isOwnerAccount(req.user.id) });
+    if (!input.ok) return res.status(400).json({ error: input.error, field: input.field });
+    var shown;
+    try {
+      shown = await require("./lib/triggerRunner").preview(triggerDeps(), req.user.id, input.value, Date.now());
+    } catch (readErr) {
+      console.error("[triggers] preview read failed for " + req.user.id + ": " + ((readErr && readErr.message) || readErr));
+      return res.status(503).json({ error: "The number could not be read just now. Nothing was changed.", reason: "metric_unreadable" });
+    }
+    res.json(shown);
   } catch (error) { next(error); }
 });
 
@@ -53756,6 +53944,27 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep; rows older than 90 days are deleted.");
   } else {
     console.log("[startup] gate decisions sweep disabled (ENABLE_GATE_DECISIONS_SWEEP is exactly \"false\")");
+  }
+
+  /* Member triggers (lib/triggerRunner.js): hourly at :30 UTC, half an hour
+     off the schedule pass, claimed through job_runs.hourly_triggers_h<hh>. OFF
+     unless ENABLE_TRIGGERS is exactly "true", read here and again at the top
+     of every tick. Each firing goes through the gates (trigger_fire: G13, G9)
+     and is recorded; at most TRIGGERS_DAILY_FIRINGS (10, clamped 1 to 20)
+     firings per member per UTC day. No model calls. No boot-time run, for the
+     reason the retention job above gives. */
+  if (require("./lib/triggers").triggersEnabled(process.env)) {
+    cron.schedule("30 * * * *", function () {
+      triggerTickNow().catch(function (err) {
+        console.error("[Triggers] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] triggerTick scheduled — hourly at :30 UTC, claimed through job_runs.hourly_triggers_h<hh>; at most " +
+      require("./lib/triggers").dailyFiringsCap(process.env) + " firing(s) per member per day.");
+  } else {
+    console.log("[startup] triggerTick disabled (ENABLE_TRIGGERS not exactly \"true\")");
   }
 
   // Nightly backup. A wall-clock schedule for the same reason the pass above is

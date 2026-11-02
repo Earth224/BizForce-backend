@@ -939,7 +939,9 @@ const SV = FILES[SERVER];
 const CC_JS = "scripts/bf-command-center.js", HQ_JS = "scripts/bf-hq.js";
 const DECK_JS = "scripts/bf-exec-deck.js";
 const WHY_JS = "scripts/bf-why.js";
-[CC_JS, HQ_JS, DECK_JS, WHY_JS].forEach(readFrontend);
+const TRG_JS = "scripts/bf-triggers.js";
+[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS].forEach(readFrontend);
+const TRIGGERS_LIB = fs.readFileSync(path.join(REPO, "lib/triggers.js"), "utf8").replace(/\r\n/g, "\n");
 const GATES_LIB = fs.readFileSync(path.join(REPO, "lib/gates.js"), "utf8").replace(/\r\n/g, "\n");
 // The only paths that credit a wallet: creditWallet, called twice (a certification, the welcome bonus), and the one
 // bfc_credit RPC inside it. Transfers, purchases and donations move BFC between members; nothing else mints it.
@@ -1258,14 +1260,25 @@ const CN = [
                     code, checkExecutiveHQ keeps the acting-tool list, and no tip claims it now)
        executive 14 "changes only that agent's schedule"          → executive 14 "\"Pause schedule\" changes only that schedule"
                     (the same proof, plus the Approvals tab's Decisions list and its "Why?") */
+  /* NAMED (B5, Nov 1 2026): the gates tip now names Triggers too. BEFORE → AFTER, by fragment:
+       executive 16 "can only stop what the platform's checks let through" → executive 16 "\"Your gates\" only stop what checks let through"
+                    (the same proof, the gates part); executive 17 is NEW, the same tip's triggers part. */
   // NEW (B2): a member gate only adds restrictions; the builder and its 30-day test are on Settings; the test reads only.
-  ["executive 16", exTips, "can only stop what the platform's checks let through", EXEC_FALSE,
+  ["executive 16", exTips, "\"Your gates\" only stop what checks let through", EXEC_FALSE,
     () => GATES_LIB.indexOf('  if (!decision || decision.outcome !== "ran" || !block) return decision;') !== -1 &&
       FILES[WHY_JS].indexOf('<h3 class="hq-h" id="bfGateTitle">Your gates</h3>') !== -1 &&
       FILES[WHY_JS].indexOf('id="bfGateTest">Test against my last 30 days</button>') !== -1 &&
       FILES[EXEC].indexOf('<div id="deckMemberGates" role="region" aria-label="Your gates"></div>') !== -1 &&
       FILES[EXEC].indexOf('<script src="/scripts/bf-why.js"></script>') !== -1 &&
       SV.indexOf('app.post("/api/member-gates/preview", requireAuth, requireActiveSubscription, memberGatesLimiter,') !== -1],
+  // NEW (B5): triggers are on Settings; their three actions are exactly alert, draft a task, pause a schedule; a draft
+  // asks for approval and never publishes (checkTriggers E7 proves the held run).
+  ["executive 17", exTips, "\"Triggers\" notify you, draft a task or pause a schedule, and never publish", EXEC_FALSE,
+    () => FILES[EXEC].indexOf('<div id="deckTriggers" role="region" aria-label="Triggers"></div>') !== -1 &&
+      FILES[EXEC].indexOf('<script src="/scripts/bf-triggers.js"></script>') !== -1 &&
+      FILES[TRG_JS].indexOf('<h3 class="hq-h" id="bfTrgTitle">Triggers</h3>') !== -1 &&
+      /var ACTIONS = Object\.freeze\(\{\n  raise_alert: [^\n]*\n  draft_task: [^\n]*\n  pause_schedule: [^\n]*\n\}\);/.test(TRIGGERS_LIB) &&
+      TRIGGERS_LIB.indexOf('" for me to review. Prepare it for my approval; do not publish or send anything.";') !== -1],
   // NEW (Block 3b): the If-stuck tip; the server says chaining's state, and the button is disabled with those words.
   ["executive 13", exTips, "running plans is switched off on the server", EXEC_FALSE,
     () => /chaining_on: agentChainingEnabled\(\),/.test(SV) && FILES[HQ_JS].indexOf('var off = cc && cc.chaining_on === false;') !== -1 &&

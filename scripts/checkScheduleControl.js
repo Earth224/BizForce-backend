@@ -624,7 +624,12 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       runNightlyBackup:     { platform: "the nightly backup" },
       pendingStorageDeletionTick: { platform: "removes files of accounts already deleted (lib/accountFiles.js); there is no member left to be entitled" },
       // NAMED (B2, Nov 1 2026): BEFORE 11 jobs; AFTER 12, with the 90-day sweep of gate_decisions (checkGates O).
-      "require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepTick": { platform: "deletes gate decisions older than 90 days, a retention rule; it acts for no member" }
+      "require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepTick": { platform: "deletes gate decisions older than 90 days, a retention rule; it acts for no member" },
+      // NAMED (B4, Nov 1 2026): BEFORE 12 jobs; AFTER 13, with the member-trigger pass. It acts for a member, and its
+      // entitlement is G13 in lib/triggerRunner.js on every firing, read through getUserPlan in triggerDeps; a lookup
+      // that throws is { error }, which G13 fails closed (entitlement_unknown; checkTriggers E6).
+      triggerTickNow:       { pass: "triggerDeps", exception: /userPlan: async function \(userId\) \{\s*try \{ return \{ plan: await getUserPlan\(userId\), error: null \}; \} catch \(planErr\) \{ return \{ plan: null, error: planErr \}; \}/,
+                              why: "G13 on every firing: getUserPlan(userId).active === true, a failed lookup fails closed (checkTriggers E6)" }
     };
     const extra = [...scheduled].filter(n => !KNOWN[n]), missing = Object.keys(KNOWN).filter(n => !scheduled.has(n));
     check("S1. the scheduled jobs in server.js are exactly the " + Object.keys(KNOWN).length + " accounted for here (a new one must be classified)",

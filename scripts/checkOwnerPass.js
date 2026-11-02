@@ -307,7 +307,10 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       "getUserPlan in agentLiveBody",
       // NAMED (Oct 29 2026, Executive Headquarters, Block 3a): BEFORE 16 readers; AFTER 17. The calendar's agent-run
       // read reads .active only to show whether a schedule will run; unknown (a failed read) shows nothing. It gates nothing.
-      "getUserPlan in /api/agents/live/calendar"];
+      "getUserPlan in /api/agents/live/calendar",
+      // NAMED (Nov 1 2026, member triggers B4): BEFORE 17 readers; AFTER 18. triggerDeps hands lib/triggerRunner.js the
+      // plan for G13 on every firing; .active !== true, or a lookup that throws, blocks the firing (checkTriggers E6).
+      "getUserPlan in triggerDeps"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));

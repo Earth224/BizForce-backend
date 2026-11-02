@@ -183,7 +183,17 @@ const ADDED = [
   ["post", "/api/member-gates/preview"],         // test a rule against the last 30 days of decisions; reads only (total 369 -> 370)
   ["get", "/api/gate-decisions"],                // the Decisions list, 20 a page, by agent and outcome (total 370 -> 371)
   ["get", "/api/gate-decisions/for"],            // the newest decision for one run, proposal or action (total 371 -> 372)
-  ["get", "/api/gate-decisions/:id"]             // one decision, explained from its record (total 372 -> 373)
+  ["get", "/api/gate-decisions/:id"],            // one decision, explained from its record (total 372 -> 373)
+  // NAMED (Nov 1 2026, member triggers, migration 160): BEFORE 373 routes; AFTER 380, adding its seven routes, each
+  // requireAuth and rate-limited, each reading or writing only the caller's own rows; the three writes and the
+  // preview also requireActiveSubscription (checkTriggers G0, G)
+  ["get", "/api/triggers/language"],             // the closed trigger language and the six templates (total 373 -> 374)
+  ["get", "/api/triggers"],                      // the member's own triggers, with last value and last fired (total 374 -> 375)
+  ["post", "/api/triggers"],                     // make one, against the closed schema, at most 10 (total 375 -> 376)
+  ["put", "/api/triggers/:id"],                  // change one or switch it on or off (total 376 -> 377)
+  ["delete", "/api/triggers/:id"],               // delete one and its firings (total 377 -> 378)
+  ["get", "/api/triggers/firings"],              // the firings history, 20 a page, each with its decision id (total 378 -> 379)
+  ["post", "/api/triggers/preview"]              // the last 30 days replayed; reads only (total 379 -> 380)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
