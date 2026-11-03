@@ -45,6 +45,10 @@
         "Ask Termaximus" in the Why panel, the trigger list and the network
         map; the kept-at-sign-out key is named.
      W. THE WIRING in server.js and the guide tip.
+     P. THE PRIVACY SENTENCE (Nov 3 2026): privacy.html says exactly what a
+        typed question sends (the question, the time, and per record only
+        { id, kind, agent, at }), the kinds and 7 days it names, one call on
+        the guide route, and nothing from the buttons.
      S. No emoji in any new or edited file.
 
    MUTATIONS — MUTATE=<name> applies one in memory; MUTATE=all runs each:
@@ -54,6 +58,9 @@
      model-call-for-button              a button question calls the model -> B
      suggestion-saved-without-approval  suggestions are saved as offered  -> E
      next-fire-while-off                triggers off still names a check  -> A, B
+     privacy-sentence-missing           privacy.html loses the sentence   -> P
+     privacy-hides-the-time             Privacy omits a field it sends    -> P
+     offered-item-grows                 an offered item gains a field     -> C, P
    ═══════════════════════════════════════════════════════════════════════════ */
 "use strict";
 const fs = require("fs");
@@ -85,7 +92,11 @@ const MUTATIONS = {
   "suggestion-saved-without-approval": ["lib",
     "  return { suggestions: out, unreadable: unreadable, rules:",
     "  for (var sx = 0; sx < out.length; sx++) await db.from(\"member_triggers\").insert(Object.assign({ user_id: userId }, out[sx].body));\n  return { suggestions: out, unreadable: unreadable, rules:"],
-  "next-fire-while-off": ["lib", "  if (!serverOn) {", "  if (false) {"]
+  "next-fire-while-off": ["lib", "  if (!serverOn) {", "  if (false) {"],
+  // NAMED (Nov 3 2026, the records privacy sentence): the three below hold Privacy's words to what is sent.
+  "privacy-sentence-missing": ["privacy", "the buttons that ask about a record send nothing to the model.</li>", "the buttons that ask about a </li>"],
+  "privacy-hides-the-time": ["legalPages", "only your question, the current time, ", "only your question, "],
+  "offered-item-grows": ["lib", "return { id: s.id, kind: s.kind, agent: s.agent, at: s.at };", "return { id: s.id, kind: s.kind, agent: s.agent, at: s.at, facts: null };"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -111,7 +122,9 @@ const FILES = {
   execHtml: readFe("executive-agent.html"),
   guide: readFe("scripts/termaximus-guide.js"),
   tipClaims: read("scripts/checkGuideTipClaims.js"),
-  offline: read("scripts/checkOfflineMode.js")
+  offline: read("scripts/checkOfflineMode.js"),
+  legalPages: read("lib/legalPages.js"),
+  privacy: readFe("privacy.html")
 };
 if (MUTATE) {
   const m = MUTATIONS[MUTATE];
@@ -563,6 +576,30 @@ const FIRE_CLAIMS = /next check is at|it fires|cooldown holds it/;
       !REC.pickSubject({ intent: "flow", subject_id: "decision:" + ID(1) }, [{ id: "decision:" + ID(1) }]).ok &&
       !REC.pickSubject({ intent: "why_now", subject_id: "decision:" + ID(1) }, [{ id: "decision:" + ID(1) }]).ok &&
       REC.pickSubject({ intent: "why_not", subject_id: "decision:" + ID(1) }, [{ id: "decision:" + ID(1) }]).ok);
+    /* NAMED (Nov 3 2026, the records privacy sentence): the Privacy Policy states exactly what a typed
+       question sends, and these checks hold those words to the message C3 captured. */
+    const sentenceSrc = (/const RECORDS_PRIVACY_SENTENCE =\n([\s\S]*?);\n/.exec(FILES.legalPages) || [])[1];
+    const said = sentenceSrc ? vm.runInNewContext(sentenceSrc) : "";
+    const escd = said.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    const deviceAt = FILES.privacy.indexOf('<h2 id="device">');
+    const nextAt = FILES.privacy.indexOf("<h2 ", deviceAt + 5);
+    check("P1. privacy.html carries the records sentence once, under \"5. On your device\", as lib/legalPages.js builds it",
+      !!said && deviceAt !== -1 && FILES.privacy.slice(deviceAt, nextAt).indexOf("<li>" + escd + "</li>") !== -1 && FILES.privacy.split(escd).length === 2 &&
+      realRequire("./lib/legalPages").RECORDS_PRIVACY_SENTENCE === said);
+    const WORDS = { question: "only your question", now: "the current time", records: "for each of your own decisions and agent runs from the last 7 days, your triggers and the agent network's declared links" };
+    const ITEM = { id: "id", kind: "kind", agent: "agent", at: "time" };
+    check("P2. the sentence names every top-level field the model is sent, and the model is sent no other",
+      !!parsed && J(Object.keys(parsed)) === J(Object.keys(WORDS)) && Object.keys(WORDS).every(k => said.indexOf(WORDS[k]) !== -1), parsed && J(Object.keys(parsed)));
+    check("P3. each offered item is exactly { id, kind, agent, at }, the four the sentence names (\"just its id, kind, agent and time, never its content\")",
+      said.indexOf("just its " + ITEM.id + ", " + ITEM.kind + ", " + ITEM.agent + " and " + ITEM.at + ", never its content") !== -1 &&
+      !!parsed && parsed.records.length > 0 && parsed.records.every(x => J(Object.keys(x)) === J(Object.keys(ITEM))));
+    const kindsSent = parsed ? Array.from(new Set(parsed.records.map(x => /^decision_/.test(x.kind) ? "decision" : x.kind))).sort() : [];
+    check("P4. the kinds sent are the four the sentence lists (decisions, agent runs, triggers, declared links), over the 7 days it states",
+      J(kindsSent) === J(["decision", "edge", "run", "trigger"]) && REC.OFFER_DAYS === 7 && said.indexOf("from the last " + REC.OFFER_DAYS + " days") !== -1, J(kindsSent));
+    check("P5. \"at most one model call per question, counted within Guide mode's daily allowance\": one call, on the guide route, for the typed question",
+      said.indexOf("at most one model call per question, counted within Guide mode's daily allowance") !== -1 && S1.anthropic.length === 1 && S1.ledger.length === 1 && S1.ledger[0].route === GUIDE.GUIDE_ROUTE && GUIDE.GUIDE_ROUTE === "guide");
+    check("P6. \"the buttons that ask about a record send nothing to the model\": section B's buttons made no model call",
+      said.indexOf("the buttons that ask about a record send nothing to the model") !== -1 && SB.anthropic.length === 0, String(SB.anthropic.length));
   }
 
   /* ═══ D. limits, gates, ledger ═════════════════════════════════════════ */

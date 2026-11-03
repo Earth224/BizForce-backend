@@ -45,6 +45,10 @@
         through sendEmail and sendMarketingEmail lifted from server.js.
      K. No claim the code cannot back: checkHonestPages' rules and a list of
         security and compliance claims nothing here proves.
+     L. What a typed record question sends (Nov 3 2026): Privacy section 5
+        says it once, naming the question, the time and each record's id,
+        kind, agent and time, one call within Guide mode's allowance, and
+        nothing from the buttons.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
@@ -111,7 +115,9 @@ const MUTATIONS = {
   // the Terms' renewal card repeats section 4's sentence word for word
   "sentence-repeated": [["lib/legalPages.js", "esc(\"No partial or prorated refunds, as section 4 sets out.\")", "esc(\"There are no partial or prorated refunds.\")"]],
   // the Terms drop the BizCash-only statement from section 8
-  "terms-not-bfc-only": [["terms.html", "<p>BizForce Market trades are in BizCash only. Every listing is priced and bought in BFC, and BizForce processes no member-to-member payments in US dollars.</p>", ""]]
+  "terms-not-bfc-only": [["terms.html", "<p>BizForce Market trades are in BizCash only. Every listing is priced and bought in BFC, and BizForce processes no member-to-member payments in US dollars.</p>", ""]],
+  // NAMED (Nov 3 2026, the records privacy sentence): privacy.html drops what a typed record question sends
+  "records-sentence-dropped": [["privacy.html", "the buttons that ask about a record send nothing to the model.</li>", "the buttons send nothing.</li>"]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 
@@ -688,6 +694,25 @@ const fmt = n => Number(n).toLocaleString("en-US");
         !/capability-pill/.test(FE[f]) && !/marketplace intelligence/i.test(FE[f]) && !/Run on Dashboard/.test(FE[f]));
     });
     check("K3. Terms mentions BizCash, so it carries the BizCash notice and its script", FE["terms.html"].indexOf("<p class=\"bfc-notice\" data-bfc-notice></p>\n<script src=\"/scripts/bf-bfc-notice.js\"></script>") !== -1);
+  }
+
+  /* ── L ─────────────────────────────────────────────────────────────────── */
+  /* NAMED (Nov 3 2026, the records privacy sentence): Privacy states what a typed record question sends.
+     scripts/checkTermaximusRecords.js P holds the same words to the captured model message. */
+  section("L. what a typed record question sends");
+  {
+    const said = LP.RECORDS_PRIVACY_SENTENCE || "";
+    const escd = said.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    const pv = FE["privacy.html"];
+    const deviceAt = pv.indexOf('<h2 id="device">');
+    const nextAt = pv.indexOf("<h2 ", deviceAt + 5);
+    check("L1. privacy.html says it once, under \"5. On your device\", right after the Guide sentence",
+      !!said && deviceAt !== -1 && pv.slice(deviceAt, nextAt).indexOf("<li>" + escd + "</li>") !== -1 && pv.split(escd).length === 2 &&
+      pv.indexOf(escd) > pv.indexOf(LP.GUIDE_PRIVACY_SENTENCE.slice(0, 60)));
+    check("L2. it names the question, the time, and only each record's id, kind, agent and time (no content), one call within Guide mode's allowance, nothing from buttons",
+      said.indexOf("only your question, the current time") !== -1 && said.indexOf("just its id, kind, agent and time, never its content") !== -1 &&
+      said.indexOf("at most one model call per question, counted within Guide mode's daily allowance") !== -1 &&
+      said.indexOf("the buttons that ask about a record send nothing to the model") !== -1, said);
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(", "));

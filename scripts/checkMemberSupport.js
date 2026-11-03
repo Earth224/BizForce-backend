@@ -148,7 +148,9 @@ const MUTATIONS = {
   // the Terms version is not bumped
   // NAMED BEFORE → AFTER (Oct 30 2026, the music Terms): BEFORE the anchor was "2026-10-28", the version member support
   // set. AFTER "2026-10-30", the version the music section set; the mutation still puts it back before member support.
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-10-30\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  // NAMED BEFORE → AFTER (Nov 3 2026, the records privacy sentence): BEFORE the anchor was "2026-10-30", the version the
+  // music section set. AFTER "2026-11-03", the version the records sentence set; the mutation still puts it back before member support.
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-03\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };
