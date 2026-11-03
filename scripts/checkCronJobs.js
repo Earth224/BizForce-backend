@@ -178,6 +178,8 @@ const OPS_GATE = "ENABLE_OPS_ALERTS";
 const FILES_GATE = "ENABLE_STORAGE_DELETION_RETRY";
 // And this one (lib/gateDecisionsSweep.js): gate decisions are kept 90 days, no longer.
 const SWEEP_GATE = "ENABLE_GATE_DECISIONS_SWEEP";
+// And this one (lib/schemaCheck.js): a missing table must be named whether or not anyone set a variable.
+const SCHEMA_GATE = "ENABLE_SCHEMA_CHECK";
 
 const MUTATIONS = {
   // the self-review job loses its timezone and runs on the host's clock
@@ -373,7 +375,9 @@ const t0 = Date.now();
     out(JSON.stringify({ listened, crashed, tasks, runs, attempts,
       reminderLogs: logs.filter(l => /reminderScheduler|reminder scheduler/.test(l)),
       gates: logs.filter(l => /\\[startup\\] (storeProposalTick|selfReviewTick|agentScheduleTick|emailSequenceTick|runNightlyBackup|youtubeRetentionTick|pendingStorageDeletionTick|triggerTick) /.test(l)),
-      sweepLogs: logs.filter(l => /gate decisions sweep (scheduled|disabled)/.test(l)) }));
+      sweepLogs: logs.filter(l => /gate decisions sweep (scheduled|disabled)/.test(l)),
+      schemaLogs: logs.filter(l => /schema check (scheduled|disabled)/.test(l)),
+      schemaRuns: logs.filter(l => /\\[SchemaCheck\\]/.test(l)) }));
     process.exit(0);
   }, 1500);
 })();
@@ -400,21 +404,22 @@ const SRC_FILE = path.join(TMP, "server.src.js");
 fs.writeFileSync(LOAD_FILE, LOAD_CHILD);
 fs.writeFileSync(PROGRAM_FILE, PROGRAM_PRELOAD);
 fs.writeFileSync(SRC_FILE, SRC);
-function childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep) {
+function childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema) {
   const env = Object.assign({}, process.env, { BLUESKY_IDENTIFIER: "", BLUESKY_APP_PASSWORD: "" });
   GATES.forEach(g => { if (gatesOn) env[g] = "true"; else delete env[g]; });
   if (retention === undefined) delete env[RETENTION_GATE]; else env[RETENTION_GATE] = retention;
   if (opsAlerts === undefined) delete env[OPS_GATE]; else env[OPS_GATE] = opsAlerts;
   if (filesRetry === undefined) delete env[FILES_GATE]; else env[FILES_GATE] = filesRetry;
   if (sweep === undefined) delete env[SWEEP_GATE]; else env[SWEEP_GATE] = sweep;
+  if (schema === undefined) delete env[SCHEMA_GATE]; else env[SCHEMA_GATE] = schema;
   delete env.BACKUP_CRON; delete env.BACKUP_TIMEZONE;
   return env;
 }
 function parseChild(r) {
   try { return JSON.parse(r.stdout); } catch (e) { return { error: "child: " + (String(r.stdout) + String(r.stderr)).slice(0, 400) }; }
 }
-function loadServer(gatesOn, retention, opsAlerts, filesRetry, sweep) {
-  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep), encoding: "utf8", timeout: 120000 }));
+function loadServer(gatesOn, retention, opsAlerts, filesRetry, sweep, schema) {
+  return parseChild(spawnSync(process.execPath, [LOAD_FILE, SRC_FILE], { cwd: REPO, env: childEnv(gatesOn, retention, opsAlerts, filesRetry, sweep, schema), encoding: "utf8", timeout: 120000 }));
 }
 function runServerAsProgram() {
   return parseChild(spawnSync(process.execPath, ["-r", PROGRAM_FILE, SERVER_PATH], { cwd: REPO, env: childEnv(false), encoding: "utf8", timeout: 120000 }));
@@ -429,7 +434,8 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
       ", timezone " + JSON.stringify(c.timezone.value) + " from " + c.timezone.from));
     // NAMED BEFORE → AFTER: was "exactly five"; the sixth is the YouTube retention job, the seventh the ops alert scan,
     // the eighth the storage-deletion retry, the ninth the gate decisions sweep, the tenth the member-trigger pass (cron-count).
-    check("server.js has exactly ten cron.schedule calls", calls.length === 10, calls.length);
+    // NAMED (Nov 3 2026, the schema check): BEFORE "exactly ten"; AFTER "exactly eleven", the eleventh the schema check at 06:00 UTC.
+    check("server.js has exactly eleven cron.schedule calls", calls.length === 11, calls.length);
     check("each expression resolves from the source", calls.every(c => typeof c.expression.value === "string"), JSON.stringify(calls.map(c => c.expression)));
     check("each passes exactly one option, a timezone, resolved from the source",
       calls.every(c => typeof c.timezone.value === "string" && c.timezone.value.length > 0), JSON.stringify(calls.map(c => [c.line, c.timezone.from])));
@@ -504,13 +510,19 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     const filesDeclared = filesCall ? convertExpression(filesCall.expression.value) + " @ UTC" : null;
     const sweepCall = calls.find(c => c.expression.value === "30 4 * * *" && c.timezone.value === "UTC");
     const sweepDeclared = sweepCall ? convertExpression(sweepCall.expression.value) + " @ UTC" : null;
+    // The schema check is the only "0 6 * * *" in UTC (the Store Agent's 0 6 is America/Los_Angeles).
+    const schemaCall = calls.find(c => c.expression.value === "0 6 * * *" && c.timezone.value === "UTC");
+    const schemaDeclared = schemaCall ? convertExpression(schemaCall.expression.value) + " @ UTC" : null;
     const taskList = (r) => (r.tasks || []).map(x => x.pattern + " @ " + x.timezone).sort();
     // NAMED BEFORE → AFTER: was "gates unset: registers no node-cron task" and "each of the five says it is disabled";
-    // then exactly the retention task; then it and the ops alert scan; then those and the storage retry; now those and the
-    // gate decisions sweep (gates-unset).
-    check("gates unset, as the suite runs: the server comes up and registers exactly four tasks, the YouTube retention job at 09:00 UTC, the ops alert scan every 30 minutes UTC, the storage-deletion retry at 04:15 UTC and the gate decisions sweep at 04:30 UTC (all on by default)",
-      off.listened === true && !off.crashed && !!retentionDeclared && !!opsDeclared && !!filesDeclared && !!sweepDeclared &&
-      JSON.stringify(taskList(off)) === JSON.stringify([retentionDeclared, opsDeclared, filesDeclared, sweepDeclared].sort()), JSON.stringify(off).slice(0, 400));
+    // then exactly the retention task; then it and the ops alert scan; then those and the storage retry; then those and the
+    // gate decisions sweep; NAMED (Nov 3 2026): BEFORE exactly four tasks; AFTER five, adding the schema check (gates-unset).
+    check("gates unset, as the suite runs: the server comes up and registers exactly five tasks, the YouTube retention job at 09:00 UTC, the ops alert scan every 30 minutes UTC, the storage-deletion retry at 04:15 UTC, the gate decisions sweep at 04:30 UTC and the schema check at 06:00 UTC (all on by default)",
+      off.listened === true && !off.crashed && !!retentionDeclared && !!opsDeclared && !!filesDeclared && !!sweepDeclared && !!schemaDeclared &&
+      JSON.stringify(taskList(off)) === JSON.stringify([retentionDeclared, opsDeclared, filesDeclared, sweepDeclared, schemaDeclared].sort()), JSON.stringify(off).slice(0, 400));
+    check("…the schema check says it is scheduled at 06:00 UTC with its own claim, and, loaded as a check, it never runs (no [SchemaCheck] line: the boot run is only for the program)",
+      Array.isArray(off.schemaLogs) && off.schemaLogs.length === 1 && /schema check scheduled — 06:00 UTC daily, claimed through job_runs.schema_check/.test(off.schemaLogs[0]) &&
+      Array.isArray(off.schemaRuns) && off.schemaRuns.length === 0, JSON.stringify([off.schemaLogs, off.schemaRuns]));
     // NAMED BEFORE → AFTER: was 6 startup lines; then 7, the storage retry saying it is scheduled; now 8, triggerTick
     // saying it is disabled, 6 disabled in all (gates-logged).
     check("…each of the six opt-in jobs says it is disabled, and the retention job and the storage retry say they are scheduled",
@@ -520,47 +532,61 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     check("…and the gate decisions sweep says it is scheduled at 04:30 UTC with its own claim",
       Array.isArray(off.sweepLogs) && off.sweepLogs.length === 1 && /gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep/.test(off.sweepLogs[0]), JSON.stringify(off.sweepLogs));
     const retentionOff = loadServer(false, "false");
-    // NAMED BEFORE → AFTER: was "no task at all", then only the ops alert scan, then it and the retry; the sweep too (retention-false).
-    check("ENABLE_YOUTUBE_RETENTION exactly \"false\": only the ops alert scan, the storage retry and the sweep, and the retention job says it is disabled",
-      retentionOff.listened === true && !retentionOff.crashed && JSON.stringify(taskList(retentionOff)) === JSON.stringify([opsDeclared, filesDeclared, sweepDeclared].sort()) &&
+    // NAMED BEFORE → AFTER: was "no task at all", then only the ops alert scan, then it and the retry; the sweep too;
+    // NAMED (Nov 3 2026): AFTER the schema check too (retention-false).
+    check("ENABLE_YOUTUBE_RETENTION exactly \"false\": only the ops alert scan, the storage retry, the sweep and the schema check, and the retention job says it is disabled",
+      retentionOff.listened === true && !retentionOff.crashed && JSON.stringify(taskList(retentionOff)) === JSON.stringify([opsDeclared, filesDeclared, sweepDeclared, schemaDeclared].sort()) &&
       (retentionOff.gates || []).some(l => /youtubeRetentionTick disabled/.test(l)), JSON.stringify(retentionOff).slice(0, 400));
     const bothOff = loadServer(false, "false", "false");
-    // NAMED BEFORE → AFTER: was "no task at all", then only the storage retry; it and the sweep (both-false).
-    check("ENABLE_YOUTUBE_RETENTION and ENABLE_OPS_ALERTS both exactly \"false\": only the storage retry and the sweep",
-      bothOff.listened === true && !bothOff.crashed && JSON.stringify(taskList(bothOff)) === JSON.stringify([filesDeclared, sweepDeclared].sort()), JSON.stringify(bothOff).slice(0, 400));
+    // NAMED BEFORE → AFTER: was "no task at all", then only the storage retry; it and the sweep;
+    // NAMED (Nov 3 2026): AFTER the schema check too (both-false).
+    check("ENABLE_YOUTUBE_RETENTION and ENABLE_OPS_ALERTS both exactly \"false\": only the storage retry, the sweep and the schema check",
+      bothOff.listened === true && !bothOff.crashed && JSON.stringify(taskList(bothOff)) === JSON.stringify([filesDeclared, sweepDeclared, schemaDeclared].sort()), JSON.stringify(bothOff).slice(0, 400));
     const allOff = loadServer(false, "false", "false", "false");
-    // NAMED BEFORE → AFTER: was "no task at all"; the sweep has its own gate (three-false).
-    check("…and with ENABLE_STORAGE_DELETION_RETRY exactly \"false\" as well: only the sweep, and the retry says it is disabled",
-      allOff.listened === true && !allOff.crashed && JSON.stringify(taskList(allOff)) === JSON.stringify([sweepDeclared]) &&
+    // NAMED BEFORE → AFTER: was "no task at all"; the sweep has its own gate;
+    // NAMED (Nov 3 2026): AFTER the sweep and the schema check, which has its own gate too (three-false).
+    check("…and with ENABLE_STORAGE_DELETION_RETRY exactly \"false\" as well: only the sweep and the schema check, and the retry says it is disabled",
+      allOff.listened === true && !allOff.crashed && JSON.stringify(taskList(allOff)) === JSON.stringify([sweepDeclared, schemaDeclared].sort()) &&
       (allOff.gates || []).some(l => /pendingStorageDeletionTick disabled/.test(l)), JSON.stringify(allOff).slice(0, 400));
     const fourOff = loadServer(false, "false", "false", "false", "false");
-    check("…and with ENABLE_GATE_DECISIONS_SWEEP exactly \"false\" as well: no task at all, and the sweep says it is disabled",
-      fourOff.listened === true && !fourOff.crashed && Array.isArray(fourOff.tasks) && fourOff.tasks.length === 0 &&
+    // NAMED (Nov 3 2026): BEFORE "no task at all"; AFTER only the schema check (four-false).
+    check("…and with ENABLE_GATE_DECISIONS_SWEEP exactly \"false\" as well: only the schema check, and the sweep says it is disabled",
+      fourOff.listened === true && !fourOff.crashed && JSON.stringify(taskList(fourOff)) === JSON.stringify([schemaDeclared]) &&
       (fourOff.sweepLogs || []).some(l => /gate decisions sweep disabled/.test(l)), JSON.stringify(fourOff).slice(0, 400));
-    const sweepFalsey = loadServer(false, "false", "false", "false", "False");
+    const fiveOff = loadServer(false, "false", "false", "false", "false", "false");
+    check("…and with ENABLE_SCHEMA_CHECK exactly \"false\" as well: no task at all, and the schema check says it is disabled",
+      fiveOff.listened === true && !fiveOff.crashed && Array.isArray(fiveOff.tasks) && fiveOff.tasks.length === 0 &&
+      (fiveOff.schemaLogs || []).some(l => /schema check disabled \(ENABLE_SCHEMA_CHECK is exactly "false"\)/.test(l)), JSON.stringify(fiveOff).slice(0, 400));
+    const schemaFalsey = loadServer(false, "false", "false", "false", "false", "False");
+    check("ENABLE_SCHEMA_CHECK \"False\" (not exactly \"false\"): the schema check is still registered",
+      schemaFalsey.listened === true && JSON.stringify(taskList(schemaFalsey)) === JSON.stringify([schemaDeclared]), JSON.stringify(schemaFalsey.tasks));
+    const sweepFalsey = loadServer(false, "false", "false", "false", "False", "false");
+    // NAMED (Nov 3 2026): BEFORE the schema check was not a variable here; AFTER it is set "false" so the sweep stands alone (sweep-False).
     check("ENABLE_GATE_DECISIONS_SWEEP \"False\" (not exactly \"false\"): the sweep is still registered",
       sweepFalsey.listened === true && JSON.stringify(taskList(sweepFalsey)) === JSON.stringify([sweepDeclared]), JSON.stringify(sweepFalsey.tasks));
     const filesFalsey = loadServer(false, "false", "false", "False");
-    // NAMED BEFORE → AFTER: was the retry alone; it and the sweep (files-False).
+    // NAMED BEFORE → AFTER: was the retry alone; it and the sweep; NAMED (Nov 3 2026): AFTER the schema check too (files-False).
     check("ENABLE_STORAGE_DELETION_RETRY \"False\" (not exactly \"false\"): the storage retry is still registered",
-      filesFalsey.listened === true && JSON.stringify(taskList(filesFalsey)) === JSON.stringify([filesDeclared, sweepDeclared].sort()), JSON.stringify(filesFalsey.tasks));
+      filesFalsey.listened === true && JSON.stringify(taskList(filesFalsey)) === JSON.stringify([filesDeclared, sweepDeclared, schemaDeclared].sort()), JSON.stringify(filesFalsey.tasks));
     const opsFalsey = loadServer(false, "false", "False");
-    // NAMED BEFORE → AFTER: was only the ops scan, then it and the storage retry; now those and the sweep (ops-False).
+    // NAMED BEFORE → AFTER: was only the ops scan, then it and the storage retry; then those and the sweep;
+    // NAMED (Nov 3 2026): AFTER the schema check too (ops-False).
     check("ENABLE_OPS_ALERTS \"False\" (not exactly \"false\"): the ops alert scan is still registered",
-      opsFalsey.listened === true && JSON.stringify(taskList(opsFalsey)) === JSON.stringify([opsDeclared, filesDeclared, sweepDeclared].sort()), JSON.stringify(opsFalsey.tasks));
+      opsFalsey.listened === true && JSON.stringify(taskList(opsFalsey)) === JSON.stringify([opsDeclared, filesDeclared, sweepDeclared, schemaDeclared].sort()), JSON.stringify(opsFalsey.tasks));
     const retentionFalsey = loadServer(false, "False");
-    // NAMED BEFORE → AFTER: was 1 task, then 2, then 3; now it, the ops alert scan, the storage retry and the sweep (retention-False).
-    check("ENABLE_YOUTUBE_RETENTION \"False\" (not exactly \"false\"): the retention task is still registered, beside the ops scan, the storage retry and the sweep",
-      retentionFalsey.listened === true && JSON.stringify(taskList(retentionFalsey)) === JSON.stringify([retentionDeclared, opsDeclared, filesDeclared, sweepDeclared].sort()), JSON.stringify(retentionFalsey.tasks));
+    // NAMED BEFORE → AFTER: was 1 task, then 2, then 3, then 4; NAMED (Nov 3 2026): AFTER 5, the schema check too (retention-False).
+    check("ENABLE_YOUTUBE_RETENTION \"False\" (not exactly \"false\"): the retention task is still registered, beside the ops scan, the storage retry, the sweep and the schema check",
+      retentionFalsey.listened === true && JSON.stringify(taskList(retentionFalsey)) === JSON.stringify([retentionDeclared, opsDeclared, filesDeclared, sweepDeclared, schemaDeclared].sort()), JSON.stringify(retentionFalsey.tasks));
     check("…and it runs no reminder pass (no calendar_events read, no pass logged; the guard says so)",
       off.listened === true && !reminderRead(off.attempts) && (off.reminderLogs || []).length === 1 && /reminder scheduler not started/.test(off.reminderLogs[0]),
       JSON.stringify({ attempts: off.attempts, reminderLogs: off.reminderLogs }));
     const on = loadServer(true);
     const declared = calls.map(c => (fieldsOf(c.expression.value) ? convertExpression(c.expression.value) : c.expression.value) + " @ " + c.timezone.value).sort();
     const registered = (on.tasks || []).map(t => t.pattern + " @ " + t.timezone).sort();
-    // NAMED BEFORE → AFTER: was "exactly the five declared schedules", then six, seven, eight, nine; now ten (gates-set).
-    check("gates set: exactly the ten declared schedules are registered, with their expressions and timezones",
-      on.listened === true && !on.crashed && registered.length === 10 && JSON.stringify(registered) === JSON.stringify(declared),
+    // NAMED BEFORE → AFTER: was "exactly the five declared schedules", then six, seven, eight, nine, ten;
+    // NAMED (Nov 3 2026): BEFORE ten; AFTER eleven, the schema check (gates-set).
+    check("gates set: exactly the eleven declared schedules are registered, with their expressions and timezones",
+      on.listened === true && !on.crashed && registered.length === 11 && JSON.stringify(registered) === JSON.stringify(declared),
       JSON.stringify(on.crashed || on.error || registered.map(r => r.slice(0, 40))) + " vs " + JSON.stringify(declared.map(r => r.slice(0, 40))));
     check("…none of them ran while server.js loaded, and still no reminder pass",
       on.listened === true && on.runs === 0 && off.runs === 0 && !reminderRead(on.attempts), JSON.stringify({ runs: on.runs, offRuns: off.runs, attempts: on.attempts }));

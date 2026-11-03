@@ -132,6 +132,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `AGENT_SCHEDULE_MAX_PER_TICK` | `25` | Scheduled runs per hourly run. |
 | `ENABLE_STORAGE_DELETION_RETRY` | on | On unless exactly `false`: the daily retry that removes a deleted account's files from Storage. |
 | `ENABLE_GATE_DECISIONS_SWEEP` | on | On unless exactly `false`: the daily sweep that deletes gate decisions older than 90 days. |
+| `ENABLE_SCHEMA_CHECK` | on | On unless exactly `false`: read-only head counts confirm every table the code relies on exists (lib/schemaCheck.js), once 60 s after boot and daily at 06:00 UTC; a missing table is emailed once, named with the migration file that creates it, and shown on `/api/admin/health` (admins only; the public `/health` is unchanged). |
 | `ENABLE_TRIGGERS` | off | Exactly `true` runs the hourly member-trigger pass (lib/triggerRunner.js). Anything else leaves triggers saved but never fired. |
 | `TRIGGERS_DAILY_FIRINGS` | 10 | Firings per member per UTC day, a whole number clamped to 1 to 20. |
 | `BFC_TRANSFER_MAX` | `1000` | The most BFC one send or donation may move. |
@@ -152,6 +153,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | ops alert scan (`lib/opsAlert.js` scanTick) | cron `*/30 * * * *`, UTC | on unless `ENABLE_OPS_ALERTS` is exactly `false` |
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
+| `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |
@@ -187,6 +189,8 @@ A check with `MUTATIONS` proves itself: `MUTATE=all node scripts/checkX.js` brea
 ## Migrations
 
 `supabase/migrations/NNN_name.sql`, numbered in order. Nothing applies them automatically. **The owner applies each new one by hand:** open the Supabase dashboard, go to SQL Editor, paste the whole file, and run it. Each file is written to be safe to run twice (`IF NOT EXISTS`, guarded constraints). Apply a new migration before deploying the code that needs it, unless its header says the code works without it.
+
+A migration that was never applied is caught by the schema check (`lib/schemaCheck.js`): within 60 seconds of a deploy, and every day at 06:00 UTC, it emails the owner once per missing table with the exact file to run, and the nightly backup's failure names the same file.
 
 `node scripts/buildScratchSchema.js` writes every migration, in order, into one file for a fresh database (the restore drill uses it).
 

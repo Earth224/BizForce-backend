@@ -625,6 +625,9 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       pendingStorageDeletionTick: { platform: "removes files of accounts already deleted (lib/accountFiles.js); there is no member left to be entitled" },
       // NAMED (B2, Nov 1 2026): BEFORE 11 jobs; AFTER 12, with the 90-day sweep of gate_decisions (checkGates O).
       "require(\"./lib/gateDecisionsSweep\").gateDecisionsSweepTick": { platform: "deletes gate decisions older than 90 days, a retention rule; it acts for no member" },
+      // NAMED (Nov 3 2026, the schema check): BEFORE 13 jobs; AFTER 14, with the daily schema check, read-only head
+      // counts of the platform's own tables that email the owner (checkSchemaCheck P, R).
+      "require(\"./lib/schemaCheck\").schemaCheckTick": { platform: "read-only head counts confirming every table exists; it emails the owner, acts for no member" },
       // NAMED (B4, Nov 1 2026): BEFORE 12 jobs; AFTER 13, with the member-trigger pass. It acts for a member, and its
       // entitlement is G13 in lib/triggerRunner.js on every firing, read through getUserPlan in triggerDeps; a lookup
       // that throws is { error }, which G13 fails closed (entitlement_unknown; checkTriggers E6).

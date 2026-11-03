@@ -216,7 +216,10 @@ const ADDED = [
   // call inside Guide mode's daily allowance (checkTermaximusRecords B, C, D, E)
   ["get", "/api/guide/records/answer"],           // a button's question answered by template from the member's own record (total 390 -> 391)
   ["post", "/api/guide/records"],                 // a typed question: the model picks one offered record id; the answer is the template (total 391 -> 392)
-  ["get", "/api/guide/suggestions"]               // ready-made triggers offered by rule from the member's own numbers; writes nothing (total 392 -> 393)
+  ["get", "/api/guide/suggestions"],              // ready-made triggers offered by rule from the member's own numbers; writes nothing (total 392 -> 393)
+  // NAMED (Nov 3 2026, the schema check): BEFORE 393 routes; AFTER 394, adding /health's admin detail, requireAuth and
+  // requireAdmin, which reads only the last schema check's result in this process (checkSchemaCheck H)
+  ["get", "/api/admin/health"]                    // the schema line: any missing table and the migration to run; admins only (total 393 -> 394)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

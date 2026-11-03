@@ -41534,6 +41534,25 @@ app.post("/api/billing/portal", requireAuth, async function (req, res) {
 
 
 
+/* /health's admin detail. The public /health answers a word and nothing else;
+   this one is admins only and adds the schema line (lib/schemaCheck.js): which
+   table is missing and the migration file to run. It reads only what the last
+   schema check found in this process, so it makes no database call of its own
+   beyond the shared health probe. */
+app.get("/api/admin/health", requireAuth, requireAdmin, async function (req, res) {
+  const probe = await opsAlerts.probeDatabase();
+  const schemaCheck = require("./lib/schemaCheck");
+  const status = schemaCheck.lastSchemaStatus();
+  return res.status(200).json({
+    ok: probe.ok,
+    db: probe.ok ? "ok" : "down",
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    schema: schemaCheck.schemaStatusLine(),
+    schema_checked_at: status ? status.checked_at : null,
+    schema_missing: status ? status.missing : null
+  });
+});
+
 app.get("/api/admin/flagged-accounts", requireAuth, requireAdmin, async function (req, res, next) {
   try {
     const { data, error } = await supabase
@@ -54583,6 +54602,32 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep; rows older than 90 days are deleted.");
   } else {
     console.log("[startup] gate decisions sweep disabled (ENABLE_GATE_DECISIONS_SWEEP is exactly \"false\")");
+  }
+
+  /* The schema check (lib/schemaCheck.js): read-only head counts confirm every
+     table the code relies on exists, and a missing one is emailed once, named
+     with the migration file that creates it. Daily at 06:00 UTC, claimed
+     through job_runs.schema_check, and once 60 seconds after boot when this
+     file runs as the program (never when a check loads it). ON unless
+     ENABLE_SCHEMA_CHECK is exactly "false". */
+  if (require("./lib/schemaCheck").schemaCheckEnabled(process.env)) {
+    cron.schedule("0 6 * * *", function () {
+      require("./lib/schemaCheck").schemaCheckTick(supabase, opsAlerts).catch(function (err) {
+        console.error("[SchemaCheck] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    if (require.main === module) {
+      shutdownControl.trackInterval("schemaCheckBoot", setTimeout(function () {
+        require("./lib/schemaCheck").schemaCheckBoot(supabase, opsAlerts).catch(function (err) {
+          console.error("[SchemaCheck] Boot run error:", err.message || err);
+        });
+      }, 60000));
+    }
+    console.log("[startup] schema check scheduled — 06:00 UTC daily, claimed through job_runs.schema_check, and once 60 seconds after boot; read-only head counts.");
+  } else {
+    console.log("[startup] schema check disabled (ENABLE_SCHEMA_CHECK is exactly \"false\")");
   }
 
   /* Member triggers (lib/triggerRunner.js): hourly at :30 UTC, half an hour

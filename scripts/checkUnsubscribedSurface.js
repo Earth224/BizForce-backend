@@ -205,7 +205,10 @@ const EXPECTED_GATED = [
 
 const EXPECTED_ADMIN = [
   "get /api/admin/flagged-accounts", "post /api/admin/ban/:userId", "post /api/admin/unban/:userId",
-  "post /api/admin/verify/:userId", "post /api/admin/flag/:userId", "post /api/admin/store-proposals/run"
+  "post /api/admin/verify/:userId", "post /api/admin/flag/:userId", "post /api/admin/store-proposals/run",
+  // NAMED (Nov 3 2026, the schema check; admin 6 -> 7): BEFORE no admin health route. AFTER /health's admin detail,
+  // requireAuth and requireAdmin, which reads only the last schema check's result and writes nothing (checkSchemaCheck H2).
+  "get /api/admin/health"
 ];
 
 /* Login-only routes that write something a stranger is served. */
