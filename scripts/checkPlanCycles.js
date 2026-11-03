@@ -502,9 +502,11 @@ const WANT_TOTALS = { dispatches_ran: 7, dispatches_refused: 1, dispatches_faile
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   /* NAMED (store connections, Nov 3 2026): BEFORE "the only migration numbered 162, and the highest" (every number <= 162).
      AFTER 163_store_connections.sql follows it, so the pin is "the only one numbered 162, every other one but 163 is lower,
-     and 161 came before it"; "the highest" is now checkStoreConnections L9's, for 163. */
+     and 161 came before it"; "the highest" is now checkStoreConnections L9's, for 163.
+     NAMED (the Bluesky Mentions inbox, Nov 3 2026): BEFORE only 163_store_connections.sql was allowed above 162. AFTER
+     163_store_connections.sql and 164_bluesky_reply_refs.sql; "the highest" is checkBlueskyMentions M3's, for 164. */
   check("A1. 162_plan_cycles.sql is the only migration numbered 162, every one before it is lower (161 was the last before it)",
-    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^163_store_connections\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
+    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^(163_store_connections|164_bluesky_reply_refs)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
   check("A2. plan_cycles: every column the design names, user_id and plan_task_id cascading, previous and next nullable",
     /id                 uuid PRIMARY KEY DEFAULT gen_random_uuid\(\),/.test(mig) &&
     /user_id            uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) &&

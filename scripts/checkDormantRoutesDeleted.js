@@ -225,7 +225,12 @@ const ADDED = [
   ["post", "/api/store/woocommerce/callback"],    // the store hands over a Read key; any other permission is refused (395 -> 396)
   ["get", "/api/store/connections"],              // status, safe fields only (396 -> 397)
   ["delete", "/api/store/connections/:id"],       // disconnect: the connection, its synced rows and order summaries (397 -> 398)
-  ["post", "/api/store/connections/:id/sync"]     // sync now, 6 a day (398 -> 399)
+  ["post", "/api/store/connections/:id/sync"],    // sync now, 6 a day (398 -> 399)
+  // NAMED (Nov 3 2026, the Bluesky Mentions inbox): BEFORE 399 routes; AFTER 402, the inbox read on request and never
+  // stored, a reply drafted by the model, and the draft filed for approval (checkBlueskyMentions R, D, F)
+  ["get", "/api/social/bluesky/mentions"],                 // one listNotifications call, mentions, replies and quotes only; 12 an hour, 60 a day (399 -> 400)
+  ["post", "/api/social/bluesky/mentions/draft-reply"],    // one reply drafted from the post's text only; 10 an hour, 30 a day (400 -> 401)
+  ["post", "/api/social/bluesky/mentions/propose-reply"]   // the drafted reply filed for approval, never run automatically (401 -> 402)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -742,8 +742,12 @@ function shopifyConn(db, userId) {
     /CHECK \(credentials_ciphertext ~ '\^\[0-9a-f\]\+\$'\)/.test(FILES.migration) && /UNIQUE \(user_id, platform, store_url\)/.test(FILES.migration));
   check("L7. README has the ENABLE_STORE_SYNC row and the job row", /\| `ENABLE_STORE_SYNC` \| off \| Exactly `true`/.test(FILES.readme) && /\| `storeSyncTick`: [^\n]*cron `0 5 \* \* \*`, UTC, claimed `store_sync`/.test(FILES.readme));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(function (f) { return /^\d+_/.test(f); });
-  check("L9. 163_store_connections.sql is the only migration numbered 163, and the highest (162 was the last before it)",
-    migFiles.filter(function (f) { return /^163_/.test(f); }).length === 1 && migFiles.every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+  /* NAMED (the Bluesky Mentions inbox, Nov 3 2026): BEFORE "the only migration numbered 163, and the highest" (every number
+     <= 163). AFTER 164_bluesky_reply_refs.sql follows it, so the pin is "the only one numbered 163, every other one but 164 is
+     lower, and 162 came before it"; "the highest" is now checkBlueskyMentions M3's, for 164. */
+  check("L9. 163_store_connections.sql is the only migration numbered 163, every one before it is lower (162 was the last before it)",
+    migFiles.filter(function (f) { return /^163_/.test(f); }).length === 1 &&
+    migFiles.filter(function (f) { return !/^164_bluesky_reply_refs\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };

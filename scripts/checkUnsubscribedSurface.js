@@ -205,7 +205,13 @@ const EXPECTED_GATED = [
   // Shopify or WooCommerce store (5 an hour) and "Sync now" (6 a day) need a subscription (requireActiveSubscription),
   // because the read feeds agents that run only with one. The list and disconnect stay login-only: a member can always
   // see what is connected and take their key back (checkStoreConnections C1, Y0, S2).
-  "post /api/store/connections", "post /api/store/connections/:id/sync"
+  "post /api/store/connections", "post /api/store/connections/:id/sync",
+  // NAMED (Nov 3 2026, the Bluesky Mentions inbox, migration 164; gated 83 -> 86): BEFORE no inbox. AFTER reading the
+  // inbox (12 an hour, 60 a day), drafting a reply (one model call; aiLimiter and 10 an hour, 30 a day) and filing it for
+  // approval need a subscription (requireActiveSubscription), because each reads Bluesky or calls the model for an
+  // account that posts only with one. Approving the reply is G3-gated on the approve route like every Bluesky action
+  // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS; checkBlueskyMentions R1-R3).
+  "get /api/social/bluesky/mentions", "post /api/social/bluesky/mentions/draft-reply", "post /api/social/bluesky/mentions/propose-reply"
 ];
 
 const EXPECTED_ADMIN = [
