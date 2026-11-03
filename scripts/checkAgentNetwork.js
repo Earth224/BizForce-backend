@@ -831,9 +831,11 @@ async function getNetwork(db, user, query) {
   const mig = FILES.migration;
   /* NAMED (B8/B9, Nov 1 2026): BEFORE "the only migration numbered 161, and the highest" (every number <= 161). AFTER
      162_plan_cycles.sql follows it, so the pin is "the only one numbered 161, and every one before it is lower"; the
-     ordering it guarded (no migration numbered above 161 when 161 was written) is now checkPlanCycles A1's, for 162. */
+     ordering it guarded (no migration numbered above 161 when 161 was written) is now checkPlanCycles A1's, for 162.
+     NAMED (store connections, Nov 3 2026): BEFORE only 162_plan_cycles.sql was allowed above 161. AFTER the migrations
+     allowed above 161 are 162_plan_cycles.sql and 163_store_connections.sql; "the highest" is checkStoreConnections L9's. */
   check("H6. 161_member_links.sql is the only migration numbered 161, and every earlier one is lower", fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^161_/.test(f)).length === 1 &&
-    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^162_plan_cycles\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
+    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
   check("H7. the table: user_id cascading, from_agent, to_agent, enabled, updated_at, one row per link, no self link",
     /user_id     uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) && /from_agent  text NOT NULL/.test(mig) && /to_agent    text NOT NULL/.test(mig) &&
     /enabled     boolean NOT NULL DEFAULT true,/.test(mig) && /updated_at  timestamptz NOT NULL DEFAULT now\(\),/.test(mig) &&

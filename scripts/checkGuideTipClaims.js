@@ -364,8 +364,10 @@ const MUTATIONS = {
     "Press \\\"Send BFC\\\", enter the member's username and the amount, check the name it finds, then press \\\"Confirm\\\".",
     "It's a read-only ledger; credits accumulate automatically as you use the platform."]],
   // store tip 159 claims to manage inventory across every channel again
+  /* NAMED (store connections, Nov 3 2026): BEFORE anchored on "It connects to no store or channel; audits are written ...".
+     AFTER the tip says the member can connect a store read-only, so the anchor is the new sentence; the restored lie is the same. */
   "restore-store-159": [[GUIDE,
-    "It connects to no store or channel; audits are written from your Business Profile and what you tell it, not your store's own data.",
+    "\\\"Connect your store\\\" reads Shopify or WooCommerce read-only; audits are written from your Business Profile and what you tell it, not your store's own data.",
     "This agent manages multi-store commerce intelligence — inventory, product performance, and omnichannel strategy across every channel you sell on."]],
   // the SEO report is called a Google report again
   "restore-google-seo-report": [[SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', '<h3 class="seo-opt-report-title">Google SEO Report</h3>']],
@@ -785,6 +787,9 @@ const REFRESH_FN = (/function refreshPage\(\) \{([\s\S]*?)\n    \}/.exec(FILES[S
      B 6 email 152          "it writes the copy and reads no delivery data"      → "It writes the copy and reads no delivery data"
      B 6 email 154          "… and the test itself runs in your own email platform" → "notes which to A/B test first; run the test in your own email platform"
      B 6 store 159          "it connects to no store or channel"                 → "It connects to no store or channel"
+                            (store connections, Nov 3 2026) "It connects to no store or channel" → "reads Shopify or WooCommerce
+                             read-only"; the proof was "the page names no Shopify or WooCommerce"; it is now "the audits
+                             still never fetch the store, and the page's Connect your store card says it only reads"
      B 6 store 160          "are written from that context, not from your store's own data" → "not your store's own data"
      B 6 store 161          "it plans your channel mix, inventory sync approach, …" → RETIRED: the tip is gone; its ban stays
      B 6 influencer 201     "drafts the work of creator partnerships"            → 'press "Draft the offer" to put budget and territory in writing'
@@ -1051,9 +1056,10 @@ const B = [
     () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n)) && /no open-rate, click-rate or /.test(SV)],
   ["6 email 154", emTips, "notes which to A/B test first; run the test in your own email platform", /lives and dies/,
     () => offers(EMAIL, "Subject Line Testing") && /Note which to A\/B test first\./.test(taskPrompt("subject_lines"))],
-  ["6 store 159", stTips, "It connects to no store or channel", /manages multi-store|across every channel|commerce intelligence/,
+  ["6 store 159", stTips, "reads Shopify or WooCommerce read-only", /manages multi-store|across every channel|commerce intelligence/,
     () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) &&
-      /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/shopify|woocommerce|bigcommerce/i.test(FILES[STORE])],
+      /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/bigcommerce/i.test(FILES[STORE]) &&
+      FILES[STORE].indexOf("BizForce only reads your store. It never changes your products, prices or orders.") !== -1 && /id="storeConnect"/.test(FILES[STORE])],
   ["6 store 160", stTips, "not your store's own data", /compare you against/,
     () => /reads no analytics, traffic, checkout or conversion data/.test(taskPrompt("conversion_audit"))],
   ["6 store 161", stTips, null, /coordinating across stores|edge is/,

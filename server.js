@@ -10311,6 +10311,19 @@ app.post("/api/inventory/items/:id/movements", requireAuth, async function (req,
       return res.status(404).json({ error: "Item not found" });
     }
 
+    /* A SYNCED ITEM'S STOCK BELONGS TO ITS STORE (migration 163). The next sync
+       sets its quantity from the store, so a movement recorded here would be
+       overwritten, and it would also stop the item being removed on
+       disconnect (inventory_movements is ON DELETE RESTRICT). */
+    var syncedItem = await findOwnedInventoryItem(req.params.id, req.user.id);
+    if (syncedItem && syncedItem.source) {
+      var storeName = syncedItem.source === "shopify" ? "Shopify" : "WooCommerce";
+      return res.status(409).json({
+        error: "This item's stock comes from your " + storeName + " store and is read from it each sync. Change the stock in " + storeName + ".",
+        code: "synced_item"
+      });
+    }
+
     /* TYPE gates only. The function owns every rule about shape and
        positivity — whether a counted figure belongs on this direction, whether
        a quantity is positive — and raises a token for each. What it cannot do
@@ -10796,7 +10809,7 @@ async function agentSignatureReads(type, userId, now, read, agent) {
       return commandCenterAllRows(function () {
         return supabase
           .from("inventory_items")
-          .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status", { count: "exact" })
+          .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status, source", { count: "exact" })
           .eq("user_id", userId)
           .order("id", { ascending: true });
       }, "inventory items");
@@ -12898,6 +12911,8 @@ function measureStockAndMargin(items, movements, windowDays) {
     var row = { name: it.name };
     if (it.sku) row.sku = it.sku;
     row.unit = it.unit || "unit"; row.on_hand = onHand; row.unit_cost = cost; row.unit_price = price;
+    // Where the stock figure comes from: what the member entered, or a store they connected (read-only, lib/storeSync.js).
+    row.source = it.source === "shopify" || it.source === "woocommerce" ? it.source : "manual";
 
     if (cost === null) { missingCost++; row.unit_cost_reason = "no unit cost entered"; }
     if (price === null) { missingPrice++; row.unit_price_reason = "no unit price entered"; }
@@ -13011,7 +13026,7 @@ function measureStockAndMargin(items, movements, windowDays) {
 async function loadStockAndMargin(userId, windowStart) {
   var itemsRead = await supabase
     .from("inventory_items")
-    .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status")
+    .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status, source")
     .eq("user_id", userId)
     .order("created_at", { ascending: true })
     .limit(STORE_STOCK_ITEM_LIMIT);
@@ -13112,6 +13127,215 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
       if (run) {
         await run.fail(error);
       }
+      next(error);
+    }
+  });
+
+/* ── Store connections, read-only (migration 163, lib/storeSync.js) ──────────
+   POST   /api/store/connections               connect: Shopify (domain and an
+                                               Admin API token, verified by one
+                                               read call) or WooCommerce (the
+                                               store's address; answers the
+                                               store's own authorization link)
+   POST   /api/store/woocommerce/callback      the key WooCommerce makes when
+                                               the member approves Read access
+   GET    /api/store/connections               each connection, safe fields only
+   DELETE /api/store/connections/:id           disconnect: deletes the row and
+                                               everything synced from it
+   POST   /api/store/connections/:id/sync      sync now
+
+   READ-ONLY. lib/storeSync.js sends GET to the store and nothing else; no
+   route here calls a store directly. Credentials are sealed with
+   lib/apiKeyCrypto.js BEFORE the store is contacted, stored only after the
+   store accepts them, and never returned, logged or exported.
+
+   Connect and sync now need an active subscription (connect 5 an hour, sync
+   now 6 a day). The list and disconnect need only a login, as Bluesky's do: a
+   member can always see what is connected and take their key back. */
+const STORE_API_BASE = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN
+  : "https://dynamic-prosperity-production-5382.up.railway.app";
+
+function storeSyncDeps() {
+  var crypt = require("./lib/apiKeyCrypto");
+  return {
+    supabase: supabase,
+    env: process.env,
+    fetch: function (url, init) { return fetch(url, init); },
+    now: function () { return Date.now(); },
+    sleep: function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); },
+    timeoutSignal: function (ms) { return AbortSignal.timeout(ms); },
+    lookup: function (host) { return require("dns").promises.lookup(host, { all: true, verbatim: true }); },
+    isBlockedAddress: require("./lib/guardedFetch").isBlockedAddress,
+    encrypt: crypt.encrypt,
+    decrypt: crypt.decrypt,
+    userPlan: async function (userId) {
+      try { return { plan: await getUserPlan(userId), error: null }; } catch (planErr) { return { plan: null, error: planErr }; }
+    }
+  };
+}
+
+const storeConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: function (req) { return "store-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many store connection attempts. Try again in an hour. Nothing was saved.", reason: "rate_limited", saved: false }
+});
+const storeSyncNowLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 6,
+  keyGenerator: function (req) { return "store-sync:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can sync your store 6 times a day. The daily sync still runs.", reason: "rate_limited" }
+});
+const storeCallbackLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests.", reason: "rate_limited" }
+});
+
+async function saveStoreConnection(userId, platform, storeUrl, sealed) {
+  var stamp = nowIso();
+  var saved = await supabase
+    .from("member_store_connections")
+    .upsert(Object.assign({
+      user_id: userId, platform: platform, store_url: storeUrl, status: "connected",
+      last_error_code: null, last_error_at: null, updated_at: stamp
+    }, sealed), { onConflict: "user_id,platform,store_url" })
+    .select("id, platform, store_url, status, created_at, last_sync_at, last_error_code")
+    .single();
+  if (saved.error) throw saved.error;
+  return saved.data;
+}
+
+app.post("/api/store/connections", requireAuth, requireActiveSubscription, storeConnectLimiter,
+  async function (req, res, next) {
+    try {
+      var ss = require("./lib/storeSync");
+      var body = req.body || {};
+      if (body.platform === "shopify") {
+        var domain = ss.normalizeShopifyDomain(body.store_url);
+        if (!domain) return res.status(400).json({ error: ss.MESSAGES.shopifyDomain, code: "shopify_domain", field: "store_url", saved: false });
+        var token = ss.checkShopifyToken(body.access_token);
+        if (!token) return res.status(400).json({ error: ss.MESSAGES.shopifyToken, code: "shopify_token", field: "access_token", saved: false });
+        // Sealed first: a server that cannot encrypt it never sends it to Shopify.
+        var sealed;
+        try { sealed = ss.sealCredentials({ access_token: token }, require("./lib/apiKeyCrypto").encrypt); } catch (cryptErr) {
+          return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+        }
+        var verified = await ss.verifyShopify(storeSyncDeps(), domain, token);
+        token = null;
+        if (!verified.ok) {
+          return res.status(verified.code === "store_unreachable" ? 503 : 400).json({ error: verified.error, code: verified.code, saved: false });
+        }
+        var row = await saveStoreConnection(req.user.id, "shopify", domain, sealed);
+        return res.json({ connection: ss.statusOf(row), saved: true, note: ss.MESSAGES.readOnly });
+      }
+      if (body.platform === "woocommerce") {
+        var storeUrl = ss.normalizeWooUrl(body.store_url);
+        if (!storeUrl) return res.status(400).json({ error: ss.MESSAGES.wooUrl, code: "woo_url", field: "store_url", saved: false });
+        if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+        var state = ss.makeWooState(req.user.id, storeUrl, Date.now(), process.env.ENCRYPTION_SECRET);
+        return res.json({
+          authorize_url: ss.wooAuthorizeUrl(storeUrl, state, STORE_API_BASE + "/api/store/woocommerce/callback",
+            FRONTEND_URL + "/store-agent.html?store=woocommerce"),
+          saved: false,
+          note: "Your store will ask you to approve Read access for BizForce AI. " + ss.MESSAGES.readOnly
+        });
+      }
+      return res.status(400).json({ error: "Choose Shopify or WooCommerce.", code: "platform", field: "platform", saved: false });
+    } catch (error) {
+      console.error("[store/connect] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+/* Called by the member's own WooCommerce store, not by a browser: the key it
+   made, its permission, and the signed state BizForce handed it as user_id.
+   Anything but a "read" key that works is refused, and nothing is stored. */
+app.post("/api/store/woocommerce/callback", storeCallbackLimiter, async function (req, res, next) {
+  try {
+    var ss = require("./lib/storeSync");
+    var body = req.body || {};
+    var state = ss.readWooState(body.user_id, Date.now(), process.env.ENCRYPTION_SECRET);
+    if (!state) return res.status(400).json({ error: "This connection link has expired or is not valid. Start again on the Store Agent page.", saved: false });
+    var key = ss.checkWooKey(body);
+    if (!key.ok) return res.status(400).json({ error: key.error, code: key.code, saved: false });
+    var sealed;
+    try { sealed = ss.sealCredentials(key.creds, require("./lib/apiKeyCrypto").encrypt); } catch (cryptErr) {
+      return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+    }
+    var verified = await ss.verifyWoo(storeSyncDeps(), state.storeUrl, key.creds);
+    key = null;
+    if (!verified.ok) return res.status(400).json({ error: verified.error, code: verified.code, saved: false });
+    await saveStoreConnection(state.userId, "woocommerce", state.storeUrl, sealed);
+    return res.json({ saved: true });
+  } catch (error) {
+    console.error("[store/woocommerce/callback] Error:", (error && error.code) || "unknown");
+    next(error);
+  }
+});
+
+app.get("/api/store/connections", requireAuth, async function (req, res, next) {
+  try {
+    var read = await supabase
+      .from("member_store_connections")
+      .select("id, platform, store_url, status, created_at, last_sync_at, last_error_code")
+      .eq("user_id", req.user.id)
+      .order("created_at", { ascending: true });
+    if (read.error) throw read.error;
+    var ss = require("./lib/storeSync");
+    return res.json({ connections: (read.data || []).map(ss.statusOf), note: ss.MESSAGES.readOnly });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/store/connections/:id", requireAuth, async function (req, res, next) {
+  try {
+    if (!isValidUuid(req.params.id)) return res.status(404).json({ error: "Connection not found" });
+    var gone = await require("./lib/storeSync").deleteConnectionData(supabase, req.user.id, req.params.id);
+    if (!gone.removed) return res.status(404).json({ error: "Connection not found" });
+    return res.json({
+      removed: true, items_removed: gone.items,
+      note: "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read are deleted. " +
+        "You can also delete the key in your store: in Shopify, uninstall the custom app; in WooCommerce, revoke it under Settings, Advanced, REST API."
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscription, storeSyncNowLimiter,
+  async function (req, res, next) {
+    try {
+      if (!isValidUuid(req.params.id)) return res.status(404).json({ error: "Connection not found" });
+      var read = await supabase
+        .from("member_store_connections")
+        .select("id, user_id, platform, store_url, status, credentials_ciphertext, credentials_iv, credentials_auth_tag, created_at")
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (read.error) throw read.error;
+      if (!read.data) return res.status(404).json({ error: "Connection not found" });
+      if (read.data.status !== "connected") {
+        return res.status(409).json({ error: "This store needs connecting again before it can be read.", code: "needs_reconnect" });
+      }
+      var result = await require("./lib/storeSync").syncConnection(storeSyncDeps(), read.data);
+      if (!result.ok) {
+        return res.status(result.needs_reconnect ? 409 : 502).json({
+          error: result.needs_reconnect ? "Your store refused the saved key, so nothing was read. Connect the store again." :
+            "Your store could not be read just now (" + result.code + "). Nothing was changed. Try again later.",
+          code: result.needs_reconnect ? "needs_reconnect" : result.code
+        });
+      }
+      return res.json({ synced: result });
+    } catch (error) {
       next(error);
     }
   });
@@ -54628,6 +54852,26 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] schema check scheduled — 06:00 UTC daily, claimed through job_runs.schema_check, and once 60 seconds after boot; read-only head counts.");
   } else {
     console.log("[startup] schema check disabled (ENABLE_SCHEMA_CHECK is exactly \"false\")");
+  }
+
+  /* Store connections (lib/storeSync.js): every connected Shopify and
+     WooCommerce store is READ (products, stock, order summaries) at 05:00 UTC,
+     claimed through job_runs.store_sync. OFF unless ENABLE_STORE_SYNC is
+     exactly "true", read here and again at the top of every tick. Each store is
+     read only while its member's subscription is active. Nothing is ever
+     written to a store. No boot-time run, for the reason the retention job
+     above gives. */
+  if (require("./lib/storeSync").storeSyncEnabled(process.env)) {
+    cron.schedule("0 5 * * *", function () {
+      require("./lib/storeSync").storeSyncTick(storeSyncDeps()).catch(function (err) {
+        console.error("[StoreSync] Scheduled run error:", err.message || err);
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] storeSyncTick scheduled — 05:00 UTC daily, claimed through job_runs.store_sync; stores are read, never written.");
+  } else {
+    console.log("[startup] storeSyncTick disabled (ENABLE_STORE_SYNC not exactly \"true\")");
   }
 
   /* Member triggers (lib/triggerRunner.js): hourly at :30 UTC, half an hour

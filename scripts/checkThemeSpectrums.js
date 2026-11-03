@@ -264,8 +264,19 @@ function withoutB8(text) {
   cut("      } else if (t.getAttribute(\"data-accept-lesson\")) {\n        addPref(t.getAttribute(\"data-accept-lesson\"), \"lesson\");\n");
   return ok ? t : null;
 }
-const profileNow = withoutB8(withoutB5(withoutB2(FILES[PROFILE_JS])));
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words and B8/B9's four lesson additions set aside)",
+/* NAMED BEFORE → AFTER (store connections, Nov 3 2026). BEFORE the file was compared with B2's, B5's and B8/B9's changes set
+   aside. AFTER the Store signature also shows a "Stock source" tile (manual / Shopify / WooCommerce) right after its
+   Inventory tile (checkStoreConnections R5 pins it). That one addition is cut out, exactly once, before the comparison. */
+function withoutStoreSource(text) {
+  if (text === null) return null;
+  const from = "      // Where the stock comes from: what the member entered, or a store they connected (read-only).\n";
+  const to = "\"Entered on your Inventory page\"));\n";
+  const a = text.indexOf(from), b = a < 0 ? -1 : text.indexOf(to, a);
+  if (a < 0 || b < 0 || text.indexOf(from, a + 1) !== -1) return null;
+  return text.slice(0, a) + text.slice(b + to.length);
+}
+const profileNow = withoutStoreSource(withoutB8(withoutB5(withoutB2(FILES[PROFILE_JS]))));
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions and the Stock source tile set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);

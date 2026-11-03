@@ -310,7 +310,10 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       "getUserPlan in /api/agents/live/calendar",
       // NAMED (Nov 1 2026, member triggers B4): BEFORE 17 readers; AFTER 18. triggerDeps hands lib/triggerRunner.js the
       // plan for G13 on every firing; .active !== true, or a lookup that throws, blocks the firing (checkTriggers E6).
-      "getUserPlan in triggerDeps"];
+      "getUserPlan in triggerDeps",
+      // NAMED (Nov 3 2026, store connections): BEFORE 18 readers; AFTER 19. storeSyncDeps hands lib/storeSync.js the plan
+      // for the daily read; .active !== true, or a lookup that fails, skips that member's store (checkStoreConnections J3, J6).
+      "getUserPlan in storeSyncDeps"];
     const extra = callers.filter(c => KNOWN.indexOf(c) === -1), missing = KNOWN.filter(c => callers.indexOf(c) === -1);
     check("A. the entitlement readers are exactly the " + KNOWN.length + " listed (a new one must be added here and reviewed)",
       extra.length === 0 && missing.length === 0, "new: " + extra.join(", ") + "; gone: " + missing.join(", "));

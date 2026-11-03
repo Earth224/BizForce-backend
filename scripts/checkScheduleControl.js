@@ -632,7 +632,12 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
       // entitlement is G13 in lib/triggerRunner.js on every firing, read through getUserPlan in triggerDeps; a lookup
       // that throws is { error }, which G13 fails closed (entitlement_unknown; checkTriggers E6).
       triggerTickNow:       { pass: "triggerDeps", exception: /userPlan: async function \(userId\) \{\s*try \{ return \{ plan: await getUserPlan\(userId\), error: null \}; \} catch \(planErr\) \{ return \{ plan: null, error: planErr \}; \}/,
-                              why: "G13 on every firing: getUserPlan(userId).active === true, a failed lookup fails closed (checkTriggers E6)" }
+                              why: "G13 on every firing: getUserPlan(userId).active === true, a failed lookup fails closed (checkTriggers E6)" },
+      // NAMED (Nov 3 2026, store connections): BEFORE 14 jobs; AFTER 15, with the daily read-only store sync. It acts for a
+      // member: storeSyncDeps hands lib/storeSync.js getUserPlan, and runStoreSyncPass skips a store unless .active === true,
+      // a failed lookup included (checkStoreConnections J3, J6).
+      "require(\"./lib/storeSync\").storeSyncTick": { lib: "lib/storeSync.js", deps: "storeSyncDeps", libPass: "runStoreSyncPass",
+                              libGate: /if \(!plan \|\| plan\.error \|\| !plan\.plan \|\| plan\.plan\.active !== true\) \{ summary\.skipped_not_entitled\+\+; continue; \}/ }
     };
     const extra = [...scheduled].filter(n => !KNOWN[n]), missing = Object.keys(KNOWN).filter(n => !scheduled.has(n));
     check("S1. the scheduled jobs in server.js are exactly the " + Object.keys(KNOWN).length + " accounted for here (a new one must be classified)",
@@ -640,6 +645,15 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
     for (const tick of Object.keys(KNOWN)) {
       const k = KNOWN[tick];
       if (k.platform) { console.log("    note  " + tick + ": the platform's own (" + k.platform + "), acts for no member"); continue; }
+      if (k.lib) {
+        const libSrc = fs.readFileSync(path.join(REPO, k.lib), "utf8");
+        const libPass = MUT.definitionOf(libSrc, k.libPass) || "";
+        const depsBody = bodyOf(k.deps);
+        check("S. " + tick + " → " + k.lib + " " + k.libPass + " checks entitlement through getUserPlan (" + k.deps + "), fail closed",
+          SRC.indexOf(tick + "(" + k.deps + "())") !== -1 && /plan: await getUserPlan\(userId\), error: null/.test(depsBody) && /error: planErr/.test(depsBody) &&
+          /await deps\.userPlan\(conn\.user_id\)/.test(libPass) && k.libGate.test(libPass));
+        continue;
+      }
       const tickBody = bodyOf(tick), pass = bodyOf(k.pass);
       const calls = tickBody.indexOf(k.pass + "(") !== -1;
       if (k.exception) {

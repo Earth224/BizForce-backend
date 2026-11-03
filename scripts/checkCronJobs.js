@@ -169,7 +169,8 @@ const REPO = path.join(__dirname, "..");
 const SERVER_PATH = path.join(REPO, "server.js");
 const CRON_DIR = path.join(REPO, "node_modules", "node-cron");
 const MUTATE = process.env.MUTATE || "";
-const GATES = ["ENABLE_STORE_PROPOSAL_JOB", "ENABLE_SELF_REVIEW", "ENABLE_AGENT_SCHEDULES", "ENABLE_EMAIL_SEQUENCES", "ENABLE_NIGHTLY_BACKUP", "ENABLE_TRIGGERS"];
+// NAMED (store connections, Nov 3 2026): BEFORE six opt-in gates; AFTER seven, ENABLE_STORE_SYNC (exactly "true") added.
+const GATES = ["ENABLE_STORE_PROPOSAL_JOB", "ENABLE_SELF_REVIEW", "ENABLE_AGENT_SCHEDULES", "ENABLE_EMAIL_SEQUENCES", "ENABLE_NIGHTLY_BACKUP", "ENABLE_TRIGGERS", "ENABLE_STORE_SYNC"];
 // On by default: only the exact value "false" turns it off (lib/youtubeRetention.js).
 const RETENTION_GATE = "ENABLE_YOUTUBE_RETENTION";
 // On by default too: only the exact value "false" turns it off (lib/opsAlert.js).
@@ -374,7 +375,7 @@ const t0 = Date.now();
     const tasks = [...cron.getTasks().values()].map(t => ({ pattern: t._scheduler && t._scheduler.timeMatcher.pattern, timezone: (t.options && t.options.timezone) || null }));
     out(JSON.stringify({ listened, crashed, tasks, runs, attempts,
       reminderLogs: logs.filter(l => /reminderScheduler|reminder scheduler/.test(l)),
-      gates: logs.filter(l => /\\[startup\\] (storeProposalTick|selfReviewTick|agentScheduleTick|emailSequenceTick|runNightlyBackup|youtubeRetentionTick|pendingStorageDeletionTick|triggerTick) /.test(l)),
+      gates: logs.filter(l => /\\[startup\\] (storeProposalTick|selfReviewTick|agentScheduleTick|emailSequenceTick|runNightlyBackup|youtubeRetentionTick|pendingStorageDeletionTick|triggerTick|storeSyncTick) /.test(l)),
       sweepLogs: logs.filter(l => /gate decisions sweep (scheduled|disabled)/.test(l)),
       schemaLogs: logs.filter(l => /schema check (scheduled|disabled)/.test(l)),
       schemaRuns: logs.filter(l => /\\[SchemaCheck\\]/.test(l)) }));
@@ -435,7 +436,8 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     // NAMED BEFORE → AFTER: was "exactly five"; the sixth is the YouTube retention job, the seventh the ops alert scan,
     // the eighth the storage-deletion retry, the ninth the gate decisions sweep, the tenth the member-trigger pass (cron-count).
     // NAMED (Nov 3 2026, the schema check): BEFORE "exactly ten"; AFTER "exactly eleven", the eleventh the schema check at 06:00 UTC.
-    check("server.js has exactly eleven cron.schedule calls", calls.length === 11, calls.length);
+    // NAMED (Nov 3 2026, store connections): BEFORE "exactly eleven"; AFTER "exactly twelve", the twelfth storeSyncTick at 05:00 UTC.
+    check("server.js has exactly twelve cron.schedule calls", calls.length === 12, calls.length);
     check("each expression resolves from the source", calls.every(c => typeof c.expression.value === "string"), JSON.stringify(calls.map(c => c.expression)));
     check("each passes exactly one option, a timezone, resolved from the source",
       calls.every(c => typeof c.timezone.value === "string" && c.timezone.value.length > 0), JSON.stringify(calls.map(c => [c.line, c.timezone.from])));
@@ -525,9 +527,11 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
       Array.isArray(off.schemaRuns) && off.schemaRuns.length === 0, JSON.stringify([off.schemaLogs, off.schemaRuns]));
     // NAMED BEFORE → AFTER: was 6 startup lines; then 7, the storage retry saying it is scheduled; now 8, triggerTick
     // saying it is disabled, 6 disabled in all (gates-logged).
-    check("…each of the six opt-in jobs says it is disabled, and the retention job and the storage retry say they are scheduled",
-      Array.isArray(off.gates) && off.gates.length === 8 && off.gates.filter(l => / disabled /.test(l)).length === 6 &&
+    // NAMED (Nov 3 2026, store connections): BEFORE 8 lines, 6 disabled; AFTER 9 lines, 7 disabled, storeSyncTick saying it too.
+    check("…each of the seven opt-in jobs says it is disabled, and the retention job and the storage retry say they are scheduled",
+      Array.isArray(off.gates) && off.gates.length === 9 && off.gates.filter(l => / disabled /.test(l)).length === 7 &&
       off.gates.some(l => /triggerTick disabled \(ENABLE_TRIGGERS not exactly "true"\)/.test(l)) &&
+      off.gates.some(l => /storeSyncTick disabled \(ENABLE_STORE_SYNC not exactly "true"\)/.test(l)) &&
       off.gates.some(l => /youtubeRetentionTick scheduled — 09:00 UTC daily/.test(l)) && off.gates.some(l => /pendingStorageDeletionTick scheduled — 04:15 UTC daily/.test(l)), JSON.stringify(off.gates));
     check("…and the gate decisions sweep says it is scheduled at 04:30 UTC with its own claim",
       Array.isArray(off.sweepLogs) && off.sweepLogs.length === 1 && /gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep/.test(off.sweepLogs[0]), JSON.stringify(off.sweepLogs));
@@ -585,8 +589,9 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     const registered = (on.tasks || []).map(t => t.pattern + " @ " + t.timezone).sort();
     // NAMED BEFORE → AFTER: was "exactly the five declared schedules", then six, seven, eight, nine, ten;
     // NAMED (Nov 3 2026): BEFORE ten; AFTER eleven, the schema check (gates-set).
-    check("gates set: exactly the eleven declared schedules are registered, with their expressions and timezones",
-      on.listened === true && !on.crashed && registered.length === 11 && JSON.stringify(registered) === JSON.stringify(declared),
+    // NAMED (Nov 3 2026, store connections): BEFORE eleven; AFTER twelve, storeSyncTick at 05:00 UTC (gates-set).
+    check("gates set: exactly the twelve declared schedules are registered, with their expressions and timezones",
+      on.listened === true && !on.crashed && registered.length === 12 && JSON.stringify(registered) === JSON.stringify(declared),
       JSON.stringify(on.crashed || on.error || registered.map(r => r.slice(0, 40))) + " vs " + JSON.stringify(declared.map(r => r.slice(0, 40))));
     check("…none of them ran while server.js loaded, and still no reminder pass",
       on.listened === true && on.runs === 0 && off.runs === 0 && !reminderRead(on.attempts), JSON.stringify({ runs: on.runs, offRuns: off.runs, attempts: on.attempts }));

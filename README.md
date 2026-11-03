@@ -31,6 +31,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `RAILWAY_ENVIRONMENT_NAME` | set by Railway | Marks the process as production. |
 | `RAILWAY_PROJECT_ID` | set by Railway | Marks the process as production. |
 | `RAILWAY_GIT_COMMIT_SHA` | set by Railway | The deployed commit, reported by `/health` and written into each backup's manifest. |
+| `RAILWAY_PUBLIC_DOMAIN` | set by Railway (else `dynamic-prosperity-production-5382.up.railway.app`) | This API's own public host, used for the address a WooCommerce store hands its read-only key back to (`/api/store/woocommerce/callback`). |
 | `FRONTEND_URL` | `https://bizforceai.net` | The site that links in emails and Stripe redirects point to. |
 | `SUPABASE_URL` | none (required) | The Supabase project. |
 | `SUPABASE_SERVICE_KEY` | none (required) | The service-role key. The server reads and writes every table with it; never put it in the frontend. |
@@ -133,6 +134,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `ENABLE_STORAGE_DELETION_RETRY` | on | On unless exactly `false`: the daily retry that removes a deleted account's files from Storage. |
 | `ENABLE_GATE_DECISIONS_SWEEP` | on | On unless exactly `false`: the daily sweep that deletes gate decisions older than 90 days. |
 | `ENABLE_SCHEMA_CHECK` | on | On unless exactly `false`: read-only head counts confirm every table the code relies on exists (lib/schemaCheck.js), once 60 s after boot and daily at 06:00 UTC; a missing table is emailed once, named with the migration file that creates it, and shown on `/api/admin/health` (admins only; the public `/health` is unchanged). |
+| `ENABLE_STORE_SYNC` | off | Exactly `true` runs the daily read of every connected Shopify and WooCommerce store (lib/storeSync.js): products, stock and order summaries, never customer details, and nothing is ever written to a store. Members can connect a store and press "Sync now" either way. |
 | `ENABLE_TRIGGERS` | off | Exactly `true` runs the hourly member-trigger pass (lib/triggerRunner.js). Anything else leaves triggers saved but never fired. |
 | `TRIGGERS_DAILY_FIRINGS` | 10 | Firings per member per UTC day, a whole number clamped to 1 to 20. |
 | `BFC_TRANSFER_MAX` | `1000` | The most BFC one send or donation may move. |
@@ -154,6 +156,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
+| `storeSyncTick`: read connected Shopify and WooCommerce stores (read-only) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |

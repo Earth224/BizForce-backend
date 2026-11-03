@@ -200,7 +200,12 @@ const EXPECTED_GATED = [
   // approved cycle starts a plan. Reading the cycle history stays login-only: a member can always see their results
   // (checkPlanCycles D16).
   "post /api/executive/cycles", "post /api/executive/cycles/:id/review", "put /api/executive/cycles/:id",
-  "post /api/executive/cycles/:id/approve", "post /api/executive/cycles/:id/discard", "post /api/executive/cycles/:id/supersede"
+  "post /api/executive/cycles/:id/approve", "post /api/executive/cycles/:id/discard", "post /api/executive/cycles/:id/supersede",
+  // NAMED (Nov 3 2026, store connections, migration 163; gated 81 -> 83): BEFORE no store connection. AFTER connecting a
+  // Shopify or WooCommerce store (5 an hour) and "Sync now" (6 a day) need a subscription (requireActiveSubscription),
+  // because the read feeds agents that run only with one. The list and disconnect stay login-only: a member can always
+  // see what is connected and take their key back (checkStoreConnections C1, Y0, S2).
+  "post /api/store/connections", "post /api/store/connections/:id/sync"
 ];
 
 const EXPECTED_ADMIN = [
@@ -395,7 +400,11 @@ const EXPECTED_UNAUTH_WRITES = {
   // token signed for the contact's current address, and nothing after "revoked".
   "post /api/confirm":                      "a confirmed consent, from a signed token (double opt-in)",
   "post /api/engine-visits":                "an arrival from a Lead Radar reply (migration 128)",
-  "post /api/sms/inbound":                  "an inbound SMS reply (STOP / HELP)"
+  "post /api/sms/inbound":                  "an inbound SMS reply (STOP / HELP)",
+  // NAMED (Nov 3 2026, store connections, migration 163; 17 -> 18): BEFORE no store callback. AFTER a member's own
+  // WooCommerce store posts the Read key it made here; it is stored only for the member an HMAC-signed state, at most
+  // 30 minutes old, names, only with permission "read", after one GET the store accepts (checkStoreConnections W3-W8).
+  "post /api/store/woocommerce/callback":   "a member's read-only WooCommerce key, from a signed state (migration 163)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The

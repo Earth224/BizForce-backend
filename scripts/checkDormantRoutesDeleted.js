@@ -219,7 +219,13 @@ const ADDED = [
   ["get", "/api/guide/suggestions"],              // ready-made triggers offered by rule from the member's own numbers; writes nothing (total 392 -> 393)
   // NAMED (Nov 3 2026, the schema check): BEFORE 393 routes; AFTER 394, adding /health's admin detail, requireAuth and
   // requireAdmin, which reads only the last schema check's result in this process (checkSchemaCheck H)
-  ["get", "/api/admin/health"]                    // the schema line: any missing table and the migration to run; admins only (total 393 -> 394)
+  ["get", "/api/admin/health"],                   // the schema line: any missing table and the migration to run; admins only (total 393 -> 394)
+  // NAMED (Nov 3 2026, store connections): BEFORE 394 routes; AFTER 399, the five read-only store routes (checkStoreConnections C, W, S, Y, D)
+  ["post", "/api/store/connections"],             // connect: Shopify verified by one GET and stored encrypted; WooCommerce answers its Read-only authorize link (394 -> 395)
+  ["post", "/api/store/woocommerce/callback"],    // the store hands over a Read key; any other permission is refused (395 -> 396)
+  ["get", "/api/store/connections"],              // status, safe fields only (396 -> 397)
+  ["delete", "/api/store/connections/:id"],       // disconnect: the connection, its synced rows and order summaries (397 -> 398)
+  ["post", "/api/store/connections/:id/sync"]     // sync now, 6 a day (398 -> 399)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([
