@@ -518,9 +518,11 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   /* NAMED (Connect Mastodon, Nov 3 2026): BEFORE "the only migration numbered 164, and the highest" (every number <= 164).
      AFTER 165_member_mastodon_connections.sql follows it, so the pin is "the only one numbered 164, every other one but 165
-     is lower, and 163 came before it"; "the highest" is now checkMastodonConnect M3's, for 165. */
+     is lower, and 163 came before it"; "the highest" is now checkMastodonConnect M3's, for 165.
+     NAMED (campaign sharing, Nov 4 2026): BEFORE only 165 was allowed above 164. AFTER 165_member_mastodon_connections.sql and
+     166_campaign_sharing.sql; "the highest" is checkCampaignSharing M2's, for 166. */
   check("M3. 164_bluesky_reply_refs.sql is the only migration numbered 164, every one before it is lower (163 was the last before it)",
-    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^165_member_mastodon_connections\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
+    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^(165_member_mastodon_connections|166_campaign_sharing)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
   check("M4. no new table: the migration only adds columns and a CHECK to social_post_drafts", !/CREATE TABLE/i.test(sqlBody) && !/DROP/i.test(sqlBody));
 
   /* ── L. the library ─────────────────────────────────────────────────────── */
@@ -1009,7 +1011,10 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
     /<\/li>\s*<li>/.test(priv.slice(priv.indexOf(esc(PRIVACY)) + esc(PRIVACY).length, priv.indexOf(esc(MENTIONS)))) &&
     priv.indexOf(esc(MENTIONS)) - priv.indexOf(esc(PRIVACY)) - esc(PRIVACY).length < 40);
   check("K5. the built terms.html carries the Terms sentence", FE("terms.html").indexOf(esc(TERMS)) !== -1);
-  check("K6. the terms version is the date of this change, Nov 3 2026", LEGAL.TERMS_VERSION === "2026-11-03" && LEGAL.TERMS_UPDATED === "Last updated November 3, 2026");
+  /* NAMED (campaign sharing, Nov 4 2026): BEFORE TERMS_VERSION "2026-11-03" and "Last updated November 3, 2026", the version
+     this change set. AFTER "2026-11-04" and "Last updated November 4, 2026", the version campaign sharing set when it added
+     its Terms sentence; still an exact pin, so a revert to this change's version or earlier fails. */
+  check("K6. the terms version is the latest change's, Nov 4 2026 (campaign sharing; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-04" && LEGAL.TERMS_UPDATED === "Last updated November 4, 2026");
   check("K7. the model message matches the privacy sentence: post text, own post text, business details and guidance; never the author's name, handle or account id",
     prompt.indexOf("kids classes") !== -1 && ownPrompt.indexOf("Saturday wheel class") !== -1 && prompt.indexOf(BUSINESS) !== -1 && prompt.indexOf(GUIDANCE) !== -1 &&
     [CAROL.displayName, CAROL.handle, CAROL.did].every(v => prompt.indexOf(v) === -1));

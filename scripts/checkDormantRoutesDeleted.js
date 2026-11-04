@@ -238,7 +238,14 @@ const ADDED = [
   ["post", "/api/social/mastodon/disconnect"],     // deletes the connection, always open (404 -> 405)
   ["get", "/api/social/mastodon/automation"],      // "Post approved drafts automatically" and its log (405 -> 406)
   ["put", "/api/social/mastodon/automation"],      // on needs a subscription and a connection; off never does (406 -> 407)
-  ["post", "/api/social/mastodon/propose-post"]    // a drafted Mastodon post filed for approval (407 -> 408)
+  ["post", "/api/social/mastodon/propose-post"],   // a drafted Mastodon post filed for approval (407 -> 408)
+  // NAMED (Nov 4 2026, campaign sharing, migration 166): BEFORE 408 routes; AFTER 413, a crowdfunding campaign's public
+  // page, off by default, its sitemap, the owner's two share routes and the member's by-share lookup (checkCampaignSharing)
+  ["get", "/api/crowdfunding/campaigns/by-share/:shareId"],  // a shared, active campaign's list item for the donate flow; login only (408 -> 409)
+  ["put", "/api/crowdfunding/campaigns/:id/share"],          // share_on and discoverable, owner only, with a subscription (409 -> 410)
+  ["post", "/api/crowdfunding/campaigns/:id/share/new-link"], // a new share_id; the old link stops working (410 -> 411)
+  ["get", "/campaign/:shareId"],                             // the public page, served while shared and the owner's plan is active (411 -> 412)
+  ["get", "/api/sitemap/campaigns.xml"]                      // shared, discoverable, active campaigns whose owner's plan is active (412 -> 413)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -506,9 +506,11 @@ const WANT_TOTALS = { dispatches_ran: 7, dispatches_refused: 1, dispatches_faile
      NAMED (the Bluesky Mentions inbox, Nov 3 2026): BEFORE only 163_store_connections.sql was allowed above 162. AFTER
      163_store_connections.sql and 164_bluesky_reply_refs.sql; "the highest" is checkBlueskyMentions M3's, for 164.
      NAMED (Connect Mastodon, Nov 3 2026): BEFORE 163 and 164 were allowed above 162. AFTER 163_store_connections.sql,
-     164_bluesky_reply_refs.sql and 165_member_mastodon_connections.sql; "the highest" is checkMastodonConnect M3's, for 165. */
+     164_bluesky_reply_refs.sql and 165_member_mastodon_connections.sql; "the highest" is checkMastodonConnect M3's, for 165.
+     NAMED (campaign sharing, Nov 4 2026): BEFORE 163 to 165 were allowed above 162. AFTER 163 to 165 and
+     166_campaign_sharing.sql; "the highest" is checkCampaignSharing M2's, for 166. */
   check("A1. 162_plan_cycles.sql is the only migration numbered 162, every one before it is lower (161 was the last before it)",
-    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^(163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
+    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^(163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
   check("A2. plan_cycles: every column the design names, user_id and plan_task_id cascading, previous and next nullable",
     /id                 uuid PRIMARY KEY DEFAULT gen_random_uuid\(\),/.test(mig) &&
     /user_id            uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) &&

@@ -60,6 +60,7 @@ const LESSONS = require("./lib/lessons");
 const APP_MAP = require("./lib/appMap.json");
 const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
+const campaignShare = require("./lib/campaignShare");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
@@ -44909,15 +44910,50 @@ app.get("/api/purchases/:orderId/download", requireAuth, async function (req, re
 
 /* ── Crowdfunding ── */
 
+/* WHAT ANOTHER MEMBER IS SERVED of a campaign (campaign sharing, Nov 4 2026):
+   this allowlist. owner_id is read to answer is_own and never returned, and
+   nothing about sharing (share_id, share_on, discoverable) is in it: a member
+   learns a campaign's link only from its owner. The id stays, because the
+   donate route is addressed by it. */
+const CAMPAIGN_LIST_COLUMNS = "id, owner_id, title, description, category, media, goal_bfc, raised_bfc, status, created_at, updated_at";
+function campaignListItem(row, viewerId) {
+  return {
+    id: row.id, title: row.title, description: row.description, category: row.category, media: row.media || [],
+    goal_bfc: row.goal_bfc, raised_bfc: row.raised_bfc, status: row.status, created_at: row.created_at, updated_at: row.updated_at,
+    is_own: !!viewerId && row.owner_id === viewerId
+  };
+}
+
 app.get("/api/crowdfunding/campaigns", requireAuth, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("crowdfunding_campaigns")
-      .select("*")
+      .select(CAMPAIGN_LIST_COLUMNS)
       .eq("status", "active")
       .order("created_at", { ascending: false });
     if (error) throw error;
-    return res.json({ campaigns: data || [] });
+    return res.json({ campaigns: (data || []).map(function (c) { return campaignListItem(c, req.user.id); }) });
+  } catch (error) { next(error); }
+});
+
+/* A shared campaign's link, opened by a signed-in member on campaigns.html
+   (?campaign=<share_id>), resolved to the list item the donate flow needs.
+   It answers only while the campaign is shared and active; anything else,
+   a malformed id included, is the same 404. */
+app.get("/api/crowdfunding/campaigns/by-share/:shareId", requireAuth, async function (req, res, next) {
+  try {
+    const notAvailable = { error: "This campaign isn't available.", reason: "not_available" };
+    const shareId = String(req.params.shareId || "");
+    if (!campaignShare.isShareId(shareId)) return res.status(404).json(notAvailable);
+    const found = await supabase
+      .from("crowdfunding_campaigns")
+      .select(CAMPAIGN_LIST_COLUMNS + ", share_on")
+      .eq("share_id", shareId)
+      .maybeSingle();
+    if (found.error) throw found.error;
+    const shared = found.data;
+    if (!shared || shared.share_on !== true || shared.status !== "active") return res.status(404).json(notAvailable);
+    return res.json({ campaign: campaignListItem(shared, req.user.id) });
   } catch (error) { next(error); }
 });
 
@@ -44929,7 +44965,11 @@ app.get("/api/crowdfunding/my-campaigns", requireAuth, async function (req, res,
       .eq("owner_id", req.user.id)
       .order("created_at", { ascending: false });
     if (error) throw error;
-    return res.json({ campaigns: data || [] });
+    // The owner's own rows, with the link their Share panel shows (null until sharing is first turned on).
+    return res.json({ campaigns: (data || []).map(function (c) {
+      return Object.assign({}, c, { share_on: c.share_on === true, discoverable: c.discoverable === true,
+        share_url: campaignShare.isShareId(c.share_id) ? campaignShare.campaignUrl(c.share_id) : null });
+    }) });
   } catch (error) { next(error); }
 });
 
@@ -44959,6 +44999,24 @@ app.post("/api/crowdfunding/campaigns", requireAuth, requireActiveSubscription, 
   } catch (error) { next(error); }
 });
 
+/* A campaign's status moves (campaign sharing, Nov 4 2026): active and paused
+   go to each other, either may be marked completed or cancelled, and
+   completed and cancelled are final. Staying where it is is not a move. */
+const CAMPAIGN_STATUS_MOVES = {
+  active: ["paused", "completed", "cancelled"],
+  paused: ["active", "completed", "cancelled"],
+  completed: [],
+  cancelled: []
+};
+function campaignStatusMoveRefusal(from, to) {
+  if (!Object.prototype.hasOwnProperty.call(CAMPAIGN_STATUS_MOVES, to)) return "A campaign's status is active, paused, completed or cancelled.";
+  if (from === to) return null;
+  if (!CAMPAIGN_STATUS_MOVES[from] || CAMPAIGN_STATUS_MOVES[from].indexOf(to) === -1) {
+    return "A " + from + " campaign cannot be made " + to + ". Completed and cancelled campaigns are final.";
+  }
+  return null;
+}
+
 app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
     const updates = { updated_at: nowIso() };
@@ -44966,21 +45024,169 @@ app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscriptio
     if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
     if (req.body.category    !== undefined) updates.category    = safeText(req.body.category, 40);
     if (req.body.media       !== undefined) updates.media       = sanitizeMedia(req.body.media);
-    if (req.body.status      !== undefined && ["active","paused","completed","cancelled"].includes(req.body.status)) {
+    if (updates.title !== undefined && !updates.title) return res.status(400).json({ error: "Title is required. The campaign is unchanged." });
+
+    const current = await supabase
+      .from("crowdfunding_campaigns")
+      .select("id, status")
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .maybeSingle();
+    if (current.error) throw current.error;
+    if (!current.data) return res.status(404).json({ error: "Campaign not found" });
+    if (req.body.status !== undefined) {
+      const refused = campaignStatusMoveRefusal(current.data.status, req.body.status);
+      if (refused) return res.status(400).json({ error: refused, reason: "status_move_refused", from: current.data.status, to: String(req.body.status) });
       updates.status = req.body.status;
     }
 
+    // The move was judged against the status read above; the write holds only while it is still that status.
     const { data, error } = await supabase
       .from("crowdfunding_campaigns")
       .update(updates)
       .eq("id", req.params.id)
       .eq("owner_id", req.user.id)
+      .eq("status", current.data.status)
       .select("*")
       .maybeSingle();
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: "Campaign not found" });
+    if (!data) return res.status(409).json({ error: "The campaign changed while you were editing it. Reload and try again." });
+    campaignSitemapCache = { xml: null, at: 0 };
     return res.json({ campaign: data });
   } catch (error) { next(error); }
+});
+
+/* ── Sharing a campaign: bizforceai.net/campaign/<share_id> (lib/campaignShare.js) ── */
+
+/* The owner's switches: share_on (a share_id is made the first time it goes
+   on) and discoverable. Either or both; anything else is refused. */
+app.put("/api/crowdfunding/campaigns/:id/share", requireAuth, requireActiveSubscription, async function (req, res, next) {
+  try {
+    const body = req.body || {};
+    const extra = Object.keys(body).filter(function (k) { return ["share_on", "discoverable"].indexOf(k) === -1; });
+    if (extra.length) return res.status(400).json({ error: "Campaign sharing does not take " + extra[0] + ".", reason: "unknown_field", field: extra[0] });
+    if (body.share_on === undefined && body.discoverable === undefined) return res.status(400).json({ error: "Send share_on, discoverable or both.", reason: "nothing_to_change" });
+    for (const field of ["share_on", "discoverable"]) {
+      if (body[field] !== undefined && body[field] !== true && body[field] !== false) {
+        return res.status(400).json({ error: field + " must be true or false.", reason: "invalid_" + field, field: field });
+      }
+    }
+    const mine = await supabase
+      .from("crowdfunding_campaigns")
+      .select("id, share_id")
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .maybeSingle();
+    if (mine.error) throw mine.error;
+    if (!mine.data) return res.status(404).json({ error: "Campaign not found" });
+    const changes = { share_changed_at: nowIso() };
+    if (body.share_on !== undefined) changes.share_on = body.share_on;
+    if (body.discoverable !== undefined) changes.discoverable = body.discoverable;
+    if (changes.share_on === true && !campaignShare.isShareId(mine.data.share_id)) changes.share_id = campaignShare.newShareId();
+    const saved = await supabase
+      .from("crowdfunding_campaigns")
+      .update(changes)
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .select("share_id, share_on, discoverable")
+      .single();
+    if (saved.error) throw saved.error;
+    campaignSitemapCache = { xml: null, at: 0 };
+    return res.json({
+      share_on: saved.data.share_on === true,
+      discoverable: saved.data.discoverable === true,
+      url: campaignShare.isShareId(saved.data.share_id) ? campaignShare.campaignUrl(saved.data.share_id) : null
+    });
+  } catch (error) { next(error); }
+});
+
+/* "Make a new link": a new share_id, so the old link answers "No campaign
+   found" from now on. Sharing stays as it was. */
+app.post("/api/crowdfunding/campaigns/:id/share/new-link", requireAuth, requireActiveSubscription, async function (req, res, next) {
+  try {
+    const replaced = await supabase
+      .from("crowdfunding_campaigns")
+      .update({ share_id: campaignShare.newShareId(), share_changed_at: nowIso() })
+      .eq("id", req.params.id)
+      .eq("owner_id", req.user.id)
+      .select("share_id")
+      .maybeSingle();
+    if (replaced.error) throw replaced.error;
+    if (!replaced.data) return res.status(404).json({ error: "Campaign not found" });
+    campaignSitemapCache = { xml: null, at: 0 };
+    return res.json({ url: campaignShare.campaignUrl(replaced.data.share_id) });
+  } catch (error) { next(error); }
+});
+
+/* Per IP: the public campaign page and its sitemap, like the support page's. */
+const campaignPageLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many requests. Try again in a few minutes."
+});
+
+/* bizforceai.net/campaign/<share_id>, proxied here by Netlify so the page is
+   served with the campaign's own title, image and preview tags. A malformed
+   or unknown id, or an owner whose plan is not active, is "No campaign found"
+   with a 404; a campaign not being shared is "off" with a 200. */
+app.get("/campaign/:shareId", campaignPageLimiter, async function (req, res) {
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("X-Content-Type-Options", "nosniff");
+  try {
+    const shareId = String(req.params.shareId || "");
+    if (!campaignShare.isShareId(shareId)) return res.status(404).send(campaignShare.renderCampaignPage("none"));
+    const found = await supabase
+      .from("crowdfunding_campaigns")
+      .select("owner_id, share_id, share_on, discoverable, status, title, description, category, media, goal_bfc, raised_bfc")
+      .eq("share_id", shareId)
+      .maybeSingle();
+    if (found.error) throw found.error;
+    const shared = found.data;
+    if (!shared || !(await ownerPagePublic(shared.owner_id))) return res.status(404).send(campaignShare.renderCampaignPage("none"));
+    const state = campaignShare.stateFor(shared, true);
+    res.set("Cache-Control", "public, max-age=60");
+    if (state !== "on" && state !== "ended") return res.status(state === "none" ? 404 : 200).send(campaignShare.renderCampaignPage(state === "none" ? "none" : "off"));
+    const prof = await supabase.from("bf_profiles").select("username, display_name, avatar_url").eq("user_id", shared.owner_id).maybeSingle();
+    if (prof.error) throw prof.error;
+    let support = null;
+    try { support = (await readMemberSupport(shared.owner_id)).row; } catch (e) { support = null; }
+    const view = campaignShare.publicCampaignFrom(shared, campaignShare.ownerFrom(prof.data, support));
+    return res.status(200).send(campaignShare.renderCampaignPage(state, { campaign: view, discoverable: shared.discoverable === true }));
+  } catch (err) {
+    console.error("[campaign page] " + ((err && err.message) || err));
+    res.set("Retry-After", "60");
+    return res.status(503).send(campaignShare.renderCampaignPage("none").replace("<h1>No campaign found</h1>", "<h1>This page could not be loaded just now</h1>"));
+  }
+});
+
+/* Campaign pages whose owners chose to be found: shared, discoverable, active,
+   and only while the owner's plan is. */
+var campaignSitemapCache = { xml: null, at: 0 };
+app.get("/api/sitemap/campaigns.xml", campaignPageLimiter, async function (req, res) {
+  try {
+    if (!campaignSitemapCache.xml || Date.now() - campaignSitemapCache.at > BLOG_SITEMAP_CACHE_MS) {
+      const rows = await supabase.from("crowdfunding_campaigns").select("owner_id, share_id, share_on, discoverable, status")
+        .eq("share_on", true).eq("discoverable", true).eq("status", "active").limit(5000);
+      if (rows.error) throw rows.error;
+      const listed = (rows.data || []).filter(function (r) { return r.share_on === true && r.discoverable === true && r.status === "active" && campaignShare.isShareId(r.share_id); });
+      const visible = await publicOwnersAmong(listed.map(function (r) { return r.owner_id; }));
+      const ids = listed.filter(function (r) { return visible.has(r.owner_id); }).map(function (r) { return r.share_id; }).sort();
+      campaignSitemapCache = {
+        xml: '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+          ids.map(function (id) { return "  <url><loc>" + supportLinks.escapeHtml(campaignShare.campaignUrl(id)) + "</loc></url>\n"; }).join("") + "</urlset>\n",
+        at: Date.now()
+      };
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=600");
+    return res.status(200).send(campaignSitemapCache.xml);
+  } catch (err) {
+    console.error("[sitemap/campaigns] could not be built:", (err && err.message) || err);
+    res.set("Retry-After", "600");
+    return res.status(503).type("text/plain").send("The campaign sitemap could not be built just now.");
+  }
 });
 
 /* Per account, after requireAuth: ten donations in ten minutes is plenty for

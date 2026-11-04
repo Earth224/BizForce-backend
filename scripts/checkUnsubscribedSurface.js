@@ -216,7 +216,11 @@ const EXPECTED_GATED = [
   // connecting a Mastodon account (5 an hour) and filing a drafted post for approval need a subscription
   // (requireActiveSubscription); approving it is G3-gated on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS).
   // The status, disconnect and automation routes stay login-only, as Bluesky's do (checkMastodonConnect C, S, A).
-  "post /api/social/mastodon/connect", "post /api/social/mastodon/propose-post"
+  "post /api/social/mastodon/connect", "post /api/social/mastodon/propose-post",
+  // NAMED (Nov 4 2026, campaign sharing, migration 166; gated 88 -> 90): BEFORE no campaign could be shared. AFTER turning a
+  // campaign's sharing or discovery on or off, and making it a new link, need a subscription (requireActiveSubscription),
+  // as editing the campaign does; the page itself is served only while the owner's plan is active (section 6).
+  "put /api/crowdfunding/campaigns/:id/share", "post /api/crowdfunding/campaigns/:id/share/new-link"
 ];
 
 const EXPECTED_ADMIN = [
@@ -458,7 +462,11 @@ const EXPECTED_SERVE_GATED = {
   // NAMED (Oct 28 2026, member support): BEFORE no support page. AFTER bizforceai.net/support/<username> and the
   // support sitemap, each serving a member only while the owner is entitled.
   "get /support/:username":                 "!(await ownerPagePublic(member.user_id))",
-  "get /api/sitemap/support.xml":           "publicOwnersAmong("
+  "get /api/sitemap/support.xml":           "publicOwnersAmong(",
+  // NAMED (Nov 4 2026, campaign sharing; serve-gated 12 -> 14): BEFORE no campaign page. AFTER bizforceai.net/campaign/<id>
+  // and the campaign sitemap, each serving a campaign only while its owner is entitled.
+  "get /campaign/:shareId":                 "!(await ownerPagePublic(shared.owner_id))",
+  "get /api/sitemap/campaigns.xml":         "publicOwnersAmong("
 };
 
 /* ── MUTATE=serve-open: the seller page's guard removed at compile ──────── */

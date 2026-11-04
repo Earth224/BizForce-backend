@@ -606,9 +606,12 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   check("P7. lib/memberMastodon.js's host, account id and acct patterns equal the SQL's, character for character",
     HOST_SQL === MM.HOST_PATTERN && ID_SQL === MM.ACCOUNT_ID_PATTERN && ACCT_SQL === MM.ACCT_PATTERN, [HOST_SQL, MM.HOST_PATTERN].join(" | "));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d{3}_/.test(f)).sort();
-  check("M3. 165_member_mastodon_connections.sql is the only migration numbered 165, and the highest (164 was the last before it)",
+  /* NAMED (campaign sharing, Nov 4 2026): BEFORE "the only migration numbered 165, and the highest" (every number <= 165).
+     AFTER 166_campaign_sharing.sql follows it, so the pin is "the only one numbered 165, every other one but 166 is lower,
+     and 164 came before it"; "the highest" is now checkCampaignSharing M2's, for 166. */
+  check("M3. 165_member_mastodon_connections.sql is the only migration numbered 165, every one before it is lower (164 was the last before it)",
     migFiles.filter(f => /^165_/.test(f)).length === 1 && migFiles.indexOf("165_member_mastodon_connections.sql") !== -1 &&
-    migFiles.every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    migFiles.filter(f => !/^166_campaign_sharing\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -1318,7 +1321,9 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     FE("terms.html").indexOf(LEGAL.escapeHtml(LP.BLUESKY_TERMS_SENTENCE)) < FE("terms.html").indexOf(LEGAL.escapeHtml(TERMS)));
   check("L5. privacy.html lists the connection among what is collected", FE("privacy.html").indexOf(LEGAL.escapeHtml(YDATA.DATA ? (YDATA.DATA.find(d => d.table === "member_mastodon_connections") || {}).what || "" : "")) !== -1 ||
     FE("privacy.html").indexOf("Your connected Mastodon account: connected as @account on your server since the date you connected it.") !== -1);
-  check("L6. TERMS_VERSION is the date of this change, 2026-11-03", LEGAL.TERMS_VERSION === "2026-11-03", LEGAL.TERMS_VERSION);
+  /* NAMED (campaign sharing, Nov 4 2026): BEFORE "2026-11-03", the version this change set. AFTER "2026-11-04", the version
+     campaign sharing set when it added its Terms sentence; still an exact pin. */
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-04 (campaign sharing; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-04", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");
