@@ -83,6 +83,9 @@ const ALLOW = {
   "be:scripts/checkBlueskyConnect.js": { count: 3, why: "a member's post holding one family emoji (three code points joined), to prove the 300-grapheme limit" },
   "be:scripts/checkSocialBlueskyPublish.js": { count: 3, why: "the same member's post with a family emoji, as the publisher counts it" },
   "be:scripts/checkSocialPublishPage.js": { count: 3, why: "the same member's post with a family emoji, as the page counts it" },
+  // NAMED (Connect Mastodon, Nov 3 2026): BEFORE six entries. AFTER a seventh, checkMastodonConnect.js, whose K tests
+  // count members' Mastodon posts holding emoji (ZWJ families, flags, skin tones) against Mastodon's own count.
+  "be:scripts/checkMastodonConnect.js": { count: 15, why: "members' Mastodon posts holding emoji (ZWJ families, flags, skin tones), to prove the count is never below Mastodon's" },
   "be:scripts/checkSocialSearch.js": { count: 1, why: "a YouTube video title as its poster wrote it, to prove a title is cut by graphemes" }
 };
 

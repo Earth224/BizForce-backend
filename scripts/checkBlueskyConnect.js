@@ -806,8 +806,12 @@ const everything = b => JSON.stringify(b.db.tables);
   const execs = SRC.slice(SRC.indexOf("const PROPOSAL_EXECUTORS = {"), s.braceMatch(SRC, SRC.indexOf("{", SRC.indexOf("const PROPOSAL_EXECUTORS = {"))) + 1);
   check("H10. registered as an executor and subscription gated at approval",
     /\n  update_bluesky_profile: executeUpdateBlueskyProfile,\n/.test(execs) && gatedList && /"update_bluesky_profile"/.test(gatedList[1]));
+  /* NAMED (Connect Mastodon, Nov 3 2026): BEFORE the definition and one call, executePublishSocialPost (3 pieces).
+     AFTER the definition and two calls, executePublishSocialPost and executePublishMastodonPost (4 pieces); the
+     profile executor is still never passed. */
   check("H11. no code path files a profile update into autoExecuteFiledProposal",
-    SRC.split("autoExecuteFiledProposal(").length === 3 && SRC.indexOf("autoExecuteFiledProposal(proposal, executePublishSocialPost)") !== -1);
+    SRC.split("autoExecuteFiledProposal(").length === 4 && SRC.indexOf("autoExecuteFiledProposal(proposal, executePublishSocialPost)") !== -1 &&
+      SRC.indexOf("autoExecuteFiledProposal(proposal, executePublishMastodonPost)") !== -1 && !/autoExecuteFiledProposal\([^)]*executeUpdateBlueskyProfile/.test(SRC));
 
   /* ── I. a session failure ───────────────────────────────────────────────── */
   console.log("\n══ I. a session failure: needs_reconnect, one notice, no retry ══");

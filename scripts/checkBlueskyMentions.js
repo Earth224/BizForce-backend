@@ -516,8 +516,11 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
     MB.POST_URI_PATTERN === SQL_URI && MB.CID_PATTERN === SQL_CID && MB.POST_URI_RE.source === new RegExp(SQL_URI).source &&
     MB.CID_RE.source === new RegExp(SQL_CID).source && MB.POST_URI_MAX === 1024, MB.POST_URI_PATTERN + " | " + SQL_URI);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M3. 164_bluesky_reply_refs.sql is the only migration numbered 164, and the highest (163 was the last before it)",
-    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
+  /* NAMED (Connect Mastodon, Nov 3 2026): BEFORE "the only migration numbered 164, and the highest" (every number <= 164).
+     AFTER 165_member_mastodon_connections.sql follows it, so the pin is "the only one numbered 164, every other one but 165
+     is lower, and 163 came before it"; "the highest" is now checkMastodonConnect M3's, for 165. */
+  check("M3. 164_bluesky_reply_refs.sql is the only migration numbered 164, every one before it is lower (163 was the last before it)",
+    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^165_member_mastodon_connections\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
   check("M4. no new table: the migration only adds columns and a CHECK to social_post_drafts", !/CREATE TABLE/i.test(sqlBody) && !/DROP/i.test(sqlBody));
 
   /* ── L. the library ─────────────────────────────────────────────────────── */

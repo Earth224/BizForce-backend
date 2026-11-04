@@ -744,10 +744,12 @@ function shopifyConn(db, userId) {
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(function (f) { return /^\d+_/.test(f); });
   /* NAMED (the Bluesky Mentions inbox, Nov 3 2026): BEFORE "the only migration numbered 163, and the highest" (every number
      <= 163). AFTER 164_bluesky_reply_refs.sql follows it, so the pin is "the only one numbered 163, every other one but 164 is
-     lower, and 162 came before it"; "the highest" is now checkBlueskyMentions M3's, for 164. */
+     lower, and 162 came before it"; "the highest" is now checkBlueskyMentions M3's, for 164.
+     NAMED (Connect Mastodon, Nov 3 2026): BEFORE only 164 was allowed above 163. AFTER 164_bluesky_reply_refs.sql and
+     165_member_mastodon_connections.sql; "the highest" is checkMastodonConnect M3's, for 165. */
   check("L9. 163_store_connections.sql is the only migration numbered 163, every one before it is lower (162 was the last before it)",
     migFiles.filter(function (f) { return /^163_/.test(f); }).length === 1 &&
-    migFiles.filter(function (f) { return !/^164_bluesky_reply_refs\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };

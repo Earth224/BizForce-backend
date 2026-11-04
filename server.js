@@ -12060,6 +12060,12 @@ const PROPOSAL_EXECUTORS = {
   // it only runs at call time.
   reply_bluesky_mention: executeReplyBlueskyMention,
 
+  // Posts an approved Mastodon draft from POST /api/social/mastodon/propose-post,
+  // from the member's own connected account (lib/memberMastodon.js), never the
+  // platform's outreach token. Defined further down the file; it only runs at
+  // call time.
+  publish_mastodon_post: executePublishMastodonPost,
+
   // Creates an email sequence and enrolls the owner's confirmed contacts from
   // an approved POST /api/agents/email/propose-sequence. Sends nothing.
   // executeSendEmailSequence is defined further down the file; it only runs at
@@ -12100,6 +12106,11 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "reply_bluesky_mention") {
       return res.status(400).json({
         error: "A Bluesky reply cannot be filed here. Use POST /api/social/bluesky/mentions/propose-reply with the task_id of a drafted reply."
+      });
+    }
+    if (actionType === "publish_mastodon_post") {
+      return res.status(400).json({
+        error: "A Mastodon post cannot be filed here. Use POST /api/social/mastodon/propose-post with the task_id of a completed social/post run for Mastodon."
       });
     }
 
@@ -12348,9 +12359,9 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
 /* The action types whose execution puts something in front of strangers. A
    calendar event is the account's own record and stays free. An email sequence
    is enrolled to be mailed to the owner's contacts. A social post is published
-   on Bluesky. */
+   on Bluesky or Mastodon. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
-  "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention"];
+  "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -30108,6 +30119,20 @@ var SOCIAL_PLATFORMS = {
     hashtag_max: null, hashtag_practical: 2,
     note: "300 graphemes is enforced: characters as a reader sees them, so an emoji built from " +
           "several code points counts once. A longer post cannot be published as a single post."
+  },
+  /* Mastodon's limit is each server's own: 500 unless the member's connected
+     server (member_mastodon_connections.max_characters) says otherwise, and
+     the social/post route uses the member's stored numbers when there are
+     some. Counted by lib/memberMastodon.js countForMastodon, which is never
+     below what Mastodon counts: code points, each link as at least the
+     server's characters_reserved_per_url. */
+  mastodon: {
+    label: "Mastodon",
+    max: 500, kind: "hard", counter: "mastodon", reserved_per_url: 23,
+    truncates_at: null,
+    hashtag_max: null, hashtag_practical: 3,
+    note: "500 characters is the default limit; your own server may allow more. Each link counts as at least 23 " +
+          "characters, however short. A longer post cannot be published as a single post."
   }
 };
 
@@ -30176,7 +30201,9 @@ function countHashtags(text) {
 function measureSocialPost(text, spec) {
   var value = String(text || "").trim();
   var tags = countHashtags(value);
-  var length = spec.unit === "graphemes" ? countGraphemes(value) : value.length;
+  var length = spec.unit === "graphemes" ? countGraphemes(value)
+    : spec.counter === "mastodon" ? require("./lib/memberMastodon").countForMastodon(value, spec.reserved_per_url)
+    : value.length;
 
   var measured = {
     length: length,
@@ -30202,7 +30229,34 @@ function measureSocialPost(text, spec) {
   if (spec.unit) {
     measured.length_unit = spec.unit;
   }
+  if (spec.counter === "mastodon") {
+    measured.links_count_as_at_least = spec.reserved_per_url;
+  }
   return measured;
+}
+
+/* The Mastodon limits a social/post run is measured against: the member's own
+   server's, when they have a connection, else the table's 500 and 23. A read
+   that fails falls back to the table; it never stops the run. */
+async function mastodonSpecFor(userId, spec) {
+  try {
+    var mm = require("./lib/memberMastodon");
+    var read = await supabase
+      .from("member_mastodon_connections")
+      .select("instance_host, max_characters, characters_reserved_per_url")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (read.error || !read.data) return spec;
+    var max = mm.limitOf(read.data), reserved = mm.reservedOf(read.data);
+    return Object.assign({}, spec, {
+      max: max,
+      reserved_per_url: reserved,
+      note: max + " characters is the limit on your server, " + read.data.instance_host + ". Each link counts as at least " + reserved +
+        " characters, however short. A longer post cannot be published as a single post."
+    });
+  } catch (err) {
+    return spec;
+  }
 }
 
 app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLimiter,
@@ -30242,6 +30296,9 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
       });
 
       var spec = SOCIAL_PLATFORMS[platformKey];
+      if (spec.counter === "mastodon") {
+        spec = await mastodonSpecFor(userId, spec);
+      }
       var businessProfile = await loadProfileForTool(userId);
 
       var socialBrain =
@@ -30255,6 +30312,9 @@ app.post("/api/agents/social/post", requireAuth, requireActiveSubscription, aiLi
         "- Hard limit: " + spec.max + " characters. Longer cannot be published.\n" +
         (spec.unit === "graphemes"
           ? "- " + spec.label + " counts characters as a reader sees them: each emoji counts as one.\n"
+          : "") +
+        (spec.counter === "mastodon"
+          ? "- Each link counts as at least " + spec.reserved_per_url + " characters, however short it is.\n"
           : "") +
         (spec.truncates_at
           ? "- Cut off at roughly " + spec.truncates_at + " characters behind a \"more\" link, so the " +
@@ -32090,6 +32150,618 @@ async function executeReplyBlueskyMention(proposal) {
       "). Do not post it again");
   }
   return { uri: uri, cid: cid, published_at: publishedAt, draft_id: draft.id, in_reply_to: fromPayload.reply_parent_uri };
+}
+
+/* ── A member's own Mastodon account (migration 165, lib/memberMastodon.js) ──
+   POST /api/social/mastodon/connect       a server and a personal access token,
+                                           verified by two reads on that server
+   GET  /api/social/mastodon/status        { connected, account, status, since, max_characters }
+   POST /api/social/mastodon/disconnect    deletes the connection
+   GET  /api/social/mastodon/automation    "Post approved drafts automatically",
+   PUT  /api/social/mastodon/automation    and every change to it
+   POST /api/social/mastodon/propose-post  files a drafted Mastodon post for approval
+
+   THERE IS NO PLATFORM FALLBACK. A post goes out only from the member's own
+   connection. The platform's MASTODON_ACCESS_TOKEN (sendMastodonReply, outreach
+   replies) is never read on any of these paths, and anyone without a
+   connection, the owner included, is told to connect first.
+
+   THE TOKEN is encrypted with lib/apiKeyCrypto.js BEFORE the server is
+   contacted, so a server without the key sends nothing, and it is stored only
+   after the server accepts it. It is never returned, never logged and never
+   exported; the export shows the server, the account name and the date
+   connected. Every request to a member's server goes through
+   lib/guardedFetch.js's JSON mode (https on 443, every address checked, no
+   redirect followed, 1 MB at most). */
+
+var MASTODON_CONNECT_FIRST = "Connect your own Mastodon account on the Social Agent page first. Posts to Mastodon go out only " +
+  "from your own connected account. Nothing was filed.";
+var MASTODON_RECONNECT_FIRST = "Your Mastodon connection needs reconnecting: your server stopped accepting the saved access token. " +
+  "Make a new token and connect again on the Social Agent page. Nothing was filed.";
+
+/* The member's own connection, and nothing else: { kind: "member", row },
+   { kind: "needs_reconnect", row } or { kind: "none" }. No platform account,
+   for anyone. */
+async function mastodonPostingAccount(userId) {
+  var read = await supabase
+    .from("member_mastodon_connections")
+    .select("id, user_id, instance_host, account_id, acct, status, auto_post, max_characters, characters_reserved_per_url, token_ciphertext, token_iv, token_auth_tag")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (read.error) {
+    throw read.error;
+  }
+  if (!read.data) return { kind: "none" };
+  return read.data.status === "connected" ? { kind: "member", row: read.data } : { kind: "needs_reconnect", row: read.data };
+}
+
+// What a proposal records as the account it posts as: proposals.html shows "Posts as @acct@host".
+function mastodonPostsAs(row) {
+  return { account: "member", acct: row.acct, host: row.instance_host, automatic: row.auto_post === true };
+}
+function mastodonAccountLabel(postsAs) {
+  return postsAs && postsAs.acct && postsAs.host ? "@" + postsAs.acct + "@" + postsAs.host : "no Mastodon account";
+}
+
+/* After an action with a member's token, as recordBlueskySession does: a
+   success notes last_ok_at; a refused token marks the connection
+   needs_reconnect and raises ONE in-app notice (the update is conditional on
+   status connected, so a second failure finds nothing to mark and says
+   nothing again); any other failure notes the error code. Never throws. */
+async function recordMastodonSession(userId, label, outcome) {
+  try {
+    var stamp = nowIso();
+    if (outcome.ok) {
+      await supabase.from("member_mastodon_connections").update({ last_ok_at: stamp, updated_at: stamp }).eq("user_id", userId);
+      return;
+    }
+    var patch = { last_error_at: stamp, last_error_code: String(outcome.code || outcome.reason).slice(0, 60), updated_at: stamp };
+    if (outcome.reason !== "session_failed") {
+      await supabase.from("member_mastodon_connections").update(patch).eq("user_id", userId);
+      return;
+    }
+    var marked = await supabase
+      .from("member_mastodon_connections")
+      .update(Object.assign({ status: "needs_reconnect" }, patch))
+      .eq("user_id", userId)
+      .eq("status", "connected")
+      .select("id");
+    if (marked.error || !(marked.data || []).length) {
+      return;
+    }
+    var notice = await supabase.from("notifications").insert({
+      user_id: userId,
+      type:    "mastodon_reconnect",
+      title:   "Reconnect your Mastodon account",
+      message: "Your Mastodon server stopped accepting the access token saved for " + label + ", so nothing was posted and " +
+        "nothing will be tried again. Make a new token in Mastodon and connect again on the Social Agent page.",
+      read:    false
+    });
+    if (notice.error) {
+      console.warn("[mastodon] the reconnect notice could not be saved:", notice.error.message || notice.error);
+    }
+  } catch (err) {
+    console.error("[mastodon] recording a member token outcome failed:", (err && err.message) || err);
+  }
+}
+
+// A member-token failure in words. Never the server's own text, never the token.
+function mastodonFailureText(outcome, label) {
+  if (outcome.reason === "session_failed") {
+    return "Mastodon refused the access token for " + label + " (" + outcome.code + "), so the connection now needs reconnecting. " +
+      "Reconnect Mastodon on the Social Agent page.";
+  }
+  if (outcome.reason === "rate_limited") {
+    return "Mastodon rate limit on " + label + " (" + outcome.code + ")" +
+      (outcome.resumes_at ? "; no Mastodon call for this account until " + outcome.resumes_at : "") + ".";
+  }
+  return "Mastodon did not take it (" + (outcome.code || outcome.reason) + ").";
+}
+
+/* Per account: five connection attempts an hour. */
+const mastodonConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: function (req) { return "mastodon-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many Mastodon connection attempts. Try again in an hour. Nothing was saved.", reason: "rate_limited", saved: false }
+});
+
+app.post("/api/social/mastodon/connect", requireAuth, requireActiveSubscription, mastodonConnectLimiter,
+  async function (req, res, next) {
+    try {
+      var mm = require("./lib/memberMastodon");
+      var body = req.body || {};
+      var host = mm.normalizeInstance(body.instance);
+      if (!host) {
+        return res.status(400).json({ error: mm.instanceMessage(body.instance), code: "instance_format", saved: false });
+      }
+      var token = mm.checkToken(body.access_token);
+      if (!token.ok) {
+        return res.status(400).json({ error: token.error, code: token.code, saved: false });
+      }
+
+      // Sealed first: a server that cannot encrypt it never sends it anywhere.
+      var sealed;
+      try {
+        sealed = require("./lib/apiKeyCrypto").encrypt(token.value);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: mm.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+
+      var verified = await mm.verify(host, token.value);
+      if (!verified.ok) {
+        if (verified.kind === "rejected") {
+          return res.status(400).json({ error: mm.MESSAGES.rejected + " (" + host + "). " + mm.TOKEN_HELP + ". Nothing was saved.", code: "mastodon_rejected", saved: false });
+        }
+        return res.status(503).json({
+          error: verified.kind === "rate_limited" ? mm.MESSAGES.rateLimited : mm.MESSAGES.unreachable,
+          code: verified.kind === "rate_limited" ? "mastodon_rate_limited" : "mastodon_unreachable",
+          saved: false
+        });
+      }
+
+      var stamp = nowIso();
+      var saved = await supabase
+        .from("member_mastodon_connections")
+        .upsert({
+          user_id:                     req.user.id,
+          instance_host:               host,
+          account_id:                  verified.account_id,
+          acct:                        verified.acct,
+          token_ciphertext:            sealed.ciphertext,
+          token_iv:                    sealed.iv,
+          token_auth_tag:              sealed.authTag,
+          max_characters:              verified.max_characters,
+          characters_reserved_per_url: verified.characters_reserved_per_url,
+          status:                      "connected",
+          last_ok_at:                  stamp,
+          last_error_at:               null,
+          last_error_code:             null,
+          updated_at:                  stamp
+        }, { onConflict: "user_id" })
+        .select("instance_host, acct, status, created_at, max_characters")
+        .single();
+      if (saved.error) {
+        throw saved.error;
+      }
+      return res.json(mm.statusOf(saved.data));
+    } catch (error) {
+      console.error("[social/mastodon/connect] Error:", (error && error.message) || error);
+      next(error);
+    }
+  });
+
+app.get("/api/social/mastodon/status", requireAuth, async function (req, res, next) {
+  try {
+    var read = await supabase
+      .from("member_mastodon_connections")
+      .select("instance_host, acct, status, created_at, max_characters")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (read.error) {
+      throw read.error;
+    }
+    return res.json(require("./lib/memberMastodon").statusOf(read.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not: a member can always take their token back.
+app.post("/api/social/mastodon/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var gone = await supabase
+      .from("member_mastodon_connections")
+      .delete()
+      .eq("user_id", req.user.id)
+      .select("id");
+    if (gone.error) {
+      throw gone.error;
+    }
+    return res.json(Object.assign(require("./lib/memberMastodon").statusOf(null), {
+      removed: (gone.data || []).length > 0,
+      note: "Disconnected. To cancel the token itself, delete the BizForce application under Preferences, Development on your Mastodon server."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The automation setting and its log, newest first. available is false when
+   there is no working connection to post from. */
+async function mastodonAutomationState(userId) {
+  var conn = await supabase
+    .from("member_mastodon_connections")
+    .select("status, auto_post, auto_post_changed_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (conn.error) {
+    throw conn.error;
+  }
+  var log = await supabase
+    .from("member_social_setting_changes")
+    .select("old_value, new_value, changed_at")
+    .eq("user_id", userId)
+    .eq("platform", "mastodon")
+    .eq("setting", "auto_post")
+    .order("changed_at", { ascending: false })
+    .limit(10);
+  if (log.error) {
+    throw log.error;
+  }
+  return {
+    auto_post: !!(conn.data && conn.data.auto_post === true),
+    changed_at: conn.data ? conn.data.auto_post_changed_at || null : null,
+    available: !!(conn.data && conn.data.status === "connected"),
+    changes: log.data || []
+  };
+}
+
+app.get("/api/social/mastodon/automation", requireAuth, async function (req, res, next) {
+  try {
+    return res.json(await mastodonAutomationState(req.user.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* OFF is always allowed; ON needs an active subscription and a working
+   connection. Every change writes one member_social_setting_changes row. */
+app.put("/api/social/mastodon/automation", requireAuth, async function (req, res, next) {
+  try {
+    var wanted = req.body ? req.body.auto_post : undefined;
+    if (typeof wanted !== "boolean") {
+      return res.status(400).json({ error: "auto_post must be true or false. Nothing was changed." });
+    }
+    var conn = await supabase
+      .from("member_mastodon_connections")
+      .select("status, auto_post")
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (conn.error) {
+      throw conn.error;
+    }
+    if (wanted && (!conn.data || conn.data.status !== "connected")) {
+      return res.status(conn.data ? 409 : 400).json({
+        error: conn.data ? MASTODON_RECONNECT_FIRST : "Connect your Mastodon account first. Nothing was changed."
+      });
+    }
+    if (wanted && await refuseUnlessSubscribed(req, res, "turn on automatic Mastodon posting")) {
+      recordGateDecision(req.user.id, "route_access", "route:put /api/social/mastodon/automation", { G3: { result: "fail", code: "subscription_required" } }, { gates: ["G3"] });
+      return;
+    }
+    if (wanted) recordGateDecision(req.user.id, "route_access", "route:put /api/social/mastodon/automation", { G3: { result: "pass" } }, { gates: ["G3"] });
+    var before = !!(conn.data && conn.data.auto_post === true);
+    if (conn.data && before !== wanted) {
+      var stamp = nowIso();
+      var changed = await supabase
+        .from("member_mastodon_connections")
+        .update({ auto_post: wanted, auto_post_changed_at: stamp, updated_at: stamp })
+        .eq("user_id", req.user.id)
+        .eq("auto_post", before)
+        .select("id");
+      if (changed.error) {
+        throw changed.error;
+      }
+      if ((changed.data || []).length) {
+        var logged = await supabase.from("member_social_setting_changes").insert({
+          user_id: req.user.id, platform: "mastodon", setting: "auto_post", old_value: before, new_value: wanted, changed_at: stamp
+        });
+        if (logged.error) {
+          throw logged.error;
+        }
+        console.log("[social/mastodon/automation] " + req.user.id + " turned automatic posting " + (wanted ? "on" : "off"));
+      }
+    }
+    return res.json(await mastodonAutomationState(req.user.id));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* Files a drafted Mastodon post for approval. The text is the stored run's,
+   exactly; it is counted (countForMastodon) against the member's own server
+   limit and refused, never cut, when over it; the claims screen runs. Only
+   when the member's own "Post approved drafts automatically" is on does it run
+   at once, through the same executor the approve route runs. */
+app.post("/api/social/mastodon/propose-post", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      var userId = req.user.id;
+      var mm = require("./lib/memberMastodon");
+
+      var account = await mastodonPostingAccount(userId);
+      if (account.kind === "none") {
+        return res.status(403).json({ error: MASTODON_CONNECT_FIRST, code: "not_connected" });
+      }
+      if (account.kind === "needs_reconnect") {
+        return res.status(409).json({ error: MASTODON_RECONNECT_FIRST, code: "needs_reconnect" });
+      }
+      var row = account.row;
+
+      var taskId = typeof req.body.task_id === "string" ? req.body.task_id.trim() : "";
+      if (!taskId) {
+        return res.status(400).json({ error: "task_id is required — the id of a completed social/post run for Mastodon." });
+      }
+      var notFound = { error: "No social post run with that task_id was found." };
+      if (!UUID_RE.test(taskId)) {
+        return res.status(404).json(notFound);
+      }
+      var taskRead = await supabase
+        .from("ai_tasks")
+        .select("id, task_type, status, output")
+        .eq("id", taskId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (taskRead.error) {
+        throw taskRead.error;
+      }
+      var task = taskRead.data;
+      if (!task) {
+        return res.status(404).json(notFound);
+      }
+      if (task.task_type !== "social/post") {
+        return res.status(400).json({ error: "That task is not a social post run (it is " + JSON.stringify(task.task_type) + ")." });
+      }
+      if (task.status !== "completed") {
+        return res.status(400).json({ error: "That social post run is not completed (it is " + JSON.stringify(task.status) + ")." });
+      }
+      var output = task.output || {};
+      if (output.platform !== "mastodon") {
+        return res.status(400).json({ error: "That run drafted a post for " + JSON.stringify(output.platform || null) + ", not Mastodon. Nothing was filed." });
+      }
+
+      // The text is the stored run's, exactly as stored: any text in the body is never read.
+      var text = output.post;
+      if (typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ error: "That run's post is empty. Nothing was filed." });
+      }
+      var limit = mm.limitOf(row);
+      var counted = mm.countForMastodon(text, mm.reservedOf(row));
+      var mastoGateFacts = { agent: "social", action_type: "publish_mastodon_post", channel: "mastodon", approved: false };
+      if (counted > limit) {
+        recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "fail", code: "over_character_limit" } }, { facts: mastoGateFacts });
+        return res.status(400).json({
+          error: "That post counts " + counted + " characters (each link as at least " + mm.reservedOf(row) + "), over your server's limit of " +
+            limit + ", so it cannot be published as written and nothing was filed."
+        });
+      }
+      var mastoClaims = blueskyClaimsRefusal(text);
+      if (mastoClaims) {
+        recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "fail", code: "claims_screen" } }, { facts: mastoGateFacts });
+        return res.status(400).json({ error: mastoClaims.error + " Nothing was filed.", code: "claims_screen", violations: mastoClaims.violations });
+      }
+      recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "pass" } }, { facts: mastoGateFacts });
+
+      var draftInsert = await supabase
+        .from("social_post_drafts")
+        .insert({
+          user_id:       userId,
+          platform:      "mastodon",
+          content:       text,
+          status:        "pending_approval",
+          scheduled_for: null,
+          created_at:    nowIso(),
+          updated_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (draftInsert.error) {
+        throw draftInsert.error;
+      }
+      var draft = draftInsert.data;
+
+      var proposalInsert = await supabase
+        .from("agent_proposals")
+        .insert({
+          user_id:       userId,
+          agent_type:    "social",
+          action_type:   "publish_mastodon_post",
+          title:         safeText("Mastodon post: " + text.replace(/\s+/g, " ").slice(0, 120), 200),
+          target:        "mastodon",
+          payload:       { draft_id: draft.id, task_id: task.id, text: text, posts_as: mastodonPostsAs(row),
+                           measured: { length: counted, limit: limit, reserved_per_url: mm.reservedOf(row) } },
+          cost_amount:   0,
+          cost_currency: "USD",
+          reversible:    false,
+          status:        "pending",
+          created_at:    nowIso()
+        })
+        .select("*")
+        .single();
+      if (proposalInsert.error) {
+        await supabase.from("social_post_drafts").delete().eq("id", draft.id).eq("user_id", userId);
+        throw proposalInsert.error;
+      }
+      var proposal = proposalInsert.data;
+
+      var linked = await supabase
+        .from("social_post_drafts")
+        .update({ proposal_id: proposal.id, updated_at: nowIso() })
+        .eq("id", draft.id)
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+      if (linked.error) {
+        throw linked.error;
+      }
+
+      var measured = { length: counted, length_unit: "characters", limit: limit, reserved_per_url: mm.reservedOf(row) };
+      var label = mastodonAccountLabel(proposal.payload.posts_as);
+      // The member's own automation: only the manual approve step is skipped.
+      if (proposal.payload.posts_as.automatic === true) {
+        var auto = await autoExecuteFiledProposal(proposal, executePublishMastodonPost);
+        var after = await supabase.from("social_post_drafts").select("*").eq("id", draft.id).eq("user_id", userId).maybeSingle();
+        return res.status(201).json({
+          draft: after.data || linked.data,
+          proposal: auto.proposal,
+          measured: measured,
+          automatic: true,
+          posted: auto.ok,
+          note: auto.ok
+            ? "Posted automatically from " + label + ", because \"Post approved drafts automatically\" is on. Every screen ran first."
+            : "Run automatically and not posted: " + auto.error + ". Nothing is retried."
+        });
+      }
+      return res.status(201).json({
+        draft: linked.data,
+        proposal: proposal,
+        measured: measured,
+        note: "Filed for approval. Nothing has been posted. Approving it posts exactly this text, publicly, from your Mastodon account " + label + "."
+      });
+    } catch (error) {
+      console.error("[social/mastodon/propose-post] Error:", (error && error.message) || error);
+      next(error);
+    }
+  });
+
+/* The publish_mastodon_post executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal row; throws on any failure. Trusts nothing stored: the
+   text is counted against the connection's CURRENT limit and screened again;
+   the connection must still exist, be connected, and be the account and
+   server the proposal was filed as; the draft must be the user's, for
+   Mastodon, pending_approval, with this exact text; the source run's stored
+   post must be this exact text.
+
+   ONE POST, ONCE. The request carries Idempotency-Key = the draft id, so a
+   repeated request is answered with the post already made. A draft already
+   published with a uri is returned as { already_published: true } and nothing
+   is sent. A refusal marks the draft publish_failed and throws; nothing is
+   retried. A refused token goes through recordMastodonSession, which marks the
+   connection needs_reconnect and tells the member once. */
+async function executePublishMastodonPost(proposal) {
+  var mm = require("./lib/memberMastodon");
+  var payload = proposal.payload || {};
+  var ownerId = proposal.user_id;
+  var fail = function (why) { return new Error("publish_mastodon_post: " + why + " Nothing was posted"); };
+
+  var text = payload.text;
+  if (typeof text !== "string" || !text.trim()) {
+    throw fail("the stored text is empty.");
+  }
+
+  var account = await mastodonPostingAccount(ownerId);
+  if (account.kind === "none") {
+    throw fail("there is no connected Mastodon account to post from; connect it on the Social Agent page.");
+  }
+  if (account.kind === "needs_reconnect") {
+    throw fail("the Mastodon connection needs reconnecting.");
+  }
+  var row = account.row;
+  var limit = mm.limitOf(row);
+  var counted = mm.countForMastodon(text, mm.reservedOf(row));
+  if (counted > limit) {
+    throw fail("the stored text counts " + counted + " characters, over the server's limit of " + limit + ".");
+  }
+  var mastoClaimsRefused = blueskyClaimsRefusal(text);
+  if (mastoClaimsRefused) {
+    throw fail(mastoClaimsRefused.error);
+  }
+  var filedAs = payload.posts_as && typeof payload.posts_as === "object" ? payload.posts_as : {};
+  if (filedAs.account !== "member" || filedAs.acct !== row.acct || filedAs.host !== row.instance_host) {
+    throw fail("this was filed to post as " + mastodonAccountLabel(filedAs) + ", and the account connected now is @" + row.acct + "@" +
+      row.instance_host + "; file it again to post from it.");
+  }
+
+  var draftId = typeof payload.draft_id === "string" && UUID_RE.test(payload.draft_id) ? payload.draft_id : null;
+  if (!draftId) {
+    throw fail("the proposal names no draft.");
+  }
+  var draftRead = await supabase
+    .from("social_post_drafts")
+    .select("id, user_id, platform, content, status, platform_post_uri")
+    .eq("id", draftId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (draftRead.error) {
+    throw fail("the draft could not be read (" + (draftRead.error.message || draftRead.error) + ").");
+  }
+  var draft = draftRead.data;
+  if (!draft) {
+    throw fail("the draft is missing or not this owner's.");
+  }
+  if (draft.platform !== "mastodon") {
+    throw fail("the draft is for " + JSON.stringify(draft.platform) + ", not Mastodon.");
+  }
+  if (text !== draft.content) {
+    throw fail("the stored text differs from the draft's content.");
+  }
+
+  var taskId = typeof payload.task_id === "string" && UUID_RE.test(payload.task_id) ? payload.task_id : null;
+  if (!taskId) {
+    throw fail("the proposal names no source run, so its text cannot be checked against one.");
+  }
+  var sourceRead = await supabase
+    .from("ai_tasks")
+    .select("id, task_type, status, output")
+    .eq("id", taskId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (sourceRead.error) {
+    throw fail("the source run could not be read (" + (sourceRead.error.message || sourceRead.error) + ").");
+  }
+  var source = sourceRead.data;
+  if (!source || source.task_type !== "social/post" || source.status !== "completed" || !source.output || source.output.platform !== "mastodon") {
+    throw fail("the source run is missing, not this owner's, or not a completed Mastodon social/post run.");
+  }
+  if (text !== source.output.post) {
+    throw fail("the stored text differs from the post the source run drafted.");
+  }
+
+  // Already posted: the address it was posted at, and nothing sent.
+  var mastoPublished = draft.status === "published" && !!draft.platform_post_uri;
+  if (mastoPublished) {
+    return { already_published: true, url: draft.platform_post_uri };
+  }
+  var mastoPending = draft.status === "pending_approval";
+  if (!mastoPending) {
+    throw fail("the draft is " + JSON.stringify(draft.status) + ", not pending_approval.");
+  }
+
+  var label = "@" + row.acct + "@" + row.instance_host;
+  var outcome = await mm.withToken(row, require("./lib/apiKeyCrypto").decrypt, function (client) {
+    return mm.postStatus(client, text, draft.id);
+  });
+  await recordMastodonSession(ownerId, label, outcome);
+
+  var posted = outcome.ok ? (outcome.value || {}) : null;
+  var url = posted && typeof posted.url === "string" && posted.url ? posted.url : null;
+  if (!url) {
+    var why = outcome.ok ? "Mastodon answered without a post address, so whether the post went out cannot be confirmed." : mastodonFailureText(outcome, label);
+    var marked = await supabase
+      .from("social_post_drafts")
+      .update({ status: "publish_failed", publish_error: safeText(why, 1000), updated_at: nowIso() })
+      .eq("id", draft.id)
+      .eq("user_id", ownerId)
+      .eq("status", "pending_approval");
+    throw new Error("publish_mastodon_post: " + why + " The draft is marked publish_failed" +
+      (marked.error ? " — except that marking it failed too (" + (marked.error.message || marked.error) + ")" : "") +
+      ". Nothing is retried automatically");
+  }
+
+  var publishedAt = nowIso();
+  var recorded = await supabase
+    .from("social_post_drafts")
+    .update({
+      status:            "published",
+      platform_post_uri: url,
+      platform_post_cid: null,
+      published_at:      publishedAt,
+      publish_error:     null,
+      updated_at:        publishedAt
+    })
+    .eq("id", draft.id)
+    .eq("user_id", ownerId)
+    .eq("status", "pending_approval")
+    .select("id")
+    .maybeSingle();
+  if (recorded.error || !recorded.data) {
+    throw new Error("publish_mastodon_post: the post WAS published, at " + url + ", but the draft could not be marked published (" +
+      (recorded.error ? (recorded.error.message || recorded.error) : "it was no longer pending_approval") + "). Do not post it again");
+  }
+  return { id: posted.id, url: url, published_at: publishedAt, draft_id: draft.id };
 }
 
 // ── SEO Agent: Social Search ────────────────────────────────────────────────
@@ -37525,7 +38197,7 @@ var TOOL_INPUT_SPECS = {
   ],
   "social/post": [
     toolField("idea", "string", true, "What the post is about, up to 1000 characters."),
-    toolField("platform", "string", true, "Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky); anything else is a 400.")
+    toolField("platform", "string", true, "Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky, mastodon); anything else is a 400.")
   ],
   "social/calendar": [
     toolField("goal", "string", true, "What the plan is for, up to 500 characters."),

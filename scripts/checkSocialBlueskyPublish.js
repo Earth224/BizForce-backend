@@ -586,8 +586,10 @@ async function filed(seedTables, opts, taskId) {
   check("social/propose-post is in CHAIN_NON_DISPATCHABLE_TOOLS", nonDispatch && /"social\/propose-post"/.test(nonDispatch[1]), nonDispatch && nonDispatch[1]);
   check("TOOL_INPUT_SPECS has social/propose-post with one required task_id",
     /"social\/propose-post": \[\n    toolField\("task_id", "string", true,[^\n]*\n  \]/.test(DISK));
-  check("the social/post platform description names all five platforms",
-    DISK.indexOf("Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky); anything else is a 400.") !== -1);
+  // NAMED (Nov 3 2026, Connect Mastodon): BEFORE "names all five platforms" (x, instagram, linkedin, tiktok, bluesky);
+  // AFTER all six, mastodon added to SOCIAL_PLATFORMS.
+  check("the social/post platform description names all six platforms",
+    DISK.indexOf("Must be a key of SOCIAL_PLATFORMS (x, instagram, linkedin, tiktok, bluesky, mastodon); anything else is a 400.") !== -1);
   check("the outreach sender's gate call is still the only one written that way (checkBskyGate's anchor)",
     DISK.split("    var posted = await bskyGate.call(function (agent) { return agent.post(postRecord); });").length === 2);
   check("/health reports icu.graphemes_counted", /graphemes_counted: graphemesCounted\(\)/.test(DISK));

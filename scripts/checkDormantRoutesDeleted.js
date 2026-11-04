@@ -230,7 +230,15 @@ const ADDED = [
   // stored, a reply drafted by the model, and the draft filed for approval (checkBlueskyMentions R, D, F)
   ["get", "/api/social/bluesky/mentions"],                 // one listNotifications call, mentions, replies and quotes only; 12 an hour, 60 a day (399 -> 400)
   ["post", "/api/social/bluesky/mentions/draft-reply"],    // one reply drafted from the post's text only; 10 an hour, 30 a day (400 -> 401)
-  ["post", "/api/social/bluesky/mentions/propose-reply"]   // the drafted reply filed for approval, never run automatically (401 -> 402)
+  ["post", "/api/social/bluesky/mentions/propose-reply"],  // the drafted reply filed for approval, never run automatically (401 -> 402)
+  // NAMED (Nov 3 2026, Connect Mastodon, migration 165): BEFORE 402 routes; AFTER 408, a member's own Mastodon account
+  // connected with a personal access token, every request through guardedFetch's JSON mode (checkMastodonConnect)
+  ["post", "/api/social/mastodon/connect"],        // the server and token, verified by two reads; 5 an hour (402 -> 403)
+  ["get", "/api/social/mastodon/status"],          // { connected, account, status, since, max_characters } (403 -> 404)
+  ["post", "/api/social/mastodon/disconnect"],     // deletes the connection, always open (404 -> 405)
+  ["get", "/api/social/mastodon/automation"],      // "Post approved drafts automatically" and its log (405 -> 406)
+  ["put", "/api/social/mastodon/automation"],      // on needs a subscription and a connection; off never does (406 -> 407)
+  ["post", "/api/social/mastodon/propose-post"]    // a drafted Mastodon post filed for approval (407 -> 408)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

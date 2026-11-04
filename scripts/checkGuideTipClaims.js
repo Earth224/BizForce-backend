@@ -762,6 +762,9 @@ const REFRESH_FN = (/function refreshPage\(\) \{([\s\S]*?)\n    \}/.exec(FILES[S
                              (proof: the Social page carries the Connect Bluesky card and POST /api/social/bluesky/connect exists)
      A 5 social 134         "Posts cannot be scheduled and social accounts cannot be connected at present" → "Only Bluesky connects so far, and posts cannot be scheduled"
                              (proof gains the card's line that the other platforms are coming, and the connect route)
+     NAMED (Nov 3 2026, members connect their own Mastodon):
+     A 5 social 134         "Only Bluesky connects so far, and posts cannot be scheduled" → "Bluesky and Mastodon connect so far, and posts cannot be scheduled"
+                             (proof gains mastodonConnects(): the Connect Mastodon card, its script and POST /api/social/mastodon/connect)
      A G seo 113            "and the Page Audit tool"                            → 'Pick "Keyword Research" or "Local SEO Plan"'
      A G operations 209     "SOP Documents and Efficiency Audits are shaped"     → 'Open "Standard Operating Procedure"' (proof gains that tool label)
      A G operations 212     "Revisit your SOP Documents periodically"            → 'Run "Efficiency Audit" to find the bottleneck'
@@ -871,8 +874,8 @@ const A = [
       offers(CONTENT, "Social Media Drafts") && /<h2 class="ap-section-label">Approval Queue<\/h2>/.test(FILES[AP]) && /status:\s*"not_published"/.test(FILES[SERVER])],
   ["5 content 128", conTips, "to post on Bluesky from your own account, use the Social Agent page",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
     () => socialShut() && blueskyConnects() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
-  ["5 social 134", socTips, "Only Bluesky connects so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
-    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() &&
+  ["5 social 134", socTips, "Bluesky and Mastodon connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
+    () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() && mastodonConnects() &&
       /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn, TikTok and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
   // guard catches outside the list
   ["G seo 113", seoTips, 'Pick "Keyword Research" or "Local SEO Plan"', /SEO Audit|Competitor Analysis/,
@@ -929,6 +932,11 @@ check("A. 5 content.html #connectIntro: one honest line, and no Connect control 
 function blueskyConnects() {
   return /<section class="context-card bsky-card" id="bskyConnect"/.test(FILES[SOCIAL]) && /<script src="\/scripts\/bluesky-connect\.js"><\/script>/.test(FILES[SOCIAL]) &&
     FILES[SERVER].indexOf('app.post("/api/social/bluesky/connect", requireAuth, requireActiveSubscription, blueskyConnectLimiter,') !== -1;
+}
+// A member connects their own Mastodon on the Social Agent page (backend migration 165, lib/memberMastodon.js).
+function mastodonConnects() {
+  return /<section class="context-card bsky-card" id="mastoConnect"/.test(FILES[SOCIAL]) && /<script src="\/scripts\/mastodon-connect\.js"><\/script>/.test(FILES[SOCIAL]) &&
+    FILES[SERVER].indexOf('app.post("/api/social/mastodon/connect", requireAuth, requireActiveSubscription, mastodonConnectLimiter,') !== -1;
 }
 // Social publishing, listing and connecting are shut for good: no Zernio host, no Zernio key read (launch audit #22c).
 function socialShut() { return FILES[SERVER].indexOf("zernio.com") === -1 && !/process\.env\.ZERNIO_/.test(FILES[SERVER]); }

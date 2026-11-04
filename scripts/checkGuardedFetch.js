@@ -46,6 +46,13 @@
         carries its chain, every hop in order with its status; a reached 404
         is returned, with or without the option, exactly as before, while a
         blocked address is thrown.
+    13. THE JSON MODE (guardedJsonRequest, NAMED Nov 3 2026 for Connect
+        Mastodon). https on 443 only; every blocked literal and name refused
+        before connecting; one resolution against rebinding; GET or POST only;
+        no redirect followed; 1 MB of body after decompression; a 2xx must be
+        JSON; a non-2xx is returned with its json; only three answer headers
+        come back; the Authorization value is in no error, detail, log line or
+        public message; the same 10 s limit; the HTML mode unchanged.
 
    No request leaves the machine. Names resolve through a stub; sockets land on
    a local server through a stub dial that asks the fetcher's OWN lookup where
@@ -101,7 +108,16 @@ const MUTATIONS = {
   "accept-ignored":   [["            if (accepted.indexOf(contentType) === -1) {", "            if (!isHtml) {"]],
   "accept-anything":  [["            if (accepted.indexOf(contentType) === -1) {", "            if (false) {"]],
   "title-non-html":   [["  if (!isHtml) return null;\n", ""]],
-  "chain-drop-hop":   [["          chain.push({ url: urlString, status: status });", "          if (hopNumber !== 1) chain.push({ url: urlString, status: status });"]]
+  "chain-drop-hop":   [["          chain.push({ url: urlString, status: status });", "          if (hopNumber !== 1) chain.push({ url: urlString, status: status });"]],
+  // NAMED (Nov 3 2026, Connect Mastodon): the JSON mode, guardedJsonRequest (section 13)
+  "json-redirect-followed": [["          if (json && status >= 300 && status < 400) {", "          if (false) {"]],
+  "json-http-allowed":      [["        if (json && !target.isHttps) {", "        if (false) {"]],
+  "json-port-allowed":      [["        if (json && target.port !== 443) {", "        if (false) {"]],
+  "json-size-unbounded":    [["          if (json && isFinite(declared) && declared > json.limit) {", "          if (false) {"],
+                             ["            if (json && bytes > json.limit) {", "            if (false) {"]],
+  "json-dns-unchecked":     [["          lookup: guardedLookup,", "          lookup: json ? function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); } : guardedLookup,"]],
+  "json-auth-logged":       [["        req.on(\"error\", fail);", "        req.on(\"error\", function (e) { fail(new GuardedFetchError(\"network\", (e && e.code) + \" sending \" + JSON.stringify(requestOptions.headers))); });"]],
+  "json-method-unrestricted": [["    if (JSON_METHODS.indexOf(method) === -1) {", "    if (false) {"]]
 };
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
@@ -209,6 +225,37 @@ const ROUTES = {
 };
 const ROBOTS = "User-agent: *\nDisallow: /private/\nSitemap: https://public.test/sitemap.xml\n";
 const SITEMAP = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://public.test/</loc></url></urlset>\n";
+// for the JSON mode (section 13)
+const ONE_MB = 1024 * 1024;
+function sendJson(res, status, value, extraHeaders) {
+  res.writeHead(status, Object.assign({ "Content-Type": "application/json; charset=utf-8" }, extraHeaders || {}));
+  res.end(JSON.stringify(value));
+}
+Object.assign(ROUTES, {
+  "/j/ok":           function (req, res) { sendJson(res, 200, { id: "109", username: "alice" }); },
+  "/j/302":          function (req, res) { res.writeHead(302, { Location: "/j/ok" }); res.end(); },
+  "/j/301":          function (req, res) { res.writeHead(301, { Location: "https://public.test/j/ok" }); res.end(); },
+  "/j/307":          function (req, res) { res.writeHead(307, { Location: "/j/ok" }); res.end(); },
+  "/j/308":          function (req, res) { res.writeHead(308, { Location: "/j/ok" }); res.end(); },
+  "/j/300":          function (req, res) { res.writeHead(300, { "Content-Type": "application/json" }); res.end("{}"); },
+  "/j/big-declared": function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(2 * ONE_MB) }); res.write("{"); },
+  "/j/big-stream":   function (req, res) { res.writeHead(200, { "Content-Type": "application/json" }); pump(res, Buffer.from("\"" + "a".repeat(ONE_MB - 1) + "\"")); },
+  "/j/exact":        function (req, res) { res.writeHead(200, { "Content-Type": "application/json" }); pump(res, Buffer.from("\"" + "a".repeat(ONE_MB - 2) + "\"")); },
+  "/j/small":        function (req, res) { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ pad: "a".repeat(5000) })); },
+  "/j/bomb":         function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(Buffer.from("\"" + " ".repeat(8 * ONE_MB) + "\""))); },
+  "/j/gzip":         function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(JSON.stringify({ zipped: true }))); },
+  "/j/html":         function (req, res) { res.writeHead(200, { "Content-Type": "text/html" }); res.end(page("Not an API")); },
+  "/j/notjson":      function (req, res) { res.writeHead(200, { "Content-Type": "application/json" }); res.end("nope"); },
+  "/j/401":          function (req, res) { sendJson(res, 401, { error: "The access token is invalid" }); },
+  "/j/429":          function (req, res) { sendJson(res, 429, { error: "Too many requests" }, { "Retry-After": "120", "X-RateLimit-Reset": "2026-11-03T20:00:00.000Z", "X-RateLimit-Remaining": "0", "Set-Cookie": "s=1" }); },
+  "/j/500-html":     function (req, res) { res.writeHead(500, { "Content-Type": "text/html" }); res.end(page("Error")); },
+  "/j/hang":         function () { /* never answers */ },
+  "/j/echo":         function (req, res) {
+    const chunks = [];
+    req.on("data", function (c) { chunks.push(c); });
+    req.on("end", function () { sendJson(res, 200, { method: req.method, headers: req.headers, body: Buffer.concat(chunks).toString("utf8") }); });
+  }
+});
 for (let i = 1; i <= 6; i++) {
   ROUTES["/chain/" + i] = (function (n) { return function (req, res) { res.writeHead(302, { Location: n > 1 ? "/chain/" + (n - 1) : "/landing" }); res.end(); }; })(i);
 }
@@ -262,6 +309,40 @@ function dial(options) {
   } });
 }
 const fetchStub = lib.createGuardedFetch({ resolve: resolve, dial: dial });
+
+/* The JSON mode is https on 443 only, so its requests cannot land on the plain
+   local server through dial. `request` stands in for https.request instead: it
+   records the options it was handed and connects to the local server over
+   plain http, asking the fetcher's OWN lookup where to go first, exactly as
+   Node would. A guard that is removed lets a request through to the server. */
+let jsonSeen = [];
+function jsonRequest(options) {
+  jsonSeen.push({ protocol: options.protocol, port: options.port, method: options.method, path: options.path, agent: options.agent,
+    hostname: options.hostname, headers: Object.assign({}, options.headers) });
+  const host = String(options.hostname || "").replace(/^\[|\]$/g, "");
+  const port = host === "refused.test" ? closedPort : server.address().port;
+  const base = { host: "127.0.0.1", port: port, path: options.path, method: options.method, headers: options.headers, agent: false };
+  if (net.isIP(host)) {
+    dialed.push({ host: host, address: host });
+    return http.request(base);
+  }
+  return http.request(Object.assign(base, { host: host, lookup: function (h, o, cb) {
+    options.lookup(h, o, function (err, addresses) {
+      if (err) return cb(err);
+      dialed.push({ host: host, address: Array.isArray(addresses) ? addresses[0].address : addresses });
+      return o && o.all ? cb(null, [{ address: "127.0.0.1", family: 4 }]) : cb(null, "127.0.0.1", 4);
+    });
+  } }));
+}
+const jsonStub = lib.createGuardedFetch({ resolve: resolve, request: jsonRequest }).json;
+async function attemptJson(url, opts) {
+  const t0 = Date.now();
+  try {
+    return { ok: true, value: await jsonStub(url, opts), ms: Date.now() - t0 };
+  } catch (err) {
+    return { ok: false, err: err, ms: Date.now() - t0 };
+  }
+}
 
 async function attempt(url, fetcher, extra) {
   const t0 = Date.now();
@@ -657,6 +738,133 @@ async function sectionRoute() {
   }
 }
 
+/* ── 13. the JSON mode (guardedJsonRequest) ─────────────────────────────── */
+async function sectionJson() {
+  const FAKE_TOKEN = "checkOnlyBearerValue_" + "Q7xT2mN9pR4sV8wY1zA3";
+  const auth = { Authorization: "Bearer " + FAKE_TOKEN };
+  check("13. guardedJsonRequest is exported, built from the same createGuardedFetch, and JSON_MAX_BODY_BYTES is 1 MB",
+    typeof lib.guardedJsonRequest === "function" && typeof lib.createGuardedFetch().json === "function" && lib.JSON_MAX_BODY_BYTES === ONE_MB);
+
+  console.log("\n══ 13a. https on 443 only, every address guard held ══");
+  let before = hits["/j/ok"] || 0;
+  let a = await attemptJson("http://public.test/j/ok", { headers: auth });
+  check("http:// is refused before any request (invalid_url)", !a.ok && a.err.code === "invalid_url" && (hits["/j/ok"] || 0) === before, code(a));
+  a = await attemptJson("http://public.test:443/j/ok", { headers: auth });
+  check("http:// on port 443 is refused too: https, not just the port", !a.ok && a.err.code === "invalid_url" && (hits["/j/ok"] || 0) === before, code(a));
+  a = await attemptJson("https://public.test:80/j/ok", { headers: auth });
+  check("https on port 80 is refused before any request (invalid_url)", !a.ok && a.err.code === "invalid_url" && (hits["/j/ok"] || 0) === before, code(a));
+  a = await attemptJson("https://public.test:8443/j/ok");
+  check("https on port 8443 is refused (invalid_url)", !a.ok && a.err.code === "invalid_url", code(a));
+  a = await attemptJson("https://user:pw@public.test/j/ok");
+  check("credentials in the address are refused (invalid_url)", !a.ok && a.err.code === "invalid_url", code(a));
+  jsonSeen = [];
+  a = await attemptJson("https://public.test/j/ok", { headers: auth });
+  check("https://public.test/j/ok is read: status 200 and the parsed JSON",
+    a.ok && a.value.status === 200 && sameJson(a.value.json, { id: "109", username: "alice" }), code(a));
+  check("the request was a GET to port 443 over https:, with agent:false and the guarded lookup",
+    jsonSeen.length === 1 && jsonSeen[0].method === "GET" && jsonSeen[0].port === 443 && jsonSeen[0].protocol === "https:" && jsonSeen[0].agent === false,
+    JSON.stringify(jsonSeen.map(function (s) { return [s.method, s.port, s.protocol, s.agent]; })));
+  a = await attemptJson("https://public.test:443/j/ok");
+  check("an explicit :443 is allowed", a.ok && a.value.status === 200, code(a));
+  for (const lit of ["https://127.0.0.1/j/ok", "https://10.0.0.5/j/ok", "https://169.254.169.254/j/ok", "https://[::1]/j/ok", "https://[fd12:3456:789a::5]/j/ok", "https://2130706433/j/ok"]) {
+    before = hits["/j/ok"] || 0;
+    a = await attemptJson(lit, { headers: auth });
+    check(lit + " is refused as blocked, and nothing arrives", !a.ok && a.err.code === "blocked" && (hits["/j/ok"] || 0) === before, code(a));
+  }
+  for (const name of ["internal.test", "loop.test", "metadata.test", "railway.test", "mixed.test"]) {
+    before = hits["/j/ok"] || 0;
+    a = await attemptJson("https://" + name + "/j/ok", { headers: auth });
+    check("https://" + name + " resolves to a blocked address and is refused before connecting", !a.ok && a.err.code === "blocked" && (hits["/j/ok"] || 0) === before, code(a));
+  }
+  rebindCalls = 0; dialed = [];
+  a = await attemptJson("https://rebind.test/j/ok");
+  check("rebinding: one resolution, and the connection goes to the public address it checked",
+    a.ok && rebindCalls === 1 && dialed.length === 1 && dialed[0].address === PUBLIC_V4, code(a) + " calls " + rebindCalls + " " + JSON.stringify(dialed));
+
+  console.log("\n══ 13b. GET or POST only ══");
+  for (const m of ["DELETE", "PUT", "PATCH", "get", "HEAD"]) {
+    resolverCalls = {};
+    a = await attemptJson("https://public.test/j/echo", { method: m });
+    check("method " + m + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
+  }
+  a = await attemptJson("https://public.test/j/echo", { method: "GET", body: { status: "x" } });
+  check("a GET with a body is refused", !a.ok && a.err instanceof TypeError, code(a));
+  a = await attemptJson("https://public.test/j/echo", { method: "POST", headers: Object.assign({ "Idempotency-Key": "draft-1", Host: "evil.test", "Content-Length": "1" }, auth), body: { status: "Hello", visibility: "public" } });
+  const echoed = a.ok ? a.value.json : null;
+  check("a POST carries its JSON body, its Authorization and Idempotency-Key, as JSON",
+    !!echoed && echoed.method === "POST" && echoed.body === JSON.stringify({ status: "Hello", visibility: "public" }) &&
+    echoed.headers.authorization === "Bearer " + FAKE_TOKEN && echoed.headers["idempotency-key"] === "draft-1" && /^application\/json/.test(echoed.headers["content-type"]), code(a));
+  check("a caller cannot set Host or Content-Length", !!echoed && echoed.headers.host !== "evil.test" && Number(echoed.headers["content-length"]) === Buffer.byteLength(echoed.body), echoed && JSON.stringify([echoed.headers.host, echoed.headers["content-length"]]));
+
+  console.log("\n══ 13c. a redirect is never followed ══");
+  for (const p of ["/j/302", "/j/301", "/j/307", "/j/308", "/j/300"]) {
+    before = hits["/j/ok"] || 0;
+    a = await attemptJson("https://public.test" + p, { headers: auth });
+    check(p + " is refused as redirected, and its target is never asked", !a.ok && a.err.code === "redirected" && (hits["/j/ok"] || 0) === before, code(a));
+  }
+
+  console.log("\n══ 13d. 1 MB of body, after decompression ══");
+  a = await attemptJson("https://public.test/j/big-declared");
+  check("a declared 2 MB body is refused (too_large)", !a.ok && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/big-stream");
+  check("a streamed 1 MB + 1 body is refused (too_large)", !a.ok && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/exact");
+  check("exactly 1 MB is read and parsed", a.ok && typeof a.value.json === "string" && a.value.json.length === ONE_MB - 2, code(a));
+  a = await attemptJson("https://public.test/j/bomb");
+  check("a gzip body that expands to 8 MB is refused (too_large)", !a.ok && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/gzip");
+  check("gzip is decoded", a.ok && sameJson(a.value.json, { zipped: true }), code(a));
+  a = await attemptJson("https://public.test/j/small", { maxBytes: 1000 });
+  check("a smaller maxBytes is honoured", !a.ok && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/big-stream", { maxBytes: 50 * ONE_MB });
+  check("a larger maxBytes is capped at 1 MB", !a.ok && a.err.code === "too_large", code(a));
+
+  console.log("\n══ 13e. what an answer must be, and what comes back ══");
+  a = await attemptJson("https://public.test/j/html");
+  check("a 2xx that is text/html is refused (unaccepted_type)", !a.ok && a.err.code === "unaccepted_type", code(a));
+  a = await attemptJson("https://public.test/j/notjson");
+  check("a 2xx application/json body that does not parse is refused (not_json)", !a.ok && a.err.code === "not_json", code(a));
+  a = await attemptJson("https://public.test/j/401", { headers: auth });
+  check("a 401 is returned, not thrown, with its JSON", a.ok && a.value.status === 401 && sameJson(a.value.json, { error: "The access token is invalid" }), code(a));
+  a = await attemptJson("https://public.test/j/500-html");
+  check("a 500 that is HTML is returned with json null", a.ok && a.value.status === 500 && a.value.json === null, code(a));
+  a = await attemptJson("https://public.test/j/429");
+  check("the result holds only status, json and headers; headers only retry-after, x-ratelimit-reset and x-ratelimit-remaining",
+    a.ok && sameJson(Object.keys(a.value).sort(), ["headers", "json", "status"]) && a.value.status === 429 &&
+    sameJson(a.value.headers, { "retry-after": "120", "x-ratelimit-reset": "2026-11-03T20:00:00.000Z", "x-ratelimit-remaining": "0" }), a.ok ? JSON.stringify(a.value.headers) : code(a));
+
+  console.log("\n══ 13f. the token is never in an error, a detail or a log line ══");
+  const refusals = [
+    ["a blocked name", "https://internal.test/j/ok"],
+    ["a name that does not resolve", "https://nowhere.test/j/ok"],
+    ["a refused connection", "https://refused.test/j/ok"],
+    ["a redirect", "https://public.test/j/302"],
+    ["a body too large", "https://public.test/j/big-stream"],
+    ["an http address", "http://public.test/j/ok"]
+  ];
+  for (const [what, url] of refusals) {
+    a = await attemptJson(url, { method: "POST", headers: auth, body: { status: "x" } });
+    const e = a.err || {};
+    const everything = [String(e), e.message, e.detail, e.stack, lib.logLine(e), lib.publicMessage(e), JSON.stringify(e)].join(" | ");
+    check(what + ": refused, and the token appears nowhere in the error, logLine or publicMessage",
+      !a.ok && e.guardedFetch === true && everything.indexOf(FAKE_TOKEN) === -1 && everything.indexOf("Bearer") === -1, code(a));
+  }
+  for (const [what, url] of refusals.slice(0, 4)) {
+    a = await attemptJson(url, { headers: auth });
+    check(what + ": the caller is told UNREACHABLE_MESSAGE", !a.ok && lib.publicMessage(a.err) === lib.UNREACHABLE_MESSAGE, a.ok ? "fetched" : lib.publicMessage(a.err));
+  }
+
+  console.log("\n══ 13g. the same 10 s total limit (about 10 s) ══");
+  a = await withWatchdog(attemptJson("https://public.test/j/hang", { headers: auth }), 20000);
+  check("an API that never answers is cut off at about 10 s (timeout)", !a.ok && a.err.code === "timeout" && a.ms >= 9500 && a.ms < 15000, code(a) + " " + a.ms + " ms");
+
+  console.log("\n══ 13h. the HTML mode is unchanged by it ══");
+  a = await attempt("http://public.test/json");
+  check("the HTML mode still refuses a JSON answer (not_html)", !a.ok && a.err.code === "not_html", code(a));
+  a = await attempt("http://public.test/r/relative");
+  check("the HTML mode still follows a redirect", a.ok && a.value.status === 200 && a.value.redirects.length === 1, code(a));
+}
+
 (async function main() {
   await new Promise(function (r) { server.listen(0, "127.0.0.1", r); });
   const closed = net.createServer();
@@ -674,6 +882,7 @@ async function sectionRoute() {
   await sectionChallenge();
   await sectionLeak(silent);
   await sectionAccept();
+  await sectionJson();
   await sectionRoute();
 
   console.log(failures ? "\n" + failures + " FAILED" : "\nALL CHECKS PASSED");

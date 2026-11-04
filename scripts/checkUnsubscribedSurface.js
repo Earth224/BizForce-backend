@@ -211,7 +211,12 @@ const EXPECTED_GATED = [
   // approval need a subscription (requireActiveSubscription), because each reads Bluesky or calls the model for an
   // account that posts only with one. Approving the reply is G3-gated on the approve route like every Bluesky action
   // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS; checkBlueskyMentions R1-R3).
-  "get /api/social/bluesky/mentions", "post /api/social/bluesky/mentions/draft-reply", "post /api/social/bluesky/mentions/propose-reply"
+  "get /api/social/bluesky/mentions", "post /api/social/bluesky/mentions/draft-reply", "post /api/social/bluesky/mentions/propose-reply",
+  // NAMED (Nov 3 2026, Connect Mastodon, migration 165; gated 86 -> 88): BEFORE no member Mastodon connection. AFTER
+  // connecting a Mastodon account (5 an hour) and filing a drafted post for approval need a subscription
+  // (requireActiveSubscription); approving it is G3-gated on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS).
+  // The status, disconnect and automation routes stay login-only, as Bluesky's do (checkMastodonConnect C, S, A).
+  "post /api/social/mastodon/connect", "post /api/social/mastodon/propose-post"
 ];
 
 const EXPECTED_ADMIN = [
@@ -383,7 +388,12 @@ const EXPECTED_OWN = [
   // makes one Haiku call inside Guide mode's own daily allowance (30 subscribed, 5 not, counted from model_calls),
   // through enforceDailyModelCallLimit and the ledger, so an unsubscribed member is capped exactly as in Guide mode.
   // It reads only the caller's own rows and writes nothing else (checkTermaximusRecords C, D, F).
-  "post /api/guide/records"
+  "post /api/guide/records",
+  // NAMED (Nov 3 2026, Connect Mastodon, migration 165; effectful login-only 151 -> 153): BEFORE no member Mastodon
+  // connection. AFTER a member deletes their own connection row (member_mastodon_connections) and sets their own
+  // automation switch (logged in member_social_setting_changes, platform mastodon); both rows are theirs and served
+  // to no one else.
+  "post /api/social/mastodon/disconnect", "put /api/social/mastodon/automation"
 ];
 
 /* Unauthenticated routes that write. */
@@ -421,7 +431,10 @@ const EXPECTED_HANDLER_GATES = {
   "post /api/certifications/award":    'creditWithheld = "subscription_required"',
   // NAMED (Oct 28 2026, members connect their own Bluesky): BEFORE three. AFTER turning automatic posting ON needs a
   // subscription, checked in the handler; turning it off never does.
-  "put /api/social/bluesky/automation": 'refuseUnlessSubscribed(req, res, "turn on automatic Bluesky posting")'
+  "put /api/social/bluesky/automation": 'refuseUnlessSubscribed(req, res, "turn on automatic Bluesky posting")',
+  // NAMED (Nov 3 2026, Connect Mastodon): BEFORE four. AFTER turning automatic Mastodon posting ON needs a
+  // subscription, checked in the handler; turning it off never does.
+  "put /api/social/mastodon/automation": 'refuseUnlessSubscribed(req, res, "turn on automatic Mastodon posting")'
 };
 
 /* Unauthenticated GET routes that serve an account's public page, and must

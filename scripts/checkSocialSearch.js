@@ -399,9 +399,13 @@ const tagStr = (n) => "#t" + "abcdefghijklmnopqrstuvwxyz"[n % 26] + "x" + String
   });
   check("C. social/post unchanged: countHashtags and measureSocialPost byte-identical to " + PRE_CHANGE + " on " + FIXTURES.length + " fixtures × " +
     Object.keys(OLDP.SOCIAL_PLATFORMS).length + " platforms (social/post's, checkSocialBlueskyPublish's, an ASCII set)", diffs.length === 0, diffs.join(", "));
-  check("C. SOCIAL_PLATFORMS' numbers are unchanged from " + PRE_CHANGE + "; only Instagram's note differs",
+  /* NAMED (Connect Mastodon, Nov 3 2026): BEFORE the two key lists were compared whole. AFTER mastodon is added
+     (its numbers are checkMastodonConnect K5's), so the platforms of PRE_CHANGE are compared one by one, and the
+     new list must be exactly those plus mastodon. */
+  check("C. SOCIAL_PLATFORMS' numbers are unchanged from " + PRE_CHANGE + "; only Instagram's note differs, and mastodon is the one platform added",
     JSON.stringify(Object.keys(OLDP.SOCIAL_PLATFORMS).map(p => Object.assign({}, OLDP.SOCIAL_PLATFORMS[p], { note: null }))) ===
-    JSON.stringify(Object.keys(NEWP.SOCIAL_PLATFORMS).map(p => Object.assign({}, NEWP.SOCIAL_PLATFORMS[p], { note: null }))) &&
+    JSON.stringify(Object.keys(OLDP.SOCIAL_PLATFORMS).map(p => Object.assign({}, NEWP.SOCIAL_PLATFORMS[p], { note: null }))) &&
+    JSON.stringify(Object.keys(NEWP.SOCIAL_PLATFORMS)) === JSON.stringify(Object.keys(OLDP.SOCIAL_PLATFORMS).concat(["mastodon"])) &&
     Object.keys(OLDP.SOCIAL_PLATFORMS).filter(p => OLDP.SOCIAL_PLATFORMS[p].note !== NEWP.SOCIAL_PLATFORMS[p].note).join(",") === "instagram");
   check("C. Instagram's note keeps 2,200 and 125 and says 30 on older accounts and reported as 5 on newer ones",
     /2,200 characters is enforced/.test(NEWP.SOCIAL_PLATFORMS.instagram.note) && /125 characters/.test(NEWP.SOCIAL_PLATFORMS.instagram.note) &&
