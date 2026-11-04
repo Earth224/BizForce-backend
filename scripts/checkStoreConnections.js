@@ -28,8 +28,9 @@
      R. THE READERS. Stock & Margin (server.js measureStockAndMargin), the "Items at their reorder point"
         trigger (lib/triggerRunner.js) and the Store signature (lib/agentSignatures.js) all read synced stock,
         and the signature says where stock came from.
-     N. NO WRITE CALL to either platform anywhere: lib/storeSync.js holds no POST, PUT, PATCH or DELETE and
-        one fetch, with method "GET"; no other non-script file names a store's API host.
+     N. NO WRITE CALL to either platform anywhere: lib/storeSync.js holds no POST, PUT, PATCH or DELETE, no
+        fetch, http.request or https.request, and one request call, deps.jsonRequest, with method "GET"
+        (NAMED Nov 3 2026: it was one fetch); no other non-script file names a store's API host.
      L. THE PRIVACY SENTENCE is built into privacy.html; the Store page says "BizForce only reads your store."
         and has the steps for both platforms; the migration turns RLS on; no emoji in any new file.
 
@@ -42,6 +43,25 @@
      shopify-write-call        a function that deletes a Shopify product is added
      double-run                the daily tick runs without claiming the day
      woo-not-read-only         a WooCommerce key with read_write permission is accepted
+     NAMED (store connections security fix, Nov 3 2026), section G:
+     woo-plain-fetch           WooCommerce pages are read with a plain fetch, not the guarded fetcher
+     shopify-plain-fetch       Shopify products are read with a plain fetch
+     redirect-followed         a redirect the guarded fetcher refused is followed with a plain fetch
+     size-unbounded            the body limit asked for is raised past 8 MB
+     too-large-retried         a body over the limit is retried
+     guard-refusal-retried     a guard refusal (a blocked address, a refused option) is retried
+     paging-header-dropped     the link header is no longer exposed, so Shopify's next page is lost
+     shopify-page-size-reverted  Shopify pages go back to 250
+     woo-orders-fields-widened WooCommerce orders ask for whole line items again
+     page-cap-shrunk           Shopify's page caps fall back to 40
+
+   G. THE GUARDED FETCHER (NAMED Nov 3 2026). Every store request, Shopify and WooCommerce, is a deps.jsonRequest
+      call (lib/guardedFetch.js's guardedJsonRequest) with method GET, the three exposed headers, 8 MB and 20 s. A
+      name that answers a private or loopback address is refused by the fetcher's own lookup, once, never retried; a
+      3xx is refused and its target never asked; a page over 8 MB is too_large, asked once, recorded and logged as
+      too_large with no URL, and the member is told what an unreachable store tells them. Pages: Shopify 50 a page,
+      200 pages of products and of orders; everything else 40; WooCommerce orders ask only line_items.sku and
+      line_items.quantity. A network tripwire fails the run if anything opens a socket, asks real DNS or fetches.
 */
 "use strict";
 const fs = require("fs");
@@ -51,6 +71,8 @@ const crypto = require("crypto");
 const Module = require("module");
 const cp = require("child_process");
 const MUT = require("./_shared");
+const { EventEmitter } = require("events");
+const { PassThrough } = require("stream");
 
 const REPO = path.join(__dirname, "..");
 const FE = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
@@ -76,7 +98,31 @@ const MUTATIONS = {
   "double-run": ["sync",
     "    if (!(await claimStoreSyncDay(deps.supabase, startedMs))) {\n", "    if (false) {\n"],
   "woo-not-read-only": ["sync",
-    "  if (b.key_permissions !== \"read\") return", "  if (b.key_permissions !== \"read\" && b.key_permissions !== \"read_write\") return"]
+    "  if (b.key_permissions !== \"read\") return", "  if (b.key_permissions !== \"read\" && b.key_permissions !== \"read_write\") return"],
+  // NAMED (store connections security fix, Nov 3 2026): every store request through the guarded fetcher (section G)
+  "woo-plain-fetch": ["sync",
+    "    var got = await request(deps, wooUrl(storeUrl, path + (path.indexOf(\"?\") === -1 ? \"?\" : \"&\") + \"per_page=100&page=\" + page), wooHeaders(creds));\n",
+    "    var got = await (async function (u, h) { var r = await fetch(u, { method: \"GET\", headers: h, redirect: \"manual\" }); return { data: await r.json(), headers: r.headers }; })(wooUrl(storeUrl, path + (path.indexOf(\"?\") === -1 ? \"?\" : \"&\") + \"per_page=100&page=\" + page), wooHeaders(creds));\n"],
+  "shopify-plain-fetch": ["sync",
+    "    var got = await request(deps, url, shopifyHeaders(token));\n    ((got.data && got.data.products)",
+    "    var got = await (async function (u, h) { var r = await fetch(u, { method: \"GET\", headers: h, redirect: \"manual\" }); return { data: await r.json(), headers: r.headers }; })(url, shopifyHeaders(token));\n    ((got.data && got.data.products)"],
+  "redirect-followed": ["sync",
+    "      var guard = err && err.guardedFetch === true ? String(err.code) : null;\n",
+    "      var guard = err && err.guardedFetch === true ? String(err.code) : null;\n      if (guard === \"redirected\") { var f = await fetch(url, { method: \"GET\", headers: headers, redirect: \"follow\" }); return { data: await f.json(), headers: headerReader({}) }; }\n"],
+  "size-unbounded": ["sync",
+    "var REQUEST_MAX_BODY_BYTES = 8 * 1024 * 1024;", "var REQUEST_MAX_BODY_BYTES = 64 * 1024 * 1024;"],
+  "too-large-retried": ["sync",
+    "var GUARD_RETRIED = [\"network\", \"timeout\"];", "var GUARD_RETRIED = [\"network\", \"timeout\", \"too_large\"];"],
+  "guard-refusal-retried": ["sync",
+    "      if (guard === null || GUARD_RETRIED.indexOf(guard) === -1) {\n", "      if (guard !== null && GUARD_RETRIED.indexOf(guard) === -1 && guard !== \"blocked\") {\n"],
+  "paging-header-dropped": ["sync",
+    "var REQUEST_EXPOSED_HEADERS = [\"retry-after\", \"link\", \"x-wp-totalpages\"];", "var REQUEST_EXPOSED_HEADERS = [\"retry-after\", \"x-wp-totalpages\"];"],
+  "shopify-page-size-reverted": ["sync",
+    "var SHOPIFY_PAGE_SIZE = 50;", "var SHOPIFY_PAGE_SIZE = 250;"],
+  "woo-orders-fields-widened": ["sync",
+    "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items.sku,line_items.quantity\";", "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items\";"],
+  "page-cap-shrunk": ["sync",
+    "var PAGE_CAPS = { shopifyProducts: 200, shopifyOrders: 200, other: 40 };", "var PAGE_CAPS = { shopifyProducts: 40, shopifyOrders: 40, other: 40 };"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -275,16 +321,30 @@ function makeDb() {
 }
 
 /* ── the stores, stubbed ────────────────────────────────────────────────── */
+/* NAMED (store connections security fix, Nov 3 2026): BEFORE the stores were a stand-in for fetch, handed to
+   lib/storeSync.js as deps.fetch (and to the routes as the global fetch), with deps.lookup for the WooCommerce
+   host check. AFTER every request goes through deps.jsonRequest, and deps.jsonRequest here is the REAL guarded
+   fetcher (GF.createGuardedFetch) with only its two edges stood in: `resolve` (the DNS answer, public unless a
+   test says otherwise) and `request` (https.request; it asks the fetcher's OWN lookup where to connect, exactly
+   as Node does, and only a request that lookup allowed reaches the store's answer and is counted in calls). So
+   the address check, the redirect refusal, the size limit and the exposed headers are the real ones. No socket
+   is opened: the network tripwire below fails the run if anything tries. */
 function headers(obj) {
   const h = {}; Object.keys(obj || {}).forEach(function (k) { h[k.toLowerCase()] = String(obj[k]); });
   return { get: function (k) { return Object.prototype.hasOwnProperty.call(h, k.toLowerCase()) ? h[k.toLowerCase()] : null; } };
 }
 function reply(status, body, hdrs) {
-  return { status: status, headers: headers(hdrs), json: function () { return Promise.resolve(body); } };
+  const h = { "content-type": "application/json; charset=utf-8" };
+  Object.keys(hdrs || {}).forEach(function (k) { h[k.toLowerCase()] = String(hdrs[k]); });
+  return { status: status, headers: h, raw: Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body), "utf8") };
 }
+const PUBLIC_V4 = "93.184.216.34";
+const OVER_8MB = function () { return Buffer.from("\"" + "a".repeat(8 * 1024 * 1024) + "\"", "utf8"); };
 function makeStores(opts) {
   const o = Object.assign({ scopes: ["read_products", "read_inventory", "read_orders"], verifyStatus: 200, productsStatus: 200, first429: false, wooStatus: 200 }, opts || {});
-  const calls = [];
+  const calls = [];       // requests the guarded fetcher let through to a store
+  const asked = [];       // every deps.jsonRequest call: the url and the options storeSync passed
+  const resolved = {};    // DNS questions, by name
   let sent429 = false;
   const orderBase = {
     email: CUSTOMER.email, phone: CUSTOMER.phone, contact_email: CUSTOMER.email,
@@ -292,67 +352,136 @@ function makeStores(opts) {
     billing_address: { name: CUSTOMER.first + " " + CUSTOMER.last, address1: CUSTOMER.street, phone: CUSTOMER.phone },
     shipping_address: { name: CUSTOMER.first + " " + CUSTOMER.last, address1: CUSTOMER.street }
   };
-  function fetchStub(url, init) {
-    calls.push({ url: url, method: (init && init.method) || "GET", headers: (init && init.headers) || {}, redirect: init && init.redirect });
+  function answer(url, init) {
+    calls.push({ url: url, method: (init && init.method) || "GET", headers: (init && init.headers) || {} });
     const u = new URL(url);
+    if (o.networkDown) return { error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) };
     if (u.hostname === SHOP) {
       if (u.pathname === "/admin/oauth/access_scopes.json") {
-        if (o.verifyStatus !== 200) return Promise.resolve(reply(o.verifyStatus, { errors: "Invalid API key or access token" }));
-        return Promise.resolve(reply(200, { access_scopes: o.scopes.map(function (h) { return { handle: h }; }) }));
+        if (o.verifyStatus !== 200) return reply(o.verifyStatus, { errors: "Invalid API key or access token" });
+        if (o.verifyHuge) return reply(200, OVER_8MB());
+        return reply(200, { access_scopes: o.scopes.map(function (h) { return { handle: h }; }) });
       }
       if (/\/products\.json$/.test(u.pathname)) {
-        if (o.productsStatus !== 200) return Promise.resolve(reply(o.productsStatus, { errors: "[API] Invalid API key or access token" }));
-        if (o.first429 && !sent429) { sent429 = true; return Promise.resolve(reply(429, { errors: "Exceeded 2 calls per second" }, { "Retry-After": "2" })); }
-        if (u.searchParams.get("page_info") === "p2") {
-          return Promise.resolve(reply(200, { products: [{ id: 2, title: "Scarf", variants: [
-            { id: 21, title: "Default Title", sku: "SCARF", price: "18.00", inventory_quantity: 0, inventory_management: "shopify", inventory_item_id: 9021 },
-            { id: 22, title: "Gift wrap", sku: "WRAP", price: "2.00", inventory_quantity: 0, inventory_management: null, inventory_item_id: 9022 }] }] }));
+        if (o.productsStatus !== 200) return reply(o.productsStatus, { errors: "[API] Invalid API key or access token" });
+        if (o.first429 && !sent429) { sent429 = true; return reply(429, { errors: "Exceeded 2 calls per second" }, { "Retry-After": "2" }); }
+        if (o.productsHuge) return reply(200, OVER_8MB());
+        if (o.endless) {
+          const n = Number(u.searchParams.get("page_info") || "0");
+          return reply(200, { products: [{ id: 1000 + n, title: "P" + n, variants: [{ id: 5000 + n, title: "Default Title", sku: "", price: "1.00", inventory_quantity: 1, inventory_management: null, inventory_item_id: null }] }] },
+            { Link: "<https://" + SHOP + "/admin/api/2026-07/products.json?limit=50&page_info=" + (n + 1) + ">; rel=\"next\"" });
         }
-        return Promise.resolve(reply(200, { products: [{ id: 1, title: "Wool Hat", variants: [
+        if (u.searchParams.get("page_info") === "p2") {
+          return reply(200, { products: [{ id: 2, title: "Scarf", variants: [
+            { id: 21, title: "Default Title", sku: "SCARF", price: "18.00", inventory_quantity: 0, inventory_management: "shopify", inventory_item_id: 9021 },
+            { id: 22, title: "Gift wrap", sku: "WRAP", price: "2.00", inventory_quantity: 0, inventory_management: null, inventory_item_id: 9022 }] }] });
+        }
+        return reply(200, { products: [{ id: 1, title: "Wool Hat", variants: [
           { id: 11, title: "Red", sku: "HAT-RED", price: "25.00", inventory_quantity: 4, inventory_management: "shopify", inventory_item_id: 9011 },
           { id: 12, title: "Blue", sku: "manual-1", price: "25.00", inventory_quantity: 7, inventory_management: "shopify", inventory_item_id: 9012 }] }] },
-          { Link: "<https://" + SHOP + "/admin/api/2026-07/products.json?limit=250&page_info=p2>; rel=\"next\"" }));
+          { Link: "<https://" + SHOP + "/admin/api/2026-07/products.json?limit=50&page_info=p2>; rel=\"next\"", "Set-Cookie": "_shopify_s=checkOnly" });
       }
       if (/\/inventory_items\.json$/.test(u.pathname)) {
-        return Promise.resolve(reply(200, { inventory_items: [{ id: 9011, cost: "10.00" }, { id: 9012, cost: "9.00" }, { id: 9021, cost: null }] }));
+        return reply(200, { inventory_items: [{ id: 9011, cost: "10.00" }, { id: 9012, cost: "9.00" }, { id: 9021, cost: null }] });
       }
       if (/\/orders\.json$/.test(u.pathname)) {
-        if (u.searchParams.get("page_info") === "o2") {
-          return Promise.resolve(reply(200, { orders: [Object.assign({ id: 5002, created_at: "2026-11-02T09:00:00Z", total_price: "18.00", currency: "USD",
-            line_items: [{ sku: "SCARF", quantity: 1, name: "Scarf", price: "18.00", vendor: "Demo" }] }, orderBase)] }));
+        if (o.endless) {
+          const n = Number(u.searchParams.get("page_info") || "0");
+          return reply(200, { orders: [{ id: 80000 + n, created_at: "2026-11-01T10:00:00Z", total_price: "1.00", currency: "USD", line_items: [] }] },
+            { Link: "<https://" + SHOP + "/admin/api/2026-07/orders.json?limit=50&page_info=" + (n + 1) + ">; rel=\"next\"" });
         }
-        return Promise.resolve(reply(200, { orders: [Object.assign({ id: 5001, created_at: "2026-11-01T10:00:00Z", total_price: "50.00", currency: "usd",
+        if (u.searchParams.get("page_info") === "o2") {
+          return reply(200, { orders: [Object.assign({ id: 5002, created_at: "2026-11-02T09:00:00Z", total_price: "18.00", currency: "USD",
+            line_items: [{ sku: "SCARF", quantity: 1, name: "Scarf", price: "18.00", vendor: "Demo" }] }, orderBase)] });
+        }
+        return reply(200, { orders: [Object.assign({ id: 5001, created_at: "2026-11-01T10:00:00Z", total_price: "50.00", currency: "usd",
           line_items: [{ sku: "HAT-RED", quantity: 2, name: "Wool Hat - Red", price: "25.00" }] }, orderBase)] },
-          { Link: "<https://" + SHOP + "/admin/api/2026-07/orders.json?limit=250&page_info=o2>; rel=\"next\"" }));
+          { Link: "<https://" + SHOP + "/admin/api/2026-07/orders.json?limit=50&page_info=o2>; rel=\"next\"" });
       }
     }
     if (u.origin === WOO) {
-      if (o.wooStatus !== 200) return Promise.resolve(reply(o.wooStatus, { code: "woocommerce_rest_cannot_view" }));
+      if (o.wooStatus !== 200) return reply(o.wooStatus, { code: "woocommerce_rest_cannot_view" });
+      if (o.wooRedirect) return { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" }, raw: Buffer.alloc(0) };
       const page = Number(u.searchParams.get("page") || 1);
-      if (u.pathname === "/wp-json/wc/v3/products" && u.searchParams.get("per_page") === "1") return Promise.resolve(reply(200, [{ id: 1 }]));
+      if (u.pathname === "/wp-json/wc/v3/products" && u.searchParams.get("per_page") === "1") return reply(200, [{ id: 1 }]);
       if (u.pathname === "/wp-json/wc/v3/products") {
+        if (o.wooEndless || o.wooOneFullPage) {
+          const list = [];
+          for (let i = 1; i <= 100; i++) list.push({ id: page * 1000 + i, name: "Row " + i, type: "simple", sku: "", price: "1.00", stock_quantity: null, manage_stock: false });
+          return reply(200, list, { "X-WP-TotalPages": o.wooEndless ? "999" : "1" });
+        }
         if (page === 1) {
           const list = [];
           for (let i = 1; i <= 99; i++) list.push({ id: 100 + i, name: "Mug " + i, type: "simple", sku: "MUG-" + i, price: "12.00", stock_quantity: i, manage_stock: true });
           list.push({ id: 300, name: "T-shirt", type: "variable", sku: "", price: "20.00", stock_quantity: null, manage_stock: false });
-          return Promise.resolve(reply(200, list, { "X-WP-TotalPages": "2" }));
+          return reply(200, list, { "X-WP-TotalPages": "2" });
         }
-        return Promise.resolve(reply(200, [{ id: 400, name: "Poster", type: "simple", sku: "POSTER", price: "", stock_quantity: null, manage_stock: false }], { "X-WP-TotalPages": "2" }));
+        return reply(200, [{ id: 400, name: "Poster", type: "simple", sku: "POSTER", price: "", stock_quantity: null, manage_stock: false }], { "X-WP-TotalPages": "2" });
       }
       if (u.pathname === "/wp-json/wc/v3/products/300/variations") {
-        return Promise.resolve(reply(200, [{ id: 301, sku: "TEE-M", price: "20.00", stock_quantity: 3, manage_stock: true, attributes: [{ name: "Size", option: "M" }] }], { "X-WP-TotalPages": "1" }));
+        return reply(200, [{ id: 301, sku: "TEE-M", price: "20.00", stock_quantity: 3, manage_stock: true, attributes: [{ name: "Size", option: "M" }] }], { "X-WP-TotalPages": "1" });
       }
       if (u.pathname === "/wp-json/wc/v3/orders") {
-        return Promise.resolve(reply(200, [{ id: 7001, date_created_gmt: "2026-11-01T08:00:00", total: "24.00", currency: "EUR", customer_id: 55,
+        if (o.wooOrdersHuge) return reply(200, OVER_8MB());
+        return reply(200, [{ id: 7001, date_created_gmt: "2026-11-01T08:00:00", total: "24.00", currency: "EUR", customer_id: 55,
           billing: { first_name: CUSTOMER.first, email: CUSTOMER.email, phone: CUSTOMER.phone, address_1: CUSTOMER.street },
           shipping: { first_name: CUSTOMER.first, address_1: CUSTOMER.street }, customer_note: "Leave at door",
-          line_items: [{ sku: "MUG-1", quantity: 2, name: "Mug 1", price: 12 }] }], { "X-WP-TotalPages": "1" }));
+          line_items: [{ sku: "MUG-1", quantity: 2, name: "Mug 1", price: 12 }] }], { "X-WP-TotalPages": "1" });
       }
     }
-    return Promise.resolve(reply(404, { error: "no stub for " + url }));
+    if (u.hostname === "169.254.169.254") return reply(200, { secret: "metadata" });
+    return reply(404, { error: "no stub for " + url });
   }
-  return { fetch: fetchStub, calls: calls };
+  // the DNS stand-in: o.addresses answers for every name, else a public address
+  function resolve(hostname, lookupOptions, cb) {
+    resolved[hostname] = (resolved[hostname] || 0) + 1;
+    const list = typeof o.addresses === "function" ? o.addresses(hostname) : o.addresses;
+    return cb(null, list || [{ address: PUBLIC_V4, family: 4 }]);
+  }
+  // the https.request stand-in: the fetcher's own lookup decides; only then does the store answer
+  function transport(options) {
+    const req = new EventEmitter();
+    req.destroy = function () {};
+    req.end = function () {
+      process.nextTick(function () {
+        options.lookup(options.hostname, { all: true }, function (err, addresses) {
+          if (err) return req.emit("error", err);
+          const url = "https://" + options.hostname + options.path;
+          const r = answer(url, { method: options.method, headers: options.headers, address: Array.isArray(addresses) ? addresses[0].address : addresses });
+          if (r.error) return req.emit("error", r.error);
+          const res = new PassThrough();
+          res.statusCode = r.status;
+          res.headers = r.headers;
+          req.emit("response", res);
+          res.end(r.raw);
+        });
+      });
+    };
+    return req;
+  }
+  const guarded = GF.createGuardedFetch({ resolve: resolve, request: transport }).json;
+  function jsonRequest(url, options) {
+    asked.push({ url: url, options: JSON.parse(JSON.stringify(options || {})) });
+    return guarded(url, options);
+  }
+  return { jsonRequest: jsonRequest, calls: calls, asked: asked, resolved: resolved };
 }
+
+/* THE NETWORK TRIPWIRE. Nothing in this run may open a socket, resolve a real name or call fetch: each is
+   replaced by a function that records the attempt and fails. The check "nothing reached the network" reads it. */
+const TRIPPED = [];
+(function tripwire() {
+  const http = require("http"), https = require("https"), net = require("net"), tls = require("tls"), dns = require("dns");
+  function wire(obj, name, label) {
+    obj[name] = function () { TRIPPED.push(label); throw new Error("checkStoreConnections: " + label + " is not allowed in this check"); };
+  }
+  wire(http, "request", "http.request"); wire(http, "get", "http.get");
+  wire(https, "request", "https.request"); wire(https, "get", "https.get");
+  wire(net, "connect", "net.connect"); wire(net, "createConnection", "net.createConnection");
+  wire(tls, "connect", "tls.connect");
+  wire(dns, "lookup", "dns.lookup"); wire(dns, "resolve", "dns.resolve"); wire(dns.promises, "lookup", "dns.promises.lookup");
+  globalThis.fetch = function () { TRIPPED.push("fetch"); return Promise.reject(new Error("checkStoreConnections: fetch is not allowed in this check")); };
+})();
 
 /* ── the routes, run from server.js's own source ─────────────────────────── */
 const START = "/* ── Store connections, read-only (migration 163, lib/storeSync.js) ──────────";
@@ -378,15 +507,15 @@ function mountRoutes(env) {
     isValidUuid: function (v) { return /^[0-9a-f-]{36}$/.test(String(v)); },
     getUserPlan: async function (uid) { return { active: (env.inactive || []).indexOf(uid) === -1 }; },
     FRONTEND_URL: "https://bizforceai.net",
-    fetch: stores.fetch,
-    AbortSignal: { timeout: function () { return undefined; } },
+    // NAMED (store connections security fix): BEFORE the routes' global fetch was the store stand-in. AFTER it is the
+    // tripwire's, and the stores are reached only through require("./lib/guardedFetch").guardedJsonRequest below.
+    fetch: globalThis.fetch,
     setTimeout: function (fn, ms) { sleeps.push(ms); fn(); return 0; },
     Promise: Promise, Buffer: Buffer, URL: URL, Date: Date, JSON: JSON, Object: Object, Array: Array, String: String, Number: Number, Math: Math,
     require: function (r) {
       if (r === "./lib/storeSync") return SS;
       if (r === "./lib/apiKeyCrypto") return { encrypt: function (p) { return CRYPT.encrypt(p); }, decrypt: function (x) { return CRYPT.decrypt(x); } };
-      if (r === "./lib/guardedFetch") return GF;
-      if (r === "dns") return { promises: { lookup: async function () { return env.lookup || [{ address: "93.184.216.34", family: 4 }]; } } };
+      if (r === "./lib/guardedFetch") return Object.assign({}, GF, { guardedJsonRequest: stores.jsonRequest });
       return realRequire(r);
     },
     app: {}
@@ -408,15 +537,19 @@ async function hit(m, key, req) {
   catch (e) { err = e; res.statusCode = 599; }
   return { status: res.statusCode, body: res.body || {}, err: err };
 }
+// What lib/storeSync.js must hand the guarded fetcher on every request, and nothing else.
+function optionsAsDecided(op) {
+  return !!op && J(Object.keys(op).sort()) === J(["exposeHeaders", "headers", "maxBytes", "method", "timeoutMs"]) && op.method === "GET" &&
+    J(op.exposeHeaders) === J(["retry-after", "link", "x-wp-totalpages"]) && op.maxBytes === 8 * 1024 * 1024 && op.timeoutMs === 20000;
+}
 function noSecretIn(text, secrets) { return secrets.every(function (s) { return String(text).indexOf(s) === -1; }); }
 
 /* lib-level deps for the sync and the tick */
 function libDeps(db, stores, extra) {
   const sleeps = [];
   return Object.assign({
-    supabase: db, env: {}, fetch: stores.fetch, now: function () { return Date.parse("2026-11-03T05:00:00.000Z"); },
+    supabase: db, env: {}, jsonRequest: stores.jsonRequest, now: function () { return Date.parse("2026-11-03T05:00:00.000Z"); },
     sleep: function (ms) { sleeps.push(ms); return Promise.resolve(); }, sleeps: sleeps,
-    lookup: async function () { return [{ address: "93.184.216.34", family: 4 }]; }, isBlockedAddress: GF.isBlockedAddress,
     encrypt: CRYPT.encrypt, decrypt: CRYPT.decrypt,
     userPlan: async function () { return { plan: { active: true }, error: null }; }
   }, extra || {});
@@ -508,7 +641,7 @@ function shopifyConn(db, userId) {
   const mr = mountRoutes({ stores: { wooStatus: 401 } });
   const rr401 = await hit(mr, "post /api/store/woocommerce/callback", { body: { user_id: state, key_permissions: "read", consumer_key: CK, consumer_secret: CS } });
   check("W6. a read key the store refuses: nothing stored", rr401.status === 400 && mr.db.t.member_store_connections.length === 0 && mr.stores.calls.length === 1);
-  const mp = mountRoutes({ lookup: [{ address: "10.0.0.5", family: 4 }] });
+  const mp = mountRoutes({ stores: { addresses: [{ address: "10.0.0.5", family: 4 }] } });
   const rpv = await hit(mp, "post /api/store/woocommerce/callback", { body: { user_id: state, key_permissions: "read", consumer_key: CK, consumer_secret: CS } });
   check("W7. a store that resolves to a private address: refused before any request, nothing stored", rpv.status === 400 && mp.stores.calls.length === 0 && mp.db.t.member_store_connections.length === 0);
   const rok = await hit(m, "post /api/store/woocommerce/callback", { body: { user_id: state, key_permissions: "read", consumer_key: CK, consumer_secret: CS } });
@@ -572,8 +705,14 @@ function shopifyConn(db, userId) {
   const hat2 = m.db.t.inventory_items.find(function (x) { return x.external_id === "variant:11"; }) || {};
   check("Y8. a second sync updates in place: no duplicate rows or orders, and the member's reorder point on a synced row stays",
     r.status === 200 && m.db.t.inventory_items.length === before && m.db.t.store_order_summaries.length === 2 && hat2.reorder_point === 6, J([r.status, m.db.t.inventory_items.length, before]));
-  check("Y9. every request to the store was a GET, never followed a redirect, and went only to the shop", m.stores.calls.length > 6 &&
-    m.stores.calls.every(function (c) { return c.method === "GET" && c.redirect === "manual" && new URL(c.url).hostname === SHOP; }), J(m.stores.calls.map(function (c) { return c.method; })));
+  /* NAMED (store connections security fix, Nov 3 2026): BEFORE "never followed a redirect" was read off each fetch
+     call's redirect: "manual". AFTER there is no fetch: each request is a deps.jsonRequest call (the guarded fetcher,
+     which never follows a redirect; G3 proves a 302 is refused and its target never asked), with exactly the options
+     decided, and one request reached the shop for each call. Still GET only, still the shop only. */
+  check("Y9. every request to the store was a GET through deps.jsonRequest with the decided options, and went only to the shop", m.stores.calls.length > 6 &&
+    m.stores.calls.every(function (c) { return c.method === "GET" && new URL(c.url).hostname === SHOP; }) &&
+    m.stores.asked.length === m.stores.calls.length && m.stores.asked.every(function (a) { return optionsAsDecided(a.options); }),
+    J([m.stores.calls.map(function (c) { return c.method; }), m.stores.asked.length, m.stores.calls.length]));
   check("Y10. the connection records the sync time, and no log line holds the token", !!(m.db.t.member_store_connections[0] || {}).last_sync_at && noSecretIn(m.logs.join("\n"), [TOKEN]));
 
   // WooCommerce through the lib
@@ -597,6 +736,153 @@ function shopifyConn(db, userId) {
   const sm = SS.summaryOf("shopify", { id: 1, created_at: "2026-11-01T00:00:00Z", total_price: "1.00", currency: "USD", email: "a@b.c", customer: { email: "a@b.c" }, line_items: [{ sku: "X", quantity: 1, name: "secret name" }] });
   check("Y14. summaryOf keeps exactly external_id, ordered_at, total, currency and line_items of SKU and quantity",
     J(Object.keys(sm).sort()) === J(SS.SUMMARY_KEYS.slice().sort()) && J(sm.line_items) === J([{ sku: "X", quantity: 1 }]) && J(sm).indexOf("a@b.c") === -1, J(sm));
+
+  /* ── G ── NAMED (store connections security fix, Nov 3 2026) */
+  console.log("\n══ G. every store request through the guarded fetcher: no rebinding gap, size-limited, never redirected ══");
+  const MB8 = 8 * 1024 * 1024;
+  check("G1. the decided limits: Shopify pages of 50, caps of 200 products pages, 200 orders pages and 40 for everything else; 8 MB (the guarded fetcher's ceiling); 20 s; three exposed headers",
+    J(SS.PAGE_CAPS) === J({ shopifyProducts: 200, shopifyOrders: 200, other: 40 }) && SS.SHOPIFY_PAGE_SIZE === 50 &&
+    SS.REQUEST_MAX_BODY_BYTES === MB8 && GF.JSON_MAX_BODY_BYTES_CEILING === MB8 && SS.REQUEST_TIMEOUT_MS === 20000 &&
+    J(SS.REQUEST_EXPOSED_HEADERS) === J(["retry-after", "link", "x-wp-totalpages"]) && !/\bMAX_PAGES\b/.test(FILES.sync),
+    J([SS.PAGE_CAPS, SS.SHOPIFY_PAGE_SIZE, SS.REQUEST_MAX_BODY_BYTES, SS.REQUEST_TIMEOUT_MS, SS.REQUEST_EXPOSED_HEADERS]));
+  const shopUrls = m.stores.calls.map(function (c) { return new URL(c.url); });
+  const firstOf = function (re) { return shopUrls.find(function (u) { return re.test(u.pathname) && !u.searchParams.get("page_info"); }); };
+  const pProducts = firstOf(/\/products\.json$/), pOrders = firstOf(/\/orders\.json$/), pInv = firstOf(/\/inventory_items\.json$/);
+  check("G2. Shopify asks for products and orders 50 a page, and inventory items 100 a call",
+    !!pProducts && pProducts.searchParams.get("limit") === "50" && !!pOrders && pOrders.searchParams.get("limit") === "50" &&
+    !!pInv && pInv.searchParams.get("limit") === "100", J([pProducts && pProducts.search, pOrders && pOrders.search, pInv && pInv.search]));
+  const wooUrls = wst.calls.map(function (c) { return new URL(c.url); });
+  const wOrders = wooUrls.filter(function (u) { return u.pathname === "/wp-json/wc/v3/orders"; });
+  const wPaged = wooUrls.filter(function (u) { return u.searchParams.get("per_page") !== "1"; });
+  const wFields = wOrders.length ? String(wOrders[0].searchParams.get("_fields")).split(",") : [];
+  check("G3. WooCommerce orders ask _fields=id,date_created_gmt,total,currency,line_items.sku,line_items.quantity: the line items' fields by name, never the whole line item",
+    wOrders.length === 1 && wOrders[0].searchParams.get("_fields") === "id,date_created_gmt,total,currency,line_items.sku,line_items.quantity" &&
+    SS.WOO_ORDER_FIELDS === wOrders[0].searchParams.get("_fields") &&
+    wFields.filter(function (f) { return /^line_items/.test(f); }).every(function (f) { return /^line_items\.[a-z_]+$/.test(f); }) && wFields.indexOf("line_items") === -1,
+    wOrders.length && wOrders[0].search);
+  check("G4. WooCommerce still pages 100 at a time, for products, variations and orders",
+    wPaged.length >= 4 && wPaged.every(function (u) { return u.searchParams.get("per_page") === "100"; }), J(wPaged.map(function (u) { return u.pathname + " " + u.searchParams.get("per_page"); })));
+  check("G5. every WooCommerce and Shopify request in the syncs above went through deps.jsonRequest, with exactly the decided options",
+    [m.stores, wst].every(function (s) { return s.asked.length > 0 && s.asked.length === s.calls.length && s.asked.every(function (a) { return optionsAsDecided(a.options); }); }),
+    J([m.stores.asked.length, m.stores.calls.length, wst.asked.length, wst.calls.length]));
+
+  async function wooSync(storeOpts) {
+    const db = makeDb(), st = makeStores(storeOpts);
+    const sealed = SS.sealCredentials({ consumer_key: CK, consumer_secret: CS }, CRYPT.encrypt);
+    const c = Object.assign({ id: uuid(), user_id: USER, platform: "woocommerce", store_url: WOO, status: "connected" }, sealed);
+    db.t.member_store_connections.push(c);
+    const deps = libDeps(db, st);
+    const lines = [];
+    const saved = [console.error, console.log];
+    console.error = function () { lines.push([].slice.call(arguments).join(" ")); };
+    console.log = function () { lines.push([].slice.call(arguments).join(" ")); };
+    let res;
+    try { res = await SS.syncConnection(deps, c); } finally { console.error = saved[0]; console.log = saved[1]; }
+    return { res: res, db: db, st: st, deps: deps, conn: db.t.member_store_connections[0] || {}, lines: lines };
+  }
+  async function shopSync(storeOpts) {
+    const db = makeDb(), st = makeStores(storeOpts);
+    const c = shopifyConn(db);
+    const deps = libDeps(db, st);
+    const lines = [];
+    const saved = [console.error, console.log];
+    console.error = function () { lines.push([].slice.call(arguments).join(" ")); };
+    console.log = function () { lines.push([].slice.call(arguments).join(" ")); };
+    let res;
+    try { res = await SS.syncConnection(deps, c); } finally { console.error = saved[0]; console.log = saved[1]; }
+    return { res: res, db: db, st: st, deps: deps, conn: db.t.member_store_connections[0] || {}, lines: lines };
+  }
+  const backoffs = function (deps) { return deps.sleeps.filter(function (ms) { return ms !== 500 && ms !== 0; }); };
+
+  for (const [label, addrs] of [["loopback 127.0.0.1", [{ address: "127.0.0.1", family: 4 }]], ["private 10.0.0.5", [{ address: "10.0.0.5", family: 4 }]],
+    ["loopback ::1", [{ address: "::1", family: 6 }]], ["a public address with a private one among them", [{ address: PUBLIC_V4, family: 4 }, { address: "192.168.1.9", family: 4 }]]]) {
+    const w = await wooSync({ addresses: addrs });
+    check("G6. WooCommerce: a store whose name answers " + label + " is refused by the guarded fetcher's own lookup: nothing reaches it, one question asked (no retry), recorded as blocked_address",
+      w.res.ok === false && w.res.code === "blocked_address" && w.st.calls.length === 0 && w.st.resolved["woo.example.com"] === 1 && w.st.asked.length === 1 &&
+      backoffs(w.deps).length === 0 && w.conn.last_error_code === "blocked_address", J([w.res, w.st.calls.length, w.st.resolved, w.deps.sleeps]));
+  }
+  const sLoop = await shopSync({ addresses: [{ address: "127.0.0.1", family: 4 }] });
+  check("G7. Shopify too: a shop whose name answers 127.0.0.1 is refused, nothing reaches it, one question asked (no retry), recorded as blocked_address",
+    sLoop.res.ok === false && sLoop.res.code === "blocked_address" && sLoop.st.calls.length === 0 && sLoop.st.resolved[SHOP] === 1 && backoffs(sLoop.deps).length === 0 &&
+    sLoop.conn.last_error_code === "blocked_address", J([sLoop.res, sLoop.st.resolved]));
+  const mLoop = mountRoutes({ stores: { addresses: [{ address: "::1", family: 6 }] } });
+  const rLoop = await hit(mLoop, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
+  check("G8. connecting a Shopify shop whose name answers ::1: refused as unreachable, nothing reaches it, nothing stored",
+    rLoop.status === 503 && rLoop.body.code === "store_unreachable" && rLoop.body.error === SS.MESSAGES.unreachable && mLoop.stores.calls.length === 0 &&
+    mLoop.db.t.member_store_connections.length === 0, J([rLoop.status, rLoop.body, mLoop.stores.calls.length]));
+
+  const wRed = await wooSync({ wooRedirect: true });
+  check("G9. a 302 from the store is refused as redirected and never followed: its target (169.254.169.254) is never asked, and it is not retried",
+    wRed.res.ok === false && wRed.res.code === "redirected" && wRed.st.calls.length === 1 && wRed.st.asked.length === 1 &&
+    !wRed.st.calls.some(function (c) { return /169\.254\./.test(c.url); }) && !wRed.st.resolved["169.254.169.254"] && TRIPPED.length === 0 &&
+    wRed.conn.last_error_code === "redirected", J([wRed.res, wRed.st.calls.map(function (c) { return c.url; }), TRIPPED]));
+
+  const wBig = await wooSync({ wooOrdersHuge: true });
+  const bigOrderCalls = wBig.st.calls.filter(function (c) { return /\/orders/.test(c.url); }).length;
+  const failLine = wBig.lines.filter(function (l) { return /^\[StoreSync\] /.test(l); });
+  check("G10. a WooCommerce page over 8 MB fails as too_large: asked ONCE (never retried), recorded on the connection as too_large",
+    wBig.res.ok === false && bigOrderCalls === 1 && wBig.conn.last_error_code === "too_large" && backoffs(wBig.deps).length === 0,
+    J([wBig.res, bigOrderCalls, wBig.conn.last_error_code, wBig.deps.sleeps]));
+  check("G11. ...the server log line says too_large, with no URL, no header and no key",
+    failLine.length === 1 && failLine[0] === "[StoreSync] woocommerce connection " + wBig.conn.id + " failed: too_large" &&
+    noSecretIn(wBig.lines.join("\n"), ["https://", "woo.example.com", "wp-json", "Basic", "Authorization", CK, CS]), J(wBig.lines));
+  const sBig = await shopSync({ productsHuge: true });
+  check("G12. a Shopify page over 8 MB: too_large the same way, asked once",
+    sBig.res.ok === false && sBig.st.calls.filter(function (c) { return /products\.json/.test(c.url); }).length === 1 && sBig.conn.last_error_code === "too_large" &&
+    noSecretIn(sBig.lines.join("\n"), ["https://", "admin/api", TOKEN]), J([sBig.res, sBig.conn.last_error_code]));
+
+  // the member's message: what an unreachable store tells them today, word for word
+  const mHuge = mountRoutes({ stores: { productsHuge: true } }), mDown = mountRoutes({ stores: { networkDown: true } });
+  const cHuge = shopifyConn(mHuge.db), cDown = shopifyConn(mDown.db);
+  const quiet = [console.error, console.log];
+  console.error = function () {}; console.log = function () {};
+  let rHuge, rDown;
+  try {
+    rHuge = await hit(mHuge, "post /api/store/connections/:id/sync", { params: { id: cHuge.id } });
+    rDown = await hit(mDown, "post /api/store/connections/:id/sync", { params: { id: cDown.id } });
+  } finally { console.error = quiet[0]; console.log = quiet[1]; }
+  check("G13. sync now on a store with an over-8 MB page tells the member exactly what an unreachable store tells them (502, the same message and code)",
+    rHuge.status === 502 && rDown.status === 502 && J(rHuge.body) === J(rDown.body) &&
+    rDown.body.error === "Your store could not be read just now (unreachable). Nothing was changed. Try again later." && rDown.body.code === "unreachable",
+    J([rHuge.status, rHuge.body, rDown.status, rDown.body]));
+  check("G14. ...and a network failure IS retried (4 attempts), while the over-8 MB page was asked once; each is recorded as itself",
+    mDown.stores.calls.length === SS.MAX_ATTEMPTS && mHuge.stores.calls.length === 1 &&
+    mHuge.db.t.member_store_connections[0].last_error_code === "too_large" && mDown.db.t.member_store_connections[0].last_error_code === "unreachable",
+    J([mDown.stores.calls.length, mHuge.stores.calls.length]));
+  const mvHuge = mountRoutes({ stores: { verifyHuge: true } }), mvDown = mountRoutes({ stores: { networkDown: true } });
+  console.error = function () {}; console.log = function () {};
+  let vHuge, vDown;
+  try {
+    vHuge = await hit(mvHuge, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
+    vDown = await hit(mvDown, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
+  } finally { console.error = quiet[0]; console.log = quiet[1]; }
+  check("G15. connecting, an over-8 MB answer is the unreachable answer too (503, the same body), asked once, nothing stored",
+    vHuge.status === 503 && J(vHuge.body) === J(vDown.body) && vHuge.body.error === SS.MESSAGES.unreachable && mvHuge.stores.calls.length === 1 &&
+    mvHuge.db.t.member_store_connections.length === 0, J([vHuge.status, vHuge.body, mvHuge.stores.calls.length]));
+
+  let typeRefusals = 0;
+  const refusingDeps = { sleep: async function () {}, jsonRequest: function () { typeRefusals++; return Promise.reject(new TypeError("guardedJsonRequest: maxBytes must be a whole number")); } };
+  let refusedCode = null;
+  try { await SS.request(refusingDeps, "https://" + SHOP + "/admin/oauth/access_scopes.json", {}); } catch (e) { refusedCode = e instanceof SS.StoreRequestError ? e.code : String(e); }
+  check("G16. a refusal by the guarded fetcher itself (a TypeError over its options) is never retried: one call, guard_refused",
+    typeRefusals === 1 && refusedCode === "guard_refused", J([typeRefusals, refusedCode]));
+
+  const wOne = await wooSync({ wooOneFullPage: true });
+  const pageTwo = wOne.st.calls.filter(function (c) { return /\/products\?/.test(c.url) && new URL(c.url).searchParams.get("page") === "2"; }).length;
+  check("G17. paging reads the exposed X-WP-TotalPages: a full page of 100 that says it is the only page is the last one asked",
+    wOne.res.ok === true && pageTwo === 0 && wOne.st.calls.some(function (c) { return /\/products\?/.test(c.url) && new URL(c.url).searchParams.get("page") === "1"; }),
+    J([wOne.res.ok, pageTwo]));
+  check("G18. ...and Y2's second Shopify page came from the exposed Link header (page_info=p2, the same shop)",
+    m.stores.calls.some(function (c) { return /\/products\.json\?limit=50&page_info=p2$/.test(c.url) && new URL(c.url).hostname === SHOP; }));
+
+  const sEnd = await shopSync({ endless: true });
+  const prodPages = sEnd.st.calls.filter(function (c) { return /products\.json/.test(c.url); }).length;
+  const ordPages = sEnd.st.calls.filter(function (c) { return /orders\.json/.test(c.url); }).length;
+  check("G19. a shop with no last page: 200 products pages and 200 orders pages are read, and no more",
+    sEnd.res.ok === true && prodPages === 200 && ordPages === 200, J([sEnd.res.ok, prodPages, ordPages]));
+  const wEnd = await wooSync({ wooEndless: true });
+  const wooProdPages = wEnd.st.calls.filter(function (c) { return /\/wp-json\/wc\/v3\/products\?/.test(c.url); }).length;
+  check("G20. a WooCommerce store with no last page: 40 products pages, and no more", wEnd.res.ok === true && wooProdPages === 40, J([wEnd.res.ok, wooProdPages]));
 
   /* ── A ── */
   console.log("\n══ A. an auth failure: needs_reconnect, one notice, no retry loop ══");
@@ -710,10 +996,21 @@ function shopifyConn(db, userId) {
   // and any method: that is not "GET", in any case.
   const writeWord = codeOnly.match(/\b(POST|PUT|PATCH|DELETE)\b/) || codeOnly.match(/method\s*:\s*["'`](?!GET["'`])[A-Za-z]+/i);
   check("N1. lib/storeSync.js holds no POST, PUT, PATCH or DELETE, and no method but GET", !writeWord, writeWord && writeWord[0]);
-  const fetchCalls = codeOnly.match(/\bfetch\(/g) || [];
-  check("N2. ...and exactly one fetch call, and it sends method \"GET\"", fetchCalls.length === 1 && /deps\.fetch\(url, \{ method: "GET", /.test(codeOnly), fetchCalls.length);
-  check("N3. the routes call no store themselves: the store section's only fetch is the GET-only wrapper handed to lib/storeSync.js",
-    (SECTION.match(/\bfetch\(/g) || []).length === 1 && /fetch: function \(url, init\) \{ return fetch\(url, init\); \}/.test(SECTION));
+  /* NAMED (store connections security fix, Nov 3 2026): BEFORE N2 was "exactly one fetch call, and it sends method
+     GET" (deps.fetch), and N3 "the store section's only fetch is the GET-only wrapper handed to lib/storeSync.js".
+     AFTER there is NO fetch, http.request or https.request in lib/storeSync.js, and no module that opens a socket
+     or resolves a name; its one request is deps.jsonRequest, sending method "GET". The store section has no fetch
+     at all, and the jsonRequest it hands lib/storeSync.js is lib/guardedFetch.js's guardedJsonRequest. */
+  const fetchCalls = codeOnly.match(/\bfetch\s*\(/g) || [];
+  const rawCalls = codeOnly.match(/\b(https?)\.(request|get)\s*\(|require\(["'](https?|net|tls|dns|undici|node:https?|node:net|node:dns)["']\)/g) || [];
+  const jsonCalls = codeOnly.match(/deps\.jsonRequest\(/g) || [];
+  check("N2. ...no fetch, http.request or https.request, nothing that opens a socket; exactly one request call, deps.jsonRequest, and it sends method \"GET\"",
+    fetchCalls.length === 0 && rawCalls.length === 0 && jsonCalls.length === 1 && /deps\.jsonRequest\(url, \{ method: "GET", headers: headers, /.test(codeOnly),
+    J([fetchCalls.length, rawCalls, jsonCalls.length]));
+  check("N3. the routes call no store themselves: the store section has no fetch, and hands lib/storeSync.js the guarded fetcher's guardedJsonRequest",
+    (SECTION.match(/\bfetch\s*\(/g) || []).length === 0 &&
+    /jsonRequest: function \(url, options\) \{ return require\("\.\/lib\/guardedFetch"\)\.guardedJsonRequest\(url, options\); \}/.test(SECTION) &&
+    !/\blookup:|isBlockedAddress|timeoutSignal/.test(MUT.definitionOf(FILES.server, "storeSyncDeps")));
   const files = cp.execFileSync("git", ["ls-files", "*.js"], { cwd: REPO }).toString().trim().split(/\r?\n/).filter(function (f) { return !/^scripts\//.test(f) && f !== "lib/storeSync.js"; });
   const named = files.filter(function (f) { return /myshopify\.com|\/wp-json\/wc\/|\/admin\/api\//.test(fs.readFileSync(path.join(REPO, f), "utf8")); });
   check("N4. no other non-script file names a store's API host or path", named.length === 0, named.join(", "));
@@ -755,6 +1052,7 @@ function shopifyConn(db, userId) {
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };
   check("L8. no emoji in any new or edited store file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }), Object.keys(fresh).filter(function (k) { return EMOJI.test(fresh[k]); }).join(", "));
 
+  check("nothing reached the network: no socket, no real DNS question and no fetch in this whole run (the tripwire)", TRIPPED.length === 0, TRIPPED.join(", "));
   check("no unhandled rejection", UNHANDLED.length === 0, UNHANDLED.map(String).join("; "));
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

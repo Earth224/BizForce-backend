@@ -53,6 +53,11 @@
         JSON; a non-2xx is returned with its json; only three answer headers
         come back; the Authorization value is in no error, detail, log line or
         public message; the same 10 s limit; the HTML mode unchanged.
+        13i (NAMED Nov 3 2026, store connections): exposeHeaders is at most
+        8 lowercase names and never set-cookie or authorization; maxBytes may
+        rise to 8 MB and no further (refused, never clamped), and a body over
+        it fails as too_large; timeoutMs runs from 1000 to 30000 and is the
+        limit used; every default is unchanged.
 
    No request leaves the machine. Names resolve through a stub; sockets land on
    a local server through a stub dial that asks the fetcher's OWN lookup where
@@ -96,8 +101,11 @@ const MUTATIONS = {
                        ["          lookup: guardedLookup,", "          lookup: hopNumber === 0 ? guardedLookup : function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); },"]],
   "redirect-limit":   [["            if (hopNumber >= MAX_REDIRECTS) {", "            if (false) {"]],
   "timeout":          [["      const timer = setTimeout(function () {\n", "      const timer = setTimeout(function () {\n        return;\n"]],
-  "size-declared":    [["          if (isFinite(declared) && declared > MAX_BODY_BYTES) {", "          if (false) {"]],
-  "size-stream":      [["            if (bytes > MAX_BODY_BYTES) {", "            if (false) {"]],
+  /* NAMED (Nov 3 2026, store connections): BEFORE these two anchors were "if (isFinite(declared) && declared >
+     MAX_BODY_BYTES) {" and "if (bytes > MAX_BODY_BYTES) {". AFTER both start "!json && ", because the JSON mode now
+     has its own limit of up to 8 MB; the mutations still remove the whole 3 MB HTML-mode check, as before. */
+  "size-declared":    [["          if (!json && isFinite(declared) && declared > MAX_BODY_BYTES) {", "          if (false) {"]],
+  "size-stream":      [["            if (!json && bytes > MAX_BODY_BYTES) {", "            if (false) {"]],
   "content-type":     [["          } else if (!isHtml) {", "          } else if (false) {"]],
   "challenge":        [["            if (challenge) return fail(", "            if (false) return fail("]],
   "leak-blocked":     [["    default:\n      return UNREACHABLE_MESSAGE;", "    case \"blocked\":\n      return \"That address is private.\";\n    default:\n      return UNREACHABLE_MESSAGE;"]],
@@ -117,7 +125,14 @@ const MUTATIONS = {
                              ["            if (json && bytes > json.limit) {", "            if (false) {"]],
   "json-dns-unchecked":     [["          lookup: guardedLookup,", "          lookup: json ? function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); } : guardedLookup,"]],
   "json-auth-logged":       [["        req.on(\"error\", fail);", "        req.on(\"error\", function (e) { fail(new GuardedFetchError(\"network\", (e && e.code) + \" sending \" + JSON.stringify(requestOptions.headers))); });"]],
-  "json-method-unrestricted": [["    if (JSON_METHODS.indexOf(method) === -1) {", "    if (false) {"]]
+  "json-method-unrestricted": [["    if (JSON_METHODS.indexOf(method) === -1) {", "    if (false) {"]],
+  // NAMED (Nov 3 2026, store connections): what a caller may raise in the JSON mode, and how far (section 13i)
+  "expose-set-cookie":      [["const JSON_UNEXPOSABLE_HEADERS = [\"set-cookie\", \"authorization\"];", "const JSON_UNEXPOSABLE_HEADERS = [\"authorization\"];"]],
+  "expose-unbounded":       [["    if (!Array.isArray(expose) || expose.length > JSON_MAX_EXPOSED_HEADERS) {", "    if (!Array.isArray(expose)) {"]],
+  "maxbytes-over-ceiling":  [["    if (typeof limit !== \"number\" || !Number.isInteger(limit) || limit < 1 || limit > JSON_MAX_BODY_BYTES_CEILING) {", "    if (typeof limit !== \"number\" || !Number.isInteger(limit) || limit < 1) {"]],
+  "timeout-unbounded":      [["timeoutMs < JSON_MIN_TIMEOUT_MS || timeoutMs > JSON_MAX_TIMEOUT_MS) {", "false) {"]],
+  "too-large-indistinct":   [["return fail(new GuardedFetchError(\"too_large\", \"more than \" + json.limit + \" bytes of JSON body\"));", "return fail(new GuardedFetchError(\"network\", \"more than \" + json.limit + \" bytes of JSON body\"));"],
+                             ["return fail(new GuardedFetchError(\"too_large\", \"declared \" + declared + \" bytes, over the JSON limit of \" + json.limit));", "return fail(new GuardedFetchError(\"network\", \"declared \" + declared + \" bytes, over the JSON limit of \" + json.limit));"]]
 };
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
@@ -250,6 +265,12 @@ Object.assign(ROUTES, {
   "/j/429":          function (req, res) { sendJson(res, 429, { error: "Too many requests" }, { "Retry-After": "120", "X-RateLimit-Reset": "2026-11-03T20:00:00.000Z", "X-RateLimit-Remaining": "0", "Set-Cookie": "s=1" }); },
   "/j/500-html":     function (req, res) { res.writeHead(500, { "Content-Type": "text/html" }); res.end(page("Error")); },
   "/j/hang":         function () { /* never answers */ },
+  // NAMED (Nov 3 2026, store connections): the options a caller may raise, up to their ceilings (section 13i)
+  // gzipped, so the decompressed size is what is counted and Windows loopback never carries megabytes (see pump)
+  "/j/five-mb":      function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(Buffer.from("\"" + "a".repeat(5 * ONE_MB) + "\""))); },
+  "/j/over-ceiling": function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(Buffer.from("\"" + "a".repeat(8 * ONE_MB - 1) + "\""))); },
+  "/j/declared-9mb": function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(9 * ONE_MB) }); res.write("{"); },
+  "/j/paged":        function (req, res) { sendJson(res, 200, [{ id: 1 }], { "Link": "<https://public.test/j/paged?page=2>; rel=\"next\"", "X-WP-TotalPages": "3", "Retry-After": "1", "Set-Cookie": "s=1", "X-Other": "x" }); },
   "/j/echo":         function (req, res) {
     const chunks = [];
     req.on("data", function (c) { chunks.push(c); });
@@ -816,8 +837,14 @@ async function sectionJson() {
   check("gzip is decoded", a.ok && sameJson(a.value.json, { zipped: true }), code(a));
   a = await attemptJson("https://public.test/j/small", { maxBytes: 1000 });
   check("a smaller maxBytes is honoured", !a.ok && a.err.code === "too_large", code(a));
+  /* NAMED (Nov 3 2026, store connections): BEFORE "a larger maxBytes is capped at 1 MB" (50 MB asked, the 1 MB + 1 body
+     refused as too_large). AFTER a maxBytes over the 8 MB ceiling is refused outright, before any lookup, and nothing is
+     read; up to 8 MB may be asked for (section 13i). Never looser: the 1 MB + 1 body is still not read. */
+  resolverCalls = {};
+  before = hits["/j/big-stream"] || 0;
   a = await attemptJson("https://public.test/j/big-stream", { maxBytes: 50 * ONE_MB });
-  check("a larger maxBytes is capped at 1 MB", !a.ok && a.err.code === "too_large", code(a));
+  check("a maxBytes over the 8 MB ceiling is refused before any lookup, never clamped, and nothing is read",
+    !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"] && (hits["/j/big-stream"] || 0) === before, code(a));
 
   console.log("\n══ 13e. what an answer must be, and what comes back ══");
   a = await attemptJson("https://public.test/j/html");
@@ -863,6 +890,71 @@ async function sectionJson() {
   check("the HTML mode still refuses a JSON answer (not_html)", !a.ok && a.err.code === "not_html", code(a));
   a = await attempt("http://public.test/r/relative");
   check("the HTML mode still follows a redirect", a.ok && a.value.status === 200 && a.value.redirects.length === 1, code(a));
+
+  await sectionJsonOptions(auth);
+}
+
+/* ── 13i. what a caller may raise, and how far (NAMED Nov 3 2026, store connections) ── */
+async function sectionJsonOptions(auth) {
+  console.log("\n══ 13i. exposeHeaders, maxBytes and timeoutMs: bounded, refused outside the bounds, never clamped ══");
+  check("13i. JSON_MAX_BODY_BYTES_CEILING is 8 MB, and timeoutMs runs from 1000 to 30000",
+    lib.JSON_MAX_BODY_BYTES_CEILING === 8 * ONE_MB && lib.JSON_MIN_TIMEOUT_MS === 1000 && lib.JSON_MAX_TIMEOUT_MS === 30000,
+    JSON.stringify([lib.JSON_MAX_BODY_BYTES_CEILING, lib.JSON_MIN_TIMEOUT_MS, lib.JSON_MAX_TIMEOUT_MS]));
+  async function refusedBeforeLookup(label, opts) {
+    resolverCalls = {};
+    const before = hits["/j/paged"] || 0;
+    const a = await attemptJson("https://public.test/j/paged", Object.assign({ headers: auth }, opts));
+    check(label + ": refused before any lookup (TypeError), nothing asked", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"] && (hits["/j/paged"] || 0) === before,
+      a.ok ? "fetched " + JSON.stringify(a.value.headers) : String(a.err && (a.err.code || a.err.message)));
+  }
+
+  // exposeHeaders
+  let a = await attemptJson("https://public.test/j/paged", { headers: auth });
+  check("by default only retry-after, x-ratelimit-reset and x-ratelimit-remaining can come back (here: retry-after)",
+    a.ok && sameJson(a.value.headers, { "retry-after": "1" }), a.ok ? JSON.stringify(a.value.headers) : code(a));
+  a = await attemptJson("https://public.test/j/paged", { headers: auth, exposeHeaders: ["retry-after", "link", "x-wp-totalpages"] });
+  check("exposeHeaders [retry-after, link, x-wp-totalpages] returns exactly those, and no other header",
+    a.ok && sameJson(a.value.headers, { "retry-after": "1", "link": "<https://public.test/j/paged?page=2>; rel=\"next\"", "x-wp-totalpages": "3" }),
+    a.ok ? JSON.stringify(a.value.headers) : code(a));
+  a = await attemptJson("https://public.test/j/paged", { headers: auth, exposeHeaders: ["link", "x-absent"] });
+  check("an exposed header the answer lacks is simply absent", a.ok && sameJson(a.value.headers, { "link": "<https://public.test/j/paged?page=2>; rel=\"next\"" }),
+    a.ok ? JSON.stringify(a.value.headers) : code(a));
+  const eight = ["a", "b", "c", "d", "e", "f", "g", "link"];
+  a = await attemptJson("https://public.test/j/paged", { headers: auth, exposeHeaders: eight });
+  check("8 names are allowed", a.ok && a.value.status === 200, code(a));
+  await refusedBeforeLookup("9 names", { exposeHeaders: eight.concat(["x-wp-totalpages"]) });
+  await refusedBeforeLookup("set-cookie", { exposeHeaders: ["link", "set-cookie"] });
+  await refusedBeforeLookup("authorization", { exposeHeaders: ["authorization"] });
+  await refusedBeforeLookup("a name with a capital (Link)", { exposeHeaders: ["Link"] });
+  await refusedBeforeLookup("a name with a space or colon", { exposeHeaders: ["x-a: b"] });
+  await refusedBeforeLookup("a 65-character name", { exposeHeaders: ["x".repeat(65)] });
+  await refusedBeforeLookup("an empty name", { exposeHeaders: [""] });
+  await refusedBeforeLookup("a list that is not a list", { exposeHeaders: "link" });
+
+  // maxBytes
+  a = await attemptJson("https://public.test/j/five-mb", { maxBytes: lib.JSON_MAX_BODY_BYTES_CEILING });
+  check("maxBytes 8 MB reads a 5 MB JSON body (the 3 MB HTML cap does not cut it)", a.ok && typeof a.value.json === "string" && a.value.json.length === 5 * ONE_MB, code(a));
+  a = await attemptJson("https://public.test/j/five-mb");
+  check("...and without maxBytes the same body is refused at 1 MB (the default is unchanged), as too_large", !a.ok && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/over-ceiling", { maxBytes: lib.JSON_MAX_BODY_BYTES_CEILING });
+  check("a streamed 8 MB + 1 body under maxBytes 8 MB fails with the code too_large, which a caller can tell apart",
+    !a.ok && a.err instanceof lib.GuardedFetchError && a.err.code === "too_large", code(a));
+  a = await attemptJson("https://public.test/j/declared-9mb", { maxBytes: lib.JSON_MAX_BODY_BYTES_CEILING });
+  check("a declared 9 MB body under maxBytes 8 MB fails with the code too_large", !a.ok && a.err.code === "too_large", code(a));
+  await refusedBeforeLookup("maxBytes 8 MB + 1", { maxBytes: lib.JSON_MAX_BODY_BYTES_CEILING + 1 });
+  await refusedBeforeLookup("maxBytes 0", { maxBytes: 0 });
+  await refusedBeforeLookup("maxBytes 1.5", { maxBytes: 1.5 });
+  await refusedBeforeLookup("maxBytes as a string", { maxBytes: "5000000" });
+
+  // timeoutMs
+  a = await attemptJson("https://public.test/j/paged", { headers: auth, timeoutMs: 30000 });
+  check("timeoutMs 30000 is allowed", a.ok && a.value.status === 200, code(a));
+  await refusedBeforeLookup("timeoutMs 30001", { timeoutMs: 30001 });
+  await refusedBeforeLookup("timeoutMs 999", { timeoutMs: 999 });
+  await refusedBeforeLookup("timeoutMs 60000", { timeoutMs: 60000 });
+  await refusedBeforeLookup("timeoutMs Infinity", { timeoutMs: Infinity });
+  a = await withWatchdog(attemptJson("https://public.test/j/hang", { headers: auth, timeoutMs: 1500 }), 8000);
+  check("timeoutMs 1500 cuts a hanging API off at about 1.5 s (timeout), not 10 s", !a.ok && a.err.code === "timeout" && a.ms >= 1300 && a.ms < 4000, code(a) + " " + a.ms + " ms");
 }
 
 (async function main() {

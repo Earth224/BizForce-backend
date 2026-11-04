@@ -13183,12 +13183,10 @@ function storeSyncDeps() {
   return {
     supabase: supabase,
     env: process.env,
-    fetch: function (url, init) { return fetch(url, init); },
+    // Every store request goes through the guarded fetcher: DNS checked and pinned, https on 443, no redirect, size- and time-limited.
+    jsonRequest: function (url, options) { return require("./lib/guardedFetch").guardedJsonRequest(url, options); },
     now: function () { return Date.now(); },
     sleep: function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); },
-    timeoutSignal: function (ms) { return AbortSignal.timeout(ms); },
-    lookup: function (host) { return require("dns").promises.lookup(host, { all: true, verbatim: true }); },
-    isBlockedAddress: require("./lib/guardedFetch").isBlockedAddress,
     encrypt: crypt.encrypt,
     decrypt: crypt.decrypt,
     userPlan: async function (userId) {
