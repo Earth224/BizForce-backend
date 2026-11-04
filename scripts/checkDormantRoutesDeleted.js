@@ -245,7 +245,15 @@ const ADDED = [
   ["put", "/api/crowdfunding/campaigns/:id/share"],          // share_on and discoverable, owner only, with a subscription (409 -> 410)
   ["post", "/api/crowdfunding/campaigns/:id/share/new-link"], // a new share_id; the old link stops working (410 -> 411)
   ["get", "/campaign/:shareId"],                             // the public page, served while shared and the owner's plan is active (411 -> 412)
-  ["get", "/api/sitemap/campaigns.xml"]                      // shared, discoverable, active campaigns whose owner's plan is active (412 -> 413)
+  ["get", "/api/sitemap/campaigns.xml"],                     // shared, discoverable, active campaigns whose owner's plan is active (412 -> 413)
+  // NAMED (Nov 4 2026, the Media Library, migration 167): BEFORE 413 routes; AFTER 419, a member's own images and short
+  // videos, byte-checked, location data removed, reusable, never deleted while in use (checkMediaLibrary)
+  ["post", "/api/media"],                                    // upload one file: sniffed, stripped, hashed, deduped, within 250 MB; with a subscription (413 -> 414)
+  ["get", "/api/media"],                                     // the member's own items, newest first, 60 a page (414 -> 415)
+  ["get", "/api/media/usage"],                               // bytes used, the cap and the count (415 -> 416)
+  ["patch", "/api/media/:id"],                               // the label and alt text, owner only (416 -> 417)
+  ["get", "/api/media/:id/uses"],                            // where the file is used, from the member's own rows (417 -> 418)
+  ["delete", "/api/media/:id"]                               // refused with 409 while in use; else the file, then the row (418 -> 419)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

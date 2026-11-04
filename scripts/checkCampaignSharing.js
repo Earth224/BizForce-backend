@@ -425,9 +425,11 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
     ALL[MIG].indexOf("Applied by the owner by hand in the Supabase SQL editor on Nov 4, 2026. This file is the text as run.") !== -1 && ALL[MIG].endsWith(SQL_AS_RUN) &&
     !/CREATE TABLE|DROP|UPDATE |DELETE /i.test(ALL[MIG].replace(/^--.*$/gm, "")));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and the highest (165 was the last before it)",
+  // NAMED (Nov 4 2026, the Media Library, migration 167): BEFORE "166 is the highest". AFTER 166 is still the only one
+  // numbered 166, and every migration but 167_member_media.sql is at most 166; "the highest" is checkMediaLibrary M2's.
+  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql is at most 166",
     migFiles.filter(f => /^166_/.test(f)).length === 1 && migFiles.indexOf("166_campaign_sharing.sql") !== -1 &&
-    migFiles.every(f => Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    migFiles.every(f => f === "167_member_media.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));

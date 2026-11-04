@@ -336,8 +336,10 @@ check("S7. on each, the tag sits on its own line before the legal footer's", tag
 check("S7. the legal pages do not load it", LEGAL.every(f => FILES[f] && !loadsGuide(f)), LEGAL.filter(f => !FILES[f] || loadsGuide(f)).join(", "));
 // NAMED (Oct 28 2026, member support): BEFORE 56 pages showed the guide and 57 loaded it. AFTER 57 and 58: the
 // support page (support.html, also served at /support/<username>) loads it and has its own entry.
-check("S7. the guide displays on 57 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html",
-  SHOWN.length === 57 && HTML_PAGES.filter(loadsGuide).length === 58, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
+// NAMED (Nov 4 2026, the Media Library, migration 167): BEFORE 57 shown and 58 loading. AFTER 58 and 59: media.html
+// loads the guide and has its own entry (four tips).
+check("S7. the guide displays on 58 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html",
+  SHOWN.length === 58 && HTML_PAGES.filter(loadsGuide).length === 59 && SHOWN.indexOf("media.html") !== -1, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
 
 /* ── S8. phones: the button and the sheet ───────────────────────────────── */
 console.log("\n══ S8. phones: the Guide button and the bottom sheet ══");

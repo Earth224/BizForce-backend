@@ -220,7 +220,12 @@ const EXPECTED_GATED = [
   // NAMED (Nov 4 2026, campaign sharing, migration 166; gated 88 -> 90): BEFORE no campaign could be shared. AFTER turning a
   // campaign's sharing or discovery on or off, and making it a new link, need a subscription (requireActiveSubscription),
   // as editing the campaign does; the page itself is served only while the owner's plan is active (section 6).
-  "put /api/crowdfunding/campaigns/:id/share", "post /api/crowdfunding/campaigns/:id/share/new-link"
+  "put /api/crowdfunding/campaigns/:id/share", "post /api/crowdfunding/campaigns/:id/share/new-link",
+  // NAMED (Nov 4 2026, the Media Library, migration 167; gated 90 -> 91): BEFORE no Media Library. AFTER adding a file to
+  // it (POST /api/media: checked by its bytes, location data removed, 10 MB a file and 250 MB in all, into bf-public
+  // media/<member id>/) needs a subscription (requireActiveSubscription), as the brief decides; listing, labelling and
+  // deleting stay login-only (section 4's OWN list), so a member whose plan lapses can still clear their library.
+  "post /api/media"
 ];
 
 const EXPECTED_ADMIN = [
@@ -397,7 +402,12 @@ const EXPECTED_OWN = [
   // connection. AFTER a member deletes their own connection row (member_mastodon_connections) and sets their own
   // automation switch (logged in member_social_setting_changes, platform mastodon); both rows are theirs and served
   // to no one else.
-  "post /api/social/mastodon/disconnect", "put /api/social/mastodon/automation"
+  "post /api/social/mastodon/disconnect", "put /api/social/mastodon/automation",
+  // NAMED (Nov 4 2026, the Media Library, migration 167; effectful login-only 153 -> 155): BEFORE no Media Library.
+  // AFTER a member edits the label and alt text of their own file (PATCH) and deletes their own file (DELETE: refused
+  // with 409 while it is used anywhere, else the file and then its row; checkMediaLibrary). Both rows are theirs, and the
+  // file is in their own media/<id>/ folder; nothing another member is served is written.
+  "patch /api/media/:id", "delete /api/media/:id"
 ];
 
 /* Unauthenticated routes that write. */

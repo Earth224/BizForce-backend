@@ -61,6 +61,7 @@ const APP_MAP = require("./lib/appMap.json");
 const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
 const campaignShare = require("./lib/campaignShare");
+const memberMedia = require("./lib/memberMedia");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
 const { CERTIFICATION_PASS_MARK, findCertification, gradeCertification, publicCertificationCatalog } = require("./lib/certificationCatalog");
@@ -7764,7 +7765,8 @@ async function removeUnusedThemePhotos(userId, candidates) {
   const profileWears = await profileDesignPhotoOf(userId);
   if (profileWears === undefined) return;   // the profile could not be read: keep every photo
   const used = memberThemes.photosIn(state.themes).concat(profileWears ? [profileWears] : []);
-  const unused = (candidates || []).filter(function (p) { return p && used.indexOf(p) === -1 && memberThemes.ownPhotoPath(p, userId); });
+  // Never a Media Library file (media/): only DELETE /api/media/:id removes those.
+  const unused = (candidates || []).filter(function (p) { return p && used.indexOf(p) === -1 && !memberMedia.isLibraryKey(p) && memberThemes.ownPhotoPath(p, userId); });
   if (!unused.length) return;
   const { error } = await supabase.storage.from("bf-public").remove(unused);
   if (error) console.error("[themes] unused photo removal failed for user " + userId + ": " + (error.message || error));
@@ -8144,6 +8146,154 @@ app.put("/api/music/player", requireAuth, musicWriteLimiter, async function (req
   } catch (error) { musicPlayerFailed(res, next, error); }
 });
 /* ── end of members' music ──────────────────────────────────────────────── */
+
+/* ── The Media Library (lib/memberMedia.js, migration 167) ─────────────────
+   A member's own images and short videos, uploaded through the server, typed
+   by their first bytes, location and camera details removed from photos,
+   reusable from the picker (scripts/media-picker.js), and never deleted while
+   in use. Uploading needs a subscription; listing, labelling and deleting do
+   not. Another member's item is 404 on every route. */
+const MEDIA_COLUMNS = "id, path, kind, mime, bytes, label, alt_text, metadata_stripped, created_at";
+const mediaUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "media-upload:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Sixty uploads an hour at most. Try again later.", reason: "rate_limited" }
+});
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: memberMedia.MAX_FILE_BYTES, files: 1 }
+});
+
+async function ownMediaItem(userId, id) {
+  if (!memberMedia.UUID_RE.test(String(id || ""))) return null;
+  const { data, error } = await supabase.from("member_media").select(MEDIA_COLUMNS).eq("id", id).eq("user_id", userId).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+/* One file, field "file", at most 10 MB, with an optional label and alt_text.
+   In this order: sniff, strip, hash (checkFile), dedupe, the quota, the
+   upload, the row, and the quota again. */
+app.post("/api/media", requireAuth, requireActiveSubscription, mediaUploadLimiter, function (req, res, next) {
+  mediaUpload.single("file")(req, res, async function (uploadError) {
+    try {
+      if (uploadError) {
+        const tooBig = uploadError.code === "LIMIT_FILE_SIZE";
+        return res.status(tooBig ? 413 : 400).json({ error: tooBig ? memberMedia.MESSAGES.tooBig : memberMedia.MESSAGES.field, reason: tooBig ? "too_big" : "field" });
+      }
+      let checked;
+      try { checked = memberMedia.checkFile(req.file); } catch (refusal) {
+        if (refusal instanceof memberMedia.MediaRefused) return res.status(refusal.status).json({ error: refusal.message, reason: refusal.reason });
+        throw refusal;
+      }
+      const text = memberMedia.textUpdates({ label: req.body && req.body.label, alt_text: req.body && req.body.alt_text }, true);
+      if (text.error) return res.status(400).json({ error: text.error });
+      const userId = req.user.id;
+
+      const same = await supabase.from("member_media").select(MEDIA_COLUMNS).eq("user_id", userId).eq("sha256", checked.sha256).maybeSingle();
+      if (same.error) throw same.error;
+      if (same.data) return res.status(200).json({ item: memberMedia.publicItem(same.data), duplicate: true });
+
+      const before = await memberMedia.usage(supabase, userId);
+      if (before.used_bytes + checked.size > memberMedia.MEMBER_MEDIA_BYTES) return res.status(413).json({ error: memberMedia.MESSAGES.full, reason: "full" });
+
+      const path = memberMedia.mediaPath(userId, checked.ext);
+      const stored = await supabase.storage.from(memberMedia.BUCKET).upload(path, checked.bytes, { contentType: checked.mime, upsert: false });
+      if (stored.error) return res.status(502).json({ error: memberMedia.MESSAGES.stored });
+
+      const ins = await supabase.from("member_media").insert(Object.assign({
+        user_id: userId, path: path, kind: checked.kind, mime: checked.mime, bytes: checked.size, sha256: checked.sha256,
+        metadata_stripped: checked.stripped
+      }, text.updates)).select(MEDIA_COLUMNS).single();
+      if (ins.error) {
+        await supabase.storage.from(memberMedia.BUCKET).remove([path]);
+        if (ins.error.code === "23505") {
+          const raced = await supabase.from("member_media").select(MEDIA_COLUMNS).eq("user_id", userId).eq("sha256", checked.sha256).maybeSingle();
+          if (!raced.error && raced.data) return res.status(200).json({ item: memberMedia.publicItem(raced.data), duplicate: true });
+        }
+        throw ins.error;
+      }
+
+      if (await memberMedia.overCap(supabase, userId, ins.data.id)) {
+        await supabase.storage.from(memberMedia.BUCKET).remove([path]);
+        await supabase.from("member_media").delete().eq("id", ins.data.id).eq("user_id", userId);
+        return res.status(413).json({ error: memberMedia.MESSAGES.full, reason: "full" });
+      }
+      return res.status(201).json({ item: memberMedia.publicItem(ins.data) });
+    } catch (error) { next(error); }
+  });
+});
+
+/* The member's own items, newest first, 60 a page; ?kind=image|video,
+   ?before=<created_at of the last item shown>. */
+app.get("/api/media", requireAuth, async function (req, res, next) {
+  try {
+    const kind = req.query.kind === undefined || req.query.kind === "" ? null : String(req.query.kind);
+    if (kind !== null && kind !== "image" && kind !== "video") return res.status(400).json({ error: memberMedia.MESSAGES.badKind });
+    const before = req.query.before === undefined || req.query.before === "" ? null : String(req.query.before);
+    if (before !== null && (before.length > 40 || isNaN(Date.parse(before)))) return res.status(400).json({ error: memberMedia.MESSAGES.badBefore });
+    let q = supabase.from("member_media").select(MEDIA_COLUMNS).eq("user_id", req.user.id);
+    if (kind) q = q.eq("kind", kind);
+    if (before) q = q.lt("created_at", before);
+    const { data, error } = await q.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(memberMedia.PAGE_SIZE + 1);
+    if (error) throw error;
+    const rows = data || [];
+    const page = rows.slice(0, memberMedia.PAGE_SIZE);
+    return res.json({ items: page.map(function (r) { return memberMedia.publicItem(r); }),
+      next_before: rows.length > memberMedia.PAGE_SIZE ? page[page.length - 1].created_at : null });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/media/usage", requireAuth, async function (req, res, next) {
+  try {
+    return res.json(await memberMedia.usage(supabase, req.user.id));
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/media/:id", requireAuth, async function (req, res, next) {
+  try {
+    const item = await ownMediaItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: memberMedia.MESSAGES.notFound });
+    const text = memberMedia.textUpdates(req.body, false);
+    if (text.error) return res.status(400).json({ error: text.error });
+    const { data, error } = await supabase.from("member_media").update(text.updates)
+      .eq("id", item.id).eq("user_id", req.user.id).select(MEDIA_COLUMNS).single();
+    if (error) throw error;
+    return res.json({ item: memberMedia.publicItem(data) });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/media/:id/uses", requireAuth, async function (req, res, next) {
+  try {
+    const item = await ownMediaItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: memberMedia.MESSAGES.notFound });
+    return res.json({ uses: await memberMedia.findUses(supabase, req.user.id, item.path) });
+  } catch (error) { next(error); }
+});
+
+/* Refused with 409 while in use. Otherwise the file first, then the row; a
+   file Storage refuses goes to pending_storage_deletions (removeFiles), and
+   the row is deleted either way. */
+app.delete("/api/media/:id", requireAuth, async function (req, res, next) {
+  try {
+    const item = await ownMediaItem(req.user.id, req.params.id);
+    if (!item) return res.status(404).json({ error: memberMedia.MESSAGES.notFound });
+    let uses;
+    try { uses = await memberMedia.findUses(supabase, req.user.id, item.path); } catch (readError) {
+      return res.status(503).json({ error: memberMedia.MESSAGES.usesUnknown });
+    }
+    if (uses.length) return res.status(409).json({ error: memberMedia.usesText(uses), uses: uses, reason: "in_use" });
+    const removed = await accountFiles.removeFiles({ supabase: supabase, storage: supabase.storage, files: [{ bucket: memberMedia.BUCKET, path: item.path }] });
+    if (removed.not_queued) console.error("[media] a library file could be neither removed nor queued for user " + req.user.id);
+    const { error } = await supabase.from("member_media").delete().eq("id", item.id).eq("user_id", req.user.id);
+    if (error) throw error;
+    return res.json({ deleted: true, queued: removed.queued > 0 });
+  } catch (error) { next(error); }
+});
+/* ── end of the Media Library ─────────────────────────────────────────────── */
 
 /* GET /api/profile/:username WAS DELETED (launch hardening, 2026-10-27). It
    answered anyone, with no sign-in, select("*") from profiles: the account's
@@ -11468,7 +11618,7 @@ const PROPOSAL_EXECUTORS = {
 
     const { data, error } = await insertListingWithSlug({
       seller_id: proposal.user_id, title, description,
-      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(payload.media), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(payload.media, proposal.user_id), status: "active",
       source_proposal_id: proposal.id,
       created_at: nowIso(), updated_at: nowIso()
     }, "id, title, status");
@@ -44567,7 +44717,11 @@ function bodyLinksToMoneyUrl(html, moneyUrl) {
   return false;
 }
 
-function sanitizeMedia(rawMedia) {
+/* A listing's or campaign's media: at most 12 entries, each kept only when
+   its URL is this project's bf-public URL of a file in the caller's own
+   folder (memberMedia.isOwnPublicMediaUrl): a Media Library item or one of
+   their own uploads, never another member's file or a foreign address. */
+function sanitizeMedia(rawMedia, userId) {
   if (!Array.isArray(rawMedia)) {
     return [];
   }
@@ -44579,7 +44733,7 @@ function sanitizeMedia(rawMedia) {
       }
 
       const url = String(entry.url == null ? "" : entry.url).trim();
-      if (!url || url.indexOf("https://") !== 0) {
+      if (!url || !memberMedia.isOwnPublicMediaUrl(url, userId)) {
         return null;
       }
 
@@ -44656,7 +44810,7 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
     if (priceBfc <= 0) return res.status(400).json({ error: "Set a BizCash (BFC) price above 0. " + LISTING_BFC_ONLY_MESSAGE, field: "price_bfc" });
     const { data, error } = await insertListingWithSlug({
       seller_id: req.user.id, title, description: description || "",
-      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media), status: "active",
+      price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media, req.user.id), status: "active",
       is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
       created_at: nowIso(), updated_at: nowIso()
     }, "*");
@@ -44747,7 +44901,7 @@ app.put("/api/marketplace/listings/:id", requireAuth, async function (req, res, 
     if (req.body.category !== undefined && MARKETPLACE_CATEGORIES.includes(req.body.category)) updates.category = req.body.category;
     if (req.body.status   !== undefined && ["active","paused","sold"].includes(req.body.status)) updates.status = req.body.status;
     if (Array.isArray(req.body.tags)) updates.tags = req.body.tags.map(function(t) { return safeText(t, 40); }).filter(Boolean).slice(0, 10);
-    if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media);
+    if (req.body.media !== undefined) updates.media = sanitizeMedia(req.body.media, req.user.id);
 
     // A pause is always allowed; any other edit must leave an active listing with a BFC price.
     if (!pauseOnly) {
@@ -44989,7 +45143,7 @@ app.post("/api/crowdfunding/campaigns", requireAuth, requireActiveSubscription, 
       .from("crowdfunding_campaigns")
       .insert({
         owner_id: req.user.id, title, description: description || "",
-        goal_bfc: goalBfc, category, media: sanitizeMedia(req.body.media),
+        goal_bfc: goalBfc, category, media: sanitizeMedia(req.body.media, req.user.id),
         raised_bfc: 0, status: "active",
         created_at: nowIso(), updated_at: nowIso()
       })
@@ -45023,7 +45177,7 @@ app.put("/api/crowdfunding/campaigns/:id", requireAuth, requireActiveSubscriptio
     if (req.body.title       !== undefined) updates.title       = safeText(req.body.title, 150);
     if (req.body.description !== undefined) updates.description = safeText(req.body.description, 2000);
     if (req.body.category    !== undefined) updates.category    = safeText(req.body.category, 40);
-    if (req.body.media       !== undefined) updates.media       = sanitizeMedia(req.body.media);
+    if (req.body.media       !== undefined) updates.media       = sanitizeMedia(req.body.media, req.user.id);
     if (updates.title !== undefined && !updates.title) return res.status(400).json({ error: "Title is required. The campaign is unchanged." });
 
     const current = await supabase
@@ -47703,6 +47857,8 @@ async function removeDisplacedCardMedia(priorRow, updatedRow, userId, logTag) {
         tag, column, userId, key);
       continue;
     }
+    // A Media Library file is the library's: only DELETE /api/media/:id removes it.
+    if (memberMedia.isLibraryKey(key)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     keys.push(key);
@@ -47948,8 +48104,14 @@ app.get("/api/cards/slug/:slug", async function (req, res, next) {
 const BFP_FONTS = ["modern", "classic", "technical"];
 
 // ── Upload signed URL (client uploads directly to Supabase Storage) ──────────
+// The folder is one of the pages' own nine, exactly: never media/ (the Media
+// Library, which only POST /api/media writes), never a path with "/".
+const UPLOAD_URL_FOLDERS = ["marketplace-media", "card-media", "banners", "avatars", "videos", "music", "music-art", "products", "portfolio"];
 app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
-  const folder      = safeText(req.body.folder, 40)   || "misc";
+  if (typeof req.body.folder !== "string" || UPLOAD_URL_FOLDERS.indexOf(req.body.folder) === -1) {
+    return res.status(400).json({ error: "folder must be one of: " + UPLOAD_URL_FOLDERS.join(", ") + ".", reason: "folder" });
+  }
+  const folder      = req.body.folder;
   const filename    = safeText(req.body.filename, 200) || "file";
   const contentType = safeText(req.body.contentType, 100) || "application/octet-stream";
   const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);

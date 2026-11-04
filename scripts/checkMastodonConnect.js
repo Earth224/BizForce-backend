@@ -611,7 +611,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
      and 164 came before it"; "the highest" is now checkCampaignSharing M2's, for 166. */
   check("M3. 165_member_mastodon_connections.sql is the only migration numbered 165, every one before it is lower (164 was the last before it)",
     migFiles.filter(f => /^165_/.test(f)).length === 1 && migFiles.indexOf("165_member_mastodon_connections.sql") !== -1 &&
-    migFiles.filter(f => !/^166_campaign_sharing\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */

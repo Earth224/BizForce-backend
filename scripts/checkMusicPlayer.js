@@ -1196,7 +1196,8 @@ async function boomboxChecks(c) {
      AFTER: every signed-in page carries both. A signed-in page is one with the session guard, or
      settings.html, whose guard-free bf-session.js tag asks for the player with data-music. Its
      pages are counted exactly (SIGNED_IN_PAGES), and one without the mist fails here. */
-  const SIGNED_IN_PAGES = 47;
+  // NAMED (Nov 4 2026, the Media Library): BEFORE 47 signed-in pages; AFTER 48, with media.html, which carries both.
+  const SIGNED_IN_PAGES = 48;
   const signedInTag = html => /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html) ||
     /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>/.test(html);
   const want = [], refuse = [], wrong = [], noMist = [], signedIn = [];
@@ -2316,7 +2317,8 @@ async function liveOrderChecks() {
     opened.forEach(x => x.p.w.close());
   }
   check("G1. live order: on every signed-in mist page, the real file loaded as the browser loads it, the boombox is drawn (" + signedIn.length + " pages, the 7 agents/ pages among them)",
-    missing.length === 0 && signedIn.length === 54 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
+    // NAMED (Nov 4 2026, the Media Library): BEFORE 54 live pages; AFTER 55, with media.html.
+    missing.length === 0 && signedIn.length === 55 && signedIn.indexOf("media.html") !== -1 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
 }
 
 /* ── G13. now playing ───────────────────────────────────────────────────── */

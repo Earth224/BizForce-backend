@@ -342,10 +342,13 @@ const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
    music-popout.html, the player's pop-out, is new and wears the member's theme. It did not exist at the commits the
    "as it was" proofs read (A4, H3), so it is left out of those and held to A1 to A3 and H3's rule for added lines:
    every theme token it carries is a var() with a fallback, and its only engine tag is the first one in <head>. */
-const NEW_PAGES = ["music-popout.html"];
+/* NAMED BEFORE → AFTER (Nov 4 2026, the Media Library, migration 167). BEFORE: 58 pages loaded bf-theme.js. AFTER:
+   59; media.html, the member's Media Library, is new and wears the member's theme, held to the same rules as the
+   pop-out above. */
+const NEW_PAGES = ["music-popout.html", "media.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
-check("A1. 58 pages load scripts/bf-theme.js", THEMED.length === 58 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
+check("A1. 59 pages load scripts/bf-theme.js", THEMED.length === 59 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
 const firstInHead = THEMED.filter(f => { const m = /<head>\s*([\s\S]*?)\n/.exec(FILES[f]); return !m || m[1].trim() !== TAG; });
 check("A1. ... as the first element of <head>, before any style or script", firstInHead.length === 0, firstInHead.join(", "));
 const inlineLeft = THEMED.concat([SHELL]).filter(f => /body::before\s*\{[^{}]*background/i.test(noComments(f === SHELL ? FILES[f] : stylesOf(FILES[f]))));
@@ -631,6 +634,8 @@ function liftRoutes(fake) {
       }
     }), { memoryStorage: () => ({}) }),
     supabase: fake.client, APP_MAP: APP_MAP, requireAuth: requireAuth, Buffer: Buffer, Date: Date, Promise: Promise,
+    // removeUnusedThemePhotos never removes a Media Library file (memberMedia.isLibraryKey); server.js requires it at the top.
+    memberMedia: require(path.join(REPO, "lib/memberMedia.js")),
     app: {}
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });
@@ -1029,7 +1034,8 @@ async function routesAndLib(lifted) {
   const row = fake.db.member_themes[0];
   check("E2. a good theme is stored, clamped, under the caller's id, and the answer lists it with the page list",
     r.status === 201 && row && row.user_id === UID && row.theme.glow_a === "#112233" && row.theme.glow_a_alpha === 1 &&   // NAMED (Block 4d): BEFORE 0.5, the old ceiling; AFTER 1
-    r.body.created_id === row.id && r.body.pages.length === 58);
+    // NAMED (Nov 4 2026, the Media Library): BEFORE 58 pages in the list; AFTER 59, with media.html.
+    r.body.created_id === row.id && r.body.pages.length === 59 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1));
   fake.db.member_themes.push({ id: "bbbbbbbb-0000-4000-8000-000000000009", user_id: OTHER, name: "Theirs", theme: LIBX.DEFAULT_THEME });
   r = await callRoute(L, "get", "/api/themes");
   check("E3. GET answers only the caller's themes", r.body.themes.length === 1 && r.body.themes[0].id === row.id);

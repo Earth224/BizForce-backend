@@ -842,7 +842,8 @@ async function getNetwork(db, user, query) {
      NAMED (campaign sharing, Nov 4 2026): BEFORE 162 to 165 were allowed above 161. AFTER 162 to 165 and
      166_campaign_sharing.sql; "the highest" is checkCampaignSharing M2's. */
   check("H6. 161_member_links.sql is the only migration numbered 161, and every earlier one is lower", fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^161_/.test(f)).length === 1 &&
-    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
+    // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
+    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
   check("H7. the table: user_id cascading, from_agent, to_agent, enabled, updated_at, one row per link, no self link",
     /user_id     uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) && /from_agent  text NOT NULL/.test(mig) && /to_agent    text NOT NULL/.test(mig) &&
     /enabled     boolean NOT NULL DEFAULT true,/.test(mig) && /updated_at  timestamptz NOT NULL DEFAULT now\(\),/.test(mig) &&
