@@ -224,6 +224,12 @@ function worldAgent(log, session) {
       BSKY.posts.push({ did: agent.session && agent.session.did, record: clone(record) });
       if (BSKY.callMode === "postfail") throw bskyError(400, "InvalidRequest");
       return { uri: uriOf((agent.session && agent.session.did) || "did:plc:none", "3kposted" + BSKY.posts.length), cid: cid(20 + BSKY.posts.length) };
+    },
+    // NAMED (Nov 5 2026, images in social posts): BEFORE no uploadBlob (the Proxy below would only record it). AFTER a real one, as
+    // the post executor now calls it for a post with images; replies carry none in this build, so it is never called here.
+    async uploadBlob(bytes, o) {
+      log.push({ m: "uploadBlob", size: bytes.length });
+      return { success: true, data: { blob: { $type: "blob", ref: { $link: "bafkblob" }, mimeType: o && o.encoding, size: bytes.length } } };
     }
   };
   // Every other method is recorded by name: none may be called.
@@ -523,7 +529,8 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
      166_campaign_sharing.sql; "the highest" is checkCampaignSharing M2's, for 166. */
   check("M3. 164_bluesky_reply_refs.sql is the only migration numbered 164, every one before it is lower (163 was the last before it)",
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
-    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^(165_member_mastodon_connections|166_campaign_sharing|167_member_media)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
+    // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
+    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^(165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
   check("M4. no new table: the migration only adds columns and a CHECK to social_post_drafts", !/CREATE TABLE/i.test(sqlBody) && !/DROP/i.test(sqlBody));
 
   /* ── L. the library ─────────────────────────────────────────────────────── */
@@ -1015,7 +1022,9 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
   /* NAMED (campaign sharing, Nov 4 2026): BEFORE TERMS_VERSION "2026-11-03" and "Last updated November 3, 2026", the version
      this change set. AFTER "2026-11-04" and "Last updated November 4, 2026", the version campaign sharing set when it added
      its Terms sentence; still an exact pin, so a revert to this change's version or earlier fails. */
-  check("K6. the terms version is the latest change's, Nov 4 2026 (campaign sharing; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-04" && LEGAL.TERMS_UPDATED === "Last updated November 4, 2026");
+  // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04" (campaign sharing). AFTER "2026-11-05", the version the social
+  // images privacy sentence set.
+  check("K6. the terms version is the latest change's, Nov 5 2026 (images in social posts; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-05" && LEGAL.TERMS_UPDATED === "Last updated November 5, 2026");
   check("K7. the model message matches the privacy sentence: post text, own post text, business details and guidance; never the author's name, handle or account id",
     prompt.indexOf("kids classes") !== -1 && ownPrompt.indexOf("Saturday wheel class") !== -1 && prompt.indexOf(BUSINESS) !== -1 && prompt.indexOf(GUIDANCE) !== -1 &&
     [CAROL.displayName, CAROL.handle, CAROL.did].every(v => prompt.indexOf(v) === -1));

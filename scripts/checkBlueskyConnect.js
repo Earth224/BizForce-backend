@@ -189,6 +189,12 @@ MB.api.createAgent = function () {
     async upsertProfile(fn) {
       const next = fn(clone(BSKY.record));
       BSKY.profiles.push({ did: agent.session && agent.session.did, next: clone(next) });
+    },
+    // NAMED (Nov 5 2026, images in social posts): BEFORE login, post and upsertProfile only. AFTER uploadBlob too, as the executor
+    // now calls it for a post with images (none of this check's posts carry one, so nothing here calls it; BSKY.blobs stays empty).
+    async uploadBlob(bytes, opts) {
+      (BSKY.blobs = BSKY.blobs || []).push({ did: agent.session && agent.session.did, size: bytes.length, encoding: opts && opts.encoding });
+      return { success: true, data: { blob: { $type: "blob", ref: { $link: "bafkblob" + BSKY.blobs.length }, mimeType: opts && opts.encoding, size: bytes.length } } };
     }
   };
   return agent;
@@ -882,8 +888,10 @@ const everything = b => JSON.stringify(b.db.tables);
   const intro = (/<p id="connectIntro"[^>]*>([^<]*)<\/p>/.exec(FE("agents/content.html")) || ["", ""])[1];
   check("J4. content.html: Bluesky points to the Social Agent page, never a main password, and Facebook and Instagram stay coming",
     intro === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in.", intro);
-  check("J5. social.html loads agent-profile.js, social-publish.js, then bluesky-connect.js",
-    /<script src="\/scripts\/agent-profile\.js"><\/script>\n<script src="\/scripts\/social-publish\.js"><\/script>\n<script src="\/scripts\/bluesky-connect\.js"><\/script>/.test(social));
+  // NAMED (Nov 5 2026, images in social posts): BEFORE agent-profile.js, social-publish.js, bluesky-connect.js in a row. AFTER the
+  // Media Library picker (media-picker.js) sits between agent-profile.js and social-publish.js; the rest of the order is the same.
+  check("J5. social.html loads agent-profile.js, media-picker.js, social-publish.js, then bluesky-connect.js",
+    social.indexOf('<script src="/scripts/agent-profile.js"></script>\n<script src="/scripts/media-picker.js"></script>\n<script src="/scripts/social-publish.js"></script>\n<script src="/scripts/bluesky-connect.js"></script>') !== -1);
 
   // The card, in jsdom, against the real routes.
   const { JSDOM } = require("jsdom");
@@ -942,7 +950,8 @@ const everything = b => JSON.stringify(b.db.tables);
   const PROP = FE("proposals.html");
   const fnSrc = name => { const i = PROP.indexOf("function " + name + "("); return i < 0 ? "" : PROP.slice(i, s.braceMatch(PROP, PROP.indexOf("{", i)) + 1); };
   const pctx = { Intl }; vm.createContext(pctx);
-  vm.runInContext(["escapeHtml", "graphemeCountText", "postsAsText", "socialPostPayloadFields", "blueskyProfilePayloadFields"].map(fnSrc).join("\n"), pctx);
+  // NAMED (Nov 5 2026, images in social posts): the lift adds postImagesFields, which the card now calls (it draws nothing without images).
+  vm.runInContext(["escapeHtml", "graphemeCountText", "postsAsText", "postImagesFields", "socialPostPayloadFields", "blueskyProfilePayloadFields"].map(fnSrc).join("\n"), pctx);
   const memberCard = pctx.socialPostPayloadFields({ text: POST, posts_as: { account: "member", handle: "alice.bsky.social", automatic: false } });
   const platformCard = pctx.socialPostPayloadFields({ text: POST });
   const evilCard = pctx.socialPostPayloadFields({ text: POST, posts_as: { account: "member", handle: "<b>x</b>" } });

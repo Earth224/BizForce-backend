@@ -278,13 +278,19 @@ function build(seedTables, opts) {
   opts = opts || {};
   const db = fakeDb(seedTables, opts.override);
   const logs = [];
-  const gate = { calls: 0, posts: [] };
+  const gate = { calls: 0, posts: [], blobs: [] };
   const agent = {
     post: async function (record) {
       gate.posts.push(JSON.parse(JSON.stringify(record)));
       if (opts.gate === "throws") throw new Error("upstream 500");
       if (opts.gate === "no_uri") return {};
       return Object.assign({}, POSTED);
+    },
+    // NAMED (Nov 5 2026, images in social posts): BEFORE post only. AFTER uploadBlob too, as the executor now calls it for a post
+    // with images; none of this check's posts carry one, so gate.blobs must stay empty (checked below).
+    uploadBlob: async function (bytes, o) {
+      gate.blobs.push({ size: bytes.length, encoding: o && o.encoding });
+      return { success: true, data: { blob: { $type: "blob", ref: { $link: "bafkblob" + gate.blobs.length }, mimeType: o && o.encoding, size: bytes.length } } };
     }
   };
   gate.call = async function (fn) {
@@ -513,6 +519,9 @@ async function filed(seedTables, opts, taskId) {
   x = await f.b.execute(f.proposal);
   check("a post with no link has no facets key at all", x.result && JSON.stringify(Object.keys(f.b.gate.posts[0])) === JSON.stringify(["text", "createdAt"]),
     f.b.gate.posts[0] && JSON.stringify(Object.keys(f.b.gate.posts[0])));
+  // NAMED (Nov 5 2026, images in social posts): a post filed with no images uploads no blob and carries no embed.
+  check("a post with no images uploads no blob and has no embed", x.result && f.b.gate.blobs.length === 0 && !("embed" in (f.b.gate.posts[0] || {})),
+    JSON.stringify(f.b.gate.blobs));
 
   const failuresCases = [
     ["rate_limited", /rate limit: no Bluesky call until 2026-10-11T12:15:00\.000Z/, 0],

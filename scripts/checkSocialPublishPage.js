@@ -356,8 +356,10 @@ async function renderResult(response, platform) {
   const accepted = await be0.call("post /api/agents/social/post", OWNER, { idea: "x", platform: "nope" });
   check("every platform offered is one the real route accepts", accepted.status === 400 &&
     offered.every(v => accepted.body.valid_platforms.indexOf(v) !== -1), JSON.stringify(accepted.body));
-  check("social.html loads social-publish.js after agent-profile.js",
-    /<script src="\/scripts\/agent-profile\.js"><\/script>\n<script src="\/scripts\/social-publish\.js"><\/script>/.test(FILES[SOCIAL]));
+  // NAMED (Nov 5 2026, images in social posts): BEFORE social-publish.js came straight after agent-profile.js. AFTER the Media
+  // Library picker (media-picker.js) sits between them, so "Add images (up to 4)" can open it; the order is otherwise the same.
+  check("social.html loads agent-profile.js, then media-picker.js, then social-publish.js",
+    FILES[SOCIAL].indexOf('<script src="/scripts/agent-profile.js"></script>\n<script src="/scripts/media-picker.js"></script>\n<script src="/scripts/social-publish.js"></script>') !== -1);
   check("/api/auth/me reports the user through publicUser", (SRC.match(/app\.get\("\/api\/auth\/me"[\s\S]*?\n\}\);/) || [""])[0].includes("publicUser(req.user)"));
 
   const beB = backend();
@@ -427,7 +429,10 @@ async function renderResult(response, platform) {
     const msg = fakeEl("msg"), form = fakeEl("form");
     await pg.sp.filePost(TASK, msg, form, null);
     const filed = pg.posted.find(x => x.path === "/api/agents/social/propose-post");
-    check("files with { task_id } and nothing else", filed && JSON.stringify(filed.body) === JSON.stringify({ task_id: TASK }), filed && JSON.stringify(filed.body));
+    // NAMED (Nov 5 2026, images in social posts): BEFORE "files with { task_id } and nothing else". AFTER "files with { task_id },
+    // plus media_ids only when images are attached": with none attached (this form) the body is still exactly { task_id };
+    // scripts/checkSocialImages.js files with images attached and sees { task_id, media_ids }.
+    check("files with { task_id }, plus media_ids only when images are attached", filed && JSON.stringify(filed.body) === JSON.stringify({ task_id: TASK }), filed && JSON.stringify(filed.body));
     const proposal = be.db.tables.agent_proposals[0];
     check("fixture: the real route filed one publish_social_post with the run's text", proposal && proposal.action_type === "publish_social_post" && proposal.payload.text === POST_TEXT);
     const real = await be.call("post /api/agents/social/propose-post", OWNER, { task_id: TASK });

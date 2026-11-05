@@ -1049,7 +1049,9 @@ function shopifyConn(db, userId) {
   check("L9. 163_store_connections.sql is the only migration numbered 163, every one before it is lower (162 was the last before it)",
     migFiles.filter(function (f) { return /^163_/.test(f); }).length === 1 &&
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE 164 to 167 allowed above 163. AFTER 168_social_post_images.sql
+    // too; "the highest" is checkSocialImages M2's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };

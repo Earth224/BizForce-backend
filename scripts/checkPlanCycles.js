@@ -511,7 +511,9 @@ const WANT_TOTALS = { dispatches_ran: 7, dispatches_refused: 1, dispatches_faile
      166_campaign_sharing.sql; "the highest" is checkCampaignSharing M2's, for 166. */
   check("A1. 162_plan_cycles.sql is the only migration numbered 162, every one before it is lower (161 was the last before it)",
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
-    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^(163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
+    // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE 163 to 167 allowed above 162. AFTER 168_social_post_images.sql
+    // too; "the highest" is checkSocialImages M2's.
+    migFiles.filter(f => /^162_/.test(f)).length === 1 && migFiles.filter(f => !/^(163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 162) && migFiles.some(f => /^161_/.test(f)));
   check("A2. plan_cycles: every column the design names, user_id and plan_task_id cascading, previous and next nullable",
     /id                 uuid PRIMARY KEY DEFAULT gen_random_uuid\(\),/.test(mig) &&
     /user_id            uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) &&

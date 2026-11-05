@@ -434,6 +434,9 @@ const urlOf = p => BASE + "/storage/v1/object/public/bf-public/" + p;
 function seed() {
   const t = { member_media: [], pending_storage_deletions: [], gate_decisions: [], users: [], profiles: [] };
   AFL.FILE_TABLES.forEach(x => { if (!t[x.table]) t[x.table] = []; });
+  // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE no social_post_drafts table here. AFTER an empty one,
+  // because findUses now also reads the member's pending social posts (scripts/checkSocialImages.js covers that case).
+  t.social_post_drafts = [];
   t.users.push({ id: OWEN, avatar_url: null, business_name: "Owen Pottery" }, { id: DANA, avatar_url: null }, { id: LOU, avatar_url: null });
   return t;
 }
@@ -637,8 +640,10 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   check("M1. 167_member_media.sql says the owner applied it by hand on Nov 4, 2026, and ends with the SQL as run, the backslash in the path pattern included",
     ALL[MIG].indexOf("Applied by the owner by hand in the Supabase SQL editor on Nov 4, 2026. This file is the text as run.") !== -1 && ALL[MIG].endsWith(SQL_AS_RUN) && ALL[MIG].indexOf("{32}\\.(jpg") !== -1);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M2. 167_member_media.sql is the only migration numbered 167, and the highest (166 was the last before it)",
-    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
+  // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE "the highest" with every migration at most 167. AFTER 167 is
+  // still the only one numbered 167, and every migration but 168_social_post_images.sql is at most 167; "the highest" is checkSocialImages M2's.
+  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql is at most 167",
+    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
   check("M3. PATH_PATTERN equals the 167 CHECK character for character", !!SQL_PATH && MED.PATH_PATTERN === SQL_PATH[1] && MED.PATH_RE.source === PATH_SQL_RE.source, SQL_PATH && SQL_PATH[1]);
   const many = Array.from({ length: 300 }, (_, i) => MED.mediaPath(OWEN, ["jpg", "png", "webp", "gif", "mp4", "webm"][i % 6]));
   check("M4. 300 paths each match the 167 pattern and the owner rule, under media/<id>/, and no two are the same",
@@ -973,7 +978,9 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
     [built["privacy.html"], fe("privacy.html") || ""].every(h => after(h, esc(LP.CAMPAIGN_PRIVACY_SENTENCE), esc(PRIVACY)) && h.indexOf(esc(PRIVACY)) - h.indexOf(esc(LP.CAMPAIGN_PRIVACY_SENTENCE)) < esc(LP.CAMPAIGN_PRIVACY_SENTENCE).length + 40));
   check("G3. the Terms carry it right after the campaign sentence, built and on disk",
     [built["terms.html"], fe("terms.html") || ""].every(h => after(h, esc(LP.CAMPAIGN_TERMS_SENTENCE), esc(TERMS)) && h.indexOf(esc(TERMS)) - h.indexOf(esc(LP.CAMPAIGN_TERMS_SENTENCE)) < esc(LP.CAMPAIGN_TERMS_SENTENCE).length + 40));
-  check("G4. TERMS_VERSION is the date of this change, Nov 4 2026", LEGAL.TERMS_VERSION === "2026-11-04" && LEGAL.TERMS_UPDATED === "Last updated November 4, 2026");
+  // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04", the version this change set. AFTER "2026-11-05", the version
+  // the social images privacy sentence set; this change's own sentences are still checked in G1-G3.
+  check("G4. TERMS_VERSION is the latest change's, Nov 5 2026 (images in social posts; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-05" && LEGAL.TERMS_UPDATED === "Last updated November 5, 2026");
   const guide = fe("scripts/termaximus-guide.js") || "";
   const block = (/"media\.html": \[\n([\s\S]*?)\n    \]/.exec(guide) || ["", ""])[1];
   const tips = (block.match(/"(?:[^"\\]|\\.)*"/g) || []).map(t => JSON.parse(t));

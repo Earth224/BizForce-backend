@@ -108,8 +108,10 @@ const MUTATIONS = {
   "count-undercounts-links": [["MM", "      total += Math.max(link.length, reserved) + (m[0].length - link.length);\n",
     "      total += link.length + (m[0].length - link.length);\n"]],
   // the post request carries no Idempotency-Key
-  "idempotency-key-missing": [["MM", "  var made = await client.post(\"/api/v1/statuses\", { status: text, visibility: \"public\" }, { \"Idempotency-Key\": idempotencyKey });\n",
-    "  var made = await client.post(\"/api/v1/statuses\", { status: text, visibility: \"public\" }, {});\n"]],
+  // NAMED (Nov 5 2026, images in social posts): BEFORE the anchor was the one-line post with the body inline. AFTER the body is
+  // built first (statusBody, media_ids only with images), so the anchor is the post line that sends it; the mutation is the same.
+  "idempotency-key-missing": [["MM", "  var made = await client.post(\"/api/v1/statuses\", statusBody, { \"Idempotency-Key\": idempotencyKey });\n",
+    "  var made = await client.post(\"/api/v1/statuses\", statusBody, {});\n"]],
   // a published draft is posted again
   "replay-posts-again": [["SRC", "  var mastoPublished = draft.status === \"published\" && !!draft.platform_post_uri;\n", "  var mastoPublished = false;\n"],
     ["SRC", "  var mastoPending = draft.status === \"pending_approval\";\n", "  var mastoPending = draft.status === \"pending_approval\" || draft.status === \"published\";\n"]],
@@ -612,7 +614,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   check("M3. 165_member_mastodon_connections.sql is the only migration numbered 165, every one before it is lower (164 was the last before it)",
     migFiles.filter(f => /^165_/.test(f)).length === 1 && migFiles.indexOf("165_member_mastodon_connections.sql") !== -1 &&
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -729,8 +732,12 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   await connected(b, PLAIN, "badinfo.example", TOK.carol);
   check("V6. rules outside 165's ranges (0 and 5000): 500 and 23", conn(b, PLAIN).max_characters === 500 && conn(b, PLAIN).characters_reserved_per_url === 23);
   const v = await MM.verify("mastodon.social", TOK.alice);
-  check("V7. verify returns the id, the username and the rules, and nothing else",
-    JSON.stringify(v) === JSON.stringify({ ok: true, account_id: "109000000000000001", acct: "alice", max_characters: 500, characters_reserved_per_url: 23 }), JSON.stringify(v));
+  // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE { ok, account_id, acct, max_characters, characters_reserved_per_url }.
+  // AFTER the same plus image_size_limit and media_description_limit, read from the same /api/v2/instance answer (here the 168
+  // defaults, 16777216 and 1500, as this fake server sends no media_attachments); scripts/checkSocialImages.js covers the reading.
+  check("V7. verify returns the id, the username and the rules (post length and media), and nothing else",
+    JSON.stringify(v) === JSON.stringify({ ok: true, account_id: "109000000000000001", acct: "alice", max_characters: 500, characters_reserved_per_url: 23,
+      image_size_limit: 16777216, media_description_limit: 1500 }), JSON.stringify(v));
 
   /* ── C. failures store nothing; classify ─────────────────────────────────── */
   console.log("\n══ C. a refused token, a limit, no answer and every guard refusal store nothing ══");
@@ -1286,7 +1293,12 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     const none = await run({ "/api/social/mastodon/status": { connected: false, account: null, status: "disconnected", since: null, max_characters: null } });
     check("J17. unconnected (the owner included): one quiet line to connect, no button",
       none.slot.innerHTML.indexOf(none.sp.MASTO_CONNECT_LINE) !== -1 && !/data-sp-masto-file/.test(none.slot.innerHTML), none.slot.innerHTML);
-    check("J18. the filing request sends only the task id, to propose-post", /api\("POST", "\/api\/social\/mastodon\/propose-post", \{ task_id: taskId \}\)/.test(FE("scripts/social-publish.js")));
+    // NAMED (Nov 5 2026, images in social posts): BEFORE the call's body was the literal { task_id: taskId }. AFTER it is
+    // filingBody(taskId, box), which is exactly { task_id } when no image is attached (proved here on a box with none), and adds
+    // media_ids only when images are (scripts/checkSocialImages.js, in jsdom).
+    check("J18. the filing request sends only the task id, to propose-post, when no image is attached",
+      FE("scripts/social-publish.js").indexOf('api("POST", "/api/social/mastodon/propose-post", filingBody(taskId, box))') !== -1 &&
+      JSON.stringify(on.sp.filingBody("t-1", {})) === JSON.stringify({ task_id: "t-1" }));
   }
 
   // proposals.html's card.
@@ -1294,7 +1306,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     const PROP = FE("proposals.html");
     const fnSrc = name => { const i = PROP.indexOf("function " + name + "("); return i < 0 ? "" : PROP.slice(i, s.braceMatch(PROP, PROP.indexOf("{", i)) + 1); };
     const pctx = {}; vm.createContext(pctx);
-    vm.runInContext(["escapeHtml", "mastodonPostPayloadFields", "mastodonResultHtml"].map(fnSrc).join("\n"), pctx);
+    // NAMED (Nov 5 2026, images in social posts): the lift adds postImagesFields, which the card now calls (it draws nothing without images).
+    vm.runInContext(["escapeHtml", "postImagesFields", "mastodonPostPayloadFields", "mastodonResultHtml"].map(fnSrc).join("\n"), pctx);
     const cardHtml = pctx.mastodonPostPayloadFields({ text: "<b>hi</b> " + POST, posts_as: { account: "member", acct: "alice", host: "mastodon.social", automatic: false },
       measured: { length: 88, limit: 500, reserved_per_url: 23 } });
     check("J19. proposals: \"Posts as @alice@mastodon.social\", \"88 of 500 characters\", and the text escaped",
@@ -1324,7 +1337,9 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     FE("privacy.html").indexOf("Your connected Mastodon account: connected as @account on your server since the date you connected it.") !== -1);
   /* NAMED (campaign sharing, Nov 4 2026): BEFORE "2026-11-03", the version this change set. AFTER "2026-11-04", the version
      campaign sharing set when it added its Terms sentence; still an exact pin. */
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-04 (campaign sharing; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-04", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04" (campaign sharing). AFTER "2026-11-05", the version the social
+  // images privacy sentence set.
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-05 (images in social posts; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-05", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

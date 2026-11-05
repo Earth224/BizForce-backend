@@ -31048,6 +31048,109 @@ async function autoExecuteFiledProposal(proposal, executor) {
   return { ok: true, proposal: done.data, result: result };
 }
 
+/* ── images in Bluesky and Mastodon posts (migration 168) ──────────────────
+   Chosen when a post is filed, never in the run: filing takes { task_id } or
+   { task_id, media_ids }, 1 to 4 different ids of the poster's own library
+   images (lib/memberMedia.js). Each must be the poster's, an image, carry alt
+   text (frozen at filing, trimmed) within the service's limit, and be within
+   its size limit: Bluesky 2,000,000 bytes and 1000 characters, Mastodon the
+   connection's image_size_limit and media_description_limit. The draft keeps
+   media_ids; the payload keeps the frozen media. A post with images is never
+   automatic. At posting, before any login, socialPostImages holds the payload
+   to the draft and each row to its frozen copy, and reads the bytes back
+   byte for byte; any difference fails the post and nothing is sent. Replies
+   carry no images. */
+async function socialFilingMedia(userId, mediaIdsValue, service, row) {
+  var MED = require("./lib/memberMedia");
+  var parsed = MED.parseMediaIds(mediaIdsValue);
+  if (parsed.error) return { status: 400, error: parsed.error };
+  var rules = service === "bluesky"
+    ? { altMax: MED.BLUESKY_ALT_MAX, altLong: MED.POST_MESSAGES.blueskyAltLong, sizeMax: MED.BLUESKY_IMAGE_MAX_BYTES, tooBig: MED.POST_MESSAGES.blueskyTooBig }
+    : { altMax: require("./lib/memberMastodon").descriptionLimitOf(row), altLong: MED.POST_MESSAGES.mastodonAltLong,
+        sizeMax: require("./lib/memberMastodon").imageSizeLimitOf(row), tooBig: MED.POST_MESSAGES.mastodonTooBig };
+  var rowsById = {};
+  for (var i = 0; i < parsed.ids.length; i++) {
+    var itemRead = await supabase
+      .from("member_media")
+      .select("id, user_id, kind, mime, bytes, sha256, label, alt_text")
+      .eq("id", parsed.ids[i])
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (itemRead.error) throw itemRead.error;
+    if (itemRead.data) rowsById[itemRead.data.id] = itemRead.data;
+  }
+  return MED.freezeForPost(rowsById, parsed.ids, userId, rules);
+}
+
+/* The images of a post about to be sent, each { bytes, mime, alt, size }, in
+   order, or throws MediaChanged. Runs before any login. The alt text is the
+   frozen one; a library edit after filing changes nothing. */
+async function socialPostImages(ownerId, payload, draft, service, row) {
+  var MED = require("./lib/memberMedia");
+  var mismatch = MED.postMediaMismatch(payload.media, draft.media_ids);
+  if (mismatch) throw new MED.MediaChanged(mismatch, "mismatch");
+  var maxBytes = service === "bluesky" ? MED.BLUESKY_IMAGE_MAX_BYTES : require("./lib/memberMastodon").imageSizeLimitOf(row);
+  var altMax = service === "bluesky" ? MED.BLUESKY_ALT_MAX : require("./lib/memberMastodon").descriptionLimitOf(row);
+  var images = [];
+  var frozenList = payload.media || [];
+  for (var i = 0; i < frozenList.length; i++) {
+    var frozen = frozenList[i];
+    if (frozen.alt.trim().length > altMax) throw new MED.MediaChanged(null, "limit");
+    var current = await supabase
+      .from("member_media")
+      .select("id, user_id, kind, mime, bytes, sha256, path")
+      .eq("id", frozen.id)
+      .eq("user_id", ownerId)
+      .maybeSingle();
+    if (current.error) throw new MED.MediaChanged(MED.POST_MESSAGES.unread, "unread");
+    var bytes = await MED.readMediaForPost(current.data, frozen, { storage: supabase.storage, userId: ownerId, maxBytes: maxBytes });
+    images.push({ bytes: bytes, mime: frozen.mime, alt: frozen.alt.trim(), size: MED.imageDimensions(bytes, frozen.mime) });
+  }
+  return images;
+}
+
+/* A media failure at posting: the draft is marked publish_failed with the
+   reason, and the error the executor throws. Nothing was sent. */
+async function socialImagesFailed(actionType, draft, ownerId, mediaErr) {
+  var mediaWhy = mediaErr && mediaErr.name === "MediaChanged" ? mediaErr.message : require("./lib/memberMedia").POST_MESSAGES.unread;
+  var markedMedia = await supabase
+    .from("social_post_drafts")
+    .update({ status: "publish_failed", publish_error: safeText(mediaWhy, 1000), updated_at: nowIso() })
+    .eq("id", draft.id)
+    .eq("user_id", ownerId)
+    .eq("status", "pending_approval");
+  return new Error(actionType + ": " + mediaWhy + " The draft is marked publish_failed" +
+    (markedMedia.error ? " — except that marking it failed too (" + (markedMedia.error.message || markedMedia.error) + ")" : "") +
+    ". Nothing is retried automatically");
+}
+
+/* Inside the one Bluesky fn: each image uploaded in order, then the one post
+   with an app.bsky.embed.images embed. The blobs exist only for this post. */
+async function blueskyPostWithImages(agent, record, images) {
+  var embedded = [];
+  for (var i = 0; i < images.length; i++) {
+    var uploaded = await agent.uploadBlob(images[i].bytes, { encoding: images[i].mime });
+    var blob = uploaded && uploaded.data && uploaded.data.blob;
+    if (!blob) throw new Error("Bluesky answered an image upload without a blob");
+    var entry = { image: blob, alt: images[i].alt };
+    if (images[i].size) entry.aspectRatio = { width: images[i].size.width, height: images[i].size.height };
+    embedded.push(entry);
+  }
+  var withEmbed = Object.assign({}, record);
+  withEmbed.embed = { $type: "app.bsky.embed.images", images: embedded };
+  return agent.post(withEmbed);
+}
+
+/* Inside the one Mastodon withToken: each image uploaded (and waited for) in
+   order, then the one status carrying their ids. */
+async function mastodonPostWithImages(mm, client, text, idempotencyKey, images) {
+  var ids = [];
+  for (var i = 0; i < images.length; i++) {
+    ids.push(await mm.uploadMedia(client, { bytes: images[i].bytes, mime: images[i].mime, description: images[i].alt }));
+  }
+  return mm.postStatus(client, text, idempotencyKey, ids);
+}
+
 app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscription, aiLimiter,
   async function (req, res, next) {
     try {
@@ -31124,17 +31227,29 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
       }
       recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "pass" } }, { facts: socialGateFacts });
 
+      // Images only when media_ids was sent (socialFilingMedia); without it the filing is as it always was.
+      var bskyMedia = [];
+      if (req.body.media_ids !== undefined) {
+        var bskyAttached = await socialFilingMedia(userId, req.body.media_ids, "bluesky", null);
+        if (bskyAttached.error) {
+          return res.status(bskyAttached.status).json({ error: bskyAttached.error });
+        }
+        bskyMedia = bskyAttached.media;
+      }
+      var bskyDraftRow = {
+        user_id:       userId,
+        platform:      "bluesky",
+        content:       text,
+        status:        "pending_approval",
+        scheduled_for: null,
+        created_at:    nowIso(),
+        updated_at:    nowIso()
+      };
+      if (bskyMedia.length) bskyDraftRow.media_ids = bskyMedia.map(function (m) { return m.id; });
+
       var draftInsert = await supabase
         .from("social_post_drafts")
-        .insert({
-          user_id:       userId,
-          platform:      "bluesky",
-          content:       text,
-          status:        "pending_approval",
-          scheduled_for: null,
-          created_at:    nowIso(),
-          updated_at:    nowIso()
-        })
+        .insert(bskyDraftRow)
         .select("*")
         .single();
       if (draftInsert.error) {
@@ -31142,6 +31257,12 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
       }
       var draft = draftInsert.data;
 
+      var bskyPayload = { draft_id: draft.id, text: text, source_task_id: task.id, posts_as: blueskyPostsAs(account) };
+      if (bskyMedia.length) {
+        // A post with images always waits for a person: never automatic, whatever auto_post says.
+        bskyPayload.posts_as.automatic = false;
+        bskyPayload.media = bskyMedia;
+      }
       var proposalInsert = await supabase
         .from("agent_proposals")
         .insert({
@@ -31150,7 +31271,7 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
           action_type:   "publish_social_post",
           title:         safeText("Bluesky post: " + text.replace(/\s+/g, " ").slice(0, 120), 200),
           target:        "bluesky",
-          payload:       { draft_id: draft.id, text: text, source_task_id: task.id, posts_as: blueskyPostsAs(account) },
+          payload:       bskyPayload,
           cost_amount:   0,
           cost_currency: "USD",
           reversible:    false,
@@ -31198,11 +31319,11 @@ app.post("/api/agents/social/propose-post", requireAuth, requireActiveSubscripti
         draft: linked.data,
         proposal: proposal,
         measured: measured,
-        note: account.kind === "member"
+        note: (account.kind === "member"
           ? "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
             "top-level post, from your Bluesky account @" + account.handle + "."
           : "Filed for approval. Nothing has been posted. Approving it posts exactly this text, as a new " +
-            "top-level post, from the platform's Bluesky account."
+            "top-level post, from the platform's Bluesky account.") + (bskyMedia.length ? " Images always wait for your approval." : "")
       });
     } catch (error) {
       console.error("[social/propose-post] Error:", error);
@@ -31269,7 +31390,7 @@ async function executePublishSocialPost(proposal) {
   }
   var draftRead = await supabase
     .from("social_post_drafts")
-    .select("id, user_id, platform, content, status, platform_post_uri, platform_post_cid")
+    .select("id, user_id, platform, content, status, platform_post_uri, platform_post_cid, media_ids")
     .eq("id", draftId)
     .eq("user_id", ownerId)
     .maybeSingle();
@@ -31325,15 +31446,27 @@ async function executePublishSocialPost(proposal) {
     record.facets = facets;
   }
 
+  /* Images (migration 168): checked and read back byte for byte before any
+     login. A post without them never comes here, and its record is as it
+     always was. */
+  var images = [];
+  if (payload.media !== undefined || (Array.isArray(draft.media_ids) && draft.media_ids.length)) {
+    try {
+      images = await socialPostImages(ownerId, payload, draft, "bluesky", null);
+    } catch (mediaErr) {
+      throw await socialImagesFailed("publish_social_post", draft, ownerId, mediaErr);
+    }
+  }
+
   var outcome;
   if (account.kind === "member") {
     // The member's own session: one login, one post, no retry (lib/memberBluesky.js).
     outcome = await require("./lib/memberBluesky").withSession(account.row, require("./lib/apiKeyCrypto").decrypt,
-      function (agent) { return agent.post(record); });
+      function (agent) { return images.length ? blueskyPostWithImages(agent, record, images) : agent.post(record); });
     await recordBlueskySession(ownerId, account.handle, outcome);
   } else {
     try {
-      outcome = await bskyGate.call(function (agent) { return agent.post(record); });
+      outcome = await bskyGate.call(function (agent) { return images.length ? blueskyPostWithImages(agent, record, images) : agent.post(record); });
     } catch (err) {
       outcome = { ok: false, reason: "post_error", error: (err && err.message) || String(err) };
     }
@@ -32334,7 +32467,7 @@ var MASTODON_RECONNECT_FIRST = "Your Mastodon connection needs reconnecting: you
 async function mastodonPostingAccount(userId) {
   var read = await supabase
     .from("member_mastodon_connections")
-    .select("id, user_id, instance_host, account_id, acct, status, auto_post, max_characters, characters_reserved_per_url, token_ciphertext, token_iv, token_auth_tag")
+    .select("id, user_id, instance_host, account_id, acct, status, auto_post, max_characters, characters_reserved_per_url, image_size_limit, media_description_limit, token_ciphertext, token_iv, token_auth_tag")
     .eq("user_id", userId)
     .maybeSingle();
   if (read.error) {
@@ -32404,6 +32537,9 @@ function mastodonFailureText(outcome, label) {
     return "Mastodon rate limit on " + label + " (" + outcome.code + ")" +
       (outcome.resumes_at ? "; no Mastodon call for this account until " + outcome.resumes_at : "") + ".";
   }
+  if (outcome.code === "media_not_ready") {
+    return "Mastodon was still processing an image. Approve the post again in a minute.";
+  }
   return "Mastodon did not take it (" + (outcome.code || outcome.reason) + ").";
 }
 
@@ -32464,6 +32600,8 @@ app.post("/api/social/mastodon/connect", requireAuth, requireActiveSubscription,
           token_auth_tag:              sealed.authTag,
           max_characters:              verified.max_characters,
           characters_reserved_per_url: verified.characters_reserved_per_url,
+          image_size_limit:            verified.image_size_limit,
+          media_description_limit:     verified.media_description_limit,
           status:                      "connected",
           last_ok_at:                  stamp,
           last_error_at:               null,
@@ -32684,17 +32822,29 @@ app.post("/api/social/mastodon/propose-post", requireAuth, requireActiveSubscrip
       }
       recordGateDecision(userId, "social_post", "ai_task:" + task.id, { G8: { result: "pass" }, G7: { result: "pass" } }, { facts: mastoGateFacts });
 
+      // Images only when media_ids was sent, held to this connection's own limits.
+      var mastoMedia = [];
+      if (req.body.media_ids !== undefined) {
+        var mastoAttached = await socialFilingMedia(userId, req.body.media_ids, "mastodon", row);
+        if (mastoAttached.error) {
+          return res.status(mastoAttached.status).json({ error: mastoAttached.error });
+        }
+        mastoMedia = mastoAttached.media;
+      }
+      var mastoDraftRow = {
+        user_id:       userId,
+        platform:      "mastodon",
+        content:       text,
+        status:        "pending_approval",
+        scheduled_for: null,
+        created_at:    nowIso(),
+        updated_at:    nowIso()
+      };
+      if (mastoMedia.length) mastoDraftRow.media_ids = mastoMedia.map(function (m) { return m.id; });
+
       var draftInsert = await supabase
         .from("social_post_drafts")
-        .insert({
-          user_id:       userId,
-          platform:      "mastodon",
-          content:       text,
-          status:        "pending_approval",
-          scheduled_for: null,
-          created_at:    nowIso(),
-          updated_at:    nowIso()
-        })
+        .insert(mastoDraftRow)
         .select("*")
         .single();
       if (draftInsert.error) {
@@ -32702,6 +32852,13 @@ app.post("/api/social/mastodon/propose-post", requireAuth, requireActiveSubscrip
       }
       var draft = draftInsert.data;
 
+      var mastoPayload = { draft_id: draft.id, task_id: task.id, text: text, posts_as: mastodonPostsAs(row),
+                           measured: { length: counted, limit: limit, reserved_per_url: mm.reservedOf(row) } };
+      if (mastoMedia.length) {
+        // A post with images always waits for a person: never automatic, whatever auto_post says.
+        mastoPayload.posts_as.automatic = false;
+        mastoPayload.media = mastoMedia;
+      }
       var proposalInsert = await supabase
         .from("agent_proposals")
         .insert({
@@ -32710,8 +32867,7 @@ app.post("/api/social/mastodon/propose-post", requireAuth, requireActiveSubscrip
           action_type:   "publish_mastodon_post",
           title:         safeText("Mastodon post: " + text.replace(/\s+/g, " ").slice(0, 120), 200),
           target:        "mastodon",
-          payload:       { draft_id: draft.id, task_id: task.id, text: text, posts_as: mastodonPostsAs(row),
-                           measured: { length: counted, limit: limit, reserved_per_url: mm.reservedOf(row) } },
+          payload:       mastoPayload,
           cost_amount:   0,
           cost_currency: "USD",
           reversible:    false,
@@ -32758,7 +32914,8 @@ app.post("/api/social/mastodon/propose-post", requireAuth, requireActiveSubscrip
         draft: linked.data,
         proposal: proposal,
         measured: measured,
-        note: "Filed for approval. Nothing has been posted. Approving it posts exactly this text, publicly, from your Mastodon account " + label + "."
+        note: "Filed for approval. Nothing has been posted. Approving it posts exactly this text, publicly, from your Mastodon account " + label + "." +
+          (mastoMedia.length ? " Images always wait for your approval." : "")
       });
     } catch (error) {
       console.error("[social/mastodon/propose-post] Error:", (error && error.message) || error);
@@ -32820,7 +32977,7 @@ async function executePublishMastodonPost(proposal) {
   }
   var draftRead = await supabase
     .from("social_post_drafts")
-    .select("id, user_id, platform, content, status, platform_post_uri")
+    .select("id, user_id, platform, content, status, platform_post_uri, media_ids")
     .eq("id", draftId)
     .eq("user_id", ownerId)
     .maybeSingle();
@@ -32869,9 +33026,20 @@ async function executePublishMastodonPost(proposal) {
     throw fail("the draft is " + JSON.stringify(draft.status) + ", not pending_approval.");
   }
 
+  // Images (migration 168): checked and read back byte for byte before the token is used.
+  var mastoImages = [];
+  if (payload.media !== undefined || (Array.isArray(draft.media_ids) && draft.media_ids.length)) {
+    try {
+      mastoImages = await socialPostImages(ownerId, payload, draft, "mastodon", row);
+    } catch (mediaErr) {
+      throw await socialImagesFailed("publish_mastodon_post", draft, ownerId, mediaErr);
+    }
+  }
+
   var label = "@" + row.acct + "@" + row.instance_host;
+  // One withToken: every upload, its polls and the status, with no retry.
   var outcome = await mm.withToken(row, require("./lib/apiKeyCrypto").decrypt, function (client) {
-    return mm.postStatus(client, text, draft.id);
+    return mastoImages.length ? mastodonPostWithImages(mm, client, text, draft.id, mastoImages) : mm.postStatus(client, text, draft.id);
   });
   await recordMastodonSession(ownerId, label, outcome);
 
