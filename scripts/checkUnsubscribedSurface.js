@@ -225,7 +225,12 @@ const EXPECTED_GATED = [
   // it (POST /api/media: checked by its bytes, location data removed, 10 MB a file and 250 MB in all, into bf-public
   // media/<member id>/) needs a subscription (requireActiveSubscription), as the brief decides; listing, labelling and
   // deleting stay login-only (section 4's OWN list), so a member whose plan lapses can still clear their library.
-  "post /api/media"
+  "post /api/media",
+  // NAMED (Nov 5 2026, mailbox connection, migration 169; gated 91 -> 94): BEFORE no mailbox. AFTER connecting a mailbox
+  // (the IMAP login and SMTP auth check, then the sealed app password) and reading it (the inbox list and one message,
+  // read-only, never stored) need a subscription; the status and disconnect stay login-only, so a member whose plan
+  // lapses can always see and remove the connection (checkMailboxConnect).
+  "post /api/mailbox/connect", "get /api/mailbox/inbox", "get /api/mailbox/inbox/:uid"
 ];
 
 const EXPECTED_ADMIN = [
@@ -407,7 +412,11 @@ const EXPECTED_OWN = [
   // AFTER a member edits the label and alt text of their own file (PATCH) and deletes their own file (DELETE: refused
   // with 409 while it is used anywhere, else the file and then its row; checkMediaLibrary). Both rows are theirs, and the
   // file is in their own media/<id>/ folder; nothing another member is served is written.
-  "patch /api/media/:id", "delete /api/media/:id"
+  "patch /api/media/:id", "delete /api/media/:id",
+  // NAMED (Nov 5 2026, mailbox connection, migration 169; effectful login-only 155 -> 156): BEFORE no mailbox. AFTER a
+  // member deletes their own member_email_connections row (the sealed app password with it); the row is theirs and
+  // served to no one else, and disconnecting must always work, subscribed or not.
+  "post /api/mailbox/disconnect"
 ];
 
 /* Unauthenticated routes that write. */

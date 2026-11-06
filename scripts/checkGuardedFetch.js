@@ -94,9 +94,12 @@ const MUTATIONS = {
   "ipv6-allowlist":   [["  if (!inRange6(n, \"2000::/3\")) {", "  if (false) {"]],
   "ipv6-carveouts":   [["    if (inRange6(n, cidr)) return cidr", "    if (false) return cidr"]],
   "mapped":           [["    const verdict = classifyIPv4(dotted);", "    const verdict = null;"]],
-  "all-addresses":    [["          for (const a of addresses) {", "          for (const a of addresses.slice(0, 1)) {"]],
-  "rebind":           [["          if (lookupOptions && lookupOptions.all) return callback(null, addresses);\n          return callback(null, addresses[0].address, addresses[0].family);",
-                        "          return resolve(hostname, { all: true, verbatim: true }, function (e2, again) {\n            if (lookupOptions && lookupOptions.all) return callback(e2, again);\n            return callback(e2, again[0].address, again[0].family);\n          });"]],
+  /* NAMED (Nov 5 2026, mailbox connection): BEFORE guardedLookup was declared inside run(), and these two anchors
+     carried its 10-space indent. AFTER it is declared once in createGuardedFetch's scope (so resolvePublicHost uses
+     the same function, not a copy), with a 6-space indent; the mutations are the same. */
+  "all-addresses":    [["      for (const a of addresses) {", "      for (const a of addresses.slice(0, 1)) {"]],
+  "rebind":           [["      if (lookupOptions && lookupOptions.all) return callback(null, addresses);\n      return callback(null, addresses[0].address, addresses[0].family);",
+                        "      return resolve(hostname, { all: true, verbatim: true }, function (e2, again) {\n        if (lookupOptions && lookupOptions.all) return callback(e2, again);\n        return callback(e2, again[0].address, again[0].family);\n      });"]],
   "redirect-recheck": [["          target = checkUrl(urlString);", "          target = hopNumber === 0 ? checkUrl(urlString) : (function (u) { return { url: u, hostname: u.hostname.replace(/^\\[|\\]$/g, \"\"), port: Number(u.port) || 80, isHttps: u.protocol === \"https:\" }; })(new URL(urlString));"],
                        ["          lookup: guardedLookup,", "          lookup: hopNumber === 0 ? guardedLookup : function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); },"]],
   "redirect-limit":   [["            if (hopNumber >= MAX_REDIRECTS) {", "            if (false) {"]],
@@ -111,7 +114,14 @@ const MUTATIONS = {
   "leak-blocked":     [["    default:\n      return UNREACHABLE_MESSAGE;", "    case \"blocked\":\n      return \"That address is private.\";\n    default:\n      return UNREACHABLE_MESSAGE;"]],
   "leak-timeout":     [["      return err.connected ? \"That website did not finish", "      return true ? \"That website did not finish"]],
   // options.accept may change the content-type rule and nothing else
-  "accept-skips-dns": [["            if (verdict) {\n              return callback(new GuardedFetchError(\"blocked\"", "            if (verdict && !accepted) {\n              return callback(new GuardedFetchError(\"blocked\""]],
+  /* NAMED (Nov 5 2026, mailbox connection): BEFORE the anchor was the verdict line inside guardedLookup, which then
+     sat inside run() and could see `accepted`. AFTER guardedLookup is shared by every request and cannot, so the
+     mutation skips it at the one place a request picks its lookup, when options.accept is given. Same meaning. */
+  "accept-skips-dns": [["          lookup: guardedLookup,", "          lookup: accepted ? function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); } : guardedLookup,"]],
+  // NAMED (Nov 5 2026, mailbox connection): resolvePublicHost (section 14)
+  "resolve-first-only":         [["      guardedLookup(name, { all: true }, function (err, addresses) {", "      resolve(name, { all: true, verbatim: true }, function (err, addresses) { if (!err && addresses && addresses.length && isBlockedAddress(addresses[0].address)) err = new GuardedFetchError(\"blocked\", \"the first address\");"]],
+  "resolve-blocked-allowed":    [["      guardedLookup(name, { all: true }, function (err, addresses) {", "      resolve(name, { all: true, verbatim: true }, function (err, addresses) {"]],
+  "resolve-ip-literal-allowed": [["      if (net.isIP(name.replace(/^\\[|\\]$/g, \"\"))) return reject(", "      if (false) return reject("]],
   "accept-skips-url": [["          target = checkUrl(urlString);", "          target = accepted ? (function (u) { return { url: u, hostname: u.hostname.replace(/^\\[|\\]$/g, \"\"), port: Number(u.port) || 80, isHttps: u.protocol === \"https:\" }; })(new URL(urlString)) : checkUrl(urlString);"]],
   "accept-ignored":   [["            if (accepted.indexOf(contentType) === -1) {", "            if (!isHtml) {"]],
   "accept-anything":  [["            if (accepted.indexOf(contentType) === -1) {", "            if (false) {"]],
@@ -957,6 +967,34 @@ async function sectionJsonOptions(auth) {
   check("timeoutMs 1500 cuts a hanging API off at about 1.5 s (timeout), not 10 s", !a.ok && a.err.code === "timeout" && a.ms >= 1300 && a.ms < 4000, code(a) + " " + a.ms + " ms");
 }
 
+/* ── 14. resolvePublicHost: for connections that are not HTTP (lib/memberEmail.js) ── */
+async function sectionResolvePublicHost() {
+  console.log("\n14. resolvePublicHost");
+  const outcome = async function (host) {
+    try { return { ok: await lib.resolvePublicHost(host, { resolve: resolve }) }; } catch (e) { return { code: e && e.code, guarded: !!(e && e.guardedFetch) }; }
+  };
+  const pub = await outcome("public.test");
+  check("a public name resolves to its one vetted address and family", pub.ok && pub.ok.address === PUBLIC_V4 && pub.ok.family === 4, JSON.stringify(pub));
+  const mixed = await outcome("mixed.test");
+  check("a name with one public and one private address is refused (every address is checked, not the first)", mixed.code === "blocked" && mixed.guarded, JSON.stringify(mixed));
+  for (const name of ["loop.test", "metadata.test", "railway.test"]) {
+    const r = await outcome(name);
+    check(name + " (a private address) is refused blocked", r.code === "blocked" && r.guarded, JSON.stringify(r));
+  }
+  resolverCalls = {};
+  const literals = [];
+  for (const literal of ["93.184.216.34", "127.0.0.1", "::1", "[2606:4700::1]"]) literals.push(await outcome(literal));
+  check("an IP literal, public or private, is refused invalid_url before any lookup", literals.every(function (r) { return r.code === "invalid_url"; }) && Object.keys(resolverCalls).length === 0,
+    JSON.stringify(literals));
+  const none = await outcome("nowhere.test");
+  const blank = await outcome("  ");
+  check("an unknown name is refused dns; an empty host invalid_url", none.code === "dns" && blank.code === "invalid_url", JSON.stringify([none, blank]));
+  resolverCalls = {};
+  await outcome("public.test");
+  check("one resolution per call", resolverCalls["public.test"] === 1, JSON.stringify(resolverCalls));
+  check("resolvePublicHost is exported, and the default one takes no deps", typeof lib.resolvePublicHost === "function" && typeof lib.createGuardedFetch().resolvePublicHost === "function");
+}
+
 (async function main() {
   await new Promise(function (r) { server.listen(0, "127.0.0.1", r); });
   const closed = net.createServer();
@@ -976,6 +1014,7 @@ async function sectionJsonOptions(auth) {
   await sectionAccept();
   await sectionJson();
   await sectionRoute();
+  await sectionResolvePublicHost();
 
   console.log(failures ? "\n" + failures + " FAILED" : "\nALL CHECKS PASSED");
   process.exit(failures ? 1 : 0);

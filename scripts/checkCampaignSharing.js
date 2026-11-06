@@ -429,9 +429,11 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // numbered 166, and every migration but 167_member_media.sql is at most 166; "the highest" is checkMediaLibrary M2's.
   // NAMED (Nov 5 2026, images in social posts, migration 168): BEFORE every migration but 167 at most 166. AFTER every migration but
   // 167 and 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
-  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql and 168_social_post_images.sql is at most 166",
+  // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE every migration but 167 and 168 at most 166. AFTER
+  // 169_member_email_connections.sql too; "the highest" is checkMailboxConnect M2's.
+  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql and 169_member_email_connections.sql is at most 166",
     migFiles.filter(f => /^166_/.test(f)).length === 1 && migFiles.indexOf("166_campaign_sharing.sql") !== -1 &&
-    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));

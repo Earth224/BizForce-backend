@@ -90,7 +90,9 @@ const MUTATIONS = {
   // an IP literal is accepted as a server
   "ip-literal-allowed": [["MM", "  if (net.isIP(s)) return null;\n", "  if (net.isIP(s)) return s;\n"]],
   // a name that resolves to a private address is connected to
-  "private-address-allowed": [["GF", "            const verdict = isBlockedAddress(a.address);\n", "            const verdict = null;\n"]],
+  // NAMED (Nov 5 2026, mailbox connection): BEFORE a 12-space indent, with guardedLookup inside run(). AFTER 8 spaces:
+  // guardedLookup now sits in createGuardedFetch's scope, shared with resolvePublicHost. The mutation is the same.
+  "private-address-allowed": [["GF", "        const verdict = isBlockedAddress(a.address);\n", "        const verdict = null;\n"]],
   // the JSON mode follows a redirect
   "redirect-followed": [["GF", "          if (json && status >= 300 && status < 400) {\n", "          if (false) {\n"]],
   // the JSON mode reads a body of any size
@@ -122,8 +124,10 @@ const MUTATIONS = {
   "retry-on-401": [["MM", "    var value = await fn(makeClient(host, function () { return token; }));\n",
     "    var value;\n    try { value = await fn(makeClient(host, function () { return token; })); }\n    catch (first) { value = await fn(makeClient(host, function () { return token; })); }\n"]],
   // the needs_reconnect mark is not conditional, so every failure notifies again
-  "notice-every-failure": [["SRC", "      .eq(\"user_id\", userId)\n      .eq(\"status\", \"connected\")\n      .select(\"id\");\n",
-    "      .eq(\"user_id\", userId)\n      .select(\"id\");\n"]],
+  // NAMED (Nov 5 2026, mailbox connection): BEFORE the anchor was the three .eq/.eq/.select lines, once in server.js. AFTER
+  // recordMailboxSession has the same three lines, so the anchor starts at this table's .from line; the mutation is the same.
+  "notice-every-failure": [["SRC", "      .from(\"member_mastodon_connections\")\n      .update(Object.assign({ status: \"needs_reconnect\" }, patch))\n      .eq(\"user_id\", userId)\n      .eq(\"status\", \"connected\")\n      .select(\"id\");\n",
+    "      .from(\"member_mastodon_connections\")\n      .update(Object.assign({ status: \"needs_reconnect\" }, patch))\n      .eq(\"user_id\", userId)\n      .select(\"id\");\n"]],
   // the export reads every column of the connection
   "export-leaks-token": [["YD", "    owner: [\"user_id\"], key: \"instance_host\", select: \"instance_host, acct, created_at\", onDelete: \"delete\" },\n",
     "    owner: [\"user_id\"], key: \"instance_host\", onDelete: \"delete\" },\n"]],
@@ -615,7 +619,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     migFiles.filter(f => /^165_/.test(f)).length === 1 && migFiles.indexOf("165_member_mastodon_connections.sql") !== -1 &&
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
     // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 5 2026, mailbox connection, migration 169): the allowlist adds 169_member_email_connections.sql; "the highest" is checkMailboxConnect M2's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */

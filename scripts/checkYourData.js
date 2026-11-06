@@ -784,7 +784,11 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
       "@anthropic-ai/sdk": "Anthropic", "@atproto/api": "Bluesky", "@simplewebauthn/server": null, "@supabase/supabase-js": "Supabase", "astronomy-engine": null,
       bcryptjs: null, "city-timezones": null, compression: null, cors: null, dotenv: null, entities: null, "epub-gen-memory": null, express: null,
       "express-rate-limit": null, helmet: null, jsonwebtoken: null, luxon: null, mammoth: null, multer: null, "node-cron": null, "pdf-parse": null, pdfkit: null,
-      resend: "Resend", stripe: "Stripe", svix: null, twilio: "Twilio", "web-push": "push service"
+      resend: "Resend", stripe: "Stripe", svix: null, twilio: "Twilio", "web-push": "push service",
+      // NAMED (Nov 5 2026, mailbox connection, migration 169; owner-approved packages): BEFORE no mail libraries. AFTER
+      // imapflow (reading the inbox) and nodemailer (the outgoing server check) talk only to the member's own email
+      // provider, named in THIRD_PARTIES; postal-mime parses a message here and sends nothing anywhere.
+      imapflow: "your own email provider", nodemailer: "your own email provider", "postal-mime": null
     };
     const text = k => (YD.PROTECTIONS.find(p => p.key === k) || {}).text || "";
     const TRACKERS = /googletagmanager\.com|google-analytics\.com|\bgtag\(|connect\.facebook\.net|\bfbq\(|hotjar\.com|segment\.(com|io)|mixpanel\.com|amplitude\.com|clarity\.ms|doubleclick\.net|adservice\.google|plausible\.io|posthog\.com/;

@@ -345,10 +345,12 @@ const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
 /* NAMED BEFORE → AFTER (Nov 4 2026, the Media Library, migration 167). BEFORE: 58 pages loaded bf-theme.js. AFTER:
    59; media.html, the member's Media Library, is new and wears the member's theme, held to the same rules as the
    pop-out above. */
-const NEW_PAGES = ["music-popout.html", "media.html"];
+/* NAMED BEFORE → AFTER (Nov 5 2026, mailbox connection, migration 169). BEFORE: 59 pages loaded bf-theme.js. AFTER:
+   60; mailbox.html, Your Inbox, is new and wears the member's theme, held to the same rules as the pop-out above. */
+const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
-check("A1. 59 pages load scripts/bf-theme.js", THEMED.length === 59 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
+check("A1. 60 pages load scripts/bf-theme.js", THEMED.length === 60 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
 const firstInHead = THEMED.filter(f => { const m = /<head>\s*([\s\S]*?)\n/.exec(FILES[f]); return !m || m[1].trim() !== TAG; });
 check("A1. ... as the first element of <head>, before any style or script", firstInHead.length === 0, firstInHead.join(", "));
 const inlineLeft = THEMED.concat([SHELL]).filter(f => /body::before\s*\{[^{}]*background/i.test(noComments(f === SHELL ? FILES[f] : stylesOf(FILES[f]))));
@@ -365,7 +367,7 @@ const mapNotThemed = mapKeys.filter(k => !THEMED.some(f => keyOfFile(f) === k)).
 check("A3. UNTHEMED is the same in lib/themes.js and scripts/bf-theme.js", JSON.stringify(frontUnthemed) === JSON.stringify(LIBX.UNTHEMED));
 check("A3. ... and is exactly the app map's pages that do not load bf-theme.js", JSON.stringify(LIBX.UNTHEMED.slice().sort()) === JSON.stringify(mapNotThemed),
   "map-not-themed: " + mapNotThemed.join(",") + " | UNTHEMED: " + LIBX.UNTHEMED.join(","));
-check("A3. the themed pages the server accepts are the 58 that load bf-theme.js", JSON.stringify(LIBX.themedPages(APP_MAP)) === JSON.stringify(THEMED.map(keyOfFile).sort()));
+check("A3. the themed pages the server accepts are the 60 that load bf-theme.js", JSON.stringify(LIBX.themedPages(APP_MAP)) === JSON.stringify(THEMED.map(keyOfFile).sort()));
 
 const ruleRoot = rulesOf(RULE, /^:where\(:root\)$/)[0] || {};
 const ruleHtml = rulesOf(RULE, /^html::before$/)[0] || {};
@@ -1035,7 +1037,9 @@ async function routesAndLib(lifted) {
   check("E2. a good theme is stored, clamped, under the caller's id, and the answer lists it with the page list",
     r.status === 201 && row && row.user_id === UID && row.theme.glow_a === "#112233" && row.theme.glow_a_alpha === 1 &&   // NAMED (Block 4d): BEFORE 0.5, the old ceiling; AFTER 1
     // NAMED (Nov 4 2026, the Media Library): BEFORE 58 pages in the list; AFTER 59, with media.html.
-    r.body.created_id === row.id && r.body.pages.length === 59 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1));
+    // NAMED (Nov 5 2026, mailbox connection): BEFORE 59 pages in the list; AFTER 60, with mailbox.html.
+    r.body.created_id === row.id && r.body.pages.length === 60 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1) &&
+    r.body.pages.some(p => (p.key || p.file || p) === "mailbox.html" || JSON.stringify(p).indexOf("mailbox.html") !== -1));
   fake.db.member_themes.push({ id: "bbbbbbbb-0000-4000-8000-000000000009", user_id: OTHER, name: "Theirs", theme: LIBX.DEFAULT_THEME });
   r = await callRoute(L, "get", "/api/themes");
   check("E3. GET answers only the caller's themes", r.body.themes.length === 1 && r.body.themes[0].id === row.id);

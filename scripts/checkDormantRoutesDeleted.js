@@ -253,7 +253,14 @@ const ADDED = [
   ["get", "/api/media/usage"],                               // bytes used, the cap and the count (415 -> 416)
   ["patch", "/api/media/:id"],                               // the label and alt text, owner only (416 -> 417)
   ["get", "/api/media/:id/uses"],                            // where the file is used, from the member's own rows (417 -> 418)
-  ["delete", "/api/media/:id"]                               // refused with 409 while in use; else the file, then the row (418 -> 419)
+  ["delete", "/api/media/:id"],                              // refused with 409 while in use; else the file, then the row (418 -> 419)
+  // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE 419 routes; AFTER 424, a member's own mailbox by app
+  // password, read only, read on request and never stored (checkMailboxConnect)
+  ["post", "/api/mailbox/connect"],                          // the IMAP login and the SMTP auth check, then the sealed row; with a subscription (419 -> 420)
+  ["get", "/api/mailbox/status"],                            // connected, provider, address, status, since; never the secret (420 -> 421)
+  ["post", "/api/mailbox/disconnect"],                       // deletes the row; always open (421 -> 422)
+  ["get", "/api/mailbox/inbox"],                             // the newest 30 by UID, INBOX opened read-only, never stored (422 -> 423)
+  ["get", "/api/mailbox/inbox/:uid"]                         // one message as plain text, at most 2 MB, attachments listed only (423 -> 424)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

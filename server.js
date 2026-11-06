@@ -33081,6 +33081,288 @@ async function executePublishMastodonPost(proposal) {
   return { id: posted.id, url: url, published_at: publishedAt, draft_id: draft.id };
 }
 
+// ── Mailbox: a member's own inbox, read only (migration 169) ───────────────
+/* lib/memberEmail.js does the work; these routes hold the row. The app password
+   is sealed before either check runs, never sent back and never logged, and
+   stored only after the IMAP login AND the SMTP auth check pass. Reading opens
+   INBOX read-only on request and returns the answer as it is: no message,
+   header or attachment is written to any table, log or run. The one write a
+   read makes is the connection's own last_ok_at or error stamp
+   (recordMailboxSession). Nothing here sends mail. */
+var MAILBOX_SECRET_COLUMNS = "id, user_id, provider, email_address, username, imap_host, imap_port, smtp_host, smtp_port, status, created_at, secret_ciphertext, secret_iv, secret_auth_tag";
+var MAILBOX_STATUS_COLUMNS = "provider, email_address, status, created_at";
+function mailboxReconnectText(address) {
+  return "Your mailbox stopped accepting the app password saved for " + address + ", so BizForce can't read it. Make a new app password and connect again.";
+}
+
+/* After a read, as recordMastodonSession does: a success notes last_ok_at; a
+   refused app password marks the connection needs_reconnect and raises ONE
+   in-app notice (conditional on status connected, so a second failure finds
+   nothing to mark and says nothing again); any other failure notes the code.
+   Never throws. */
+async function recordMailboxSession(userId, address, outcome) {
+  try {
+    var when = nowIso();
+    if (outcome.ok || outcome.reason === "too_large" || outcome.reason === "not_found") {
+      await supabase.from("member_email_connections").update({ last_ok_at: when, updated_at: when }).eq("user_id", userId);
+      return;
+    }
+    var errorPatch = { last_error_at: when, last_error_code: String(outcome.code || outcome.reason).slice(0, 60), updated_at: when };
+    if (outcome.reason !== "session_failed") {
+      await supabase.from("member_email_connections").update(errorPatch).eq("user_id", userId);
+      return;
+    }
+    var flagged = await supabase
+      .from("member_email_connections")
+      .update(Object.assign({ status: "needs_reconnect" }, errorPatch))
+      .eq("user_id", userId)
+      .eq("status", "connected")
+      .select("id");
+    if (flagged.error || !(flagged.data || []).length) {
+      return;
+    }
+    var reconnectNotice = await supabase.from("notifications").insert({
+      user_id: userId,
+      type:    "email_reconnect",
+      title:   "Reconnect your mailbox",
+      message: mailboxReconnectText(address),
+      read:    false
+    });
+    if (reconnectNotice.error) {
+      console.warn("[mailbox] the reconnect notice could not be saved:", reconnectNotice.error.code || "error");
+    }
+  } catch (err) {
+    console.error("[mailbox] recording a mailbox outcome failed:", (err && err.code) || "error");
+  }
+}
+
+function mailboxLimitHandler(text) {
+  return function (req, res) {
+    var reset = req.rateLimit && req.rateLimit.resetTime instanceof Date ? req.rateLimit.resetTime.toISOString() : null;
+    res.set("Cache-Control", "no-store");
+    res.status(429).json({ error: text, reason: "rate_limited", resumes_at: reset });
+  };
+}
+/* Per account: five connection attempts an hour. */
+const mailboxConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: function (req) { return "mailbox-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Too many mailbox connection attempts. Try again in an hour. Nothing was saved.")
+});
+const mailboxReadHourLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "mailbox-read:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Your inbox can be loaded 30 times an hour.")
+});
+const mailboxReadDayLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 200,
+  keyGenerator: function (req) { return "mailbox-read:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Your inbox can be loaded 200 times a day.")
+});
+const mailboxOpenHourLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "mailbox-open:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Messages can be opened 60 times an hour.")
+});
+const mailboxOpenDayLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 300,
+  keyGenerator: function (req) { return "mailbox-open:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Messages can be opened 300 times a day.")
+});
+
+app.post("/api/mailbox/connect", requireAuth, requireActiveSubscription, mailboxConnectLimiter,
+  async function (req, res, next) {
+    try {
+      var me = require("./lib/memberEmail");
+      var form = req.body || {};
+      var asked = me.settingsFrom(form);
+      if (!asked.ok) {
+        return res.status(400).json({ error: asked.error, code: asked.code, saved: false });
+      }
+      var appPassword = me.checkAppPassword(form.app_password);
+      if (!appPassword.ok) {
+        return res.status(400).json({ error: appPassword.error, code: appPassword.code, saved: false });
+      }
+
+      // Sealed first: a server that cannot encrypt it never sends it anywhere.
+      var sealedSecret;
+      try {
+        sealedSecret = require("./lib/apiKeyCrypto").encrypt(appPassword.value);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: me.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+
+      var checked = await me.verifyConnection(asked.settings, appPassword.value);
+      appPassword = null;
+      if (!checked.ok) {
+        if (checked.kind === "rejected") {
+          return res.status(422).json({ error: me.MESSAGES.rejected, code: "rejected", saved: false });
+        }
+        return res.status(502).json({
+          error: checked.kind === "rate_limited" ? me.MESSAGES.rateLimited : me.MESSAGES.unreachable,
+          code: checked.kind === "rate_limited" ? "rate_limited" : "unreachable",
+          saved: false
+        });
+      }
+
+      var connectedAt = nowIso();
+      var stored = await supabase
+        .from("member_email_connections")
+        .upsert({
+          user_id:           req.user.id,
+          provider:          asked.settings.provider,
+          email_address:     asked.settings.email_address,
+          username:          asked.settings.username,
+          imap_host:         asked.settings.imap_host,
+          imap_port:         asked.settings.imap_port,
+          smtp_host:         asked.settings.smtp_host,
+          smtp_port:         asked.settings.smtp_port,
+          auth_kind:         "app_password",
+          secret_ciphertext: sealedSecret.ciphertext,
+          secret_iv:         sealedSecret.iv,
+          secret_auth_tag:   sealedSecret.authTag,
+          status:            "connected",
+          last_ok_at:        connectedAt,
+          last_error_at:     null,
+          last_error_code:   null,
+          updated_at:        connectedAt
+        }, { onConflict: "user_id" })
+        .select(MAILBOX_STATUS_COLUMNS)
+        .single();
+      if (stored.error) {
+        throw stored.error;
+      }
+      me.clearBackoff(req.user.id);
+      return res.json(me.statusOf(stored.data));
+    } catch (error) {
+      console.error("[mailbox/connect] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/mailbox/status", requireAuth, async function (req, res, next) {
+  try {
+    var current = await supabase
+      .from("member_email_connections")
+      .select(MAILBOX_STATUS_COLUMNS)
+      .eq("user_id", req.user.id)
+      .maybeSingle();
+    if (current.error) {
+      throw current.error;
+    }
+    return res.json(require("./lib/memberEmail").statusOf(current.data));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not: a member can always take their app password back.
+app.post("/api/mailbox/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var dropped = await supabase
+      .from("member_email_connections")
+      .delete()
+      .eq("user_id", req.user.id)
+      .select("id");
+    if (dropped.error) {
+      throw dropped.error;
+    }
+    return res.json(Object.assign(require("./lib/memberEmail").statusOf(null), {
+      removed: (dropped.data || []).length > 0,
+      note: "Disconnected. To cancel the app password itself, remove it in your email provider's security settings."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The member's row with its sealed secret, or an answer already sent. */
+async function mailboxForRead(req, res) {
+  var me = require("./lib/memberEmail");
+  var found = await supabase
+    .from("member_email_connections")
+    .select(MAILBOX_SECRET_COLUMNS)
+    .eq("user_id", req.user.id)
+    .maybeSingle();
+  if (found.error) {
+    throw found.error;
+  }
+  if (!found.data) {
+    res.status(404).json({ error: me.MESSAGES.notConnected, code: "not_connected" });
+    return null;
+  }
+  if (found.data.status !== "connected") {
+    res.status(409).json({ error: mailboxReconnectText(found.data.email_address), code: "needs_reconnect" });
+    return null;
+  }
+  return found.data;
+}
+
+function mailboxReadFailure(res, outcome, address) {
+  var me = require("./lib/memberEmail");
+  if (outcome.reason === "session_failed") return res.status(422).json({ error: mailboxReconnectText(address), code: "needs_reconnect" });
+  if (outcome.reason === "rate_limited") return res.status(429).json({ error: me.MESSAGES.rateLimited, code: "rate_limited", resumes_at: outcome.resumes_at || null });
+  if (outcome.reason === "too_large") return res.status(413).json({ error: me.MESSAGES.tooLarge, code: "too_large" });
+  if (outcome.reason === "not_found") return res.status(404).json({ error: me.MESSAGES.notFound, code: "not_found" });
+  return res.status(502).json({ error: me.MESSAGES.readUnreachable, code: "unreachable" });
+}
+
+app.get("/api/mailbox/inbox", requireAuth, requireActiveSubscription, mailboxReadHourLimiter, mailboxReadDayLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var me = require("./lib/memberEmail");
+      var before = null;
+      if (req.query.before !== undefined && req.query.before !== "") {
+        before = me.uidOf(req.query.before);
+        if (!before) return res.status(400).json({ error: me.MESSAGES.uid, code: "uid" });
+      }
+      var box = await mailboxForRead(req, res);
+      if (!box) return;
+      var listed = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.listInbox(client, before); });
+      await recordMailboxSession(req.user.id, box.email_address, listed);
+      if (!listed.ok) return mailboxReadFailure(res, listed, box.email_address);
+      return res.json({ messages: listed.value.messages, next_before: listed.value.next_before });
+    } catch (error) {
+      console.error("[mailbox/inbox] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/mailbox/inbox/:uid", requireAuth, requireActiveSubscription, mailboxOpenHourLimiter, mailboxOpenDayLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var me = require("./lib/memberEmail");
+      var uid = me.uidOf(req.params.uid);
+      if (!uid) return res.status(400).json({ error: me.MESSAGES.uid, code: "uid" });
+      var box = await mailboxForRead(req, res);
+      if (!box) return;
+      var opened = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.openMessage(client, uid); });
+      await recordMailboxSession(req.user.id, box.email_address, opened);
+      if (!opened.ok) return mailboxReadFailure(res, opened, box.email_address);
+      return res.json({ message: opened.value });
+    } catch (error) {
+      console.error("[mailbox/message] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
 // ── SEO Agent: Social Search ────────────────────────────────────────────────
 
 /* POST /api/agents/seo/social-search measures a draft for YouTube, TikTok or

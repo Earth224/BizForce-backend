@@ -338,8 +338,10 @@ check("S7. the legal pages do not load it", LEGAL.every(f => FILES[f] && !loadsG
 // support page (support.html, also served at /support/<username>) loads it and has its own entry.
 // NAMED (Nov 4 2026, the Media Library, migration 167): BEFORE 57 shown and 58 loading. AFTER 58 and 59: media.html
 // loads the guide and has its own entry (four tips).
-check("S7. the guide displays on 58 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html",
-  SHOWN.length === 58 && HTML_PAGES.filter(loadsGuide).length === 59 && SHOWN.indexOf("media.html") !== -1, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
+// NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE 58 shown and 59 loading. AFTER 59 and 60: mailbox.html
+// (Your Inbox) loads the guide and has its own entry (four tips).
+check("S7. the guide displays on 59 pages now: 46 loaded it before (app.html among them, where it never displays), plus the 11, plus support.html, plus media.html, plus mailbox.html",
+  SHOWN.length === 59 && HTML_PAGES.filter(loadsGuide).length === 60 && SHOWN.indexOf("media.html") !== -1 && SHOWN.indexOf("mailbox.html") !== -1, SHOWN.length + " shown, " + HTML_PAGES.filter(loadsGuide).length + " loading");
 
 /* ── S8. phones: the button and the sheet ───────────────────────────────── */
 console.log("\n══ S8. phones: the Guide button and the bottom sheet ══");

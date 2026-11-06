@@ -1180,8 +1180,10 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   check("M1. 168_social_post_images.sql says the owner applied it by hand on Nov 5, 2026, and ends with the SQL as run",
     mig.indexOf("Applied by the owner by hand in the Supabase SQL editor on Nov 5, 2026. This file is the text as run.") !== -1 && mig.endsWith(SQL_AS_RUN));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M2. 168_social_post_images.sql is the only migration numbered 168, and the highest (167 was the last before it)",
-    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
+  // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE "the highest" with every migration at most 168. AFTER 168 is
+  // still the only one numbered 168, and every migration but 169_member_email_connections.sql is at most 168; "the highest" is checkMailboxConnect M2's.
+  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql is at most 168",
+    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
   check("M3. the code's limits are 168's: Mastodon 16777216 and 1500 by default, ranges 1-104857600 and 1-100000; at most 4 a post",
     MM.IMAGE_SIZE_LIMIT_DEFAULT === 16777216 && MM.MEDIA_DESCRIPTION_LIMIT_DEFAULT === 1500 && J(MM.IMAGE_SIZE_LIMIT_RANGE) === J([1, 104857600]) &&
     J(MM.MEDIA_DESCRIPTION_LIMIT_RANGE) === J([1, 100000]) && MED.POST_MEDIA_MAX === 4 && MM.MEDIA_PER_POST === 4 && /cardinality\(media_ids\) <= 4/.test(mig));
