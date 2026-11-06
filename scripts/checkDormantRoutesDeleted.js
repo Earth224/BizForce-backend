@@ -271,7 +271,13 @@ const ADDED = [
   ["get", "/card/:token"],                                   // the same, by share token, for a card without a short link (427 -> 428)
   ["post", "/api/cards/tap"],                                // public: one added to a card's tel, email, save or support count; 204 (428 -> 429)
   ["get", "/api/digital-cards/:id/stats"],                   // the owner's own 30 days of counts; anyone else's card is a 404 (429 -> 430)
-  ["get", "/api/sitemap/cards.xml"]                          // discoverable cards with a short link whose owner is public (430 -> 431)
+  ["get", "/api/sitemap/cards.xml"],                         // discoverable cards with a short link whose owner is public (430 -> 431)
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 431 routes; AFTER 435, an opt-in lead form on a card, with
+  // consent recorded, and the owner's Leads list (checkCardLeads)
+  ["post", "/api/cards/lead"],                               // public: one lead for a card whose form is on; token, honeypot, caps, dedupe (431 -> 432)
+  ["get", "/api/digital-cards/:id/leads"],                   // the owner's own leads for one card, 50 a page; anyone else's card is a 404 (432 -> 433)
+  ["patch", "/api/card-leads/:id"],                          // the owner marks one of their own leads read or archived (433 -> 434)
+  ["delete", "/api/card-leads/:id"]                          // the owner deletes one of their own leads (434 -> 435)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -62,6 +62,7 @@ const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
 const campaignShare = require("./lib/campaignShare");
 const cardPage = require("./lib/cardPage");
+const cardLeads = require("./lib/cardLeads");
 const memberMedia = require("./lib/memberMedia");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
@@ -48619,6 +48620,11 @@ function cardMediaUpdates(body) {
     if (typeof body.discoverable !== "boolean") return { error: "Letting search engines find a card is true or false." };
     out.discoverable = body.discoverable;
   }
+  // C2 (Nov 6 2026): the lead form switch, a boolean, off unless turned on.
+  if (body.lead_form_on !== undefined) {
+    if (typeof body.lead_form_on !== "boolean") return { error: "Letting visitors leave their details is true or false." };
+    out.lead_form_on = body.lead_form_on;
+  }
   return { updates: out };
 }
 
@@ -48651,7 +48657,7 @@ async function cardOwnerPhoto(row) {
 }
 
 function publicCardFrom(row, photoUrl) {
-  return {
+  const out = {
     full_name: row.full_name || "", job_title: row.job_title || "", company: row.company || "", website: row.website || "",
     email: row.show_email === false ? "" : (row.email || ""),
     phone: row.show_phone === false ? "" : (row.phone || ""),
@@ -48661,6 +48667,17 @@ function publicCardFrom(row, photoUrl) {
     still_image_url: row.still_image_url || null, audio_url: row.audio_url || null,
     holographic_style: Boolean(row.holographic_style), media_layout: row.media_layout || {}
   };
+  // C2 (Nov 6 2026): lead_form, and with it the form's token (lib/cardLeads.js).
+  // Without a secret there is no token, so no form is offered.
+  const form = row.lead_form_on === true ? cardLeads.issueFormToken(String(row.id || ""), nowIso(), process.env.JWT_SECRET) : null;
+  out.lead_form = !!form;
+  if (form) { out.form_token = form.form_token; out.form_issued_at = form.form_issued_at; }
+  return out;
+}
+
+/* A card whose lead form is on carries a fresh form token, so its answer is never cached. */
+function noStoreIfLeadForm(res, row) {
+  if (row && row.lead_form_on === true) res.set("Cache-Control", "no-store");
 }
 
 // The digital_cards columns that hold a bf-public object URL.
@@ -49099,6 +49116,137 @@ app.get("/api/sitemap/cards.xml", cardPageLimiter, async function (req, res) {
   }
 });
 
+/* ── C2 (Nov 6 2026, migration 172): the lead form on a card ─────────────────
+   lib/cardLeads.js holds the rules. The card page posts to this route on the
+   Railway API directly (not through the Netlify proxy), so the IP limiter
+   sees the visitor's address; it is a backstop, not the main defence. */
+const cardLeadLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many messages from here. Try again in a few minutes." }
+});
+
+/* Public. { ref, name, email, phone, message, consent, form_token,
+   form_issued_at, website }. In order: the card (exists, owner public, form
+   on; else 404), the honeypot (answered as a success, nothing kept), the
+   token (3 seconds to 2 hours, this card), the fields, the card's caps, the
+   dedupe (answered as a success), then the lead and at most one notice an
+   hour. Nothing about the visitor is stored or logged. */
+app.post("/api/cards/lead", cardLeadLimiter, async function (req, res) {
+  res.set("Cache-Control", "no-store");
+  const leadBody = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  try {
+    const leadRef = typeof leadBody.ref === "string" ? leadBody.ref : "";
+    const leadByToken = cardPage.CARD_TOKEN_RE.test(leadRef);
+    const leadBySlug = !leadByToken && cardSlugFrom(leadRef).slug === leadRef && leadRef !== "";
+    if (!leadByToken && !leadBySlug) return res.status(404).json({ error: cardLeads.MESSAGES.notFound });
+    const leadCard = await cardRowFor(leadByToken ? { token: leadRef } : { slug: leadRef }, "id, user_id, full_name, lead_form_on");
+    let leadOwnerPublic = false;
+    try { leadOwnerPublic = leadCard ? (await ownerPagePublic(leadCard.user_id)) === true : false; } catch (ownerErr) { leadOwnerPublic = false; }
+    if (!leadCard || !leadOwnerPublic || leadCard.lead_form_on !== true) return res.status(404).json({ error: cardLeads.MESSAGES.notFound });
+
+    const leadSuccess = cardLeads.successBody(leadCard.full_name);
+    if (cardLeads.honeypotFilled(leadBody)) return res.status(200).json(leadSuccess);
+
+    const leadNowMs = Date.parse(nowIso());
+    if (!cardLeads.checkFormToken(leadCard.id, leadBody.form_token, leadBody.form_issued_at, leadNowMs, process.env.JWT_SECRET)) {
+      return res.status(400).json({ error: cardLeads.MESSAGES.tryAgain });
+    }
+    const checked = cardLeads.validateLead(leadBody);
+    if (checked.error) return res.status(400).json({ error: checked.error });
+
+    const recentLeads = await supabase.from("card_leads").select("email, phone, created_at")
+      .eq("card_id", leadCard.id).gte("created_at", cardLeads.sinceIso(leadNowMs, cardLeads.DAY_MS)).order("created_at", { ascending: false }).limit(100);
+    if (recentLeads.error) throw recentLeads.error;
+    if (cardLeads.capReached(recentLeads.data || [], leadNowMs)) return res.status(429).json({ error: cardLeads.MESSAGES.capped });
+    if (cardLeads.isDuplicate(recentLeads.data || [], checked.lead, leadNowMs)) return res.status(200).json(leadSuccess);
+
+    const storedLead = await supabase.from("card_leads").insert({
+      card_id: leadCard.id, user_id: leadCard.user_id,
+      name: checked.lead.name, email: checked.lead.email, phone: checked.lead.phone, message: checked.lead.message,
+      consent_text: cardLeads.consentSentence(leadCard.full_name), status: "new", created_at: new Date(leadNowMs).toISOString()
+    });
+    if (storedLead.error) throw storedLead.error;
+    await noticeCardLead(leadCard.user_id, leadNowMs);
+    return res.status(200).json(leadSuccess);
+  } catch (leadErr) {
+    console.error("[card lead] not saved: " + ((leadErr && leadErr.code) || "error"));
+    return res.status(500).json({ error: cardLeads.MESSAGES.failed });
+  }
+});
+
+/* One in-app notice per member per hour at most, with no lead details in it. Never throws. */
+async function noticeCardLead(ownerId, nowMs) {
+  try {
+    const latest = await supabase.from("notifications").select("created_at")
+      .eq("user_id", ownerId).eq("type", cardLeads.NOTICE_TYPE).order("created_at", { ascending: false }).limit(1);
+    if (latest.error) { console.warn("[card lead] the notice check failed: " + (latest.error.code || "error")); return; }
+    const last = (latest.data || [])[0];
+    if (!cardLeads.noticeDue(last && last.created_at, nowMs)) return;
+    const notice = await supabase.from("notifications").insert({
+      user_id: ownerId,
+      type: cardLeads.NOTICE_TYPE,
+      title: cardLeads.MESSAGES.noticeTitle,
+      message: cardLeads.MESSAGES.noticeBody,
+      read: false,
+      created_at: new Date(nowMs).toISOString()
+    });
+    if (notice.error) console.warn("[card lead] the notice could not be saved: " + (notice.error.code || "error"));
+  } catch (noticeErr) {
+    console.warn("[card lead] the notice could not be saved: " + ((noticeErr && noticeErr.code) || "error"));
+  }
+}
+
+/* The owner's leads for one card, newest first, 50 a page; ?before=<created_at>
+   for the next page. Open without a subscription: it is the member's own data. */
+app.get("/api/digital-cards/:id/leads", requireAuth, async function (req, res, next) {
+  try {
+    const leadsCardId = String(req.params.id || "");
+    if (!UUID_RE.test(leadsCardId)) return res.status(404).json({ error: "Card not found" });
+    const leadsOwned = await supabase.from("digital_cards").select("id").eq("user_id", req.user.id).eq("id", leadsCardId).maybeSingle();
+    if (leadsOwned.error) throw leadsOwned.error;
+    if (!leadsOwned.data) return res.status(404).json({ error: "Card not found" });
+    const before = req.query && typeof req.query.before === "string" ? req.query.before : "";
+    if (before && !(isFinite(Date.parse(before)) && before.length <= 40)) return res.status(400).json({ error: "before is a date and time." });
+    let leadsQuery = supabase.from("card_leads").select("id, name, email, phone, message, consent_text, status, created_at")
+      .eq("user_id", req.user.id).eq("card_id", leadsOwned.data.id);
+    if (before) leadsQuery = leadsQuery.lt("created_at", before);
+    const leadRows = await leadsQuery.order("created_at", { ascending: false }).limit(cardLeads.LIST_PAGE + 1);
+    if (leadRows.error) throw leadRows.error;
+    const page = (leadRows.data || []).slice(0, cardLeads.LIST_PAGE);
+    res.set("Cache-Control", "no-store");
+    return res.json({ leads: page, next_before: (leadRows.data || []).length > cardLeads.LIST_PAGE ? page[page.length - 1].created_at : null });
+  } catch (error) { next(error); }
+});
+
+/* { status: read | archived } on one of the owner's own leads; anyone else's is a 404. */
+app.patch("/api/card-leads/:id", requireAuth, async function (req, res, next) {
+  try {
+    const leadId = String(req.params.id || "");
+    if (!UUID_RE.test(leadId)) return res.status(404).json({ error: "Lead not found" });
+    const status = req.body ? req.body.status : undefined;
+    if (cardLeads.OWNER_STATUSES.indexOf(status) === -1) return res.status(400).json({ error: cardLeads.MESSAGES.status });
+    const marked = await supabase.from("card_leads").update({ status: status }).eq("id", leadId).eq("user_id", req.user.id).select("id, status");
+    if (marked.error) throw marked.error;
+    if (!(marked.data || []).length) return res.status(404).json({ error: "Lead not found" });
+    return res.json({ lead: marked.data[0] });
+  } catch (error) { next(error); }
+});
+
+/* Deletes one of the owner's own leads; anyone else's is a 404. */
+app.delete("/api/card-leads/:id", requireAuth, async function (req, res, next) {
+  try {
+    const leadId = String(req.params.id || "");
+    if (!UUID_RE.test(leadId)) return res.status(404).json({ error: "Lead not found" });
+    const removedLead = await supabase.from("card_leads").delete().eq("id", leadId).eq("user_id", req.user.id).select("id");
+    if (removedLead.error) throw removedLead.error;
+    if (!(removedLead.data || []).length) return res.status(404).json({ error: "Lead not found" });
+    return res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 // Returns (and lazily generates) a share token for the user's card
 app.post("/api/cards/share-token", requireAuth, requireActiveSubscription, async function (req, res, next) {
   try {
@@ -49139,6 +49287,7 @@ app.get("/api/cards/share/:token", cardPageLimiter, async function (req, res, ne
     // never returned.
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
+    noStoreIfLeadForm(res, data);
     return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
 });
@@ -49159,6 +49308,7 @@ app.get("/api/cards/slug/:slug", cardPageLimiter, async function (req, res, next
     if (!data) return res.status(404).json({ error: "Card not found" });
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
+    noStoreIfLeadForm(res, data);
     return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
 });
@@ -57514,6 +57664,22 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] gate decisions sweep scheduled — 04:30 UTC daily, claimed through job_runs.gate_decisions_sweep; rows older than 90 days are deleted.");
   } else {
     console.log("[startup] gate decisions sweep disabled (ENABLE_GATE_DECISIONS_SWEEP is exactly \"false\")");
+  }
+
+  /* Card leads older than 12 months (C2, Nov 6 2026, lib/cardLeads.js):
+     04:45 UTC daily, claimed through job_runs.card_leads_purge. No flag turns
+     it off: it is a deletion the Privacy Policy promises. Only when this file
+     is the program, so a check that loads server.js never schedules it. No
+     boot-time run, for the reason the retention job above gives. */
+  if (require.main === module) {
+    cron.schedule("45 4 * * *", function () {
+      cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
+        console.error("[CardLeadsPurge] Scheduled run error: " + ((err && err.code) || "error"));
+      });
+    }, {
+      timezone: "UTC"
+    });
+    console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

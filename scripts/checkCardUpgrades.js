@@ -1015,16 +1015,21 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   check("G2. the Privacy Policy carries it directly after the Media Library sentence, as built and on disk", nextTo(builtPages["privacy.html"]) && nextTo(fe("privacy.html") || ""));
   check("G3. TERMS_VERSION and TERMS_UPDATED are this change's date, Nov 6 2026", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
+  // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the editor tip named the search switch and the card-view
+  // tip said the owner never learns who you are. AFTER both still tell of the counts, and say truthfully that the owner
+  // sees a visitor's name and contact only when they send them with "Leave your details" (checkCardLeads holds the leads).
   check("G4. the guide tells both pages about the counts, truthfully, and keeps five tips each",
-    guide.indexOf("\\\"Visits to your card\\\" under the card counts 30 days of opens and taps; \\\"Let search engines find this card\\\" stays off unless you turn it on.") !== -1 &&
-    guide.indexOf("the owner changes it on the Digital Cards page, and sees only daily counts of opens and taps, never who you are.") !== -1 &&
+    guide.indexOf("Under the card, \\\"Visits to your card\\\" counts 30 days of opens and taps; \\\"Leads\\\" lists what visitors leave once \\\"Let visitors leave their details\\\" is on.") !== -1 &&
+    guide.indexOf("Nothing here can be edited; the owner sees daily counts of opens and taps, and your name and contact only if you send them with \\\"Leave your details\\\".") !== -1 &&
     ["digital-cards.html", "card-view.html"].every(p => { const m = new RegExp("\"" + p.replace(".", BS + ".") + "\": \\[([\\s\\S]*?)\\n    \\]").exec(guide); return m && (m[1].match(/^      "/gm) || []).length === 5; }));
 
   /* ════ R. the migration and the registries ════ */
   console.log("\n══ R. migration 171 and the registries ══");
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("R1. 171_card_counts.sql is the only migration numbered 171, and the highest (170 was the last before it)",
-    migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
+  // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE 171 was the highest. AFTER 172_card_leads.sql is, and
+  // checkCardLeads R1 holds that; 171_card_counts.sql is still the only migration numbered 171.
+  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 172 (checkCardLeads R1), 170 the last before it",
+    migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

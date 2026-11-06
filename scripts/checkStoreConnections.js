@@ -1054,7 +1054,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 5 2026, mailbox connection, migration 169): the allowlist adds 169_member_email_connections.sql; "the highest" is checkMailboxConnect M2's.
     // NAMED (Nov 5 2026, mailbox replies, migration 170): the allowlist adds 170_member_email_replies.sql; "the highest" is checkMailboxReply M2's.
     // NAMED (Nov 6 2026, card upgrades C1, migration 171): the allowlist adds 171_card_counts.sql; "the highest" is checkCardUpgrades R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 6 2026, card upgrades C2, migration 172): the allowlist adds 172_card_leads.sql; "the highest" is checkCardLeads R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };

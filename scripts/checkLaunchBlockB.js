@@ -194,8 +194,11 @@ const MUTATIONS = {
   // #10: the short link route served to a lapsed owner
   // NAMED (Oct 28 2026, member support): BEFORE the slug route answered { card }. AFTER { card, support_links }; the
   // anchor and its replacement follow the line, the mutation (the owner check removed) is the same.
-  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
-    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
+  // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the return followed the blank line directly. AFTER
+  // noStoreIfLeadForm(res, data); comes first (no-store while the card's lead form is on); the anchor and its replacement
+  // carry that line, and the mutation (the owner check removed) is the same.
+  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
+    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
   // #10: Netlify does not serve /c/<slug>
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was the rewrite "/c/:slug /card-view.html 200".
   // AFTER the proxy to the backend's GET /c/:slug, which serves card-view.html with the card's own head; the mutation
@@ -872,8 +875,10 @@ function fakeDb(tables, fail) {
       /149/.test((A.cardWriteRefusal({ code: "PGRST204", message: "Could not find the 'slug' column" }) || {}).error || "") &&
       A.cardWriteRefusal(null) === null && A.cardWriteRefusal({ code: "XX000", message: "other" }) === null);
     const pub = A.publicCardFrom(Object.assign({}, rows.digital_cards[0], { secret_note: "x" }), "https://x.supabase.co/u1.jpg");
+    // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 15 keys. AFTER lead_form (true or false) on every card,
+    // and form_token and form_issued_at only while its lead form is on (checkCardLeads holds when each is present).
     const ALLOWED = ["full_name", "job_title", "company", "website", "email", "phone", "photo_url", "public_url", "theme", "video_url", "bg_image_url",
-      "still_image_url", "audio_url", "holographic_style", "media_layout"];
+      "still_image_url", "audio_url", "holographic_style", "media_layout", "lead_form", "form_token", "form_issued_at"];
     check("10. the public card is an allowlist: no user_id, id, share_token, slug or any other column",
       Object.keys(pub).every(k => ALLOWED.indexOf(k) !== -1) && !("user_id" in pub) && !("share_token" in pub) && !("id" in pub), Object.keys(pub).join(","));
     check("10. a hidden email, phone or photo is served empty; a shown one as is",

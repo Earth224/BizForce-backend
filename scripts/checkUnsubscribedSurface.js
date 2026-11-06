@@ -421,7 +421,12 @@ const EXPECTED_OWN = [
   // NAMED (Nov 5 2026, mailbox connection, migration 169; effectful login-only 155 -> 156): BEFORE no mailbox. AFTER a
   // member deletes their own member_email_connections row (the sealed app password with it); the row is theirs and
   // served to no one else, and disconnecting must always work, subscribed or not.
-  "post /api/mailbox/disconnect"
+  "post /api/mailbox/disconnect",
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172; effectful login-only 156 -> 158): BEFORE no card leads. AFTER a
+  // member marks one of their own leads read or archived (PATCH) and deletes one of their own leads (DELETE); both are
+  // .eq("user_id", req.user.id), the rows are the member's own data, served to no one else, and stay theirs to manage
+  // subscribed or not (checkCardLeads). GET /api/digital-cards/:id/leads is a login-only read and needs no entry here.
+  "patch /api/card-leads/:id", "delete /api/card-leads/:id"
 ];
 
 /* Unauthenticated routes that write. */
@@ -456,7 +461,12 @@ const EXPECTED_UNAUTH_WRITES = {
   // is a login-only read of the owner's own card and needs no entry here.
   "get /c/:slug":                           "one added to a card's daily view count, nothing about the visitor (migration 171)",
   "get /card/:token":                       "one added to a card's daily view count, nothing about the visitor (migration 171)",
-  "post /api/cards/tap":                    "one added to a card's daily tap count, nothing about the visitor (migration 171)"
+  "post /api/cards/tap":                    "one added to a card's daily tap count, nothing about the visitor (migration 171)",
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172; 21 -> 22): BEFORE no card took a lead. AFTER a visitor leaves one
+  // lead (name, email or phone, message, the server's consent sentence) on a card whose owner turned the form on and is
+  // public, behind a form token, a honeypot, per-card caps, a dedupe and an IP limiter; at most one notice an hour to
+  // the owner, with no lead details. Nothing about the visitor's device is written (checkCardLeads).
+  "post /api/cards/lead":                   "one lead on a card whose owner turned the form on, consent recorded (migration 172)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The

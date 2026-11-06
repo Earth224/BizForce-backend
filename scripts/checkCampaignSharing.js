@@ -435,9 +435,11 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
   // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 167, 168, 169 and 170 at most 166. AFTER
   // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
-  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql and 171_card_counts.sql is at most 166",
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 166. AFTER
+  // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
+  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql, 171_card_counts.sql and 172_card_leads.sql is at most 166",
     migFiles.filter(f => /^166_/.test(f)).length === 1 && migFiles.indexOf("166_campaign_sharing.sql") !== -1 &&
-    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));

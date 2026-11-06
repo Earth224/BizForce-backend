@@ -1191,8 +1191,10 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
   // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 169 and 170 at most 168. AFTER
   // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
-  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql, 170_member_email_replies.sql and 171_card_counts.sql is at most 168",
-    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 168. AFTER
+  // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
+  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql, 170_member_email_replies.sql, 171_card_counts.sql and 172_card_leads.sql is at most 168",
+    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
   check("M3. the code's limits are 168's: Mastodon 16777216 and 1500 by default, ranges 1-104857600 and 1-100000; at most 4 a post",
     MM.IMAGE_SIZE_LIMIT_DEFAULT === 16777216 && MM.MEDIA_DESCRIPTION_LIMIT_DEFAULT === 1500 && J(MM.IMAGE_SIZE_LIMIT_RANGE) === J([1, 104857600]) &&
     J(MM.MEDIA_DESCRIPTION_LIMIT_RANGE) === J([1, 100000]) && MED.POST_MEDIA_MAX === 4 && MM.MEDIA_PER_POST === 4 && /cardinality\(media_ids\) <= 4/.test(mig));

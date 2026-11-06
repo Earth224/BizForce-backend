@@ -734,9 +734,11 @@ const tick = () => new Promise(r => setImmediate(r));
   // still the only one numbered 169, and every migration but 170_member_email_replies.sql is at most 169; "the highest" is checkMailboxReply M2's.
   // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 170 at most 169. AFTER 171_card_counts.sql
   // too; "the highest" is checkCardUpgrades R1's.
-  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql and 171_card_counts.sql is at most 169",
+  // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 169. AFTER
+  // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
+  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql, 171_card_counts.sql and 172_card_leads.sql is at most 169",
     migFiles.filter(f => /^169_/.test(f)).length === 1 && migFiles.indexOf("169_member_email_connections.sql") !== -1 &&
-    migFiles.every(f => f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── N. what a member types ─────────────────────────────────────────────── */
   console.log("\n══ N. what a member types ══");

@@ -393,7 +393,10 @@ const t0 = Date.now();
   const listened = logs.some(l => /BizForce AI server running/.test(l));
   if (!listened && Date.now() - t0 < 30000) return realSetTimeout(wait, 50);
   realSetTimeout(() => {
-    out(JSON.stringify({ listened, isMain: true, attempts, reminderLogs: logs.filter(l => /reminderScheduler|reminder scheduler/.test(l)) }));
+    // NAMED (Nov 6 2026, card upgrades C2): AFTER the program run also lists node-cron's tasks, to prove the program-only purge.
+    const cron = require(${JSON.stringify(CRON_DIR)});
+    const tasks = [...cron.getTasks().values()].map(t => ({ pattern: t._scheduler && t._scheduler.timeMatcher.pattern, timezone: (t.options && t.options.timezone) || null }));
+    out(JSON.stringify({ listened, isMain: true, attempts, tasks, reminderLogs: logs.filter(l => /reminderScheduler|reminder scheduler/.test(l)) }));
     process.exit(0);
   }, 1500);
 })();
@@ -437,7 +440,9 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     // the eighth the storage-deletion retry, the ninth the gate decisions sweep, the tenth the member-trigger pass (cron-count).
     // NAMED (Nov 3 2026, the schema check): BEFORE "exactly ten"; AFTER "exactly eleven", the eleventh the schema check at 06:00 UTC.
     // NAMED (Nov 3 2026, store connections): BEFORE "exactly eleven"; AFTER "exactly twelve", the twelfth storeSyncTick at 05:00 UTC.
-    check("server.js has exactly twelve cron.schedule calls", calls.length === 12, calls.length);
+    // NAMED (Nov 6 2026, card upgrades C2): BEFORE "exactly twelve"; AFTER "exactly thirteen", the thirteenth the card leads
+    // purge at 04:45 UTC, scheduled only when server.js is the program (checkCardLeads U4).
+    check("server.js has exactly thirteen cron.schedule calls", calls.length === 13, calls.length);
     check("each expression resolves from the source", calls.every(c => typeof c.expression.value === "string"), JSON.stringify(calls.map(c => c.expression)));
     check("each passes exactly one option, a timezone, resolved from the source",
       calls.every(c => typeof c.timezone.value === "string" && c.timezone.value.length > 0), JSON.stringify(calls.map(c => [c.line, c.timezone.from])));
@@ -585,12 +590,18 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
       off.listened === true && !reminderRead(off.attempts) && (off.reminderLogs || []).length === 1 && /reminder scheduler not started/.test(off.reminderLogs[0]),
       JSON.stringify({ attempts: off.attempts, reminderLogs: off.reminderLogs }));
     const on = loadServer(true);
-    const declared = calls.map(c => (fieldsOf(c.expression.value) ? convertExpression(c.expression.value) : c.expression.value) + " @ " + c.timezone.value).sort();
+    const asTask = c => (fieldsOf(c.expression.value) ? convertExpression(c.expression.value) : c.expression.value) + " @ " + c.timezone.value;
+    const PROGRAM_ONLY = calls.filter(c => c.expression.value === "45 4 * * *" && c.timezone.value === "UTC").map(asTask);
+    const declared = calls.map(asTask).filter(t => PROGRAM_ONLY.indexOf(t) === -1).sort();
     const registered = (on.tasks || []).map(t => t.pattern + " @ " + t.timezone).sort();
     // NAMED BEFORE → AFTER: was "exactly the five declared schedules", then six, seven, eight, nine, ten;
     // NAMED (Nov 3 2026): BEFORE ten; AFTER eleven, the schema check (gates-set).
     // NAMED (Nov 3 2026, store connections): BEFORE eleven; AFTER twelve, storeSyncTick at 05:00 UTC (gates-set).
-    check("gates set: exactly the twelve declared schedules are registered, with their expressions and timezones",
+    // NAMED (Nov 6 2026, card upgrades C2): BEFORE "the twelve declared schedules" were all of them; AFTER twelve of the thirteen,
+    // the card leads purge (04:45 UTC, exactly one call) left out here because it registers only when server.js is the program;
+    // the check below proves it is registered then.
+    check("the card leads purge is exactly one call, at 04:45 UTC", PROGRAM_ONLY.length === 1, JSON.stringify(PROGRAM_ONLY));
+    check("gates set: exactly the twelve declared schedules other than the program-only purge are registered, with their expressions and timezones",
       on.listened === true && !on.crashed && registered.length === 12 && JSON.stringify(registered) === JSON.stringify(declared),
       JSON.stringify(on.crashed || on.error || registered.map(r => r.slice(0, 40))) + " vs " + JSON.stringify(declared.map(r => r.slice(0, 40))));
     check("…none of them ran while server.js loaded, and still no reminder pass",
@@ -599,6 +610,11 @@ const reminderRead = (attempts) => (attempts || []).some(a => /calendar_events/.
     check("run as the program (node server.js, as production starts it): the reminder pass starts (it reads calendar_events, blocked here)",
       prog.listened === true && reminderRead(prog.attempts) && !(prog.reminderLogs || []).some(l => /not started/.test(l)),
       JSON.stringify(prog).slice(0, 400));
+    const progTasks = (prog.tasks || []).map(t => t.pattern + " @ " + t.timezone);
+    check("run as the program: the card leads purge is registered, once, at 04:45 UTC, with every gate unset",
+      PROGRAM_ONLY.length === 1 && progTasks.filter(t => t === PROGRAM_ONLY[0]).length === 1, JSON.stringify(progTasks));
+    check("loaded as a check (gates set or unset): the card leads purge is never registered",
+      PROGRAM_ONLY.length === 1 && ![on, off].some(r => (r.tasks || []).some(t => t.pattern + " @ " + t.timezone === PROGRAM_ONLY[0])));
     const net = [...new Set((off.attempts || []).concat(on.attempts || []))];
     console.log("    note  outbound attempts blocked while server.js loaded as a check: " + (net.join(", ") || "none"));
   } finally {
