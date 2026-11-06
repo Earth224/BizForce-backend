@@ -230,7 +230,12 @@ const EXPECTED_GATED = [
   // (the IMAP login and SMTP auth check, then the sealed app password) and reading it (the inbox list and one message,
   // read-only, never stored) need a subscription; the status and disconnect stay login-only, so a member whose plan
   // lapses can always see and remove the connection (checkMailboxConnect).
-  "post /api/mailbox/connect", "get /api/mailbox/inbox", "get /api/mailbox/inbox/:uid"
+  "post /api/mailbox/connect", "get /api/mailbox/inbox", "get /api/mailbox/inbox/:uid",
+  // NAMED (Nov 5 2026, mailbox replies, migration 170; gated 94 -> 96): BEFORE no reply could be drafted. AFTER drafting a
+  // reply to one message (one model call; aiLimiter and 10 an hour, 30 a day) and filing it for approval need a
+  // subscription (requireActiveSubscription); approving it is G3-gated on the approve route
+  // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS send_mailbox_reply; checkMailboxReply).
+  "post /api/mailbox/inbox/:uid/draft-reply", "post /api/mailbox/propose-reply"
 ];
 
 const EXPECTED_ADMIN = [

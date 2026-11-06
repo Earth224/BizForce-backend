@@ -1159,7 +1159,10 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
         imgs.length === 2 && imgs[0].getAttribute("src") === BASE + "/storage/v1/object/public/bf-public/k.jpg" && !imgs[1].hasAttribute("src") &&
         asked.length === 2 && asked[0] === "https://api.example/api/media?kind=image" && /before=/.test(asked[1]) && w.document.querySelectorAll("img[onerror]").length === 0, J(asked));
     }
-    check("P20. both cards are wired to call the Images row", (PR.match(/postImagesFields\(payload\) \+/g) || []).length === 2 && PR.indexOf("  showPostImages(container);\n}") !== -1);
+    // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE showPostImages(container) closed renderProposals. AFTER it is
+    // still called once after every render, followed only by fillMailboxReplies(container), which fills the email reply cards (checkMailboxReply J12).
+    check("P20. both cards are wired to call the Images row", (PR.match(/postImagesFields\(payload\) \+/g) || []).length === 2 &&
+      PR.indexOf("  showPostImages(container);\n  fillMailboxReplies(container);\n}") !== -1 && PR.split("showPostImages(container);").length === 2);
   }
 
   /* ════ L. legal and the migration ════ */
@@ -1182,8 +1185,10 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE "the highest" with every migration at most 168. AFTER 168 is
   // still the only one numbered 168, and every migration but 169_member_email_connections.sql is at most 168; "the highest" is checkMailboxConnect M2's.
-  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql is at most 168",
-    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
+  // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE every migration but 169 at most 168. AFTER
+  // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
+  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql and 170_member_email_replies.sql is at most 168",
+    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
   check("M3. the code's limits are 168's: Mastodon 16777216 and 1500 by default, ranges 1-104857600 and 1-100000; at most 4 a post",
     MM.IMAGE_SIZE_LIMIT_DEFAULT === 16777216 && MM.MEDIA_DESCRIPTION_LIMIT_DEFAULT === 1500 && J(MM.IMAGE_SIZE_LIMIT_RANGE) === J([1, 104857600]) &&
     J(MM.MEDIA_DESCRIPTION_LIMIT_RANGE) === J([1, 100000]) && MED.POST_MEDIA_MAX === 4 && MM.MEDIA_PER_POST === 4 && /cardinality\(media_ids\) <= 4/.test(mig));

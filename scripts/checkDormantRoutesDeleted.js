@@ -260,7 +260,11 @@ const ADDED = [
   ["get", "/api/mailbox/status"],                            // connected, provider, address, status, since; never the secret (420 -> 421)
   ["post", "/api/mailbox/disconnect"],                       // deletes the row; always open (421 -> 422)
   ["get", "/api/mailbox/inbox"],                             // the newest 30 by UID, INBOX opened read-only, never stored (422 -> 423)
-  ["get", "/api/mailbox/inbox/:uid"]                         // one message as plain text, at most 2 MB, attachments listed only (423 -> 424)
+  ["get", "/api/mailbox/inbox/:uid"],                        // one message as plain text, at most 2 MB, attachments listed only (423 -> 424)
+  // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE 424 routes; AFTER 426, an AI-drafted reply to one message,
+  // filed for approval and sent from the member's own address only to the sender (checkMailboxReply)
+  ["post", "/api/mailbox/inbox/:uid/draft-reply"],           // reads the message read-only, drafts one plain-text reply; with a subscription (424 -> 425)
+  ["post", "/api/mailbox/propose-reply"]                     // re-reads that message's headers only, files a send_mailbox_reply proposal; never sends (425 -> 426)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

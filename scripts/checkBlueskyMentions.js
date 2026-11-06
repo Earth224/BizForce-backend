@@ -531,7 +531,8 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
     // NAMED (Nov 4 2026, the Media Library, migration 167): the allowlist adds 167_member_media.sql; "the highest" is checkMediaLibrary M2's.
     // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
     // NAMED (Nov 5 2026, mailbox connection, migration 169): the allowlist adds 169_member_email_connections.sql; "the highest" is checkMailboxConnect M2's.
-    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^(165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
+    // NAMED (Nov 5 2026, mailbox replies, migration 170): the allowlist adds 170_member_email_replies.sql; "the highest" is checkMailboxReply M2's.
+    migFiles.filter(f => /^164_/.test(f)).length === 1 && migFiles.filter(f => !/^(165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 164) && migFiles.some(f => /^163_/.test(f)));
   check("M4. no new table: the migration only adds columns and a CHECK to social_post_drafts", !/CREATE TABLE/i.test(sqlBody) && !/DROP/i.test(sqlBody));
 
   /* ── L. the library ─────────────────────────────────────────────────────── */

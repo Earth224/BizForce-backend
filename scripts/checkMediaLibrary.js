@@ -644,8 +644,10 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // still the only one numbered 167, and every migration but 168_social_post_images.sql is at most 167; "the highest" is checkSocialImages M2's.
   // NAMED (Nov 5 2026, mailbox connection, migration 169): BEFORE every migration but 168 at most 167. AFTER
   // 169_member_email_connections.sql too; "the highest" is checkMailboxConnect M2's.
-  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql and 169_member_email_connections.sql is at most 167",
-    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
+  // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE every migration but 168 and 169 at most 167. AFTER
+  // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
+  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql, 169_member_email_connections.sql and 170_member_email_replies.sql is at most 167",
+    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
   check("M3. PATH_PATTERN equals the 167 CHECK character for character", !!SQL_PATH && MED.PATH_PATTERN === SQL_PATH[1] && MED.PATH_RE.source === PATH_SQL_RE.source, SQL_PATH && SQL_PATH[1]);
   const many = Array.from({ length: 300 }, (_, i) => MED.mediaPath(OWEN, ["jpg", "png", "webp", "gif", "mp4", "webm"][i % 6]));
   check("M4. 300 paths each match the 167 pattern and the owner rule, under media/<id>/, and no two are the same",

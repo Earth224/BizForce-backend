@@ -730,9 +730,11 @@ const tick = () => new Promise(r => setImmediate(r));
   check("P7. the header says the owner applied it by hand on Nov 5, 2026",
     MIGRATION.indexOf("-- Applied by the owner by hand in the Supabase SQL editor on Nov 5, 2026. This file is the text as run.") !== -1);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and the highest (168 was the last before it)",
+  // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE "the highest" with every migration at most 169. AFTER 169 is
+  // still the only one numbered 169, and every migration but 170_member_email_replies.sql is at most 169; "the highest" is checkMailboxReply M2's.
+  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql is at most 169",
     migFiles.filter(f => /^169_/.test(f)).length === 1 && migFiles.indexOf("169_member_email_connections.sql") !== -1 &&
-    migFiles.every(f => Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── N. what a member types ─────────────────────────────────────────────── */
   console.log("\n══ N. what a member types ══");
@@ -1080,9 +1082,19 @@ const tick = () => new Promise(r => setImmediate(r));
   console.log("\n══ S. read only: no send code in this build ══");
   const MEcode = uncommented(SOURCES.ME), BLcode = uncommented(BLOCK);
   check("S1. the server's mailbox block was read", BLOCK.length > 5000 && BLOCK.indexOf("app.get(\"/api/mailbox/inbox/:uid\"") !== -1, BLOCK.length);
-  check("S2. neither lib/memberEmail.js nor the mailbox routes call sendMail, send, append or a flag, move, copy or delete method",
-    ![MEcode, BLcode].some(t => /\.sendMail\(|\.send\(|\.append\(|messageFlags(Add|Set|Remove)\(|messageMove\(|messageCopy\(|messageDelete\(|mailboxDelete\(/.test(t)));
-  check("S3. the only nodemailer call is verify(), which connects, logs in and quits", (MEcode.match(/transport\.[a-zA-Z]+\(/g) || []).every(c => c === "transport.verify(" || c === "transport.close("));
+  /* NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE S2 and S3 read all of lib/memberEmail.js, which had no
+     send code. AFTER Build B's sendReply sends one approved reply (checkMailboxReply holds it); S2 and S3 read the module
+     with sendReply set aside, and S2b holds sendReply to exactly one sendMail and no other method that writes. */
+  const SEND_AT = MEcode.indexOf("async function sendReply(");
+  const SEND_END = SEND_AT === -1 ? -1 : s.braceMatch(MEcode, MEcode.indexOf(") {", SEND_AT) + 2);
+  const sendReplyCode = SEND_AT === -1 ? "" : MEcode.slice(SEND_AT, SEND_END + 1);
+  const MEread = SEND_AT === -1 ? MEcode : MEcode.slice(0, SEND_AT) + MEcode.slice(SEND_END + 1);
+  check("S2. neither lib/memberEmail.js (sendReply aside) nor the mailbox routes call sendMail, send, append or a flag, move, copy or delete method",
+    ![MEread, BLcode].some(t => /\.sendMail\(|\.send\(|\.append\(|messageFlags(Add|Set|Remove)\(|messageMove\(|messageCopy\(|messageDelete\(|mailboxDelete\(/.test(t)));
+  check("S2b. sendReply calls sendMail exactly once and nothing that writes to a mailbox",
+    sendReplyCode.length > 200 && (sendReplyCode.match(/\.sendMail\(/g) || []).length === 1 &&
+    !/\.send\(|\.append\(|messageFlags(Add|Set|Remove)\(|messageMove\(|messageCopy\(|messageDelete\(|mailboxDelete\(/.test(sendReplyCode), sendReplyCode.length);
+  check("S3. outside sendReply, the only nodemailer call is verify(), which connects, logs in and quits", (MEread.match(/transport\.[a-zA-Z]+\(/g) || []).every(c => c === "transport.verify(" || c === "transport.close("));
   check("S4. during every check above, no transport sent mail and no client called an unexpected method",
     STUB.everClients.length > 10 && STUB.everTransports.length > 5 && STUB.everTransports.every(t => t.calls.every(c => c === "verify" || c === "close")) &&
     STUB.everClients.every(c => c.calls.every(x => ALLOWED_CLIENT_CALLS.indexOf(x) !== -1)), J([STUB.everClients.length, STUB.everTransports.length]));
@@ -1175,7 +1187,10 @@ const tick = () => new Promise(r => setImmediate(r));
 
   /* ── L. privacy and terms ───────────────────────────────────────────────── */
   console.log("\n══ L. Privacy and Terms ══");
-  const PRIVACY = "If you connect your mailbox, BizForce stores your email address, your mail server names and the app password you made for BizForce, encrypted; it is used only to check the connection and to read your inbox when you open it in BizForce. Your messages are read each time you ask and are not stored, BizForce never marks them read or changes anything in your mailbox, and attachments are listed but not downloaded. You can disconnect at any time, you can also cancel the app password with your email provider, and it is deleted with your account.";
+  /* NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE "to check the connection and to read your inbox when you open it in
+     BizForce". AFTER "to check the connection, to read your inbox when you open it in BizForce, and to send the replies you approve",
+     as Build B decides; the reply sentences that follow it are checkMailboxReply's. */
+  const PRIVACY = "If you connect your mailbox, BizForce stores your email address, your mail server names and the app password you made for BizForce, encrypted; it is used only to check the connection, to read your inbox when you open it in BizForce, and to send the replies you approve. Your messages are read each time you ask and are not stored, BizForce never marks them read or changes anything in your mailbox, and attachments are listed but not downloaded. You can disconnect at any time, you can also cancel the app password with your email provider, and it is deleted with your account.";
   const TERMS = "If you connect a mailbox, you confirm it is yours or that you are allowed to connect it.";
   check("L1. lib/legalPages.js holds both sentences word for word", LP.MAILBOX_PRIVACY_SENTENCE === PRIVACY && LP.MAILBOX_TERMS_SENTENCE === TERMS);
   const priv = FE("privacy.html"), terms = FE("terms.html");
