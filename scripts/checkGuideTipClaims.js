@@ -1177,9 +1177,12 @@ const C = [
   // NAMED (Oct 27 2026, launch item #10): BEFORE the tip said the QR codes hold a vCard, and the pin proved both pages
   // passed buildVCard's text to QRCode.toCanvas. AFTER both pages pass the card's public URL (the short link, else the
   // ?token= link), card-view opens from either, and the vCard is the Save Contact download (scripts/bf-card.js).
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE both card-view QR codes passed cardUrl. AFTER they pass qrUrl, the same
+  // public URL with via=qr (bf-card.js qrUrl), which still opens this same page; the canonical stays cardUrl.
   ["11 card-view 98", cvTips, "its QR codes open this same page", /via a shared link or QR code/,
-    () => /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
-      /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), cardUrl,/.test(FILES[CARDVIEW]) &&
+    () => /var qrUrl = window\.bfCard\.qrUrl\(cardUrl\);/.test(FILES[CARDVIEW]) &&
+      /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), qrUrl,/.test(FILES[CARDVIEW]) &&
+      /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), qrUrl,/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(qr, url,/.test(FILES[CARDS]) && /QRCode\.toCanvas\(qrVideo, url,/.test(FILES[CARDS]) &&
       /new URLSearchParams\(window\.location\.search\)\.get\("token"\)/.test(FILES[CARDVIEW]) &&
       /\/\^\\\/c\\\/\(\[a-z0-9-\]\{3,40\}\)\\\/\?\$\/\.exec\(window\.location\.pathname\)/.test(FILES[CARDVIEW]) &&

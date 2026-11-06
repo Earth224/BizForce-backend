@@ -433,9 +433,11 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // 169_member_email_connections.sql too; "the highest" is checkMailboxConnect M2's.
   // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE every migration but 167, 168 and 169 at most 166. AFTER
   // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
-  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql, 169_member_email_connections.sql and 170_member_email_replies.sql is at most 166",
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 167, 168, 169 and 170 at most 166. AFTER
+  // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
+  check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql and 171_card_counts.sql is at most 166",
     migFiles.filter(f => /^166_/.test(f)).length === 1 && migFiles.indexOf("166_campaign_sharing.sql") !== -1 &&
-    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));
@@ -786,7 +788,9 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
       (inOrder(h, esc(MARKET), esc(TERMS)) && h.indexOf(esc(TERMS)) - h.indexOf(esc(MARKET)) < esc(MARKET).length + 40)));
   // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04", the version this change set. AFTER "2026-11-05", the version
   // the social images privacy sentence set.
-  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 5 2026 (images in social posts; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-05" && LEGAL.TERMS_UPDATED === "Last updated November 5, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
+  // card visits privacy sentence set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 6 2026 (card visits; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   const block = (/"campaigns\.html": \[\n([\s\S]*?)\n    \]/.exec(guide) || ["", ""])[1];
   const tips = (block.match(/"(?:[^"\\]|\\.)*"/g) || []).map(t => JSON.parse(t));

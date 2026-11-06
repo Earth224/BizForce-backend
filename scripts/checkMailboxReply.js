@@ -719,9 +719,11 @@ async function draftAndFile(b, user, uid, reply) {
   check("P6. the header says the owner applied it by hand on Nov 5, 2026",
     MIGRATION.indexOf("-- Applied by the owner by hand in the Supabase SQL editor on Nov 5, 2026. This file is the text as run.") !== -1);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("M2. 170_member_email_replies.sql is the only migration numbered 170, and the highest (169 was the last before it)",
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE "the highest" with every migration at most 170. AFTER 170 is
+  // still the only one numbered 170, and every migration but 171_card_counts.sql is at most 170; "the highest" is checkCardUpgrades R1's.
+  check("M2. 170_member_email_replies.sql is the only migration numbered 170, and every other migration but 171_card_counts.sql is at most 170 (169 was the last before it)",
     migFiles.filter(f => /^170_/.test(f)).length === 1 && migFiles.indexOf("170_member_email_replies.sql") !== -1 &&
-    migFiles.every(f => Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── U. the pure parts ──────────────────────────────────────────────────── */
   console.log("\n══ U. lib/memberEmail.js, the pure parts ══");
@@ -955,6 +957,12 @@ async function draftAndFile(b, user, uid, reply) {
     ti.options.host === "17.42.251.20" && ti.options.servername === "smtp.mail.me.com", aIvy.code + " " + safe(J(ti.options)).slice(0, 160));
 
   // E9: the cap, with BOB
+  // NAMED (Nov 6 2026, found during card upgrades C1): BEFORE E9 ran on CLOCK (Nov 5 12:00 UTC), which stamps sent_at through
+  // nowIso, while the cap's 24-hour window is measured from the real Date.now(); from Nov 6 11:00 UTC every row fell out of the
+  // window and E9 failed by date alone. AFTER E9 sets CLOCK to the real time, so the stamps and the window agree as they do in
+  // production, and puts CLOCK back after E9.
+  const clockBeforeE9 = CLOCK.now;
+  CLOCK.now = Date.now();
   const seedSent = (user, n, hoursAgo) => { for (let i = 0; i < n; i++) b.db.rows("member_email_replies").push({ id: "99999999-" + String(hoursAgo).padStart(4, "0") + "-4000-8000-" + String(i).padStart(12, "0"),
     user_id: user, task_id: "88888888-0000-4000-8000-000000000001", status: "sent", to_address: ADDR.pat, subject: "Re: x", body: "x", in_reply_to: "<x@example.com>",
     reference_ids: "<x@example.com>", source_uid: 1, smtp_message_id: "<s" + i + "@example.com>", sent_at: new Date(CLOCK.now - hoursAgo * 3600000).toISOString(),
@@ -971,6 +979,7 @@ async function draftAndFile(b, user, uid, reply) {
   check("E9. the cap: with 19 sent in the last 24 hours (and 30 older), the 20th goes out; the 21st is refused, marked send_failed, nothing sent",
     a20.code === 200 && a21.code === 500 && STUB.transports.length === 0 && r21.status === "send_failed" && r21.send_error === "daily_cap" &&
     /You've reached today's limit of 20 replies\./.test(a21.body.proposal.execution_error), J([a20.code, a21.code, r21.status, a21.body && a21.body.proposal && a21.body.proposal.execution_error]));
+  CLOCK.now = clockBeforeE9;
 
   // E10: every re-check, each before any connection
   const tamper = async (label, mutateRow, mutateTask, mutateConn) => {

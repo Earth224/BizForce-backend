@@ -1172,7 +1172,9 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   const built = LP.buildLegalPages(), esc = LEGAL.escapeHtml;
   const nextTo = h => { const a = h.indexOf(esc(LP.MASTODON_PRIVACY_SENTENCE)), b = h.indexOf(esc(SENTENCE)); return a !== -1 && b > a && b - a - esc(LP.MASTODON_PRIVACY_SENTENCE).length < 20; };
   check("L2. the Privacy Policy carries it directly after the Mastodon sentence, as built and on disk", nextTo(built["privacy.html"]) && nextTo(fe("privacy.html") || ""));
-  check("L3. TERMS_VERSION is the date of this change, Nov 5 2026", LEGAL.TERMS_VERSION === "2026-11-05" && LEGAL.TERMS_UPDATED === "Last updated November 5, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05", the date of this change. AFTER "2026-11-06", the version the
+  // card visits privacy sentence set; this change's own sentence is still checked in L1-L2.
+  check("L3. TERMS_VERSION is the latest change's, Nov 6 2026 (card visits; this change set Nov 5)", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026", LEGAL.TERMS_VERSION);
   const SQL_AS_RUN = "ALTER TABLE public.social_post_drafts\n  ADD COLUMN IF NOT EXISTS media_ids uuid[] NOT NULL DEFAULT '{}'::uuid[];\n\n" +
     "ALTER TABLE public.social_post_drafts\n  ADD CONSTRAINT social_post_drafts_media_ids_check CHECK (cardinality(media_ids) <= 4);\n\n" +
     "CREATE INDEX IF NOT EXISTS social_post_drafts_media_ids_idx\n  ON public.social_post_drafts USING gin (media_ids);\n\n" +
@@ -1187,8 +1189,10 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   // still the only one numbered 168, and every migration but 169_member_email_connections.sql is at most 168; "the highest" is checkMailboxConnect M2's.
   // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE every migration but 169 at most 168. AFTER
   // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
-  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql and 170_member_email_replies.sql is at most 168",
-    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 169 and 170 at most 168. AFTER
+  // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
+  check("M2. 168_social_post_images.sql is the only migration numbered 168, and every other migration but 169_member_email_connections.sql, 170_member_email_replies.sql and 171_card_counts.sql is at most 168",
+    migFiles.filter(f => /^168_/.test(f)).length === 1 && migFiles.indexOf("168_social_post_images.sql") !== -1 && migFiles.every(f => f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 168) && migFiles.some(f => /^167_/.test(f)));
   check("M3. the code's limits are 168's: Mastodon 16777216 and 1500 by default, ranges 1-104857600 and 1-100000; at most 4 a post",
     MM.IMAGE_SIZE_LIMIT_DEFAULT === 16777216 && MM.MEDIA_DESCRIPTION_LIMIT_DEFAULT === 1500 && J(MM.IMAGE_SIZE_LIMIT_RANGE) === J([1, 104857600]) &&
     J(MM.MEDIA_DESCRIPTION_LIMIT_RANGE) === J([1, 100000]) && MED.POST_MEDIA_MAX === 4 && MM.MEDIA_PER_POST === 4 && /cardinality\(media_ids\) <= 4/.test(mig));

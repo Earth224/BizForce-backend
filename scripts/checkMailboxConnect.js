@@ -732,9 +732,11 @@ const tick = () => new Promise(r => setImmediate(r));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE "the highest" with every migration at most 169. AFTER 169 is
   // still the only one numbered 169, and every migration but 170_member_email_replies.sql is at most 169; "the highest" is checkMailboxReply M2's.
-  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql is at most 169",
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 170 at most 169. AFTER 171_card_counts.sql
+  // too; "the highest" is checkCardUpgrades R1's.
+  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql and 171_card_counts.sql is at most 169",
     migFiles.filter(f => /^169_/.test(f)).length === 1 && migFiles.indexOf("169_member_email_connections.sql") !== -1 &&
-    migFiles.every(f => f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── N. what a member types ─────────────────────────────────────────────── */
   console.log("\n══ N. what a member types ══");

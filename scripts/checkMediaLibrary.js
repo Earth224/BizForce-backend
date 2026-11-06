@@ -646,8 +646,10 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // 169_member_email_connections.sql too; "the highest" is checkMailboxConnect M2's.
   // NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE every migration but 168 and 169 at most 167. AFTER
   // 170_member_email_replies.sql too; "the highest" is checkMailboxReply M2's.
-  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql, 169_member_email_connections.sql and 170_member_email_replies.sql is at most 167",
-    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171): BEFORE every migration but 168, 169 and 170 at most 167. AFTER
+  // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
+  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql and 171_card_counts.sql is at most 167",
+    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
   check("M3. PATH_PATTERN equals the 167 CHECK character for character", !!SQL_PATH && MED.PATH_PATTERN === SQL_PATH[1] && MED.PATH_RE.source === PATH_SQL_RE.source, SQL_PATH && SQL_PATH[1]);
   const many = Array.from({ length: 300 }, (_, i) => MED.mediaPath(OWEN, ["jpg", "png", "webp", "gif", "mp4", "webm"][i % 6]));
   check("M4. 300 paths each match the 167 pattern and the owner rule, under media/<id>/, and no two are the same",
@@ -984,7 +986,9 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
     [built["terms.html"], fe("terms.html") || ""].every(h => after(h, esc(LP.CAMPAIGN_TERMS_SENTENCE), esc(TERMS)) && h.indexOf(esc(TERMS)) - h.indexOf(esc(LP.CAMPAIGN_TERMS_SENTENCE)) < esc(LP.CAMPAIGN_TERMS_SENTENCE).length + 40));
   // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04", the version this change set. AFTER "2026-11-05", the version
   // the social images privacy sentence set; this change's own sentences are still checked in G1-G3.
-  check("G4. TERMS_VERSION is the latest change's, Nov 5 2026 (images in social posts; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-05" && LEGAL.TERMS_UPDATED === "Last updated November 5, 2026");
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
+  // card visits privacy sentence set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 6 2026 (card visits; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026");
   const guide = fe("scripts/termaximus-guide.js") || "";
   const block = (/"media\.html": \[\n([\s\S]*?)\n    \]/.exec(guide) || ["", ""])[1];
   const tips = (block.match(/"(?:[^"\\]|\\.)*"/g) || []).map(t => JSON.parse(t));

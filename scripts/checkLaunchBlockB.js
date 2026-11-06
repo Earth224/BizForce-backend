@@ -41,9 +41,9 @@
   10. THE BUSINESS CARD. scripts/bf-card.js, run: the public URL, tel: and
       mailto: links, a vCard with N, FN, ORG, TITLE, TEL, EMAIL, URL and PHOTO
       (embedded or linked), RFC 2426 escaping and folding. Both pages' QR codes
-      encode the URL, never a vCard. server.js's slug validation, privacy
-      allowlist and GET /api/cards/slug/:slug, lifted and run. Migration 149
-      and the /c/:slug rewrite.
+      encode the URL (with via=qr), never a vCard. server.js's slug validation,
+      privacy allowlist and GET /api/cards/slug/:slug, lifted and run.
+      Migration 149 and the /c/:slug and /card/:token proxies.
   12. SEO. Every public page: a unique title, a description, a canonical and
       OG tags, no noindex, and the static ones in the sitemap. Every other page
       noindex and out of the sitemap. robots.txt allows crawling and names the
@@ -160,7 +160,9 @@ const MUTATIONS = {
   // #8: the content error helper parses HTML
   "content-error-as-html": [["FE:" + CONTENT, "      span.textContent = text;", "      span.innerHTML = text;"]],
   // #10: the QR holds a vCard
-  "qr-holds-vcard": [["FE:" + CARD_VIEW, "QRCode.toCanvas(document.getElementById(\"qrCanvas\"), cardUrl, {",
+  // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was the QR line drawing cardUrl; AFTER it is the
+  // same line drawing qrUrl (the public URL plus ?via=qr). The mutation is unchanged: the QR becomes a vCard.
+  "qr-holds-vcard": [["FE:" + CARD_VIEW, "QRCode.toCanvas(document.getElementById(\"qrCanvas\"), qrUrl, {",
     "QRCode.toCanvas(document.getElementById(\"qrCanvas\"), window.bfCard.buildVCard(c, null), {"]],
   // #10: the editor's QR holds a vCard
   "editor-qr-holds-vcard": [["FE:" + CARDS, "      QRCode.toCanvas(qr, url, {", "      QRCode.toCanvas(qr, buildVCard(collectFormData()), {"]],
@@ -195,7 +197,10 @@ const MUTATIONS = {
   "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
     "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
   // #10: Netlify does not serve /c/<slug>
-  "short-link-unrouted": [["FE:_redirects", "/c/:slug /card-view.html 200\n", ""]],
+  // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was the rewrite "/c/:slug /card-view.html 200".
+  // AFTER the proxy to the backend's GET /c/:slug, which serves card-view.html with the card's own head; the mutation
+  // (the line removed) is the same.
+  "short-link-unrouted": [["FE:_redirects", "/c/:slug https://dynamic-prosperity-production-5382.up.railway.app/c/:slug 200\n", ""]],
   // #12: a public page without a canonical
   "public-page-without-canonical": [["FE:terms.html", "<link rel=\"canonical\" href=\"https://bizforceai.net/terms\">", ""]],
   // #12: a public page without a description
@@ -758,9 +763,13 @@ function fakeDb(tables, fail) {
     const C = win.bfCard;
     check("10. bf-card.js loads and exposes publicUrl, telHref, mailtoHref, buildVCard and photoFor",
       !!C && ["publicUrl", "telHref", "mailtoHref", "buildVCard", "photoFor"].every(k => typeof C[k] === "function"));
-    check("10. the public URL: the short link when there is a slug, else card-view.html?token=",
+    // NAMED (Nov 6 2026, card upgrades C1): BEFORE a card without a slug was card-view.html?token=<token>. AFTER it is
+    // /card/<token>, which the backend serves with the card's own head; the old link sends the visitor there.
+    check("10. the public URL: the short link when there is a slug, else /card/<token>",
       C.publicUrl({ slug: "jane-doe", share_token: "t" }) === "https://bizforceai.net/c/jane-doe" &&
-      C.publicUrl({ share_token: "a b" }) === "https://bizforceai.net/card-view.html?token=a%20b" && C.publicUrl({}) === null);
+      C.publicUrl({ share_token: "a b" }) === "https://bizforceai.net/card/a%20b" && C.publicUrl({}) === null);
+    check("10. the QR URL is the public URL with via=qr; no URL, no QR URL",
+      C.qrUrl("https://bizforceai.net/c/jane-doe") === "https://bizforceai.net/c/jane-doe?via=qr" && C.qrUrl(null) === null);
     check("10. tel: keeps the + and the digits; too short is no link",
       C.telHref("+1 (555) 010-2030") === "tel:+15550102030" && C.telHref("555.010.2030") === "tel:5550102030" && C.telHref("12") === null && C.telHref("") === null);
     check("10. mailto: for a real address only", C.mailtoHref(" jane@example.com ") === "mailto:jane@example.com" && C.mailtoHref("jane") === null && C.mailtoHref("") === null);
@@ -799,10 +808,14 @@ function fakeDb(tables, fail) {
 
     const view = FE[CARD_VIEW], editor = FE[CARDS];
     const qrArgs = text => [...text.matchAll(/QRCode\.toCanvas\(([^,]+),\s*([^,]+),/g)].map(m => m[2].trim());
-    check("10. card-view.html: both QR codes encode cardUrl, the card's public URL", JSON.stringify(qrArgs(view)) === '["cardUrl","cardUrl"]' &&
-      /var cardUrl = window\.bfCard\.publicUrl\(c\) \|\| window\.location\.href;/.test(view), JSON.stringify(qrArgs(view)));
-    check("10. digital-cards.html: both QR codes encode url, the card's public URL (blank before the first save)",
-      JSON.stringify(qrArgs(editor)) === '["url","url"]' && /var url = cardQrUrl\(\);/.test(editor) &&
+    // NAMED (Nov 6 2026, card upgrades C1): BEFORE both QR codes encoded cardUrl, the public URL. AFTER they encode qrUrl,
+    // the same URL with via=qr (bf-card.js qrUrl), so the card's counts tell a scan from a link; the canonical stays cardUrl.
+    check("10. card-view.html: both QR codes encode qrUrl, the card's public URL with via=qr", JSON.stringify(qrArgs(view)) === '["qrUrl","qrUrl"]' &&
+      /var cardUrl = window\.bfCard\.publicUrl\(c\) \|\| window\.location\.href;\n  setCanonical\(cardUrl\);\n  var qrUrl = window\.bfCard\.qrUrl\(cardUrl\);/.test(view), JSON.stringify(qrArgs(view)));
+    // NAMED (Nov 6 2026, card upgrades C1): BEFORE the editor's QR encoded cardQrUrl(). AFTER it encodes
+    // bfCard.qrUrl(cardQrUrl()), the same URL with via=qr; cardQrUrl itself, and the vCard and Share link that use it, are unchanged.
+    check("10. digital-cards.html: both QR codes encode url, the card's public URL with via=qr (blank before the first save)",
+      JSON.stringify(qrArgs(editor)) === '["url","url"]' && /var url = window\.bfCard\.qrUrl\(cardQrUrl\(\)\);/.test(editor) &&
       /function cardQrUrl\(\) \{\n  return window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: activeShareToken \}\);/.test(editor), JSON.stringify(qrArgs(editor)));
     check("10. neither page builds a vCard of its own (bf-card.js is the one builder)",
       !/BEGIN:VCARD/.test(view) && !/BEGIN:VCARD/.test(editor) && /<script src="\/scripts\/bf-card\.js"><\/script>/.test(view) && /<script src="\/scripts\/bf-card\.js"><\/script>/.test(editor));
@@ -817,8 +830,13 @@ function fakeDb(tables, fail) {
       /id="fSlug"/.test(editor) && /id="fShowEmail"/.test(editor) && /id="fShowPhone"/.test(editor) && /id="fShowPhoto"/.test(editor) &&
       /if \(cardPrivacyReady\) Object\.assign\(body, privacyFields\(\)\);/.test(editor));
     const R = FE["_redirects"];
-    const cAt = R.indexOf("/c/:slug /card-view.html 200\n"), splatAt = R.search(/^\/\*\s/m);
-    check("10. Netlify serves card-view.html at /c/<slug>", cAt !== -1 && (splatAt === -1 || cAt < splatAt), cAt + " / " + splatAt);
+    // NAMED (Nov 6 2026, card upgrades C1): BEFORE Netlify served card-view.html itself at /c/<slug>. AFTER it proxies
+    // /c/<slug> and /card/<token> to the backend, above the catch-all, which serves card-view.html with the card's own head;
+    // the old rewrite is gone.
+    const cAt = R.indexOf("\n/c/:slug https://dynamic-prosperity-production-5382.up.railway.app/c/:slug 200\n"), splatAt = R.search(/^\/\*\s/m);
+    const tAt = R.indexOf("\n/card/:token https://dynamic-prosperity-production-5382.up.railway.app/card/:token 200\n");
+    check("10. Netlify proxies /c/<slug> and /card/<token> to the backend, above the catch-all; no rewrite to card-view.html is left",
+      cAt !== -1 && tAt !== -1 && (splatAt === -1 || (cAt < splatAt && tAt < splatAt)) && R.indexOf("/c/:slug /card-view.html") === -1, cAt + " / " + tAt + " / " + splatAt);
 
     // server.js, lifted
     const rows = {
@@ -861,8 +879,9 @@ function fakeDb(tables, fail) {
     check("10. a hidden email, phone or photo is served empty; a shown one as is",
       pub.email === "" && pub.phone === "555" && pub.photo_url === null &&
       A.publicCardFrom({ show_phone: false, phone: "1", email: "e@x.y" }, "https://p").phone === "" && A.publicCardFrom({ email: "e@x.y" }, "https://p").photo_url === "https://p");
+    // NAMED (Nov 6 2026, card upgrades C1): BEFORE the token link was card-view.html?token=tok. AFTER /card/tok (cardPublicUrl).
     check("10. public_url is the short link, else the token link", pub.public_url === "https://bizforceai.net/c/jane-doe" &&
-      A.publicCardFrom({ share_token: "tok" }, null).public_url === "https://bizforceai.net/card-view.html?token=tok");
+      A.publicCardFrom({ share_token: "tok" }, null).public_url === "https://bizforceai.net/card/tok");
     async function get(slug) {
       const res = { statusCode: 200, body: null, status(c) { this.statusCode = c; return this; }, json(b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
       let nextErr = null;

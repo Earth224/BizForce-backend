@@ -846,7 +846,8 @@ async function getNetwork(db, user, query) {
     // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
     // NAMED (Nov 5 2026, mailbox connection, migration 169): the allowlist adds 169_member_email_connections.sql; "the highest" is checkMailboxConnect M2's.
     // NAMED (Nov 5 2026, mailbox replies, migration 170): the allowlist adds 170_member_email_replies.sql; "the highest" is checkMailboxReply M2's.
-    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
+    // NAMED (Nov 6 2026, card upgrades C1, migration 171): the allowlist adds 171_card_counts.sql; "the highest" is checkCardUpgrades R1's.
+    fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f)).filter(f => !/^(162_plan_cycles|163_store_connections|164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 161));
   check("H7. the table: user_id cascading, from_agent, to_agent, enabled, updated_at, one row per link, no self link",
     /user_id     uuid NOT NULL REFERENCES public\.users\(id\) ON DELETE CASCADE,/.test(mig) && /from_agent  text NOT NULL/.test(mig) && /to_agent    text NOT NULL/.test(mig) &&
     /enabled     boolean NOT NULL DEFAULT true,/.test(mig) && /updated_at  timestamptz NOT NULL DEFAULT now\(\),/.test(mig) &&

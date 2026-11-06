@@ -448,7 +448,15 @@ const EXPECTED_UNAUTH_WRITES = {
   // NAMED (Nov 3 2026, store connections, migration 163; 17 -> 18): BEFORE no store callback. AFTER a member's own
   // WooCommerce store posts the Read key it made here; it is stored only for the member an HMAC-signed state, at most
   // 30 minutes old, names, only with permission "read", after one GET the store accepts (checkStoreConnections W3-W8).
-  "post /api/store/woocommerce/callback":   "a member's read-only WooCommerce key, from a signed state (migration 163)"
+  "post /api/store/woocommerce/callback":   "a member's read-only WooCommerce key, from a signed state (migration 163)",
+  // NAMED (Nov 6 2026, card upgrades C1, migration 171; 18 -> 21): BEFORE no card page or tap was counted. AFTER a GET of a
+  // card page adds one to that card's daily views (and qr_views for ?via=qr), and a tap on its Call, Email, Save Contact or
+  // Support adds one to that counter, through bump_card_count only. Nothing about the visitor is written; HEAD, no
+  // User-Agent, bots and a lapsed owner's card are not counted (checkCardUpgrades). GET /api/digital-cards/:id/stats
+  // is a login-only read of the owner's own card and needs no entry here.
+  "get /c/:slug":                           "one added to a card's daily view count, nothing about the visitor (migration 171)",
+  "get /card/:token":                       "one added to a card's daily view count, nothing about the visitor (migration 171)",
+  "post /api/cards/tap":                    "one added to a card's daily tap count, nothing about the visitor (migration 171)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The
@@ -490,7 +498,14 @@ const EXPECTED_SERVE_GATED = {
   // NAMED (Nov 4 2026, campaign sharing; serve-gated 12 -> 14): BEFORE no campaign page. AFTER bizforceai.net/campaign/<id>
   // and the campaign sitemap, each serving a campaign only while its owner is entitled.
   "get /campaign/:shareId":                 "!(await ownerPagePublic(shared.owner_id))",
-  "get /api/sitemap/campaigns.xml":         "publicOwnersAmong("
+  "get /api/sitemap/campaigns.xml":         "publicOwnersAmong(",
+  // NAMED (Nov 6 2026, card upgrades C1; serve-gated 14 -> 17): BEFORE Netlify served card-view.html at /c/<slug> itself.
+  // AFTER bizforceai.net/c/<slug> and /card/<token> are served here by serveCardPage, whose owner check is
+  // "(await ownerPagePublic(row.user_id)) === true" (checkCardUpgrades proves a lapsed owner's card is a 404 and uncounted),
+  // and the cards sitemap lists a card only while its owner is entitled.
+  "get /c/:slug":                           "serveCardPage(req, res,",
+  "get /card/:token":                       "serveCardPage(req, res,",
+  "get /api/sitemap/cards.xml":             "publicOwnersAmong("
 };
 
 /* ── MUTATE=serve-open: the seller page's guard removed at compile ──────── */

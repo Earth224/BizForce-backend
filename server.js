@@ -61,6 +61,7 @@ const APP_MAP = require("./lib/appMap.json");
 const supportLinks = require("./lib/supportLinks");
 const supportPage = require("./lib/supportPage");
 const campaignShare = require("./lib/campaignShare");
+const cardPage = require("./lib/cardPage");
 const memberMedia = require("./lib/memberMedia");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
@@ -48545,8 +48546,12 @@ const CARD_THEMES = ["dark","midnight","forest","ember"];
    URL only. The page embeds it in the vCard when it is small enough and links
    it otherwise (scripts/bf-card.js in the frontend).
 
-   THE SHORT LINK is bizforceai.net/c/<slug>: Netlify serves card-view.html at
-   that path, and the page asks GET /api/cards/slug/:slug. A slug is 3 to 40
+   THE SHORT LINK is bizforceai.net/c/<slug>: Netlify proxies that path to
+   GET /c/:slug here, which serves card-view.html with the card's own preview
+   tags (lib/cardPage.js), and the page asks GET /api/cards/slug/:slug. A card
+   without a slug lives at bizforceai.net/card/<share token> the same way
+   (C1, Nov 6 2026; before, card-view.html?token=, which now sends the visitor
+   there). A slug is 3 to 40
    lowercase letters, digits and single hyphens, starting and ending with a
    letter or digit, not on CARD_SLUG_RESERVED, and unique (migration 149's
    unique index; a taken slug is a 409). public_url, which the QR encodes, is
@@ -48571,7 +48576,7 @@ function cardSlugFrom(raw) {
 
 function cardPublicUrl(row) {
   if (row && row.slug) return CARD_SITE + "/c/" + row.slug;
-  if (row && row.share_token) return CARD_SITE + "/card-view.html?token=" + encodeURIComponent(row.share_token);
+  if (row && row.share_token) return CARD_SITE + "/card/" + encodeURIComponent(row.share_token);
   return null;
 }
 
@@ -48590,6 +48595,36 @@ function cardPrivacyUpdates(body) {
   }
   return { updates: out };
 }
+
+/* C1 (Nov 6 2026): the media links, media_layout and discoverable a POST or
+   PUT body carries, validated by lib/cardPage.js. Only fields present are
+   written. A media link is empty or a safe https URL; media_layout keeps only
+   the editor's own keys with valid values and is refused over 4 KB;
+   discoverable is a boolean. Rows already stored are not rewritten. */
+function cardMediaUpdates(body) {
+  var out = {};
+  for (var i = 0; i < CARD_MEDIA_COLUMNS.length; i++) {
+    var col = CARD_MEDIA_COLUMNS[i];
+    if (body[col] === undefined) continue;
+    var checked = cardPage.validateCardMediaUrl(body[col], col);
+    if (checked.error) return { error: checked.error };
+    out[col] = checked.value;
+  }
+  if (body.media_layout !== undefined) {
+    var layout = cardPage.sanitizeMediaLayout(body.media_layout);
+    if (layout.error) return { error: layout.error };
+    out.media_layout = layout.value;
+  }
+  if (body.discoverable !== undefined) {
+    if (typeof body.discoverable !== "boolean") return { error: "Letting search engines find a card is true or false." };
+    out.discoverable = body.discoverable;
+  }
+  return { updates: out };
+}
+
+/* The cards sitemap, rebuilt at most every BLOG_SITEMAP_CACHE_MS, and at once
+   after any card write (POST, PUT or DELETE /api/digital-cards). */
+var cardSitemapCache = { xml: null, at: 0 };
 
 /* A write that failed on migration 149's unique slug index is a 409; one that
    named a column the database does not have yet is a 503 that says so. */
@@ -48760,6 +48795,8 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
   try {
     const privacy = cardPrivacyUpdates(req.body);
     if (privacy.error) return res.status(400).json({ error: privacy.error });
+    const media = cardMediaUpdates(req.body);
+    if (media.error) return res.status(400).json({ error: media.error });
     const { data, error } = await supabase
       .from("digital_cards")
       .insert(Object.assign({
@@ -48771,16 +48808,17 @@ app.post("/api/digital-cards", requireAuth, async function (req, res, next) {
         company:   safeText(req.body.company, 120)   || "",
         website:   normalizeUrl(req.body.website)    || "",
         theme:     CARD_THEMES.includes(req.body.theme) ? req.body.theme : "dark",
-        video_url:        safeText(req.body.video_url, 500) || null,
-        bg_image_url:     safeText(req.body.bg_image_url, 500) || null,
-        still_image_url:  safeText(req.body.still_image_url, 500) || null,
-        audio_url:        safeText(req.body.audio_url, 500) || null,
+        video_url:        null,
+        bg_image_url:     null,
+        still_image_url:  null,
+        audio_url:        null,
         holographic_style: Boolean(req.body.holographic_style) || false,
-        media_layout: req.body.media_layout || {},
+        media_layout: {},
         share_token: crypto.randomBytes(16).toString("hex"),
         created_at: nowIso(), updated_at: nowIso()
-      }, privacy.updates))
+      }, media.updates, privacy.updates))
       .select("*").single();
+    if (!error) cardSitemapCache = { xml: null, at: 0 };
     const postRefusal = cardWriteRefusal(error);
     if (postRefusal) return res.status(postRefusal.status).json({ error: postRefusal.error });
     if (error) {
@@ -48806,12 +48844,10 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (req.body.company   !== undefined) updates.company   = safeText(req.body.company, 120)   || "";
     if (req.body.website   !== undefined) updates.website   = normalizeUrl(req.body.website)    || "";
     if (req.body.theme     !== undefined && CARD_THEMES.includes(req.body.theme)) updates.theme = req.body.theme;
-    if (req.body.video_url      !== undefined) updates.video_url      = safeText(req.body.video_url, 500)      || null;
-    if (req.body.bg_image_url   !== undefined) updates.bg_image_url   = safeText(req.body.bg_image_url, 500)   || null;
-    if (req.body.still_image_url !== undefined) updates.still_image_url = safeText(req.body.still_image_url, 500) || null;
-    if (req.body.audio_url       !== undefined) updates.audio_url       = safeText(req.body.audio_url, 500)       || null;
     if (req.body.holographic_style !== undefined) updates.holographic_style = Boolean(req.body.holographic_style);
-    if (req.body.media_layout !== undefined) updates.media_layout = req.body.media_layout || {};
+    const media = cardMediaUpdates(req.body);
+    if (media.error) return res.status(400).json({ error: media.error });
+    Object.assign(updates, media.updates);
     const privacy = cardPrivacyUpdates(req.body);
     if (privacy.error) return res.status(400).json({ error: privacy.error });
     Object.assign(updates, privacy.updates);
@@ -48856,6 +48892,7 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     }
 
     // The row is saved; from here nothing may fail the request.
+    cardSitemapCache = { xml: null, at: 0 };
     if (priorMedia) {
       await removeDisplacedCardMedia(priorMedia, data, req.user.id);
     }
@@ -48891,12 +48928,175 @@ app.delete("/api/digital-cards/:id", requireAuth, async function (req, res, next
 
     // The row is gone; from here nothing may fail the request. A null updatedRow means
     // every slot is displaced.
+    cardSitemapCache = { xml: null, at: 0 };
     if (priorMedia) {
       await removeDisplacedCardMedia(priorMedia, null, req.user.id, "digital-cards DELETE");
     }
 
     return res.json({ success: true });
   } catch (error) { next(error); }
+});
+
+/* ── Card pages, daily counts and the cards sitemap (C1, Nov 6 2026, migration 171) ──
+   GET /c/:slug and GET /card/:token: Netlify proxies both here. The answer is
+   card-view.html with the card's own head (lib/cardPage.js), served only when
+   the card exists and its owner's page is public; anything else, a lookup
+   that throws included, is "Card not found" with a 404. Every answer is
+   no-store and carries the frontend's own security headers.
+
+   COUNTS, AND NOTHING ABOUT A VISITOR. A GET of either page adds one to the
+   card's "views" for the UTC day, and to "qr_views" too when ?via=qr; a tap
+   on the card's Call, Email, Save Contact or Support adds one to its counter
+   (POST /api/cards/tap). Nothing is counted for a HEAD, a missing
+   User-Agent, a bot or link previewer (cardPage.isCountableRequest), or a
+   card whose owner is not public. The User-Agent is read at request time and
+   never kept; the IP is seen only by the in-memory limiters; no cookie is
+   set; no referrer or account is read. A count that fails logs its code and
+   never breaks the page. bump_card_count runs as the service role only. */
+const cardPageLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many requests. Try again in a few minutes."
+});
+
+const cardTapLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many taps. Try again in a few minutes." }
+});
+
+/* One added to one counter of one card for today (UTC). Never throws. */
+async function bumpCardCount(cardId, kind) {
+  if (cardPage.COUNT_KINDS.indexOf(kind) === -1) return false;
+  try {
+    const bumped = await supabase.rpc("bump_card_count", { p_card: cardId, p_kind: kind });
+    if (bumped && bumped.error) {
+      console.error("[card count] not counted: " + (bumped.error.code || "error"));
+      return false;
+    }
+    return true;
+  } catch (countErr) {
+    console.error("[card count] not counted: " + ((countErr && countErr.code) || "failed"));
+    return false;
+  }
+}
+
+/* The card a page or a tap names: { slug } or { token }, already valid. */
+async function cardRowFor(ref, columns) {
+  const cardQuery = supabase.from("digital_cards").select(columns || "*");
+  const got = ref.token ? await cardQuery.eq("share_token", ref.token).maybeSingle() : await cardQuery.eq("slug", ref.slug).maybeSingle();
+  if (got.error) throw got.error;
+  return got.data || null;
+}
+
+async function serveCardPage(req, res, ref) {
+  res.set(cardPage.pageHeaders());
+  try {
+    let row = null, visible = false;
+    try {
+      row = ref ? await cardRowFor(ref) : null;
+    } catch (readErr) {
+      console.error("[card page] the card could not be read: " + ((readErr && readErr.code) || "error"));
+      row = null;
+    }
+    if (row) {
+      try { visible = (await ownerPagePublic(row.user_id)) === true; } catch (planErr) { visible = false; }
+    }
+    if (!row || !visible) return res.status(404).send(cardPage.renderNotFound());
+    const shown = publicCardFrom(row, await cardOwnerPhoto(row));
+    const html = cardPage.renderCardPage({
+      full_name: shown.full_name, job_title: shown.job_title, company: shown.company, public_url: shown.public_url,
+      photo_url: shown.photo_url, show_photo: row.show_photo === true, discoverable: row.discoverable === true
+    });
+    if (cardPage.isCountableRequest(req)) {
+      await bumpCardCount(row.id, "views");
+      if (req.query && req.query.via === "qr") await bumpCardCount(row.id, "qr_views");
+    }
+    return res.status(200).send(html);
+  } catch (pageErr) {
+    console.error("[card page] " + ((pageErr && pageErr.code) || "not served"));
+    return res.status(404).send(cardPage.renderNotFound());
+  }
+}
+
+app.get("/c/:slug", cardPageLimiter, async function (req, res) {
+  const parsedSlug = cardSlugFrom(req.params.slug);
+  return serveCardPage(req, res, parsedSlug.slug ? { slug: parsedSlug.slug } : null);
+});
+
+app.get("/card/:token", cardPageLimiter, async function (req, res) {
+  const pageToken = String(req.params.token || "");
+  return serveCardPage(req, res, cardPage.CARD_TOKEN_RE.test(pageToken) ? { token: pageToken } : null);
+});
+
+/* Public. { ref: a slug or a share token, kind: tel | email | save | support }.
+   204 whether it was counted or skipped; 400 for a bad kind or ref. The card
+   page sends it with navigator.sendBeacon, whose body is text/plain. */
+app.post("/api/cards/tap", cardTapLimiter, express.text({ type: "text/plain", limit: "2kb" }), async function (req, res) {
+  let tap = req.body;
+  if (typeof tap === "string") { try { tap = JSON.parse(tap); } catch (parseErr) { tap = null; } }
+  const column = tap && typeof tap === "object" ? cardPage.tapColumn(tap.kind) : null;
+  const ref = tap && typeof tap.ref === "string" ? tap.ref : "";
+  const byToken = cardPage.CARD_TOKEN_RE.test(ref);
+  const bySlug = cardSlugFrom(ref).slug === ref;
+  if (!column || (!byToken && !bySlug)) return res.status(400).json({ error: "A tap names a card and one of tel, email, save or support." });
+  if (!cardPage.isCountableRequest(req)) return res.status(204).end();
+  try {
+    let tapped = byToken ? await cardRowFor({ token: ref }, "id, user_id") : null;
+    if (!tapped && bySlug) tapped = await cardRowFor({ slug: ref }, "id, user_id");
+    if (tapped && (await ownerPagePublic(tapped.user_id)) === true) await bumpCardCount(tapped.id, column);
+  } catch (tapErr) {
+    console.error("[card tap] not counted: " + ((tapErr && tapErr.code) || "error"));
+  }
+  return res.status(204).end();
+});
+
+/* The owner's own counts for one card: the last 30 UTC days, every day
+   present, and the 7- and 30-day totals. Anyone else's card is a 404. */
+app.get("/api/digital-cards/:id/stats", requireAuth, async function (req, res, next) {
+  try {
+    const statsCardId = String(req.params.id || "");
+    if (!UUID_RE.test(statsCardId)) return res.status(404).json({ error: "Card not found" });
+    const owned = await supabase.from("digital_cards").select("id").eq("user_id", req.user.id).eq("id", statsCardId).maybeSingle();
+    if (owned.error) throw owned.error;
+    if (!owned.data) return res.status(404).json({ error: "Card not found" });
+    const statsNow = new Date(nowIso());
+    const counted = await supabase.from("card_view_counts").select("day, views, qr_views, tel_taps, email_taps, save_taps, support_taps")
+      .eq("card_id", owned.data.id).gte("day", cardPage.statsDays(statsNow)[0]).order("day", { ascending: true });
+    if (counted.error) throw counted.error;
+    return res.json(cardPage.buildStats(counted.data || [], statsNow));
+  } catch (error) { next(error); }
+});
+
+/* Cards whose members let search engines find them, with a short link, and
+   only while the owner's page is public. */
+app.get("/api/sitemap/cards.xml", cardPageLimiter, async function (req, res) {
+  try {
+    if (!cardSitemapCache.xml || Date.now() - cardSitemapCache.at > BLOG_SITEMAP_CACHE_MS) {
+      const listedCards = await supabase.from("digital_cards").select("user_id, slug, discoverable")
+        .eq("discoverable", true).not("slug", "is", null).limit(5000);
+      if (listedCards.error) throw listedCards.error;
+      const findable = (listedCards.data || []).filter(function (r) { return r.discoverable === true && typeof r.slug === "string" && cardSlugFrom(r.slug).slug === r.slug; });
+      const shownOwners = await publicOwnersAmong(findable.map(function (r) { return r.user_id; }));
+      const slugs = findable.filter(function (r) { return shownOwners.has(r.user_id); }).map(function (r) { return r.slug; }).sort();
+      cardSitemapCache = {
+        xml: '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+          slugs.map(function (slug) { return "  <url><loc>" + supportLinks.escapeHtml(CARD_SITE + "/c/" + slug) + "</loc></url>\n"; }).join("") + "</urlset>\n",
+        at: Date.now()
+      };
+    }
+    res.set("Content-Type", "application/xml; charset=utf-8");
+    res.set("Cache-Control", "public, max-age=600");
+    return res.status(200).send(cardSitemapCache.xml);
+  } catch (err) {
+    console.error("[sitemap/cards] could not be built: " + ((err && err.code) || "error"));
+    res.set("Retry-After", "600");
+    return res.status(503).type("text/plain").send("The cards sitemap could not be built just now.");
+  }
 });
 
 // Returns (and lazily generates) a share token for the user's card
@@ -48926,7 +49126,7 @@ app.post("/api/cards/share-token", requireAuth, requireActiveSubscription, async
 
 // Public — no auth — returns card by share token. select("*") so the card
 // reads the same before and after migration 149; publicCardFrom is what leaves.
-app.get("/api/cards/share/:token", async function (req, res, next) {
+app.get("/api/cards/share/:token", cardPageLimiter, async function (req, res, next) {
   try {
     const { data, error } = await supabase
       .from("digital_cards")
@@ -48943,10 +49143,10 @@ app.get("/api/cards/share/:token", async function (req, res, next) {
   } catch (error) { next(error); }
 });
 
-// Public — no auth — the short link bizforceai.net/c/<slug> (Netlify serves
-// card-view.html there, and the page asks this). A slug that cannot be valid
-// is a 404 without a read.
-app.get("/api/cards/slug/:slug", async function (req, res, next) {
+// Public — no auth — the short link bizforceai.net/c/<slug> (GET /c/:slug
+// serves card-view.html there, and the page asks this). A slug that cannot be
+// valid is a 404 without a read.
+app.get("/api/cards/slug/:slug", cardPageLimiter, async function (req, res, next) {
   try {
     const parsed = cardSlugFrom(req.params.slug);
     if (!parsed.slug) return res.status(404).json({ error: "Card not found" });

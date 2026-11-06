@@ -621,7 +621,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     // NAMED (Nov 5 2026, images in social posts, migration 168): the allowlist adds 168_social_post_images.sql; "the highest" is checkSocialImages M2's.
     // NAMED (Nov 5 2026, mailbox connection, migration 169): the allowlist adds 169_member_email_connections.sql; "the highest" is checkMailboxConnect M2's.
     // NAMED (Nov 5 2026, mailbox replies, migration 170): the allowlist adds 170_member_email_replies.sql; "the highest" is checkMailboxReply M2's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 6 2026, card upgrades C1, migration 171): the allowlist adds 171_card_counts.sql; "the highest" is checkCardUpgrades R1's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -1345,7 +1346,9 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
      campaign sharing set when it added its Terms sentence; still an exact pin. */
   // NAMED (Nov 5 2026, images in social posts): BEFORE "2026-11-04" (campaign sharing). AFTER "2026-11-05", the version the social
   // images privacy sentence set.
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-05 (images in social posts; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-05", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
+  // card visits privacy sentence set.
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-06 (card visits; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-06", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

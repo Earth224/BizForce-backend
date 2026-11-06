@@ -267,9 +267,11 @@ function wellFormed(xml) {
   // lists sitemap-support.xml, the support pages members chose to list (checkMemberSupport.js holds that route).
   // NAMED (Nov 4 2026, campaign sharing): BEFORE the index listed pages, blog and support. AFTER it also lists
   // sitemap-campaigns.xml, the shared campaigns their owners chose to list (checkCampaignSharing.js holds that route).
-  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml, sitemap-blog.xml, sitemap-support.xml and sitemap-campaigns.xml", !!INDEX && wellFormed(INDEX) === null &&
+  // NAMED (Nov 6 2026, card upgrades C1): BEFORE the index listed pages, blog, support and campaigns. AFTER it also lists
+  // sitemap-cards.xml, the cards whose members let search engines find them (checkCardUpgrades.js holds that route).
+  check("E. sitemap.xml is a sitemap index listing exactly sitemap-pages.xml, sitemap-blog.xml, sitemap-support.xml, sitemap-campaigns.xml and sitemap-cards.xml", !!INDEX && wellFormed(INDEX) === null &&
     /<sitemapindex xmlns="http:\/\/www\.sitemaps\.org\/schemas\/sitemap\/0\.9">/.test(INDEX) &&
-    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml", "https://bizforceai.net/sitemap-campaigns.xml"]), INDEX);
+    JSON.stringify(locs(INDEX)) === JSON.stringify(["https://bizforceai.net/sitemap-pages.xml", "https://bizforceai.net/sitemap-blog.xml", "https://bizforceai.net/sitemap-support.xml", "https://bizforceai.net/sitemap-campaigns.xml", "https://bizforceai.net/sitemap-cards.xml"]), INDEX);
   // NAMED (Oct 27 2026, launch item #12): BEFORE the five pages ended at /suppressed.html. AFTER the four legal pages
   // follow it, /terms, /privacy, /refund and /contact, each public and canonical (checkLaunchBlockB section 12).
   check("E. sitemap-pages.xml keeps /, /app, /vitality, /xxl-xtreme, /suppressed.html and adds /terms, /privacy, /refund, /contact", !!PAGES && wellFormed(PAGES) === null &&
