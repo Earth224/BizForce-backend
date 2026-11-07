@@ -112,6 +112,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 |---|---|---|
 | `SHOPIFY_CLIENT_ID` | none | The Client ID of BizForce's Shopify app (see "Shopify app setup" below). Needed only for Connect Shopify on the Store Agent page; without it (or `SHOPIFY_CLIENT_SECRET`) the Shopify routes and `POST /api/webhooks/shopify` answer 503 "Shopify connection isn't set up yet.", `GET /api/store/connections` answers `shopify_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `SHOPIFY_CLIENT_SECRET` | none | That app's client secret. It is sent in the token exchange and refresh, and it verifies the HMAC on Shopify's return to the Store Agent page and on every webhook. Needed only for Shopify, with `SHOPIFY_CLIENT_ID`. A secret; set it on Railway and never commit it. Rotating it in the Partner Dashboard means setting the new value on Railway at once, or webhooks are refused with 401. |
+| `GOOGLE_OAUTH_CLIENT_ID` | none | The client ID of BizForce's Google OAuth client (see "YouTube app setup" below). Needed only for YouTube on the Social Agent page; without it (or `GOOGLE_OAUTH_CLIENT_SECRET`) the YouTube connect, video and proposal routes answer 503 "YouTube connection isn't set up yet.", `GET /api/youtube/status` answers `youtube_available: false` and the page disables the button. Set it on Railway; never commit it. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | none | That client's secret, sent in the code exchange and every refresh. Needed only for YouTube, with `GOOGLE_OAUTH_CLIENT_ID`. A secret; set it on Railway and never commit it. |
 
 ### Google Wallet
 
@@ -178,8 +180,9 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
-| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft and Shopify sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify and YouTube sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
 | `webhookEventsPurgeTick` (`lib/shopifyAuth.js`): Shopify notification receipts older than 30 days | the same 04:45 UTC run, after the sign-in states purge, claimed `shopify_webhook_events_purge` | always on (no flag); runs only when server.js is the program |
+| `retentionTick` (`lib/memberVideos.js`): videos for YouTube never uploaded after 14 days, uploaded videos' leftover files, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `storeSyncTick`: read connected Shopify and WooCommerce stores (the sync only reads) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
@@ -260,6 +263,20 @@ Connect Shopify on the Store Agent page (`lib/shopifyAuth.js`, `lib/shopifyApi.j
 - **Credentials:** the Client ID in `SHOPIFY_CLIENT_ID` and the client secret in `SHOPIFY_CLIENT_SECRET`, on Railway only.
 
 Until both variables are set, the Shopify routes answer 503 and the page shows "Shopify connection isn't set up yet." One shop connects to one BizForce account. Disconnecting deletes BizForce's copy; the member removes the app from their Shopify admin under Settings, then Apps. Webhook receipts are kept 30 days (`shopify_webhook_events`).
+
+## YouTube app setup
+
+YouTube on the Social Agent page (`lib/googleAuth.js`, `lib/youtubeApi.js`, `lib/memberVideos.js`, migration 177) needs one OAuth client in Google Cloud:
+
+- **Project:** a Google Cloud project. The Google Wallet one may be reused.
+- **API:** the YouTube Data API v3, enabled in that project.
+- **OAuth consent screen:** with the two scopes `https://www.googleapis.com/auth/youtube.upload` and `https://www.googleapis.com/auth/youtube.readonly`. A grant missing either is refused.
+- **OAuth client:** type Web application, with the authorized redirect URI exactly `https://bizforceai.net/agents/social.html` (the server sends `FRONTEND_URL` + `/agents/social.html`, so the two must match).
+- **Credentials:** the client ID in `GOOGLE_OAUTH_CLIENT_ID` and the client secret in `GOOGLE_OAUTH_CLIENT_SECRET`, on Railway only.
+- **Testing status:** while the app is in "testing", only its test users can connect, their refresh tokens expire after 7 days (they then connect again), and YouTube keeps every upload private.
+- **Verification:** Google's app verification for these scopes is needed before uploads can be unlisted or public, and before anyone outside the test users can connect.
+
+Until both variables are set, the YouTube routes answer 503 and the page shows "YouTube connection isn't set up yet." Videos wait in the private bucket `bf-video` (50 MB a file, MP4, WebM or MOV) and are deleted as soon as YouTube has them, or after 14 days. Every upload and removal waits for the member's approval, and YouTube API units are reserved in `youtube_api_calls` before each call. Disconnecting asks Google to revoke the access, as a best effort, and deletes BizForce's copy.
 
 ## Google Wallet setup
 

@@ -1129,7 +1129,9 @@ function stateParts(url) {
     ["offline_access", "openid", "email", "profile", "IMAP.AccessAsUser.All", "SMTP.Send"].every(p => reg.indexOf("`" + p + "`") !== -1) && /rotate it before then/.test(reg));
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "one-time Microsoft sign-in states". AFTER the same purge removes
   // Connect Shopify's states too (oauth_states holds both purposes), and the row says so.
-  check("H9. the README job table lists the oauth_states purge", /\| `oauthStatesPurgeTick` \(`lib\/microsoftAuth\.js`\): one-time Microsoft and Shopify sign-in states older than a day \|/.test(README));
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "one-time Microsoft and Shopify sign-in states". AFTER the purge
+  // removes Connect YouTube's states (purpose youtube_google) too, and the row says so.
+  check("H9. the README job table lists the oauth_states purge", /\| `oauthStatesPurgeTick` \(`lib\/microsoftAuth\.js`\): one-time Microsoft, Shopify and YouTube sign-in states older than a day \|/.test(README));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql is, held by
   // checkGoogleWallet R1; it is the only migration allowed above 173, by name.
@@ -1137,8 +1139,10 @@ function stateParts(url) {
   // by name; "the highest" is checkStoreChanges R1's.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE 174 and 175 were allowed above 173. AFTER 176_shopify_oauth.sql
   // too; "the highest" is checkShopifyConnect R1's.
-  check("R1. 173_mailbox_microsoft.sql is the only migration numbered 173; above it only 174_card_wallet_count.sql, 175_store_changes.sql and 176_shopify_oauth.sql (checkShopifyConnect R1); 172 was the last before it",
-    migFiles.filter(f => /^173_/.test(f)).length === 1 && migFiles.indexOf("173_mailbox_microsoft.sql") !== -1 && migFiles.every(f => f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || f === "176_shopify_oauth.sql" || Number(f.split("_")[0]) <= 173) && migFiles.some(f => /^172_/.test(f)));
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE 174, 175 and 176 were allowed above 173. AFTER
+  // 177_youtube_uploads.sql too; "the highest" is checkYoutubeUploads R1's.
+  check("R1. 173_mailbox_microsoft.sql is the only migration numbered 173; above it only 174_card_wallet_count.sql, 175_store_changes.sql, 176_shopify_oauth.sql and 177_youtube_uploads.sql (checkYoutubeUploads R1); 172 was the last before it",
+    migFiles.filter(f => /^173_/.test(f)).length === 1 && migFiles.indexOf("173_mailbox_microsoft.sql") !== -1 && migFiles.every(f => f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || Number(f.split("_")[0]) <= 173) && migFiles.some(f => /^172_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026", MIGRATION.indexOf("-- Applied by the owner by hand in the Supabase SQL editor on Nov 6, 2026. This file is the text as run.\n") === 0);
   check("R3. RLS on, anon and authenticated revoked, the state hash unique, the kind_shape CHECK present, and every pattern this check enforces read from it",
     /ALTER TABLE public\.oauth_states ENABLE ROW LEVEL SECURITY;/.test(MIGRATION) && /REVOKE ALL ON public\.oauth_states FROM anon, authenticated;/.test(MIGRATION) &&

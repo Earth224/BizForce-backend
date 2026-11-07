@@ -876,7 +876,8 @@ const A = [
       offers(CONTENT, "Social Media Drafts") && /<h2 class="ap-section-label">Approval Queue<\/h2>/.test(FILES[AP]) && /status:\s*"not_published"/.test(FILES[SERVER])],
   ["5 content 128", conTips, "to post on Bluesky from your own account, use the Social Agent page",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
     () => socialShut() && blueskyConnects() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
-  ["5 social 134", socTips, "Bluesky and Mastodon connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "Bluesky and Mastodon connect so far, ..."; AFTER YouTube is named too.
+  ["5 social 134", socTips, "Bluesky, Mastodon and YouTube connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
     () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() && mastodonConnects() &&
       /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn, TikTok and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
   // guard catches outside the list

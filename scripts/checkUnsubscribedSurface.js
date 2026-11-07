@@ -251,7 +251,16 @@ const EXPECTED_GATED = [
   // through POST /api/store/connections. AFTER Connect Shopify starts (a single-use state stored) and finishes (the HMAC and
   // timestamp checked, the state consumed, the code exchanged, both tokens sealed, the row stored) behind a subscription, as
   // WooCommerce's connect does; the list, the location routes and disconnect stay login-only (checkShopifyConnect).
-  "post /api/store/shopify/start", "post /api/store/shopify/finish"
+  "post /api/store/shopify/start", "post /api/store/shopify/finish",
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177; gated 102 -> 109): BEFORE no YouTube connection or member video. AFTER
+  // Connect YouTube starts (a single-use state and a sealed PKCE verifier stored) and finishes (the code exchanged, both
+  // scopes required, the tokens sealed, the channel stored); a signed upload URL into the private bf-video bucket and the
+  // streamed check of what arrived (finalize); filing an upload or a removal for approval; and an AI draft of the title,
+  // description and tags (aiLimiter). All need a subscription; approving either is G3-gated on the approve route
+  // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_youtube_video and delete_youtube_video). Status, disconnect, the list of
+  // videos, deleting a ready video and a video's status stay login-only (checkYoutubeUploads).
+  "post /api/youtube/start", "post /api/youtube/finish", "post /api/videos/upload-url", "post /api/videos/finalize",
+  "post /api/youtube/propose-upload", "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete"
 ];
 
 const EXPECTED_ADMIN = [
@@ -448,7 +457,13 @@ const EXPECTED_OWN = [
   // active locations read live), .eq("user_id", req.user.id) and platform shopify; the row is theirs, served to no one else,
   // and changes nothing in the store. GET /api/store/connections/:id/locations is a login-only live read (it may mark the
   // member's own connection needs_reconnect, as Sync now does) and needs no entry here (checkShopifyConnect).
-  "put /api/store/connections/:id/location"
+  "put /api/store/connections/:id/location",
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177; one more effectful login-only route): BEFORE no YouTube connection.
+  // AFTER a member disconnects their own channel: Google is asked to revoke the token as a best effort (never blocking), and
+  // their own member_youtube_connections row and their own youtube_google oauth_states are deleted; nothing another member
+  // is served is written, and disconnecting must always work, subscribed or not. DELETE /api/videos/:id (a ready video the
+  // member owns, through lib/memberVideos.js) and the status reads write nothing a member is served and need no entry here.
+  "post /api/youtube/disconnect"
 ];
 
 /* Unauthenticated routes that write. */

@@ -48,7 +48,8 @@
         blocked address is thrown.
     13. THE JSON MODE (guardedJsonRequest, NAMED Nov 3 2026 for Connect
         Mastodon). https on 443 only; every blocked literal and name refused
-        before connecting; one resolution against rebinding; GET or POST only;
+        before connecting; one resolution against rebinding; GET or POST only
+        (NAMED Nov 7 2026, YouTube uploads: GET, POST or DELETE, see 13b);
         no redirect followed; 1 MB of body after decompression; a 2xx must be
         JSON; a non-2xx is returned with its json; only three answer headers
         come back; the Authorization value is in no error, detail, log line or
@@ -290,6 +291,8 @@ Object.assign(ROUTES, {
   "/j/over-ceiling": function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" }); res.end(zlib.gzipSync(Buffer.from("\"" + "a".repeat(8 * ONE_MB - 1) + "\""))); },
   "/j/declared-9mb": function (req, res) { res.writeHead(200, { "Content-Type": "application/json", "Content-Length": String(9 * ONE_MB) }); res.write("{"); },
   "/j/paged":        function (req, res) { sendJson(res, 200, [{ id: 1 }], { "Link": "<https://public.test/j/paged?page=2>; rel=\"next\"", "X-WP-TotalPages": "3", "Retry-After": "1", "Set-Cookie": "s=1", "X-Other": "x" }); },
+  // NAMED (Nov 7 2026, YouTube uploads): a 2xx with no body at all, as videos.delete and the revoke answer (section 13b)
+  "/j/empty204":     function (req, res) { res.writeHead(204); res.end(); },
   "/j/echo":         function (req, res) {
     const chunks = [];
     req.on("data", function (c) { chunks.push(c); });
@@ -821,12 +824,29 @@ async function sectionJson() {
   check("rebinding: one resolution, and the connection goes to the public address it checked",
     a.ok && rebindCalls === 1 && dialed.length === 1 && dialed[0].address === PUBLIC_V4, code(a) + " calls " + rebindCalls + " " + JSON.stringify(dialed));
 
-  console.log("\n══ 13b. GET or POST only ══");
-  for (const m of ["DELETE", "PUT", "PATCH", "get", "HEAD"]) {
+  /* NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "GET or POST only", with DELETE among the refused methods.
+     AFTER GET, POST or DELETE: videos.delete is a DELETE (lib/youtubeApi.js executeDelete). DELETE leaves the refused list
+     and is proved to go through, carrying no body; every other method is still refused before any lookup, and the
+     json-method-unrestricted mutation is still caught by them. The emptyOk option (a 2xx with an empty body is json null)
+     is proved here too; without it an empty 2xx is still refused. */
+  console.log("\n══ 13b. GET, POST or DELETE only ══");
+  for (const m of ["PUT", "PATCH", "get", "delete", "HEAD"]) {
     resolverCalls = {};
     a = await attemptJson("https://public.test/j/echo", { method: m });
     check("method " + m + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
   }
+  a = await attemptJson("https://public.test/j/echo", { method: "DELETE", headers: auth });
+  check("a DELETE goes through, with its Authorization and no body", a.ok && a.value.json.method === "DELETE" && a.value.json.body === "" &&
+    a.value.json.headers.authorization === "Bearer " + FAKE_TOKEN, code(a));
+  a = await attemptJson("https://public.test/j/echo", { method: "DELETE", body: { x: 1 } });
+  check("a DELETE with a body is refused", !a.ok && a.err instanceof TypeError, code(a));
+  a = await attemptJson("https://public.test/j/empty204", { method: "DELETE", emptyOk: true });
+  check("emptyOk: a 204 with no body answers json null", a.ok && a.value.status === 204 && a.value.json === null, code(a));
+  a = await attemptJson("https://public.test/j/empty204", { method: "DELETE" });
+  check("without emptyOk the same empty 204 is refused, as before", !a.ok, a.ok ? "accepted" : code(a));
+  resolverCalls = {};
+  a = await attemptJson("https://public.test/j/empty204", { method: "DELETE", emptyOk: "yes" });
+  check("emptyOk that is not true or false is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], code(a));
   a = await attemptJson("https://public.test/j/echo", { method: "GET", body: { status: "x" } });
   check("a GET with a body is refused", !a.ok && a.err instanceof TypeError, code(a));
   a = await attemptJson("https://public.test/j/echo", { method: "POST", headers: Object.assign({ "Idempotency-Key": "draft-1", Host: "evil.test", "Content-Length": "1" }, auth), body: { status: "Hello", visibility: "public" } });

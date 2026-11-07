@@ -300,7 +300,22 @@ const ADDED = [
   ["post", "/api/store/shopify/finish"],                     // subscribed: HMAC, timestamp, shop, state; the code exchanged; both tokens sealed; stored (442 -> 443)
   ["get", "/api/store/connections/:id/locations"],           // login-only: the member's own Shopify shop's active locations, read live (443 -> 444)
   ["put", "/api/store/connections/:id/location"],            // login-only: the location stock changes apply at, one of the live list (444 -> 445)
-  ["post", "/api/webhooks/shopify"]                          // public, raw body, HMAC-verified: app/uninstalled and the privacy topics, deduped (445 -> 446)
+  ["post", "/api/webhooks/shopify"],                         // public, raw body, HMAC-verified: app/uninstalled and the privacy topics, deduped (445 -> 446)
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE 446 routes; AFTER 458, Connect YouTube (Google OAuth with PKCE),
+  // a member's private videos (a signed upload, then a streamed check), uploads and removals filed for approval, and a
+  // status read (checkYoutubeUploads)
+  ["post", "/api/youtube/start"],                            // subscribed: stores a single-use state and a sealed PKCE verifier, returns Google's authorize URL; 503 until configured (446 -> 447)
+  ["post", "/api/youtube/finish"],                           // subscribed: state, code, verifier; both scopes required; tokens sealed; the channel stored (447 -> 448)
+  ["get", "/api/youtube/status"],                            // login-only: the member's own connection, never a token; youtube_available (448 -> 449)
+  ["post", "/api/youtube/disconnect"],                       // login-only: revoke as a best effort, the row and this purpose's states deleted (449 -> 450)
+  ["post", "/api/videos/upload-url"],                        // subscribed: a signed upload URL into the private bf-video bucket; 503 until configured (450 -> 451)
+  ["post", "/api/videos/finalize"],                          // subscribed: the object streamed, sniffed, counted and hashed; refused objects deleted (451 -> 452)
+  ["get", "/api/videos"],                                    // login-only: the member's own videos, never a path, hash or session (452 -> 453)
+  ["delete", "/api/videos/:id"],                             // login-only: a ready video the member owns, refused while a proposal names it (453 -> 454)
+  ["post", "/api/youtube/propose-upload"],                   // subscribed: validated metadata frozen in a proposal; never executes (454 -> 455)
+  ["post", "/api/youtube/draft-metadata"],                   // subscribed: an AI draft of the title, description and tags; nothing stored (455 -> 456)
+  ["post", "/api/youtube/videos/:id/propose-delete"],        // subscribed: removal from YouTube filed as a proposal; never executes (456 -> 457)
+  ["get", "/api/youtube/videos/:id/status"]                  // login-only: videos.list status and processing for the member's own uploaded video, 1 unit (457 -> 458)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

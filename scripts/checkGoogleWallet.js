@@ -677,8 +677,10 @@ function verified(token) {
   // above it, by name; "the highest" is checkStoreChanges R1's.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE only 175 was allowed above 174. AFTER 176_shopify_oauth.sql too;
   // "the highest" is checkShopifyConnect R1's.
-  check("R1. 174_card_wallet_count.sql is the only migration numbered 174; above it only 175_store_changes.sql and 176_shopify_oauth.sql (checkShopifyConnect R1); 173 the last before it",
-    migFiles.filter(f => /^174_/.test(f)).length === 1 && migFiles.indexOf("174_card_wallet_count.sql") !== -1 && migFiles.every(f => f === "175_store_changes.sql" || f === "176_shopify_oauth.sql" || Number(f.split("_")[0]) <= 174) && migFiles.some(f => /^173_/.test(f)));
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE 175 and 176 were allowed above 174. AFTER 177_youtube_uploads.sql
+  // too; "the highest" is checkYoutubeUploads R1's.
+  check("R1. 174_card_wallet_count.sql is the only migration numbered 174; above it only 175_store_changes.sql, 176_shopify_oauth.sql and 177_youtube_uploads.sql (checkYoutubeUploads R1); 173 the last before it",
+    migFiles.filter(f => /^174_/.test(f)).length === 1 && migFiles.indexOf("174_card_wallet_count.sql") !== -1 && migFiles.every(f => f === "175_store_changes.sql" || f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || Number(f.split("_")[0]) <= 174) && migFiles.some(f => /^173_/.test(f)));
   check("R2. the route is in checkDormantRoutesDeleted ADDED and checkUnsubscribedSurface's serve-gated list",
     fs.readFileSync(path.join(__dirname, "checkDormantRoutesDeleted.js"), "utf8").indexOf("[\"get\", \"/api/cards/google-wallet\"]") !== -1 &&
     fs.readFileSync(path.join(__dirname, "checkUnsubscribedSurface.js"), "utf8").indexOf("\"get /api/cards/google-wallet\":           SERVE_GUARD") !== -1);

@@ -1372,8 +1372,10 @@ function listAnswers(over) {
   check("G5. privacy.html carries it once, as built", FILES.privacy.split(esc(PRIVACY)).length === 2);
   const LEGAL = realRequire("./lib/legal");
   check("G6. TERMS_VERSION and TERMS_UPDATED are Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07" && LEGAL.TERMS_UPDATED === "Last updated November 7, 2026", LEGAL.TERMS_VERSION);
-  check("G7. yourData: the sign-in states name Connect Shopify, the receipts are not member data, and Shopify is a third party",
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft and Connect Shopify") !== -1 &&
+  // NAMED (Nov 7 2026, YouTube uploads, migration 177): the sign-in states line now also names Connect YouTube;
+  // Connect Shopify is still required in it.
+  check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube), the receipts are not member data, and Shopify is a third party",
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify and Connect YouTube") !== -1 &&
     FILES.yourData.indexOf("shopify_webhook_events: \"Shopify's notifications about app installs and privacy requests, kept 30 days\"") !== -1 &&
     FILES.yourData.indexOf("{ name: \"Shopify\", for: \"connecting your Shopify store, reading it and making the changes you approve, when you connect one\" }") !== -1);
   check("G8. README: the two env vars, the Shopify app setup section and the webhook address",
@@ -1388,7 +1390,13 @@ function listAnswers(over) {
     FILES.migration176.indexOf("REVOKE ALL ON public.shopify_webhook_events FROM anon, authenticated;") !== -1);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (f) { return /^\d{3}_.*\.sql$/.test(f); });
   const highest = migFiles.map(function (f) { return Number(f.slice(0, 3)); }).reduce(function (a, x) { return Math.max(a, x); }, 0);
-  check("G11. R1. 176_shopify_oauth.sql is the highest migration, and the only 176", highest === 176 && migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
+  /* NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "176_shopify_oauth.sql is the highest migration, and the only
+     176". AFTER it is the only 176, and every migration but 177_youtube_uploads.sql is 176 or lower; "the highest" is
+     checkYoutubeUploads R1's, for 177. */
+  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql is 176 or lower (checkYoutubeUploads R1)",
+    highest === 177 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,
     "store-agent.html": FILES.page, "scripts/checkShopifyConnect.js": fs.readFileSync(__filename, "utf8") };

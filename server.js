@@ -12329,6 +12329,16 @@ const PROPOSAL_EXECUTORS = {
   // runs at call time.
   send_mailbox_reply: executeSendMailboxReply,
 
+  // Uploads a member's video to their own YouTube channel, from an approved
+  // POST /api/youtube/propose-upload (migration 177, lib/youtubeApi.js): the
+  // fingerprint checked, one resumable session sealed before the first byte,
+  // never a second insert. Always through approval. Defined further down the file.
+  publish_youtube_video: executePublishYoutubeVideo,
+
+  // Removes a video BizForce uploaded from the member's channel, from an approved
+  // POST /api/youtube/videos/:id/propose-delete. Always through approval.
+  delete_youtube_video: executeDeleteYoutubeVideo,
+
   // Changes one WooCommerce or Shopify item's price or stock level, from an approved
   // POST /api/store/changes/propose (migrations 175 and 176, lib/storeWrite.js), after a
   // live compare-and-set, with one write and no retry. Always through approval:
@@ -12385,6 +12395,17 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "publish_mastodon_post") {
       return res.status(400).json({
         error: "A Mastodon post cannot be filed here. Use POST /api/social/mastodon/propose-post with the task_id of a completed social/post run for Mastodon."
+      });
+    }
+    // A YouTube upload or removal: filed only by the routes that read the video and the channel (migration 177).
+    if (actionType === "publish_youtube_video") {
+      return res.status(400).json({
+        error: "A YouTube upload cannot be filed here. Use POST /api/youtube/propose-upload from the Social Agent page."
+      });
+    }
+    if (actionType === "delete_youtube_video") {
+      return res.status(400).json({
+        error: "A YouTube removal cannot be filed here. Use POST /api/youtube/videos/:id/propose-delete from the Social Agent page."
       });
     }
     // A store change: filed only by the route that reads the store's live value.
@@ -12640,10 +12661,11 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
    calendar event is the account's own record and stays free. An email sequence
    is enrolled to be mailed to the owner's contacts. A social post is published
    on Bluesky or Mastodon. A store change (migrations 175 and 176) changes what
-   shoppers see in the member's WooCommerce or Shopify store. */
+   shoppers see in the member's WooCommerce or Shopify store. A YouTube upload
+   or removal (migration 177) changes what the member's channel shows. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
   "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
-  "update_store_item"];
+  "update_store_item", "publish_youtube_video", "delete_youtube_video"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -33545,6 +33567,439 @@ async function executePublishMastodonPost(proposal) {
       (recorded.error ? (recorded.error.message || recorded.error) : "it was no longer pending_approval") + "). Do not post it again");
   }
   return { id: posted.id, url: url, published_at: publishedAt, draft_id: draft.id };
+}
+
+/* ── YouTube uploads (migration 177; lib/googleAuth.js, lib/youtubeApi.js, lib/memberVideos.js) ──
+   POST   /api/youtube/start                   Connect YouTube: a single-use state (purpose
+                                               youtube_google) and a sealed PKCE verifier
+   POST   /api/youtube/finish                  { code, state } from the Social page: the state
+                                               consumed once, the code exchanged, BOTH scopes
+                                               checked, the tokens sealed, the channel read
+   GET    /api/youtube/status                  the connection, never a token
+   POST   /api/youtube/disconnect              Google's revoke as a best effort, then the row
+                                               and this sign-in's states deleted
+   POST   /api/videos/upload-url               { mime, bytes, label }: a signed upload URL in
+                                               the private bucket bf-video
+   POST   /api/videos/finalize                 { path, label, bytes }: the object streamed,
+                                               sniffed, counted and hashed; a mismatch deletes it
+   GET    /api/videos                          the member's videos, never a path or a session
+   DELETE /api/videos/:id                      a waiting video and its file
+   POST   /api/youtube/propose-upload          files publish_youtube_video; never runs it
+   POST   /api/youtube/draft-metadata          { video_id, idea }: a title, description and
+                                               tags from the model, measured in code
+   POST   /api/youtube/videos/:id/propose-delete  files delete_youtube_video; never runs it
+   GET    /api/youtube/videos/:id/status       videos.list on demand
+   Connect, upload-url, finalize and the propose routes need an active
+   subscription. Without GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET
+   every YouTube route but status, disconnect, the list and delete answers 503,
+   and status says youtube_available false. The upload and the removal run
+   only when the member approves the proposal (executePublishYoutubeVideo and
+   executeDeleteYoutubeVideo below), never automatically. Nothing here logs a
+   token, a code, a verifier, a signed URL or a session URI. */
+function youtubeRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/agents/social.html";
+}
+
+function youtubeDeps() {
+  var gf = require("./lib/guardedFetch");
+  return {
+    supabase: supabase,
+    storage: supabase.storage,
+    crypt: require("./lib/apiKeyCrypto"),
+    jsonRequest: gf.guardedJsonRequest,
+    streamUpload: gf.guardedStreamUpload,
+    now: function () { return Date.now(); },
+    config: function () { return require("./lib/googleAuth").configured(process.env); },
+    limits: SOCIAL_SEARCH_LIMITS.youtube,
+    claims: blueskyClaimsRefusal,
+    env: process.env
+  };
+}
+
+/* The last step of the 04:45 UTC chain (see the cron block): the video retention
+   pass, lib/memberVideos.js retentionTick, claimed through job_runs
+   member_videos_retention. Never rejects. */
+async function videoRetentionTick() {
+  try {
+    return await require("./lib/memberVideos").retentionTick(youtubeDeps());
+  } catch (err) {
+    console.error("[VideoRetention] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
+function youtubeNotConfigured(res) {
+  return res.status(503).json({ error: require("./lib/googleAuth").MESSAGES.notConfigured, code: "not_configured", saved: false });
+}
+
+/* Per account: ten YouTube sign-in steps an hour, start and finish together. */
+const youtubeConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "youtube-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many YouTube sign-in attempts. Try again in an hour. Nothing was saved.", code: "rate_limited" }
+});
+/* Per account: ten video steps an hour, upload-url and finalize together. */
+const videoUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "video-upload:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can add videos 10 steps an hour. Try again later.", code: "rate_limited" }
+});
+/* Per account: thirty YouTube proposals an hour, uploads and removals together. */
+const youtubeProposeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "youtube-propose:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can file 30 YouTube proposals an hour. Nothing was filed.", code: "rate_limited" }
+});
+
+/* A token-endpoint failure at finish, as the member is told it. Never the reason's detail. */
+function youtubeFinishFailure(res, err) {
+  var ga = require("./lib/googleAuth");
+  var kind = err && err.kind;
+  if (kind === "no_scopes") return res.status(422).json({ error: ga.MESSAGES.noScopes, code: "no_scopes", saved: false });
+  if (kind === "invalid_grant") return res.status(400).json({ error: ga.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+  return res.status(502).json({ error: ga.MESSAGES.unreachable, code: "unreachable", saved: false });
+}
+
+app.post("/api/youtube/start", requireAuth, requireActiveSubscription, youtubeConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ga = require("./lib/googleAuth");
+      var config = ga.configured(process.env);
+      if (!config) return youtubeNotConfigured(res);
+      var state = ga.newState();
+      var verifier = ga.newVerifier();
+      var verifierSealed;
+      try {
+        verifierSealed = require("./lib/apiKeyCrypto").encrypt(verifier);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ga.MESSAGES.noSecret, code: "no_encryption_key" });
+      }
+      var nowMs = Date.now();
+      // Tidy first: this member's sign-in states older than a day; each is consumed or expired.
+      var tidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id)
+        .lt("created_at", new Date(nowMs - ga.STATES_RETENTION_MS).toISOString());
+      if (tidied.error) throw tidied.error;
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:             req.user.id,
+        purpose:             ga.PURPOSE,
+        state_hash:          ga.stateHash(state),
+        verifier_ciphertext: verifierSealed.ciphertext,
+        verifier_iv:         verifierSealed.iv,
+        verifier_auth_tag:   verifierSealed.authTag,
+        expires_at:          new Date(nowMs + ga.STATE_TTL_MS).toISOString(),
+        created_at:          new Date(nowMs).toISOString()
+      });
+      if (stored.error) throw stored.error;
+      var url = ga.authorizeUrl(config.clientId, youtubeRedirectUri(), state, ga.challengeFor(verifier));
+      state = null;
+      verifier = null;
+      return res.json({ authorize_url: url });
+    } catch (error) {
+      console.error("[youtube/start] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/youtube/finish", requireAuth, requireActiveSubscription, youtubeConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ga = require("./lib/googleAuth");
+      var ya = require("./lib/youtubeApi");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = ga.configured(process.env);
+      if (!config) return youtubeNotConfigured(res);
+      var shape = ga.finishShape(req.body);
+      if (!shape.ok) return res.status(400).json({ error: ga.MESSAGES.badRequest, code: "bad_request", saved: false });
+
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired. No reason is ever given.
+      var consumedAt = nowIso();
+      var consumed = await supabase.from("oauth_states").update({ consumed_at: consumedAt })
+        .eq("state_hash", ga.stateHash(shape.state)).eq("user_id", req.user.id).eq("purpose", ga.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", consumedAt)
+        .select("verifier_ciphertext, verifier_iv, verifier_auth_tag");
+      if (consumed.error) throw consumed.error;
+      var spent = (consumed.data || [])[0];
+      if (!spent) return res.status(400).json({ error: ga.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+      var verifier;
+      try {
+        verifier = crypt.decrypt({ ciphertext: spent.verifier_ciphertext, iv: spent.verifier_iv, authTag: spent.verifier_auth_tag });
+      } catch (cryptErr) {
+        return res.status(400).json({ error: ga.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+      }
+
+      var grant;
+      try {
+        grant = await ga.exchangeCode(config, shape.code, verifier, youtubeRedirectUri());
+      } catch (exchangeErr) {
+        return youtubeFinishFailure(res, exchangeErr);
+      } finally {
+        verifier = null;
+        shape.code = null;
+      }
+
+      // Sealed first: both tokens are encrypted before YouTube is asked anything.
+      var sealedRefresh, sealedAccess;
+      try {
+        sealedRefresh = crypt.encrypt(grant.refreshToken);
+        sealedAccess = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ga.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var tokenExpiry = new Date(Date.now() + grant.expiresIn * 1000 - ga.EXPIRY_SLACK_MS).toISOString();
+      var deps = youtubeDeps();
+      try {
+        await ya.reserve(deps, "channels.list", req.user.id);
+      } catch (quotaErr) {
+        return res.status(503).json({ error: ya.MESSAGES.quota, code: "quota", saved: false });
+      }
+      var channel;
+      try {
+        channel = await ya.readChannel(deps, grant.accessToken);
+      } catch (channelErr) {
+        return res.status(502).json({ error: ga.MESSAGES.unreachable, code: "unreachable", saved: false });
+      }
+      var scopes = grant.scope;
+      grant = null;
+      if (!channel) return res.status(422).json({ error: ga.MESSAGES.noChannel, code: "no_channel", saved: false });
+
+      var connectedAt = nowIso();
+      var saved = await supabase.from("member_youtube_connections").upsert({
+        user_id:            req.user.id,
+        channel_id:         channel.id,
+        channel_title:      channel.title,
+        refresh_ciphertext: sealedRefresh.ciphertext,
+        refresh_iv:         sealedRefresh.iv,
+        refresh_auth_tag:   sealedRefresh.authTag,
+        access_ciphertext:  sealedAccess.ciphertext,
+        access_iv:          sealedAccess.iv,
+        access_auth_tag:    sealedAccess.authTag,
+        access_expires_at:  tokenExpiry,
+        token_version:      0,
+        granted_scopes:     String(scopes || "").slice(0, 500),
+        status:             "connected",
+        last_ok_at:         connectedAt,
+        last_error_at:      null,
+        last_error_code:    null,
+        created_at:         connectedAt,
+        updated_at:         connectedAt
+      }, { onConflict: "user_id" }).select(ya.STATUS_COLUMNS).single();
+      if (saved.error) throw saved.error;
+      return res.json(ya.statusOf(saved.data, true));
+    } catch (error) {
+      console.error("[youtube/finish] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/youtube/status", requireAuth, async function (req, res, next) {
+  try {
+    var ya = require("./lib/youtubeApi");
+    var row = await ya.readConnection(supabase, req.user.id);
+    return res.json(ya.statusOf(row, require("./lib/googleAuth").configured(process.env) !== null));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not, configured or not: a member can always take their channel's access back.
+app.post("/api/youtube/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var ga = require("./lib/googleAuth");
+    var ya = require("./lib/youtubeApi");
+    var row = await ya.readConnection(supabase, req.user.id);
+    var revoked = false;
+    if (row) {
+      // Best effort: a failure to reach Google never blocks the disconnect.
+      try {
+        var refreshToken = require("./lib/apiKeyCrypto").decrypt({ ciphertext: row.refresh_ciphertext, iv: row.refresh_iv, authTag: row.refresh_auth_tag });
+        revoked = await ga.revoke(refreshToken);
+        refreshToken = null;
+      } catch (revokeErr) {
+        revoked = false;
+      }
+    }
+    var dropped = await supabase.from("member_youtube_connections").delete().eq("user_id", req.user.id).select("id");
+    if (dropped.error) throw dropped.error;
+    // Only this sign-in's states: a Connect Shopify or Microsoft sign-in in progress keeps its own.
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", ga.PURPOSE);
+    if (statesDropped.error) throw statesDropped.error;
+    return res.json(Object.assign(ya.statusOf(null, ga.configured(process.env) !== null), {
+      removed: (dropped.data || []).length > 0,
+      revoked: revoked,
+      note: row ? ga.MESSAGES.disconnected : "No YouTube channel was connected."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/videos/upload-url", requireAuth, requireActiveSubscription, videoUploadLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      var out = await require("./lib/memberVideos").uploadUrl(youtubeDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[videos/upload-url] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/videos/finalize", requireAuth, requireActiveSubscription, videoUploadLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      var out = await require("./lib/memberVideos").finalize(youtubeDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[videos/finalize] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/videos", requireAuth, async function (req, res, next) {
+  try {
+    var mv = require("./lib/memberVideos");
+    return res.json({ videos: await mv.listVideos(youtubeDeps(), req.user.id), max_bytes: mv.MAX_BYTES, ready_max: mv.READY_MAX });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/videos/:id", requireAuth, async function (req, res, next) {
+  try {
+    var out = await require("./lib/memberVideos").deleteVideo(youtubeDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/youtube/propose-upload", requireAuth, requireActiveSubscription, youtubeProposeLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      var out = await require("./lib/youtubeApi").proposeUpload(youtubeDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[youtube/propose-upload] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+/* The model's draft, in three marked parts. { title, description, tags } with
+   whatever it gave, or null when the markers are not all there. */
+function parseYoutubeDraft(text) {
+  var s = String(text || "");
+  var t = /TITLE:\s*([^\n]*)/.exec(s);
+  var d = /DESCRIPTION:\s*([\s\S]*?)\n\s*TAGS:/.exec(s);
+  var g = /TAGS:\s*([^\n]*)/.exec(s);
+  if (!t || !d || !g) return null;
+  return {
+    title: t[1].trim(),
+    description: d[1].trim(),
+    tags: g[1].split(",").map(function (x) { return x.trim(); }).filter(Boolean)
+  };
+}
+
+app.post("/api/youtube/draft-metadata", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      var mv = require("./lib/memberVideos");
+      var video = await mv.readVideo(supabase, req.user.id, req.body && req.body.video_id);
+      if (!video) return res.status(404).json({ error: mv.MESSAGES.notFound, code: "not_found" });
+      var idea = req.body && typeof req.body.idea === "string" ? req.body.idea.trim() : "";
+      if (!idea || idea.length > 1000) {
+        return res.status(400).json({ error: "Say what the video is about, in up to 1000 characters.", code: "bad_idea", field: "idea" });
+      }
+      var profileResult = await supabase.from("business_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
+      var bp = (profileResult && profileResult.data) || {};
+      var L = SOCIAL_SEARCH_LIMITS.youtube;
+      // The model sees the idea and the business profile, and nothing else: no file, no label, no channel.
+      var prompt =
+        "You write YouTube video details for a small business.\n\n" +
+        "BUSINESS CONTEXT:\n" +
+        "Business Name: " + (bp.business_name || "Not provided") + "\n" +
+        "Industry: " + (bp.industry || "Not provided") + "\n" +
+        "Products/Services: " + (bp.products_services || "Not provided") + "\n" +
+        "Target Audience: " + (bp.target_audience || "Not provided") + "\n\n" +
+        "WHAT THE VIDEO IS ABOUT, in the owner's words: " + JSON.stringify(idea) + "\n\n" +
+        "OUTPUT FORMAT, exactly three parts:\n" +
+        "TITLE: <one line, at most " + L.title_max + " characters>\n" +
+        "DESCRIPTION: <the description, at most " + L.description_max_bytes + " bytes>\n" +
+        "TAGS: <comma-separated tags, at most " + L.tags_max_total + " characters in all>\n\n" +
+        "RULES:\n- No < or > anywhere.\n- Invent no figures, reviews, results or health claims.\n" +
+        "- Do not claim or predict views, ranking or reach.";
+      var generation = await callAnthropicText(prompt, 1500, req.user.id, undefined, {
+        user_id: req.user.id, agent_type: "social", route: "POST /api/youtube/draft-metadata"
+      });
+      var draft = parseYoutubeDraft(generation && generation.text);
+      if (!draft) return res.status(502).json({ error: "The draft came back incomplete. Try again, or write the details yourself.", code: "draft_unreadable" });
+      var measured = mv.measureMetadata(draft, L);
+      var refusals = ["title", "description"].map(function (f) {
+        var r = draft[f] ? blueskyClaimsRefusal(draft[f]) : null;
+        return r ? { field: f, error: r.error } : null;
+      }).filter(Boolean);
+      return res.json({
+        draft: draft, measured: measured,
+        within_limits: measured.title.within_limit && measured.description.within_limit && measured.tags.within_limit,
+        claims_refused: refusals,
+        note: "A draft only. Nothing was filed or sent. Read it, change what you want, then file it for approval."
+      });
+    } catch (error) {
+      console.error("[youtube/draft-metadata] Error:", (error && error.message) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/youtube/videos/:id/propose-delete", requireAuth, requireActiveSubscription, youtubeProposeLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      var out = await require("./lib/youtubeApi").proposeDelete(youtubeDeps(), req.user.id, req.params.id);
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[youtube/propose-delete] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/youtube/videos/:id/status", requireAuth, async function (req, res, next) {
+  try {
+    if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+    var out = await require("./lib/youtubeApi").videoStatus(youtubeDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The publish_youtube_video executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal; throws with the member's message on any failure.
+   lib/youtubeApi.js executePublish checks everything again, streams the file
+   through its fingerprint, and sends it once through a resumable session
+   sealed before the first byte. Always through approval: no automation runs it. */
+async function executePublishYoutubeVideo(proposal) {
+  return require("./lib/youtubeApi").executePublish(youtubeDeps(), proposal);
+}
+
+/* The delete_youtube_video executor (PROPOSAL_EXECUTORS): videos.delete on the
+   member's own channel, then the video's status removed. Always through approval. */
+async function executeDeleteYoutubeVideo(proposal) {
+  return require("./lib/youtubeApi").executeDelete(youtubeDeps(), proposal);
 }
 
 // ── Mailbox: a member's own inbox, read only (migration 169) ───────────────
@@ -58442,7 +58897,13 @@ shutdownControl.setServer(app.listen(PORT, function () {
      every purpose's states, Connect Shopify's (store_shopify) too. Then
      Shopify's notification receipts older than 30 days are deleted
      (lib/shopifyAuth.js webhookEventsPurgeTick), claimed through job_runs
-     shopify_webhook_events_purge. */
+     shopify_webhook_events_purge.
+     NAMED (Nov 7 2026, YouTube uploads, migration 177): that purge deletes the
+     youtube_google states too. Then the video retention pass
+     (lib/memberVideos.js retentionTick), claimed through job_runs
+     member_videos_retention: a ready video never uploaded is deleted after 14
+     days, an uploaded video's leftover file at once, and a bf-video file with
+     no record after a day. lib/youtubeRetention.js stays the radar's alone. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -58455,12 +58916,13 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
-      });
+      }).then(videoRetentionTick);
     }, {
       timezone: "UTC"
     });
     console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted; then Microsoft sign-in states older than a day, claimed through job_runs.oauth_states_purge.");
     console.log("[startup] Shopify notification receipts older than 30 days are deleted in the same 04:45 UTC run, claimed through job_runs.shopify_webhook_events_purge.");
+    console.log("[startup] Videos for YouTube are cleaned in the same 04:45 UTC run, claimed through job_runs.member_videos_retention: unsent after 14 days, leftovers at once, unrecorded files after a day.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every
