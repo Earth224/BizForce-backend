@@ -183,8 +183,10 @@ const MUTATIONS = {
   "mailbox-modified": [["ME", "  var addressParser = deps.addressParser();\n",
     "  await client.messageFlagsAdd(String(uid), [\"\\\\Answered\"], { uid: true });\n  var addressParser = deps.addressParser();\n"]],
   // approving a reply needs no subscription
-  "unsubscribed-can-send": [["SRC", "\"publish_social_post\", \"update_bluesky_profile\", \"reply_bluesky_mention\", \"publish_mastodon_post\", \"send_mailbox_reply\"];",
-    "\"publish_social_post\", \"update_bluesky_profile\", \"reply_bluesky_mention\", \"publish_mastodon_post\"];"]],
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE anchored on `"send_mailbox_reply"];`, the list's end. AFTER the
+  // list goes on to "update_store_item" on the next line; the mutation still drops send_mailbox_reply from it.
+  "unsubscribed-can-send": [["SRC", "\"publish_social_post\", \"update_bluesky_profile\", \"reply_bluesky_mention\", \"publish_mastodon_post\", \"send_mailbox_reply\",\n",
+    "\"publish_social_post\", \"update_bluesky_profile\", \"reply_bluesky_mention\", \"publish_mastodon_post\",\n"]],
   // drafting needs no subscription
   "draft-ungated": [["SRC", "app.post(\"/api/mailbox/inbox/:uid/draft-reply\", requireAuth, requireActiveSubscription, aiLimiter,\n",
     "app.post(\"/api/mailbox/inbox/:uid/draft-reply\", requireAuth, aiLimiter,\n"]],
@@ -727,9 +729,10 @@ async function draftAndFile(b, user, uid, reply) {
   // 173_mailbox_microsoft.sql too; "the highest" is checkMailboxOutlook R1's.
   // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 173_mailbox_microsoft.sql was the last allowed above 170. AFTER
   // 174_card_wallet_count.sql too; "the highest" is checkGoogleWallet R1's.
+  // NAMED (Nov 6 2026, store changes, migration 175): 175_store_changes.sql is allowed too; "the highest" is checkStoreChanges R1's.
   check("M2. 170_member_email_replies.sql is the only migration numbered 170, and every other migration but 171_card_counts.sql, 172_card_leads.sql, 173_mailbox_microsoft.sql and 174_card_wallet_count.sql is at most 170 (169 was the last before it)",
     migFiles.filter(f => /^170_/.test(f)).length === 1 && migFiles.indexOf("170_member_email_replies.sql") !== -1 &&
-    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── U. the pure parts ──────────────────────────────────────────────────── */
   console.log("\n══ U. lib/memberEmail.js, the pure parts ══");

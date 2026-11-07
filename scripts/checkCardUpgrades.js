@@ -1039,9 +1039,11 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // is, held by checkMailboxOutlook R1; above 171 only 172_card_leads.sql and 173_mailbox_microsoft.sql are allowed, by name.
   // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql
   // is, held by checkGoogleWallet R1; it is allowed above 171 by name too.
-  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 174 (checkGoogleWallet R1), 170 the last before it",
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE 174 was the highest. AFTER 175_store_changes.sql is, held by
+  // checkStoreChanges R1; it is allowed above 171 by name too.
+  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 175 (checkStoreChanges R1), 170 the last before it",
     migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 &&
-    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
+    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

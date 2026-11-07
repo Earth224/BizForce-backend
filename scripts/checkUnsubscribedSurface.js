@@ -240,7 +240,13 @@ const EXPECTED_GATED = [
   // AFTER Sign in with Microsoft starts (a single-use state stored) and finishes (the code exchanged, the IMAP and SMTP
   // checks run, the sealed tokens stored) behind a subscription, as connect does; status and disconnect stay
   // login-only (checkMailboxOutlook).
-  "post /api/mailbox/microsoft/start", "post /api/mailbox/microsoft/finish"
+  "post /api/mailbox/microsoft/start", "post /api/mailbox/microsoft/finish",
+  // NAMED (Nov 6 2026, store changes, migration 175; gated 98 -> 100): BEFORE BizForce only read a store. AFTER proposing a
+  // WooCommerce price or stock change (one live read of the item) and proposing its undo need a subscription
+  // (requireActiveSubscription; 30 an hour), and approving one is G3-gated on the approve route
+  // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS update_store_item). Reading the record of changes stays login-only: a member can
+  // always see what BizForce changed (checkStoreChanges).
+  "post /api/store/changes/propose", "post /api/store/changes/:id/undo"
 ];
 
 const EXPECTED_ADMIN = [

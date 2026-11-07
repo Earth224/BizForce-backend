@@ -97,8 +97,11 @@ const MUTATIONS = {
     "function archiveShopifyProduct(deps, domain, token, id) {\n  return deps.fetch(\"https://\" + domain + \"/admin/api/2026-07/products/\" + id + \".json\", { method: \"DELETE\", headers: { \"X-Shopify-Access-Token\": token } });\n}\nfunction shopifyUrl(domain, path) {\n"],
   "double-run": ["sync",
     "    if (!(await claimStoreSyncDay(deps.supabase, startedMs))) {\n", "    if (false) {\n"],
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE anchored on `if (b.key_permissions !== "read") return`. AFTER
+  // checkWooKey compares the key with the permission the signed state asked for (want); the mutation still lets a
+  // read_write key through when read was asked, which W4 must catch.
   "woo-not-read-only": ["sync",
-    "  if (b.key_permissions !== \"read\") return", "  if (b.key_permissions !== \"read\" && b.key_permissions !== \"read_write\") return"],
+    "  if (b.key_permissions !== want) {\n", "  if (b.key_permissions !== want && b.key_permissions !== \"read_write\") {\n"],
   // NAMED (store connections security fix, Nov 3 2026): every store request through the guarded fetcher (section G)
   "woo-plain-fetch": ["sync",
     "    var got = await request(deps, wooUrl(storeUrl, path + (path.indexOf(\"?\") === -1 ? \"?\" : \"&\") + \"per_page=100&page=\" + page), wooHeaders(creds));\n",
@@ -657,7 +660,10 @@ function shopifyConn(db, userId) {
   console.log("\n══ S. status ══");
   r = await hit(m, "get /api/store/connections", {});
   const st = (r.body.connections || [])[0] || {};
-  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "id", "last_error_code", "last_sync_at", "platform", "platform_label", "status", "store"]) &&
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE eight safe fields. AFTER permission too ("read" or
+  // "read_write"), so the page can say "Read only" or "Changes allowed with your approval"; still never a credential.
+  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "id", "last_error_code", "last_sync_at", "permission", "platform", "platform_label", "status", "store"]) &&
+    st.permission === "read" &&
     !/ciphertext|credential|auth_tag|_iv/.test(J(r.body)), J(r.body));
   check("S2. the list and disconnect need only a login (a member can always take their key back)",
     m.routes["get /api/store/connections"].middleware.length === 1 && m.routes["get /api/store/connections"].middleware[0] === requireAuth &&
@@ -947,11 +953,15 @@ function shopifyConn(db, userId) {
   const entry = function (tname) { return (YD.DATA || []).find(function (e) { return e.table === tname; }); };
   const yd = FILES.yourData;
   const ce = entry("member_store_connections"), oe = entry("store_order_summaries");
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE the export selected platform, store_url, status, created_at,
+  // last_sync_at. AFTER permission too, between status and created_at; still never the credentials.
   check("D4. the export: connections with safe fields only (never the credentials), order summaries without customer fields",
-    ce && ce.onDelete === "delete" && /^platform, store_url, status, created_at, last_sync_at$/.test(ce.select) && oe && oe.onDelete === "delete" &&
+    ce && ce.onDelete === "delete" && /^platform, store_url, status, permission, created_at, last_sync_at$/.test(ce.select) && oe && oe.onDelete === "delete" &&
     oe.select === "platform, external_id, ordered_at, total, currency, line_items", J([ce, oe]));
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE "store_order_summaries", "calendar_events" were adjacent.
+  // AFTER store_change_log sits between them (checkStoreChanges G holds it).
   check("D5. the account delete removes both: summaries in DELETE_ORDER, connections in FINAL_DELETES",
-    /"inventory_items", "store_order_summaries", "calendar_events"/.test(yd) && /"member_social_connections", "member_store_connections",/.test(yd));
+    /"inventory_items", "store_order_summaries", "store_change_log", "calendar_events"/.test(yd) && /"member_social_connections", "member_store_connections",/.test(yd));
   const BK = realRequire("./lib/backup"), SC = realRequire("./lib/schemaCheck");
   check("D6. in the backup lists (the key excluded, the summaries skipped) and the schema list, tagged 163",
     !!BK.EXCLUDED_TABLES.member_store_connections && !!BK.SKIPPED_TABLES.store_order_summaries &&
@@ -1011,9 +1021,18 @@ function shopifyConn(db, userId) {
     (SECTION.match(/\bfetch\s*\(/g) || []).length === 0 &&
     /jsonRequest: function \(url, options\) \{ return require\("\.\/lib\/guardedFetch"\)\.guardedJsonRequest\(url, options\); \}/.test(SECTION) &&
     !/\blookup:|isBlockedAddress|timeoutSignal/.test(MUT.definitionOf(FILES.server, "storeSyncDeps")));
-  const files = cp.execFileSync("git", ["ls-files", "*.js"], { cwd: REPO }).toString().trim().split(/\r?\n/).filter(function (f) { return !/^scripts\//.test(f) && f !== "lib/storeSync.js"; });
-  const named = files.filter(function (f) { return /myshopify\.com|\/wp-json\/wc\/|\/admin\/api\//.test(fs.readFileSync(path.join(REPO, f), "utf8")); });
-  check("N4. no other non-script file names a store's API host or path", named.length === 0, named.join(", "));
+  /* NAMED (Nov 6 2026, store changes, migration 175): BEFORE no non-script file but lib/storeSync.js named a store's API
+     host or path. AFTER lib/storeWrite.js, the one file that writes to a store (approved WooCommerce changes), may too, and
+     only it: it is listed in git or on disk, and every other non-script file still names none. lib/storeWrite.js is
+     scanned, not exempted unread: it must name no Shopify host or Admin API path (checkStoreChanges S holds its writes). */
+  const files = cp.execFileSync("git", ["ls-files", "*.js"], { cwd: REPO }).toString().trim().split(/\r?\n/)
+    .concat(fs.existsSync(path.join(REPO, "lib/storeWrite.js")) ? ["lib/storeWrite.js"] : [])
+    .filter(function (f, i, all) { return all.indexOf(f) === i && !/^scripts\//.test(f) && f !== "lib/storeSync.js"; });
+  const named = files.filter(function (f) { return f !== "lib/storeWrite.js" && /myshopify\.com|\/wp-json\/wc\/|\/admin\/api\//.test(fs.readFileSync(path.join(REPO, f), "utf8")); });
+  const writeSrc = fs.existsSync(path.join(REPO, "lib/storeWrite.js")) ? fs.readFileSync(path.join(REPO, "lib/storeWrite.js"), "utf8") : "";
+  const writeCode = writeSrc.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
+  check("N4. no other non-script file names a store's API host or path; lib/storeWrite.js alone may, and its code names no Shopify host or Admin API path",
+    named.length === 0 && writeSrc.length > 0 && !/myshopify\.com|\/admin\/api\/|X-Shopify/.test(writeCode), named.join(", "));
   check("N5. the stubbed stores saw only GET in this whole run", [m.stores, wst, ast, jst].every(function (s) { return s.calls.every(function (c) { return c.method === "GET"; }); }));
 
   /* ── L ── */
@@ -1021,12 +1040,22 @@ function shopifyConn(db, userId) {
   const LP = realRequire("./lib/legalPages");
   const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
   const sentence = LP.STORE_PRIVACY_SENTENCE || "";
-  check("L1. the Privacy sentence says what is stored, never customer details, own agents only, deleted on disconnect or with the account",
+  /* NAMED (Nov 6 2026, store changes, migration 175): BEFORE the sentence said "the read-only key you made for it" and
+     "BizForce never changes anything in your store". AFTER "the key you made for it", a change only when the member
+     approves it and only if they allowed changes when connecting, a record of each change, and that record in the
+     deletion list. The whole sentence is held word for word by checkStoreChanges L1. */
+  check("L1. the Privacy sentence says what is stored, never customer details, own agents only, changes only with approval, deleted on disconnect or with the account",
     /encrypted/.test(sentence) && /never any customer's name, email, address or phone number/.test(sentence) && /used only for your own agents/.test(sentence) &&
-    /deleted when you disconnect the store or delete your account/.test(sentence) && /never\s+changes anything in your store/.test(sentence));
+    /the order summaries and the record of changes are deleted when you disconnect the store or delete your account/.test(sentence) &&
+    /BizForce changes a product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store/.test(sentence) &&
+    !/read-only key|never changes anything/.test(sentence));
   check("L2. privacy.html carries it once, as built", sentence.length > 100 && FILES.privacy.split(esc(sentence)).length === 2);
-  check("L3. the Store page says \"BizForce only reads your store. It never changes your products, prices or orders.\" and loads the card's script",
-    FILES.page.indexOf("BizForce only reads your store. It never changes your products, prices or orders.") !== -1 && /<script src="\/scripts\/store-connect\.js"><\/script>/.test(FILES.page) &&
+  /* NAMED (Nov 6 2026, store changes, migration 175): BEFORE the page said "BizForce only reads your store. It never
+     changes your products, prices or orders." AFTER the line names when it changes something, word for word, and the old
+     line is gone from the page. */
+  check("L3. the Store page says \"BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.\" and loads the card's script",
+    FILES.page.indexOf("BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.") !== -1 &&
+    FILES.page.indexOf("It never changes your products, prices or orders.") === -1 && /<script src="\/scripts\/store-connect\.js"><\/script>/.test(FILES.page) &&
     /id="storeConnect"/.test(FILES.page));
   check("L4. the steps: Shopify's three read scopes and the shpat_ token; WooCommerce's Read approval and where to revoke it",
     /read_products<\/code>, <code>read_inventory<\/code> and <code>read_orders<\/code>/.test(FILES.page) && /shpat_/.test(FILES.page) &&
@@ -1057,7 +1086,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 6 2026, card upgrades C2, migration 172): the allowlist adds 172_card_leads.sql; "the highest" is checkCardLeads R1's.
     // NAMED (Nov 6 2026, Outlook sign-in, migration 173): the allowlist adds 173_mailbox_microsoft.sql; "the highest" is checkMailboxOutlook R1's.
     // NAMED (Nov 6 2026, Google Wallet, migration 174): the allowlist adds 174_card_wallet_count.sql; "the highest" is checkGoogleWallet R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 6 2026, store changes, migration 175): the allowlist adds 175_store_changes.sql; "the highest" is checkStoreChanges R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };

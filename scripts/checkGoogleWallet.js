@@ -673,8 +673,10 @@ function verified(token) {
   check("G7. the rpc's allowlist is COUNT_KINDS exactly, and the stats read every counter", J(kinds174) === J(CPG.COUNT_KINDS) &&
     SRC.indexOf("select(\"day, " + CPG.COUNT_KINDS.join(", ") + "\")") !== -1, J(kinds174));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("R1. 174_card_wallet_count.sql is the only migration numbered 174, and the highest (173 the last before it)",
-    migFiles.filter(f => /^174_/.test(f)).length === 1 && migFiles.indexOf("174_card_wallet_count.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 174) && migFiles.some(f => /^173_/.test(f)));
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE 174 was the highest. AFTER only 175_store_changes.sql is allowed
+  // above it, by name; "the highest" is checkStoreChanges R1's.
+  check("R1. 174_card_wallet_count.sql is the only migration numbered 174; above it only 175_store_changes.sql (checkStoreChanges R1); 173 the last before it",
+    migFiles.filter(f => /^174_/.test(f)).length === 1 && migFiles.indexOf("174_card_wallet_count.sql") !== -1 && migFiles.every(f => f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 174) && migFiles.some(f => /^173_/.test(f)));
   check("R2. the route is in checkDormantRoutesDeleted ADDED and checkUnsubscribedSurface's serve-gated list",
     fs.readFileSync(path.join(__dirname, "checkDormantRoutesDeleted.js"), "utf8").indexOf("[\"get\", \"/api/cards/google-wallet\"]") !== -1 &&
     fs.readFileSync(path.join(__dirname, "checkUnsubscribedSurface.js"), "utf8").indexOf("\"get /api/cards/google-wallet\":           SERVE_GUARD") !== -1);

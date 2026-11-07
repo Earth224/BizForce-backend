@@ -284,7 +284,12 @@ const ADDED = [
   ["post", "/api/mailbox/microsoft/finish"],                 // subscribed: consumes the state, exchanges the code, seals both tokens, verifies, stores (436 -> 437)
   // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 437 routes; AFTER 438, a public card's "Add to Google Wallet"
   // link: the card's public fields only, while its owner is entitled, signed offline; writes nothing (checkGoogleWallet)
-  ["get", "/api/cards/google-wallet"]                        // public: 302 to Google's save link; 503 until configured; 404 for a missing or lapsed card (437 -> 438)
+  ["get", "/api/cards/google-wallet"],                       // public: 302 to Google's save link; 503 until configured; 404 for a missing or lapsed card (437 -> 438)
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE 438 routes; AFTER 441, a WooCommerce price or stock change
+  // proposed for approval, the member's record of changes, and an undo filed the same way (checkStoreChanges)
+  ["post", "/api/store/changes/propose"],                    // subscribed: one live read of the item, then a proposal; never executes (438 -> 439)
+  ["get", "/api/store/changes"],                             // login-only: the member's own change log, newest first, 50 a page (439 -> 440)
+  ["post", "/api/store/changes/:id/undo"]                    // subscribed: files the reverse change as a new proposal (440 -> 441)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

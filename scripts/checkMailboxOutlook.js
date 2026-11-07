@@ -1129,8 +1129,10 @@ function stateParts(url) {
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql is, held by
   // checkGoogleWallet R1; it is the only migration allowed above 173, by name.
-  check("R1. 173_mailbox_microsoft.sql is the only migration numbered 173; above it only 174_card_wallet_count.sql (checkGoogleWallet R1); 172 was the last before it",
-    migFiles.filter(f => /^173_/.test(f)).length === 1 && migFiles.indexOf("173_mailbox_microsoft.sql") !== -1 && migFiles.every(f => f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 173) && migFiles.some(f => /^172_/.test(f)));
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE only 174 was allowed above 173. AFTER 175_store_changes.sql too,
+  // by name; "the highest" is checkStoreChanges R1's.
+  check("R1. 173_mailbox_microsoft.sql is the only migration numbered 173; above it only 174_card_wallet_count.sql and 175_store_changes.sql (checkStoreChanges R1); 172 was the last before it",
+    migFiles.filter(f => /^173_/.test(f)).length === 1 && migFiles.indexOf("173_mailbox_microsoft.sql") !== -1 && migFiles.every(f => f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 173) && migFiles.some(f => /^172_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026", MIGRATION.indexOf("-- Applied by the owner by hand in the Supabase SQL editor on Nov 6, 2026. This file is the text as run.\n") === 0);
   check("R3. RLS on, anon and authenticated revoked, the state hash unique, the kind_shape CHECK present, and every pattern this check enforces read from it",
     /ALTER TABLE public\.oauth_states ENABLE ROW LEVEL SECURITY;/.test(MIGRATION) && /REVOKE ALL ON public\.oauth_states FROM anon, authenticated;/.test(MIGRATION) &&

@@ -269,7 +269,9 @@ function withoutB8(text) {
    Inventory tile (checkStoreConnections R5 pins it). That one addition is cut out, exactly once, before the comparison. */
 function withoutStoreSource(text) {
   if (text === null) return null;
-  const from = "      // Where the stock comes from: what the member entered, or a store they connected (read-only).\n";
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE the cut began at the comment "...a store they connected
+  // (read-only).". AFTER that comment says the store is changed only with approval; the cut is the same block, exactly once.
+  const from = "      // Where the stock comes from: what the member entered, or a store they connected (changed only with approval, migration 175).\n";
   const to = "\"Entered on your Inventory page\"));\n";
   const a = text.indexOf(from), b = a < 0 ? -1 : text.indexOf(to, a);
   if (a < 0 || b < 0 || text.indexOf(from, a + 1) !== -1) return null;

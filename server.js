@@ -10314,6 +10314,36 @@ app.put("/api/inventory/items/:id", requireAuth, async function (req, res, next)
       return res.status(400).json({ error: validated.error, field: validated.field });
     }
 
+    /* A SYNCED ROW'S STORE FIELDS BELONG TO ITS STORE (migration 175). Its name,
+       SKU, price, cost and stock are read from the store, so a local edit would be
+       mistaken for the store's own value and overwritten at the next sync. A save
+       that sends them unchanged (the edit form sends every field) still goes
+       through; the member's own fields (reorder point, notes, supplier, ...) stay
+       editable. */
+    if (isValidUuid(req.params.id)) {
+      var editedItem = await findOwnedInventoryItem(req.params.id, req.user.id);
+      if (editedItem && editedItem.source) {
+        var body = req.body || {};
+        var storeFieldChanged = ["name", "sku", "unit_price", "unit_cost", "quantity_on_hand"].some(function (k) {
+          if (!Object.prototype.hasOwnProperty.call(body, k)) return false;
+          var next = Object.prototype.hasOwnProperty.call(validated.fields, k) ? validated.fields[k] : body[k];
+          var was = editedItem[k];
+          if (k === "unit_price" || k === "unit_cost" || k === "quantity_on_hand") {
+            var a = next === null || next === undefined || next === "" ? null : Number(next);
+            var b = was === null || was === undefined ? null : Number(was);
+            return a !== b;
+          }
+          return String(next == null ? "" : next) !== String(was == null ? "" : was);
+        });
+        if (storeFieldChanged) {
+          return res.status(409).json({
+            error: "This item comes from your store. Change it in your store, or propose a change.",
+            code: "synced_item"
+          });
+        }
+      }
+    }
+
     const { data, error } = await supabase
       .from("inventory_items")
       .update(Object.assign({}, validated.fields, { updated_at: nowIso() }))
@@ -12226,6 +12256,12 @@ const PROPOSAL_EXECUTORS = {
   // runs at call time.
   send_mailbox_reply: executeSendMailboxReply,
 
+  // Changes one WooCommerce item's regular price or stock level, from an approved
+  // POST /api/store/changes/propose (migration 175, lib/storeWrite.js), after a
+  // live compare-and-set, with one write and no retry. Always through approval:
+  // no automation runs it. Defined further down the file; it only runs at call time.
+  update_store_item: executeUpdateStoreItem,
+
   // Creates an email sequence and enrolls the owner's confirmed contacts from
   // an approved POST /api/agents/email/propose-sequence. Sends nothing.
   // executeSendEmailSequence is defined further down the file; it only runs at
@@ -12276,6 +12312,12 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "publish_mastodon_post") {
       return res.status(400).json({
         error: "A Mastodon post cannot be filed here. Use POST /api/social/mastodon/propose-post with the task_id of a completed social/post run for Mastodon."
+      });
+    }
+    // A store change: filed only by the route that reads the store's live value.
+    if (actionType === "update_store_item") {
+      return res.status(400).json({
+        error: "A store change cannot be filed here. Use POST /api/store/changes/propose with the item and the new price or stock."
       });
     }
 
@@ -12524,9 +12566,11 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
 /* The action types whose execution puts something in front of strangers. A
    calendar event is the account's own record and stays free. An email sequence
    is enrolled to be mailed to the owner's contacts. A social post is published
-   on Bluesky or Mastodon. */
+   on Bluesky or Mastodon. A store change (migration 175) changes what shoppers
+   see in the member's WooCommerce store. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
-  "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply"];
+  "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
+  "update_store_item"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -13098,8 +13142,10 @@ function measureStockAndMargin(items, movements, windowDays) {
     var row = { name: it.name };
     if (it.sku) row.sku = it.sku;
     row.unit = it.unit || "unit"; row.on_hand = onHand; row.unit_cost = cost; row.unit_price = price;
-    // Where the stock figure comes from: what the member entered, or a store they connected (read-only, lib/storeSync.js).
+    // Where the stock figure comes from: what the member entered, or a store they connected (lib/storeSync.js).
     row.source = it.source === "shopify" || it.source === "woocommerce" ? it.source : "manual";
+    // A synced row names its item, so the page can offer "Propose a change" for it (migration 175).
+    if (row.source !== "manual" && it.id) row.store_item_id = it.id;
 
     if (cost === null) { missingCost++; row.unit_cost_reason = "no unit cost entered"; }
     if (price === null) { missingPrice++; row.unit_price_reason = "no unit price entered"; }
@@ -13331,8 +13377,11 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
                                                everything synced from it
    POST   /api/store/connections/:id/sync      sync now
 
-   READ-ONLY. lib/storeSync.js sends GET to the store and nothing else; no
-   route here calls a store directly. Credentials are sealed with
+   lib/storeSync.js sends GET to the store and nothing else; no route here
+   calls a store directly. The only writes to a store are the approved
+   WooCommerce price and stock changes below (Store changes, migration 175,
+   lib/storeWrite.js), on a connection the member made with changes allowed;
+   Shopify is read-only. Credentials are sealed with
    lib/apiKeyCrypto.js BEFORE the store is contacted, stored only after the
    store accepts them, and never returned, logged or exported.
 
@@ -13384,15 +13433,18 @@ const storeCallbackLimiter = rateLimit({
   message: { error: "Too many requests.", reason: "rate_limited" }
 });
 
-async function saveStoreConnection(userId, platform, storeUrl, sealed) {
+/* permission (migration 175): "read", or "read_write" only for a WooCommerce key
+   the store made with exactly that permission. Shopify is always "read". */
+async function saveStoreConnection(userId, platform, storeUrl, sealed, permission) {
   var stamp = nowIso();
   var saved = await supabase
     .from("member_store_connections")
     .upsert(Object.assign({
       user_id: userId, platform: platform, store_url: storeUrl, status: "connected",
+      permission: platform === "woocommerce" && permission === "read_write" ? "read_write" : "read",
       last_error_code: null, last_error_at: null, updated_at: stamp
     }, sealed), { onConflict: "user_id,platform,store_url" })
-    .select("id, platform, store_url, status, created_at, last_sync_at, last_error_code")
+    .select("id, platform, store_url, status, permission, created_at, last_sync_at, last_error_code")
     .single();
   if (saved.error) throw saved.error;
   return saved.data;
@@ -13418,19 +13470,27 @@ app.post("/api/store/connections", requireAuth, requireActiveSubscription, store
         if (!verified.ok) {
           return res.status(verified.code === "store_unreachable" ? 503 : 400).json({ error: verified.error, code: verified.code, saved: false });
         }
-        var row = await saveStoreConnection(req.user.id, "shopify", domain, sealed);
+        var row = await saveStoreConnection(req.user.id, "shopify", domain, sealed, "read");
         return res.json({ connection: ss.statusOf(row), saved: true, note: ss.MESSAGES.readOnly });
       }
       if (body.platform === "woocommerce") {
         var storeUrl = ss.normalizeWooUrl(body.store_url);
         if (!storeUrl) return res.status(400).json({ error: ss.MESSAGES.wooUrl, code: "woo_url", field: "store_url", saved: false });
         if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
-        var state = ss.makeWooState(req.user.id, storeUrl, Date.now(), process.env.ENCRYPTION_SECRET);
+        // Changes are opt-in (migration 175): read_write only when allow_changes is exactly true.
+        if (body.allow_changes !== undefined && typeof body.allow_changes !== "boolean") {
+          return res.status(400).json({ error: "allow_changes must be true or false.", code: "allow_changes", field: "allow_changes", saved: false });
+        }
+        var wooPermission = body.allow_changes === true ? "read_write" : "read";
+        var state = ss.makeWooState(req.user.id, storeUrl, Date.now(), process.env.ENCRYPTION_SECRET, wooPermission);
         return res.json({
           authorize_url: ss.wooAuthorizeUrl(storeUrl, state, STORE_API_BASE + "/api/store/woocommerce/callback",
-            FRONTEND_URL + "/store-agent.html?store=woocommerce"),
+            FRONTEND_URL + "/store-agent.html?store=woocommerce", wooPermission),
           saved: false,
-          note: "Your store will ask you to approve Read access for BizForce AI. " + ss.MESSAGES.readOnly
+          permission: wooPermission,
+          note: wooPermission === "read_write"
+            ? "Your store will ask you to approve Read/Write access for BizForce AI. " + ss.MESSAGES.readWrite
+            : "Your store will ask you to approve Read access for BizForce AI. " + ss.MESSAGES.readOnly
         });
       }
       return res.status(400).json({ error: "Choose Shopify or WooCommerce.", code: "platform", field: "platform", saved: false });
@@ -13449,16 +13509,18 @@ app.post("/api/store/woocommerce/callback", storeCallbackLimiter, async function
     var body = req.body || {};
     var state = ss.readWooState(body.user_id, Date.now(), process.env.ENCRYPTION_SECRET);
     if (!state) return res.status(400).json({ error: "This connection link has expired or is not valid. Start again on the Store Agent page.", saved: false });
-    var key = ss.checkWooKey(body);
+    // The key's permission must be exactly what the signed state asked for (migration 175).
+    var key = ss.checkWooKey(body, state.permission);
     if (!key.ok) return res.status(400).json({ error: key.error, code: key.code, saved: false });
     var sealed;
     try { sealed = ss.sealCredentials(key.creds, require("./lib/apiKeyCrypto").encrypt); } catch (cryptErr) {
       return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
     }
     var verified = await ss.verifyWoo(storeSyncDeps(), state.storeUrl, key.creds);
+    var keyPermission = key.permission;
     key = null;
     if (!verified.ok) return res.status(400).json({ error: verified.error, code: verified.code, saved: false });
-    await saveStoreConnection(state.userId, "woocommerce", state.storeUrl, sealed);
+    await saveStoreConnection(state.userId, "woocommerce", state.storeUrl, sealed, keyPermission);
     return res.json({ saved: true });
   } catch (error) {
     console.error("[store/woocommerce/callback] Error:", (error && error.code) || "unknown");
@@ -13470,12 +13532,14 @@ app.get("/api/store/connections", requireAuth, async function (req, res, next) {
   try {
     var read = await supabase
       .from("member_store_connections")
-      .select("id, platform, store_url, status, created_at, last_sync_at, last_error_code")
+      .select("id, platform, store_url, status, permission, created_at, last_sync_at, last_error_code")
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: true });
     if (read.error) throw read.error;
     var ss = require("./lib/storeSync");
-    return res.json({ connections: (read.data || []).map(ss.statusOf), note: ss.MESSAGES.readOnly });
+    var shownConnections = (read.data || []).map(ss.statusOf);
+    var anyWritable = shownConnections.some(function (c) { return c.permission === "read_write"; });
+    return res.json({ connections: shownConnections, note: ss.noteFor(anyWritable ? "read_write" : "read") });
   } catch (error) {
     next(error);
   }
@@ -13488,7 +13552,7 @@ app.delete("/api/store/connections/:id", requireAuth, async function (req, res, 
     if (!gone.removed) return res.status(404).json({ error: "Connection not found" });
     return res.json({
       removed: true, items_removed: gone.items,
-      note: "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read are deleted. " +
+      note: "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
         "You can also delete the key in your store: in Shopify, uninstall the custom app; in WooCommerce, revoke it under Settings, Advanced, REST API."
     });
   } catch (error) {
@@ -13524,6 +13588,69 @@ app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscripti
       next(error);
     }
   });
+
+/* ── Store changes, WooCommerce only, through approval (migration 175, lib/storeWrite.js) ──
+   POST /api/store/changes/propose     { item_id, field: "price" | "stock", to }: reads the
+                                       store's live value as from, files a pending
+                                       update_store_item proposal; never runs it
+   GET  /api/store/changes?before=     the member's own change log, newest first, 50 a page
+   POST /api/store/changes/:id/undo    files a NEW proposal from the live value back to the
+                                       change's old value; writes nothing to the store
+
+   Proposing and undoing need an active subscription and share one limiter, 30 an hour.
+   The change itself runs only when the member approves the proposal
+   (POST /api/proposals/:id/approve, executeUpdateStoreItem below), on a connection
+   that is theirs, WooCommerce, read_write and connected. Shopify is never written. */
+const storeChangeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "store-change:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can propose 30 store changes an hour. Nothing was proposed.", reason: "rate_limited" }
+});
+
+app.post("/api/store/changes/propose", requireAuth, requireActiveSubscription, storeChangeLimiter,
+  async function (req, res, next) {
+    try {
+      var out = await require("./lib/storeWrite").proposeChange(storeSyncDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[store/changes/propose] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+app.get("/api/store/changes", requireAuth, async function (req, res, next) {
+  try {
+    var before = typeof req.query.before === "string" ? req.query.before : null;
+    return res.json(await require("./lib/storeWrite").listChanges(storeSyncDeps(), req.user.id, before));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/store/changes/:id/undo", requireAuth, requireActiveSubscription, storeChangeLimiter,
+  async function (req, res, next) {
+    try {
+      var out = await require("./lib/storeWrite").undoChange(storeSyncDeps(), req.user.id, req.params.id);
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[store/changes/undo] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+/* The update_store_item executor (PROPOSAL_EXECUTORS). One argument, the claimed
+   proposal; throws with the member's message on any failure. lib/storeWrite.js's
+   executeChange re-reads the connection and the item scoped by proposal.user_id,
+   re-checks the ranges and the 100-a-day cap, compares the live value, sends ONE
+   write with no retry, checks the store's echo, updates the item and records the
+   change. A replay finds this proposal's store_change_log row and writes nothing.
+   Always through approval: no automation runs it. */
+async function executeUpdateStoreItem(proposal) {
+  return require("./lib/storeWrite").executeChange(storeSyncDeps(), proposal);
+}
 
 // The SEO writer used to answer in JSON, which meant embedding a whole HTML
 // article inside a JSON string value. Every quote in every href had to be

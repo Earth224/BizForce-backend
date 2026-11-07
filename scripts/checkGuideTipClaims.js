@@ -365,9 +365,11 @@ const MUTATIONS = {
     "It's a read-only ledger; credits accumulate automatically as you use the platform."]],
   // store tip 159 claims to manage inventory across every channel again
   /* NAMED (store connections, Nov 3 2026): BEFORE anchored on "It connects to no store or channel; audits are written ...".
-     AFTER the tip says the member can connect a store read-only, so the anchor is the new sentence; the restored lie is the same. */
+     AFTER the tip says the member can connect a store read-only, so the anchor is the new sentence; the restored lie is the same.
+     NAMED (Nov 6 2026, store changes, migration 175): BEFORE anchored on "... reads Shopify or WooCommerce read-only; ...". AFTER
+     the tip no longer says read-only (a store can be changed with approval), so the anchor is the tip as it now reads. */
   "restore-store-159": [[GUIDE,
-    "\\\"Connect your store\\\" reads Shopify or WooCommerce read-only; audits are written from your Business Profile and what you tell it, not your store's own data.",
+    "\\\"Connect your store\\\" reads Shopify or WooCommerce; audits are written from your Business Profile and what you tell it, not your store's own data.",
     "This agent manages multi-store commerce intelligence — inventory, product performance, and omnichannel strategy across every channel you sell on."]],
   // the SEO report is called a Google report again
   "restore-google-seo-report": [[SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', '<h3 class="seo-opt-report-title">Google SEO Report</h3>']],
@@ -1064,10 +1066,14 @@ const B = [
     () => ["Email Campaign", "Email Sequence", "Winback Flow", "Nurture Campaign", "Subject Line Testing"].every(n => offers(EMAIL, n)) && /no open-rate, click-rate or /.test(SV)],
   ["6 email 154", emTips, "notes which to A/B test first; run the test in your own email platform", /lives and dies/,
     () => offers(EMAIL, "Subject Line Testing") && /Note which to A\/B test first\./.test(taskPrompt("subject_lines"))],
-  ["6 store 159", stTips, "reads Shopify or WooCommerce read-only", /manages multi-store|across every channel|commerce intelligence/,
+  /* NAMED (Nov 6 2026, store changes, migration 175): BEFORE the tip said "reads Shopify or WooCommerce read-only" and the page
+     "BizForce only reads your store. It never changes your products, prices or orders." AFTER a WooCommerce store connected with
+     changes allowed can be changed after approval, so the tip says only "reads Shopify or WooCommerce;" (no read-only claim), and
+     the page carries the new line word for word (checkStoreChanges P3 holds it too). */
+  ["6 store 159", stTips, "\"Connect your store\" reads Shopify or WooCommerce;", /manages multi-store|across every channel|commerce intelligence|read-only/,
     () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) &&
       /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/bigcommerce/i.test(FILES[STORE]) &&
-      FILES[STORE].indexOf("BizForce only reads your store. It never changes your products, prices or orders.") !== -1 && /id="storeConnect"/.test(FILES[STORE])],
+      FILES[STORE].indexOf("BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.") !== -1 && /id="storeConnect"/.test(FILES[STORE])],
   ["6 store 160", stTips, "not your store's own data", /compare you against/,
     () => /reads no analytics, traffic, checkout or conversion data/.test(taskPrompt("conversion_audit"))],
   ["6 store 161", stTips, null, /coordinating across stores|edge is/,

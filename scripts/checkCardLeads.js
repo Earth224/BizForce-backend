@@ -956,8 +956,10 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // 173_mailbox_microsoft.sql is, and checkMailboxOutlook R1 holds that; 172_card_leads.sql is still the only migration numbered 172.
   // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql
   // is, held by checkGoogleWallet R1; above 172 only 173_mailbox_microsoft.sql and 174_card_wallet_count.sql are allowed, by name.
-  check("R1. 172_card_leads.sql is the only migration numbered 172; the highest is 174 (checkGoogleWallet R1), 171 the last before it",
-    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
+  // NAMED (Nov 6 2026, store changes, migration 175): BEFORE 174 was the highest. AFTER 175_store_changes.sql is, held by
+  // checkStoreChanges R1, and is allowed above 172 by name too.
+  check("R1. 172_card_leads.sql is the only migration numbered 172; the highest is 175 (checkStoreChanges R1), 171 the last before it",
+    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. the table is RLS-on with anon and authenticated revoked, and its leads go with the card and with the account",
     /ALTER TABLE public\.card_leads ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON public\.card_leads FROM anon, authenticated;/.test(ALL[MIG]) &&
