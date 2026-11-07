@@ -808,8 +808,14 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const cronAt = SRC.indexOf("    cron.schedule(\"45 4 * * *\", function () {\n      cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {");
   const guardAt = SRC.lastIndexOf("  if (require.main === module) {\n", cronAt);
   const between = cronAt > 0 && guardAt > 0 ? SRC.slice(guardAt, cronAt) : "";
+  /* NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE the UTC timezone had to be within 400 characters of the
+     cron line. AFTER the same callback then runs the oauth_states purge (lib/microsoftAuth.js oauthStatesPurgeTick,
+     its own job_runs row; checkMailboxOutlook), so the callback is longer: the timezone must close THIS schedule call,
+     the first "}, {" after the cron line, with no other cron.schedule in between, and no flag anywhere in it. */
+  const cronCall = cronAt > 0 ? SRC.slice(cronAt, SRC.indexOf("    });\n", SRC.indexOf("}, {\n      timezone:", cronAt)) + 8) : "";
   check("U4. server.js runs it at 04:45 UTC daily, only when server.js is the program, and no flag turns it off",
-    cronAt > 0 && guardAt > 0 && between === "  if (require.main === module) {\n" && !/ENABLE_/.test(between) && /\}, \{\n      timezone: "UTC"\n    \}\);/.test(SRC.slice(cronAt, cronAt + 400)), between);
+    cronAt > 0 && guardAt > 0 && between === "  if (require.main === module) {\n" && !/ENABLE_/.test(between) && !/ENABLE_/.test(cronCall) &&
+    /\}, \{\n      timezone: "UTC"\n    \}\);\n$/.test(cronCall) && cronCall.indexOf("cron.schedule(", 10) === -1 && cronCall.length < 900, between);
   check("U5. the README's job table lists it", /\| `cardLeadsPurgeTick`: card leads older than 12 months \| cron `45 4 \* \* \*`, UTC, claimed `card_leads_purge` \|/.test(ALL["README.md"]));
 
   /* ════ F. the card page ════ */
@@ -943,8 +949,10 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   /* ════ R. migration and registries ════ */
   console.log("\n══ R. migration 172 and the registries ══");
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
-  check("R1. 172_card_leads.sql is the only migration numbered 172, and the highest (171 was the last before it)",
-    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
+  // NAMED BEFORE → AFTER (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172 was the highest. AFTER
+  // 173_mailbox_microsoft.sql is, and checkMailboxOutlook R1 holds that; 172_card_leads.sql is still the only migration numbered 172.
+  check("R1. 172_card_leads.sql is the only migration numbered 172; the highest is 173 (checkMailboxOutlook R1), 171 the last before it",
+    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. the table is RLS-on with anon and authenticated revoked, and its leads go with the card and with the account",
     /ALTER TABLE public\.card_leads ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON public\.card_leads FROM anon, authenticated;/.test(ALL[MIG]) &&

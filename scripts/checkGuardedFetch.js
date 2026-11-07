@@ -58,6 +58,11 @@
         rise to 8 MB and no further (refused, never clamped), and a body over
         it fails as too_large; timeoutMs runs from 1000 to 30000 and is the
         limit used; every default is unchanged.
+     15 (NAMED Nov 6 2026, Outlook sign-in). The JSON mode's form option: a
+        plain object of strings, sent URL-encoded and always labelled
+        application/x-www-form-urlencoded; form with a body, with a caller
+        Content-Type, on a GET, or of any other shape is a TypeError before
+        any lookup.
 
    No request leaves the machine. Names resolve through a stub; sockets land on
    a local server through a stub dial that asks the fetcher's OWN lookup where
@@ -122,6 +127,10 @@ const MUTATIONS = {
   "resolve-first-only":         [["      guardedLookup(name, { all: true }, function (err, addresses) {", "      resolve(name, { all: true, verbatim: true }, function (err, addresses) { if (!err && addresses && addresses.length && isBlockedAddress(addresses[0].address)) err = new GuardedFetchError(\"blocked\", \"the first address\");"]],
   "resolve-blocked-allowed":    [["      guardedLookup(name, { all: true }, function (err, addresses) {", "      resolve(name, { all: true, verbatim: true }, function (err, addresses) {"]],
   "resolve-ip-literal-allowed": [["      if (net.isIP(name.replace(/^\\[|\\]$/g, \"\"))) return reject(", "      if (false) return reject("]],
+  // NAMED (Nov 6 2026, Outlook sign-in): the form option (section 15)
+  "form-mislabelled":           [["    if (formEncoded) headers[\"Content-Type\"] = \"application/x-www-form-urlencoded\";\n", ""]],
+  "form-with-body-allowed":     [["      if (opts.body !== undefined && opts.body !== null) return Promise.reject(new TypeError(\"guardedJsonRequest: form and body cannot both be given\"));\n", ""]],
+  "form-content-type-override": [["        return Promise.reject(new TypeError(\"guardedJsonRequest: a form sets its own Content-Type; do not pass one\"));\n", ""]],
   "accept-skips-url": [["          target = checkUrl(urlString);", "          target = accepted ? (function (u) { return { url: u, hostname: u.hostname.replace(/^\\[|\\]$/g, \"\"), port: Number(u.port) || 80, isHttps: u.protocol === \"https:\" }; })(new URL(urlString)) : checkUrl(urlString);"]],
   "accept-ignored":   [["            if (accepted.indexOf(contentType) === -1) {", "            if (!isHtml) {"]],
   "accept-anything":  [["            if (accepted.indexOf(contentType) === -1) {", "            if (false) {"]],
@@ -995,6 +1004,37 @@ async function sectionResolvePublicHost() {
   check("resolvePublicHost is exported, and the default one takes no deps", typeof lib.resolvePublicHost === "function" && typeof lib.createGuardedFetch().resolvePublicHost === "function");
 }
 
+/* ── 15. the form option: an OAuth token endpoint's body (NAMED Nov 6 2026, Outlook sign-in) ── */
+async function sectionForm() {
+  console.log("\n15. guardedJsonRequest's form option");
+  const form = { grant_type: "authorization_code", code: "c-1", redirect_uri: "https://bizforceai.net/mailbox.html", scope: "a b+c" };
+  let a = await attemptJson("https://public.test/j/echo", { method: "POST", form: form });
+  const e = a.ok ? a.value.json : null;
+  check("a form POST is sent URL-encoded, under application/x-www-form-urlencoded, and nothing else",
+    !!e && e.method === "POST" && e.body === new URLSearchParams(form).toString() && e.headers["content-type"] === "application/x-www-form-urlencoded",
+    e ? JSON.stringify([e.headers["content-type"], e.body.length]) : code(a));
+  check("its Content-Length is the encoded byte length", !!e && Number(e.headers["content-length"]) === Buffer.byteLength(e.body), e && e.headers["content-length"]);
+  check("a JSON body still goes as application/json (the default is unchanged)", (await (async function () {
+    const j = await attemptJson("https://public.test/j/echo", { method: "POST", body: { x: "1" } });
+    return j.ok && /^application\/json/.test(j.value.json.headers["content-type"]);
+  })()));
+  async function refused(label, opts) {
+    resolverCalls = {};
+    const before = hits["/j/echo"] || 0;
+    const r = await attemptJson("https://public.test/j/echo", opts);
+    check(label + ": a TypeError before any lookup, nothing sent", !r.ok && r.err instanceof TypeError && !resolverCalls["public.test"] && (hits["/j/echo"] || 0) === before,
+      r.ok ? "sent" : String(r.err && (r.err.code || r.err.message)));
+  }
+  await refused("form with a body", { method: "POST", form: form, body: { x: "1" } });
+  await refused("form with a string body", { method: "POST", form: form, body: "a=1" });
+  await refused("form with a caller Content-Type", { method: "POST", form: form, headers: { "Content-Type": "application/json" } });
+  await refused("form with a lower-case caller content-type", { method: "POST", form: form, headers: { "content-type": "application/x-www-form-urlencoded" } });
+  await refused("form on a GET", { method: "GET", form: form });
+  await refused("form with a number value", { method: "POST", form: { a: 1 } });
+  await refused("form as an array", { method: "POST", form: [["a", "b"]] });
+  await refused("form as a URLSearchParams", { method: "POST", form: new URLSearchParams("a=b") });
+}
+
 (async function main() {
   await new Promise(function (r) { server.listen(0, "127.0.0.1", r); });
   const closed = net.createServer();
@@ -1015,6 +1055,7 @@ async function sectionResolvePublicHost() {
   await sectionJson();
   await sectionRoute();
   await sectionResolvePublicHost();
+  await sectionForm();
 
   console.log(failures ? "\n" + failures + " FAILED" : "\nALL CHECKS PASSED");
   process.exit(failures ? 1 : 0);

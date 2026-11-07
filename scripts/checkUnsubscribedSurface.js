@@ -235,7 +235,12 @@ const EXPECTED_GATED = [
   // reply to one message (one model call; aiLimiter and 10 an hour, 30 a day) and filing it for approval need a
   // subscription (requireActiveSubscription); approving it is G3-gated on the approve route
   // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS send_mailbox_reply; checkMailboxReply).
-  "post /api/mailbox/inbox/:uid/draft-reply", "post /api/mailbox/propose-reply"
+  "post /api/mailbox/inbox/:uid/draft-reply", "post /api/mailbox/propose-reply",
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173; gated 96 -> 98): BEFORE a mailbox connected by app password only.
+  // AFTER Sign in with Microsoft starts (a single-use state stored) and finishes (the code exchanged, the IMAP and SMTP
+  // checks run, the sealed tokens stored) behind a subscription, as connect does; status and disconnect stay
+  // login-only (checkMailboxOutlook).
+  "post /api/mailbox/microsoft/start", "post /api/mailbox/microsoft/finish"
 ];
 
 const EXPECTED_ADMIN = [

@@ -99,6 +99,13 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `VAPID_PUBLIC_KEY` | none | Web push key pair for calendar reminders. Without them, no push is sent. |
 | `VAPID_PRIVATE_KEY` | none | See `VAPID_PUBLIC_KEY`. |
 
+### Outlook sign-in (Microsoft)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MS_CLIENT_ID` | none | The Application (client) ID of BizForce's Microsoft app registration (see "Microsoft app registration" below). Needed only for Sign in with Microsoft on Your Inbox; without it (or `MS_CLIENT_SECRET`) the Microsoft routes answer 503 "Outlook sign-in isn't set up yet." and the page disables the button. Set it on Railway; never commit it. |
+| `MS_CLIENT_SECRET` | none | That registration's client secret value. Needed only for Sign in with Microsoft, with `MS_CLIENT_ID`. A secret; set it on Railway, never commit it, and replace it before Microsoft's expiry date. |
+
 ### Lead Radar and outreach
 
 | Variable | Default | Effect |
@@ -156,6 +163,7 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `storeSyncTick`: read connected Shopify and WooCommerce stores (read-only) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
@@ -212,6 +220,17 @@ Backend before frontend, because a page may call a route that only the new backe
 
 - **Sending: Resend**, from `hello@mail.bizforceai.net`. The sending domain is `mail.bizforceai.net`, verified in Resend. Its DNS records are the ones Resend lists for that domain: a DKIM record, and at `send.mail.bizforceai.net` the MX and SPF records Resend uses for bounces. Bounces and complaints come back through Resend's webhook (`RESEND_WEBHOOK_SECRET`) and stop further mail to that address.
 - **Receiving: ImprovMX**, for every address at `@bizforceai.net`, including the contact address the legal pages give (`lib/legal.js` `CONTACT_EMAIL`). The MX records on the apex `bizforceai.net` point to ImprovMX, which forwards to the owner's inbox. Sending uses a separate subdomain, so the two never conflict.
+
+## Microsoft app registration
+
+Sign in with Microsoft on Your Inbox (`lib/microsoftAuth.js`, migration 173) needs one app registration in the Microsoft Entra admin center (App registrations, New registration):
+
+- **Supported account types:** accounts in any organisational directory and personal Microsoft accounts ("any organisational directory and personal Microsoft accounts"), so Outlook.com, Hotmail and Microsoft 365 mailboxes can all sign in. The code uses the `common` endpoints.
+- **Platform:** Web. **Redirect URI**, exactly: `https://bizforceai.net/mailbox.html` (the server sends `FRONTEND_URL` + `/mailbox.html`, so the two must match).
+- **API permissions, delegated:** `offline_access`, `openid`, `email`, `profile`, and from Office 365 Exchange Online `IMAP.AccessAsUser.All` and `SMTP.Send`.
+- **Certificates and secrets:** one client secret. Put its value in `MS_CLIENT_SECRET` and the Application (client) ID in `MS_CLIENT_ID`, on Railway only. Note the secret's expiry date and rotate it before then: make a new secret, set it on Railway, then delete the old one.
+
+Until both variables are set, the Microsoft routes answer 503 and the page shows "Outlook sign-in isn't set up yet." Disconnecting deletes BizForce's copy only; a member removes BizForce from their own Microsoft account under its app permissions.
 
 ## Backups and the restore drill
 

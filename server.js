@@ -33102,11 +33102,17 @@ async function executePublishMastodonPost(proposal) {
    header or attachment is written to any table, log or run. The one write a
    read makes is the connection's own last_ok_at or error stamp
    (recordMailboxSession). Nothing in these read routes sends mail; replies,
-   approved one at a time, are the next block (migration 170). */
-var MAILBOX_SECRET_COLUMNS = "id, user_id, provider, email_address, username, imap_host, imap_port, smtp_host, smtp_port, status, created_at, secret_ciphertext, secret_iv, secret_auth_tag";
-var MAILBOX_STATUS_COLUMNS = "provider, email_address, status, created_at";
-function mailboxReconnectText(address) {
-  return "Your mailbox stopped accepting the app password saved for " + address + ", so BizForce can't read it. Make a new app password and connect again.";
+   approved one at a time, are the next block (migration 170).
+   SIGN IN WITH MICROSOFT (migration 173): an outlook row is connected through
+   /api/mailbox/microsoft/start and /finish below instead of /connect; its
+   refresh token sits sealed in secret_*, its access token in access_*, and
+   every read and reply route reaches it through mailboxAccess() and
+   lib/memberEmail.js getAccessToken, with the same pinning and the same rules. */
+var MAILBOX_SECRET_COLUMNS = "id, user_id, provider, email_address, username, imap_host, imap_port, smtp_host, smtp_port, status, created_at, auth_kind, secret_ciphertext, secret_iv, secret_auth_tag, access_ciphertext, access_iv, access_auth_tag, access_expires_at, token_version, account_type";
+var MAILBOX_STATUS_COLUMNS = "provider, email_address, status, created_at, account_type";
+/* The needs_reconnect wording for this kind of row (lib/memberEmail.js reconnectText). */
+function mailboxReconnectText(address, authKind) {
+  return require("./lib/memberEmail").reconnectText({ email_address: address, auth_kind: authKind });
 }
 
 /* After a read, as recordMastodonSession does: a success notes last_ok_at; a
@@ -33131,7 +33137,7 @@ async function recordMailboxSession(userId, address, outcome) {
       .update(Object.assign({ status: "needs_reconnect" }, errorPatch))
       .eq("user_id", userId)
       .eq("status", "connected")
-      .select("id");
+      .select("id, auth_kind");
     if (flagged.error || !(flagged.data || []).length) {
       return;
     }
@@ -33139,7 +33145,7 @@ async function recordMailboxSession(userId, address, outcome) {
       user_id: userId,
       type:    "email_reconnect",
       title:   "Reconnect your mailbox",
-      message: mailboxReconnectText(address),
+      message: mailboxReconnectText(address, flagged.data[0].auth_kind),
       read:    false
     });
     if (reconnectNotice.error) {
@@ -33250,6 +33256,13 @@ app.post("/api/mailbox/connect", requireAuth, requireActiveSubscription, mailbox
           secret_ciphertext: sealedSecret.ciphertext,
           secret_iv:         sealedSecret.iv,
           secret_auth_tag:   sealedSecret.authTag,
+          // 173's kind_shape CHECK: an app-password row holds no Microsoft token, so a member switching from Outlook clears them.
+          access_ciphertext: null,
+          access_iv:         null,
+          access_auth_tag:   null,
+          access_expires_at: null,
+          token_version:     0,
+          account_type:      null,
           status:            "connected",
           last_ok_at:        connectedAt,
           last_error_at:     null,
@@ -33279,31 +33292,283 @@ app.get("/api/mailbox/status", requireAuth, async function (req, res, next) {
     if (current.error) {
       throw current.error;
     }
-    return res.json(require("./lib/memberEmail").statusOf(current.data));
+    // outlook_available: whether Sign in with Microsoft is set up on this server (MS_CLIENT_ID and MS_CLIENT_SECRET).
+    return res.json(Object.assign(require("./lib/memberEmail").statusOf(current.data), {
+      outlook_available: require("./lib/microsoftAuth").configured() !== null
+    }));
   } catch (error) {
     next(error);
   }
 });
 
-// Always open, subscribed or not: a member can always take their app password back.
+// Always open, subscribed or not: a member can always take their app password or Microsoft access back.
+// No revoke call to Microsoft: the row and this member's sign-in states are deleted, and the note says where to remove the app.
 app.post("/api/mailbox/disconnect", requireAuth, async function (req, res, next) {
   try {
     var dropped = await supabase
       .from("member_email_connections")
       .delete()
       .eq("user_id", req.user.id)
-      .select("id");
+      .select("id, provider");
     if (dropped.error) {
       throw dropped.error;
     }
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id);
+    if (statesDropped.error) {
+      throw statesDropped.error;
+    }
+    var wasOutlook = (dropped.data || []).some(function (r) { return r.provider === "outlook"; });
     return res.json(Object.assign(require("./lib/memberEmail").statusOf(null), {
       removed: (dropped.data || []).length > 0,
-      note: "Disconnected. To cancel the app password itself, remove it in your email provider's security settings."
+      note: wasOutlook ? require("./lib/microsoftAuth").MESSAGES.disconnected
+        : "Disconnected. To cancel the app password itself, remove it in your email provider's security settings."
     }));
   } catch (error) {
     next(error);
   }
 });
+
+// ── Sign in with Microsoft (migration 173, lib/microsoftAuth.js) ──────────
+/* Where Microsoft sends the browser back: the Your Inbox page itself, which
+   POSTs the code and state to /finish as the signed-in member. */
+function mailboxRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/mailbox.html";
+}
+
+/* What lib/memberEmail.js getAccessToken needs for either kind of row. cas is
+   the compare-and-set on token_version: the update lands only where id,
+   user_id, auth_kind and the token_version that was read all still match, so
+   of two refreshes racing, exactly one writes; the other gets false, writes
+   nothing, and reads the winner's row (reread). */
+function mailboxAccess() {
+  var crypt = require("./lib/apiKeyCrypto");
+  var ms = require("./lib/microsoftAuth");
+  return {
+    decrypt: crypt.decrypt,
+    encrypt: crypt.encrypt,
+    refresh: function (refreshToken) {
+      var config = ms.configured();
+      if (!config) return Promise.reject(new ms.MicrosoftError("unreachable", "not_configured"));
+      return ms.refreshTokens(config, refreshToken, mailboxRedirectUri());
+    },
+    cas: async function (row, update) {
+      var swapped = await supabase
+        .from("member_email_connections")
+        .update(update)
+        .eq("id", row.id)
+        .eq("user_id", row.user_id)
+        .eq("auth_kind", "oauth_microsoft")
+        .eq("token_version", row.token_version)
+        .select("id");
+      if (swapped.error) throw swapped.error;
+      return (swapped.data || []).length === 1;
+    },
+    reread: async function (row) {
+      var again = await supabase
+        .from("member_email_connections")
+        .select(MAILBOX_SECRET_COLUMNS)
+        .eq("id", row.id)
+        .eq("user_id", row.user_id)
+        .maybeSingle();
+      if (again.error) throw again.error;
+      return again.data || null;
+    }
+  };
+}
+
+/* Per account: ten Microsoft sign-in steps an hour, start and finish together. */
+const mailboxMicrosoftLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "mailbox-ms:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: mailboxLimitHandler("Too many Microsoft sign-in attempts. Try again in an hour. Nothing was saved.")
+});
+
+/* A token-endpoint or ID-token failure, as the member is told it. Never the reason's detail. */
+function microsoftFinishFailure(res, err) {
+  var ms = require("./lib/microsoftAuth");
+  var kind = err && err.kind;
+  if (kind === "no_mail_access") return res.status(422).json({ error: ms.MESSAGES.noMailAccess, code: "no_mail_access", saved: false });
+  // The code itself was refused (expired, used, or not for this verifier): the same answer as a spent state.
+  if (kind === "invalid_grant") return res.status(400).json({ error: ms.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+  return res.status(502).json({ error: ms.MESSAGES.unreachable, code: "unreachable", saved: false });
+}
+
+app.post("/api/mailbox/microsoft/start", requireAuth, requireActiveSubscription, mailboxMicrosoftLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ms = require("./lib/microsoftAuth");
+      var config = ms.configured();
+      if (!config) {
+        return res.status(503).json({ error: ms.MESSAGES.notConfigured, code: "not_configured" });
+      }
+      var state = ms.newState();
+      var verifier = ms.newVerifier();
+      var sealedVerifier;
+      try {
+        sealedVerifier = require("./lib/apiKeyCrypto").encrypt(verifier);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ms.MESSAGES.noSecret, code: "no_encryption_key" });
+      }
+      var nowMs = Date.now();
+      /* Tidy first: this member's rows older than a day. Every such row is
+         consumed or expired (a state lives 10 minutes, and 173's CHECK caps it
+         at 15). The daily purge removes everyone's (oauthStatesPurgeTick). */
+      var tidied = await supabase
+        .from("oauth_states")
+        .delete()
+        .eq("user_id", req.user.id)
+        .lt("created_at", new Date(nowMs - ms.STATES_RETENTION_MS).toISOString());
+      if (tidied.error) {
+        throw tidied.error;
+      }
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:             req.user.id,
+        purpose:             ms.PURPOSE,
+        state_hash:          ms.stateHash(state),
+        verifier_ciphertext: sealedVerifier.ciphertext,
+        verifier_iv:         sealedVerifier.iv,
+        verifier_auth_tag:   sealedVerifier.authTag,
+        expires_at:          new Date(nowMs + ms.STATE_TTL_MS).toISOString(),
+        created_at:          new Date(nowMs).toISOString()
+      });
+      if (stored.error) {
+        throw stored.error;
+      }
+      var url = ms.authorizeUrl(config.clientId, mailboxRedirectUri(), state, ms.challengeFor(verifier));
+      state = null;
+      verifier = null;
+      return res.json({ authorize_url: url });
+    } catch (error) {
+      console.error("[mailbox/microsoft/start] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/mailbox/microsoft/finish", requireAuth, requireActiveSubscription, mailboxMicrosoftLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ms = require("./lib/microsoftAuth");
+      var me = require("./lib/memberEmail");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = ms.configured();
+      if (!config) {
+        return res.status(503).json({ error: ms.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      }
+      var shape = ms.finishShape(req.body);
+      if (!shape.ok) {
+        return res.status(400).json({ error: ms.MESSAGES.badRequest, code: "bad_request", saved: false });
+      }
+
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired. No reason is ever given.
+      var consumedAt = nowIso();
+      var consumed = await supabase
+        .from("oauth_states")
+        .update({ consumed_at: consumedAt })
+        .eq("state_hash", ms.stateHash(shape.state))
+        .eq("user_id", req.user.id)
+        .eq("purpose", ms.PURPOSE)
+        .is("consumed_at", null)
+        .gt("expires_at", consumedAt)
+        .select("verifier_ciphertext, verifier_iv, verifier_auth_tag");
+      if (consumed.error) {
+        throw consumed.error;
+      }
+      var spent = (consumed.data || [])[0];
+      if (!spent) {
+        return res.status(400).json({ error: ms.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+      }
+      var verifier;
+      try {
+        verifier = crypt.decrypt({ ciphertext: spent.verifier_ciphertext, iv: spent.verifier_iv, authTag: spent.verifier_auth_tag });
+      } catch (cryptErr) {
+        return res.status(400).json({ error: ms.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+      }
+
+      var grant, who;
+      try {
+        grant = await ms.exchangeCode(config, shape.code, verifier, mailboxRedirectUri());
+        who = ms.readIdToken(grant.idToken, config.clientId, Date.now());
+      } catch (exchangeErr) {
+        return microsoftFinishFailure(res, exchangeErr);
+      } finally {
+        verifier = null;
+        shape.code = null;
+      }
+      var hosts = ms.hostsFor(who.accountType);
+
+      // Sealed first: both tokens are encrypted before any mail server is asked anything.
+      var sealedRefresh, sealedAccess;
+      try {
+        sealedRefresh = crypt.encrypt(grant.refreshToken);
+        sealedAccess = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ms.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var accessExpiresAt = new Date(Date.now() + grant.expiresIn * 1000 - ms.EXPIRY_SLACK_MS).toISOString();
+      var settings = {
+        provider: "outlook", email_address: who.email, username: who.email,
+        imap_host: hosts.imap_host, imap_port: hosts.imap_port, smtp_host: hosts.smtp_host, smtp_port: hosts.smtp_port
+      };
+
+      var checked = await me.verifyConnection(settings, { kind: "oauth", accessToken: grant.accessToken });
+      grant = null;
+      if (!checked.ok) {
+        if (checked.kind === "rejected") {
+          // Refused right after a fresh grant: for a work account, almost always the organisation's own policy.
+          return res.status(422).json({ error: who.accountType === "work" ? ms.MESSAGES.orgBlocked : ms.MESSAGES.personalRefused, code: "rejected", saved: false });
+        }
+        return res.status(502).json({
+          error: checked.kind === "rate_limited" ? me.MESSAGES.rateLimited : me.MESSAGES.unreachable,
+          code: checked.kind === "rate_limited" ? "rate_limited" : "unreachable",
+          saved: false
+        });
+      }
+
+      var connectedAt = nowIso();
+      var saved = await supabase
+        .from("member_email_connections")
+        .upsert({
+          user_id:           req.user.id,
+          provider:          "outlook",
+          email_address:     settings.email_address,
+          username:          settings.username,
+          imap_host:         settings.imap_host,
+          imap_port:         settings.imap_port,
+          smtp_host:         settings.smtp_host,
+          smtp_port:         settings.smtp_port,
+          auth_kind:         "oauth_microsoft",
+          secret_ciphertext: sealedRefresh.ciphertext,
+          secret_iv:         sealedRefresh.iv,
+          secret_auth_tag:   sealedRefresh.authTag,
+          access_ciphertext: sealedAccess.ciphertext,
+          access_iv:         sealedAccess.iv,
+          access_auth_tag:   sealedAccess.authTag,
+          access_expires_at: accessExpiresAt,
+          token_version:     0,
+          account_type:      who.accountType,
+          status:            "connected",
+          last_ok_at:        connectedAt,
+          last_error_at:     null,
+          last_error_code:   null,
+          updated_at:        connectedAt
+        }, { onConflict: "user_id" })
+        .select(MAILBOX_STATUS_COLUMNS)
+        .single();
+      if (saved.error) {
+        throw saved.error;
+      }
+      me.clearBackoff(req.user.id);
+      return res.json(Object.assign(me.statusOf(saved.data), { outlook_available: true }));
+    } catch (error) {
+      console.error("[mailbox/microsoft/finish] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
 
 /* The member's row with its sealed secret, or an answer already sent. */
 async function mailboxForRead(req, res) {
@@ -33321,15 +33586,15 @@ async function mailboxForRead(req, res) {
     return null;
   }
   if (found.data.status !== "connected") {
-    res.status(409).json({ error: mailboxReconnectText(found.data.email_address), code: "needs_reconnect" });
+    res.status(409).json({ error: mailboxReconnectText(found.data.email_address, found.data.auth_kind), code: "needs_reconnect" });
     return null;
   }
   return found.data;
 }
 
-function mailboxReadFailure(res, outcome, address) {
+function mailboxReadFailure(res, outcome, address, authKind) {
   var me = require("./lib/memberEmail");
-  if (outcome.reason === "session_failed") return res.status(422).json({ error: mailboxReconnectText(address), code: "needs_reconnect" });
+  if (outcome.reason === "session_failed") return res.status(422).json({ error: mailboxReconnectText(address, authKind), code: "needs_reconnect" });
   if (outcome.reason === "rate_limited") return res.status(429).json({ error: me.MESSAGES.rateLimited, code: "rate_limited", resumes_at: outcome.resumes_at || null });
   if (outcome.reason === "too_large") return res.status(413).json({ error: me.MESSAGES.tooLarge, code: "too_large" });
   if (outcome.reason === "not_found") return res.status(404).json({ error: me.MESSAGES.notFound, code: "not_found" });
@@ -33348,9 +33613,9 @@ app.get("/api/mailbox/inbox", requireAuth, requireActiveSubscription, mailboxRea
       }
       var box = await mailboxForRead(req, res);
       if (!box) return;
-      var listed = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.listInbox(client, before); });
+      var listed = await me.withImap(box, mailboxAccess(), function (client) { return me.listInbox(client, before); });
       await recordMailboxSession(req.user.id, box.email_address, listed);
-      if (!listed.ok) return mailboxReadFailure(res, listed, box.email_address);
+      if (!listed.ok) return mailboxReadFailure(res, listed, box.email_address, box.auth_kind);
       return res.json({ messages: listed.value.messages, next_before: listed.value.next_before });
     } catch (error) {
       console.error("[mailbox/inbox] Error:", (error && error.code) || "error");
@@ -33367,9 +33632,9 @@ app.get("/api/mailbox/inbox/:uid", requireAuth, requireActiveSubscription, mailb
       if (!uid) return res.status(400).json({ error: me.MESSAGES.uid, code: "uid" });
       var box = await mailboxForRead(req, res);
       if (!box) return;
-      var opened = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.openMessage(client, uid); });
+      var opened = await me.withImap(box, mailboxAccess(), function (client) { return me.openMessage(client, uid); });
       await recordMailboxSession(req.user.id, box.email_address, opened);
-      if (!opened.ok) return mailboxReadFailure(res, opened, box.email_address);
+      if (!opened.ok) return mailboxReadFailure(res, opened, box.email_address, box.auth_kind);
       return res.json({ message: opened.value });
     } catch (error) {
       console.error("[mailbox/message] Error:", (error && error.code) || "error");
@@ -33427,9 +33692,9 @@ app.post("/api/mailbox/inbox/:uid/draft-reply", requireAuth, requireActiveSubscr
       if (!uid) return res.status(400).json({ error: me.MESSAGES.uid, code: "uid" });
       var box = await mailboxForRead(req, res);
       if (!box) return;
-      var read = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.readForReply(client, uid); });
+      var read = await me.withImap(box, mailboxAccess(), function (client) { return me.readForReply(client, uid); });
       await recordMailboxSession(userId, box.email_address, read);
-      if (!read.ok) return mailboxReadFailure(res, read, box.email_address);
+      if (!read.ok) return mailboxReadFailure(res, read, box.email_address, box.auth_kind);
       var source = read.value;
       if (!source.message_id) {
         return res.status(422).json({ error: me.MESSAGES.noMessageId, code: "no_message_id" });
@@ -33547,12 +33812,12 @@ app.post("/api/mailbox/propose-reply", requireAuth, requireActiveSubscription, a
 
       var box = await mailboxForRead(req, res);
       if (!box) return;
-      var headed = await me.withImap(box, require("./lib/apiKeyCrypto").decrypt, function (client) { return me.readHeadersOnly(client, answers.uid); });
+      var headed = await me.withImap(box, mailboxAccess(), function (client) { return me.readHeadersOnly(client, answers.uid); });
       await recordMailboxSession(userId, box.email_address, headed);
       if (!headed.ok && headed.reason === "not_found") {
         return res.status(409).json({ error: me.MESSAGES.changed, code: "changed" });
       }
-      if (!headed.ok) return mailboxReadFailure(res, headed, box.email_address);
+      if (!headed.ok) return mailboxReadFailure(res, headed, box.email_address, box.auth_kind);
       var headers = headed.value;
       if (headers.message_id !== answers.message_id) {
         return res.status(409).json({ error: me.MESSAGES.changed, code: "changed" });
@@ -33698,7 +33963,7 @@ async function executeSendMailboxReply(proposal) {
   if (connRead.error) throw fail("the mailbox connection could not be read (" + (connRead.error.code || "error") + ").");
   var conn = connRead.data;
   if (!conn) throw fail("no mailbox is connected.");
-  if (conn.status !== "connected") throw fail(mailboxReconnectText(conn.email_address));
+  if (conn.status !== "connected") throw fail(mailboxReconnectText(conn.email_address, conn.auth_kind));
   if (typeof payload.from_address !== "string" || conn.email_address !== payload.from_address) {
     throw fail("the connected mailbox is not the one this reply was filed from.");
   }
@@ -33738,13 +34003,20 @@ async function executeSendMailboxReply(proposal) {
     .maybeSingle();
   if (claim.error || !claim.data) throw fail("the reply is already being sent.");
 
+  // An oauth_microsoft row hands sendReply the access hooks (getAccessToken refreshes there); an app-password row, the password.
+  var oauthRow = conn.auth_kind === "oauth_microsoft";
+  var rejectedText = oauthRow ? me.MESSAGES.sendRejectedOutlook : me.MESSAGES.sendRejected;
   var secret;
-  try {
-    secret = require("./lib/apiKeyCrypto").decrypt({ ciphertext: conn.secret_ciphertext, iv: conn.secret_iv, authTag: conn.secret_auth_tag });
-  } catch (decryptErr) {
-    await recordMailboxSession(ownerId, conn.email_address, { ok: false, reason: "session_failed", code: "secret_unreadable" });
-    await markFailed("secret_unreadable");
-    throw fail(me.MESSAGES.sendRejected);
+  if (oauthRow) {
+    secret = mailboxAccess();
+  } else {
+    try {
+      secret = require("./lib/apiKeyCrypto").decrypt({ ciphertext: conn.secret_ciphertext, iv: conn.secret_iv, authTag: conn.secret_auth_tag });
+    } catch (decryptErr) {
+      await recordMailboxSession(ownerId, conn.email_address, { ok: false, reason: "session_failed", code: "secret_unreadable" });
+      await markFailed("secret_unreadable");
+      throw fail(me.MESSAGES.sendRejected);
+    }
   }
   var outgoing = {
     from: conn.email_address,
@@ -33761,7 +34033,7 @@ async function executeSendMailboxReply(proposal) {
     var reason = sent.kind === "rejected" ? "session_failed" : (sent.kind === "rate_limited" ? "rate_limited" : "call_failed");
     await recordMailboxSession(ownerId, conn.email_address, { ok: false, reason: reason, code: sent.code });
     await markFailed("smtp " + sent.kind + " (" + sent.code + ")");
-    throw fail(sent.kind === "rejected" ? me.MESSAGES.sendRejected : (sent.kind === "rate_limited" ? me.MESSAGES.sendRateLimited : me.MESSAGES.sendFailed));
+    throw fail(sent.kind === "rejected" ? rejectedText : (sent.kind === "rate_limited" ? me.MESSAGES.sendRateLimited : me.MESSAGES.sendFailed));
   }
   await recordMailboxSession(ownerId, conn.email_address, { ok: true });
 
@@ -57670,16 +57942,24 @@ shutdownControl.setServer(app.listen(PORT, function () {
      04:45 UTC daily, claimed through job_runs.card_leads_purge. No flag turns
      it off: it is a deletion the Privacy Policy promises. Only when this file
      is the program, so a check that loads server.js never schedules it. No
-     boot-time run, for the reason the retention job above gives. */
+     boot-time run, for the reason the retention job above gives.
+     NAMED (Nov 6 2026, Outlook sign-in): the same 04:45 run then deletes
+     one-time Microsoft sign-in states older than a day
+     (lib/microsoftAuth.js oauthStatesPurgeTick), claimed through its OWN
+     job_runs row, oauth_states_purge, after the card leads tick settles. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
         console.error("[CardLeadsPurge] Scheduled run error: " + ((err && err.code) || "error"));
+      }).then(function () {
+        return require("./lib/microsoftAuth").oauthStatesPurgeTick(supabase);
+      }).catch(function (err) {
+        console.error("[OauthStatesPurge] Scheduled run error: " + ((err && err.code) || "error"));
       });
     }, {
       timezone: "UTC"
     });
-    console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted.");
+    console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted; then Microsoft sign-in states older than a day, claimed through job_runs.oauth_states_purge.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

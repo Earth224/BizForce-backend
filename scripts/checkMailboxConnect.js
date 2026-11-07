@@ -736,9 +736,11 @@ const tick = () => new Promise(r => setImmediate(r));
   // too; "the highest" is checkCardUpgrades R1's.
   // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 169. AFTER
   // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
-  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql, 171_card_counts.sql and 172_card_leads.sql is at most 169",
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172_card_leads.sql was the last allowed above 169. AFTER
+  // 173_mailbox_microsoft.sql too; "the highest" is checkMailboxOutlook R1's.
+  check("M2. 169_member_email_connections.sql is the only migration numbered 169, and every other migration but 170_member_email_replies.sql, 171_card_counts.sql, 172_card_leads.sql and 173_mailbox_microsoft.sql is at most 169",
     migFiles.filter(f => /^169_/.test(f)).length === 1 && migFiles.indexOf("169_member_email_connections.sql") !== -1 &&
-    migFiles.every(f => f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 169) && migFiles.some(f => /^168_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── N. what a member types ─────────────────────────────────────────────── */
   console.log("\n══ N. what a member types ══");
@@ -748,10 +750,13 @@ const tick = () => new Promise(r => setImmediate(r));
     g.ok && J(g.settings) === J({ provider: "gmail", email_address: ADDR.alice, username: ADDR.alice, imap_host: "imap.gmail.com", imap_port: 993, smtp_host: "smtp.gmail.com", smtp_port: 465 }), J(g));
   const PRESETS = { gmail: ["imap.gmail.com", "smtp.gmail.com", 465], yahoo: ["imap.mail.yahoo.com", "smtp.mail.yahoo.com", 465],
     icloud: ["imap.mail.me.com", "smtp.mail.me.com", 587], fastmail: ["imap.fastmail.com", "smtp.fastmail.com", 465] };
-  check("N2. the four presets are the architect's: Gmail, Yahoo 465, iCloud 587, Fastmail 465, and Other; Outlook is not offered",
+  /* NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE "Outlook is not offered", held by ME.OUTLOOK_LINE ("Sign in with
+     Microsoft is coming"). AFTER Outlook is offered only through Sign in with Microsoft (checkMailboxOutlook): the app-password
+     providers are still exactly these five, and an app-password connect for outlook is still refused, now pointing to the sign-in. */
+  check("N2. the four presets are the architect's: Gmail, Yahoo 465, iCloud 587, Fastmail 465, and Other; Outlook is not an app-password provider",
     Object.keys(PRESETS).every(p => J([ME.PROVIDERS[p].imap_host, ME.PROVIDERS[p].smtp_host, ME.PROVIDERS[p].smtp_port]) === J(PRESETS[p])) &&
     J(ME.PROVIDER_IDS) === J(["gmail", "yahoo", "icloud", "fastmail", "other"]) && !set({ provider: "outlook", email_address: ADDR.alice }).ok &&
-    ME.OUTLOOK_LINE === "Outlook.com no longer allows app passwords. Sign in with Microsoft is coming.");
+    set({ provider: "outlook", email_address: ADDR.alice }).error === ME.MESSAGES.outlookSignIn && ME.OUTLOOK_LINE === undefined);
   const o = set({ provider: "other", email_address: ADDR.bob, username: "bob-signin", imap_host: "IMAP.Kiln.Example.", smtp_host: "smtp.kiln.example", smtp_port: "587" });
   check("N3. Other: both names lowercased (one trailing dot dropped), port 587 taken, the typed sign-in name kept",
     o.ok && o.settings.imap_host === "imap.kiln.example" && o.settings.smtp_port === 587 && o.settings.username === "bob-signin", J(o));
@@ -938,8 +943,11 @@ const tick = () => new Promise(r => setImmediate(r));
   resetStubCounters();
   const logAt = b.db.log.length;
   const rs = await b.hit("status", ALICE);
-  check("R1. status: provider, address, status and since only; no secret, sign-in name or server names; no connection made",
-    rs.code === 200 && J(Object.keys(rs.body).sort()) === J(["connected", "email_address", "provider", "since", "status"]) && STUB.clients.length === 0 &&
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE these five keys only. AFTER outlook_available too (true or false:
+  // whether Sign in with Microsoft is set up on the server); an app-password row adds nothing else (account_type is outlook rows').
+  check("R1. status: provider, address, status, since and outlook_available only; no secret, sign-in name or server names; no connection made",
+    rs.code === 200 && J(Object.keys(rs.body).sort()) === J(["connected", "email_address", "outlook_available", "provider", "since", "status"]) &&
+    typeof rs.body.outlook_available === "boolean" && STUB.clients.length === 0 &&
     !/imap|smtp|secret|username/.test(J(rs.body)));
   const r1 = await b.hit("inbox", ALICE);
   const list = (r1.body && r1.body.messages) || [];
@@ -1077,7 +1085,9 @@ const tick = () => new Promise(r => setImmediate(r));
   check("X1. Your data exports the provider, the address and the date only (group account, key provider, deleted with the account)",
     entry.select === "provider, email_address, created_at" && entry.group === "account" && entry.key === "provider" && entry.onDelete === "delete" &&
     J(entry.owner) === J(["user_id"]) && !/secret|username|host|port/.test(String(entry.select)), J(entry));
-  check("X2. the never-exported list names the app password", (YDATA.NEVER_EXPORTED || []).indexOf("Your mailbox app password: stored encrypted; the export shows only the provider, the address and the date you connected.") !== -1);
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE "Your mailbox app password: stored encrypted; ...". AFTER
+  // "Your mailbox app password or Microsoft access: stored encrypted; ..." (the brief's words), the rest unchanged.
+  check("X2. the never-exported list names the app password and the Microsoft access", (YDATA.NEVER_EXPORTED || []).indexOf("Your mailbox app password or Microsoft access: stored encrypted; the export shows only the provider, the address and the date you connected.") !== -1);
   check("X3. account deletion removes the row (FINAL_DELETES)", (YDATA.FINAL_DELETES || []).indexOf("member_email_connections") !== -1);
   check("X4. backups leave the table out, with the reason", BACKUP.EXCLUDED_TABLES.member_email_connections === "members' mailbox app passwords (encrypted); members connect again");
   check("X5. the schema list names the table as migration 169's", lf(fs.readFileSync(path.join(REPO, "lib/schemaCheck.js"), "utf8")).indexOf('["member_email_connections", "169_member_email_connections.sql"]') !== -1);
@@ -1089,10 +1099,14 @@ const tick = () => new Promise(r => setImmediate(r));
   /* NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE S2 and S3 read all of lib/memberEmail.js, which had no
      send code. AFTER Build B's sendReply sends one approved reply (checkMailboxReply holds it); S2 and S3 read the module
      with sendReply set aside, and S2b holds sendReply to exactly one sendMail and no other method that writes. */
+  /* NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE sendReply was one function. AFTER it is three, side by
+     side: sendReply (the checks and the one-retry rule), sendWithToken (an oauth row's token) and sendOnce (the one
+     transport and its one sendMail). The three are set aside together, and S2b reads the three together. */
   const SEND_AT = MEcode.indexOf("async function sendReply(");
-  const SEND_END = SEND_AT === -1 ? -1 : s.braceMatch(MEcode, MEcode.indexOf(") {", SEND_AT) + 2);
-  const sendReplyCode = SEND_AT === -1 ? "" : MEcode.slice(SEND_AT, SEND_END + 1);
-  const MEread = SEND_AT === -1 ? MEcode : MEcode.slice(0, SEND_AT) + MEcode.slice(SEND_END + 1);
+  const ONCE_AT = MEcode.indexOf("async function sendOnce(");
+  const SEND_END = SEND_AT === -1 || ONCE_AT < SEND_AT ? -1 : s.braceMatch(MEcode, MEcode.indexOf(") {", ONCE_AT) + 2);
+  const sendReplyCode = SEND_END === -1 ? "" : MEcode.slice(SEND_AT, SEND_END + 1);
+  const MEread = SEND_END === -1 ? MEcode : MEcode.slice(0, SEND_AT) + MEcode.slice(SEND_END + 1);
   check("S2. neither lib/memberEmail.js (sendReply aside) nor the mailbox routes call sendMail, send, append or a flag, move, copy or delete method",
     ![MEread, BLcode].some(t => /\.sendMail\(|\.send\(|\.append\(|messageFlags(Add|Set|Remove)\(|messageMove\(|messageCopy\(|messageDelete\(|mailboxDelete\(/.test(t)));
   check("S2b. sendReply calls sendMail exactly once and nothing that writes to a mailbox",
@@ -1107,8 +1121,11 @@ const tick = () => new Promise(r => setImmediate(r));
   console.log("\n══ J. mailbox.html and scripts/mailbox.js ══");
   const page = FE("mailbox.html"), js = FE("scripts/mailbox.js");
   const PRIV_LINE = "BizForce reads your inbox only when you ask, never stores your messages, and never marks them read or changes anything in your mailbox.";
-  check("J1. the page says the three lines word for word: read on request, attachments not downloaded, and the Outlook line",
-    page.indexOf(PRIV_LINE) !== -1 && page.indexOf("Attachments are listed but not downloaded.") !== -1 && page.indexOf(ME.OUTLOOK_LINE) !== -1 &&
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE the third line was "Outlook.com no longer allows app passwords.
+  // Sign in with Microsoft is coming." AFTER that line is gone (it is no longer true) and the page says the sign-in line instead.
+  check("J1. the page says the lines word for word: read on request, attachments not downloaded, and the Microsoft sign-in line; the old Outlook line is gone",
+    page.indexOf(PRIV_LINE) !== -1 && page.indexOf("Attachments are listed but not downloaded.") !== -1 &&
+    page.indexOf("Sign in with Microsoft is coming.") === -1 && page.indexOf("You sign in on Microsoft's own page. BizForce never sees your Microsoft password.") !== -1 &&
     js.indexOf("var OFFLINE = \"Your inbox loads when you are back online.\";") !== -1);
   check("J2. the page loads bf-theme.js first, its own script, the guide and the legal footer; title \"Your Inbox\"",
     page.indexOf("<head>\n<script src=\"/scripts/bf-theme.js\"></script>") !== -1 && page.indexOf('<script src="/scripts/mailbox.js"></script>') !== -1 &&
@@ -1194,7 +1211,14 @@ const tick = () => new Promise(r => setImmediate(r));
   /* NAMED (Nov 5 2026, mailbox replies, migration 170): BEFORE "to check the connection and to read your inbox when you open it in
      BizForce". AFTER "to check the connection, to read your inbox when you open it in BizForce, and to send the replies you approve",
      as Build B decides; the reply sentences that follow it are checkMailboxReply's. */
-  const PRIVACY = "If you connect your mailbox, BizForce stores your email address, your mail server names and the app password you made for BizForce, encrypted; it is used only to check the connection, to read your inbox when you open it in BizForce, and to send the replies you approve. Your messages are read each time you ask and are not stored, BizForce never marks them read or changes anything in your mailbox, and attachments are listed but not downloaded. You can disconnect at any time, you can also cancel the app password with your email provider, and it is deleted with your account.";
+  /* NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE the sentence below as it stood. AFTER exactly two
+     replacements, as the brief decides and nothing else: "the app password you made for BizForce, encrypted" names the
+     access Microsoft grants too, and "cancel the app password with your email provider" adds removing BizForce from the
+     Microsoft account. The words before each replacement are kept here, so any other change still fails L1. */
+  const PRIVACY_169 = "If you connect your mailbox, BizForce stores your email address, your mail server names and the app password you made for BizForce, encrypted; it is used only to check the connection, to read your inbox when you open it in BizForce, and to send the replies you approve. Your messages are read each time you ask and are not stored, BizForce never marks them read or changes anything in your mailbox, and attachments are listed but not downloaded. You can disconnect at any time, you can also cancel the app password with your email provider, and it is deleted with your account.";
+  const PRIVACY = PRIVACY_169
+    .replace("the app password you made for BizForce, encrypted", "the app password you made for BizForce or, if you sign in with Microsoft, the access Microsoft grants BizForce, encrypted")
+    .replace("you can also cancel the app password with your email provider", "you can also cancel the app password with your email provider or remove BizForce from your Microsoft account");
   const TERMS = "If you connect a mailbox, you confirm it is yours or that you are allowed to connect it.";
   check("L1. lib/legalPages.js holds both sentences word for word", LP.MAILBOX_PRIVACY_SENTENCE === PRIVACY && LP.MAILBOX_TERMS_SENTENCE === TERMS);
   const priv = FE("privacy.html"), terms = FE("terms.html");

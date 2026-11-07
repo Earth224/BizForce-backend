@@ -723,9 +723,11 @@ async function draftAndFile(b, user, uid, reply) {
   // still the only one numbered 170, and every migration but 171_card_counts.sql is at most 170; "the highest" is checkCardUpgrades R1's.
   // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 170. AFTER
   // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
-  check("M2. 170_member_email_replies.sql is the only migration numbered 170, and every other migration but 171_card_counts.sql and 172_card_leads.sql is at most 170 (169 was the last before it)",
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172_card_leads.sql was the last allowed above 170. AFTER
+  // 173_mailbox_microsoft.sql too; "the highest" is checkMailboxOutlook R1's.
+  check("M2. 170_member_email_replies.sql is the only migration numbered 170, and every other migration but 171_card_counts.sql, 172_card_leads.sql and 173_mailbox_microsoft.sql is at most 170 (169 was the last before it)",
     migFiles.filter(f => /^170_/.test(f)).length === 1 && migFiles.indexOf("170_member_email_replies.sql") !== -1 &&
-    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── U. the pure parts ──────────────────────────────────────────────────── */
   console.log("\n══ U. lib/memberEmail.js, the pure parts ══");

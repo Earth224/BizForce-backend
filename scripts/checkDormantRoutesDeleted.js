@@ -277,7 +277,11 @@ const ADDED = [
   ["post", "/api/cards/lead"],                               // public: one lead for a card whose form is on; token, honeypot, caps, dedupe (431 -> 432)
   ["get", "/api/digital-cards/:id/leads"],                   // the owner's own leads for one card, 50 a page; anyone else's card is a 404 (432 -> 433)
   ["patch", "/api/card-leads/:id"],                          // the owner marks one of their own leads read or archived (433 -> 434)
-  ["delete", "/api/card-leads/:id"]                          // the owner deletes one of their own leads (434 -> 435)
+  ["delete", "/api/card-leads/:id"],                         // the owner deletes one of their own leads (434 -> 435)
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 435 routes; AFTER 437, Sign in with Microsoft for Your
+  // Inbox: a state and a PKCE verifier stored, then the code exchanged as the signed-in member (checkMailboxOutlook)
+  ["post", "/api/mailbox/microsoft/start"],                  // subscribed: stores a single-use state, returns Microsoft's sign-in URL; 503 until configured (435 -> 436)
+  ["post", "/api/mailbox/microsoft/finish"]                  // subscribed: consumes the state, exchanges the code, seals both tokens, verifies, stores (436 -> 437)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

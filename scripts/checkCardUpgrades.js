@@ -1028,8 +1028,11 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE 171 was the highest. AFTER 172_card_leads.sql is, and
   // checkCardLeads R1 holds that; 171_card_counts.sql is still the only migration numbered 171.
-  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 172 (checkCardLeads R1), 170 the last before it",
-    migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 && migFiles.every(f => Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^170_/.test(f)));
+  // NAMED BEFORE → AFTER (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172 was the highest. AFTER 173_mailbox_microsoft.sql
+  // is, held by checkMailboxOutlook R1; above 171 only 172_card_leads.sql and 173_mailbox_microsoft.sql are allowed, by name.
+  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 173 (checkMailboxOutlook R1), 170 the last before it",
+    migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 &&
+    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

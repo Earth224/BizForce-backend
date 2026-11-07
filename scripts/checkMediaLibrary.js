@@ -650,8 +650,10 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // 171_card_counts.sql too; "the highest" is checkCardUpgrades R1's.
   // NAMED (Nov 6 2026, card upgrades C2, migration 172): BEFORE 171_card_counts.sql was the last allowed above 167. AFTER
   // 172_card_leads.sql too; "the highest" is checkCardLeads R1's.
-  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql, 171_card_counts.sql and 172_card_leads.sql is at most 167",
-    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
+  // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172_card_leads.sql was the last allowed above 167. AFTER
+  // 173_mailbox_microsoft.sql too; "the highest" is checkMailboxOutlook R1's.
+  check("M2. 167_member_media.sql is the only migration numbered 167, and every other migration but 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql, 171_card_counts.sql, 172_card_leads.sql and 173_mailbox_microsoft.sql is at most 167",
+    migFiles.filter(f => /^167_/.test(f)).length === 1 && migFiles.indexOf("167_member_media.sql") !== -1 && migFiles.every(f => f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 167) && migFiles.some(f => /^166_/.test(f)));
   check("M3. PATH_PATTERN equals the 167 CHECK character for character", !!SQL_PATH && MED.PATH_PATTERN === SQL_PATH[1] && MED.PATH_RE.source === PATH_SQL_RE.source, SQL_PATH && SQL_PATH[1]);
   const many = Array.from({ length: 300 }, (_, i) => MED.mediaPath(OWEN, ["jpg", "png", "webp", "gif", "mp4", "webm"][i % 6]));
   check("M4. 300 paths each match the 167 pattern and the owner rule, under media/<id>/, and no two are the same",
