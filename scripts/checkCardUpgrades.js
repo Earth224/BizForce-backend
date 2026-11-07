@@ -676,11 +676,17 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   CUR.rpcs.length = 0;
   await slugPage("lapsed-card"); await tokenPage(TOK.lapsed); await slugPage("thrower-card");
   check("C8. a lapsed owner's card and a lookup that throws: never counted", CUR.rpcs.length === 0, J(CUR.rpcs));
-  check("C9. bumpCardCount refuses a kind outside the six, with no rpc", (await CTX.bumpCardCount(CID.jane, "ip")) === false && (await CTX.bumpCardCount(CID.jane, "user_agent")) === false &&
-    CUR.rpcs.length === 0 && J(CPL.COUNT_KINDS) === J(["views", "qr_views", "tel_taps", "email_taps", "save_taps", "support_taps"]));
-  const kindsSql = (/IF p_kind NOT IN \(([^)]*)\) THEN/.exec(ALL[MIG]) || [])[1] || "";
-  check("C10. the rpc's own allowlist is the same six kinds, and it raises on anything else", J(kindsSql.split(",").map(x => x.trim().replace(/'/g, ""))) === J(CPL.COUNT_KINDS) &&
-    /RAISE EXCEPTION 'unknown count kind';/.test(ALL[MIG]), kindsSql);
+  // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE the six kinds of 171. AFTER seven: wallet_taps added last (checkGoogleWallet).
+  check("C9. bumpCardCount refuses a kind outside the seven, with no rpc", (await CTX.bumpCardCount(CID.jane, "ip")) === false && (await CTX.bumpCardCount(CID.jane, "user_agent")) === false &&
+    CUR.rpcs.length === 0 && J(CPL.COUNT_KINDS) === J(["views", "qr_views", "tel_taps", "email_taps", "save_taps", "support_taps", "wallet_taps"]));
+  // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 171's allowlist was the rpc's. AFTER 174 replaces the function:
+  // its allowlist is COUNT_KINDS exactly, and 171's, as run, is the first six.
+  const MIG174 = lf(fs.readFileSync(path.join(REPO, "supabase/migrations/174_card_wallet_count.sql"), "utf8"));
+  const kindsOf = sql => ((/IF p_kind NOT IN \(([^)]*)\) THEN/.exec(sql) || [])[1] || "").split(",").map(x => x.trim().replace(/'/g, ""));
+  const kindsSql = kindsOf(MIG174).join(", ");
+  check("C10. the rpc's own allowlist (174) is the same seven kinds, 171's was the first six, and it raises on anything else",
+    J(kindsOf(MIG174)) === J(CPL.COUNT_KINDS) && J(kindsOf(ALL[MIG])) === J(CPL.COUNT_KINDS.slice(0, 6)) &&
+    /RAISE EXCEPTION 'unknown count kind';/.test(ALL[MIG]) && /RAISE EXCEPTION 'unknown count kind';/.test(MIG174), kindsSql);
   CUR.rpcFails = true; LOGS.length = 0;
   const failing = await slugPage("jane-doe");
   CUR.rpcFails = false;
@@ -707,10 +713,11 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   /* ════ T. taps ════ */
   console.log("\n══ T. taps ══");
   CUR = makeDb(seed()); LOGS.length = 0; resetLimits();
-  const kinds = { tel: "tel_taps", email: "email_taps", save: "save_taps", support: "support_taps" };
+  // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE four kinds. AFTER wallet too, a tap on "Add to Google Wallet".
+  const kinds = { tel: "tel_taps", email: "email_taps", save: "save_taps", support: "support_taps", wallet: "wallet_taps" };
   const okTaps = [];
   for (const k of Object.keys(kinds)) okTaps.push(await tap({ ref: "jane-doe", kind: k }, { ip: "198.51.100." + (okTaps.length + 1) }));
-  check("T1. each of tel, email, save and support adds one to its own counter, by slug, answering 204",
+  check("T1. each of tel, email, save, support and wallet adds one to its own counter, by slug, answering 204",
     okTaps.every(r => r.status === 204) && J(rpcKinds()) === J(Object.values(kinds).map(c => c + "@" + CID.jane)), J(rpcKinds()));
   CUR.rpcs.length = 0;
   const tokTap = await tap({ ref: TOK.token, kind: "save" });
@@ -726,7 +733,7 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const junk = [(await tap("not json")).status, (await tap(null)).status, (await tap([1, 2])).status];
   check("T3. any other kind, a malformed ref or an unreadable body: 400, nothing counted",
     bk.every(x => x === 400) && br.every(x => x === 400) && junk.every(x => x === 400) && CUR.rpcs.length === 0, J([bk, br, junk, CUR.rpcs]));
-  check("T4. tapColumn maps exactly the four kinds", J(CPL.TAP_KINDS) === J(kinds) && CPL.tapColumn("toString") === null && CPL.tapColumn("views") === null);
+  check("T4. tapColumn maps exactly the five kinds", J(CPL.TAP_KINDS) === J(kinds) && CPL.tapColumn("toString") === null && CPL.tapColumn("views") === null);
   const skipped = [await tap({ ref: "jane-doe", kind: "tel" }, { ua: null }), await tap({ ref: "jane-doe", kind: "tel" }, { ua: "Slackbot-LinkExpanding 1.0" }),
     await tap({ ref: "lapsed-card", kind: "tel" }), await tap({ ref: TOK.lapsed, kind: "tel" }), await tap({ ref: "thrower-card", kind: "tel" }), await tap({ ref: "no-such-card", kind: "tel" })];
   check("T5. no User-Agent, a bot, a lapsed owner, a throwing lookup or an unknown card: 204, nothing counted", skipped.every(r => r.status === 204) && CUR.rpcs.length === 0, J(skipped.map(r => r.status)) + J(CUR.rpcs));
@@ -1030,9 +1037,11 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // checkCardLeads R1 holds that; 171_card_counts.sql is still the only migration numbered 171.
   // NAMED BEFORE → AFTER (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172 was the highest. AFTER 173_mailbox_microsoft.sql
   // is, held by checkMailboxOutlook R1; above 171 only 172_card_leads.sql and 173_mailbox_microsoft.sql are allowed, by name.
-  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 173 (checkMailboxOutlook R1), 170 the last before it",
+  // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql
+  // is, held by checkGoogleWallet R1; it is allowed above 171 by name too.
+  check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 174 (checkGoogleWallet R1), 170 the last before it",
     migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 &&
-    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
+    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

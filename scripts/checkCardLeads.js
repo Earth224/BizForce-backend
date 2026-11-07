@@ -941,8 +941,11 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const built = LP.buildLegalPages();
   const escH = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const after = (h, a, b) => { const i = h.indexOf(escH(a)), j = h.indexOf(escH(b)); return i !== -1 && j > i && j - i - escH(a).length < 20; };
-  check("G2. the Privacy Policy carries it directly after the card visits sentence, as built and on disk",
-    after(built["privacy.html"], LP.CARD_VISITS_PRIVACY_SENTENCE, PRIV) && after(fe("privacy.html") || "", LP.CARD_VISITS_PRIVACY_SENTENCE, PRIV));
+  // NAMED (Nov 6 2026, Google Wallet): BEFORE directly after the card visits sentence. AFTER the Google Wallet sentence sits
+  // between them (it follows the visits sentence, checkGoogleWallet), so this one is directly after that.
+  check("G2. the Privacy Policy carries it directly after the Google Wallet sentence, which follows the card visits sentence, as built and on disk",
+    after(built["privacy.html"], LP.CARD_WALLET_PRIVACY_SENTENCE, PRIV) && after(fe("privacy.html") || "", LP.CARD_WALLET_PRIVACY_SENTENCE, PRIV) &&
+    after(built["privacy.html"], LP.CARD_VISITS_PRIVACY_SENTENCE, LP.CARD_WALLET_PRIVACY_SENTENCE));
   check("G3. the Terms carry theirs directly after the media sentence, as built and on disk",
     after(built["terms.html"], LP.MEDIA_TERMS_SENTENCE, TERMS) && after(fe("terms.html") || "", LP.MEDIA_TERMS_SENTENCE, TERMS));
 
@@ -951,8 +954,10 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(f => /^\d+_/.test(f));
   // NAMED BEFORE → AFTER (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 172 was the highest. AFTER
   // 173_mailbox_microsoft.sql is, and checkMailboxOutlook R1 holds that; 172_card_leads.sql is still the only migration numbered 172.
-  check("R1. 172_card_leads.sql is the only migration numbered 172; the highest is 173 (checkMailboxOutlook R1), 171 the last before it",
-    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => f === "173_mailbox_microsoft.sql" || Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
+  // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet, migration 174): BEFORE 173 was the highest. AFTER 174_card_wallet_count.sql
+  // is, held by checkGoogleWallet R1; above 172 only 173_mailbox_microsoft.sql and 174_card_wallet_count.sql are allowed, by name.
+  check("R1. 172_card_leads.sql is the only migration numbered 172; the highest is 174 (checkGoogleWallet R1), 171 the last before it",
+    migFiles.filter(f => /^172_/.test(f)).length === 1 && migFiles.indexOf("172_card_leads.sql") !== -1 && migFiles.every(f => f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || Number(f.split("_")[0]) <= 172) && migFiles.some(f => /^171_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. the table is RLS-on with anon and authenticated revoked, and its leads go with the card and with the account",
     /ALTER TABLE public\.card_leads ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON public\.card_leads FROM anon, authenticated;/.test(ALL[MIG]) &&

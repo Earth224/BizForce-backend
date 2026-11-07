@@ -281,7 +281,10 @@ const ADDED = [
   // NAMED (Nov 6 2026, Outlook sign-in, migration 173): BEFORE 435 routes; AFTER 437, Sign in with Microsoft for Your
   // Inbox: a state and a PKCE verifier stored, then the code exchanged as the signed-in member (checkMailboxOutlook)
   ["post", "/api/mailbox/microsoft/start"],                  // subscribed: stores a single-use state, returns Microsoft's sign-in URL; 503 until configured (435 -> 436)
-  ["post", "/api/mailbox/microsoft/finish"]                  // subscribed: consumes the state, exchanges the code, seals both tokens, verifies, stores (436 -> 437)
+  ["post", "/api/mailbox/microsoft/finish"],                 // subscribed: consumes the state, exchanges the code, seals both tokens, verifies, stores (436 -> 437)
+  // NAMED (Nov 6 2026, Google Wallet, migration 174): BEFORE 437 routes; AFTER 438, a public card's "Add to Google Wallet"
+  // link: the card's public fields only, while its owner is entitled, signed offline; writes nothing (checkGoogleWallet)
+  ["get", "/api/cards/google-wallet"]                        // public: 302 to Google's save link; 503 until configured; 404 for a missing or lapsed card (437 -> 438)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -63,6 +63,7 @@ const supportPage = require("./lib/supportPage");
 const campaignShare = require("./lib/campaignShare");
 const cardPage = require("./lib/cardPage");
 const cardLeads = require("./lib/cardLeads");
+const googleWallet = require("./lib/googleWallet");
 const memberMedia = require("./lib/memberMedia");
 const { runNightlyBackup } = require("./lib/backup");
 const { opsAlertsEnabled, OPS_ALERT_SCAN_JOB_NAME } = require("./lib/opsAlert");
@@ -48947,6 +48948,14 @@ function publicCardFrom(row, photoUrl) {
   return out;
 }
 
+/* The public card JSON (share and slug routes) gains google_wallet: true only
+   while Google Wallet is configured (lib/googleWallet.js); nothing else. The
+   card page shows "Add to Google Wallet" on Android only when it is true. */
+function withGoogleWalletFlag(card) {
+  if (card && googleWallet.config()) card.google_wallet = true;
+  return card;
+}
+
 /* A card whose lead form is on carries a fresh form token, so its answer is never cached. */
 function noStoreIfLeadForm(res, row) {
   if (row && row.lead_form_on === true) res.set("Cache-Control", "no-store");
@@ -49322,7 +49331,8 @@ app.get("/card/:token", cardPageLimiter, async function (req, res) {
   return serveCardPage(req, res, cardPage.CARD_TOKEN_RE.test(pageToken) ? { token: pageToken } : null);
 });
 
-/* Public. { ref: a slug or a share token, kind: tel | email | save | support }.
+/* Public. { ref: a slug or a share token, kind: tel | email | save | support | wallet }.
+   wallet (migration 174, Nov 6 2026) is a tap on "Add to Google Wallet".
    204 whether it was counted or skipped; 400 for a bad kind or ref. The card
    page sends it with navigator.sendBeacon, whose body is text/plain. */
 app.post("/api/cards/tap", cardTapLimiter, express.text({ type: "text/plain", limit: "2kb" }), async function (req, res) {
@@ -49332,7 +49342,7 @@ app.post("/api/cards/tap", cardTapLimiter, express.text({ type: "text/plain", li
   const ref = tap && typeof tap.ref === "string" ? tap.ref : "";
   const byToken = cardPage.CARD_TOKEN_RE.test(ref);
   const bySlug = cardSlugFrom(ref).slug === ref;
-  if (!column || (!byToken && !bySlug)) return res.status(400).json({ error: "A tap names a card and one of tel, email, save or support." });
+  if (!column || (!byToken && !bySlug)) return res.status(400).json({ error: "A tap names a card and one of tel, email, save, support or wallet." });
   if (!cardPage.isCountableRequest(req)) return res.status(204).end();
   try {
     let tapped = byToken ? await cardRowFor({ token: ref }, "id, user_id") : null;
@@ -49354,7 +49364,7 @@ app.get("/api/digital-cards/:id/stats", requireAuth, async function (req, res, n
     if (owned.error) throw owned.error;
     if (!owned.data) return res.status(404).json({ error: "Card not found" });
     const statsNow = new Date(nowIso());
-    const counted = await supabase.from("card_view_counts").select("day, views, qr_views, tel_taps, email_taps, save_taps, support_taps")
+    const counted = await supabase.from("card_view_counts").select("day, views, qr_views, tel_taps, email_taps, save_taps, support_taps, wallet_taps")
       .eq("card_id", owned.data.id).gte("day", cardPage.statsDays(statsNow)[0]).order("day", { ascending: true });
     if (counted.error) throw counted.error;
     return res.json(cardPage.buildStats(counted.data || [], statsNow));
@@ -49560,7 +49570,7 @@ app.get("/api/cards/share/:token", cardPageLimiter, async function (req, res, ne
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
     noStoreIfLeadForm(res, data);
-    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
+    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
 });
 
@@ -49581,8 +49591,36 @@ app.get("/api/cards/slug/:slug", cardPageLimiter, async function (req, res, next
     if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: "Card not found" });
 
     noStoreIfLeadForm(res, data);
-    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });
+    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });
   } catch (error) { next(error); }
+});
+
+/* Public. "Add to Google Wallet" (Nov 6 2026, lib/googleWallet.js): ?ref= a
+   slug or a share token, the formats POST /api/cards/tap accepts, else 400.
+   503 until Google Wallet is configured. The card, then its owner's page
+   (failing closed), then publicCardFrom's public fields only; a missing card,
+   a lapsed owner or a lookup that throws is 404 "Card not found". Answers 302
+   to Google's save link, signed now, no-store. Writes nothing: the page counts
+   the tap itself through POST /api/cards/tap (kind wallet). */
+app.get("/api/cards/google-wallet", cardPageLimiter, async function (req, res) {
+  res.set("Cache-Control", "no-store");
+  const walletRef = req.query && typeof req.query.ref === "string" ? req.query.ref : "";
+  const walletByToken = cardPage.CARD_TOKEN_RE.test(walletRef);
+  const walletBySlug = !walletByToken && walletRef !== "" && cardSlugFrom(walletRef).slug === walletRef;
+  if (!walletByToken && !walletBySlug) return res.status(400).json({ error: googleWallet.MESSAGES.badRef });
+  const walletConfig = googleWallet.config();
+  if (!walletConfig) return res.status(503).json({ error: googleWallet.MESSAGES.notConfigured });
+  try {
+    const walletRow = await cardRowFor(walletByToken ? { token: walletRef } : { slug: walletRef });
+    if (!walletRow) return res.status(404).json({ error: googleWallet.MESSAGES.notFound });
+    if (!(await ownerPagePublic(walletRow.user_id))) return res.status(404).json({ error: googleWallet.MESSAGES.notFound });
+    const walletObject = googleWallet.buildObject(publicCardFrom(walletRow, await cardOwnerPhoto(walletRow)), walletRow, walletConfig);
+    if (!walletObject) return res.status(404).json({ error: googleWallet.MESSAGES.notFound });
+    return res.redirect(302, googleWallet.saveUrl(walletObject, walletConfig, Date.now()));
+  } catch (walletErr) {
+    console.error("[google-wallet] no pass: " + ((walletErr && walletErr.code) || "error"));
+    return res.status(404).json({ error: googleWallet.MESSAGES.notFound });
+  }
 });
 
 // ════════════════════════════════════════════════════════

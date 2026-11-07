@@ -106,6 +106,14 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `MS_CLIENT_ID` | none | The Application (client) ID of BizForce's Microsoft app registration (see "Microsoft app registration" below). Needed only for Sign in with Microsoft on Your Inbox; without it (or `MS_CLIENT_SECRET`) the Microsoft routes answer 503 "Outlook sign-in isn't set up yet." and the page disables the button. Set it on Railway; never commit it. |
 | `MS_CLIENT_SECRET` | none | That registration's client secret value. Needed only for Sign in with Microsoft, with `MS_CLIENT_ID`. A secret; set it on Railway, never commit it, and replace it before Microsoft's expiry date. |
 
+### Google Wallet
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GOOGLE_WALLET_ISSUER_ID` | none | The issuer ID of BizForce's Google Pay and Wallet Console account, 10 to 25 digits (see "Google Wallet setup" below). Needed only for "Add to Google Wallet" on public cards; without all three Google Wallet variables the button is not shown and `GET /api/cards/google-wallet` answers 503. |
+| `GOOGLE_WALLET_SA_EMAIL` | none | The email address of the Google Cloud service account that signs the passes; it must end in `.iam.gserviceaccount.com`. Needed only for Google Wallet, with the other two. |
+| `GOOGLE_WALLET_SA_KEY` | none | That service account's `private_key` from its JSON key file, pasted whole: `-----BEGIN PRIVATE KEY-----` to the end, and a literal `\n` as the file writes it is accepted. It signs the save links (RS256). A secret; set it on Railway and never commit it. A key that does not parse, or is not RSA, means Google Wallet is not configured. |
+
 ### Lead Radar and outreach
 
 | Variable | Default | Effect |
@@ -231,6 +239,18 @@ Sign in with Microsoft on Your Inbox (`lib/microsoftAuth.js`, migration 173) nee
 - **Certificates and secrets:** one client secret. Put its value in `MS_CLIENT_SECRET` and the Application (client) ID in `MS_CLIENT_ID`, on Railway only. Note the secret's expiry date and rotate it before then: make a new secret, set it on Railway, then delete the old one.
 
 Until both variables are set, the Microsoft routes answer 503 and the page shows "Outlook sign-in isn't set up yet." Disconnecting deletes BizForce's copy only; a member removes BizForce from their own Microsoft account under its app permissions.
+
+## Google Wallet setup
+
+"Add to Google Wallet" on public cards (Android visitors) needs the three `GOOGLE_WALLET_*` variables. BizForce signs each save link itself and makes no Google API call.
+
+- **Issuer ID:** from the Google Pay and Wallet Console (`GOOGLE_WALLET_ISSUER_ID`).
+- **Service account:** a Google Cloud service account with a JSON key; its email is `GOOGLE_WALLET_SA_EMAIL` and its `private_key` is `GOOGLE_WALLET_SA_KEY`.
+- **Issuer user:** that service account added as a user of the issuer in the Wallet Console.
+- **Origins:** the save links are signed for the origin `https://bizforceai.net`.
+- **Publishing access:** requested from Google in the Wallet Console before the public can save passes; until then only the issuer's test accounts can.
+
+The pass holds only what the card shows publicly. The class is `<issuer>.bizforce_card_v1`; each card's object id is derived from its id with a key from `JWT_SECRET`, so no BizForce id leaves the server (lib/googleWallet.js).
 
 ## Backups and the restore drill
 

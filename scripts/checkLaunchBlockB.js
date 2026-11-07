@@ -197,8 +197,10 @@ const MUTATIONS = {
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the return followed the blank line directly. AFTER
   // noStoreIfLeadForm(res, data); comes first (no-store while the card's lead form is on); the anchor and its replacement
   // carry that line, and the mutation (the owner check removed) is the same.
-  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════",
-    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: publicCardFrom(data, await cardOwnerPhoto(data)), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n// ════════"]],
+  // NAMED BEFORE → AFTER (Nov 6 2026, Google Wallet): BEFORE the card was publicCardFrom(...) and the profile banner came next.
+  // AFTER it is withGoogleWalletFlag(publicCardFrom(...)) and the Google Wallet route follows; the mutation is the same.
+  "slug-route-ungated": [["SRC", "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\"",
+    "    if (!data) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, await cardOwnerPhoto(data))), support_links: await publicSupportLinks(data.user_id) });\n  } catch (error) { next(error); }\n});\n\n/* Public. \"Add to Google Wallet\""]],
   // #10: Netlify does not serve /c/<slug>
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was the rewrite "/c/:slug /card-view.html 200".
   // AFTER the proxy to the backend's GET /c/:slug, which serves card-view.html with the card's own head; the mutation
@@ -911,7 +913,10 @@ function fakeDb(tables, fail) {
     const code = uncommented(SRC);
     // NAMED (Oct 28 2026, member support): BEFORE the answer was { card } alone. AFTER it is { card, support_links }, the
     // owner's normalized support links only (publicSupportLinks; checkMemberSupport D1-D2 holds what they carry).
-    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: publicCardFrom\(data, await cardOwnerPhoto\(data\)\), support_links: await publicSupportLinks\(data\.user_id\) \}\);/.test(code));
+    // NAMED (Nov 6 2026, Google Wallet): BEFORE card was publicCardFrom(...) as it is. AFTER withGoogleWalletFlag(publicCardFrom(...)),
+    // which adds google_wallet: true while Google Wallet is configured and nothing else (checkGoogleWallet holds it too).
+    check("10. GET /api/cards/share/:token serves the same allowlist", /app\.get\("\/api\/cards\/share\/:token"[\s\S]*?return res\.json\(\{ card: withGoogleWalletFlag\(publicCardFrom\(data, await cardOwnerPhoto\(data\)\)\), support_links: await publicSupportLinks\(data\.user_id\) \}\);/.test(code) &&
+      /function withGoogleWalletFlag\(card\) \{\n  if \(card && googleWallet\.config\(\)\) card\.google_wallet = true;\n  return card;\n\}/.test(code));
     check("10. POST and PUT /api/digital-cards validate the privacy fields and map the slug refusals",
       (code.match(/const privacy = cardPrivacyUpdates\(req\.body\);/g) || []).length === 2 && /const postRefusal = cardWriteRefusal\(error\);/.test(code) && /const putRefusal = cardWriteRefusal\(error\);/.test(code));
     const reFromSql = (/slug ~ '([^']+)'/.exec(MIG) || [])[1];

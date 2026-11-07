@@ -520,7 +520,11 @@ const EXPECTED_SERVE_GATED = {
   // and the cards sitemap lists a card only while its owner is entitled.
   "get /c/:slug":                           "serveCardPage(req, res,",
   "get /card/:token":                       "serveCardPage(req, res,",
-  "get /api/sitemap/cards.xml":             "publicOwnersAmong("
+  "get /api/sitemap/cards.xml":             "publicOwnersAmong(",
+  // NAMED (Nov 6 2026, Google Wallet; serve-gated 17 -> 18): BEFORE no pass. AFTER GET /api/cards/google-wallet answers a
+  // signed save link for a card only while its owner is entitled (a lapsed owner or a throwing lookup is 404); it writes
+  // nothing, so it is not an unauthenticated write (checkGoogleWallet).
+  "get /api/cards/google-wallet":           SERVE_GUARD
 };
 
 /* ── MUTATE=serve-open: the seller page's guard removed at compile ──────── */
