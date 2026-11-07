@@ -221,7 +221,10 @@ const ADDED = [
   // requireAdmin, which reads only the last schema check's result in this process (checkSchemaCheck H)
   ["get", "/api/admin/health"],                   // the schema line: any missing table and the migration to run; admins only (total 393 -> 394)
   // NAMED (Nov 3 2026, store connections): BEFORE 394 routes; AFTER 399, the five read-only store routes (checkStoreConnections C, W, S, Y, D)
-  ["post", "/api/store/connections"],             // connect: Shopify verified by one GET and stored encrypted; WooCommerce answers its Read-only authorize link (394 -> 395)
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE this route's note said "Shopify verified by one GET and stored
+  // encrypted; WooCommerce answers its Read-only authorize link". AFTER it connects WooCommerce only (its authorize link, read
+  // or read_write as the member chose); a Shopify body answers 400 "Use Connect Shopify on the Store Agent page."
+  ["post", "/api/store/connections"],             // connect WooCommerce: answers its authorize link; Shopify answers 400, use Connect Shopify (394 -> 395)
   ["post", "/api/store/woocommerce/callback"],    // the store hands over a Read key; any other permission is refused (395 -> 396)
   ["get", "/api/store/connections"],              // status, safe fields only (396 -> 397)
   ["delete", "/api/store/connections/:id"],       // disconnect: the connection, its synced rows and order summaries (397 -> 398)
@@ -289,7 +292,15 @@ const ADDED = [
   // proposed for approval, the member's record of changes, and an undo filed the same way (checkStoreChanges)
   ["post", "/api/store/changes/propose"],                    // subscribed: one live read of the item, then a proposal; never executes (438 -> 439)
   ["get", "/api/store/changes"],                             // login-only: the member's own change log, newest first, 50 a page (439 -> 440)
-  ["post", "/api/store/changes/:id/undo"]                    // subscribed: files the reverse change as a new proposal (440 -> 441)
+  ["post", "/api/store/changes/:id/undo"],                   // subscribed: files the reverse change as a new proposal (440 -> 441)
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE 441 routes; AFTER 446, Connect Shopify (a single-use state, then
+  // the HMAC-verified callback's code exchanged as the signed-in member), the location stock changes apply at, and Shopify's
+  // HMAC-verified webhooks (checkShopifyConnect)
+  ["post", "/api/store/shopify/start"],                      // subscribed: stores a single-use state, returns Shopify's authorize URL; 503 until configured (441 -> 442)
+  ["post", "/api/store/shopify/finish"],                     // subscribed: HMAC, timestamp, shop, state; the code exchanged; both tokens sealed; stored (442 -> 443)
+  ["get", "/api/store/connections/:id/locations"],           // login-only: the member's own Shopify shop's active locations, read live (443 -> 444)
+  ["put", "/api/store/connections/:id/location"],            // login-only: the location stock changes apply at, one of the live list (444 -> 445)
+  ["post", "/api/webhooks/shopify"]                          // public, raw body, HMAC-verified: app/uninstalled and the privacy topics, deduped (445 -> 446)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

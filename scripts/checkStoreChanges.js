@@ -6,9 +6,14 @@
 
      P. PERMISSION IS OPT-IN. Connecting WooCommerce asks for scope=read unless allow_changes is exactly true, then
         scope=read_write; the signed state carries it; the callback stores a key only when its key_permissions is
-        exactly what was asked, and stores that permission. Shopify is always "read" (the database refuses otherwise).
+        exactly what was asked, and stores that permission. NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE
+        Shopify was always "read" (175's CHECK). AFTER 176 drops that CHECK, Connect Shopify stores the permission asked
+        for, and a Shopify connection is read_write only with write_products and write_inventory granted (P8). Shopify's
+        own change path (GraphQL, location, compare-and-set) is scripts/checkShopifyConnect.js's; this check stays on
+        WooCommerce and on what both platforms share.
      X. PROPOSING. POST /api/store/changes/propose is requireAuth, requireActiveSubscription and 30 an hour keyed
-        store-change:<uid>. It refuses a foreign item, a manual item, a Shopify item, a read-only or disconnected
+        store-change:<uid>. It refuses a foreign item, a manual item, an item on a read-only Shopify connection (NAMED,
+        migration 176: it was any Shopify item), a read-only or disconnected
         connection, a value out of range or equal to the store's, and an item whose stock is untracked, each before
         or without a write. A good proposal reads the live value with ONE GET, files a pending update_store_item
         proposal with exactly the decided payload and title, says when a sale is running, and changes nothing.
@@ -83,19 +88,25 @@ const MUTATIONS = {
     ".eq(\"id\", itemId).eq(\"user_id\", userId).maybeSingle();", ".eq(\"id\", itemId).maybeSingle();"],
   "variation-path-wrong": ["write",
     "  return \"/products/\" + parent + \"/variations/\" + m[2];", "  return \"/products/\" + m[2];"],
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE anchored on the "not_woocommerce" refusal, which is gone:
+     Shopify changes are allowed now, on a connection made with changes allowed. AFTER the mutation lets a Shopify
+     connection through without that permission; X9 and E18 (a read-only Shopify connection) must catch it. */
   "shopify-write-allowed": ["write",
-    "  if (conn.platform !== \"woocommerce\") return { ok: false, status: 409, code: \"not_woocommerce\", error: MESSAGES.notWoo };\n  if (SS.permissionOf(conn) !== \"read_write\")",
-    "  if (conn.platform === \"woocommerce\" && SS.permissionOf(conn) !== \"read_write\")"],
+    "  if (SS.permissionOf(conn) !== \"read_write\") return {", "  if (conn.platform !== \"shopify\" && SS.permissionOf(conn) !== \"read_write\") return {"],
+  // NAMED (Nov 7 2026, migration 176): BEFORE anchored on "function shopifyUrl(domain, path) {", which is gone. AFTER the same
+  // added POST, just above lib/storeSync.js's WooCommerce section.
   "storesync-writes": ["sync",
-    "function shopifyUrl(domain, path) {\n",
-    "function wooWrite(deps, url, headers, body) {\n  return deps.jsonRequest(url, { method: \"POST\", headers: headers, body: body });\n}\nfunction shopifyUrl(domain, path) {\n"],
+    "/* ── WooCommerce ──",
+    "function wooWrite(deps, url, headers, body) {\n  return deps.jsonRequest(url, { method: \"POST\", headers: headers, body: body });\n}\n/* ── WooCommerce ──"],
   "local-edit-allowed": ["server",
     "        if (storeFieldChanged) {\n", "        if (false) {\n"],
   "undo-writes-directly": ["write",
     "  return proposeChange(deps, userId, { item_id: row.inventory_item_id, field: row.field, to: to });\n",
     "  var filed = await proposeChange(deps, userId, { item_id: row.inventory_item_id, field: row.field, to: to });\n  if (filed.status === 201) await executeChange(deps, filed.body.proposal);\n  return filed;\n"],
+  // NAMED (Nov 7 2026, migration 176): BEFORE "...record of changes are deleted" sat on one source line. AFTER the 176 sentence
+  // breaks its source line after "are", so the anchor ends there; the mutation still drops the record of changes.
   "privacy-sentence-stale": ["legal",
-    "the order summaries and the record of changes are deleted", "the order summaries are deleted"],
+    "the order summaries and the record of changes are \" +", "the order summaries are \" +"],
   "innerHTML-on-page": ["changesUi",
     "    if (text !== undefined) e.textContent = text;\n", "    if (text !== undefined) e.innerHTML = text;\n"],
   // the others the code earns
@@ -121,8 +132,10 @@ const MUTATIONS = {
     ".select(LOG_COLUMNS).eq(\"user_id\", userId);", ".select(LOG_COLUMNS);"],
   "foreign-undo": ["write",
     ".eq(\"id\", changeId).eq(\"user_id\", userId).maybeSingle();", ".eq(\"id\", changeId).maybeSingle();"],
+  // NAMED (Nov 7 2026, migration 176): BEFORE proposeControl(itemId, prefill). AFTER it takes the connection first, to label
+  // the price with the store's currency and name a Shopify location.
   "readonly-row-offered": ["changesUi",
-    "    if (writable(conn)) return proposeControl(itemId, prefill);\n", "    return proposeControl(itemId, prefill);\n"],
+    "    if (writable(conn)) return proposeControl(conn, itemId, prefill);\n", "    return proposeControl(conn, itemId, prefill);\n"],
   "undo-unconfirmed": ["changesUi",
     "          undo.hidden = true; sure.hidden = false; cancel.hidden = false;\n", "          undo.hidden = true; sure.hidden = false; cancel.hidden = false; sure.click();\n"]
 };
@@ -144,6 +157,9 @@ const FILES = {
   sync: read("lib/storeSync.js"),
   server: read("server.js"),
   migration: read("supabase/migrations/175_store_changes.sql"),
+  // NAMED (Nov 7 2026, migration 176): the migration that drops 175's Shopify CHECK, and the Shopify module lib/storeWrite.js requires.
+  migration176: read("supabase/migrations/176_shopify_oauth.sql"),
+  api: read("lib/shopifyApi.js"),
   legal: read("lib/legalPages.js"),
   gateRules: read("lib/gateRules.js"),
   privacy: readFe("privacy.html"),
@@ -174,7 +190,9 @@ function compile(src, file, map) {
   return m.exports;
 }
 const SS = compile(FILES.sync, "lib/storeSync.js", {});
-const SW = compile(FILES.write, "lib/storeWrite.js", { "./storeSync": SS });
+// NAMED (Nov 7 2026, migration 176): lib/storeWrite.js requires ./shopifyApi, compiled here against the same storeSync.
+const SAPI = compile(FILES.api, "lib/shopifyApi.js", { "./storeSync": SS });
+const SW = compile(FILES.write, "lib/storeWrite.js", { "./storeSync": SS, "./shopifyApi": SAPI });
 const GR = compile(FILES.gateRules, "lib/gateRules.js", {});
 function braceMatch(src, openIdx) {
   let depth = 0;
@@ -221,7 +239,8 @@ function makeDb() {
     if (name === "member_store_connections") {
       if (!/^[0-9a-f]+$/.test(r.credentials_ciphertext || "") || !/^[0-9a-f]{24}$/.test(r.credentials_iv || "") || !/^[0-9a-f]{32}$/.test(r.credentials_auth_tag || "")) return "member_store_connections_ciphertext_check";
       if (["read", "read_write"].indexOf(r.permission) === -1) return "member_store_connections_permission_check";
-      if (!(r.permission === "read" || r.platform === "woocommerce")) return "member_store_connections_write_platform_check";
+      // NAMED (Nov 7 2026, migration 176): BEFORE member_store_connections_write_platform_check (permission = 'read' OR
+      // platform = 'woocommerce') was enforced here. AFTER migration 176 drops it, so this fake no longer has it (P8).
     }
     if (name === "inventory_items") {
       const manual = r.source == null && r.store_connection_id == null && r.external_id == null;
@@ -486,7 +505,13 @@ const TRIPPED = [];
 function sealed() { return SS.sealCredentials({ consumer_key: CK, consumer_secret: CS }, CRYPT.encrypt); }
 function seed(db) {
   function conn(userId, platform, url, permission, status) {
-    const s = platform === "shopify" ? SS.sealCredentials({ access_token: "shpat_" + "a1b2c3d4".repeat(4) }, CRYPT.encrypt) : sealed();
+    // NAMED (Nov 7 2026, migration 176): BEFORE a Shopify row held a sealed pasted { access_token }. AFTER the OAuth shape:
+    // a sealed { refresh_token } in credentials_* and the sealed access token in access_*, with the read scopes granted.
+    const s = platform === "shopify" ? Object.assign(SS.sealCredentials({ refresh_token: "shprt_" + "a1b2c3d4".repeat(4) }, CRYPT.encrypt), (function () {
+      const a = CRYPT.encrypt("shpca_" + "a1b2c3d4".repeat(4));
+      return { access_ciphertext: a.ciphertext, access_iv: a.iv, access_auth_tag: a.authTag, access_expires_at: "2027-06-01T00:00:00.000Z", token_version: 0,
+        granted_scopes: "read_products,read_inventory,read_orders,read_locations" };
+    })()) : sealed();
     const r = Object.assign({ id: uuid(), user_id: userId, platform: platform, store_url: url, status: status || "connected", permission: permission, created_at: "2026-11-06T00:00:00.000Z" }, s);
     db.t.member_store_connections.push(r);
     return r;
@@ -536,7 +561,9 @@ function seedLog(db, conn, n, ageMs) {
 }
 
 /* ── the routes, run from server.js's own source ─────────────────────────── */
-const START = "/* ── Store connections, read-only (migration 163, lib/storeSync.js) ──────────";
+// NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE the section began "Store connections, read-only
+// (migration 163, ...)". AFTER it names migrations 163, 175 and 176; the same block, from here to END.
+const START = "/* ── Store connections (migrations 163, 175, 176; lib/storeSync.js) ──────────";
 const END = "// The SEO writer used to answer in JSON, which meant embedding a whole HTML";
 const SECTION = (function () {
   const a = FILES.server.indexOf(START), b = FILES.server.indexOf(END, a);
@@ -562,6 +589,7 @@ function mountRoutes(woo, db) {
     require: function (r) {
       if (r === "./lib/storeSync") return SS;
       if (r === "./lib/storeWrite") return SW;
+      if (r === "./lib/shopifyApi") return SAPI;
       if (r === "./lib/apiKeyCrypto") return { encrypt: function (p) { return CRYPT.encrypt(p); }, decrypt: function (x) { return CRYPT.decrypt(x); } };
       if (r === "./lib/guardedFetch") return Object.assign({}, GF, { guardedJsonRequest: woo.jsonRequest });
       return realRequire(r);
@@ -578,7 +606,7 @@ function mountRoutes(woo, db) {
 async function hit(m, key, req) {
   const r = m.routes[key];
   if (!r) return { status: 0, body: {}, err: new Error("no route " + key) };
-  const res = { statusCode: 200, body: undefined, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
+  const res = { statusCode: 200, body: undefined, set: function () { return this; }, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
   let err = null;
   try { await r.handler(Object.assign({ user: { id: USER }, body: {}, params: {}, query: {} }, req), res, function (e) { err = e || new Error("next"); }); }
   catch (e) { err = e; res.statusCode = 599; }
@@ -667,11 +695,19 @@ function loadPageScript(answers) {
     const perms = (list.body.connections || []).map(function (c) { return c.store + "=" + c.permission; }).sort();
     check("P9. the list names each connection's permission, and the note says changes happen only with approval",
       J(perms) === J([WOO_RO + "=read", WOO + "=read_write"]) && list.body.note === SS.MESSAGES.readWrite);
-    const shopRw = await db.from("member_store_connections").insert(Object.assign({ user_id: USER, platform: "shopify", store_url: SHOP, permission: "read_write" }, sealed())).select("id").single();
-    check("P8. the database refuses a Shopify connection with read_write (migration 175's CHECK), and Shopify connect saves \"read\"",
-      !!shopRw.error && /write_platform_check/.test(shopRw.error.message) &&
-      FILES.server.indexOf("var row = await saveStoreConnection(req.user.id, \"shopify\", domain, sealed, \"read\");") !== -1 &&
-      SS.permissionOf({ platform: "shopify", permission: "read_write" }) === "read");
+    /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE P8 held that the database refused a Shopify read_write
+       connection (175's write_platform_check) and that Shopify connect saved "read". AFTER migration 176 drops that CHECK:
+       Shopify changes are opt-in like WooCommerce's. Connect Shopify stores the permission the signed state asked for, and
+       a Shopify connection counts as read_write only when Shopify also granted write_products and write_inventory. */
+    const scopesAll = "read_products,read_inventory,read_orders,read_locations,write_products,write_inventory";
+    check("P8. migration 176 drops 175's Shopify CHECK; Connect Shopify stores the permission the state asked for; a Shopify connection is read_write only with both write scopes granted",
+      FILES.migration176.indexOf("DROP CONSTRAINT member_store_connections_write_platform_check;") !== -1 &&
+      FILES.server.indexOf("var permission = body.allow_changes === true ? \"read_write\" : \"read\";") !== -1 &&
+      FILES.server.indexOf("user_id: req.user.id, platform: \"shopify\", store_url: shop, status: \"connected\", permission: permission,") !== -1 &&
+      SS.permissionOf({ platform: "shopify", permission: "read_write", granted_scopes: scopesAll }) === "read_write" &&
+      SS.permissionOf({ platform: "shopify", permission: "read_write", granted_scopes: "read_products,read_inventory,read_orders,read_locations,write_products" }) === "read" &&
+      SS.permissionOf({ platform: "shopify", permission: "read", granted_scopes: scopesAll }) === "read" &&
+      SS.permissionOf({ platform: "shopify", permission: "read_write", granted_scopes: null }) === "read");
     check("P10. the permission cannot be raised by editing the state: a read state rewritten to read_write fails its signature",
       (function () {
         const st = SS.makeWooState(USER, WOO, Date.now(), SECRET_HEX, "read");
@@ -689,7 +725,10 @@ function loadPageScript(answers) {
     const s = setup();
     const out = await propose(s, s.f.mug.id, "price", "24");
     const prop = out.body.proposal || {};
-    const want = { connection_id: s.f.rw.id, item_id: s.f.mug.id, external_id: "product:101", external_parent_id: null, item_name: "Mug", field: "price", from: "19.99", to: "24.00", automatic: false };
+    // NAMED (Nov 7 2026, migration 176): BEFORE nine payload keys. AFTER the platform and the store's currency too (null until a sync
+    // reads it), so the Approvals card can name them; a Shopify payload adds its own ids (checkShopifyConnect holds those).
+    const want = { connection_id: s.f.rw.id, item_id: s.f.mug.id, external_id: "product:101", external_parent_id: null, item_name: "Mug", field: "price", from: "19.99", to: "24.00", automatic: false,
+      platform: "woocommerce", currency: null };
     check("X1. a price proposal files a pending update_store_item proposal, agent store, with exactly the decided payload",
       out.status === 201 && prop.status === "pending" && prop.action_type === "update_store_item" && prop.agent_type === "store" && J(prop.payload) === J(want), J(out.body).slice(0, 300));
     check("X1. its title is \"Change Mug price from 19.99 to 24.00\"", prop.title === "Change Mug price from 19.99 to 24.00", prop.title);
@@ -728,7 +767,10 @@ function loadPageScript(answers) {
     const foreign = await propose(s, s.f.foreign.id, "price", "24");
     check("X8. another member's item is not found, and nothing is read", foreign.status === 404 && s.woo.calls.length === n0 && s.db.t.agent_proposals.every(function (p) { return p.payload.item_id !== s.f.foreign.id; }));
     const shop = await propose(s, s.f.shopItem.id, "price", "30");
-    check("X9. a Shopify item is refused: Shopify stays read-only", shop.status === 409 && shop.body.code === "not_woocommerce" && s.woo.calls.length === n0);
+    // NAMED (Nov 7 2026, migration 176): BEFORE "a Shopify item is refused: Shopify stays read-only" (not_woocommerce). AFTER
+    // Shopify changes are allowed with permission, so an item on a READ-ONLY Shopify connection is refused like WooCommerce's.
+    check("X9. an item on a read-only Shopify connection is refused (read_only), with nothing read",
+      shop.status === 409 && shop.body.code === "read_only" && shop.body.error === M.readOnly && s.woo.calls.length === n0, J(shop.body));
     const old = await propose(s, s.f.teeOld.id, "price", "22");
     check("X11. a variation synced before 175 (no parent id) asks for a sync, with nothing read", old.status === 409 && old.body.code === "unaddressable" && s.woo.calls.length === n0);
     const tee = await propose(s, s.f.tee.id, "stock", 6);
@@ -873,8 +915,10 @@ function loadPageScript(answers) {
     const foreignRun = await runExec(sm, Object.assign({}, mp, { user_id: OTHER }));
     check("E16. a proposal is read only as its owner's: another member's id finds nothing to change", !foreignRun.ok && sm.woo.posts().length === 0);
     const shopRun = await runExec(sm, { id: uuid(), user_id: USER, payload: { connection_id: sm.f.shop.id, item_id: sm.f.shopItem.id, external_id: "variant:11", external_parent_id: null, item_name: "Wool Hat", field: "price", from: "25.00", to: "30.00", automatic: false } });
-    check("E18. a Shopify connection is refused by the executor itself: \"" + M.notWoo.slice(0, 40) + "...\", nothing read or written",
-      !shopRun.ok && shopRun.error === M.notWoo && sm.woo.calls.length === n2);
+    // NAMED (Nov 7 2026, migration 176): BEFORE any Shopify connection was refused (MESSAGES.notWoo, now gone). AFTER a
+    // read-only Shopify connection is refused by the executor itself with the read-only message.
+    check("E18. a read-only Shopify connection is refused by the executor itself: \"" + M.readOnly.slice(0, 40) + "...\", nothing read or written",
+      !shopRun.ok && shopRun.error === M.readOnly && sm.woo.calls.length === n2 && M.notWoo === undefined);
     const rangeRun = await runExec(sm, Object.assign({}, mp, { payload: Object.assign({}, mp.payload, { to: "1000000.01" }) }));
     check("E16. the executor checks the range again", !rangeRun.ok && rangeRun.error === M.price && sm.woo.calls.length === n2);
 
@@ -959,14 +1003,26 @@ function loadPageScript(answers) {
     check("S5. gateRules: update_store_item is an action type on the \"store\" channel",
       GR.ACTION_TYPES.indexOf("update_store_item") !== -1 && GR.CHANNELS.indexOf("store") !== -1 && GR.channelFor("update_store_item") === "store");
     const syncCalls = FILES.sync.match(/deps\.jsonRequest\(/g) || [];
-    check("S6. lib/storeSync.js stays GET-only: one deps.jsonRequest, method GET, no POST, PUT, PATCH or DELETE",
-      syncCalls.length === 1 && /deps\.jsonRequest\(url, \{ method: "GET",/.test(FILES.sync) && !/method:\s*"(POST|PUT|PATCH|DELETE)"/.test(FILES.sync) && !/\bfetch\(/.test(FILES.sync.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")));
+    /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "lib/storeSync.js stays GET-only: one deps.jsonRequest,
+       method GET, no POST, PUT, PATCH or DELETE". AFTER the same, and it holds no Shopify request either: the sync reads a
+       shop only through deps.shopifyReader (lib/shopifyApi.js's query-only reads). */
+    check("S6. lib/storeSync.js stays GET-only: one deps.jsonRequest, method GET, no POST, PUT, PATCH or DELETE, and no Shopify request of its own",
+      syncCalls.length === 1 && /deps\.jsonRequest\(url, \{ method: "GET",/.test(FILES.sync) && !/method:\s*"(POST|PUT|PATCH|DELETE)"/.test(FILES.sync) &&
+      !/\bfetch\(|graphql|X-Shopify/i.test(FILES.sync.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")));
     const writeCalls = FILES.write.match(/deps\.jsonRequest\(/g) || [];
     const execSrc = fnSource(FILES.write, "executeChange");
-    check("S6. lib/storeWrite.js writes with ONE deps.jsonRequest POST, called once in the executor, and names no Shopify API",
+    const shopifyWriteSrc = fnSource(FILES.write, "writeShopifyItem");
+    /* NAMED (Nov 7 2026, migration 176): BEFORE "lib/storeWrite.js writes with ONE deps.jsonRequest POST, called once in the
+       executor, and names no Shopify API". AFTER WooCommerce is still that one POST, called once; Shopify is written only
+       through lib/shopifyApi.js, writePrice or writeStock, each named once in writeShopifyItem, which the executor calls once
+       and which holds no loop; lib/storeWrite.js still names no Shopify host, Admin API path, header or mutation itself. */
+    check("S6. lib/storeWrite.js writes WooCommerce with ONE deps.jsonRequest POST and Shopify only through lib/shopifyApi.js's writePrice or writeStock, each called once by the executor, never in a loop, and names no Shopify API itself",
       writeCalls.length === 1 && /deps\.jsonRequest\(SS\.wooUrl\(conn\.store_url, path\), \{ method: "POST",/.test(FILES.write) &&
       (execSrc.match(/writeWooItem\(/g) || []).length === 1 && !/\b(for|while)\s*\(/.test(fnSource(FILES.write, "writeWooItem")) &&
-      !/myshopify|\/admin\/api\/|X-Shopify/.test(FILES.write) && !/method:\s*"(PUT|PATCH|DELETE)"/.test(FILES.write));
+      (execSrc.match(/writeShopifyItem\(/g) || []).length === 1 && !/\b(for|while)\s*\(/.test(shopifyWriteSrc) &&
+      (shopifyWriteSrc.match(/SAPI\.writePrice\(/g) || []).length === 1 && (shopifyWriteSrc.match(/SAPI\.writeStock\(/g) || []).length === 1 &&
+      (FILES.write.match(/SAPI\.write(Price|Stock)\(/g) || []).length === 2 &&
+      !/myshopify|\/admin\/api\/|X-Shopify|\bmutation\b/.test(FILES.write.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")) && !/method:\s*"(PUT|PATCH|DELETE)"/.test(FILES.write));
 
     // PUT /api/inventory/items/:id: the synced-row guard, run from server.js's own text
     const putAt = FILES.server.indexOf("app.put(\"/api/inventory/items/:id\"");
@@ -1037,9 +1093,15 @@ function loadPageScript(answers) {
       /permission/.test(connEntry.select || "") && /allowed BizForce to make changes you approve/.test(connEntry.what || "") && !/credentials/.test(connEntry.select || ""));
     check("M2. the account delete removes it before the store connections", YD.DELETE_ORDER.indexOf("store_change_log") !== -1 && YD.FINAL_DELETES.indexOf("member_store_connections") !== -1);
     const migFiles = fs.readdirSync(path.join(REPO, "supabase/migrations")).filter(function (f) { return /^\d+_/.test(f); });
-    check("R1. 175_store_changes.sql is the only migration numbered 175, and the highest (174 the last before it)",
+    /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "the only migration numbered 175, and the highest". AFTER
+       176_shopify_oauth.sql follows it, so the pin is "the only one numbered 175, every other one but 176 is lower, and 174
+       came before it"; "the highest" is checkShopifyConnect R1's, for 176. */
+    check("R1. 175_store_changes.sql is the only migration numbered 175, every one but 176_shopify_oauth.sql is lower (174 the last before it)",
       migFiles.filter(function (f) { return /^175_/.test(f); }).length === 1 && migFiles.indexOf("175_store_changes.sql") !== -1 &&
-      migFiles.every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
+      migFiles.filter(function (f) { return !/^176_shopify_oauth\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
+    check("M1b. migration 176 drops 175's Shopify CHECK and adds currency and location_name to store_change_log",
+      FILES.migration176.indexOf("ALTER TABLE public.member_store_connections\n  DROP CONSTRAINT member_store_connections_write_platform_check;") !== -1 &&
+      FILES.migration176.indexOf("ALTER TABLE public.store_change_log\n  ADD COLUMN IF NOT EXISTS currency text,\n  ADD COLUMN IF NOT EXISTS location_name text;") !== -1);
     const dormant = read("scripts/checkDormantRoutesDeleted.js"), surface = read("scripts/checkUnsubscribedSurface.js");
     check("M3. the three routes are in checkDormantRoutesDeleted ADDED, and propose and undo in checkUnsubscribedSurface's gated list",
       ["[\"post\", \"/api/store/changes/propose\"]", "[\"get\", \"/api/store/changes\"]", "[\"post\", \"/api/store/changes/:id/undo\"]"].every(function (s) { return dormant.indexOf(s) !== -1; }) &&
@@ -1051,7 +1113,11 @@ function loadPageScript(answers) {
   {
     const LP = compile(FILES.legal, "lib/legalPages.js", {});
     const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
-    const PRIVACY = "If you connect a Shopify or WooCommerce store, BizForce stores the store's address and the key you made for it, encrypted, and reads from the store only your products (name, SKU, price, cost where the store has one), your stock levels and summaries of your orders (each order's number, date, total, currency, and its items as SKU and quantity), never any customer's name, email, address or phone number; BizForce changes a product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store, and it keeps a record of each change (the item, the old and new value, and when). What it reads is used only for your own agents, the key is never shown back to you or exported, and the key, the products, the stock, the order summaries and the record of changes are deleted when you disconnect the store or delete your account.";
+    /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE the 175 sentence ("the key you made for it, encrypted", "the
+       key is never shown back", "deleted when you disconnect the store or delete your account"). AFTER the owner's sentence
+       for 176, word for word: the access given (WooCommerce's key or Shopify's approved access), the currency and location
+       names, and deletion on uninstall too. */
+    const PRIVACY = "If you connect a Shopify or WooCommerce store, BizForce stores the store's address and the access it is given, encrypted (for WooCommerce, the key you made for it; for Shopify, the access you approve when you connect), and reads from the store only your products (name, SKU, price, cost where the store has one), your stock levels, your store's currency and location names, and summaries of your orders (each order's number, date, total, currency, and its items as SKU and quantity), never any customer's name, email, address or phone number; BizForce changes a product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store, and it keeps a record of each change (the item, the old and new value, and when). What it reads is used only for your own agents, the store's key or access is never shown back to you or exported, and it, the products, the stock, the order summaries and the record of changes are deleted when you disconnect the store, uninstall BizForce from Shopify, or delete your account.";
     check("L1. the privacy sentence is word for word the decided one, the record of changes in the deletion list", LP.STORE_PRIVACY_SENTENCE === PRIVACY, LP.STORE_PRIVACY_SENTENCE);
     check("L1. privacy.html carries it once, as built", FILES.privacy.split(esc(PRIVACY)).length === 2);
     const TERMS = "If you let BizForce change your store, you are responsible for the prices and stock levels you approve.";
@@ -1061,10 +1127,15 @@ function loadPageScript(answers) {
       /^<\/p>\s*<p>$/.test(FILES.terms.slice(li + esc(LP.CARD_LEADS_TERMS_SENTENCE).length, ti)));
     const LINE = "BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.";
     check("L3. the Store page says the decided line, and no longer \"BizForce only reads your store.\"", FILES.page.indexOf(LINE) !== -1 && FILES.page.indexOf("BizForce only reads your store.") === -1);
-    check("L3. it has the opt-in box, unticked, shown for WooCommerce only, with the decided words",
+    /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE one opt-in box, shown for WooCommerce only. AFTER each platform
+       has its own box with the same words, unticked: WooCommerce's inside its section (hidden unless WooCommerce is chosen, and
+       cleared when another is), and Shopify's sent as allow_changes to /api/store/shopify/start. */
+    check("L3. each platform has its own opt-in box, unticked, with the decided words, and each sends allow_changes exactly true or false",
       FILES.page.indexOf("<input type=\"checkbox\" id=\"storeAllowChanges\" /> Let BizForce make changes I approve (prices and stock)</label>") !== -1 &&
-      !/id="storeAllowChanges"[^>]*checked/.test(FILES.page) && FILES.ui.indexOf("byId(\"storeAllowField\").hidden = p !== \"woocommerce\";") !== -1 &&
-      FILES.ui.indexOf("if (platform === \"woocommerce\") body.allow_changes = byId(\"storeAllowChanges\").checked === true;") !== -1);
+      FILES.page.indexOf("<input type=\"checkbox\" id=\"storeShopifyAllow\" /> Let BizForce make changes I approve (prices and stock)</label>") !== -1 &&
+      !/id="(storeAllowChanges|storeShopifyAllow)"[^>]*checked/.test(FILES.page) && FILES.ui.indexOf("byId(\"storeWooSection\").hidden = p !== \"woocommerce\";") !== -1 &&
+      FILES.ui.indexOf("if (p !== \"woocommerce\") byId(\"storeAllowChanges\").checked = false;") !== -1 &&
+      FILES.ui.indexOf("allow_changes: byId(\"storeAllowChanges\").checked === true") !== -1 && FILES.ui.indexOf("allow_changes: byId(\"storeShopifyAllow\").checked === true") !== -1);
     check("L3. each connection is labelled \"Read only\" or \"Changes allowed with your approval\"",
       FILES.ui.indexOf("var PERMISSION_LABEL = { read: \"Read only\", read_write: \"Changes allowed with your approval\" };") !== -1);
     check("L3. a Store changes section, and the page script loaded before store-connect.js",

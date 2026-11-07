@@ -246,7 +246,12 @@ const EXPECTED_GATED = [
   // (requireActiveSubscription; 30 an hour), and approving one is G3-gated on the approve route
   // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS update_store_item). Reading the record of changes stays login-only: a member can
   // always see what BizForce changed (checkStoreChanges).
-  "post /api/store/changes/propose", "post /api/store/changes/:id/undo"
+  "post /api/store/changes/propose", "post /api/store/changes/:id/undo",
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176; gated 100 -> 102): BEFORE a Shopify shop connected by a pasted token
+  // through POST /api/store/connections. AFTER Connect Shopify starts (a single-use state stored) and finishes (the HMAC and
+  // timestamp checked, the state consumed, the code exchanged, both tokens sealed, the row stored) behind a subscription, as
+  // WooCommerce's connect does; the list, the location routes and disconnect stay login-only (checkShopifyConnect).
+  "post /api/store/shopify/start", "post /api/store/shopify/finish"
 ];
 
 const EXPECTED_ADMIN = [
@@ -437,7 +442,13 @@ const EXPECTED_OWN = [
   // member marks one of their own leads read or archived (PATCH) and deletes one of their own leads (DELETE); both are
   // .eq("user_id", req.user.id), the rows are the member's own data, served to no one else, and stay theirs to manage
   // subscribed or not (checkCardLeads). GET /api/digital-cards/:id/leads is a login-only read and needs no entry here.
-  "patch /api/card-leads/:id", "delete /api/card-leads/:id"
+  "patch /api/card-leads/:id", "delete /api/card-leads/:id",
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176; effectful login-only 158 -> 159): BEFORE no location choice. AFTER a
+  // member sets where Shopify stock changes apply on their own connection (location_id and location_name, one of the shop's
+  // active locations read live), .eq("user_id", req.user.id) and platform shopify; the row is theirs, served to no one else,
+  // and changes nothing in the store. GET /api/store/connections/:id/locations is a login-only live read (it may mark the
+  // member's own connection needs_reconnect, as Sync now does) and needs no entry here (checkShopifyConnect).
+  "put /api/store/connections/:id/location"
 ];
 
 /* Unauthenticated routes that write. */
@@ -464,7 +475,9 @@ const EXPECTED_UNAUTH_WRITES = {
   // NAMED (Nov 3 2026, store connections, migration 163; 17 -> 18): BEFORE no store callback. AFTER a member's own
   // WooCommerce store posts the Read key it made here; it is stored only for the member an HMAC-signed state, at most
   // 30 minutes old, names, only with permission "read", after one GET the store accepts (checkStoreConnections W3-W8).
-  "post /api/store/woocommerce/callback":   "a member's read-only WooCommerce key, from a signed state (migration 163)",
+  // NAMED (Nov 7 2026, migration 176): BEFORE "a member's read-only WooCommerce key". AFTER since migration 175 the key is read,
+  // or read_write when the member allowed changes and the signed state asked for exactly that; the entry says so.
+  "post /api/store/woocommerce/callback":   "a member's WooCommerce key, read or read_write exactly as the signed state asked (migrations 163, 175)",
   // NAMED (Nov 6 2026, card upgrades C1, migration 171; 18 -> 21): BEFORE no card page or tap was counted. AFTER a GET of a
   // card page adds one to that card's daily views (and qr_views for ?via=qr), and a tap on its Call, Email, Save Contact or
   // Support adds one to that counter, through bump_card_count only. Nothing about the visitor is written; HEAD, no
@@ -477,7 +490,12 @@ const EXPECTED_UNAUTH_WRITES = {
   // lead (name, email or phone, message, the server's consent sentence) on a card whose owner turned the form on and is
   // public, behind a form token, a honeypot, per-card caps, a dedupe and an IP limiter; at most one notice an hour to
   // the owner, with no lead details. Nothing about the visitor's device is written (checkCardLeads).
-  "post /api/cards/lead":                   "one lead on a card whose owner turned the form on, consent recorded (migration 172)"
+  "post /api/cards/lead":                   "one lead on a card whose owner turned the form on, consent recorded (migration 172)",
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176; 22 -> 23): BEFORE no Shopify webhook. AFTER Shopify posts app/uninstalled
+  // and the three privacy topics here, raw body, HMAC-SHA256 verified under the app's secret (401 otherwise, 503 unconfigured);
+  // each delivery's id is recorded once in shopify_webhook_events (kept 30 days), and uninstall or shop/redact deletes that
+  // shop's connection and everything read from it, as Disconnect does. Nothing else is written (checkShopifyConnect).
+  "post /api/webhooks/shopify":             "Shopify webhook, HMAC-verified: a receipt, and on uninstall or shop/redact the shop's connection deleted (migration 176)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The

@@ -1020,7 +1020,9 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   const escH = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const nextTo = h => { const a = h.indexOf(escH(LP.MEDIA_PRIVACY_SENTENCE)), b = h.indexOf(escH(SENT)); return a !== -1 && b > a && b - a - escH(LP.MEDIA_PRIVACY_SENTENCE).length < 20; };
   check("G2. the Privacy Policy carries it directly after the Media Library sentence, as built and on disk", nextTo(builtPages["privacy.html"]) && nextTo(fe("privacy.html") || ""));
-  check("G3. TERMS_VERSION and TERMS_UPDATED are this change's date, Nov 6 2026", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06", this change's date. AFTER "2026-11-07", the
+  // version the Shopify privacy sentence set; the pin follows the latest change.
+  check("G3. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 7 2026 (Shopify on OAuth; this change set Nov 6)", LEGAL.TERMS_VERSION === "2026-11-07" && LEGAL.TERMS_UPDATED === "Last updated November 7, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the editor tip named the search switch and the card-view
   // tip said the owner never learns who you are. AFTER both still tell of the counts, and say truthfully that the owner
@@ -1043,7 +1045,7 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // checkStoreChanges R1; it is allowed above 171 by name too.
   check("R1. 171_card_counts.sql is the only migration numbered 171; the highest is 175 (checkStoreChanges R1), 170 the last before it",
     migFiles.filter(f => /^171_/.test(f)).length === 1 && migFiles.indexOf("171_card_counts.sql") !== -1 &&
-    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
+    migFiles.every(f => f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || Number(f.split("_")[0]) <= 171) && migFiles.some(f => /^170_/.test(f)));
   check("R2. its header says the owner applied it by hand on Nov 6, 2026, and the rest is the SQL as run, exactly", ALL[MIG] === HEADER + "\n\n" + SQL_AS_RUN, ALL[MIG].length + " vs " + (HEADER.length + 2 + SQL_AS_RUN.length));
   check("R3. RLS on, anon and authenticated revoked, the function SECURITY DEFINER with a fixed search_path, executable by service_role only",
     /ALTER TABLE public\.card_view_counts ENABLE ROW LEVEL SECURITY;/.test(ALL[MIG]) && /REVOKE ALL ON FUNCTION public\.bump_card_count\(uuid, text\) FROM PUBLIC, anon, authenticated;/.test(ALL[MIG]) &&

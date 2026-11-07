@@ -626,7 +626,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     // NAMED (Nov 6 2026, Outlook sign-in, migration 173): the allowlist adds 173_mailbox_microsoft.sql; "the highest" is checkMailboxOutlook R1's.
     // NAMED (Nov 6 2026, Google Wallet, migration 174): the allowlist adds 174_card_wallet_count.sql; "the highest" is checkGoogleWallet R1's.
     // NAMED (Nov 6 2026, store changes, migration 175): the allowlist adds 175_store_changes.sql; "the highest" is checkStoreChanges R1's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): the allowlist adds 176_shopify_oauth.sql; "the highest" is checkShopifyConnect R1's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -1352,7 +1353,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   // images privacy sentence set.
   // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
   // card visits privacy sentence set.
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-06 (card visits; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-06", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-07 (Shopify on OAuth; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

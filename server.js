@@ -1359,6 +1359,79 @@ app.post(
   }
 );
 
+/* ── Shopify webhooks (migration 176, lib/shopifyAuth.js) ────────────────
+   app/uninstalled, and the three privacy (compliance) topics every public
+   Shopify app must answer. Registered HERE, above app.use(express.json(...)),
+   for the reason the Resend route gives: X-Shopify-Hmac-Sha256 is a base64
+   HMAC-SHA256 under the app's client secret over the RAW body, so req.body
+   must stay the bytes Shopify sent. express.raw takes any content type, so a
+   parsed body can never reach the check.
+
+   503 when the app is not configured; 401 for a missing or wrong HMAC
+   (compared in constant time); then every answer is 200, quickly, with no
+   slow work. Each delivery's X-Shopify-Webhook-Id is inserted into
+   shopify_webhook_events first: a delivery already processed (processed_at
+   set) is a duplicate and does nothing; one recorded but not processed (a
+   failure last time) is processed again, which is safe because each action
+   is idempotent.
+     app/uninstalled, shop/redact  the shop's connection is removed exactly as
+                                   the disconnect route removes it (lib/storeSync.js
+                                   deleteConnectionData): its synced items, order
+                                   summaries and change record, then the row.
+     customers/data_request,       recorded only. BizForce reads no customer
+     customers/redact              from a shop (order summaries hold no name,
+                                   email, address or phone; lib/storeSync.js
+                                   summaryOf), so there is nothing to send or erase.
+   The body is never logged or stored. Receipts are deleted after 30 days
+   (lib/shopifyAuth.js webhookEventsPurgeTick, the 04:45 UTC chain). */
+async function removeShopifyShop(shop) {
+  var rows = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "shopify").eq("store_url", shop);
+  if (rows.error) throw rows.error;
+  var removed = 0;
+  for (var i = 0; i < (rows.data || []).length; i++) {
+    var gone = await require("./lib/storeSync").deleteConnectionData(supabase, rows.data[i].user_id, rows.data[i].id);
+    if (gone.removed) removed++;
+  }
+  return removed;
+}
+
+app.post(
+  "/api/webhooks/shopify",
+  express.raw({ type: function () { return true; }, limit: "1mb" }),
+  async function (req, res) {
+    var sa = require("./lib/shopifyAuth");
+    var config = sa.configured(process.env);
+    if (!config) return res.status(503).json({ error: sa.MESSAGES.notConfigured });
+    var raw = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!raw || !sa.webhookHmacValid(raw, req.get("X-Shopify-Hmac-Sha256") || "", config.clientSecret)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      var topic = String(req.get("X-Shopify-Topic") || "");
+      var shop = require("./lib/storeSync").normalizeShopifyDomain(String(req.get("X-Shopify-Shop-Domain") || ""));
+      var webhookId = String(req.get("X-Shopify-Webhook-Id") || "");
+      if (sa.WEBHOOK_TOPICS.indexOf(topic) === -1 || !shop || webhookId.length < 1 || webhookId.length > 200) {
+        return res.status(200).json({ received: true, ignored: true });
+      }
+      var recorded = await supabase.from("shopify_webhook_events").insert({ webhook_id: webhookId, topic: topic, shop_domain: shop }).select("id");
+      if (recorded.error) {
+        if (recorded.error.code !== "23505") throw recorded.error;
+        var before = await supabase.from("shopify_webhook_events").select("processed_at").eq("webhook_id", webhookId).maybeSingle();
+        if (before.error) throw before.error;
+        if (before.data && before.data.processed_at) return res.status(200).json({ received: true, duplicate: true });
+      }
+      if (topic === "app/uninstalled" || topic === "shop/redact") await removeShopifyShop(shop);
+      var processed = await supabase.from("shopify_webhook_events").update({ processed_at: new Date().toISOString() }).eq("webhook_id", webhookId);
+      if (processed.error) throw processed.error;
+      return res.status(200).json({ received: true });
+    } catch (error) {
+      // 500, so Shopify delivers it again; the receipt has no processed_at, so the redelivery is processed.
+      console.error("[webhooks/shopify] Error:", (error && error.code) || "error");
+      return res.status(500).json({ error: "Webhook handler failed" });
+    }
+  }
+);
+
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
@@ -12256,8 +12329,8 @@ const PROPOSAL_EXECUTORS = {
   // runs at call time.
   send_mailbox_reply: executeSendMailboxReply,
 
-  // Changes one WooCommerce item's regular price or stock level, from an approved
-  // POST /api/store/changes/propose (migration 175, lib/storeWrite.js), after a
+  // Changes one WooCommerce or Shopify item's price or stock level, from an approved
+  // POST /api/store/changes/propose (migrations 175 and 176, lib/storeWrite.js), after a
   // live compare-and-set, with one write and no retry. Always through approval:
   // no automation runs it. Defined further down the file; it only runs at call time.
   update_store_item: executeUpdateStoreItem,
@@ -12566,8 +12639,8 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
 /* The action types whose execution puts something in front of strangers. A
    calendar event is the account's own record and stays free. An email sequence
    is enrolled to be mailed to the owner's contacts. A social post is published
-   on Bluesky or Mastodon. A store change (migration 175) changes what shoppers
-   see in the member's WooCommerce store. */
+   on Bluesky or Mastodon. A store change (migrations 175 and 176) changes what
+   shoppers see in the member's WooCommerce or Shopify store. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
   "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
   "update_store_item"];
@@ -13364,30 +13437,41 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
     }
   });
 
-/* ── Store connections, read-only (migration 163, lib/storeSync.js) ──────────
-   POST   /api/store/connections               connect: Shopify (domain and an
-                                               Admin API token, verified by one
-                                               read call) or WooCommerce (the
-                                               store's address; answers the
-                                               store's own authorization link)
+/* ── Store connections (migrations 163, 175, 176; lib/storeSync.js) ──────────
+   POST   /api/store/connections               connect WooCommerce (the store's
+                                               address; answers the store's own
+                                               authorization link). Shopify
+                                               answers 400: Connect Shopify.
    POST   /api/store/woocommerce/callback      the key WooCommerce makes when
-                                               the member approves Read access
+                                               the member approves its access
+   POST   /api/store/shopify/start             Connect Shopify (migration 176):
+                                               a one-time state, then Shopify's
+                                               own authorization page
+   POST   /api/store/shopify/finish            the callback's query, from the
+                                               Store Agent page: HMAC, time,
+                                               shop, state, code exchange
    GET    /api/store/connections               each connection, safe fields only
+   GET    /api/store/connections/:id/locations a Shopify shop's locations, live
+   PUT    /api/store/connections/:id/location  the location stock changes apply at
    DELETE /api/store/connections/:id           disconnect: deletes the row and
                                                everything synced from it
    POST   /api/store/connections/:id/sync      sync now
+   (POST /api/webhooks/shopify, Shopify's notifications, is near the top of
+   this file: it needs the raw body.)
 
-   lib/storeSync.js sends GET to the store and nothing else; no route here
-   calls a store directly. The only writes to a store are the approved
-   WooCommerce price and stock changes below (Store changes, migration 175,
-   lib/storeWrite.js), on a connection the member made with changes allowed;
-   Shopify is read-only. Credentials are sealed with
-   lib/apiKeyCrypto.js BEFORE the store is contacted, stored only after the
-   store accepts them, and never returned, logged or exported.
+   lib/storeSync.js sends GET to a WooCommerce store and nothing else, and
+   reads a Shopify shop through lib/shopifyApi.js's GraphQL queries; no route
+   here calls a store directly. The only writes to a store are the approved
+   price and stock changes below (Store changes, migrations 175 and 176,
+   lib/storeWrite.js), on a connection the member made with changes allowed.
+   Credentials are sealed with lib/apiKeyCrypto.js BEFORE the store is asked
+   anything with them, stored only after the store accepts them, and never
+   returned, logged or exported.
 
-   Connect and sync now need an active subscription (connect 5 an hour, sync
-   now 6 a day). The list and disconnect need only a login, as Bluesky's do: a
-   member can always see what is connected and take their key back. */
+   Connect and sync now need an active subscription (WooCommerce connect 5 an
+   hour, Connect Shopify 10 an hour, sync now 6 a day). The list and disconnect
+   need only a login, as Bluesky's do: a member can always see what is
+   connected and take their key back. */
 const STORE_API_BASE = process.env.RAILWAY_PUBLIC_DOMAIN
   ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN
   : "https://dynamic-prosperity-production-5382.up.railway.app";
@@ -13403,11 +13487,30 @@ function storeSyncDeps() {
     sleep: function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); },
     encrypt: crypt.encrypt,
     decrypt: crypt.decrypt,
+    // Shopify (migration 176): the GraphQL reader the sync calls, and the app's client id and secret for a token refresh.
+    shopifyReader: require("./lib/shopifyApi"),
+    shopifyConfig: function () { return require("./lib/shopifyAuth").configured(process.env); },
     userPlan: async function (userId) {
       try { return { plan: await getUserPlan(userId), error: null }; } catch (planErr) { return { plan: null, error: planErr }; }
     }
   };
 }
+
+/* Where Shopify sends the browser back: the Store Agent page, which POSTs the
+   query to /api/store/shopify/finish as the signed-in member. Also the app URL. */
+function shopifyRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/store-agent.html";
+}
+
+/* Per account: ten Connect Shopify steps an hour, start and finish together. */
+const shopifyConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "shopify-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many Shopify connection attempts. Try again in an hour. Nothing was saved.", reason: "rate_limited", saved: false }
+});
 
 const storeConnectLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -13433,8 +13536,9 @@ const storeCallbackLimiter = rateLimit({
   message: { error: "Too many requests.", reason: "rate_limited" }
 });
 
-/* permission (migration 175): "read", or "read_write" only for a WooCommerce key
-   the store made with exactly that permission. Shopify is always "read". */
+/* A WooCommerce connection (migration 175): "read", or "read_write" only for a
+   key the store made with exactly that permission. A Shopify connection is
+   stored by /api/store/shopify/finish, below. */
 async function saveStoreConnection(userId, platform, storeUrl, sealed, permission) {
   var stamp = nowIso();
   var saved = await supabase
@@ -13444,34 +13548,26 @@ async function saveStoreConnection(userId, platform, storeUrl, sealed, permissio
       permission: platform === "woocommerce" && permission === "read_write" ? "read_write" : "read",
       last_error_code: null, last_error_at: null, updated_at: stamp
     }, sealed), { onConflict: "user_id,platform,store_url" })
-    .select("id, platform, store_url, status, permission, created_at, last_sync_at, last_error_code")
+    .select(STORE_STATUS_COLUMNS)
     .single();
   if (saved.error) throw saved.error;
   return saved.data;
 }
+// What lib/storeSync.js statusOf reads: never a credential or a token.
+const STORE_STATUS_COLUMNS = "id, platform, store_url, status, permission, granted_scopes, currency, location_id, location_name, created_at, last_sync_at, last_error_code";
 
 app.post("/api/store/connections", requireAuth, requireActiveSubscription, storeConnectLimiter,
   async function (req, res, next) {
     try {
       var ss = require("./lib/storeSync");
       var body = req.body || {};
+      /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE a Shopify
+         domain and a pasted shpat_ Admin API token were verified and stored
+         here. AFTER merchants can no longer make admin custom apps, the pasted
+         token is gone, and a Shopify shop connects only through Connect Shopify
+         (/api/store/shopify/start and /finish). */
       if (body.platform === "shopify") {
-        var domain = ss.normalizeShopifyDomain(body.store_url);
-        if (!domain) return res.status(400).json({ error: ss.MESSAGES.shopifyDomain, code: "shopify_domain", field: "store_url", saved: false });
-        var token = ss.checkShopifyToken(body.access_token);
-        if (!token) return res.status(400).json({ error: ss.MESSAGES.shopifyToken, code: "shopify_token", field: "access_token", saved: false });
-        // Sealed first: a server that cannot encrypt it never sends it to Shopify.
-        var sealed;
-        try { sealed = ss.sealCredentials({ access_token: token }, require("./lib/apiKeyCrypto").encrypt); } catch (cryptErr) {
-          return res.status(503).json({ error: ss.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
-        }
-        var verified = await ss.verifyShopify(storeSyncDeps(), domain, token);
-        token = null;
-        if (!verified.ok) {
-          return res.status(verified.code === "store_unreachable" ? 503 : 400).json({ error: verified.error, code: verified.code, saved: false });
-        }
-        var row = await saveStoreConnection(req.user.id, "shopify", domain, sealed, "read");
-        return res.json({ connection: ss.statusOf(row), saved: true, note: ss.MESSAGES.readOnly });
+        return res.status(400).json({ error: require("./lib/shopifyAuth").MESSAGES.useConnect, code: "use_connect_shopify", saved: false });
       }
       if (body.platform === "woocommerce") {
         var storeUrl = ss.normalizeWooUrl(body.store_url);
@@ -13528,18 +13624,245 @@ app.post("/api/store/woocommerce/callback", storeCallbackLimiter, async function
   }
 });
 
+/* ── Connect Shopify (migration 176, lib/shopifyAuth.js, lib/shopifyApi.js) ──
+   start: a one-time state (only its sha256 stored, in oauth_states, purpose
+   store_shopify, with flow_context { shop, permission }, for 10 minutes), and
+   Shopify's own authorization page on the member's shop, asking for the read
+   scopes, plus write_products and write_inventory only when allow_changes is
+   exactly true. A shop another member has connected is refused (the unique
+   index member_store_connections_shopify_shop_key backs it).
+   finish: the callback's query as Shopify sent it. In this order, each
+   failing with the same answer and no reason: the HMAC (constant time), the
+   timestamp (within 10 minutes), the shop (normalized and the one the state
+   was made for), the state (consumed by one conditional update: this member,
+   this purpose, not consumed, not expired). Then the code exchange (an
+   expiring offline token: refresh_token and expires_in must be there), the
+   scopes (every one asked for must be granted; extras are stored, never
+   used), both tokens SEALED before any GraphQL call, the shop's currency and
+   locations read, and the row stored. */
+app.post("/api/store/shopify/start", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var sa = require("./lib/shopifyAuth");
+      var ss = require("./lib/storeSync");
+      var config = sa.configured(process.env);
+      if (!config) return res.status(503).json({ error: sa.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var body = req.body || {};
+      var shop = ss.normalizeShopifyDomain(body.shop);
+      if (!shop) return res.status(400).json({ error: ss.MESSAGES.shopifyDomain, code: "shopify_domain", field: "shop", saved: false });
+      if (body.allow_changes !== undefined && typeof body.allow_changes !== "boolean") {
+        return res.status(400).json({ error: "allow_changes must be true or false.", code: "allow_changes", field: "allow_changes", saved: false });
+      }
+      if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: sa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      var permission = body.allow_changes === true ? "read_write" : "read";
+      // One shop, one member.
+      var held = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "shopify").eq("store_url", shop);
+      if (held.error) throw held.error;
+      if ((held.data || []).some(function (r) { return r.user_id !== req.user.id; })) {
+        return res.status(409).json({ error: sa.MESSAGES.takenByOther, code: "shop_taken", saved: false });
+      }
+      var nowMs = Date.now();
+      // Tidy first: this member's Shopify states older than a day. The daily purge removes everyone's.
+      var tidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", sa.PURPOSE)
+        .lt("created_at", new Date(nowMs - 24 * 60 * 60 * 1000).toISOString());
+      if (tidied.error) throw tidied.error;
+      var state = sa.newState();
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:      req.user.id,
+        purpose:      sa.PURPOSE,
+        state_hash:   sa.stateHash(state),
+        flow_context: { shop: shop, permission: permission },
+        expires_at:   new Date(nowMs + sa.STATE_TTL_MS).toISOString(),
+        created_at:   new Date(nowMs).toISOString()
+      });
+      if (stored.error) throw stored.error;
+      var url = sa.authorizeUrl(shop, config.clientId, permission, shopifyRedirectUri(), state);
+      state = null;
+      return res.json({ authorize_url: url, permission: permission, saved: false });
+    } catch (error) {
+      console.error("[store/shopify/start] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+app.post("/api/store/shopify/finish", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var sa = require("./lib/shopifyAuth");
+      var ss = require("./lib/storeSync");
+      var api = require("./lib/shopifyApi");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = sa.configured(process.env);
+      if (!config) return res.status(503).json({ error: sa.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var invalid = function () { return res.status(400).json({ error: sa.MESSAGES.stateInvalid, code: "state_invalid", saved: false }); };
+      var shape = sa.finishShape(req.body);
+      if (!shape.ok) return invalid();
+      var params = shape.params;
+      if (!sa.callbackHmacValid(params, config.clientSecret)) return invalid();
+      var nowMs = Date.now();
+      if (!sa.timestampFresh(params.timestamp, nowMs)) return invalid();
+      var shop = ss.normalizeShopifyDomain(params.shop);
+      if (!shop || shop !== params.shop) return invalid();
+      var stampNow = new Date(nowMs).toISOString();
+      var pending = await supabase.from("oauth_states").select("flow_context")
+        .eq("state_hash", sa.stateHash(params.state)).eq("user_id", req.user.id).eq("purpose", sa.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", stampNow).maybeSingle();
+      if (pending.error) throw pending.error;
+      var context = pending.data && pending.data.flow_context;
+      if (!context || context.shop !== shop || ss.PERMISSIONS.indexOf(context.permission) === -1) return invalid();
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired.
+      var consumed = await supabase.from("oauth_states").update({ consumed_at: stampNow })
+        .eq("state_hash", sa.stateHash(params.state)).eq("user_id", req.user.id).eq("purpose", sa.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", stampNow).select("id");
+      if (consumed.error) throw consumed.error;
+      if (!(consumed.data || []).length) return invalid();
+      var permission = context.permission;
+
+      var deps = storeSyncDeps();
+      var grant;
+      try {
+        grant = await sa.exchangeCode(config, shop, params.code, deps.jsonRequest);
+      } catch (exchangeErr) {
+        if (exchangeErr && exchangeErr.kind === "rejected") return invalid();
+        if (exchangeErr && exchangeErr.kind === "no_access") return res.status(422).json({ error: sa.MESSAGES.scopesMissing, code: "no_access", saved: false });
+        return res.status(502).json({ error: sa.MESSAGES.unreachable, code: "unreachable", saved: false });
+      } finally {
+        params.code = null;
+      }
+      if (!sa.grantCovers(grant.scopes, sa.scopesFor(permission))) {
+        grant = null;
+        return res.status(422).json({ error: sa.MESSAGES.scopesMissing, code: "scopes_missing", saved: false });
+      }
+      // Sealed first: both tokens are encrypted before Shopify's GraphQL API is asked anything.
+      var sealedRefresh, sealedAccess;
+      try {
+        sealedRefresh = ss.sealCredentials({ refresh_token: grant.refreshToken }, crypt.encrypt);
+        sealedAccess = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        grant = null;
+        return res.status(503).json({ error: sa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var expiries = sa.expiriesFor(grant, Date.now());
+      var grantedScopes = grant.scopes.join(",").slice(0, 500);
+      grant = null;
+      var row = Object.assign({
+        user_id: req.user.id, platform: "shopify", store_url: shop, status: "connected", permission: permission,
+        granted_scopes: /^[a-z_,]*$/.test(grantedScopes) ? grantedScopes : null,
+        access_ciphertext: sealedAccess.ciphertext, access_iv: sealedAccess.iv, access_auth_tag: sealedAccess.authTag,
+        access_expires_at: expiries.access_expires_at, refresh_expires_at: expiries.refresh_expires_at, token_version: 0
+      }, sealedRefresh);
+      var info;
+      try {
+        // A fresh token: this read never refreshes it (the row is not stored yet, so a refresh could not be saved).
+        var firstRead = api.session(Object.assign({ id: null }, row));
+        firstRead.refreshed = true;
+        info = await api.shopInfo(deps, firstRead);
+      } catch (readErr) {
+        return res.status(502).json({ error: sa.MESSAGES.unreachable, code: "unreachable", saved: false });
+      }
+      // The location stock changes apply at: the only one, or the one chosen before if it is still active.
+      var previous = await supabase.from("member_store_connections").select("location_id").eq("user_id", req.user.id)
+        .eq("platform", "shopify").eq("store_url", shop).maybeSingle();
+      if (previous.error) throw previous.error;
+      var kept = previous.data && previous.data.location_id ? info.locations.filter(function (l) { return l.id === previous.data.location_id; })[0] : null;
+      var chosen = info.locations.length === 1 ? info.locations[0] : kept || null;
+      var stamp = nowIso();
+      Object.assign(row, {
+        currency: info.currency, location_id: chosen ? chosen.id : null, location_name: chosen ? chosen.name : null,
+        last_error_code: null, last_error_at: null, updated_at: stamp
+      });
+      var saved = await supabase.from("member_store_connections").upsert(row, { onConflict: "user_id,platform,store_url" })
+        .select(STORE_STATUS_COLUMNS).single();
+      if (saved.error) {
+        if (saved.error.code === "23505") return res.status(409).json({ error: sa.MESSAGES.takenByOther, code: "shop_taken", saved: false });
+        throw saved.error;
+      }
+      return res.json({ saved: true, connection: ss.statusOf(saved.data), locations: info.locations.length,
+        note: permission === "read_write" ? ss.MESSAGES.readWrite : ss.MESSAGES.readOnly });
+    } catch (error) {
+      console.error("[store/shopify/finish] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
 app.get("/api/store/connections", requireAuth, async function (req, res, next) {
   try {
     var read = await supabase
       .from("member_store_connections")
-      .select("id, platform, store_url, status, permission, created_at, last_sync_at, last_error_code")
+      .select(STORE_STATUS_COLUMNS)
       .eq("user_id", req.user.id)
       .order("created_at", { ascending: true });
     if (read.error) throw read.error;
     var ss = require("./lib/storeSync");
     var shownConnections = (read.data || []).map(ss.statusOf);
     var anyWritable = shownConnections.some(function (c) { return c.permission === "read_write"; });
-    return res.json({ connections: shownConnections, note: ss.noteFor(anyWritable ? "read_write" : "read") });
+    return res.json({ connections: shownConnections, note: ss.noteFor(anyWritable ? "read_write" : "read"),
+      shopify_available: require("./lib/shopifyAuth").configured(process.env) !== null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The member's own connected Shopify connection, for the location routes, or an answer already sent. */
+async function ownShopifyConnection(req, res) {
+  if (!isValidUuid(req.params.id)) { res.status(404).json({ error: "Connection not found" }); return null; }
+  var read = await supabase.from("member_store_connections").select(require("./lib/shopifyApi").CONNECTION_COLUMNS)
+    .eq("id", req.params.id).eq("user_id", req.user.id).maybeSingle();
+  if (read.error) throw read.error;
+  if (!read.data) { res.status(404).json({ error: "Connection not found" }); return null; }
+  if (read.data.platform !== "shopify") { res.status(409).json({ error: "Only a Shopify store has locations to choose.", code: "not_shopify" }); return null; }
+  if (read.data.status !== "connected") { res.status(409).json({ error: "This store needs connecting again before it can be read.", code: "needs_reconnect" }); return null; }
+  return read.data;
+}
+
+/* The shop's active locations, read live; a refused token marks needs_reconnect. */
+async function liveShopifyLocations(conn, res) {
+  var api = require("./lib/shopifyApi");
+  try {
+    return await api.listLocations(storeSyncDeps(), api.session(conn));
+  } catch (err) {
+    if (err && err.name === "StoreAuthError") {
+      await require("./lib/storeSync").markNeedsReconnect(supabase, conn, err.code, nowIso());
+      res.status(409).json({ error: "Your store refused the saved access, so nothing was read. Connect the store again.", code: "needs_reconnect" });
+      return null;
+    }
+    res.status(502).json({ error: "Your store could not be read just now. Nothing was changed. Try again later.", code: "unreachable" });
+    return null;
+  }
+}
+
+app.get("/api/store/connections/:id/locations", requireAuth, async function (req, res, next) {
+  try {
+    var conn = await ownShopifyConnection(req, res);
+    if (!conn) return;
+    var locations = await liveShopifyLocations(conn, res);
+    if (!locations) return;
+    return res.json({ locations: locations, location_id: conn.location_id || null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/store/connections/:id/location", requireAuth, async function (req, res, next) {
+  try {
+    var wanted = req.body && typeof req.body.location_id === "string" ? req.body.location_id : "";
+    if (!/^gid:\/\/shopify\/Location\/[0-9]{1,30}$/.test(wanted)) {
+      return res.status(400).json({ error: "Choose a location from the list.", code: "location", field: "location_id" });
+    }
+    var conn = await ownShopifyConnection(req, res);
+    if (!conn) return;
+    var locations = await liveShopifyLocations(conn, res);
+    if (!locations) return;
+    var found = locations.filter(function (l) { return l.id === wanted; })[0];
+    if (!found) return res.status(400).json({ error: "That location is not one of your store's active locations.", code: "location_unknown", field: "location_id" });
+    var saved = await supabase.from("member_store_connections").update({ location_id: found.id, location_name: found.name, updated_at: nowIso() })
+      .eq("id", conn.id).eq("user_id", req.user.id).eq("platform", "shopify").select(STORE_STATUS_COLUMNS).maybeSingle();
+    if (saved.error) throw saved.error;
+    if (!saved.data) return res.status(404).json({ error: "Connection not found" });
+    return res.json({ connection: require("./lib/storeSync").statusOf(saved.data),
+      note: "Stock changes apply at " + found.name + ". The next sync reads stock at " + found.name + "." });
   } catch (error) {
     next(error);
   }
@@ -13552,8 +13875,9 @@ app.delete("/api/store/connections/:id", requireAuth, async function (req, res, 
     if (!gone.removed) return res.status(404).json({ error: "Connection not found" });
     return res.json({
       removed: true, items_removed: gone.items,
-      note: "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
-        "You can also delete the key in your store: in Shopify, uninstall the custom app; in WooCommerce, revoke it under Settings, Advanced, REST API."
+      note: gone.platform === "shopify" ? require("./lib/shopifyAuth").MESSAGES.disconnected
+        : "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
+          "You can also revoke the key in WooCommerce, under Settings, Advanced, REST API."
     });
   } catch (error) {
     next(error);
@@ -13566,7 +13890,7 @@ app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscripti
       if (!isValidUuid(req.params.id)) return res.status(404).json({ error: "Connection not found" });
       var read = await supabase
         .from("member_store_connections")
-        .select("id, user_id, platform, store_url, status, credentials_ciphertext, credentials_iv, credentials_auth_tag, created_at")
+        .select(require("./lib/storeSync").SYNC_COLUMNS)
         .eq("id", req.params.id)
         .eq("user_id", req.user.id)
         .maybeSingle();
@@ -13589,7 +13913,7 @@ app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscripti
     }
   });
 
-/* ── Store changes, WooCommerce only, through approval (migration 175, lib/storeWrite.js) ──
+/* ── Store changes, WooCommerce and Shopify, through approval (migrations 175 and 176, lib/storeWrite.js) ──
    POST /api/store/changes/propose     { item_id, field: "price" | "stock", to }: reads the
                                        store's live value as from, files a pending
                                        update_store_item proposal; never runs it
@@ -13600,7 +13924,8 @@ app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscripti
    Proposing and undoing need an active subscription and share one limiter, 30 an hour.
    The change itself runs only when the member approves the proposal
    (POST /api/proposals/:id/approve, executeUpdateStoreItem below), on a connection
-   that is theirs, WooCommerce, read_write and connected. Shopify is never written. */
+   that is theirs, read_write (for Shopify, with both write scopes granted) and
+   connected. A Shopify stock change also needs a chosen location. */
 const storeChangeLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 30,
@@ -33441,7 +33766,8 @@ app.post("/api/mailbox/disconnect", requireAuth, async function (req, res, next)
     if (dropped.error) {
       throw dropped.error;
     }
-    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id);
+    // Only this sign-in's states (migration 176): a Connect Shopify in progress keeps its own.
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", "mailbox_microsoft");
     if (statesDropped.error) {
       throw statesDropped.error;
     }
@@ -58111,7 +58437,12 @@ shutdownControl.setServer(app.listen(PORT, function () {
      NAMED (Nov 6 2026, Outlook sign-in): the same 04:45 run then deletes
      one-time Microsoft sign-in states older than a day
      (lib/microsoftAuth.js oauthStatesPurgeTick), claimed through its OWN
-     job_runs row, oauth_states_purge, after the card leads tick settles. */
+     job_runs row, oauth_states_purge, after the card leads tick settles.
+     NAMED (Nov 7 2026, Shopify on OAuth, migration 176): that purge deletes
+     every purpose's states, Connect Shopify's (store_shopify) too. Then
+     Shopify's notification receipts older than 30 days are deleted
+     (lib/shopifyAuth.js webhookEventsPurgeTick), claimed through job_runs
+     shopify_webhook_events_purge. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -58120,11 +58451,16 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/microsoftAuth").oauthStatesPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[OauthStatesPurge] Scheduled run error: " + ((err && err.code) || "error"));
+      }).then(function () {
+        return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
+      }).catch(function (err) {
+        console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
       });
     }, {
       timezone: "UTC"
     });
     console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted; then Microsoft sign-in states older than a day, claimed through job_runs.oauth_states_purge.");
+    console.log("[startup] Shopify notification receipts older than 30 days are deleted in the same 04:45 UTC run, claimed through job_runs.shopify_webhook_events_purge.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every
@@ -58157,9 +58493,10 @@ shutdownControl.setServer(app.listen(PORT, function () {
      WooCommerce store is READ (products, stock, order summaries) at 05:00 UTC,
      claimed through job_runs.store_sync. OFF unless ENABLE_STORE_SYNC is
      exactly "true", read here and again at the top of every tick. Each store is
-     read only while its member's subscription is active. Nothing is ever
-     written to a store. No boot-time run, for the reason the retention job
-     above gives. */
+     read only while its member's subscription is active. The sync itself
+     never writes to a store; the only writes are price and stock changes a
+     member approved (lib/storeWrite.js, migrations 175 and 176), never from
+     this job. No boot-time run, for the reason the retention job above gives. */
   if (require("./lib/storeSync").storeSyncEnabled(process.env)) {
     cron.schedule("0 5 * * *", function () {
       require("./lib/storeSync").storeSyncTick(storeSyncDeps()).catch(function (err) {
@@ -58168,7 +58505,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
     }, {
       timezone: "UTC"
     });
-    console.log("[startup] storeSyncTick scheduled — 05:00 UTC daily, claimed through job_runs.store_sync; stores are read, never written.");
+    console.log("[startup] storeSyncTick scheduled — 05:00 UTC daily, claimed through job_runs.store_sync; the sync reads stores and never writes to them.");
   } else {
     console.log("[startup] storeSyncTick disabled (ENABLE_STORE_SYNC not exactly \"true\")");
   }

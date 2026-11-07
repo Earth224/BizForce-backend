@@ -156,7 +156,9 @@ const MUTATIONS = {
   // the social images privacy sentence set.
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C1): BEFORE the anchor was "2026-11-05". AFTER "2026-11-06", the version
   // the card visits privacy sentence set.
-  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-06\";", "const TERMS_VERSION = \"2026-10-26\";"]],
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE the anchor was "2026-11-06". AFTER "2026-11-07", the version the
+  // Shopify privacy sentence set; the mutation still winds it back before this check's change.
+  "terms-version-not-bumped": [[LEGAL, "const TERMS_VERSION = \"2026-11-07\";", "const TERMS_VERSION = \"2026-10-26\";"]],
   // support's ledger legs are described differently, so the shared total in SQL misses them
   "support-debit-not-transfer": [["mig", "v_balance := bfc_transfer(p_from, p_to, p_amount, 'Transfer');", "v_balance := bfc_transfer(p_from, p_to, p_amount, case when p_kind = 'support' then 'Support' else 'Transfer' end);"]]
 };

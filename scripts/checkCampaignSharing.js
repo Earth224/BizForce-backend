@@ -444,7 +444,7 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // NAMED (Nov 6 2026, store changes, migration 175): 175_store_changes.sql is allowed too; "the highest" is checkStoreChanges R1's.
   check("M2. 166_campaign_sharing.sql is the only migration numbered 166, and every other migration but 167_member_media.sql, 168_social_post_images.sql, 169_member_email_connections.sql, 170_member_email_replies.sql, 171_card_counts.sql, 172_card_leads.sql, 173_mailbox_microsoft.sql and 174_card_wallet_count.sql is at most 166",
     migFiles.filter(f => /^166_/.test(f)).length === 1 && migFiles.indexOf("166_campaign_sharing.sql") !== -1 &&
-    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
+    migFiles.every(f => f === "167_member_media.sql" || f === "168_social_post_images.sql" || f === "169_member_email_connections.sql" || f === "170_member_email_replies.sql" || f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || Number(f.split("_")[0]) <= 166) && migFiles.some(f => /^165_/.test(f)));
   check("M3. sharing and discovery default to off, and a signed-in member reads only their own rows directly",
     /share_on boolean NOT NULL DEFAULT false/.test(ALL[MIG]) && /discoverable boolean NOT NULL DEFAULT false/.test(ALL[MIG]) &&
     /ALTER POLICY campaigns_select ON public\.crowdfunding_campaigns\n  TO authenticated\n  USING \(owner_id = auth\.uid\(\)\);/.test(ALL[MIG]));
@@ -797,7 +797,8 @@ const stripScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, 
   // the social images privacy sentence set.
   // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
   // card visits privacy sentence set.
-  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 6 2026 (card visits; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-06" && LEGAL.TERMS_UPDATED === "Last updated November 6, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 7 2026 (Shopify on OAuth; this change set Nov 4)", LEGAL.TERMS_VERSION === "2026-11-07" && LEGAL.TERMS_UPDATED === "Last updated November 7, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   const block = (/"campaigns\.html": \[\n([\s\S]*?)\n    \]/.exec(guide) || ["", ""])[1];
   const tips = (block.match(/"(?:[^"\\]|\\.)*"/g) || []).map(t => JSON.parse(t));

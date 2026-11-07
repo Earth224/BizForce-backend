@@ -31,7 +31,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `RAILWAY_ENVIRONMENT_NAME` | set by Railway | Marks the process as production. |
 | `RAILWAY_PROJECT_ID` | set by Railway | Marks the process as production. |
 | `RAILWAY_GIT_COMMIT_SHA` | set by Railway | The deployed commit, reported by `/health` and written into each backup's manifest. |
-| `RAILWAY_PUBLIC_DOMAIN` | set by Railway (else `dynamic-prosperity-production-5382.up.railway.app`) | This API's own public host, used for the address a WooCommerce store hands its read-only key back to (`/api/store/woocommerce/callback`). |
+| `RAILWAY_PUBLIC_DOMAIN` | set by Railway (else `dynamic-prosperity-production-5382.up.railway.app`) | This API's own public host, used for the address a WooCommerce store hands its key back to (`/api/store/woocommerce/callback`) and for the Shopify webhook address (`/api/webhooks/shopify`). |
 | `FRONTEND_URL` | `https://bizforceai.net` | The site that links in emails and Stripe redirects point to. |
 | `SUPABASE_URL` | none (required) | The Supabase project. |
 | `SUPABASE_SERVICE_KEY` | none (required) | The service-role key. The server reads and writes every table with it; never put it in the frontend. |
@@ -106,6 +106,13 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `MS_CLIENT_ID` | none | The Application (client) ID of BizForce's Microsoft app registration (see "Microsoft app registration" below). Needed only for Sign in with Microsoft on Your Inbox; without it (or `MS_CLIENT_SECRET`) the Microsoft routes answer 503 "Outlook sign-in isn't set up yet." and the page disables the button. Set it on Railway; never commit it. |
 | `MS_CLIENT_SECRET` | none | That registration's client secret value. Needed only for Sign in with Microsoft, with `MS_CLIENT_ID`. A secret; set it on Railway, never commit it, and replace it before Microsoft's expiry date. |
 
+### Shopify app
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SHOPIFY_CLIENT_ID` | none | The Client ID of BizForce's Shopify app (see "Shopify app setup" below). Needed only for Connect Shopify on the Store Agent page; without it (or `SHOPIFY_CLIENT_SECRET`) the Shopify routes and `POST /api/webhooks/shopify` answer 503 "Shopify connection isn't set up yet.", `GET /api/store/connections` answers `shopify_available: false` and the page disables the button. Set it on Railway; never commit it. |
+| `SHOPIFY_CLIENT_SECRET` | none | That app's client secret. It is sent in the token exchange and refresh, and it verifies the HMAC on Shopify's return to the Store Agent page and on every webhook. Needed only for Shopify, with `SHOPIFY_CLIENT_ID`. A secret; set it on Railway and never commit it. Rotating it in the Partner Dashboard means setting the new value on Railway at once, or webhooks are refused with 401. |
+
 ### Google Wallet
 
 | Variable | Default | Effect |
@@ -149,7 +156,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `ENABLE_STORAGE_DELETION_RETRY` | on | On unless exactly `false`: the daily retry that removes a deleted account's files from Storage. |
 | `ENABLE_GATE_DECISIONS_SWEEP` | on | On unless exactly `false`: the daily sweep that deletes gate decisions older than 90 days. |
 | `ENABLE_SCHEMA_CHECK` | on | On unless exactly `false`: read-only head counts confirm every table the code relies on exists (lib/schemaCheck.js), once 60 s after boot and daily at 06:00 UTC; a missing table is emailed once, named with the migration file that creates it, and shown on `/api/admin/health` (admins only; the public `/health` is unchanged). |
-| `ENABLE_STORE_SYNC` | off | Exactly `true` runs the daily read of every connected Shopify and WooCommerce store (lib/storeSync.js): products, stock and order summaries, never customer details, and nothing is ever written to a store. Members can connect a store and press "Sync now" either way. |
+| `ENABLE_STORE_SYNC` | off | Exactly `true` runs the daily read of every connected Shopify and WooCommerce store (lib/storeSync.js): products, stock and order summaries, never customer details. The sync never writes to a store; a price or stock change is made only when a member approves it, and only on a connection they allowed changes on. Members can connect a store and press "Sync now" either way. |
 | `ENABLE_TRIGGERS` | off | Exactly `true` runs the hourly member-trigger pass (lib/triggerRunner.js). Anything else leaves triggers saved but never fired. |
 | `TRIGGERS_DAILY_FIRINGS` | 10 | Firings per member per UTC day, a whole number clamped to 1 to 20. |
 | `BFC_TRANSFER_MAX` | `1000` | The most BFC one send or donation may move. |
@@ -171,9 +178,10 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
-| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft and Shopify sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `webhookEventsPurgeTick` (`lib/shopifyAuth.js`): Shopify notification receipts older than 30 days | the same 04:45 UTC run, after the sign-in states purge, claimed `shopify_webhook_events_purge` | always on (no flag); runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
-| `storeSyncTick`: read connected Shopify and WooCommerce stores (read-only) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
+| `storeSyncTick`: read connected Shopify and WooCommerce stores (the sync only reads) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
 | `runNightlyBackup` | cron `BACKUP_CRON` (`0 8 * * *`), `BACKUP_TIMEZONE` (America/Los_Angeles) | `ENABLE_NIGHTLY_BACKUP` exactly `true` |
 | `dripTick`: SMS drip engine | every 5 minutes, and once at boot | `ENABLE_DRIP_SCHEDULER` exactly `true` |
@@ -239,6 +247,19 @@ Sign in with Microsoft on Your Inbox (`lib/microsoftAuth.js`, migration 173) nee
 - **Certificates and secrets:** one client secret. Put its value in `MS_CLIENT_SECRET` and the Application (client) ID in `MS_CLIENT_ID`, on Railway only. Note the secret's expiry date and rotate it before then: make a new secret, set it on Railway, then delete the old one.
 
 Until both variables are set, the Microsoft routes answer 503 and the page shows "Outlook sign-in isn't set up yet." Disconnecting deletes BizForce's copy only; a member removes BizForce from their own Microsoft account under its app permissions.
+
+## Shopify app setup
+
+Connect Shopify on the Store Agent page (`lib/shopifyAuth.js`, `lib/shopifyApi.js`, migration 176) needs one public app in the Shopify Partner Dashboard:
+
+- **App URL:** `https://bizforceai.net/store-agent.html`. When Shopify opens it (with `shop` and `hmac`, no `code`), the page fills the shop in and asks the member to press Connect Shopify; nothing is sent until they do.
+- **Allowed redirection URL**, exactly: `https://bizforceai.net/store-agent.html` (the server sends `FRONTEND_URL` + `/store-agent.html`, so the two must match).
+- **Access tokens:** expiring offline tokens. The server asks for them (`expiring=1`), keeps the access token and the refresh token sealed, and refreshes before expiry; each refresh replaces both.
+- **Scopes:** `read_products`, `read_inventory`, `read_orders`, `read_locations`; with "Let BizForce make changes I approve" ticked, also `write_products` and `write_inventory`. A grant missing any asked-for scope is refused. `read_orders` covers the last 60 days of orders.
+- **Webhooks**, all to `https://<RAILWAY_PUBLIC_DOMAIN>/api/webhooks/shopify` (JSON): `app/uninstalled`, and the three compliance topics `customers/data_request`, `customers/redact`, `shop/redact`. Uninstall and `shop/redact` delete the connection and everything read from it, as Disconnect does; BizForce stores no customer data, so the two customer topics are recorded and need no other action.
+- **Credentials:** the Client ID in `SHOPIFY_CLIENT_ID` and the client secret in `SHOPIFY_CLIENT_SECRET`, on Railway only.
+
+Until both variables are set, the Shopify routes answer 503 and the page shows "Shopify connection isn't set up yet." One shop connects to one BizForce account. Disconnecting deletes BizForce's copy; the member removes the app from their Shopify admin under Settings, then Apps. Webhook receipts are kept 30 days (`shopify_webhook_events`).
 
 ## Google Wallet setup
 

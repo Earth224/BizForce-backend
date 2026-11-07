@@ -5,10 +5,12 @@
 
      V. VALIDATION. A Shopify domain is *.myshopify.com and nothing else; a WooCommerce address is https only,
         with no IP address, no user or password and no other port.
-     C. CONNECTING SHOPIFY, through the real route. A good read-only token is verified by one GET and stored
-        ENCRYPTED (hex, decrypts to the token, never the token itself); the token is in no response and no log.
-        A token with any write_ scope, one missing a read scope, one Shopify refuses, a bad domain or a server
-        without its key stores nothing. The route is requireAuth, requireActiveSubscription and 5 an hour.
+     C. CONNECTING SHOPIFY. NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE a pasted shpat_ token was
+        verified by one GET to access_scopes.json and stored encrypted through POST /api/store/connections. AFTER
+        that route answers 400 use_connect_shopify for a Shopify body, whatever token it carries, storing nothing
+        and asking nothing; Connect Shopify is /api/store/shopify/start and /finish (requireAuth,
+        requireActiveSubscription, 10 an hour), 503 without SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET, and the
+        list says shopify_available. The OAuth flow itself is scripts/checkShopifyConnect.js's.
      W. CONNECTING WOOCOMMERCE. The route answers the store's own authorization page with scope=read. The
         callback refuses a key whose permission is not "read", a forged or expired state, a key the store
         refuses and a store on a private address, and stores nothing; a read key is verified by one GET and
@@ -18,7 +20,10 @@
         source, across pages, with a 429 waited out (Retry-After) and retried; untracked stock is skipped, not
         written as 0; a member's own row with the same SKU is never overwritten; a second sync updates in place
         and keeps the member's reorder point. Order summaries hold exactly the summary keys and NO customer
-        field, whatever the store sends. Every request is a GET.
+        field, whatever the store sends. Every WooCommerce request is a GET; NAMED (Nov 7 2026, migration 176):
+        BEFORE every Shopify request was a REST GET too. AFTER the sync reads a shop through lib/shopifyApi.js
+        (deps.shopifyReader): each request a POST of a GraphQL "query" document to the shop's graphql.json, paged
+        by cursor, never a mutation; the shop's currency is stored on the connection.
      A. AN AUTH FAILURE marks needs_reconnect with ONE notice, after ONE request (no retry loop), and a second
         failure says nothing more; sync now on it is refused without a request.
      J. THE DAILY SYNC runs only with ENABLE_STORE_SYNC exactly "true", claims job_runs.store_sync for the UTC
@@ -28,40 +33,53 @@
      R. THE READERS. Stock & Margin (server.js measureStockAndMargin), the "Items at their reorder point"
         trigger (lib/triggerRunner.js) and the Store signature (lib/agentSignatures.js) all read synced stock,
         and the signature says where stock came from.
-     N. NO WRITE CALL to either platform anywhere: lib/storeSync.js holds no POST, PUT, PATCH or DELETE, no
-        fetch, http.request or https.request, and one request call, deps.jsonRequest, with method "GET"
-        (NAMED Nov 3 2026: it was one fetch); no other non-script file names a store's API host.
-     L. THE PRIVACY SENTENCE is built into privacy.html; the Store page says "BizForce only reads your store."
+     N. NO WRITE CALL from the sync: lib/storeSync.js holds no POST, PUT, PATCH or DELETE, no fetch,
+        http.request or https.request, and one request call, deps.jsonRequest, with method "GET" (NAMED Nov 3
+        2026: it was one fetch). NAMED (Nov 7 2026, migration 176): BEFORE lib/storeSync.js read Shopify itself and
+        lib/storeWrite.js was the only other file that named a store's API path. AFTER lib/storeSync.js names no
+        Shopify request at all; lib/shopifyApi.js has exactly two deps.jsonRequest calls (readQuery, which refuses
+        any document but a query, and sendOnce) and the word "mutation" only inside writePrice and writeStock;
+        lib/shopifyApi.js and lib/shopifyAuth.js may name the shop's paths, lib/storeWrite.js still names none.
+     L. THE PRIVACY SENTENCE is built into privacy.html; the Store page says when BizForce changes something
         and has the steps for both platforms; the migration turns RLS on; no emoji in any new file.
 
    MUTATIONS — MUTATE=<name> applies one in memory; MUTATE=all runs each:
-     plaintext-credentials     the connection is stored with the token in the clear
-     write-scope-accepted      a token with a write_ scope is accepted
+     plaintext-credentials     the connection is stored with the key in the clear
      customer-email-stored     an order summary keeps the customer's email
      manual-row-overwritten    a synced product takes over a member's own row with the same SKU
-     auth-failure-retried      a 401 is retried like a 429
-     shopify-write-call        a function that deletes a Shopify product is added
+     auth-failure-retried      a Shopify 401 is retried like a 429
+     shopify-write-call        a function that deletes a Shopify product is added to lib/storeSync.js
      double-run                the daily tick runs without claiming the day
      woo-not-read-only         a WooCommerce key with read_write permission is accepted
      NAMED (store connections security fix, Nov 3 2026), section G:
      woo-plain-fetch           WooCommerce pages are read with a plain fetch, not the guarded fetcher
-     shopify-plain-fetch       Shopify products are read with a plain fetch
+     shopify-plain-fetch       Shopify reads are sent with a plain fetch
      redirect-followed         a redirect the guarded fetcher refused is followed with a plain fetch
      size-unbounded            the body limit asked for is raised past 8 MB
      too-large-retried         a body over the limit is retried
      guard-refusal-retried     a guard refusal (a blocked address, a refused option) is retried
-     paging-header-dropped     the link header is no longer exposed, so Shopify's next page is lost
-     shopify-page-size-reverted  Shopify pages go back to 250
      woo-orders-fields-widened WooCommerce orders ask for whole line items again
+     NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE write-scope-accepted (a pasted token with a
+     write_ scope accepted), paging-header-dropped (the link header no longer exposed),
+     shopify-page-size-reverted (SHOPIFY_PAGE_SIZE 250) and page-cap-shrunk (PAGE_CAPS shopifyProducts and
+     shopifyOrders 40), all on REST code that is gone. AFTER:
+     pasted-token-back         the old connect route takes a Shopify body again
+     cursor-ignored            the variants are always asked from the first page, never by endCursor
+     shopify-page-size-reverted  Shopify variants go back to 250 a page
      page-cap-shrunk           Shopify's page caps fall back to 40
+     read-sends-mutation       readQuery stops refusing a document that is not a query
 
    G. THE GUARDED FETCHER (NAMED Nov 3 2026). Every store request, Shopify and WooCommerce, is a deps.jsonRequest
-      call (lib/guardedFetch.js's guardedJsonRequest) with method GET, the three exposed headers, 8 MB and 20 s. A
-      name that answers a private or loopback address is refused by the fetcher's own lookup, once, never retried; a
-      3xx is refused and its target never asked; a page over 8 MB is too_large, asked once, recorded and logged as
-      too_large with no URL, and the member is told what an unreachable store tells them. Pages: Shopify 50 a page,
-      200 pages of products and of orders; everything else 40; WooCommerce orders ask only line_items.sku and
-      line_items.quantity. A network tripwire fails the run if anything opens a socket, asks real DNS or fetches.
+      call (lib/guardedFetch.js's guardedJsonRequest), 8 MB and 20 s. A name that answers a private or loopback
+      address is refused by the fetcher's own lookup, once, never retried; a 3xx is refused and its target never
+      asked; a page over 8 MB is too_large, asked once, recorded and logged as too_large with no URL, and the member
+      is told what an unreachable store tells them. WooCommerce orders ask only line_items.sku and
+      line_items.quantity, and WooCommerce pages are 100, 40 pages at most. NAMED (Nov 7 2026, migration 176):
+      BEFORE every request was a GET exposing retry-after, link and x-wp-totalpages, and Shopify paged 50 a page by
+      the link header, 200 pages of products and of orders. AFTER WooCommerce GETs expose retry-after and
+      x-wp-totalpages; Shopify reads are POSTs of a query document exposing retry-after only, 50 variants a page and
+      20 orders of at most 40 line items a page (Shopify's query cost cap), by cursor, 200 pages of each. A network
+      tripwire fails the run if anything opens a socket, asks real DNS or fetches.
 */
 "use strict";
 const fs = require("fs");
@@ -83,18 +101,20 @@ const MUTATIONS = {
   "plaintext-credentials": ["sync",
     "  return { credentials_ciphertext: sealed.ciphertext, credentials_iv: sealed.iv, credentials_auth_tag: sealed.authTag };\n",
     "  return { credentials_ciphertext: plain, credentials_iv: sealed.iv, credentials_auth_tag: sealed.authTag };\n"],
-  "write-scope-accepted": ["sync",
-    "  if (scopes.some(function (s) { return /^write_/.test(s); })) {\n", "  if (false) {\n"],
   "customer-email-stored": ["sync",
     "    currency: currency,\n    line_items:", "    currency: currency,\n    email: o.email || (o.billing && o.billing.email) || null,\n    line_items:"],
   "manual-row-overwritten": ["sync",
     "      if (owner && !mine && owner.source == null) { result.skipped_sku_manual++; return; }\n",
     "      if (owner && !mine && owner.source == null) { supabase.from(\"inventory_items\").update({ name: it.name, quantity_on_hand: it.quantity_on_hand }).eq(\"id\", owner.id).then(function () {}); result.skipped_sku_manual++; return; }\n"],
-  "auth-failure-retried": ["sync",
+  // NAMED (Nov 7 2026, migration 176): BEFORE on lib/storeSync.js's RETRYABLE, which read Shopify. AFTER on
+  // lib/shopifyApi.js's, which does; A1 must still see one GraphQL request for a 401.
+  "auth-failure-retried": ["api",
     "var RETRYABLE = [429, 500, 502, 503, 504];\n", "var RETRYABLE = [401, 429, 500, 502, 503, 504];\n"],
+  // NAMED (Nov 7 2026, migration 176): BEFORE anchored on "function shopifyUrl(domain, path) {", which is gone. AFTER the
+  // same added DELETE call, put just above the WooCommerce section of lib/storeSync.js; N1 must catch it.
   "shopify-write-call": ["sync",
-    "function shopifyUrl(domain, path) {\n",
-    "function archiveShopifyProduct(deps, domain, token, id) {\n  return deps.fetch(\"https://\" + domain + \"/admin/api/2026-07/products/\" + id + \".json\", { method: \"DELETE\", headers: { \"X-Shopify-Access-Token\": token } });\n}\nfunction shopifyUrl(domain, path) {\n"],
+    "/* ── WooCommerce ──",
+    "function archiveShopifyProduct(deps, domain, token, id) {\n  return deps.fetch(\"https://\" + domain + \"/admin/api/2026-07/products/\" + id + \".json\", { method: \"DELETE\", headers: { \"X-Shopify-Access-Token\": token } });\n}\n/* ── WooCommerce ──"],
   "double-run": ["sync",
     "    if (!(await claimStoreSyncDay(deps.supabase, startedMs))) {\n", "    if (false) {\n"],
   // NAMED (Nov 6 2026, store changes, migration 175): BEFORE anchored on `if (b.key_permissions !== "read") return`. AFTER
@@ -106,9 +126,11 @@ const MUTATIONS = {
   "woo-plain-fetch": ["sync",
     "    var got = await request(deps, wooUrl(storeUrl, path + (path.indexOf(\"?\") === -1 ? \"?\" : \"&\") + \"per_page=100&page=\" + page), wooHeaders(creds));\n",
     "    var got = await (async function (u, h) { var r = await fetch(u, { method: \"GET\", headers: h, redirect: \"manual\" }); return { data: await r.json(), headers: r.headers }; })(wooUrl(storeUrl, path + (path.indexOf(\"?\") === -1 ? \"?\" : \"&\") + \"per_page=100&page=\" + page), wooHeaders(creds));\n"],
-  "shopify-plain-fetch": ["sync",
-    "    var got = await request(deps, url, shopifyHeaders(token));\n    ((got.data && got.data.products)",
-    "    var got = await (async function (u, h) { var r = await fetch(u, { method: \"GET\", headers: h, redirect: \"manual\" }); return { data: await r.json(), headers: r.headers }; })(url, shopifyHeaders(token));\n    ((got.data && got.data.products)"],
+  // NAMED (Nov 7 2026, migration 176): BEFORE on the REST products read in lib/storeSync.js. AFTER on the one read request
+  // in lib/shopifyApi.js's readQuery.
+  "shopify-plain-fetch": ["api",
+    "      answer = await deps.jsonRequest(graphqlUrl(shop), { method: \"POST\", headers: headersFor(token), body: { query: doc, variables: variables || {} },\n        exposeHeaders: EXPOSED_HEADERS, maxBytes: REQUEST_MAX_BODY_BYTES, timeoutMs: REQUEST_TIMEOUT_MS });\n",
+    "      answer = await (async function (u, h, b) { var r = await fetch(u, { method: \"POST\", headers: h, body: JSON.stringify(b) }); return { status: r.status, json: await r.json(), headers: {} }; })(graphqlUrl(shop), headersFor(token), { query: doc, variables: variables || {} });\n"],
   "redirect-followed": ["sync",
     "      var guard = err && err.guardedFetch === true ? String(err.code) : null;\n",
     "      var guard = err && err.guardedFetch === true ? String(err.code) : null;\n      if (guard === \"redirected\") { var f = await fetch(url, { method: \"GET\", headers: headers, redirect: \"follow\" }); return { data: await f.json(), headers: headerReader({}) }; }\n"],
@@ -118,14 +140,22 @@ const MUTATIONS = {
     "var GUARD_RETRIED = [\"network\", \"timeout\"];", "var GUARD_RETRIED = [\"network\", \"timeout\", \"too_large\"];"],
   "guard-refusal-retried": ["sync",
     "      if (guard === null || GUARD_RETRIED.indexOf(guard) === -1) {\n", "      if (guard !== null && GUARD_RETRIED.indexOf(guard) === -1 && guard !== \"blocked\") {\n"],
-  "paging-header-dropped": ["sync",
-    "var REQUEST_EXPOSED_HEADERS = [\"retry-after\", \"link\", \"x-wp-totalpages\"];", "var REQUEST_EXPOSED_HEADERS = [\"retry-after\", \"x-wp-totalpages\"];"],
-  "shopify-page-size-reverted": ["sync",
-    "var SHOPIFY_PAGE_SIZE = 50;", "var SHOPIFY_PAGE_SIZE = 250;"],
   "woo-orders-fields-widened": ["sync",
     "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items.sku,line_items.quantity\";", "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items\";"],
-  "page-cap-shrunk": ["sync",
-    "var PAGE_CAPS = { shopifyProducts: 200, shopifyOrders: 200, other: 40 };", "var PAGE_CAPS = { shopifyProducts: 40, shopifyOrders: 40, other: 40 };"]
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): the REST mutations paging-header-dropped and
+  // write-scope-accepted are gone with their code; these hold what replaced it.
+  "pasted-token-back": ["server",
+    "      if (body.platform === \"shopify\") {\n        return res.status(400).json({ error: require(\"./lib/shopifyAuth\").MESSAGES.useConnect, code: \"use_connect_shopify\", saved: false });\n      }\n",
+    "      if (false) {\n        return res.status(400).json({ error: require(\"./lib/shopifyAuth\").MESSAGES.useConnect, code: \"use_connect_shopify\", saved: false });\n      }\n"],
+  "cursor-ignored": ["api",
+    "location ? { cursor: cursor, location: location } : { cursor: cursor });", "location ? { cursor: null, location: location } : { cursor: null });"],
+  "shopify-page-size-reverted": ["api",
+    "var PAGE_SIZE = 50;", "var PAGE_SIZE = 250;"],
+  "page-cap-shrunk": ["api",
+    "var PAGE_CAPS = { variants: 200, orders: 200 };", "var PAGE_CAPS = { variants: 40, orders: 40 };"],
+  "read-sends-mutation": ["api",
+    "  if (typeof doc !== \"string\" || !/^query\\b/.test(doc)) throw new SS.StoreRequestError(\"not_a_query\");\n",
+    "  if (typeof doc !== \"string\") throw new SS.StoreRequestError(\"not_a_query\");\n"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -142,6 +172,10 @@ process.on("unhandledRejection", function (e) { UNHANDLED.push(e); });
 
 const FILES = {
   sync: read("lib/storeSync.js"),
+  // NAMED (Nov 7 2026, migration 176): Shopify's GraphQL reader and its OAuth helpers, compiled from these texts below.
+  api: read("lib/shopifyApi.js"),
+  auth: read("lib/shopifyAuth.js"),
+  migration176: read("supabase/migrations/176_shopify_oauth.sql"),
   server: read("server.js"),
   migration: read("supabase/migrations/163_store_connections.sql"),
   yourData: read("lib/yourData.js"),
@@ -171,11 +205,19 @@ function compile(src, file, map) {
   return m.exports;
 }
 const SS = compile(FILES.sync, "lib/storeSync.js", {});
+// The same storeSync instance for both, so StoreAuthError and StoreRequestError are one class each.
+const SA = compile(FILES.auth, "lib/shopifyAuth.js", {});
+const SAPI = compile(FILES.api, "lib/shopifyApi.js", { "./storeSync": SS, "./shopifyAuth": SA });
+const SHOPIFY_CONFIG = { clientId: "check-client-id", clientSecret: "check-client-secret-" + "9".repeat(20) };
 
 const USER = "00000000-0000-4000-8000-000000000001";
 const OTHER = "00000000-0000-4000-8000-000000000002";
 const SHOP = "demo-shop.myshopify.com";
-const TOKEN = "shpat_" + "a1b2c3d4".repeat(4);
+// NAMED (Nov 7 2026, migration 176): BEFORE a pasted shpat_ token. AFTER an expiring OAuth access token and its refresh token.
+const TOKEN = "shpca_" + "a1b2c3d4".repeat(4);
+const REFRESH = "shprt_" + "e5f6a7b8".repeat(4);
+const GRAPHQL_PATH = "/admin/api/2026-07/graphql.json";
+const LOCATION = "gid://shopify/Location/71";
 const WOO = "https://woo.example.com";
 const CK = "ck_" + "f".repeat(40), CS = "cs_" + "e".repeat(40);
 const CUSTOMER = { email: "buyer@example.com", phone: "+15551234567", first: "Jane", last: "Buyer", street: "12 Elm Street" };
@@ -200,6 +242,11 @@ function makeDb() {
   function checkViolation(name, row) {
     if (name === "member_store_connections") {
       if (!/^[0-9a-f]+$/.test(row.credentials_ciphertext || "") || !/^[0-9a-f]{24}$/.test(row.credentials_iv || "") || !/^[0-9a-f]{32}$/.test(row.credentials_auth_tag || "")) return "member_store_connections_ciphertext_check";
+      // NAMED (Nov 7 2026, migration 176): member_store_connections_token_shape_check, as the migration has it.
+      const access = row.access_ciphertext != null && row.access_iv != null && row.access_auth_tag != null && row.access_expires_at != null;
+      const none = row.access_ciphertext == null && row.access_iv == null && row.access_auth_tag == null && row.access_expires_at == null &&
+        row.refresh_expires_at == null && row.location_id == null && row.location_name == null;
+      if (!((row.platform === "shopify" && access) || (row.platform === "woocommerce" && none))) return "member_store_connections_token_shape_check";
     }
     if (name === "inventory_items") {
       const manual = row.source == null && row.store_connection_id == null && row.external_id == null;
@@ -232,6 +279,10 @@ function makeDb() {
       delete: function () { q.op = "delete"; return api; },
       eq: function (c, v) { q.filters.push(["eq", c, v]); return api; },
       in: function (c, v) { q.filters.push(["in", c, v]); return api; },
+      // NAMED (Nov 7 2026, migration 176): the Shopify routes filter with is, gt and lt too.
+      is: function (c, v) { q.filters.push(["is", c, v]); return api; },
+      gt: function (c, v) { q.filters.push(["gt", c, v]); return api; },
+      lt: function (c, v) { q.filters.push(["lt", c, v]); return api; },
       or: function (s) { q.or = s; return api; },
       order: function () { return api; }, limit: function () { return api; },
       range: function (a, b) { q.range = [a, b]; return api; },
@@ -243,6 +294,9 @@ function makeDb() {
       if (!q.filters.every(function (f) {
         if (f[0] === "eq") return String(r[f[1]]) === String(f[2]);
         if (f[0] === "in") return f[2].map(String).indexOf(String(r[f[1]])) !== -1;
+        if (f[0] === "is") return f[2] === null ? r[f[1]] == null : r[f[1]] === f[2];
+        if (f[0] === "gt") return r[f[1]] != null && String(r[f[1]]) > String(f[2]);
+        if (f[0] === "lt") return r[f[1]] != null && String(r[f[1]]) < String(f[2]);
         return true;
       })) return false;
       if (q.or) { const d = /neq\.(\d{4}-\d{2}-\d{2})/.exec(q.or)[1]; return r.last_run_on == null || r.last_run_on !== d; }
@@ -344,7 +398,7 @@ function reply(status, body, hdrs) {
 const PUBLIC_V4 = "93.184.216.34";
 const OVER_8MB = function () { return Buffer.from("\"" + "a".repeat(8 * 1024 * 1024) + "\"", "utf8"); };
 function makeStores(opts) {
-  const o = Object.assign({ scopes: ["read_products", "read_inventory", "read_orders"], verifyStatus: 200, productsStatus: 200, first429: false, wooStatus: 200 }, opts || {});
+  const o = Object.assign({ first429: false, wooStatus: 200 }, opts || {});
   const calls = [];       // requests the guarded fetcher let through to a store
   const asked = [];       // every deps.jsonRequest call: the url and the options storeSync passed
   const resolved = {};    // DNS questions, by name
@@ -355,52 +409,71 @@ function makeStores(opts) {
     billing_address: { name: CUSTOMER.first + " " + CUSTOMER.last, address1: CUSTOMER.street, phone: CUSTOMER.phone },
     shipping_address: { name: CUSTOMER.first + " " + CUSTOMER.last, address1: CUSTOMER.street }
   };
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE the shop answered REST GETs (access_scopes.json,
+     products.json, inventory_items.json, orders.json) paged by a Link header. AFTER it answers what lib/shopifyApi.js
+     sends: a POST of { query, variables } to graphql.json, by operation name (ShopInfo, Variants, VariantsAt, Orders),
+     paged by endCursor; and the token endpoint, which refuses a refresh unless o.refreshOk. The same products, stock,
+     costs and orders as before, and the same customer fields offered on every order. */
+  function variant(id, productId, productTitle, title, sku, price, qty, itemId, tracked, cost) {
+    return { id: "gid://shopify/ProductVariant/" + id, sku: sku, title: title, price: price, compareAtPrice: null, inventoryQuantity: qty,
+      product: { id: "gid://shopify/Product/" + productId, title: productTitle },
+      inventoryItem: { id: "gid://shopify/InventoryItem/" + itemId, tracked: tracked, unitCost: cost === null ? null : { amount: cost },
+        inventoryLevel: { quantities: [{ name: "available", quantity: qty === null ? 0 : Math.max(0, qty - 1) }] } } };
+  }
+  function order(id, at, amount, lines) {
+    return Object.assign({ id: "gid://shopify/Order/" + id, createdAt: at, totalPriceSet: { shopMoney: { amount: amount, currencyCode: "USD" } },
+      lineItems: { nodes: lines } }, orderBase);
+  }
+  function graphql(op, vars) {
+    if (o.shopStatus) return reply(o.shopStatus, { errors: "[API] Invalid API key or access token" });
+    if (o.shopHuge) return reply(200, OVER_8MB());
+    if (op === "ShopInfo") {
+      return reply(200, { data: { shop: { currencyCode: "CAD" }, locations: { nodes: o.locations || [{ id: LOCATION, name: "Main warehouse", isActive: true }] } } });
+    }
+    if (op === "Variants" || op === "VariantsAt") {
+      if (o.first429 && !sent429) { sent429 = true; return reply(429, { errors: "Exceeded 2 calls per second" }, { "Retry-After": "2" }); }
+      if (o.variantsHuge) return reply(200, OVER_8MB());
+      if (o.endless) {
+        const n = Number(String(vars.cursor || "e0").slice(1));
+        return reply(200, { data: { productVariants: { pageInfo: { hasNextPage: true, endCursor: "e" + (n + 1) },
+          nodes: [variant(5000 + n, 1000 + n, "P" + n, "Default Title", "", "1.00", 1, 7000 + n, false, null)] } } });
+      }
+      if (vars.cursor === "c2") {
+        return reply(200, { data: { productVariants: { pageInfo: { hasNextPage: false, endCursor: "c3" }, nodes: [
+          variant(21, 2, "Scarf", "Default Title", "SCARF", "18.00", 0, 9021, true, null),
+          variant(22, 2, "Gift wrap", "Default Title", "WRAP", "2.00", 0, 9022, false, null)] } } }, { "Set-Cookie": "_shopify_s=checkOnly" });
+      }
+      return reply(200, { data: { productVariants: { pageInfo: { hasNextPage: true, endCursor: "c2" }, nodes: [
+        variant(11, 1, "Wool Hat", "Red", "HAT-RED", "25.00", 4, 9011, true, "10.00"),
+        variant(12, 1, "Wool Hat", "Blue", "manual-1", "25.00", 7, 9012, true, "9.00")] } } });
+    }
+    if (op === "Orders") {
+      if (o.endless) {
+        const n = Number(String(vars.cursor || "e0").slice(1));
+        return reply(200, { data: { orders: { pageInfo: { hasNextPage: true, endCursor: "e" + (n + 1) }, nodes: [order(80000 + n, "2026-11-01T10:00:00Z", "1.00", [])] } } });
+      }
+      if (vars.cursor === "o2") {
+        return reply(200, { data: { orders: { pageInfo: { hasNextPage: false, endCursor: "o3" },
+          nodes: [order(5002, "2026-11-02T09:00:00Z", "18.00", [{ sku: "SCARF", quantity: 1, name: "Scarf", vendor: "Demo" }])] } } });
+      }
+      return reply(200, { data: { orders: { pageInfo: { hasNextPage: true, endCursor: "o2" },
+        nodes: [order(5001, "2026-11-01T10:00:00Z", "50.00", [{ sku: "HAT-RED", quantity: 2, name: "Wool Hat - Red" }])] } } });
+    }
+    return reply(200, { errors: [{ message: "no stub for " + op }] });
+  }
   function answer(url, init) {
-    calls.push({ url: url, method: (init && init.method) || "GET", headers: (init && init.headers) || {} });
+    let body = null;
+    try { body = init && init.body ? JSON.parse(String(init.body)) : null; } catch (e) { body = null; }
+    const opMatch = body && typeof body.query === "string" ? /^(query|mutation)\s+([A-Za-z]+)/.exec(body.query) : null;
+    calls.push({ url: url, method: (init && init.method) || "GET", headers: (init && init.headers) || {}, body: body, op: opMatch ? opMatch[2] : null, kind: opMatch ? opMatch[1] : null });
     const u = new URL(url);
     if (o.networkDown) return { error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) };
-    if (u.hostname === SHOP) {
-      if (u.pathname === "/admin/oauth/access_scopes.json") {
-        if (o.verifyStatus !== 200) return reply(o.verifyStatus, { errors: "Invalid API key or access token" });
-        if (o.verifyHuge) return reply(200, OVER_8MB());
-        return reply(200, { access_scopes: o.scopes.map(function (h) { return { handle: h }; }) });
+    if (u.hostname === SHOP || u.hostname === "other-shop.myshopify.com") {
+      if (u.pathname === "/admin/oauth/access_token") {
+        if (!o.refreshOk) return reply(400, { error: "invalid_request", error_description: "refresh token expired or revoked" });
+        return reply(200, { access_token: TOKEN + "n", refresh_token: REFRESH + "n", expires_in: 3600, refresh_token_expires_in: 7776000, scope: "read_products,read_inventory,read_orders,read_locations" });
       }
-      if (/\/products\.json$/.test(u.pathname)) {
-        if (o.productsStatus !== 200) return reply(o.productsStatus, { errors: "[API] Invalid API key or access token" });
-        if (o.first429 && !sent429) { sent429 = true; return reply(429, { errors: "Exceeded 2 calls per second" }, { "Retry-After": "2" }); }
-        if (o.productsHuge) return reply(200, OVER_8MB());
-        if (o.endless) {
-          const n = Number(u.searchParams.get("page_info") || "0");
-          return reply(200, { products: [{ id: 1000 + n, title: "P" + n, variants: [{ id: 5000 + n, title: "Default Title", sku: "", price: "1.00", inventory_quantity: 1, inventory_management: null, inventory_item_id: null }] }] },
-            { Link: "<https://" + SHOP + "/admin/api/2026-07/products.json?limit=50&page_info=" + (n + 1) + ">; rel=\"next\"" });
-        }
-        if (u.searchParams.get("page_info") === "p2") {
-          return reply(200, { products: [{ id: 2, title: "Scarf", variants: [
-            { id: 21, title: "Default Title", sku: "SCARF", price: "18.00", inventory_quantity: 0, inventory_management: "shopify", inventory_item_id: 9021 },
-            { id: 22, title: "Gift wrap", sku: "WRAP", price: "2.00", inventory_quantity: 0, inventory_management: null, inventory_item_id: 9022 }] }] });
-        }
-        return reply(200, { products: [{ id: 1, title: "Wool Hat", variants: [
-          { id: 11, title: "Red", sku: "HAT-RED", price: "25.00", inventory_quantity: 4, inventory_management: "shopify", inventory_item_id: 9011 },
-          { id: 12, title: "Blue", sku: "manual-1", price: "25.00", inventory_quantity: 7, inventory_management: "shopify", inventory_item_id: 9012 }] }] },
-          { Link: "<https://" + SHOP + "/admin/api/2026-07/products.json?limit=50&page_info=p2>; rel=\"next\"", "Set-Cookie": "_shopify_s=checkOnly" });
-      }
-      if (/\/inventory_items\.json$/.test(u.pathname)) {
-        return reply(200, { inventory_items: [{ id: 9011, cost: "10.00" }, { id: 9012, cost: "9.00" }, { id: 9021, cost: null }] });
-      }
-      if (/\/orders\.json$/.test(u.pathname)) {
-        if (o.endless) {
-          const n = Number(u.searchParams.get("page_info") || "0");
-          return reply(200, { orders: [{ id: 80000 + n, created_at: "2026-11-01T10:00:00Z", total_price: "1.00", currency: "USD", line_items: [] }] },
-            { Link: "<https://" + SHOP + "/admin/api/2026-07/orders.json?limit=50&page_info=" + (n + 1) + ">; rel=\"next\"" });
-        }
-        if (u.searchParams.get("page_info") === "o2") {
-          return reply(200, { orders: [Object.assign({ id: 5002, created_at: "2026-11-02T09:00:00Z", total_price: "18.00", currency: "USD",
-            line_items: [{ sku: "SCARF", quantity: 1, name: "Scarf", price: "18.00", vendor: "Demo" }] }, orderBase)] });
-        }
-        return reply(200, { orders: [Object.assign({ id: 5001, created_at: "2026-11-01T10:00:00Z", total_price: "50.00", currency: "usd",
-          line_items: [{ sku: "HAT-RED", quantity: 2, name: "Wool Hat - Red", price: "25.00" }] }, orderBase)] },
-          { Link: "<https://" + SHOP + "/admin/api/2026-07/orders.json?limit=50&page_info=o2>; rel=\"next\"" });
-      }
+      if (u.pathname === GRAPHQL_PATH && (init && init.method) === "POST" && opMatch) return graphql(opMatch[2], (body && body.variables) || {});
     }
     if (u.origin === WOO) {
       if (o.wooStatus !== 200) return reply(o.wooStatus, { code: "woocommerce_rest_cannot_view" });
@@ -421,6 +494,8 @@ function makeStores(opts) {
         }
         return reply(200, [{ id: 400, name: "Poster", type: "simple", sku: "POSTER", price: "", stock_quantity: null, manage_stock: false }], { "X-WP-TotalPages": "2" });
       }
+      // NAMED (Nov 7 2026, migration 176): the store's currency, read once a sync (best effort).
+      if (u.pathname === "/wp-json/wc/v3/data/currencies/current") return reply(200, { code: "EUR", name: "Euro", symbol: "&euro;" });
       if (u.pathname === "/wp-json/wc/v3/products/300/variations") {
         return reply(200, [{ id: 301, sku: "TEE-M", price: "20.00", stock_quantity: 3, manage_stock: true, attributes: [{ name: "Size", option: "M" }] }], { "X-WP-TotalPages": "1" });
       }
@@ -445,12 +520,13 @@ function makeStores(opts) {
   function transport(options) {
     const req = new EventEmitter();
     req.destroy = function () {};
-    req.end = function () {
+    // NAMED (Nov 7 2026, migration 176): the body the fetcher ends the request with is handed on (Shopify's reads are POSTs).
+    req.end = function (payload) {
       process.nextTick(function () {
         options.lookup(options.hostname, { all: true }, function (err, addresses) {
           if (err) return req.emit("error", err);
           const url = "https://" + options.hostname + options.path;
-          const r = answer(url, { method: options.method, headers: options.headers, address: Array.isArray(addresses) ? addresses[0].address : addresses });
+          const r = answer(url, { method: options.method, headers: options.headers, body: payload ? Buffer.from(payload).toString("utf8") : null, address: Array.isArray(addresses) ? addresses[0].address : addresses });
           if (r.error) return req.emit("error", r.error);
           const res = new PassThrough();
           res.statusCode = r.status;
@@ -487,7 +563,10 @@ const TRIPPED = [];
 })();
 
 /* ── the routes, run from server.js's own source ─────────────────────────── */
-const START = "/* ── Store connections, read-only (migration 163, lib/storeSync.js) ──────────";
+// NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE the section began "Store connections, read-only
+// (migration 163, ...)". AFTER changes are possible with approval and Shopify connects on OAuth, so it names the
+// three migrations; the section is still the same block, from here to END.
+const START = "/* ── Store connections (migrations 163, 175, 176; lib/storeSync.js) ──────────";
 const END = "// The SEO writer used to answer in JSON, which meant embedding a whole HTML";
 const SECTION = (function () {
   const a = FILES.server.indexOf(START), b = FILES.server.indexOf(END, a);
@@ -519,6 +598,9 @@ function mountRoutes(env) {
       if (r === "./lib/storeSync") return SS;
       if (r === "./lib/apiKeyCrypto") return { encrypt: function (p) { return CRYPT.encrypt(p); }, decrypt: function (x) { return CRYPT.decrypt(x); } };
       if (r === "./lib/guardedFetch") return Object.assign({}, GF, { guardedJsonRequest: stores.jsonRequest });
+      // NAMED (Nov 7 2026, migration 176): the Shopify routes and the sync's reader, compiled above from this run's texts.
+      if (r === "./lib/shopifyApi") return SAPI;
+      if (r === "./lib/shopifyAuth") return SA;
       return realRequire(r);
     },
     app: {}
@@ -534,17 +616,30 @@ function mountRoutes(env) {
 }
 async function hit(m, key, req) {
   const r = m.routes[key];
-  const res = { statusCode: 200, body: undefined, status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
+  const res = { statusCode: 200, body: undefined, headers: {}, set: function (k, v) { this.headers[k] = v; return this; },
+    status: function (c) { this.statusCode = c; return this; }, json: function (b) { this.body = JSON.parse(JSON.stringify(b)); return this; } };
   let err = null;
   try { await r.handler(Object.assign({ user: { id: USER }, body: {}, params: {} }, req), res, function (e) { err = e || new Error("next"); }); }
   catch (e) { err = e; res.statusCode = 599; }
   return { status: res.statusCode, body: res.body || {}, err: err };
 }
-// What lib/storeSync.js must hand the guarded fetcher on every request, and nothing else.
+/* What each request must hand the guarded fetcher, and nothing else. NAMED (Nov 7 2026, migration 176): BEFORE one
+   shape for both platforms: a GET exposing retry-after, link and x-wp-totalpages. AFTER WooCommerce (lib/storeSync.js)
+   is a GET exposing retry-after and x-wp-totalpages; a Shopify read (lib/shopifyApi.js readQuery) is a POST whose body
+   is { query, variables } with a "query" document, exposing retry-after only; a token request (lib/shopifyAuth.js) is
+   a POST to the shop's /admin/oauth/access_token. Each 8 MB (the default for the token request) and 20 s or less. */
 function optionsAsDecided(op) {
   return !!op && J(Object.keys(op).sort()) === J(["exposeHeaders", "headers", "maxBytes", "method", "timeoutMs"]) && op.method === "GET" &&
-    J(op.exposeHeaders) === J(["retry-after", "link", "x-wp-totalpages"]) && op.maxBytes === 8 * 1024 * 1024 && op.timeoutMs === 20000;
+    J(op.exposeHeaders) === J(["retry-after", "x-wp-totalpages"]) && op.maxBytes === 8 * 1024 * 1024 && op.timeoutMs === 20000;
 }
+function shopifyReadAsDecided(a) {
+  const op = a && a.options;
+  return !!op && new URL(a.url).pathname === GRAPHQL_PATH && J(Object.keys(op).sort()) === J(["body", "exposeHeaders", "headers", "maxBytes", "method", "timeoutMs"]) &&
+    op.method === "POST" && J(Object.keys(op.body).sort()) === J(["query", "variables"]) && /^query [A-Za-z]+/.test(op.body.query) && !/\bmutation\b/.test(op.body.query) &&
+    J(op.exposeHeaders) === J(["retry-after"]) && op.maxBytes === 8 * 1024 * 1024 && op.timeoutMs === 20000 && op.headers["X-Shopify-Access-Token"] !== undefined;
+}
+function isTokenRequest(a) { return !!a && new URL(a.url).pathname === "/admin/oauth/access_token" && a.options && a.options.method === "POST"; }
+function graphqlCalls(stores, op) { return stores.calls.filter(function (c) { return new URL(c.url).pathname === GRAPHQL_PATH && (!op || c.op === op); }); }
 function noSecretIn(text, secrets) { return secrets.every(function (s) { return String(text).indexOf(s) === -1; }); }
 
 /* lib-level deps for the sync and the tick */
@@ -554,12 +649,22 @@ function libDeps(db, stores, extra) {
     supabase: db, env: {}, jsonRequest: stores.jsonRequest, now: function () { return Date.parse("2026-11-03T05:00:00.000Z"); },
     sleep: function (ms) { sleeps.push(ms); return Promise.resolve(); }, sleeps: sleeps,
     encrypt: CRYPT.encrypt, decrypt: CRYPT.decrypt,
+    // NAMED (Nov 7 2026, migration 176): the sync reads Shopify through lib/shopifyApi.js, with the app's credentials for a refresh.
+    shopifyReader: SAPI, shopifyConfig: function () { return SHOPIFY_CONFIG; },
     userPlan: async function () { return { plan: { active: true }, error: null }; }
   }, extra || {});
 }
+/* NAMED (Nov 7 2026, migration 176): BEFORE the row held a sealed { access_token } in credentials_*. AFTER the
+   migration-176 shape: the access token sealed in access_* with its expiry (far off, so no refresh unless a test
+   asks), the refresh token sealed in credentials_* as { refresh_token }, token_version 0, the read scopes granted. */
 function shopifyConn(db, userId) {
-  const sealed = SS.sealCredentials({ access_token: TOKEN }, CRYPT.encrypt);
-  const row = Object.assign({ id: uuid(), user_id: userId || USER, platform: "shopify", store_url: SHOP, status: "connected", created_at: "2026-11-01T00:00:00.000Z" }, sealed);
+  const sealed = SS.sealCredentials({ refresh_token: REFRESH }, CRYPT.encrypt);
+  const access = CRYPT.encrypt(TOKEN);
+  const row = Object.assign({ id: uuid(), user_id: userId || USER, platform: "shopify", store_url: SHOP, status: "connected", permission: "read",
+    access_ciphertext: access.ciphertext, access_iv: access.iv, access_auth_tag: access.authTag,
+    access_expires_at: "2027-06-01T00:00:00.000Z", refresh_expires_at: "2027-09-01T00:00:00.000Z", token_version: 0,
+    granted_scopes: "read_products,read_inventory,read_orders,read_locations", location_id: null, location_name: null, currency: null,
+    created_at: "2026-11-01T00:00:00.000Z" }, sealed);
   db.t.member_store_connections.push(row);
   return row;
 }
@@ -585,38 +690,41 @@ function shopifyConn(db, userId) {
   const lim = connect.middleware[2] && connect.middleware[2].limiter;
   check("C1. connect is requireAuth, requireActiveSubscription and 5 an hour",
     connect.middleware[0] === requireAuth && connect.middleware[1] === requireActiveSubscription && lim && lim.max === 5 && lim.windowMs === 3600000);
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE C2 to C8 connected a pasted shpat_ token through this route
+     (one GET to access_scopes.json, stored encrypted; a write_ scope, a missing read scope, a 401, a bad domain or no
+     ENCRYPTION_SECRET refused). AFTER the pasted-token path is removed: whatever a Shopify body carries, the route answers
+     400 "Use Connect Shopify on the Store Agent page." (use_connect_shopify), asks nothing and stores nothing. The OAuth
+     flow (state, HMAC, timestamp, code exchange, scopes, sealing) is scripts/checkShopifyConnect.js's. */
   let r = await hit(m, "post /api/store/connections", { body: { platform: "shopify", store_url: "https://" + SHOP, access_token: TOKEN } });
-  const row = m.db.t.member_store_connections[0] || {};
-  check("C2. a read-only token: 200, one GET to access_scopes, the connection stored", r.status === 200 && !!r.body && r.body.saved === true &&
-    m.stores.calls.length === 1 && m.stores.calls[0].method === "GET" && /access_scopes\.json$/.test(m.stores.calls[0].url) && row.status === "connected" && row.store_url === SHOP, J([r.status, r.body, m.stores.calls.length]));
-  let opened = null;
-  try { opened = SS.openCredentials(row, CRYPT.decrypt); } catch (e) { opened = null; }
-  check("C3. stored ENCRYPTED: hex columns without the token, which decrypt to it", /^[0-9a-f]+$/.test(row.credentials_ciphertext || "") &&
-    noSecretIn(J(row), [TOKEN, "shpat_"]) && opened && opened.access_token === TOKEN, J(row).slice(0, 200));
-  check("C4. the token is in no response and no log line", !!r.body && noSecretIn(J(r.body), [TOKEN, row.credentials_ciphertext || "x-none"]) && noSecretIn(m.logs.join("\n"), [TOKEN]),
-    J(r.body));
-  for (const [label, opts, code] of [
-    ["a token with a write_ scope", { scopes: ["read_products", "read_inventory", "read_orders", "write_products"] }, "write_scope"],
-    ["a token missing read_orders", { scopes: ["read_products", "read_inventory"] }, "missing_scope"],
-    ["a token Shopify refuses (401)", { verifyStatus: 401 }, "shopify_rejected"]]) {
-    const mm = mountRoutes({ stores: opts });
-    const rr = await hit(mm, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
-    check("C5. " + label + ": refused (" + code + "), with a clear message, and NOTHING stored",
-      rr.status === 400 && rr.body.code === code && rr.body.saved === false && typeof rr.body.error === "string" && rr.body.error.length > 30 &&
-      mm.db.t.member_store_connections.length === 0 && mm.stores.calls.length === 1, J([rr.status, rr.body, mm.db.t.member_store_connections.length]));
-  }
-  const mw = mountRoutes({ stores: { scopes: ["read_products", "write_inventory"] } });
-  const rw = await hit(mw, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
-  check("C6. ...the write-scope message says what to do", rw.body && /write_/.test(rw.body.error || "") && /read_products, read_inventory and read_orders/.test(rw.body.error || ""));
-  const mb = mountRoutes({});
-  const rb = await hit(mb, "post /api/store/connections", { body: { platform: "shopify", store_url: "evil.com", access_token: TOKEN } });
-  check("C7. a domain that is not *.myshopify.com: 400 before any request", rb.status === 400 && rb.body.code === "shopify_domain" && mb.stores.calls.length === 0);
-  const mn = mountRoutes({ env: { ENCRYPTION_SECRET: "" } });
-  process.env.ENCRYPTION_SECRET = "";
-  const rn = await hit(mn, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
-  process.env.ENCRYPTION_SECRET = SECRET_HEX;
-  check("C8. a server without ENCRYPTION_SECRET: 503, nothing sent to Shopify, nothing stored",
-    rn.status === 503 && rn.body.code === "no_encryption_key" && mn.stores.calls.length === 0 && mn.db.t.member_store_connections.length === 0, J([rn.status, rn.body]));
+  check("C2. a Shopify body with a pasted token: 400 use_connect_shopify, the exact message, nothing asked, nothing stored",
+    r.status === 400 && r.body.code === "use_connect_shopify" && r.body.error === "Use Connect Shopify on the Store Agent page." && r.body.saved === false &&
+    m.stores.calls.length === 0 && m.db.t.member_store_connections.length === 0, J([r.status, r.body, m.stores.calls.length]));
+  check("C3. ...and the token is in no response and no log line", noSecretIn(J(r.body), [TOKEN]) && noSecretIn(m.logs.join("\n"), [TOKEN]));
+  const rbare = await hit(m, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP } });
+  check("C4. a Shopify body with no token at all: the same 400", rbare.status === 400 && rbare.body.code === "use_connect_shopify" && m.db.t.member_store_connections.length === 0);
+  const start = m.routes["post /api/store/shopify/start"], finish = m.routes["post /api/store/shopify/finish"];
+  const sLim = start && start.middleware[2] && start.middleware[2].limiter, fLim = finish && finish.middleware[2] && finish.middleware[2].limiter;
+  check("C5. Connect Shopify's start and finish are requireAuth, requireActiveSubscription and 10 an hour, one limiter keyed shopify-connect:<id>",
+    !!start && !!finish && start.middleware[0] === requireAuth && start.middleware[1] === requireActiveSubscription &&
+    finish.middleware[0] === requireAuth && finish.middleware[1] === requireActiveSubscription && sLim === fLim && sLim.max === 10 && sLim.windowMs === 3600000 &&
+    sLim.keyGenerator({ user: { id: USER } }) === "shopify-connect:" + USER);
+  const rs = await hit(m, "post /api/store/shopify/start", { body: { shop: SHOP } });
+  const rl = await hit(m, "get /api/store/connections", {});
+  check("C6. without SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET: start answers 503 \"Shopify connection isn't set up yet.\", nothing asked or stored, and the list says shopify_available false",
+    rs.status === 503 && rs.body.error === "Shopify connection isn't set up yet." && m.stores.calls.length === 0 && m.db.t.member_store_connections.length === 0 &&
+    rl.body.shopify_available === false, J([rs.status, rs.body, rl.body.shopify_available]));
+  const mc = mountRoutes({ env: { SHOPIFY_CLIENT_ID: SHOPIFY_CONFIG.clientId, SHOPIFY_CLIENT_SECRET: SHOPIFY_CONFIG.clientSecret } });
+  const rb = await hit(mc, "post /api/store/shopify/start", { body: { shop: "evil.com" } });
+  const rlc = await hit(mc, "get /api/store/connections", {});
+  check("C7. configured: a shop that is not *.myshopify.com is refused before any request, and the list says shopify_available true",
+    rb.status === 400 && rb.body.code === "shopify_domain" && mc.stores.calls.length === 0 && rlc.body.shopify_available === true, J([rb.status, rb.body, rlc.body.shopify_available]));
+  const rgo = await hit(mc, "post /api/store/shopify/start", { body: { shop: "https://" + SHOP + "/admin" } });
+  const goUrl = rgo.body && rgo.body.authorize_url ? new URL(rgo.body.authorize_url) : null;
+  check("C8. configured: start answers Shopify's own authorization page on the shop, read scopes only by default, nothing asked of the shop, nothing stored in member_store_connections",
+    rgo.status === 200 && goUrl && goUrl.origin === "https://" + SHOP && goUrl.pathname === "/admin/oauth/authorize" &&
+    goUrl.searchParams.get("scope") === "read_products,read_inventory,read_orders,read_locations" &&
+    goUrl.searchParams.get("redirect_uri") === "https://bizforceai.net/store-agent.html" && mc.stores.calls.length === 0 && mc.db.t.member_store_connections.length === 0,
+    J([rgo.status, rgo.body]));
 
   /* ── W ── */
   console.log("\n══ W. connecting WooCommerce ══");
@@ -662,8 +770,10 @@ function shopifyConn(db, userId) {
   const st = (r.body.connections || [])[0] || {};
   // NAMED (Nov 6 2026, store changes, migration 175): BEFORE eight safe fields. AFTER permission too ("read" or
   // "read_write"), so the page can say "Read only" or "Changes allowed with your approval"; still never a credential.
-  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "id", "last_error_code", "last_sync_at", "permission", "platform", "platform_label", "status", "store"]) &&
-    st.permission === "read" &&
+  // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE nine fields. AFTER currency, location_id, location_name and
+  // stock_scope too (Shopify's location for stock changes; the latter three null on WooCommerce); still never a credential or a token.
+  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "currency", "id", "last_error_code", "last_sync_at", "location_id", "location_name", "permission", "platform", "platform_label", "status", "stock_scope", "store"]) &&
+    st.permission === "read" && st.location_id === null && st.stock_scope === null &&
     !/ciphertext|credential|auth_tag|_iv/.test(J(r.body)), J(r.body));
   check("S2. the list and disconnect need only a login (a member can always take their key back)",
     m.routes["get /api/store/connections"].middleware.length === 1 && m.routes["get /api/store/connections"].middleware[0] === requireAuth &&
@@ -684,11 +794,16 @@ function shopifyConn(db, userId) {
   const synced = m.db.t.inventory_items.filter(function (x) { return x.store_connection_id === conn.id; });
   const hat = synced.find(function (x) { return x.external_id === "variant:11"; }) || {};
   const scarf = synced.find(function (x) { return x.external_id === "variant:21"; }) || {};
-  check("Y1. products and variants map: name, SKU, price, cost, stock, source shopify",
+  // NAMED (Nov 7 2026, migration 176): Y1 adds the inventory item id each row now keeps (Shopify's stock changes need it).
+  check("Y1. products and variants map: name, SKU, price, cost, stock, source shopify, and the inventory item id",
     r.status === 200 && hat.name === "Wool Hat - Red" && hat.sku === "HAT-RED" && hat.unit_price === 25 && hat.unit_cost === 10 && hat.quantity_on_hand === 4 && hat.source === "shopify" &&
+    hat.external_inventory_item_id === "9011" &&
     scarf.name === "Scarf" && scarf.quantity_on_hand === 0 && scarf.unit_cost === null && scarf.user_id === USER, J([r.status, r.body, hat, scarf]));
-  check("Y2. both pages were read (the Link header was followed), and the stock the store does not track was skipped, not written as 0",
-    m.stores.calls.some(function (c) { return /page_info=p2/.test(c.url); }) && !synced.some(function (x) { return x.external_id === "variant:22"; }) && r.body.synced && r.body.synced.skipped_untracked === 1, J(r.body));
+  // NAMED (Nov 7 2026, migration 176): BEFORE "the Link header was followed" (page_info=p2). AFTER the second page is asked
+  // with the first page's endCursor (c2) as the cursor variable.
+  check("Y2. both pages were read (the endCursor was followed), and the stock the store does not track was skipped, not written as 0",
+    graphqlCalls(m.stores, "Variants").some(function (c) { return c.body.variables.cursor === "c2"; }) && !synced.some(function (x) { return x.external_id === "variant:22"; }) &&
+    r.body.synced && r.body.synced.skipped_untracked === 1, J(r.body));
   const mine1 = m.db.t.inventory_items.find(function (x) { return x.id === manualSku.id; });
   const mine2 = m.db.t.inventory_items.find(function (x) { return x.id === manualNoSku.id; });
   const theirs = m.db.t.inventory_items.find(function (x) { return x.id === otherUser.id; });
@@ -703,8 +818,17 @@ function shopifyConn(db, userId) {
   check("Y6. an order summary has exactly the summary columns, and NO customer field anywhere",
     orders.every(function (o) { return J(Object.keys(o).sort()) === J(allowed); }) &&
     noSecretIn(J(orders), [CUSTOMER.email, CUSTOMER.phone, CUSTOMER.first, CUSTOMER.last, CUSTOMER.street, "customer", "billing", "shipping"]), J(orders[0]));
-  check("Y7. the orders were asked for with fields limited to id, date, total, currency and line items",
-    m.stores.calls.filter(function (c) { return /orders\.json/.test(c.url) && !/page_info/.test(c.url); }).every(function (c) { return /fields=id,created_at,total_price,currency,line_items/.test(c.url); }));
+  /* NAMED (Nov 7 2026, migration 176): BEFORE the REST orders URL carried fields=id,created_at,total_price,currency,line_items.
+     AFTER the Orders query names its fields: id, createdAt, the total and its currency, and line items' sku and quantity, and
+     nothing about a customer; it asks only orders created in the window. */
+  const orderAsks = graphqlCalls(m.stores, "Orders");
+  check("Y7. the orders were asked for with fields limited to id, date, total, currency and line items' SKU and quantity, since the window's start",
+    orderAsks.length >= 2 && orderAsks.every(function (c) {
+      const q = c.body.query;
+      return /nodes \{ id createdAt totalPriceSet \{ shopMoney \{ amount currencyCode \} \} lineItems\(first: 40\) \{ nodes \{ sku quantity \} \} \}/.test(q) &&
+        !/customer|email|phone|billing|shipping|Address|note/i.test(q) && /^created_at:>='\d{4}-\d{2}-\d{2}T/.test(c.body.variables.search);
+    }), J(orderAsks.map(function (c) { return c.body; })).slice(0, 400));
+  check("Y7b. the shop's currency was read and stored on the connection", (m.db.t.member_store_connections[0] || {}).currency === "CAD" && graphqlCalls(m.stores, "ShopInfo").length >= 1);
   m.db.t.inventory_items.find(function (x) { return x.external_id === "variant:11"; }).reorder_point = 6;
   const before = m.db.t.inventory_items.length;
   r = await hit(m, "post /api/store/connections/:id/sync", { params: { id: conn.id } });
@@ -715,10 +839,13 @@ function shopifyConn(db, userId) {
      call's redirect: "manual". AFTER there is no fetch: each request is a deps.jsonRequest call (the guarded fetcher,
      which never follows a redirect; G3 proves a 302 is refused and its target never asked), with exactly the options
      decided, and one request reached the shop for each call. Still GET only, still the shop only. */
-  check("Y9. every request to the store was a GET through deps.jsonRequest with the decided options, and went only to the shop", m.stores.calls.length > 6 &&
-    m.stores.calls.every(function (c) { return c.method === "GET" && new URL(c.url).hostname === SHOP; }) &&
-    m.stores.asked.length === m.stores.calls.length && m.stores.asked.every(function (a) { return optionsAsDecided(a.options); }),
-    J([m.stores.calls.map(function (c) { return c.method; }), m.stores.asked.length, m.stores.calls.length]));
+  // NAMED (Nov 7 2026, migration 176): BEFORE every request was a GET. AFTER every Shopify read is a POST of a "query" document
+  // to the shop's graphql.json, never a mutation, with the decided options.
+  check("Y9. every request to the store was a POST of a GraphQL query (never a mutation) through deps.jsonRequest with the decided options, and went only to the shop's graphql.json",
+    m.stores.calls.length > 6 &&
+    m.stores.calls.every(function (c) { return c.method === "POST" && c.kind === "query" && new URL(c.url).hostname === SHOP && new URL(c.url).pathname === GRAPHQL_PATH; }) &&
+    m.stores.asked.length === m.stores.calls.length && m.stores.asked.every(shopifyReadAsDecided),
+    J([m.stores.calls.map(function (c) { return c.method + " " + c.op; }), m.stores.asked.length, m.stores.calls.length]));
   check("Y10. the connection records the sync time, and no log line holds the token", !!(m.db.t.member_store_connections[0] || {}).last_sync_at && noSecretIn(m.logs.join("\n"), [TOKEN]));
 
   // WooCommerce through the lib
@@ -742,24 +869,39 @@ function shopifyConn(db, userId) {
   const sm = SS.summaryOf("shopify", { id: 1, created_at: "2026-11-01T00:00:00Z", total_price: "1.00", currency: "USD", email: "a@b.c", customer: { email: "a@b.c" }, line_items: [{ sku: "X", quantity: 1, name: "secret name" }] });
   check("Y14. summaryOf keeps exactly external_id, ordered_at, total, currency and line_items of SKU and quantity",
     J(Object.keys(sm).sort()) === J(SS.SUMMARY_KEYS.slice().sort()) && J(sm.line_items) === J([{ sku: "X", quantity: 1 }]) && J(sm).indexOf("a@b.c") === -1, J(sm));
+  // NAMED (Nov 7 2026, migration 176): a chosen location. The stock is that location's "available", read with VariantsAt.
+  const ldb = makeDb(), lst = makeStores({});
+  const lconn = shopifyConn(ldb); lconn.location_id = LOCATION; lconn.location_name = "Main warehouse";
+  const lres = await SS.syncConnection(libDeps(ldb, lst), lconn);
+  const lhat = ldb.t.inventory_items.find(function (x) { return x.external_id === "variant:11"; }) || {};
+  check("Y15. with a location chosen, the variants are read at it (VariantsAt, location variable) and the stock is its \"available\", not the total",
+    lres.ok === true && lhat.quantity_on_hand === 3 && graphqlCalls(lst, "Variants").length === 0 &&
+    graphqlCalls(lst, "VariantsAt").length === 2 && graphqlCalls(lst, "VariantsAt").every(function (c) { return c.body.variables.location === LOCATION; }), J([lres, lhat.quantity_on_hand]));
 
   /* ── G ── NAMED (store connections security fix, Nov 3 2026) */
   console.log("\n══ G. every store request through the guarded fetcher: no rebinding gap, size-limited, never redirected ══");
   const MB8 = 8 * 1024 * 1024;
-  check("G1. the decided limits: Shopify pages of 50, caps of 200 products pages, 200 orders pages and 40 for everything else; 8 MB (the guarded fetcher's ceiling); 20 s; three exposed headers",
-    J(SS.PAGE_CAPS) === J({ shopifyProducts: 200, shopifyOrders: 200, other: 40 }) && SS.SHOPIFY_PAGE_SIZE === 50 &&
-    SS.REQUEST_MAX_BODY_BYTES === MB8 && GF.JSON_MAX_BODY_BYTES_CEILING === MB8 && SS.REQUEST_TIMEOUT_MS === 20000 &&
-    J(SS.REQUEST_EXPOSED_HEADERS) === J(["retry-after", "link", "x-wp-totalpages"]) && !/\bMAX_PAGES\b/.test(FILES.sync),
-    J([SS.PAGE_CAPS, SS.SHOPIFY_PAGE_SIZE, SS.REQUEST_MAX_BODY_BYTES, SS.REQUEST_TIMEOUT_MS, SS.REQUEST_EXPOSED_HEADERS]));
-  const shopUrls = m.stores.calls.map(function (c) { return new URL(c.url); });
-  const firstOf = function (re) { return shopUrls.find(function (u) { return re.test(u.pathname) && !u.searchParams.get("page_info"); }); };
-  const pProducts = firstOf(/\/products\.json$/), pOrders = firstOf(/\/orders\.json$/), pInv = firstOf(/\/inventory_items\.json$/);
-  check("G2. Shopify asks for products and orders 50 a page, and inventory items 100 a call",
-    !!pProducts && pProducts.searchParams.get("limit") === "50" && !!pOrders && pOrders.searchParams.get("limit") === "50" &&
-    !!pInv && pInv.searchParams.get("limit") === "100", J([pProducts && pProducts.search, pOrders && pOrders.search, pInv && pInv.search]));
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE PAGE_CAPS { shopifyProducts: 200, shopifyOrders: 200,
+     other: 40 }, SHOPIFY_PAGE_SIZE 50 and three exposed headers (link for Shopify's paging), all in lib/storeSync.js. AFTER
+     lib/storeSync.js keeps WooCommerce's (other: 40; retry-after and x-wp-totalpages) and has no Shopify paging at all;
+     lib/shopifyApi.js has Shopify's: 50 variants a page, 20 orders of at most 40 line items a page, 200 pages of each,
+     8 MB, 20 s, retry-after only. */
+  check("G1. the decided limits: WooCommerce 40 pages, Shopify 200 pages of variants and of orders; 8 MB (the guarded fetcher's ceiling); 20 s; WooCommerce exposes two headers, Shopify one",
+    J(SS.PAGE_CAPS) === J({ other: 40 }) && SS.SHOPIFY_PAGE_SIZE === undefined && J(SAPI.PAGE_CAPS) === J({ variants: 200, orders: 200 }) &&
+    SAPI.PAGE_SIZE === 50 && SAPI.ORDER_PAGE_SIZE === 20 && SAPI.ORDER_LINE_ITEMS === 40 &&
+    SS.REQUEST_MAX_BODY_BYTES === MB8 && SAPI.REQUEST_MAX_BODY_BYTES === MB8 && GF.JSON_MAX_BODY_BYTES_CEILING === MB8 && SS.REQUEST_TIMEOUT_MS === 20000 &&
+    SAPI.REQUEST_TIMEOUT_MS === 20000 && J(SS.REQUEST_EXPOSED_HEADERS) === J(["retry-after", "x-wp-totalpages"]) && !/\bMAX_PAGES\b/.test(FILES.sync),
+    J([SS.PAGE_CAPS, SAPI.PAGE_CAPS, SAPI.PAGE_SIZE, SS.REQUEST_MAX_BODY_BYTES, SS.REQUEST_TIMEOUT_MS, SS.REQUEST_EXPOSED_HEADERS]));
+  // NAMED (Nov 7 2026, migration 176): BEFORE the REST limit= parameters (50, 50, and 100 inventory items a call). AFTER the GraphQL first: arguments.
+  const vq = (graphqlCalls(m.stores, "Variants")[0] || { body: { query: "" } }).body.query, oq = (graphqlCalls(m.stores, "Orders")[0] || { body: { query: "" } }).body.query;
+  check("G2. Shopify asks for variants 50 a page and orders 20 a page with at most 40 line items each, by cursor",
+    /productVariants\(first: 50, after: \$cursor\)/.test(vq) && /orders\(first: 20, after: \$cursor, query: \$search, sortKey: CREATED_AT\)/.test(oq) && /lineItems\(first: 40\)/.test(oq), J([vq, oq]).slice(0, 300));
   const wooUrls = wst.calls.map(function (c) { return new URL(c.url); });
   const wOrders = wooUrls.filter(function (u) { return u.pathname === "/wp-json/wc/v3/orders"; });
-  const wPaged = wooUrls.filter(function (u) { return u.searchParams.get("per_page") !== "1"; });
+  // NAMED (Nov 7 2026, migration 176): the one currency read is not a paged request, so it is left out of G4's pages.
+  const wPaged = wooUrls.filter(function (u) { return u.searchParams.get("per_page") !== "1" && u.pathname !== "/wp-json/wc/v3/data/currencies/current"; });
+  check("G4b. WooCommerce's currency is read once a sync, by GET, and stored on the connection",
+    wooUrls.filter(function (u) { return u.pathname === "/wp-json/wc/v3/data/currencies/current"; }).length === 1 && wconn.currency === "EUR" && wres.currency === "EUR", J([wres.currency, wconn.currency]));
   const wFields = wOrders.length ? String(wOrders[0].searchParams.get("_fields")).split(",") : [];
   check("G3. WooCommerce orders ask _fields=id,date_created_gmt,total,currency,line_items.sku,line_items.quantity: the line items' fields by name, never the whole line item",
     wOrders.length === 1 && wOrders[0].searchParams.get("_fields") === "id,date_created_gmt,total,currency,line_items.sku,line_items.quantity" &&
@@ -768,9 +910,11 @@ function shopifyConn(db, userId) {
     wOrders.length && wOrders[0].search);
   check("G4. WooCommerce still pages 100 at a time, for products, variations and orders",
     wPaged.length >= 4 && wPaged.every(function (u) { return u.searchParams.get("per_page") === "100"; }), J(wPaged.map(function (u) { return u.pathname + " " + u.searchParams.get("per_page"); })));
+  // NAMED (Nov 7 2026, migration 176): one decided shape per platform (optionsAsDecided for WooCommerce, shopifyReadAsDecided for Shopify).
   check("G5. every WooCommerce and Shopify request in the syncs above went through deps.jsonRequest, with exactly the decided options",
-    [m.stores, wst].every(function (s) { return s.asked.length > 0 && s.asked.length === s.calls.length && s.asked.every(function (a) { return optionsAsDecided(a.options); }); }),
-    J([m.stores.asked.length, m.stores.calls.length, wst.asked.length, wst.calls.length]));
+    [[m.stores, shopifyReadAsDecided], [wst, function (a) { return optionsAsDecided(a.options); }]].every(function (p) {
+      const s = p[0]; return s.asked.length > 0 && s.asked.length === s.calls.length && s.asked.every(p[1]);
+    }), J([m.stores.asked.length, m.stores.calls.length, wst.asked.length, wst.calls.length]));
 
   async function wooSync(storeOpts) {
     const db = makeDb(), st = makeStores(storeOpts);
@@ -811,11 +955,17 @@ function shopifyConn(db, userId) {
   check("G7. Shopify too: a shop whose name answers 127.0.0.1 is refused, nothing reaches it, one question asked (no retry), recorded as blocked_address",
     sLoop.res.ok === false && sLoop.res.code === "blocked_address" && sLoop.st.calls.length === 0 && sLoop.st.resolved[SHOP] === 1 && backoffs(sLoop.deps).length === 0 &&
     sLoop.conn.last_error_code === "blocked_address", J([sLoop.res, sLoop.st.resolved]));
+  /* NAMED (Nov 7 2026, migration 176): BEFORE connecting a pasted token to a shop answering ::1 was refused as
+     store_unreachable. AFTER there is no pasted token; the live locations read (GET /api/store/connections/:id/locations)
+     on such a shop answers 502 unreachable, nothing reaches it and the connection is not changed. The finish route's
+     reads are scripts/checkShopifyConnect.js's. */
   const mLoop = mountRoutes({ stores: { addresses: [{ address: "::1", family: 6 }] } });
-  const rLoop = await hit(mLoop, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
-  check("G8. connecting a Shopify shop whose name answers ::1: refused as unreachable, nothing reaches it, nothing stored",
-    rLoop.status === 503 && rLoop.body.code === "store_unreachable" && rLoop.body.error === SS.MESSAGES.unreachable && mLoop.stores.calls.length === 0 &&
-    mLoop.db.t.member_store_connections.length === 0, J([rLoop.status, rLoop.body, mLoop.stores.calls.length]));
+  const cLoop = shopifyConn(mLoop.db);
+  const quietLoop = [console.error, console.log];
+  const rLoop = await hit(mLoop, "get /api/store/connections/:id/locations", { params: { id: cLoop.id } });
+  check("G8. the live locations read on a shop whose name answers ::1: 502 unreachable, nothing reaches it, the connection unchanged",
+    rLoop.status === 502 && rLoop.body.code === "unreachable" && mLoop.stores.calls.length === 0 && mLoop.db.t.member_store_connections[0].status === "connected",
+    J([rLoop.status, rLoop.body, mLoop.stores.calls.length, quietLoop.length]));
 
   const wRed = await wooSync({ wooRedirect: true });
   check("G9. a 302 from the store is refused as redirected and never followed: its target (169.254.169.254) is never asked, and it is not retried",
@@ -832,13 +982,15 @@ function shopifyConn(db, userId) {
   check("G11. ...the server log line says too_large, with no URL, no header and no key",
     failLine.length === 1 && failLine[0] === "[StoreSync] woocommerce connection " + wBig.conn.id + " failed: too_large" &&
     noSecretIn(wBig.lines.join("\n"), ["https://", "woo.example.com", "wp-json", "Basic", "Authorization", CK, CS]), J(wBig.lines));
-  const sBig = await shopSync({ productsHuge: true });
-  check("G12. a Shopify page over 8 MB: too_large the same way, asked once",
-    sBig.res.ok === false && sBig.st.calls.filter(function (c) { return /products\.json/.test(c.url); }).length === 1 && sBig.conn.last_error_code === "too_large" &&
-    noSecretIn(sBig.lines.join("\n"), ["https://", "admin/api", TOKEN]), J([sBig.res, sBig.conn.last_error_code]));
+  // NAMED (Nov 7 2026, migration 176): BEFORE the products.json page. AFTER the Variants query's answer.
+  const sBig = await shopSync({ variantsHuge: true });
+  check("G12. a Shopify answer over 8 MB: too_large the same way, asked once",
+    sBig.res.ok === false && graphqlCalls(sBig.st, "Variants").length === 1 && sBig.conn.last_error_code === "too_large" &&
+    noSecretIn(sBig.lines.join("\n"), ["https://", "admin/api", "graphql", TOKEN]), J([sBig.res, sBig.conn.last_error_code]));
 
   // the member's message: what an unreachable store tells them today, word for word
-  const mHuge = mountRoutes({ stores: { productsHuge: true } }), mDown = mountRoutes({ stores: { networkDown: true } });
+  // NAMED (Nov 7 2026, migration 176): BEFORE productsHuge (the first REST read). AFTER shopHuge: every GraphQL answer, so the first read, ShopInfo, is the one over 8 MB.
+  const mHuge = mountRoutes({ stores: { shopHuge: true } }), mDown = mountRoutes({ stores: { networkDown: true } });
   const cHuge = shopifyConn(mHuge.db), cDown = shopifyConn(mDown.db);
   const quiet = [console.error, console.log];
   console.error = function () {}; console.log = function () {};
@@ -852,39 +1004,48 @@ function shopifyConn(db, userId) {
     rDown.body.error === "Your store could not be read just now (unreachable). Nothing was changed. Try again later." && rDown.body.code === "unreachable",
     J([rHuge.status, rHuge.body, rDown.status, rDown.body]));
   check("G14. ...and a network failure IS retried (4 attempts), while the over-8 MB page was asked once; each is recorded as itself",
-    mDown.stores.calls.length === SS.MAX_ATTEMPTS && mHuge.stores.calls.length === 1 &&
+    mDown.stores.calls.length === SS.MAX_ATTEMPTS && SAPI.MAX_ATTEMPTS === SS.MAX_ATTEMPTS && mHuge.stores.calls.length === 1 &&
     mHuge.db.t.member_store_connections[0].last_error_code === "too_large" && mDown.db.t.member_store_connections[0].last_error_code === "unreachable",
     J([mDown.stores.calls.length, mHuge.stores.calls.length]));
-  const mvHuge = mountRoutes({ stores: { verifyHuge: true } }), mvDown = mountRoutes({ stores: { networkDown: true } });
+  /* NAMED (Nov 7 2026, migration 176): BEFORE G15 connected a pasted token whose access_scopes answer was over 8 MB (503,
+     the unreachable body). AFTER the same rule on the live locations read: an over-8 MB answer gives the body a network
+     failure gives (502 unreachable), asked once, and the connection stays as it was. */
+  const mvHuge = mountRoutes({ stores: { shopHuge: true } }), mvDown = mountRoutes({ stores: { networkDown: true } });
+  const cvHuge = shopifyConn(mvHuge.db), cvDown = shopifyConn(mvDown.db);
   console.error = function () {}; console.log = function () {};
   let vHuge, vDown;
   try {
-    vHuge = await hit(mvHuge, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
-    vDown = await hit(mvDown, "post /api/store/connections", { body: { platform: "shopify", store_url: SHOP, access_token: TOKEN } });
+    vHuge = await hit(mvHuge, "get /api/store/connections/:id/locations", { params: { id: cvHuge.id } });
+    vDown = await hit(mvDown, "get /api/store/connections/:id/locations", { params: { id: cvDown.id } });
   } finally { console.error = quiet[0]; console.log = quiet[1]; }
-  check("G15. connecting, an over-8 MB answer is the unreachable answer too (503, the same body), asked once, nothing stored",
-    vHuge.status === 503 && J(vHuge.body) === J(vDown.body) && vHuge.body.error === SS.MESSAGES.unreachable && mvHuge.stores.calls.length === 1 &&
-    mvHuge.db.t.member_store_connections.length === 0, J([vHuge.status, vHuge.body, mvHuge.stores.calls.length]));
+  check("G15. the live locations read: an over-8 MB answer is the unreachable answer too (502, the same body), asked once, the connection unchanged",
+    vHuge.status === 502 && J(vHuge.body) === J(vDown.body) && vHuge.body.code === "unreachable" && mvHuge.stores.calls.length === 1 &&
+    mvHuge.db.t.member_store_connections[0].status === "connected", J([vHuge.status, vHuge.body, mvHuge.stores.calls.length]));
 
   let typeRefusals = 0;
   const refusingDeps = { sleep: async function () {}, jsonRequest: function () { typeRefusals++; return Promise.reject(new TypeError("guardedJsonRequest: maxBytes must be a whole number")); } };
-  let refusedCode = null;
-  try { await SS.request(refusingDeps, "https://" + SHOP + "/admin/oauth/access_scopes.json", {}); } catch (e) { refusedCode = e instanceof SS.StoreRequestError ? e.code : String(e); }
-  check("G16. a refusal by the guarded fetcher itself (a TypeError over its options) is never retried: one call, guard_refused",
-    typeRefusals === 1 && refusedCode === "guard_refused", J([typeRefusals, refusedCode]));
+  let refusedCode = null, apiRefused = null;
+  // NAMED (Nov 7 2026, migration 176): BEFORE the URL was Shopify's access_scopes.json. AFTER a WooCommerce URL for
+  // lib/storeSync.js, and the same rule for lib/shopifyApi.js's readQuery.
+  try { await SS.request(refusingDeps, WOO + "/wp-json/wc/v3/products?per_page=1", {}); } catch (e) { refusedCode = e instanceof SS.StoreRequestError ? e.code : String(e); }
+  try { await SAPI.readQuery(refusingDeps, SHOP, TOKEN, "query ShopInfo { shop { currencyCode } }", {}); } catch (e) { apiRefused = e instanceof SS.StoreRequestError ? e.code : String(e); }
+  check("G16. a refusal by the guarded fetcher itself (a TypeError over its options) is never retried: one call each, guard_refused",
+    typeRefusals === 2 && refusedCode === "guard_refused" && apiRefused === "guard_refused", J([typeRefusals, refusedCode, apiRefused]));
 
   const wOne = await wooSync({ wooOneFullPage: true });
   const pageTwo = wOne.st.calls.filter(function (c) { return /\/products\?/.test(c.url) && new URL(c.url).searchParams.get("page") === "2"; }).length;
   check("G17. paging reads the exposed X-WP-TotalPages: a full page of 100 that says it is the only page is the last one asked",
     wOne.res.ok === true && pageTwo === 0 && wOne.st.calls.some(function (c) { return /\/products\?/.test(c.url) && new URL(c.url).searchParams.get("page") === "1"; }),
     J([wOne.res.ok, pageTwo]));
-  check("G18. ...and Y2's second Shopify page came from the exposed Link header (page_info=p2, the same shop)",
-    m.stores.calls.some(function (c) { return /\/products\.json\?limit=50&page_info=p2$/.test(c.url) && new URL(c.url).hostname === SHOP; }));
+  // NAMED (Nov 7 2026, migration 176): BEFORE the second page came from the exposed Link header. AFTER from the answer's endCursor.
+  check("G18. ...and Y2's second Shopify page came from the first answer's endCursor (c2), on the same shop, and the first page was asked with no cursor",
+    graphqlCalls(m.stores, "Variants").some(function (c) { return c.body.variables.cursor === "c2" && new URL(c.url).hostname === SHOP; }) &&
+    graphqlCalls(m.stores, "Variants").some(function (c) { return c.body.variables.cursor === null; }));
 
   const sEnd = await shopSync({ endless: true });
-  const prodPages = sEnd.st.calls.filter(function (c) { return /products\.json/.test(c.url); }).length;
-  const ordPages = sEnd.st.calls.filter(function (c) { return /orders\.json/.test(c.url); }).length;
-  check("G19. a shop with no last page: 200 products pages and 200 orders pages are read, and no more",
+  const prodPages = graphqlCalls(sEnd.st, "Variants").length;
+  const ordPages = graphqlCalls(sEnd.st, "Orders").length;
+  check("G19. a shop with no last page: 200 variants pages and 200 orders pages are read, and no more",
     sEnd.res.ok === true && prodPages === 200 && ordPages === 200, J([sEnd.res.ok, prodPages, ordPages]));
   const wEnd = await wooSync({ wooEndless: true });
   const wooProdPages = wEnd.st.calls.filter(function (c) { return /\/wp-json\/wc\/v3\/products\?/.test(c.url); }).length;
@@ -892,14 +1053,30 @@ function shopifyConn(db, userId) {
 
   /* ── A ── */
   console.log("\n══ A. an auth failure: needs_reconnect, one notice, no retry loop ══");
-  const adb = makeDb(), ast = makeStores({ productsStatus: 401 });
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE a 401 on products.json was ONE request and needs_reconnect.
+     AFTER a 401 on a GraphQL read may refresh the token ONCE (lib/shopifyApi.js read): one GraphQL request, one token
+     request, and when Shopify refuses the refresh, needs_reconnect with one notice; no retry loop either way. */
+  const adb = makeDb(), ast = makeStores({ shopStatus: 401 });
   const aconn = shopifyConn(adb);
   const ad = libDeps(adb, ast);
   const a1 = await SS.syncConnection(ad, aconn);
-  const productCalls = ast.calls.filter(function (c) { return /products\.json/.test(c.url); }).length;
-  check("A1. a 401: needs_reconnect, ONE request (no retry), one notice", a1.ok === false && a1.needs_reconnect === true && productCalls === 1 &&
-    adb.t.member_store_connections[0].status === "needs_reconnect" && adb.t.notifications.length === 1 && adb.t.notifications[0].type === "store_reconnect", J([a1, productCalls, adb.t.notifications.length]));
-  check("A2. the notice says what to do and holds no key", /Connect the store again on the Store Agent page/.test(adb.t.notifications[0] && adb.t.notifications[0].message) && noSecretIn(J(adb.t.notifications), [TOKEN]));
+  const productCalls = graphqlCalls(ast).length;
+  const tokenCalls = ast.asked.filter(isTokenRequest).length;
+  check("A1. a 401: ONE GraphQL request (no retry), ONE refresh asked and refused, needs_reconnect, one notice",
+    a1.ok === false && a1.needs_reconnect === true && productCalls === 1 && tokenCalls === 1 && a1.code === "refresh_refused" &&
+    adb.t.member_store_connections[0].status === "needs_reconnect" && adb.t.notifications.length === 1 && adb.t.notifications[0].type === "store_reconnect", J([a1, productCalls, tokenCalls, adb.t.notifications.length]));
+  check("A2. the notice says what to do and holds no key or token", /Connect the store again on the Store Agent page/.test(adb.t.notifications[0] && adb.t.notifications[0].message) &&
+    noSecretIn(J(adb.t.notifications), [TOKEN, REFRESH]));
+  // A refresh Shopify accepts: the new pair is sealed and saved in one update, and the read is asked once more with it.
+  const rdb = makeDb(), rst = makeStores({ shopStatus: 401, refreshOk: true });
+  const rconn = shopifyConn(rdb);
+  const r1 = await SS.syncConnection(libDeps(rdb, rst), rconn);
+  const rrow = rdb.t.member_store_connections[0];
+  let ropen = null; try { ropen = SS.openCredentials(rrow, CRYPT.decrypt); } catch (e) { ropen = null; }
+  check("A1b. a refresh Shopify accepts: token_version 1, both new tokens sealed (never in the clear), and the read asked exactly once more, then given up",
+    rrow.token_version === 1 && ropen && ropen.refresh_token === REFRESH + "n" && CRYPT.decrypt({ ciphertext: rrow.access_ciphertext, iv: rrow.access_iv, authTag: rrow.access_auth_tag }) === TOKEN + "n" &&
+    noSecretIn(J(rrow), [TOKEN, REFRESH]) && graphqlCalls(rst).length === 2 && rst.asked.filter(isTokenRequest).length === 1 && r1.needs_reconnect === true,
+    J([r1, rrow.token_version, graphqlCalls(rst).length]));
   const a2 = await SS.syncConnection(ad, Object.assign({}, aconn, { status: "connected" }));
   check("A3. a second failure finds nothing to mark and sends no second notice", a2.needs_reconnect === true && adb.t.notifications.length === 1, adb.t.notifications.length);
   const am = mountRoutes({});
@@ -908,6 +1085,10 @@ function shopifyConn(db, userId) {
   check("A4. sync now on a store that needs reconnecting: 409, no request", ar.status === 409 && am.stores.calls.length === 0);
   const pass = await SS.runStoreSyncPass(libDeps(adb, ast));
   check("A5. the daily pass skips it (it reads connected stores only)", pass.stores === 0, J(pass));
+  // NAMED (Nov 7 2026, migration 176): WooCommerce keeps A1's old rule, held here now that A1 is Shopify's refresh.
+  const w401 = await wooSync({ wooStatus: 401 });
+  check("A6. WooCommerce: a 401 is ONE request (no retry) and needs_reconnect", w401.res.needs_reconnect === true && w401.st.calls.length === 1 &&
+    w401.conn.status === "needs_reconnect", J([w401.res, w401.st.calls.length]));
 
   /* ── J ── */
   console.log("\n══ J. the daily sync: ENABLE_STORE_SYNC exactly \"true\", its own claim ══");
@@ -946,7 +1127,15 @@ function shopifyConn(db, userId) {
   check("D1. disconnect deletes the connection, its synced rows and its order summaries, and keeps the member's own rows",
     r.status === 200 && hadItems === 2 && hadOrders === 2 && m.db.t.member_store_connections.length === 0 && m.db.t.store_order_summaries.length === 0 &&
     m.db.t.inventory_items.length === 1 && m.db.t.inventory_items[0].id === manualSku.id, J([r.status, hadItems, hadOrders, m.db.t.inventory_items.length]));
-  check("D2. ...and says how to revoke the key in the store", /uninstall the custom app/.test(r.body.note) && /REST API/.test(r.body.note));
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE one note for both platforms ("uninstall the custom app" and
+     "REST API"). AFTER a Shopify disconnect says exactly how to remove the app from the Shopify admin, and a WooCommerce one
+     still says where to revoke the key. */
+  const wdel = Object.assign({ id: uuid(), user_id: USER, platform: "woocommerce", store_url: WOO, status: "connected" }, SS.sealCredentials({ consumer_key: CK, consumer_secret: CS }, CRYPT.encrypt));
+  m.db.t.member_store_connections.push(wdel);
+  const rwdel = await hit(m, "delete /api/store/connections/:id", { params: { id: wdel.id } });
+  check("D2. ...and says how to remove BizForce from the store: Shopify's exact note, and WooCommerce's REST API line",
+    r.body.note === "Disconnected. To remove BizForce from your Shopify admin too, uninstall the BizForce app under Settings, then Apps." &&
+    rwdel.status === 200 && /Settings, Advanced, REST API/.test(rwdel.body.note || "") && !/custom app/.test(rwdel.body.note || ""), J([r.body.note, rwdel.body.note]));
   const r404 = await hit(m, "delete /api/store/connections/:id", { params: { id: uuid() } });
   check("D3. someone else's or an unknown connection: 404", r404.status === 404);
   const YD = realRequire("./lib/yourData");
@@ -956,16 +1145,21 @@ function shopifyConn(db, userId) {
   // NAMED (Nov 6 2026, store changes, migration 175): BEFORE the export selected platform, store_url, status, created_at,
   // last_sync_at. AFTER permission too, between status and created_at; still never the credentials.
   check("D4. the export: connections with safe fields only (never the credentials), order summaries without customer fields",
-    ce && ce.onDelete === "delete" && /^platform, store_url, status, permission, created_at, last_sync_at$/.test(ce.select) && oe && oe.onDelete === "delete" &&
+    // NAMED (Nov 7 2026, migration 176): BEFORE "platform, store_url, status, permission, created_at, last_sync_at". AFTER currency and
+    // location_name too, after permission; still never a credential or a token.
+    ce && ce.onDelete === "delete" && /^platform, store_url, status, permission, currency, location_name, created_at, last_sync_at$/.test(ce.select) && oe && oe.onDelete === "delete" &&
     oe.select === "platform, external_id, ordered_at, total, currency, line_items", J([ce, oe]));
   // NAMED (Nov 6 2026, store changes, migration 175): BEFORE "store_order_summaries", "calendar_events" were adjacent.
   // AFTER store_change_log sits between them (checkStoreChanges G holds it).
   check("D5. the account delete removes both: summaries in DELETE_ORDER, connections in FINAL_DELETES",
     /"inventory_items", "store_order_summaries", "store_change_log", "calendar_events"/.test(yd) && /"member_social_connections", "member_store_connections",/.test(yd));
   const BK = realRequire("./lib/backup"), SC = realRequire("./lib/schemaCheck");
-  check("D6. in the backup lists (the key excluded, the summaries skipped) and the schema list, tagged 163",
+  // NAMED (Nov 7 2026, migration 176): shopify_webhook_events joins them: excluded from backups, and in the schema list tagged 176.
+  check("D6. in the backup lists (the key excluded, the summaries skipped, the webhook receipts excluded) and the schema list, tagged 163 and 176",
     !!BK.EXCLUDED_TABLES.member_store_connections && !!BK.SKIPPED_TABLES.store_order_summaries &&
-    SC.migrationFor("member_store_connections") === "supabase/migrations/163_store_connections.sql" && SC.migrationFor("store_order_summaries") === "supabase/migrations/163_store_connections.sql");
+    BK.EXCLUDED_TABLES.shopify_webhook_events === "Shopify notification receipts, kept 30 days" &&
+    SC.migrationFor("member_store_connections") === "supabase/migrations/163_store_connections.sql" && SC.migrationFor("store_order_summaries") === "supabase/migrations/163_store_connections.sql" &&
+    SC.migrationFor("shopify_webhook_events") === "supabase/migrations/176_shopify_oauth.sql");
 
   /* ── R ── */
   console.log("\n══ R. the readers read synced stock ══");
@@ -1005,7 +1199,11 @@ function shopifyConn(db, userId) {
   // The method names in capitals (a variable named patch and the database's .delete() are not requests),
   // and any method: that is not "GET", in any case.
   const writeWord = codeOnly.match(/\b(POST|PUT|PATCH|DELETE)\b/) || codeOnly.match(/method\s*:\s*["'`](?!GET["'`])[A-Za-z]+/i);
-  check("N1. lib/storeSync.js holds no POST, PUT, PATCH or DELETE, and no method but GET", !writeWord, writeWord && writeWord[0]);
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "N1. lib/storeSync.js holds no POST, PUT, PATCH or DELETE, and no
+     method but GET". AFTER the same, and it names no Shopify request at all (no graphql, no X-Shopify header, no mutation, no
+     /admin/ path): it reads a shop only through deps.shopifyReader. */
+  check("N1. lib/storeSync.js holds no POST, PUT, PATCH or DELETE, no method but GET, and no Shopify request of its own (it reads Shopify only through deps.shopifyReader)",
+    !writeWord && !/graphql|X-Shopify|\bmutation\b|\/admin\//i.test(codeOnly) && /deps\.shopifyReader/.test(codeOnly), (writeWord && writeWord[0]) || "shopify request");
   /* NAMED (store connections security fix, Nov 3 2026): BEFORE N2 was "exactly one fetch call, and it sends method
      GET" (deps.fetch), and N3 "the store section's only fetch is the GET-only wrapper handed to lib/storeSync.js".
      AFTER there is NO fetch, http.request or https.request in lib/storeSync.js, and no module that opens a socket
@@ -1014,9 +1212,24 @@ function shopifyConn(db, userId) {
   const fetchCalls = codeOnly.match(/\bfetch\s*\(/g) || [];
   const rawCalls = codeOnly.match(/\b(https?)\.(request|get)\s*\(|require\(["'](https?|net|tls|dns|undici|node:https?|node:net|node:dns)["']\)/g) || [];
   const jsonCalls = codeOnly.match(/deps\.jsonRequest\(/g) || [];
-  check("N2. ...no fetch, http.request or https.request, nothing that opens a socket; exactly one request call, deps.jsonRequest, and it sends method \"GET\"",
-    fetchCalls.length === 0 && rawCalls.length === 0 && jsonCalls.length === 1 && /deps\.jsonRequest\(url, \{ method: "GET", headers: headers, /.test(codeOnly),
-    J([fetchCalls.length, rawCalls, jsonCalls.length]));
+  /* NAMED (Nov 7 2026, migration 176): BEFORE N2 held lib/storeSync.js alone, the one file that read a store. AFTER
+     lib/shopifyApi.js reads Shopify, so it is held too: no fetch, http.request or https.request; exactly two
+     deps.jsonRequest calls, readQuery's (which refuses any document but a "query") and sendOnce's; and the word
+     "mutation" only inside writePrice and writeStock, the two writes lib/storeWrite.js makes after an approval. */
+  const apiCode = FILES.api.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
+  const apiFetch = (apiCode.match(/\bfetch\s*\(/g) || []).length + (apiCode.match(/\b(https?)\.(request|get)\s*\(|require\(["'](https?|net|tls|dns|undici)["']\)/g) || []).length;
+  const apiJson = (apiCode.match(/deps\.jsonRequest\(/g) || []).length;
+  // The code only (comments are allowed to explain the rule), with the two write functions taken out.
+  const withoutWrites = ["writePrice", "writeStock"].reduce(function (src, n) { return src.split(MUT.definitionOf(FILES.api, n)).join(""); }, FILES.api)
+    .replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
+  check("N2. lib/storeSync.js: no fetch, http.request or https.request, nothing that opens a socket, exactly one request call, deps.jsonRequest, sending \"GET\"; lib/shopifyApi.js: none of those either, exactly two deps.jsonRequest calls (readQuery and sendOnce), and \"mutation\" only inside writePrice and writeStock",
+    fetchCalls.length === 0 && rawCalls.length === 0 && jsonCalls.length === 1 && /deps\.jsonRequest\(url, \{ method: "GET", headers: headers, /.test(codeOnly) &&
+    apiFetch === 0 && apiJson === 2 && /deps\.jsonRequest\(graphqlUrl\(shop\)/.test(MUT.definitionOf(FILES.api, "readQuery")) && /deps\.jsonRequest\(graphqlUrl\(shop\)/.test(MUT.definitionOf(FILES.api, "sendOnce")) &&
+    !/\bmutation\b/i.test(withoutWrites) && ["writePrice", "writeStock"].every(function (n) { return /"mutation [A-Za-z]+\(/.test(MUT.definitionOf(FILES.api, n)); }),
+    J([fetchCalls.length, rawCalls, jsonCalls.length, apiFetch, apiJson]));
+  let notQuery = null; const beforeAsk = makeStores({});
+  try { await SAPI.readQuery({ sleep: async function () {}, jsonRequest: beforeAsk.jsonRequest }, SHOP, TOKEN, "mutation X { productDelete(input: {}) { userErrors { message } } }", {}); } catch (e) { notQuery = e && e.code; }
+  check("N6. readQuery refuses a document that is not a query before anything is sent (not_a_query)", notQuery === "not_a_query" && beforeAsk.asked.length === 0, J([notQuery, beforeAsk.asked.length]));
   check("N3. the routes call no store themselves: the store section has no fetch, and hands lib/storeSync.js the guarded fetcher's guardedJsonRequest",
     (SECTION.match(/\bfetch\s*\(/g) || []).length === 0 &&
     /jsonRequest: function \(url, options\) \{ return require\("\.\/lib\/guardedFetch"\)\.guardedJsonRequest\(url, options\); \}/.test(SECTION) &&
@@ -1025,15 +1238,30 @@ function shopifyConn(db, userId) {
      host or path. AFTER lib/storeWrite.js, the one file that writes to a store (approved WooCommerce changes), may too, and
      only it: it is listed in git or on disk, and every other non-script file still names none. lib/storeWrite.js is
      scanned, not exempted unread: it must name no Shopify host or Admin API path (checkStoreChanges S holds its writes). */
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "no other non-script file names a store's API host or path;
+     lib/storeWrite.js alone may". AFTER lib/shopifyApi.js (the shop's graphql.json) and lib/shopifyAuth.js (its OAuth paths)
+     may too, and are listed whether or not git knows them yet; lib/storeWrite.js may name WooCommerce's path and still names
+     no Shopify host, Admin API path or Shopify header in its code: it writes to Shopify only through lib/shopifyApi.js. */
+  const ALLOWED_NAMERS = ["lib/storeWrite.js", "lib/shopifyApi.js", "lib/shopifyAuth.js"];
   const files = cp.execFileSync("git", ["ls-files", "*.js"], { cwd: REPO }).toString().trim().split(/\r?\n/)
-    .concat(fs.existsSync(path.join(REPO, "lib/storeWrite.js")) ? ["lib/storeWrite.js"] : [])
+    .concat(ALLOWED_NAMERS.filter(function (f) { return fs.existsSync(path.join(REPO, f)); }))
     .filter(function (f, i, all) { return all.indexOf(f) === i && !/^scripts\//.test(f) && f !== "lib/storeSync.js"; });
-  const named = files.filter(function (f) { return f !== "lib/storeWrite.js" && /myshopify\.com|\/wp-json\/wc\/|\/admin\/api\//.test(fs.readFileSync(path.join(REPO, f), "utf8")); });
+  const named = files.filter(function (f) { return ALLOWED_NAMERS.indexOf(f) === -1 && /myshopify\.com|\/wp-json\/wc\/|\/admin\/api\/|\/admin\/oauth\//.test(fs.readFileSync(path.join(REPO, f), "utf8")); });
   const writeSrc = fs.existsSync(path.join(REPO, "lib/storeWrite.js")) ? fs.readFileSync(path.join(REPO, "lib/storeWrite.js"), "utf8") : "";
   const writeCode = writeSrc.replace(/(^|[^:])\/\/[^\n]*/g, "$1").replace(/\/\*[\s\S]*?\*\//g, "");
-  check("N4. no other non-script file names a store's API host or path; lib/storeWrite.js alone may, and its code names no Shopify host or Admin API path",
-    named.length === 0 && writeSrc.length > 0 && !/myshopify\.com|\/admin\/api\/|X-Shopify/.test(writeCode), named.join(", "));
-  check("N5. the stubbed stores saw only GET in this whole run", [m.stores, wst, ast, jst].every(function (s) { return s.calls.every(function (c) { return c.method === "GET"; }); }));
+  check("N4. no non-script file but lib/storeWrite.js, lib/shopifyApi.js and lib/shopifyAuth.js names a store's API host or path, and lib/storeWrite.js's code names no Shopify host, Admin API path or Shopify header",
+    named.length === 0 && writeSrc.length > 0 && !/myshopify\.com|\/admin\/api\/|\/admin\/oauth\/|X-Shopify|graphql/i.test(writeCode), named.join(", "));
+  /* NAMED (Nov 7 2026, migration 176): BEFORE "the stubbed stores saw only GET in this whole run". AFTER WooCommerce saw only
+     GET; Shopify saw only POSTs of GraphQL "query" documents to graphql.json and token POSTs to /admin/oauth/access_token,
+     never a mutation. */
+  check("N5. the stubbed stores saw only GET from WooCommerce, and from Shopify only GraphQL queries and token requests, never a mutation, in this whole run",
+    [m.stores, wst, ast, jst, rst].every(function (s) {
+      return s.calls.every(function (c) {
+        const u = new URL(c.url);
+        if (u.origin === WOO) return c.method === "GET";
+        return c.method === "POST" && ((u.pathname === GRAPHQL_PATH && c.kind === "query") || u.pathname === "/admin/oauth/access_token");
+      });
+    }));
 
   /* ── L ── */
   console.log("\n══ L. the Privacy page, the Store page, the migration, no emoji ══");
@@ -1044,9 +1272,13 @@ function shopifyConn(db, userId) {
      "BizForce never changes anything in your store". AFTER "the key you made for it", a change only when the member
      approves it and only if they allowed changes when connecting, a record of each change, and that record in the
      deletion list. The whole sentence is held word for word by checkStoreChanges L1. */
-  check("L1. the Privacy sentence says what is stored, never customer details, own agents only, changes only with approval, deleted on disconnect or with the account",
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "...are deleted when you disconnect the store or delete your
+     account". AFTER uninstalling BizForce from Shopify deletes them too (the app/uninstalled webhook), and the sentence
+     names the Shopify access approved on connecting, the currency and the location names. Held whole by checkShopifyConnect. */
+  check("L1. the Privacy sentence says what is stored, never customer details, own agents only, changes only with approval, deleted on disconnect, on uninstall or with the account",
     /encrypted/.test(sentence) && /never any customer's name, email, address or phone number/.test(sentence) && /used only for your own agents/.test(sentence) &&
-    /the order summaries and the record of changes are deleted when you disconnect the store or delete your account/.test(sentence) &&
+    /the order summaries and the record of changes are deleted when you disconnect the store, uninstall BizForce from Shopify, or delete your account/.test(sentence) &&
+    /for Shopify, the access you approve when you connect/.test(sentence) && /your store's currency and location names/.test(sentence) &&
     /BizForce changes a product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store/.test(sentence) &&
     !/read-only key|never changes anything/.test(sentence));
   check("L2. privacy.html carries it once, as built", sentence.length > 100 && FILES.privacy.split(esc(sentence)).length === 2);
@@ -1057,12 +1289,17 @@ function shopifyConn(db, userId) {
     FILES.page.indexOf("BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.") !== -1 &&
     FILES.page.indexOf("It never changes your products, prices or orders.") === -1 && /<script src="\/scripts\/store-connect\.js"><\/script>/.test(FILES.page) &&
     /id="storeConnect"/.test(FILES.page));
-  check("L4. the steps: Shopify's three read scopes and the shpat_ token; WooCommerce's Read approval and where to revoke it",
-    /read_products<\/code>, <code>read_inventory<\/code> and <code>read_orders<\/code>/.test(FILES.page) && /shpat_/.test(FILES.page) &&
+  /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE L4 held Shopify's custom-app steps (three read scopes and a
+     shpat_ token field) and L5 that the token field was cleared (tokenEl.value = ""). AFTER the Shopify part is the shop's
+     address, the changes box and Connect Shopify, with no token field and no shpat_ anywhere on the page or in its script;
+     the page clears the WooCommerce address after connecting instead. */
+  check("L4. the steps: Shopify's own approval page, the shop address and Connect Shopify, no token field; WooCommerce's Read approval and where to revoke it",
+    /You approve BizForce on Shopify's own page\. BizForce never sees your Shopify password\./.test(FILES.page) && /id="storeShop"/.test(FILES.page) &&
+    /id="storeShopifyBtn">Connect Shopify</.test(FILES.page) && !/shpat_|id="storeToken"|access_token/.test(FILES.page + FILES.ui) &&
     /approve Read access for BizForce AI/.test(FILES.page) && /Settings, Advanced, REST API/.test(FILES.page));
-  check("L5. the card shows \"Connected to <store>\", Last synced, Sync now, Disconnect and the reconnect state",
+  check("L5. the card shows \"Connected to <store>\", Last synced, Sync now, Disconnect and the reconnect state, and the address field is cleared after connecting",
     /"Connected to " \+ c\.store/.test(FILES.ui) && /"Last synced: "/.test(FILES.ui) && /"Sync now"/.test(FILES.ui) && /"Disconnect"/.test(FILES.ui) && /needs_reconnect/.test(FILES.ui) &&
-    /tokenEl\.value = "";/.test(FILES.ui));
+    /byId\("storeUrl"\)\.value = "";/.test(FILES.ui));
   check("L6. the migration turns RLS on for both tables and keeps credentials hex-only",
     /ALTER TABLE public\.member_store_connections ENABLE ROW LEVEL SECURITY;/.test(FILES.migration) && /ALTER TABLE public\.store_order_summaries ENABLE ROW LEVEL SECURITY;/.test(FILES.migration) &&
     /CHECK \(credentials_ciphertext ~ '\^\[0-9a-f\]\+\$'\)/.test(FILES.migration) && /UNIQUE \(user_id, platform, store_url\)/.test(FILES.migration));
@@ -1087,10 +1324,13 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 6 2026, Outlook sign-in, migration 173): the allowlist adds 173_mailbox_microsoft.sql; "the highest" is checkMailboxOutlook R1's.
     // NAMED (Nov 6 2026, Google Wallet, migration 174): the allowlist adds 174_card_wallet_count.sql; "the highest" is checkGoogleWallet R1's.
     // NAMED (Nov 6 2026, store changes, migration 175): the allowlist adds 175_store_changes.sql; "the highest" is checkStoreChanges R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): the allowlist adds 176_shopify_oauth.sql; "the highest" is checkShopifyConnect R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
-  const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page };
+  // NAMED (Nov 7 2026, migration 176): lib/shopifyApi.js, lib/shopifyAuth.js and 176_shopify_oauth.sql join the list.
+  const fresh = { "lib/storeSync.js": FILES.sync, "163_store_connections.sql": FILES.migration, "scripts/store-connect.js": FILES.ui, "store-agent.html": FILES.page,
+    "lib/shopifyApi.js": FILES.api, "lib/shopifyAuth.js": FILES.auth, "176_shopify_oauth.sql": FILES.migration176 };
   check("L8. no emoji in any new or edited store file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }), Object.keys(fresh).filter(function (k) { return EMOJI.test(fresh[k]); }).join(", "));
 
   check("nothing reached the network: no socket, no real DNS question and no fetch in this whole run (the tripwire)", TRIPPED.length === 0, TRIPPED.join(", "));
