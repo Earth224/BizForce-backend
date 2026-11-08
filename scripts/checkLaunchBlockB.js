@@ -95,7 +95,10 @@ const MUTATE = process.env.MUTATE || "";
 // Facebook and Instagram, through each platform's own sign-in. BizForce will never ask for your passwords." AFTER Bluesky connects
 // on the Social Agent page with an app password, and the other platforms keep the honest "coming" wording. The
 // connect-line-changed anchor moves from "BizForce will never ask for your passwords.</p>" to the line's new last clause.
-const EXACT_CONNECT_LINE = "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in.";
+// NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "... Facebook and Instagram are coming, through each platform's
+// own sign-in." AFTER Instagram connects on the Social Agent page (approval only) and Facebook stays coming. The page still has
+// no Connect button, no oauth text and no "Connect <platform>". The connect-line-changed anchor moves to the new last clauses.
+const EXACT_CONNECT_LINE = "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post waits for your approval. Facebook is coming, through its own sign-in.";
 const MUTATIONS = {
   // #0: test-account rows are counted in the platform's spend
   "test-fixture-counted": [["SRC", "    if (accounts.tests[String(row.user_id || \"\").toLowerCase()]) { testRows++; return; }\n", ""]],
@@ -107,8 +110,8 @@ const MUTATIONS = {
   "connect-button-restored": [["FE:" + CONTENT, EXACT_CONNECT_LINE + "</p>",
     EXACT_CONNECT_LINE + "</p>\n      <button class=\"connect-btn\" onclick=\"connectPlatform('facebook')\">Connect Facebook</button>"]],
   // #4: the sentence is softened
-  "connect-line-changed": [["FE:" + CONTENT, "never your main password. Facebook and Instagram are coming, through each platform's own sign-in.</p>",
-    "never your main password. Facebook and Instagram are coming soon.</p>"]],
+  "connect-line-changed": [["FE:" + CONTENT, "every Instagram post waits for your approval. Facebook is coming, through its own sign-in.</p>",
+    "every Instagram post waits for your approval. Facebook is coming soon.</p>"]],
   // #7: SIGTERM does not close the server
   "sigterm-not-closing-server": [["SHUT", "  proc.on(\"SIGTERM\", function () { shutdownApi.shutdown(\"SIGTERM\", 0); });", "  proc.on(\"SIGTERM\", function () { });"]],
   // #7: the shutdown never calls server.close

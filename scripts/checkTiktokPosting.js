@@ -38,8 +38,9 @@ const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
 const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g, "\n");
 
 const MUTATIONS = {
+  // NAMED, item 8 part 3a: the Instagram finish route consumes its state with the same lines, so the anchor now carries TikTok's purpose.
   "state-reusable": ["server",
-    ".is(\"consumed_at\", null).gt(\"expires_at\", consumedAt)\n        .select(\"id\");", ".gt(\"expires_at\", consumedAt)\n        .select(\"id\");"],
+    ".eq(\"purpose\", ta.PURPOSE)\n        .is(\"consumed_at\", null).gt(\"expires_at\", consumedAt)\n        .select(\"id\");", ".eq(\"purpose\", ta.PURPOSE)\n        .gt(\"expires_at\", consumedAt)\n        .select(\"id\");"],
   "scopes-unchecked": ["auth",
     "  if (exchange && !grantsTiktok(j.scope)) throw new TiktokError(\"no_scopes\", \"scope_missing\");\n", ""],
   "unsealed-before-api": ["server",
@@ -91,7 +92,8 @@ const MUTATIONS = {
   "file-kept-forever": ["videos",
     "const READY_DAYS = 14;", "const READY_DAYS = 14000;"],
   "pending-proposal-ignored": ["videos",
-    "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id]; });", "    var bothRows = (both.data || []).filter(function (r) { return r.path; });"],
+    // NAMED, item 8 part 3a: the early delete now also needs a published Instagram reel and no Instagram row holding the file.
+    "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id] && bothIg.published[r.id]", "    var bothRows = (both.data || []).filter(function (r) { return r.path && bothIg.published[r.id]"],
   "wrong-dispatcher": ["server",
     "  publish_tiktok_post: executePublishTiktokPost,\n", "  publish_tiktok_post: executePublishYoutubeVideo,\n"],
   "tiktok-host-unrestricted": ["fetch",
@@ -127,14 +129,16 @@ const MUTATIONS = {
   "tiktok-308-allowed": ["fetch",
     "pathPrefix: \"/upload/\", allow308: false,", "pathPrefix: \"/upload/\", allow308: true,"],
   "delete-ignores-tiktok": ["videos",
-    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\"]);",
-    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\"]);"],
+    // NAMED, item 8 part 3a: FILE_ACTIONS now also names publish_instagram_post.
+    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\"]);",
+    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_instagram_post\"]);"],
   "privacy-defaulted-on-page": ["ui",
     "      opt.value = o;\n      privacy.appendChild(opt);", "      opt.value = o;\n      if (privacy.children.length === 1) { none.selected = false; opt.selected = true; }\n      privacy.appendChild(opt);"],
   "upload-not-whole": ["api",
     "function putComplete(answer) { return !!answer && answer.status === 201; }", "function putComplete(answer) { return !!answer && (answer.status === 201 || answer.status === 206); }"],
-  "youtube-marker-ignored": ["ytui",
-    "    if (which === \"tiktok\") return false;\n", ""]
+  // NAMED, item 8 part 3a: the marker is read once in scripts/oauth-return.js; the mutation now lets the first registered script (YouTube) take TikTok's answer.
+  "youtube-marker-ignored": ["oauth",
+    "    if (!pending || pending.name !== name) return false;\n", "    if (!pending) return false;\n"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -172,6 +176,8 @@ const FILES = {
   page: readFe("agents/social.html"),
   ui: readFe("scripts/tiktok.js"),
   ytui: readFe("scripts/youtube.js"),
+  // NAMED, item 8 part 3a: the shared sign-in return (scripts/oauth-return.js) now reads ?code and ?state for YouTube, TikTok and Instagram.
+  oauth: readFe("scripts/oauth-return.js"),
   proposals: readFe("proposals.html"),
   integrations: readFe("integrations.html"),
   guide: readFe("scripts/termaximus-guide.js")
@@ -291,7 +297,8 @@ function makeStorage() {
   return { from: function (b) { if (b !== "bf-video") throw new Error("unexpected bucket " + b); return bucket; }, objects: objects, calls: calls };
 }
 function makeDb() {
-  const t = { member_tiktok_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], business_profiles: [] };
+  // NAMED, item 8 part 3a: instagram_posts added; retention and deleting a video now read it.
+  const t = { member_tiktok_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], business_profiles: [], instagram_posts: [] };
   const fail = {};
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
   function sealedOk(c, i, a) { return HEX.test(c || "") && /^[0-9a-f]{24}$/.test(i || "") && /^[0-9a-f]{32}$/.test(a || ""); }
@@ -642,7 +649,8 @@ function sliceOf(src, start, end) {
   return a === -1 || b === -1 ? "" : src.slice(a, b);
 }
 const TT_SECTION = sliceOf(FILES.server, "/* ── TikTok posting (migration 178; lib/tiktokAuth.js, lib/tiktokApi.js, lib/memberVideos.js) ──",
-  "/* ── YouTube uploads (migration 177; lib/googleAuth.js, lib/youtubeApi.js, lib/memberVideos.js) ──");
+  // NAMED, item 8 part 3a: the Instagram section now sits between TikTok and YouTube, so the TikTok slice ends at the Instagram header.
+  "/* ── Instagram posting (migration 179;");
 function requireAuth() {} function requireActiveSubscription() {} function aiLimiter() {}
 function claimsStub(text) {
   return /guaranteed/i.test(String(text)) ? { error: "That makes a promise BizForce can't check (\"guaranteed\").", violations: [{ phrase: "guaranteed" }] } : null;
@@ -819,6 +827,7 @@ function runPage(search, answers, marker) {
   vm.createContext(ctx);
   // window is the page's global: BFVideos and BFTikTok are set on it.
   ctx.window = new Proxy(window, { get: function (t, k) { return k in t ? t[k] : ctx[k]; }, set: function (t, k, v) { t[k] = v; return true; } });
+  vm.runInContext(FILES.oauth, ctx, { filename: "scripts/oauth-return.js" }); // NAMED, item 8 part 3a: loaded first, as on the page
   vm.runInContext(FILES.ytui, ctx, { filename: "scripts/youtube.js" });
   vm.runInContext(FILES.ui, ctx, { filename: "scripts/tiktok.js" });
   dom.window = window;
@@ -1103,7 +1112,8 @@ function pageAnswers(over) {
   // registration
   check("F13. the generic proposals route refuses publish_tiktok_post; it is subscription-gated; its executor is registered",
     FILES.server.indexOf("if (actionType === \"publish_tiktok_post\") {\n      return res.status(400).json({\n        error: \"A TikTok post cannot be filed here.") !== -1 &&
-    /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[[^\]]*"publish_tiktok_post"\];/.test(FILES.server) &&
+    // NAMED, item 8 part 3a: publish_instagram_post now follows publish_tiktok_post in the list.
+    /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[[^\]]*"publish_tiktok_post"[^\]]*\];/.test(FILES.server) &&
     (/\n  publish_tiktok_post: (\w+),\n/.exec(FILES.server) || [])[1] === "executePublishTiktokPost" &&
     /async function executePublishTiktokPost\(proposal\) \{\n  return require\("\.\/lib\/tiktokApi"\)\.executePublish\(tiktokDeps\(\), proposal\);\n\}/.test(TT_SECTION));
   const GR = realRequire("./lib/gateRules");
@@ -1330,9 +1340,11 @@ function pageAnswers(over) {
   const oldStuck = seedVideo(db, mp4(100, 47), { created_at: iso(now - 15 * 86400000), tiktok_status: "initiated", tiktok_publish_id: PUBLISH_BASE + ".3",
     tiktok_upload_ciphertext: seal(UPLOAD_BASE + "3").ciphertext, tiktok_upload_iv: "0".repeat(24), tiktok_upload_auth_tag: "0".repeat(32), tiktok_upload_expires_at: iso(now + 600000) });
   db.t.agent_proposals.push({ id: uuid(), user_id: USER, action_type: "publish_tiktok_post", status: "pending", payload: { video_id: heldV.id } });
-  const tick = await MV.retentionTick({ supabase: db, storage: db.storage, now: function () { return now; } }, now);
+  // NAMED, item 8 part 3a: the early delete now also needs a published Instagram reel; bothV, ytOnly and heldV have one, so only the platform under test differs.
+  [bothV, ytOnly, heldV].forEach(function (v) { db.t.instagram_posts.push({ id: uuid(), user_id: USER, kind: "reel", status: "published", video_id: v.id, created_at: iso(now - 600000) }); });
+  const tick =await MV.retentionTick({ supabase: db, storage: db.storage, now: function () { return now; } }, now);
   const rowIn = function (id) { return db.t.member_videos.filter(function (x) { return x.id === id; })[0]; };
-  check("J1. YouTube AND TikTok have it: the file deleted at once, status uploaded (a platform got it)", !db.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null, J(tick));
+  check("J1. YouTube, TikTok AND Instagram have it (NAMED, item 8 part 3a: Instagram added): the file deleted at once, status uploaded (a platform got it)", !db.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null, J(tick));
   check("J2. only one platform has it, under 14 days: the file kept", !!db.storage.objects[ytOnly.path] && rowIn(ytOnly.id).status === "ready" && !!db.storage.objects[ttOnly.path] && rowIn(ttOnly.id).status === "ready");
   check("J3. a pending proposal names it: kept, even with both platforms done", !!db.storage.objects[heldV.path] && rowIn(heldV.id).status === "ready");
   check("J4. 14 days after it was added: deleted whatever the platforms have (uploaded when one got it, removed when none did)",
@@ -1348,12 +1360,12 @@ function pageAnswers(over) {
 
   /* ── P ── */
   OUT("\n══ P. the pages ══");
-  check("P1. the Social page: the TikTok panel with its three lines word for word, the not-set-up line, and tiktok.js right after youtube.js",
+  check("P1. the Social page: the TikTok panel with its three lines word for word, the not-set-up line, and tiktok.js right after youtube.js (NAMED, item 8 part 3a: oauth-return.js now before, instagram.js after)",
     FILES.page.indexOf("<p class=\"bsky-quiet\">Until TikTok reviews BizForce, TikTok keeps posts from BizForce visible only to you.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">To remove a TikTok post, delete it in the TikTok app.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-warn\" id=\"ttUnavailable\" hidden>TikTok connection isn't set up yet.</p>") !== -1 && FILES.page.indexOf("id=\"ttConnect\"") !== -1 &&
-    FILES.page.indexOf("<script src=\"/scripts/youtube.js\"></script>\n<script src=\"/scripts/tiktok.js\"></script>") !== -1);
+    FILES.page.indexOf("<script src=\"/scripts/oauth-return.js\"></script>\n<script src=\"/scripts/youtube.js\"></script>\n<script src=\"/scripts/tiktok.js\"></script>\n<script src=\"/scripts/instagram.js\"></script>") !== -1);
   let dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers(), "tiktok");
   await flush();
   const fin = dom.fetches.filter(function (x) { return x.path === "/api/tiktok/finish"; })[0];
@@ -1474,7 +1486,8 @@ function pageAnswers(over) {
     card("TikTok")[2] === "On the Social page" && /Social Agent page/.test(card("TikTok")[1] || "") && /visible only to you/.test(card("TikTok")[1] || "") &&
     card("YouTube")[2] === "On the Social page" && /keeps uploads from BizForce private/.test(card("YouTube")[1] || "") && card("Facebook")[2] === "Removed");
   check("P26. the guide tips: Social names TikTok as connecting, Integrations names the new state; still 4 Integrations tips",
-    FILES.guide.indexOf("Bluesky, Mastodon, YouTube and TikTok connect so far, and posts cannot be scheduled") !== -1 &&
+    // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "Bluesky, Mastodon, YouTube and TikTok connect so far"; AFTER Instagram is named too.
+    FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far, and posts cannot be scheduled") !== -1 &&
     ((/"integrations\.html": \[([\s\S]*?)\n    \]/.exec(FILES.guide) || ["", ""])[1].match(/\n      "/g) || []).length === 4 &&
     FILES.guide.indexOf("\\\"On the Social page\\\"") !== -1);
 
@@ -1502,11 +1515,14 @@ function pageAnswers(over) {
   check("G6. yourData: the TikTok connection exported as its name and date only, deleted with the account; never its tokens",
     !!ttEntry && ttEntry.select === "display_name, created_at" && ttEntry.onDelete === "delete" &&
     FILES.yourData.indexOf("\"Your TikTok access: stored encrypted; the export shows only your TikTok name and the date you connected.\"") !== -1 &&
-    FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"oauth_states\"") !== -1);
+    // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "member_tiktok_connections", "oauth_states" side by side. AFTER
+    // member_instagram_connections sits between them; the TikTok connection is still deleted before the sign-in states.
+    FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"oauth_states\"") !== -1);
   check("G7. ...the videos export TikTok's status, time and post id, never the publish id or the upload address; TikTok a third party; the sign-in states line",
     FILES.yourData.indexOf("select: \"id, label, bytes, status, youtube_video_id, uploaded_at, tiktok_status, tiktok_posted_at, tiktok_post_id, created_at\"") !== -1 &&
     FILES.yourData.indexOf("{ name: \"TikTok\", for: \"posting the videos you approve to your own TikTok account, when you connect it\" }") !== -1 &&
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube and Connect TikTok") !== -1);
+    // NAMED (Nov 7 2026, Instagram posting): BEFORE "..., Connect YouTube and Connect TikTok". AFTER Connect Instagram is named last.
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok and Connect Instagram") !== -1);
   check("G8. schemaCheck knows member_tiktok_connections at 178; the backup leaves it out", FILES.schema.indexOf("[\"member_tiktok_connections\", \"178_tiktok_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_tiktok_connections: \"members' TikTok access, sealed; members connect again\",") !== -1);
   const tts = (FILES.readme.split("## TikTok app setup")[1] || "").split("\n## ")[0];
@@ -1525,7 +1541,11 @@ function pageAnswers(over) {
   check("G12. no emoji in any TikTok file", [FILES.auth, FILES.api, FILES.ui, TT_SECTION, FILES.migration].every(function (s) { return !EMOJI.test(s); }));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("G13. R1. 178_tiktok_posting.sql is the highest migration, and the only 178", highest === 178 && migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql", highest);
+  // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE 178 was the highest. AFTER it is the only 178, and only
+  // 179_instagram_posting.sql is above it; "the highest" is checkInstagramPosting R1's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql is above it (checkInstagramPosting R1)", highest === 179 &&
+    migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql", highest);
   check("G14. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
   OUT("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (failures + passes) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));

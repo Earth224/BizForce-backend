@@ -267,7 +267,14 @@ const EXPECTED_GATED = [
   // (aiLimiter). All need a subscription; approving a post is G3-gated on the approve route
   // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_tiktok_post). Status, disconnect, creator-info and a post's status stay
   // login-only (checkTiktokPosting).
-  "post /api/tiktok/start", "post /api/tiktok/finish", "post /api/tiktok/propose-post", "post /api/tiktok/draft-caption"
+  "post /api/tiktok/start", "post /api/tiktok/finish", "post /api/tiktok/propose-post", "post /api/tiktok/draft-caption",
+  // NAMED (Nov 7 2026, Instagram posting, migration 179; gated 113 -> 117): BEFORE no Instagram connection. AFTER Connect
+  // Instagram starts (a single-use state stored) and finishes (the code exchanged, the short token swapped at once for the
+  // long-lived one, sealed before /me, Business and Creator accounts only); filing a post for approval (each photo's bytes
+  // checked JPEG, or the Reel's type); and an AI draft of the caption (aiLimiter). All need a subscription; approving a post is
+  // G3-gated on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_instagram_post). Status, disconnect, the list
+  // of posts and a post's status stay login-only (checkInstagramPosting).
+  "post /api/instagram/start", "post /api/instagram/finish", "post /api/instagram/propose-post", "post /api/instagram/draft-caption"
 ];
 
 const EXPECTED_ADMIN = [
@@ -476,7 +483,13 @@ const EXPECTED_OWN = [
   // blocking), and their own member_tiktok_connections row and their own tiktok_login oauth_states are deleted; nothing
   // another member is served is written, and disconnecting must always work, subscribed or not. The creator-info and status
   // reads (through lib/tiktokApi.js) write only the member's own rows and need no entry here.
-  "post /api/tiktok/disconnect"
+  "post /api/tiktok/disconnect",
+  // NAMED (Nov 7 2026, Instagram posting, migration 179; one more effectful login-only route): BEFORE no Instagram connection.
+  // AFTER a member disconnects their own Instagram account: their own member_instagram_connections row and their own
+  // instagram_login oauth_states are deleted; nothing another member is served is written, and disconnecting must always
+  // work, subscribed or not. The posts list and a post's status (through lib/instagramApi.js) write only the member's own
+  // rows, finishing a post the member already approved, and need no entry here.
+  "post /api/instagram/disconnect"
 ];
 
 /* Unauthenticated routes that write. */

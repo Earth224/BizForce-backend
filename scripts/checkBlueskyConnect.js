@@ -106,7 +106,8 @@ const MUTATIONS = {
   "stored-without-verify": [["SRC", "        if (verified.kind === \"rejected\") {\n          return res.status(400).json({ error: mb.MESSAGES.rejected, code: \"bluesky_rejected\", saved: false });\n        }\n",
     "        if (verified.kind === \"rejected\") {\n          verified = { ok: true, did: \"did:plc:unverified\", handle: handle };\n        }\n"]],
   // the platform's Bluesky line is gone from the other platforms
-  "honest-line-removed": [["FE:agents/social.html", "are coming, through each platform's own sign-in.</p>", "are available.</p>"]]
+  // NAMED (Nov 7 2026, Instagram posting): the line now goes on about Instagram, so the anchor ends at "sign-in." rather than "sign-in.</p>".
+  "honest-line-removed": [["FE:agents/social.html", "X, LinkedIn and Facebook are coming, through each platform's own sign-in.", "X, LinkedIn and Facebook are available."]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -884,11 +885,14 @@ const everything = b => JSON.stringify(b.db.tables);
     />Disconnect<\/button>/.test(card) && /<input type="checkbox" id="bskyAutoPost" \/> <span>Post approved drafts automatically<\/span>/.test(card) &&
     /id="bskyReconnect" hidden/.test(card) && /Profile changes always wait for your approval/.test(card));
   // NAMED (Nov 7 2026, TikTok posting, migration 178): TikTok connects now, so it left the "coming" list. Same honest line otherwise.
-  check("J3. the other platforms keep the honest line: coming, through each platform's own sign-in",
-    /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(card));
+  // NAMED (Nov 7 2026, Instagram posting, migration 179): Instagram connects now (approval only), so it left the "coming" list,
+  // and the line says so. BEFORE "X, Instagram, LinkedIn and Facebook are coming, ...".
+  check("J3. the other platforms keep the honest line: coming, through each platform's own sign-in; Instagram connects, approval only",
+    /<p class="bsky-quiet" id="bskyOtherPlatforms">X, LinkedIn and Facebook are coming, through each platform's own sign-in\. Instagram can be connected below, and every Instagram post waits for your approval\.<\/p>/.test(card));
   const intro = (/<p id="connectIntro"[^>]*>([^<]*)<\/p>/.exec(FE("agents/content.html")) || ["", ""])[1];
-  check("J4. content.html: Bluesky points to the Social Agent page, never a main password, and Facebook and Instagram stay coming",
-    intro === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in.", intro);
+  // NAMED (Nov 7 2026, Instagram posting): BEFORE "... Facebook and Instagram are coming, through each platform's own sign-in.".
+  check("J4. content.html: Bluesky points to the Social Agent page, never a main password; Instagram connects there, approval only; Facebook stays coming",
+    intro === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post waits for your approval. Facebook is coming, through its own sign-in.", intro);
   // NAMED (Nov 5 2026, images in social posts): BEFORE agent-profile.js, social-publish.js, bluesky-connect.js in a row. AFTER the
   // Media Library picker (media-picker.js) sits between agent-profile.js and social-publish.js; the rest of the order is the same.
   check("J5. social.html loads agent-profile.js, media-picker.js, social-publish.js, then bluesky-connect.js",

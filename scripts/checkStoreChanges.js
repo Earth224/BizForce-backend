@@ -125,8 +125,9 @@ const MUTATIONS = {
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): the gated list now goes on past update_store_item
   // with the two YouTube actions; the mutation still removes update_store_item alone.
   // NAMED (Nov 7 2026, TikTok posting, migration 178): the list goes on with publish_tiktok_post; still update_store_item alone removed.
+  // NAMED (Nov 7 2026, Instagram posting, migration 179): the list now ends with publish_instagram_post; still update_store_item alone removed.
   "approve-ungated": ["server",
-    "  \"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\"];", "  \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\"];"],
+    "  \"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\"];", "  \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\"];"],
   "limiter-raised": ["server",
     "  max: 30,\n  keyGenerator: function (req) { return \"store-change:\"", "  max: 300,\n  keyGenerator: function (req) { return \"store-change:\""],
   "propose-ungated": ["server",
@@ -1103,9 +1104,10 @@ function loadPageScript(answers) {
        177_youtube_uploads.sql is excepted too, by name; "the highest" is checkYoutubeUploads R1's, for 177. */
     /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178_tiktok_posting.sql is excepted too, by name; "the highest" is
        checkTiktokPosting R1's, for 178. */
-    check("R1. 175_store_changes.sql is the only migration numbered 175, every one but 176_shopify_oauth.sql, 177_youtube_uploads.sql and 178_tiktok_posting.sql is lower (174 the last before it)",
+    check("R1. 175_store_changes.sql is the only migration numbered 175, every one but 176_shopify_oauth.sql, 177_youtube_uploads.sql, 178_tiktok_posting.sql and 179_instagram_posting.sql is lower (174 the last before it)",
       migFiles.filter(function (f) { return /^175_/.test(f); }).length === 1 && migFiles.indexOf("175_store_changes.sql") !== -1 &&
-      migFiles.filter(function (f) { return !/^(176_shopify_oauth|177_youtube_uploads|178_tiktok_posting)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
+      // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
+      migFiles.filter(function (f) { return !/^(176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
     check("M1b. migration 176 drops 175's Shopify CHECK and adds currency and location_name to store_change_log",
       FILES.migration176.indexOf("ALTER TABLE public.member_store_connections\n  DROP CONSTRAINT member_store_connections_write_platform_check;") !== -1 &&
       FILES.migration176.indexOf("ALTER TABLE public.store_change_log\n  ADD COLUMN IF NOT EXISTS currency text,\n  ADD COLUMN IF NOT EXISTS location_name text;") !== -1);

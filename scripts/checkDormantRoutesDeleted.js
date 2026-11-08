@@ -326,7 +326,18 @@ const ADDED = [
   ["get", "/api/tiktok/creator-info"],                       // login-only: creator_info read live for the member's own account (462 -> 463)
   ["post", "/api/tiktok/propose-post"],                      // subscribed: TikTok's rules checked against a fresh creator_info, frozen in a proposal; never executes (463 -> 464)
   ["post", "/api/tiktok/draft-caption"],                     // subscribed: an AI draft of the caption; nothing stored (464 -> 465)
-  ["get", "/api/tiktok/videos/:id/status"]                   // login-only: the post's status fetched for the member's own video, recorded when it changed (465 -> 466)
+  ["get", "/api/tiktok/videos/:id/status"],                  // login-only: the post's status fetched for the member's own video, recorded when it changed (465 -> 466)
+  // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE 466 routes; AFTER 474, Connect Instagram (Instagram Login, a
+  // single-use state, the long-lived token sealed before /me), a post filed for approval (JPEG photos or a Reel), an AI caption
+  // draft, the member's own posts listed, and a slow post finished on demand, published once (checkInstagramPosting)
+  ["post", "/api/instagram/start"],                          // subscribed: stores a single-use state, returns Instagram's authorize URL; 503 until configured (466 -> 467)
+  ["post", "/api/instagram/finish"],                         // subscribed: state, code; short token swapped at once; long-lived token sealed before /me; professional accounts only (467 -> 468)
+  ["get", "/api/instagram/status"],                          // login-only: the member's own connection, never a token; instagram_available (468 -> 469)
+  ["post", "/api/instagram/disconnect"],                     // login-only: the row and this purpose's states deleted (469 -> 470)
+  ["post", "/api/instagram/propose-post"],                   // subscribed: every photo's bytes checked JPEG, or the Reel's type, frozen in a proposal; never executes (470 -> 471)
+  ["post", "/api/instagram/draft-caption"],                  // subscribed: an AI draft of the caption; nothing stored (471 -> 472)
+  ["get", "/api/instagram/posts"],                           // login-only: the member's own Instagram posts, newest first (472 -> 473)
+  ["get", "/api/instagram/posts/:id/status"]                 // login-only: the member's own post rechecked, published once under a compare-and-set claim (473 -> 474)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

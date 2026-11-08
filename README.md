@@ -116,6 +116,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `GOOGLE_OAUTH_CLIENT_SECRET` | none | That client's secret, sent in the code exchange and every refresh. Needed only for YouTube, with `GOOGLE_OAUTH_CLIENT_ID`. A secret; set it on Railway and never commit it. |
 | `TIKTOK_CLIENT_KEY` | none | The client key of BizForce's TikTok app (see "TikTok app setup" below). Needed only for TikTok on the Social Agent page; without it (or `TIKTOK_CLIENT_SECRET`) the TikTok connect, creator-info, caption, proposal and status routes answer 503 "TikTok connection isn't set up yet.", `GET /api/tiktok/status` answers `tiktok_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `TIKTOK_CLIENT_SECRET` | none | That app's client secret, sent in the code exchange, every refresh and the revoke. Needed only for TikTok, with `TIKTOK_CLIENT_KEY`. A secret; set it only on Railway and never commit it. |
+| `INSTAGRAM_APP_ID` | none | The app id of BizForce's Instagram app (see "Instagram app setup" below). Needed only for Instagram on the Social Agent page; without it (or `INSTAGRAM_APP_SECRET`) the Instagram connect, caption, proposal and post routes answer 503 "Instagram connection isn't set up yet.", `GET /api/instagram/status` answers `instagram_available: false` and the page disables the button. Set it on Railway; never commit it. |
+| `INSTAGRAM_APP_SECRET` | none | That app's secret, sent in the code exchange and the long-lived token exchange. Needed only for Instagram, with `INSTAGRAM_APP_ID`. A secret; set it only on Railway and never commit it. |
 
 ### Google Wallet
 
@@ -182,9 +184,10 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
-| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify, YouTube and TikTok sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify, YouTube, TikTok and Instagram sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
 | `webhookEventsPurgeTick` (`lib/shopifyAuth.js`): Shopify notification receipts older than 30 days | the same 04:45 UTC run, after the sign-in states purge, claimed `shopify_webhook_events_purge` | always on (no flag); runs only when server.js is the program |
-| `retentionTick` (`lib/memberVideos.js`): a video's file once YouTube has it and TikTok has posted it (and no pending proposal names it), any video's file 14 days after it was added, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
+| `retentionTick` (`lib/memberVideos.js`): a video's file once YouTube has it, TikTok has posted it and an Instagram Reel of it is published (and no pending proposal or unfinished Instagram post needs it), any video's file 14 days after it was added, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
+| `refreshTick` (`lib/instagramApi.js`): every connected Instagram token that expires within 10 days and is at least a day old is refreshed; an expired one is marked to reconnect, with one notice | the same 04:45 UTC run, after the video retention pass, claimed `instagram_token_refresh` | always on (no flag), skipped while `INSTAGRAM_APP_ID` or `INSTAGRAM_APP_SECRET` is missing; runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `storeSyncTick`: read connected Shopify and WooCommerce stores (the sync only reads) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
@@ -293,6 +296,20 @@ TikTok on the Social Agent page (`lib/tiktokAuth.js`, `lib/tiktokApi.js`, `lib/m
 - **Audit:** until TikTok audits the app, every post from BizForce is visible only to its owner (SELF_ONLY), whatever privacy the member picks.
 
 Until both variables are set, the TikTok routes but status and disconnect answer 503 and the page shows "TikTok connection isn't set up yet." Each post follows TikTok's posting rules (the account's nickname shown, privacy chosen from TikTok's options with no default, interactions off unless turned on, the commercial content disclosure), checked again against a fresh creator_info when it is approved. Every post waits for the member's approval. TikTok has no API to delete a post, so the member deletes it in the TikTok app. Disconnecting asks TikTok to revoke the access, as a best effort, and deletes BizForce's copy.
+
+## Instagram app setup
+
+Instagram on the Social Agent page (`lib/instagramAuth.js`, `lib/instagramApi.js`, migration 179) needs one app on Meta for Developers:
+
+- **Account and app:** a Meta developer account, and an app in it for BizForce with the Instagram product, set up as "API setup with Instagram login".
+- **Scopes:** `instagram_business_basic` and `instagram_business_content_publish`.
+- **Redirect URI:** exactly `https://bizforceai.net/agents/social.html` (the server sends `FRONTEND_URL` + `/agents/social.html`, so the two must match).
+- **Credentials:** the Instagram app id in `INSTAGRAM_APP_ID` and the Instagram app secret in `INSTAGRAM_APP_SECRET`, kept only on Railway.
+- **Testers:** while the app is in development, only the Instagram accounts added as testers in the app can connect.
+- **Before the public can connect:** Business verification and App Review for both permissions.
+- **Accounts:** only Instagram Business and Creator accounts can publish through the API; a personal account is refused at connect.
+
+Until both variables are set, the Instagram routes but status and disconnect answer 503 and the page shows "Instagram connection isn't set up yet." Photos must be JPEG (from the Media Library) and Reels MP4 or MOV (from Your videos); each file's fingerprint is checked right before Instagram is given its address, and a Reel's address is a signed link that stops working after 2 hours. Every post waits for the member's approval and is published once. Instagram has no API to delete a post, so the member deletes it in the Instagram app. Disconnecting deletes BizForce's copy; the member removes BizForce in Instagram's settings, under Apps and websites.
 
 ## Google Wallet setup
 

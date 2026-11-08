@@ -12346,6 +12346,14 @@ const PROPOSAL_EXECUTORS = {
   // upload is stored. Always through approval. Defined further down the file.
   publish_tiktok_post: executePublishTiktokPost,
 
+  // Publishes JPEG photos (one, or a carousel of 2 to 10) or a Reel to a member's
+  // own Instagram professional account, from an approved POST /api/instagram/propose-post
+  // (migration 179, lib/instagramApi.js): the instagram_posts row inserted before any
+  // container, every file's fingerprint checked right before its container, then
+  // publish exactly once under a compare-and-set claim. Always through approval.
+  // Defined further down the file.
+  publish_instagram_post: executePublishInstagramPost,
+
   // Changes one WooCommerce or Shopify item's price or stock level, from an approved
   // POST /api/store/changes/propose (migrations 175 and 176, lib/storeWrite.js), after a
   // live compare-and-set, with one write and no retry. Always through approval:
@@ -12419,6 +12427,12 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "publish_tiktok_post") {
       return res.status(400).json({
         error: "A TikTok post cannot be filed here. Use POST /api/tiktok/propose-post from the Social Agent page."
+      });
+    }
+    // An Instagram post: filed only by the route that reads each photo's bytes or the video (migration 179).
+    if (actionType === "publish_instagram_post") {
+      return res.status(400).json({
+        error: "An Instagram post cannot be filed here. Use POST /api/instagram/propose-post from the Social Agent page."
       });
     }
     // A store change: filed only by the route that reads the store's live value.
@@ -12676,10 +12690,12 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
    on Bluesky or Mastodon. A store change (migrations 175 and 176) changes what
    shoppers see in the member's WooCommerce or Shopify store. A YouTube upload
    or removal (migration 177) changes what the member's channel shows. A TikTok
-   post (migration 178) puts a video on the member's TikTok account. */
+   post (migration 178) puts a video on the member's TikTok account. An
+   Instagram post (migration 179) puts photos or a Reel on the member's
+   Instagram account. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
   "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
-  "update_store_item", "publish_youtube_video", "delete_youtube_video", "publish_tiktok_post"];
+  "update_store_item", "publish_youtube_video", "delete_youtube_video", "publish_tiktok_post", "publish_instagram_post"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -33912,6 +33928,335 @@ async function executePublishTiktokPost(proposal) {
   return require("./lib/tiktokApi").executePublish(tiktokDeps(), proposal);
 }
 
+/* ── Instagram posting (migration 179; lib/instagramAuth.js, lib/instagramApi.js) ──
+   POST   /api/instagram/start                 Connect Instagram: a single-use state (purpose
+                                               instagram_login), no PKCE (Instagram Login)
+   POST   /api/instagram/finish                { code, state } from the Social page: the state
+                                               consumed once, the code exchanged, the short
+                                               token swapped at once for the long-lived one,
+                                               SEALED, and only then /me read; Business and
+                                               Creator accounts only
+   GET    /api/instagram/status                the connection, never a token
+   POST   /api/instagram/disconnect            the row and this sign-in's states deleted
+   POST   /api/instagram/propose-post          files publish_instagram_post; never runs it
+   POST   /api/instagram/draft-caption         { idea }: a caption from the model, measured in code
+   GET    /api/instagram/posts                 the member's own posts, newest first
+   GET    /api/instagram/posts/:id/status      a slow post finished on demand, published once
+   Photos come from the Media Library (JPEG only), a Reel from "Your videos"
+   (MP4 or MOV). Connect and the propose and draft routes need an active
+   subscription. Without INSTAGRAM_APP_ID and INSTAGRAM_APP_SECRET every
+   Instagram route but status and disconnect answers 503 "Instagram connection
+   isn't set up yet.", and status says instagram_available false. The post
+   runs only when the member approves the proposal
+   (executePublishInstagramPost below), never automatically. There is no
+   removal: Instagram has no API to delete a post. Nothing here logs a token,
+   a code or a signed link. */
+function instagramRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/agents/social.html";
+}
+
+function instagramDeps() {
+  var gf = require("./lib/guardedFetch");
+  return {
+    supabase: supabase,
+    storage: supabase.storage,
+    crypt: require("./lib/apiKeyCrypto"),
+    jsonRequest: gf.guardedJsonRequest,
+    now: function () { return Date.now(); },
+    sleep: function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); },
+    config: function () { return require("./lib/instagramAuth").configured(process.env); },
+    limits: SOCIAL_PLATFORMS.instagram,
+    claims: blueskyClaimsRefusal,
+    base: process.env.SUPABASE_URL
+  };
+}
+
+function instagramNotConfigured(res) {
+  return res.status(503).json({ error: require("./lib/instagramAuth").MESSAGES.notConfigured, code: "not_configured", saved: false });
+}
+
+/* Per account: ten Instagram sign-in steps an hour, start and finish together. */
+const instagramConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "instagram-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many Instagram sign-in attempts. Try again in an hour. Nothing was saved.", code: "rate_limited" }
+});
+/* Per account: thirty Instagram proposals an hour. */
+const instagramProposeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "instagram-propose:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can file 30 Instagram posts an hour. Nothing was filed.", code: "rate_limited" }
+});
+
+/* A token-endpoint failure at finish, as the member is told it. Never the reason's detail. */
+function instagramFinishFailure(res, err) {
+  var ia = require("./lib/instagramAuth");
+  var kind = err && err.kind;
+  if (kind === "no_scopes") return res.status(422).json({ error: ia.MESSAGES.noScopes, code: "no_scopes", saved: false });
+  if (kind === "invalid_grant") return res.status(400).json({ error: ia.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+  return res.status(502).json({ error: ia.MESSAGES.unreachable, code: "unreachable", saved: false });
+}
+
+app.post("/api/instagram/start", requireAuth, requireActiveSubscription, instagramConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ia = require("./lib/instagramAuth");
+      var config = ia.configured(process.env);
+      if (!config) return instagramNotConfigured(res);
+      var state = ia.newState();
+      var nowMs = Date.now();
+      // Tidy first: this member's sign-in states older than a day; each is consumed or expired.
+      var tidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id)
+        .lt("created_at", new Date(nowMs - ia.STATES_RETENTION_MS).toISOString());
+      if (tidied.error) throw tidied.error;
+      // Only the state's sha256 is stored; Instagram Login uses no verifier.
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:    req.user.id,
+        purpose:    ia.PURPOSE,
+        state_hash: ia.stateHash(state),
+        expires_at: new Date(nowMs + ia.STATE_TTL_MS).toISOString(),
+        created_at: new Date(nowMs).toISOString()
+      });
+      if (stored.error) throw stored.error;
+      var url = ia.authorizeUrl(config.appId, instagramRedirectUri(), state);
+      state = null;
+      return res.json({ authorize_url: url });
+    } catch (error) {
+      console.error("[instagram/start] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/instagram/finish", requireAuth, requireActiveSubscription, instagramConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ia = require("./lib/instagramAuth");
+      var ig = require("./lib/instagramApi");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = ia.configured(process.env);
+      if (!config) return instagramNotConfigured(res);
+      var shape = ia.finishShape(req.body);
+      if (!shape.ok) return res.status(400).json({ error: ia.MESSAGES.badRequest, code: "bad_request", saved: false });
+
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired. No reason is ever given.
+      var consumedAt = nowIso();
+      var consumed = await supabase.from("oauth_states").update({ consumed_at: consumedAt })
+        .eq("state_hash", ia.stateHash(shape.state)).eq("user_id", req.user.id).eq("purpose", ia.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", consumedAt)
+        .select("id");
+      if (consumed.error) throw consumed.error;
+      if (!(consumed.data || [])[0]) return res.status(400).json({ error: ia.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+
+      var short, grant;
+      try {
+        short = await ia.exchangeCode(config, shape.code, instagramRedirectUri());
+        // The short-lived token is never stored: it is swapped at once for the long-lived one.
+        grant = await ia.longLived(config, short.shortToken);
+      } catch (exchangeErr) {
+        return instagramFinishFailure(res, exchangeErr);
+      } finally {
+        shape.code = null;
+        if (short) short.shortToken = null;
+      }
+
+      // Sealed first: the long-lived token is encrypted before Instagram is asked anything.
+      var sealedAccess;
+      try {
+        sealedAccess = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ia.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var tokenExpiry = ia.expiresAt(Date.now(), grant.expiresIn);
+      var me;
+      try {
+        me = await ig.readMe(instagramDeps(), grant.accessToken);
+      } catch (meErr) {
+        return res.status(502).json({ error: ia.MESSAGES.unreachable, code: "unreachable", saved: false });
+      } finally {
+        grant = null;
+      }
+      if (!me) return res.status(502).json({ error: ia.MESSAGES.unreachable, code: "unreachable", saved: false });
+      // Business and Creator accounts only: a personal account can't publish through the API.
+      if (!ig.professional(me)) return res.status(422).json({ error: ia.MESSAGES.personal, code: "personal_account", saved: false });
+
+      var connectedAt = nowIso();
+      var saved = await supabase.from("member_instagram_connections").upsert({
+        user_id:           req.user.id,
+        ig_user_id:        me.ig_user_id,
+        username:          me.username,
+        account_type:      me.account_type,
+        access_ciphertext: sealedAccess.ciphertext,
+        access_iv:         sealedAccess.iv,
+        access_auth_tag:   sealedAccess.authTag,
+        access_expires_at: tokenExpiry,
+        token_version:     0,
+        granted_scopes:    short && short.scopes ? short.scopes : null,
+        status:            "connected",
+        last_ok_at:        connectedAt,
+        last_error_at:     null,
+        last_error_code:   null,
+        created_at:        connectedAt,
+        updated_at:        connectedAt
+      }, { onConflict: "user_id" }).select(ig.STATUS_COLUMNS).single();
+      if (saved.error) throw saved.error;
+      return res.json(ig.statusOf(saved.data, true));
+    } catch (error) {
+      console.error("[instagram/finish] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/instagram/status", requireAuth, async function (req, res, next) {
+  try {
+    var ig = require("./lib/instagramApi");
+    var row = await ig.readConnection(supabase, req.user.id);
+    return res.json(ig.statusOf(row, require("./lib/instagramAuth").configured(process.env) !== null));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not, configured or not: a member can always take their account's access back.
+app.post("/api/instagram/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var ia = require("./lib/instagramAuth");
+    var ig = require("./lib/instagramApi");
+    var row = await ig.readConnection(supabase, req.user.id);
+    var dropped = await supabase.from("member_instagram_connections").delete().eq("user_id", req.user.id).select("id");
+    if (dropped.error) throw dropped.error;
+    // Only this sign-in's states: another platform's sign-in in progress keeps its own.
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", ia.PURPOSE);
+    if (statesDropped.error) throw statesDropped.error;
+    return res.json(Object.assign(ig.statusOf(null, ia.configured(process.env) !== null), {
+      removed: (dropped.data || []).length > 0,
+      note: row ? ia.MESSAGES.disconnected : "No Instagram account was connected."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/instagram/propose-post", requireAuth, requireActiveSubscription, instagramProposeLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/instagramAuth").configured(process.env)) return instagramNotConfigured(res);
+      var out = await require("./lib/instagramApi").proposePost(instagramDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[instagram/propose-post] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+/* The model's caption, after one CAPTION: marker; null when it is not there. */
+function parseInstagramDraft(text) {
+  var m = /CAPTION:\s*([\s\S]*)$/.exec(String(text || ""));
+  return m ? m[1].trim() : null;
+}
+
+app.post("/api/instagram/draft-caption", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/instagramAuth").configured(process.env)) return instagramNotConfigured(res);
+      var ig = require("./lib/instagramApi");
+      var idea = req.body && typeof req.body.idea === "string" ? req.body.idea.trim() : "";
+      if (!idea || idea.length > 1000) {
+        return res.status(400).json({ error: "Say what the post is about, in up to 1000 characters.", code: "bad_idea", field: "idea" });
+      }
+      var profileResult = await supabase.from("business_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
+      var bp = (profileResult && profileResult.data) || {};
+      var L = SOCIAL_PLATFORMS.instagram;
+      // The model sees the idea and the business profile, and nothing else: no photo, no video, no account.
+      var prompt =
+        "You write an Instagram caption for a small business.\n\n" +
+        "BUSINESS CONTEXT:\n" +
+        "Business Name: " + (bp.business_name || "Not provided") + "\n" +
+        "Industry: " + (bp.industry || "Not provided") + "\n" +
+        "Products/Services: " + (bp.products_services || "Not provided") + "\n" +
+        "Target Audience: " + (bp.target_audience || "Not provided") + "\n\n" +
+        "WHAT THE POST IS ABOUT, in the owner's words: " + JSON.stringify(idea) + "\n\n" +
+        "OUTPUT FORMAT, exactly one part:\n" +
+        "CAPTION: <the caption, at most " + L.max + " characters; the first " + L.truncates_at +
+        " or so show before \"more\"; at most " + L.hashtag_practical + " hashtags and no @mentions>\n\n" +
+        "RULES:\n- No < or > anywhere.\n- Invent no figures, reviews, results or health claims.\n" +
+        "- Do not claim or predict likes, followers or reach.";
+      var generation = await callAnthropicText(prompt, 1200, req.user.id, undefined, {
+        user_id: req.user.id, agent_type: "social", route: "POST /api/instagram/draft-caption"
+      });
+      var caption = parseInstagramDraft(generation && generation.text);
+      if (!caption) return res.status(502).json({ error: "The draft came back incomplete. Try again, or write the caption yourself.", code: "draft_unreadable" });
+      var length = Array.from(caption).length;
+      var measured = ig.checkCaption(caption, L);
+      var refused = blueskyClaimsRefusal(caption);
+      return res.json({
+        draft: { caption: caption },
+        measured: { caption: { length: length, limit: L.max, hashtags: ig.hashtagCount(caption), hashtag_limit: L.hashtag_max,
+          mentions: ig.mentionCount(caption), mention_limit: ig.MENTION_MAX, within_limit: measured.ok, shows_first: L.truncates_at } },
+        within_limits: measured.ok,
+        claims_refused: refused ? [{ field: "caption", error: refused.error }] : [],
+        note: "A draft only. Nothing was filed or sent. Read it, change what you want, then file it for approval."
+      });
+    } catch (error) {
+      console.error("[instagram/draft-caption] Error:", (error && error.message) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/instagram/posts", requireAuth, async function (req, res, next) {
+  try {
+    if (!require("./lib/instagramAuth").configured(process.env)) return instagramNotConfigured(res);
+    var ig = require("./lib/instagramApi");
+    var posts = await ig.listPosts(instagramDeps(), req.user.id);
+    return res.json({ posts: posts, note: ig.MESSAGES.noDelete });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/instagram/posts/:id/status", requireAuth, async function (req, res, next) {
+  try {
+    res.set("Cache-Control", "no-store");
+    if (!require("./lib/instagramAuth").configured(process.env)) return instagramNotConfigured(res);
+    var out = await require("./lib/instagramApi").postStatus(instagramDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[instagram/post-status] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+/* The publish_instagram_post executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal; throws with the member's message on any failure.
+   lib/instagramApi.js executePublish checks the account, the files and the
+   cap again, inserts the instagram_posts row before any container, checks
+   each file's fingerprint right before its container, waits at most 60
+   seconds, and publishes once under a compare-and-set claim; a slow one
+   returns { processing: true } and finishes on "Check status". Always through
+   approval: no automation runs it. */
+async function executePublishInstagramPost(proposal) {
+  return require("./lib/instagramApi").executePublish(instagramDeps(), proposal);
+}
+
+/* A step of the 04:45 UTC chain (see the cron block): Instagram's daily token
+   refresh, lib/instagramApi.js refreshTick, claimed through job_runs
+   instagram_token_refresh. Never rejects. */
+async function instagramRefreshTick() {
+  try {
+    return await require("./lib/instagramApi").refreshTick(instagramDeps());
+  } catch (err) {
+    console.error("[InstagramRefresh] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
 /* ── YouTube uploads (migration 177; lib/googleAuth.js, lib/youtubeApi.js, lib/memberVideos.js) ──
    POST   /api/youtube/start                   Connect YouTube: a single-use state (purpose
                                                youtube_google) and a sealed PKCE verifier
@@ -33973,9 +34318,11 @@ async function videoRetentionTick() {
   }
 }
 
-/* Either platform a video can go to is set up. */
+/* Any platform a video can go to is set up. NAMED (Nov 7 2026, Instagram
+   posting): Instagram Reels come from these videos too. */
 function videoPlatformConfigured() {
-  return require("./lib/googleAuth").configured(process.env) !== null || require("./lib/tiktokAuth").configured(process.env) !== null;
+  return require("./lib/googleAuth").configured(process.env) !== null || require("./lib/tiktokAuth").configured(process.env) !== null ||
+    require("./lib/instagramAuth").configured(process.env) !== null;
 }
 
 function youtubeNotConfigured(res) {
@@ -59257,7 +59604,15 @@ shutdownControl.setServer(app.listen(PORT, function () {
      178) a video's file is deleted once YouTube has it AND TikTok has posted
      it and no pending proposal names it, or 14 days after it was added; a
      bf-video file with no record after a day. The same purge deletes the
-     tiktok_login states. lib/youtubeRetention.js stays the radar's alone. */
+     tiktok_login states. lib/youtubeRetention.js stays the radar's alone.
+     NAMED (Nov 7 2026, Instagram posting, migration 179): the retention pass
+     now keeps a file until YouTube, TikTok AND Instagram have it (or 14 days),
+     and holds it while an Instagram post of it is pending, creating or
+     processing. The same purge deletes the instagram_login states. Then
+     Instagram's daily token refresh (lib/instagramApi.js refreshTick),
+     claimed through its OWN job_runs row, instagram_token_refresh: every
+     connection whose token expires within 10 days and is at least a day old
+     is refreshed; an expired one is marked to reconnect, with one notice. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -59270,13 +59625,14 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
-      }).then(videoRetentionTick);
+      }).then(videoRetentionTick).then(instagramRefreshTick);
     }, {
       timezone: "UTC"
     });
     console.log("[startup] card leads purge scheduled — 04:45 UTC daily, claimed through job_runs." + cardLeads.PURGE_JOB_NAME + "; leads older than 12 months are deleted; then Microsoft sign-in states older than a day, claimed through job_runs.oauth_states_purge.");
     console.log("[startup] Shopify notification receipts older than 30 days are deleted in the same 04:45 UTC run, claimed through job_runs.shopify_webhook_events_purge.");
     console.log("[startup] Videos for YouTube are cleaned in the same 04:45 UTC run, claimed through job_runs.member_videos_retention: unsent after 14 days, leftovers at once, unrecorded files after a day.");
+    console.log("[startup] Instagram tokens expiring within 10 days are refreshed in the same 04:45 UTC run, claimed through job_runs.instagram_token_refresh.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

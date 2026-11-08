@@ -879,9 +879,12 @@ const A = [
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "Bluesky and Mastodon connect so far, ..."; AFTER YouTube is named too.
   // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "Bluesky, Mastodon and YouTube connect so far"; AFTER TikTok is named too,
   // and the other-platforms line no longer lists TikTok as coming.
-  ["5 social 134", socTips, "Bluesky, Mastodon, YouTube and TikTok connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
+  // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "Bluesky, Mastodon, YouTube and TikTok connect so far"; AFTER
+  // Instagram is named too, and the other-platforms line BEFORE "X, Instagram, LinkedIn and Facebook are coming, ..." AFTER
+  // "X, LinkedIn and Facebook are coming, ... Instagram can be connected below, and every Instagram post waits for your approval."
+  ["5 social 134", socTips, "Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
     () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() && mastodonConnects() &&
-      /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
+      /<p class="bsky-quiet" id="bskyOtherPlatforms">X, LinkedIn and Facebook are coming, through each platform's own sign-in\. Instagram can be connected below, and every Instagram post waits for your approval\.<\/p>/.test(FILES[SOCIAL])],
   // guard catches outside the list
   ["G seo 113", seoTips, 'Pick "Keyword Research" or "Local SEO Plan"', /SEO Audit|Competitor Analysis/,
     () => ["Keyword Research", "Competitor Comparison", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n))],
@@ -929,8 +932,11 @@ check("A. 5 content.html #connectIntro: the static text no longer offers connect
 // and a static intro that the accounts read rewrote with the same words ("Connecting social accounts is turned off for
 // now … Approved drafts are saved, not published."). AFTER, no Connect button, no accounts read, and one static line that
 // says what is coming and never asks for a password; checkLaunchBlockB pins the exact line.
+// NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "... Facebook and Instagram are coming, through each platform's own
+// sign-in." AFTER "... Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post
+// waits for your approval. Facebook is coming, through its own sign-in." Still no Connect control on content.html.
 check("A. 5 content.html #connectIntro: one honest line, and no Connect control or accounts read is left",
-  STATIC_INTRO === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in." &&
+  STATIC_INTRO === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post waits for your approval. Facebook is coming, through its own sign-in." &&
   !/connectPlatform|loadConnectedAccounts|class="connect-btn"|openCreateAccount|caModalConnect|\/api\/social\/accounts/.test(FILES[CONTENT]), STATIC_INTRO);
 
 // A member connects their own Bluesky on the Social Agent page (backend migration 152, lib/memberBluesky.js).

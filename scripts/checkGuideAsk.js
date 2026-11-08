@@ -369,9 +369,11 @@ async function main() {
       a3.known === false && a3.dropped === 2 && a3.steps.length === 0 && /^I don't know a path for that in BizForce, and I won't invent one\. The closest real page is /.test(a3.note) &&
       !!a3.link && !!MAP.pages[a3.link.page] && a3.link.href === MAP.pages[a3.link.page].p, JSON.stringify(a3));
     check("G2. ... and the model's false note (\"Your posts will publish themselves\") does not reach the member", JSON.stringify(a3).indexOf("publish themselves") === -1);
-    const promise = G.verifyGuideAnswer(MAP, { steps: [{ text: "Connect your Instagram account here.", page: "integrations.html", control_id: null },
-      { text: "Open Integrations.", page: "integrations.html", control_id: null }] }, "instagram");
-    check("G2. a step on a real page that promises a feature BizForce lacks (connecting Instagram) is dropped too", promise.dropped === 1 && promise.steps.length === 1, JSON.stringify(promise));
+    // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE the false promise was "Connect your Instagram account here.".
+    // AFTER Instagram connects on the Social Agent page, so the example is Facebook, which still does not connect.
+    const promise = G.verifyGuideAnswer(MAP, { steps: [{ text: "Connect your Facebook account here.", page: "integrations.html", control_id: null },
+      { text: "Open Integrations.", page: "integrations.html", control_id: null }] }, "facebook");
+    check("G2. a step on a real page that promises a feature BizForce lacks (connecting Facebook) is dropped too", promise.dropped === 1 && promise.steps.length === 1, JSON.stringify(promise));
     const junk = G.verifyGuideAnswer(MAP, G.parseGuideJson("I think you should press the big button."), "where is billing");
     check("G2. a reply that is not JSON gives the does-not-know answer, linking the closest page (billing.html for \"where is billing\")",
       junk.known === false && junk.link.page === "billing.html", JSON.stringify(junk));

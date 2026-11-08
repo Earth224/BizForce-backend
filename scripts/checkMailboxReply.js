@@ -732,7 +732,7 @@ async function draftAndFile(b, user, uid, reply) {
   // NAMED (Nov 6 2026, store changes, migration 175): 175_store_changes.sql is allowed too; "the highest" is checkStoreChanges R1's.
   check("M2. 170_member_email_replies.sql is the only migration numbered 170, and every other migration but 171_card_counts.sql, 172_card_leads.sql, 173_mailbox_microsoft.sql and 174_card_wallet_count.sql is at most 170 (169 was the last before it)",
     migFiles.filter(f => /^170_/.test(f)).length === 1 && migFiles.indexOf("170_member_email_replies.sql") !== -1 &&
-    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
+    migFiles.every(f => f === "171_card_counts.sql" || f === "172_card_leads.sql" || f === "173_mailbox_microsoft.sql" || f === "174_card_wallet_count.sql" || f === "175_store_changes.sql" || /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): 176 is allowed too; "the highest" is checkShopifyConnect R1's. */ f === "176_shopify_oauth.sql" || /* NAMED (Nov 7 2026, YouTube uploads, migration 177): 177 is allowed too; "the highest" is checkYoutubeUploads R1's. */ f === "177_youtube_uploads.sql" || /* NAMED (Nov 7 2026, TikTok posting, migration 178): 178 is allowed too; "the highest" is checkTiktokPosting R1's. */ f === "178_tiktok_posting.sql" || /* NAMED (Nov 7 2026, Instagram posting, migration 179): 179 is allowed too; "the highest" is checkInstagramPosting R1's. */ f === "179_instagram_posting.sql" || Number(f.split("_")[0]) <= 170) && migFiles.some(f => /^169_/.test(f)), migFiles.slice(-2).join(","));
 
   /* ── U. the pure parts ──────────────────────────────────────────────────── */
   console.log("\n══ U. lib/memberEmail.js, the pure parts ══");
@@ -1156,7 +1156,8 @@ async function draftAndFile(b, user, uid, reply) {
   check("J11. an executed reply shows \"Sent\"", />Sent</.test(doneHtml) && pctx.mailboxReplyResultHtml({ already_sent: true }).indexOf("already sent") !== -1);
   check("J12. the card is wired: the payload branch, the result branch, and fillMailboxReplies after each render",
     PROP.indexOf("} else if (p.action_type === \"send_mailbox_reply\") {\n        fieldsHtml = mailboxReplyPayloadFields(p.payload || {});") !== -1 &&
-    PROP.indexOf("p.action_type === \"send_mailbox_reply\" && p.execution_result") !== -1 && PROP.indexOf("  showPostImages(container);\n  fillMailboxReplies(container);\n}") !== -1);
+    // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE fillMailboxReplies(container) closed the render. AFTER fillInstagramVideos(container) follows it.
+    PROP.indexOf("p.action_type === \"send_mailbox_reply\" && p.execution_result") !== -1 && PROP.indexOf("  showPostImages(container);\n  fillMailboxReplies(container);\n  fillInstagramVideos(container);\n}") !== -1);
   if (JSDOM) {
     const pdom = new JSDOM("<div id=c>" + card + "</div>", { url: "https://bizforceai.net/proposals.html", runScripts: "outside-only" });
     const pw = pdom.window, pf = [];
