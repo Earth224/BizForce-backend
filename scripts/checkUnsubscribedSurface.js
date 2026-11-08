@@ -260,7 +260,14 @@ const EXPECTED_GATED = [
   // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_youtube_video and delete_youtube_video). Status, disconnect, the list of
   // videos, deleting a ready video and a video's status stay login-only (checkYoutubeUploads).
   "post /api/youtube/start", "post /api/youtube/finish", "post /api/videos/upload-url", "post /api/videos/finalize",
-  "post /api/youtube/propose-upload", "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete"
+  "post /api/youtube/propose-upload", "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete",
+  // NAMED (Nov 7 2026, TikTok posting, migration 178; gated 109 -> 113): BEFORE no TikTok connection. AFTER Connect TikTok
+  // starts (a single-use state stored) and finishes (the code exchanged, both scopes required, the tokens sealed, the user
+  // read); filing a post for approval (TikTok's posting rules against a fresh creator_info); and an AI draft of the caption
+  // (aiLimiter). All need a subscription; approving a post is G3-gated on the approve route
+  // (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_tiktok_post). Status, disconnect, creator-info and a post's status stay
+  // login-only (checkTiktokPosting).
+  "post /api/tiktok/start", "post /api/tiktok/finish", "post /api/tiktok/propose-post", "post /api/tiktok/draft-caption"
 ];
 
 const EXPECTED_ADMIN = [
@@ -463,7 +470,13 @@ const EXPECTED_OWN = [
   // their own member_youtube_connections row and their own youtube_google oauth_states are deleted; nothing another member
   // is served is written, and disconnecting must always work, subscribed or not. DELETE /api/videos/:id (a ready video the
   // member owns, through lib/memberVideos.js) and the status reads write nothing a member is served and need no entry here.
-  "post /api/youtube/disconnect"
+  "post /api/youtube/disconnect",
+  // NAMED (Nov 7 2026, TikTok posting, migration 178; one more effectful login-only route): BEFORE no TikTok connection.
+  // AFTER a member disconnects their own TikTok account: TikTok is asked to revoke the token as a best effort (never
+  // blocking), and their own member_tiktok_connections row and their own tiktok_login oauth_states are deleted; nothing
+  // another member is served is written, and disconnecting must always work, subscribed or not. The creator-info and status
+  // reads (through lib/tiktokApi.js) write only the member's own rows and need no entry here.
+  "post /api/tiktok/disconnect"
 ];
 
 /* Unauthenticated routes that write. */

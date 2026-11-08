@@ -59,9 +59,11 @@ const MUTATIONS = {
   "pkce-plain": ["server",
     "var url = ga.authorizeUrl(config.clientId, youtubeRedirectUri(), state, ga.challengeFor(verifier));",
     "var url = ga.authorizeUrl(config.clientId, youtubeRedirectUri(), state, verifier);"],
+  // NAMED (Nov 7 2026, TikTok posting): TikTok's finish consumes its state with the same first line, so the anchor
+  // goes on to YouTube's own second line (ga.stateHash) to stay one match.
   "state-reusable": ["server",
-    "var consumed = await supabase.from(\"oauth_states\").update({ consumed_at: consumedAt })",
-    "var consumed = await supabase.from(\"oauth_states\").update({ consumed_at: null })"],
+    "var consumed = await supabase.from(\"oauth_states\").update({ consumed_at: consumedAt })\n        .eq(\"state_hash\", ga.stateHash(",
+    "var consumed = await supabase.from(\"oauth_states\").update({ consumed_at: null })\n        .eq(\"state_hash\", ga.stateHash("],
   "scopes-unchecked": ["auth",
     "  if (needScopes && !grantsYoutube(j.scope)) throw new GoogleError(\"no_scopes\", \"scope_missing\");\n", ""],
   "unsealed-before-api": ["server",
@@ -113,15 +115,18 @@ const MUTATIONS = {
     "b.privacy === \"\" ? \"private\" : b.privacy;", "b.privacy === \"\" ? \"public\" : b.privacy;"],
   "made-for-kids-optional": ["videos",
     "  if (typeof b.made_for_kids !== \"boolean\") return { ok: false, error: MESSAGES.kids, field: \"made_for_kids\" };\n", ""],
-  "file-kept-after-upload": ["api",
-    "  if (video.path && await MV.removeObject(deps.storage, video.path)) {\n", "  if (false) {\n"],
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE the executor deleted the file once YouTube had it. AFTER the file
+  // is deleted by the retention pass once YouTube AND TikTok have it (J8), so the mutation keeps every such file instead.
+  "file-kept-after-upload": ["videos",
+    "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id]; });\n", "    var bothRows = [];\n"],
   "retention-missing": ["server",
     "    return await require(\"./lib/memberVideos\").retentionTick(youtubeDeps());\n", "    return null;\n"],
   "foreign-video-visible": ["videos",
     "  var r = await supabase.from(\"member_videos\").select(ROW_COLUMNS).eq(\"id\", id).eq(\"user_id\", userId).maybeSingle();\n  if (r.error) throw r.error;\n  return r.data && r.data.user_id === userId ? r.data : null;\n",
     "  var r = await supabase.from(\"member_videos\").select(ROW_COLUMNS).eq(\"id\", id).maybeSingle();\n  if (r.error) throw r.error;\n  return r.data || null;\n"],
+  // NAMED (Nov 7 2026, TikTok posting): the host check is now the named profile's (youtube: www.googleapis.com).
   "stream-host-unrestricted": ["fetch",
-    "target.hostname !== STREAM_HOST || ", ""],
+    "target.hostname !== profile.host || ", ""],
   "other-3xx-followed": ["fetch",
     "        if (status >= 300 && status < 400) {\n          res.destroy();\n          return fail(new GuardedFetchError(\"redirected\", \"answered \" + status + \"; the stream mode never follows a redirect\"));\n        }\n", ""],
   "session-uri-logged": ["api",
@@ -158,8 +163,9 @@ const MUTATIONS = {
     "  var path = newPath(userId, ext, deps.randomBytes);\n"],
   "refresh-margin-ignored": ["api",
     "const REFRESH_MARGIN_MS = 5 * 60 * 1000;", "const REFRESH_MARGIN_MS = 0;"],
+  // NAMED (Nov 7 2026, TikTok posting): the stale select now reads youtube_video_id and tiktok_status too (for fileGonePatch).
   "retention-ready-kept": ["videos",
-    "    var stale = await supabase.from(\"member_videos\").select(\"id, user_id, path\").eq(\"status\", \"ready\").lt(\"created_at\", cutoff).limit(PAGE_SIZE);\n",
+    "    var stale = await supabase.from(\"member_videos\").select(\"id, user_id, path, youtube_video_id, tiktok_status\").eq(\"status\", \"ready\").lt(\"created_at\", cutoff).limit(PAGE_SIZE);\n",
     "    var stale = { data: [], error: null };\n"],
   "refresh-not-single-flight": ["api",
     "  var running = refreshesInFlight.get(key);\n", "  var running = null;\n"],
@@ -845,8 +851,12 @@ function stripComments(src) { return String(src).replace(/\/\*[\s\S]*?\*\//g, ""
 
 /* ── the Social page's YouTube panel in a fake DOM ───────────────────────── */
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
-function runPage(search, answers) {
-  const dom = { els: {}, fetches: [], events: [], innerHTML: [], assigned: [], xhr: [] };
+/* NAMED (Nov 7 2026, TikTok posting): sessionStorage "bf_oauth_return" marks whose sign-in comes back. A return
+   (a query) starts with the marker "youtube" unless marker says otherwise (null: none). */
+function runPage(search, answers, marker) {
+  const dom = { els: {}, fetches: [], events: [], innerHTML: [], assigned: [], xhr: [], session: {} };
+  const mk = marker === undefined ? (search ? "youtube" : null) : marker;
+  if (mk !== null) dom.session.bf_oauth_return = mk;
   function node(tag) {
     const n = { tagName: String(tag).toUpperCase(), children: [], _t: "", className: "", hidden: false, disabled: false, value: "", checked: false, type: "", id: "", name: "",
       required: false, selected: false, attrs: {}, listeners: {}, files: null,
@@ -896,7 +906,9 @@ function runPage(search, answers) {
     };
     return x;
   }
-  const ctx = { window: window, document: document, localStorage: { getItem: function () { return "tok"; } }, fetch: fetch, URLSearchParams: URLSearchParams,
+  const sessionStorage = { getItem: function (k) { return Object.prototype.hasOwnProperty.call(dom.session, k) ? dom.session[k] : null; },
+    setItem: function (k, v) { dom.session[k] = String(v); }, removeItem: function (k) { delete dom.session[k]; } };
+  const ctx = { window: window, document: document, localStorage: { getItem: function () { return "tok"; } }, sessionStorage: sessionStorage, fetch: fetch, URLSearchParams: URLSearchParams,
     XMLHttpRequest: XMLHttpRequest, encodeURIComponent: encodeURIComponent,
     console: { log: function () {}, error: function () {}, warn: function () {} }, Promise: Promise, JSON: JSON, String: String, Array: Array, Date: Date, Math: Math, Number: Number, Error: Error };
   vm.createContext(ctx);
@@ -1238,7 +1250,8 @@ function pageAnswers(over) {
   check("F11. the generic proposals route refuses both types, and both are subscription-gated and have an executor",
     FILES.server.indexOf("if (actionType === \"publish_youtube_video\") {\n      return res.status(400).json({\n        error: \"A YouTube upload cannot be filed here.") !== -1 &&
     FILES.server.indexOf("if (actionType === \"delete_youtube_video\") {\n      return res.status(400).json({\n        error: \"A YouTube removal cannot be filed here.") !== -1 &&
-    FILES.server.indexOf("\"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\"];") !== -1 &&
+    // NAMED (Nov 7 2026, TikTok posting): the gated list goes on with publish_tiktok_post; both YouTube types still in it.
+    FILES.server.indexOf("\"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\"];") !== -1 &&
     FILES.server.indexOf("  publish_youtube_video: executePublishYoutubeVideo,\n") !== -1 && FILES.server.indexOf("  delete_youtube_video: executeDeleteYoutubeVideo,\n") !== -1);
   // draft
   m = mountRoutes({ env: CONFIGURED });
@@ -1264,10 +1277,13 @@ function pageAnswers(over) {
   const sess = m.google.sessions[Object.keys(m.google.sessions)[0]];
   check("U1. approved: the file reaches YouTube whole and once, through one resumable session", a.ok && m.google.starts().length === 1 && m.google.puts().length === 1 &&
     !!sess && sess.done && sha(sess.received) === sha(buf), a.ok ? "" : a.msg);
-  check("U2. recorded: status uploaded, the id, uploaded_at, the session cleared; the link https://www.youtube.com/watch?v=<id>",
-    a.ok && v.status === "uploaded" && v.youtube_video_id === YT_ID && !!v.uploaded_at && v.session_ciphertext === null && a.v.url === "https://www.youtube.com/watch?v=" + YT_ID &&
+  /* NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE the upload set status uploaded and deleted the file at once.
+     AFTER status describes the FILE, so it stays ready with the file kept for TikTok; the retention pass deletes it once
+     YouTube and TikTok both have it, or 14 days after it was added (J8, J1). */
+  check("U2. recorded: the id, uploaded_at, the session cleared, the file still ready; the link https://www.youtube.com/watch?v=<id>",
+    a.ok && v.status === "ready" && v.youtube_video_id === YT_ID && !!v.uploaded_at && v.session_ciphertext === null && a.v.url === "https://www.youtube.com/watch?v=" + YT_ID &&
     a.v.privacy === "private" && a.v.channel === CHANNEL_TITLE);
-  check("U3. the file is deleted as soon as YouTube has it (path null)", v.path === null && !m.storage.objects[video.path]);
+  check("U3. the file is kept after YouTube has it (path kept, the object there), for the other platform or the retention pass", v.path === video.path && !!m.storage.objects[video.path]);
   const sb = (m.google.startBodies || [])[0] || {};
   const start0 = m.google.starts()[0] || {};
   check("U4. the start sends the filed title, description, tags, category 22, privacy and made-for-kids, and the file's type and size",
@@ -1383,8 +1399,9 @@ function pageAnswers(over) {
     s1.done && sha(s1.received) === sha(buf), a.ok ? J(after.map(function (x) { return x.method + " " + x.contentRange; })) : a.msg);
   check("U22. ...the status query reserved 1 unit (uploads.status), and the run made no second 100-unit reservation",
     m.db.t.youtube_api_calls.filter(function (x) { return x.units === 100; }).length === 1 && m.db.t.youtube_api_calls.filter(function (x) { return x.units === 1; }).length === 1);
-  check("U23. ...recorded once: uploaded, the session cleared, the file deleted", rowOf(m, video.id).status === "uploaded" && rowOf(m, video.id).session_ciphertext === null &&
-    rowOf(m, video.id).path === null && !m.storage.objects[video.path]);
+  // NAMED (Nov 7 2026, TikTok posting): BEFORE "uploaded ... the file deleted"; AFTER the YouTube id recorded once, the file kept (U3).
+  check("U23. ...recorded once: the YouTube id, the session cleared, the file kept", rowOf(m, video.id).youtube_video_id === YT_ID && rowOf(m, video.id).status === "ready" &&
+    rowOf(m, video.id).session_ciphertext === null && rowOf(m, video.id).path === video.path && !!m.storage.objects[video.path]);
   // crash after the last byte, before the record
   m = mountRoutes({ env: CONFIGURED, google: { cut: 1 } });
   seedConnection(m.db);
@@ -1455,8 +1472,9 @@ function pageAnswers(over) {
   check("R2. one pending removal per video", r.status === 409 && r.body.code === "pending");
   a = await attempt(m.ctx.executeDeleteYoutubeVideo(dp));
   const del = m.google.of(function (x) { return x.method === "DELETE"; })[0];
-  check("R3. approved: videos.delete on that id (50 units reserved first), then status removed", a.ok && a.v.removed === true && !!del && del.search === "?id=" + YT_ID &&
-    rowOf(m, up.id).status === "removed" && m.db.t.youtube_api_calls.some(function (x) { return x.units === 50; }), a.ok ? "" : a.msg);
+  // NAMED (Nov 7 2026, TikTok posting): BEFORE "then status removed"; AFTER status describes the file, so removing from YouTube clears youtube_video_id.
+  check("R3. approved: videos.delete on that id (50 units reserved first), then youtube_video_id cleared", a.ok && a.v.removed === true && !!del && del.search === "?id=" + YT_ID &&
+    rowOf(m, up.id).youtube_video_id === null && rowOf(m, up.id).status === "uploaded" && m.db.t.youtube_api_calls.some(function (x) { return x.units === 50; }), a.ok ? "" : a.msg);
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db);
   const up2 = seedVideo(m.db, mp4("isom", 3000), { status: "uploaded", youtube_video_id: YT_ID, path: null, uploaded_at: new Date().toISOString() });
@@ -1476,29 +1494,36 @@ function pageAnswers(over) {
   /* ── S ── */
   OUT("\n══ S. the stream mode ══");
   g = makeGoogle({});
-  const sNone = await attempt(g.streamUpload("https://evil.example.com/upload/x", { method: "PUT", body: null, contentLength: 0 }));
-  const sPath = await attempt(g.streamUpload("https://www.googleapis.com/youtube/v3/videos", { method: "PUT", body: null, contentLength: 0 }));
-  const sHttp = await attempt(g.streamUpload("http://www.googleapis.com/upload/x", { method: "PUT", body: null, contentLength: 0 }));
-  const sPort = await attempt(g.streamUpload("https://www.googleapis.com:8443/upload/x", { method: "PUT", body: null, contentLength: 0 }));
+  const sNone = await attempt(g.streamUpload("https://evil.example.com/upload/x", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
+  const sPath = await attempt(g.streamUpload("https://www.googleapis.com/youtube/v3/videos", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
+  const sHttp = await attempt(g.streamUpload("http://www.googleapis.com/upload/x", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
+  const sPort = await attempt(g.streamUpload("https://www.googleapis.com:8443/upload/x", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
   check("S1. only https://www.googleapis.com on 443 with a path under /upload/: another host, path, scheme or port is invalid_url, with no request",
     [sNone, sPath, sHttp, sPort].every(function (x) { return !x.ok && x.code === "invalid_url" && noSecretIn(x.msg) && String(x.msg).indexOf("evil") === -1; }) && g.requests.length === 0,
     J([sNone.code, sPath.code, sHttp.code, sPort.code]));
-  const sPost = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { method: "POST", body: null, contentLength: 0 }));
+  const sPost = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { profile: "youtube", method: "POST", body: null, contentLength: 0 }));
   check("S2. PUT only", !sPost.ok && /method must be PUT/.test(sPost.msg || ""));
-  const sRedir = await attempt(g.streamUpload("https://www.googleapis.com/upload/redirect", { method: "PUT", body: null, contentLength: 0 }));
+  const sRedir = await attempt(g.streamUpload("https://www.googleapis.com/upload/redirect", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
   check("S3. a 302 is not followed: rejected as redirected, one request", !sRedir.ok && sRedir.code === "redirected" && g.requests.length === 1, sRedir.ok ? J(sRedir.v) : sRedir.code);
   g = makeGoogle({});
-  const sHuge = await attempt(g.streamUpload("https://www.googleapis.com/upload/huge", { method: "PUT", body: null, contentLength: 0 }));
+  const sHuge = await attempt(g.streamUpload("https://www.googleapis.com/upload/huge", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
   check("S4. a JSON answer over 1 MB is too_large", !sHuge.ok && sHuge.code === "too_large", sHuge.code);
   const t0 = Date.now();
-  const sIdle = await attempt(g.streamUpload("https://www.googleapis.com/upload/silent", { method: "PUT", body: null, contentLength: 0, idleTimeoutMs: 1000 }));
+  const sIdle = await attempt(g.streamUpload("https://www.googleapis.com/upload/silent", { profile: "youtube", method: "PUT", body: null, contentLength: 0, idleTimeoutMs: 1000 }));
   check("S5. nothing answered for the idle time: timeout", !sIdle.ok && sIdle.code === "timeout" && Date.now() - t0 < 5000, sIdle.code);
   check("S6. the limits: 60 s idle, 20 minutes total, 50 MB up, 1 MB of answer; Range and Location exposed",
     GF.STREAM_IDLE_TIMEOUT_MS === 60000 && GF.STREAM_TOTAL_TIMEOUT_MS === 1200000 && GF.STREAM_MAX_UPLOAD_BYTES === 52428800 && GF.STREAM_HOST === "www.googleapis.com" &&
     GF.STREAM_PATH_PREFIX === "/upload/" && FILES.fetch.indexOf("const STREAM_ANSWER_HEADERS = [\"range\", \"location\"];") !== -1 && FILES.fetch.indexOf("const STREAM_MAX_BODY_BYTES = 1024 * 1024;") !== -1);
-  const sLong = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { method: "PUT", body: null, contentLength: 0, idleTimeoutMs: 61000 }));
-  const sMax = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { method: "PUT", body: null, contentLength: 52428801 }));
+  const sLong = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { profile: "youtube", method: "PUT", body: null, contentLength: 0, idleTimeoutMs: 61000 }));
+  const sMax = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { profile: "youtube", method: "PUT", body: null, contentLength: 52428801 }));
   check("S7. an idle time over 60 s, or more than 50 MB, is refused before any request", !sLong.ok && !sMax.ok && g.requests.length === 2);
+  // NAMED (Nov 7 2026, TikTok posting): the stream mode serves named provider profiles, and the caller must name one.
+  // Every call above names "youtube"; with none, or an unknown one, nothing is sent.
+  const sNoProfile = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { method: "PUT", body: null, contentLength: 0 }));
+  const sBadProfile = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { profile: "vimeo", method: "PUT", body: null, contentLength: 0 }));
+  check("S8. no profile, or one not named, is refused before any request", !sNoProfile.ok && !sBadProfile.ok && /profile must be one of/.test(sNoProfile.msg || "") && g.requests.length === 2);
+  check("S9. the youtube profile is www.googleapis.com under /upload/, 308 allowed, no empty-body statuses",
+    J(GF.STREAM_PROFILES.youtube) === J({ host: "www.googleapis.com", pathPrefix: "/upload/", allow308: true, emptyOkStatuses: [] }));
 
   /* ── J ── */
   OUT("\n══ J. retention ══");
@@ -1518,6 +1543,17 @@ function pageAnswers(over) {
     !db.storage.objects[staleV.path] && db.t.member_videos.filter(function (x) { return x.id === staleV.id; })[0].status === "removed" &&
     db.t.member_videos.filter(function (x) { return x.id === staleV.id; })[0].path === null && !!db.storage.objects[freshV.path] && tick.expired === 1, J(tick));
   check("J2. an uploaded video's leftover file: deleted, path null", !db.storage.objects[leftV.path] && db.t.member_videos.filter(function (x) { return x.id === leftV.id; })[0].path === null && tick.leftovers === 1);
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): a ready video YouTube has AND TikTok posted goes at once, unless a pending proposal names it.
+  const dbB = makeDb();
+  const bothV = seedVideo(dbB, mp4("isom", 100, 4), { youtube_video_id: YT_ID, uploaded_at: iso(now - 3600000), tiktok_status: "posted", tiktok_posted_at: iso(now - 600000) });
+  const ytOnly = seedVideo(dbB, mp4("isom", 100, 5), { youtube_video_id: YT_ID, uploaded_at: iso(now - 3600000) });
+  const heldV = seedVideo(dbB, mp4("isom", 100, 6), { youtube_video_id: YT_ID, uploaded_at: iso(now - 3600000), tiktok_status: "posted", tiktok_posted_at: iso(now - 600000) });
+  dbB.t.agent_proposals.push({ id: uuid(), user_id: USER, action_type: "delete_youtube_video", status: "pending", payload: { video_id: heldV.id, youtube_video_id: YT_ID, channel_id: CHANNEL } });
+  const tickBoth = await MV.retentionTick({ supabase: dbB, storage: dbB.storage, now: function () { return now; } }, now);
+  const rowIn = function (id) { return dbB.t.member_videos.filter(function (x) { return x.id === id; })[0]; };
+  check("J8. YouTube AND TikTok have it: the file deleted at once, status uploaded; YouTube alone, or named by a pending proposal: kept",
+    !dbB.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null &&
+    !!dbB.storage.objects[ytOnly.path] && rowIn(ytOnly.id).status === "ready" && !!dbB.storage.objects[heldV.path] && rowIn(heldV.id).status === "ready" && tickBoth.both === 1, J(tickBoth));
   check("J3. a file with no row: deleted after a day (both members' folders); one an hour old kept",
     !db.storage.objects[orphanOld] && !db.storage.objects[orphanOther] && !!db.storage.objects[orphanNew] && tick.orphans === 2, J(tick));
   const jr = db.t.job_runs.filter(function (x) { return x.job_name === "member_videos_retention"; });
@@ -1558,11 +1594,12 @@ function pageAnswers(over) {
   OUT("\n══ P. the pages ══");
   check("P1. the Social page: the three lines word for word, the panel, and the script after mastodon-connect.js",
     FILES.page.indexOf("<p class=\"bsky-quiet\">Videos up to 50 MB (MP4, WebM or MOV).</p>") !== -1 &&
-    FILES.page.indexOf("<p class=\"bsky-quiet\">BizForce deletes the file as soon as YouTube has it, or after 14 days if it's never uploaded.</p>") !== -1 &&
+    // NAMED (Nov 7 2026, TikTok posting): BEFORE "as soon as YouTube has it, or after 14 days if it's never uploaded"; AFTER every platform.
+    FILES.page.indexOf("<p class=\"bsky-quiet\">BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">Until Google approves BizForce, YouTube keeps uploads from BizForce private.</p>") !== -1 &&
     FILES.page.indexOf("id=\"ytConnect\"") !== -1 && FILES.page.indexOf("<script src=\"/scripts/youtube.js\"></script>") > FILES.page.indexOf("mastodon-connect.js"));
   check("P2. the same three lines are the server's own (lib/memberVideos.js MESSAGES)", MV.MESSAGES.limits === "Videos up to 50 MB (MP4, WebM or MOV)." &&
-    MV.MESSAGES.kept === "BizForce deletes the file as soon as YouTube has it, or after 14 days if it's never uploaded." &&
+    MV.MESSAGES.kept === "BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it." &&
     MV.MESSAGES.privateUntilVerified === "Until Google approves BizForce, YouTube keeps uploads from BizForce private.");
   let dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers());
   await flush();
@@ -1570,6 +1607,16 @@ function pageAnswers(over) {
   const finIdx = dom.events.indexOf("fetch:POST /api/youtube/finish"), rsIdx = dom.events.indexOf("replaceState:" + PAGE_PATH);
   check("P3. back from Google: the code and state POSTed to finish, then the query stripped with replaceState", !!finCall && J(finCall.body) === J({ code: CODE, state: "S".repeat(43) }) &&
     finIdx !== -1 && rsIdx > finIdx, dom.events.join(","));
+  check("P3b. ...and the marker is cleared once handled", dom.session.bf_oauth_return === undefined);
+  dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers(), null);
+  await flush();
+  check("P3c. a return with no marker: stripped with replaceState, \"Start the connection again.\", no finish",
+    dom.events.indexOf("replaceState:" + PAGE_PATH) !== -1 && dom.get("ytConnectMsg").textContent === "Start the connection again." &&
+    !dom.fetches.some(function (x) { return /\/finish$/.test(x.path); }));
+  dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers(), "tiktok");
+  await flush();
+  check("P3d. TikTok's return (marker tiktok): this script neither finishes nor strips it, and leaves the marker",
+    !dom.fetches.some(function (x) { return x.path === "/api/youtube/finish"; }) && dom.events.indexOf("replaceState:" + PAGE_PATH) === -1 && dom.session.bf_oauth_return === "tiktok");
   dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers({ "POST /api/youtube/finish": { status: 400, body: { error: "That sign-in link has expired or was already used. Start again." } } }));
   await flush();
   check("P4. ...stripped whatever the answer: a refused finish strips it too, and shows the server's words",
@@ -1586,6 +1633,7 @@ function pageAnswers(over) {
   dom.get("ytConnectBtn").click();
   await flush();
   check("P7. Connect YouTube goes to the address start answers, on accounts.google.com", dom.assigned.length === 1 && dom.assigned[0].indexOf("https://accounts.google.com/") === 0);
+  check("P7b. ...having set the return marker to youtube first", dom.session.bf_oauth_return === "youtube");
   dom = runPage("", pageAnswers({ "GET /api/youtube/status": { status: 200, body: { youtube_available: true, connected: false, status: "not_connected" } },
     "POST /api/youtube/start": { status: 200, body: { authorize_url: "https://accounts.google.com.evil.example/x" } } }));
   await flush();
@@ -1651,8 +1699,10 @@ function pageAnswers(over) {
   OUT("\n══ G. legal and registries ══");
   const PRIVACY = "If you connect your YouTube channel, BizForce stores your channel's name and id and the access Google grants BizForce, encrypted, and uses " +
     "that access only to upload or remove a video when you approve it and to check a video's status when you ask. Videos you add for YouTube " +
-    "are kept privately, sent only to YouTube with the title, description and tags you approve, and deleted as soon as YouTube has them or " +
-    "after 14 days if they are never uploaded. You can disconnect at any time, which also asks Google to cancel BizForce's access, and " +
+    // NAMED (Nov 7 2026, TikTok posting): BEFORE "deleted as soon as YouTube has them or after 14 days if they are never uploaded";
+    // AFTER, word for word as the owner decided, "deleted once every platform you sent them to has them, or 14 days after you added them".
+    "are kept privately, sent only to YouTube with the title, description and tags you approve, and deleted once every platform you sent " +
+    "them to has them, or 14 days after you added them. You can disconnect at any time, which also asks Google to cancel BizForce's access, and " +
     "everything is deleted with your account.";
   const TERMS = "If you upload videos through BizForce, you confirm you have the rights to them and that they follow YouTube's rules.";
   const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
@@ -1671,10 +1721,12 @@ function pageAnswers(over) {
   check("G5. gateRules: both actions known, channel youtube", GR.ACTION_TYPES.indexOf("publish_youtube_video") !== -1 && GR.ACTION_TYPES.indexOf("delete_youtube_video") !== -1 &&
     GR.CHANNELS.indexOf("youtube") !== -1 && GR.channelFor("publish_youtube_video") === "youtube" && GR.channelFor("delete_youtube_video") === "youtube");
   check("G6. yourData: the connection and the videos exported without tokens, paths, fingerprints or sessions; deleted with the account; YouTube a third party",
-    FILES.yourData.indexOf("select: \"id, label, bytes, status, youtube_video_id, uploaded_at, created_at\"") !== -1 &&
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify and Connect YouTube") !== -1 &&
+    // NAMED (Nov 7 2026, TikTok posting, migration 178): the videos' export adds TikTok's status, time and post id (never the
+    // upload address); the sign-in states line names Connect TikTok last; the TikTok connection is deleted between the two.
+    FILES.yourData.indexOf("select: \"id, label, bytes, status, youtube_video_id, uploaded_at, tiktok_status, tiktok_posted_at, tiktok_post_id, created_at\"") !== -1 &&
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube and Connect TikTok") !== -1 &&
     FILES.yourData.indexOf("{ name: \"YouTube (Google)\", for: \"uploading the videos you approve to your own channel, when you connect it\" }") !== -1 &&
-    FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"oauth_states\"") !== -1);
+    FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"oauth_states\"") !== -1);
   check("G7. schemaCheck knows both tables at migration 177; backup leaves both out; accountFiles lists bf-video",
     FILES.schema.split("177_youtube_uploads.sql").length - 1 >= 2 && /member_videos/.test(FILES.backup) && /member_youtube_connections/.test(FILES.backup) &&
     FILES.accountFiles.indexOf("const BUCKETS = [PUBLIC, BOOKS, GOODS, MUSIC, VIDEO];") !== -1 && FILES.accountFiles.indexOf("const VIDEO = \"bf-video\";") !== -1);
@@ -1695,7 +1747,11 @@ function pageAnswers(over) {
     MV.PATH_RE.test(MV.newPath(USER, "webm")) && !MV.PATH_RE.test("video/" + USER + "/x.mp4"));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("G12. R1. 177_youtube_uploads.sql is the highest migration, and the only 177", highest === 177 && migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql", highest);
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE 177 was the highest. AFTER it is the only 177, and only
+  // 178_tiktok_posting.sql is above it; "the highest" is checkTiktokPosting R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql is above it (checkTiktokPosting R1)", highest === 178 &&
+    migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

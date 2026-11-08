@@ -883,8 +883,9 @@ const everything = b => JSON.stringify(b.db.tables);
   check("J2. …Disconnect, the switch \"Post approved drafts automatically\" (unchecked in the markup), and the reconnect slot",
     />Disconnect<\/button>/.test(card) && /<input type="checkbox" id="bskyAutoPost" \/> <span>Post approved drafts automatically<\/span>/.test(card) &&
     /id="bskyReconnect" hidden/.test(card) && /Profile changes always wait for your approval/.test(card));
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): TikTok connects now, so it left the "coming" list. Same honest line otherwise.
   check("J3. the other platforms keep the honest line: coming, through each platform's own sign-in",
-    /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn, TikTok and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(card));
+    /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(card));
   const intro = (/<p id="connectIntro"[^>]*>([^<]*)<\/p>/.exec(FE("agents/content.html")) || ["", ""])[1];
   check("J4. content.html: Bluesky points to the Social Agent page, never a main password, and Facebook and Instagram stay coming",
     intro === "Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Facebook and Instagram are coming, through each platform's own sign-in.", intro);

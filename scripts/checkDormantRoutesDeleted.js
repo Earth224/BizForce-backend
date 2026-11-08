@@ -315,7 +315,18 @@ const ADDED = [
   ["post", "/api/youtube/propose-upload"],                   // subscribed: validated metadata frozen in a proposal; never executes (454 -> 455)
   ["post", "/api/youtube/draft-metadata"],                   // subscribed: an AI draft of the title, description and tags; nothing stored (455 -> 456)
   ["post", "/api/youtube/videos/:id/propose-delete"],        // subscribed: removal from YouTube filed as a proposal; never executes (456 -> 457)
-  ["get", "/api/youtube/videos/:id/status"]                  // login-only: videos.list status and processing for the member's own uploaded video, 1 unit (457 -> 458)
+  ["get", "/api/youtube/videos/:id/status"],                 // login-only: videos.list status and processing for the member's own uploaded video, 1 unit (457 -> 458)
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE 458 routes; AFTER 466, Connect TikTok (Login Kit for Web, a
+  // single-use state), TikTok's creator_info read live, a post filed for approval with TikTok's posting rules, an AI caption
+  // draft, and a post's status read (checkTiktokPosting)
+  ["post", "/api/tiktok/start"],                             // subscribed: stores a single-use state, returns TikTok's authorize URL; 503 until configured (458 -> 459)
+  ["post", "/api/tiktok/finish"],                            // subscribed: state, code; both scopes required; tokens sealed before the user read; stored (459 -> 460)
+  ["get", "/api/tiktok/status"],                             // login-only: the member's own connection, never a token; tiktok_available (460 -> 461)
+  ["post", "/api/tiktok/disconnect"],                        // login-only: revoke as a best effort, the row and this purpose's states deleted (461 -> 462)
+  ["get", "/api/tiktok/creator-info"],                       // login-only: creator_info read live for the member's own account (462 -> 463)
+  ["post", "/api/tiktok/propose-post"],                      // subscribed: TikTok's rules checked against a fresh creator_info, frozen in a proposal; never executes (463 -> 464)
+  ["post", "/api/tiktok/draft-caption"],                     // subscribed: an AI draft of the caption; nothing stored (464 -> 465)
+  ["get", "/api/tiktok/videos/:id/status"]                   // login-only: the post's status fetched for the member's own video, recorded when it changed (465 -> 466)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

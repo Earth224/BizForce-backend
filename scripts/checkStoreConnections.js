@@ -1326,7 +1326,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 6 2026, store changes, migration 175): the allowlist adds 175_store_changes.sql; "the highest" is checkStoreChanges R1's.
     // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): the allowlist adds 176_shopify_oauth.sql; "the highest" is checkShopifyConnect R1's.
     // NAMED (Nov 7 2026, YouTube uploads, migration 177): the allowlist adds 177_youtube_uploads.sql; "the highest" is checkYoutubeUploads R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 7 2026, TikTok posting, migration 178): the allowlist adds 178_tiktok_posting.sql; "the highest" is checkTiktokPosting R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   // NAMED (Nov 7 2026, migration 176): lib/shopifyApi.js, lib/shopifyAuth.js and 176_shopify_oauth.sql join the list.

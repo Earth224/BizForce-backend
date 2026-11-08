@@ -577,8 +577,13 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
        NAMED BEFORE → AFTER (Nov 1 2026, B10, Termaximus's suggestions). BEFORE: KEPT had 17 keys. AFTER: 18; bf_tmx_not_now
        is which suggestions were set aside with "Not now" on this device and until when (scripts/termaximus-presence.js):
-       fixed rule names and times, no member data, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it. */
+       fixed rule names and times, no member data, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Nov 7 2026, TikTok posting). BEFORE: KEPT had 18 keys. AFTER: 19; bf_oauth_return is which
+       sign-in (the word youtube or tiktok) is coming back to the Social page in this tab (sessionStorage, scripts/youtube.js
+       and scripts/tiktok.js), cleared when that return is handled: no member data, so sign-out leaves it and bf-session.js's
+       LEFT ON PURPOSE list names it. */
     const KEPT = {
+      bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",
       bf_exec_tab: "which tab the Executive command deck opens on",
       bf_tmx_not_now: "which Termaximus suggestions were set aside with Not now on this device",
       bf_boombox: "where the music boombox sits and whether it is minimised",

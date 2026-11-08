@@ -877,9 +877,11 @@ const A = [
   ["5 content 128", conTips, "to post on Bluesky from your own account, use the Social Agent page",/Connect your social accounts|directly on this page so approved content has somewhere to go/,
     () => socialShut() && blueskyConnects() && /app\.post\("\/api\/social\/connect\/:platform", requireAuth, async function \(req, res, next\) \{\s*try \{\s*\/\*[^*]*\*\/\s*return res\.status\(503\)\.json\(\{ error: "Social account connections are temporarily unavailable\." \}\);/.test(FILES[SERVER])],
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "Bluesky and Mastodon connect so far, ..."; AFTER YouTube is named too.
-  ["5 social 134", socTips, "Bluesky, Mastodon and YouTube connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
+  // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "Bluesky, Mastodon and YouTube connect so far"; AFTER TikTok is named too,
+  // and the other-platforms line no longer lists TikTok as coming.
+  ["5 social 134", socTips, "Bluesky, Mastodon, YouTube and TikTok connect so far, and posts cannot be scheduled",/drafting and scheduling posts|account connections live/,
     () => offers(SOCIAL, "Content Calendar") && offers(SOCIAL, "Platform Playbook") && offers(CONTENT, "Social Media Drafts") && socialShut() && blueskyConnects() && mastodonConnects() &&
-      /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn, TikTok and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
+      /<p class="bsky-quiet" id="bskyOtherPlatforms">X, Instagram, LinkedIn and Facebook are coming, through each platform's own sign-in\.<\/p>/.test(FILES[SOCIAL])],
   // guard catches outside the list
   ["G seo 113", seoTips, 'Pick "Keyword Research" or "Local SEO Plan"', /SEO Audit|Competitor Analysis/,
     () => ["Keyword Research", "Competitor Comparison", "Local SEO Plan", "Page Audit"].every(n => offers(SEO, n))],

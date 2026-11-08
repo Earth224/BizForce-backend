@@ -114,6 +114,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `SHOPIFY_CLIENT_SECRET` | none | That app's client secret. It is sent in the token exchange and refresh, and it verifies the HMAC on Shopify's return to the Store Agent page and on every webhook. Needed only for Shopify, with `SHOPIFY_CLIENT_ID`. A secret; set it on Railway and never commit it. Rotating it in the Partner Dashboard means setting the new value on Railway at once, or webhooks are refused with 401. |
 | `GOOGLE_OAUTH_CLIENT_ID` | none | The client ID of BizForce's Google OAuth client (see "YouTube app setup" below). Needed only for YouTube on the Social Agent page; without it (or `GOOGLE_OAUTH_CLIENT_SECRET`) the YouTube connect, video and proposal routes answer 503 "YouTube connection isn't set up yet.", `GET /api/youtube/status` answers `youtube_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | none | That client's secret, sent in the code exchange and every refresh. Needed only for YouTube, with `GOOGLE_OAUTH_CLIENT_ID`. A secret; set it on Railway and never commit it. |
+| `TIKTOK_CLIENT_KEY` | none | The client key of BizForce's TikTok app (see "TikTok app setup" below). Needed only for TikTok on the Social Agent page; without it (or `TIKTOK_CLIENT_SECRET`) the TikTok connect, creator-info, caption, proposal and status routes answer 503 "TikTok connection isn't set up yet.", `GET /api/tiktok/status` answers `tiktok_available: false` and the page disables the button. Set it on Railway; never commit it. |
+| `TIKTOK_CLIENT_SECRET` | none | That app's client secret, sent in the code exchange, every refresh and the revoke. Needed only for TikTok, with `TIKTOK_CLIENT_KEY`. A secret; set it only on Railway and never commit it. |
 
 ### Google Wallet
 
@@ -180,9 +182,9 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
-| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify and YouTube sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify, YouTube and TikTok sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
 | `webhookEventsPurgeTick` (`lib/shopifyAuth.js`): Shopify notification receipts older than 30 days | the same 04:45 UTC run, after the sign-in states purge, claimed `shopify_webhook_events_purge` | always on (no flag); runs only when server.js is the program |
-| `retentionTick` (`lib/memberVideos.js`): videos for YouTube never uploaded after 14 days, uploaded videos' leftover files, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
+| `retentionTick` (`lib/memberVideos.js`): a video's file once YouTube has it and TikTok has posted it (and no pending proposal names it), any video's file 14 days after it was added, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `storeSyncTick`: read connected Shopify and WooCommerce stores (the sync only reads) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
@@ -276,7 +278,21 @@ YouTube on the Social Agent page (`lib/googleAuth.js`, `lib/youtubeApi.js`, `lib
 - **Testing status:** while the app is in "testing", only its test users can connect, their refresh tokens expire after 7 days (they then connect again), and YouTube keeps every upload private.
 - **Verification:** Google's app verification for these scopes is needed before uploads can be unlisted or public, and before anyone outside the test users can connect.
 
-Until both variables are set, the YouTube routes answer 503 and the page shows "YouTube connection isn't set up yet." Videos wait in the private bucket `bf-video` (50 MB a file, MP4, WebM or MOV) and are deleted as soon as YouTube has them, or after 14 days. Every upload and removal waits for the member's approval, and YouTube API units are reserved in `youtube_api_calls` before each call. Disconnecting asks Google to revoke the access, as a best effort, and deletes BizForce's copy.
+Until both variables are set, the YouTube routes answer 503 and the page shows "YouTube connection isn't set up yet." Videos wait in the private bucket `bf-video` (50 MB a file, MP4, WebM or MOV) and are deleted once every platform they were sent to has them, or 14 days after they were added. Every upload and removal waits for the member's approval, and YouTube API units are reserved in `youtube_api_calls` before each call. Disconnecting asks Google to revoke the access, as a best effort, and deletes BizForce's copy.
+
+## TikTok app setup
+
+TikTok on the Social Agent page (`lib/tiktokAuth.js`, `lib/tiktokApi.js`, `lib/memberVideos.js`, migration 178) needs one app on TikTok for Developers:
+
+- **Account and app:** a TikTok for Developers account, and an app in it for BizForce.
+- **Products:** Login Kit for Web, and the Content Posting API with Direct Post turned on.
+- **Scopes:** `user.info.basic` and `video.publish`. A grant missing either is refused.
+- **Redirect URI:** exactly `https://bizforceai.net/agents/social.html` (the server sends `FRONTEND_URL` + `/agents/social.html`, so the two must match).
+- **URL prefix and domain verification:** only if TikTok asks for them; posting here sends the file itself (FILE_UPLOAD), not a URL for TikTok to fetch.
+- **Credentials:** the client key in `TIKTOK_CLIENT_KEY` and the client secret in `TIKTOK_CLIENT_SECRET`, kept only on Railway.
+- **Audit:** until TikTok audits the app, every post from BizForce is visible only to its owner (SELF_ONLY), whatever privacy the member picks.
+
+Until both variables are set, the TikTok routes but status and disconnect answer 503 and the page shows "TikTok connection isn't set up yet." Each post follows TikTok's posting rules (the account's nickname shown, privacy chosen from TikTok's options with no default, interactions off unless turned on, the commercial content disclosure), checked again against a fresh creator_info when it is approved. Every post waits for the member's approval. TikTok has no API to delete a post, so the member deletes it in the TikTok app. Disconnecting asks TikTok to revoke the access, as a best effort, and deletes BizForce's copy.
 
 ## Google Wallet setup
 

@@ -12339,6 +12339,13 @@ const PROPOSAL_EXECUTORS = {
   // POST /api/youtube/videos/:id/propose-delete. Always through approval.
   delete_youtube_video: executeDeleteYoutubeVideo,
 
+  // Posts a member's video to their own TikTok account, from an approved
+  // POST /api/tiktok/propose-post (migration 178, lib/tiktokApi.js): a fresh
+  // creator_info checked against the filed settings, the publish and the sealed
+  // upload URL stored before the one PUT, never a second init while a valid
+  // upload is stored. Always through approval. Defined further down the file.
+  publish_tiktok_post: executePublishTiktokPost,
+
   // Changes one WooCommerce or Shopify item's price or stock level, from an approved
   // POST /api/store/changes/propose (migrations 175 and 176, lib/storeWrite.js), after a
   // live compare-and-set, with one write and no retry. Always through approval:
@@ -12406,6 +12413,12 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "delete_youtube_video") {
       return res.status(400).json({
         error: "A YouTube removal cannot be filed here. Use POST /api/youtube/videos/:id/propose-delete from the Social Agent page."
+      });
+    }
+    // A TikTok post: filed only by the route that reads the video and a fresh creator_info (migration 178).
+    if (actionType === "publish_tiktok_post") {
+      return res.status(400).json({
+        error: "A TikTok post cannot be filed here. Use POST /api/tiktok/propose-post from the Social Agent page."
       });
     }
     // A store change: filed only by the route that reads the store's live value.
@@ -12662,10 +12675,11 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
    is enrolled to be mailed to the owner's contacts. A social post is published
    on Bluesky or Mastodon. A store change (migrations 175 and 176) changes what
    shoppers see in the member's WooCommerce or Shopify store. A YouTube upload
-   or removal (migration 177) changes what the member's channel shows. */
+   or removal (migration 177) changes what the member's channel shows. A TikTok
+   post (migration 178) puts a video on the member's TikTok account. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
   "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
-  "update_store_item", "publish_youtube_video", "delete_youtube_video"];
+  "update_store_item", "publish_youtube_video", "delete_youtube_video", "publish_tiktok_post"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -33569,6 +33583,335 @@ async function executePublishMastodonPost(proposal) {
   return { id: posted.id, url: url, published_at: publishedAt, draft_id: draft.id };
 }
 
+/* ── TikTok posting (migration 178; lib/tiktokAuth.js, lib/tiktokApi.js, lib/memberVideos.js) ──
+   POST   /api/tiktok/start                    Connect TikTok: a single-use state (purpose
+                                               tiktok_login), no PKCE (Login Kit for Web)
+   POST   /api/tiktok/finish                   { code, state } from the Social page: the state
+                                               consumed once, the code exchanged, BOTH scopes
+                                               checked, the tokens sealed, the user read
+   GET    /api/tiktok/status                   the connection, never a token
+   POST   /api/tiktok/disconnect               TikTok's revoke as a best effort, then the row
+                                               and this sign-in's states deleted
+   GET    /api/tiktok/creator-info             creator_info, live: the nickname, the privacy
+                                               options and what the account turned off
+   POST   /api/tiktok/propose-post             files publish_tiktok_post; never runs it
+   POST   /api/tiktok/draft-caption            { video_id, idea }: a caption from the model,
+                                               measured in code
+   GET    /api/tiktok/videos/:id/status        the post's status, fetched on demand
+   The videos themselves are the ones added through /api/videos (the YouTube
+   section below). Connect and the propose and draft routes need an active
+   subscription. Without TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET every
+   TikTok route but status and disconnect answers 503 "TikTok connection isn't
+   set up yet.", and status says tiktok_available false. The post runs only
+   when the member approves the proposal (executePublishTiktokPost below),
+   never automatically. There is no removal: TikTok has no API to delete a
+   post. Nothing here logs a token, a code or an upload URL. */
+function tiktokRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/agents/social.html";
+}
+
+function tiktokDeps() {
+  var gf = require("./lib/guardedFetch");
+  return {
+    supabase: supabase,
+    storage: supabase.storage,
+    crypt: require("./lib/apiKeyCrypto"),
+    jsonRequest: gf.guardedJsonRequest,
+    streamUpload: gf.guardedStreamUpload,
+    now: function () { return Date.now(); },
+    config: function () { return require("./lib/tiktokAuth").configured(process.env); },
+    limits: SOCIAL_SEARCH_LIMITS.tiktok,
+    claims: blueskyClaimsRefusal,
+    env: process.env
+  };
+}
+
+function tiktokNotConfigured(res) {
+  return res.status(503).json({ error: require("./lib/tiktokAuth").MESSAGES.notConfigured, code: "not_configured", saved: false });
+}
+
+/* Per account: ten TikTok sign-in steps an hour, start and finish together. */
+const tiktokConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "tiktok-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many TikTok sign-in attempts. Try again in an hour. Nothing was saved.", code: "rate_limited" }
+});
+/* Per account: thirty TikTok proposals an hour. */
+const tiktokProposeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "tiktok-propose:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can file 30 TikTok posts an hour. Nothing was filed.", code: "rate_limited" }
+});
+
+/* A token-endpoint failure at finish, as the member is told it. Never the reason's detail. */
+function tiktokFinishFailure(res, err) {
+  var ta = require("./lib/tiktokAuth");
+  var kind = err && err.kind;
+  if (kind === "no_scopes") return res.status(422).json({ error: ta.MESSAGES.noScopes, code: "no_scopes", saved: false });
+  if (kind === "invalid_grant") return res.status(400).json({ error: ta.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+  return res.status(502).json({ error: ta.MESSAGES.unreachable, code: "unreachable", saved: false });
+}
+
+app.post("/api/tiktok/start", requireAuth, requireActiveSubscription, tiktokConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ta = require("./lib/tiktokAuth");
+      var config = ta.configured(process.env);
+      if (!config) return tiktokNotConfigured(res);
+      var state = ta.newState();
+      var nowMs = Date.now();
+      // Tidy first: this member's sign-in states older than a day; each is consumed or expired.
+      var tidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id)
+        .lt("created_at", new Date(nowMs - ta.STATES_RETENTION_MS).toISOString());
+      if (tidied.error) throw tidied.error;
+      // Only the state's sha256 is stored; Login Kit for Web uses no verifier.
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:    req.user.id,
+        purpose:    ta.PURPOSE,
+        state_hash: ta.stateHash(state),
+        expires_at: new Date(nowMs + ta.STATE_TTL_MS).toISOString(),
+        created_at: new Date(nowMs).toISOString()
+      });
+      if (stored.error) throw stored.error;
+      var url = ta.authorizeUrl(config.clientKey, tiktokRedirectUri(), state);
+      state = null;
+      return res.json({ authorize_url: url });
+    } catch (error) {
+      console.error("[tiktok/start] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/tiktok/finish", requireAuth, requireActiveSubscription, tiktokConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ta = require("./lib/tiktokAuth");
+      var tk = require("./lib/tiktokApi");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = ta.configured(process.env);
+      if (!config) return tiktokNotConfigured(res);
+      var shape = ta.finishShape(req.body);
+      if (!shape.ok) return res.status(400).json({ error: ta.MESSAGES.badRequest, code: "bad_request", saved: false });
+
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired. No reason is ever given.
+      var consumedAt = nowIso();
+      var consumed = await supabase.from("oauth_states").update({ consumed_at: consumedAt })
+        .eq("state_hash", ta.stateHash(shape.state)).eq("user_id", req.user.id).eq("purpose", ta.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", consumedAt)
+        .select("id");
+      if (consumed.error) throw consumed.error;
+      if (!(consumed.data || [])[0]) return res.status(400).json({ error: ta.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+
+      var grant;
+      try {
+        grant = await ta.exchangeCode(config, shape.code, tiktokRedirectUri());
+      } catch (exchangeErr) {
+        return tiktokFinishFailure(res, exchangeErr);
+      } finally {
+        shape.code = null;
+      }
+
+      // Sealed first: both tokens are encrypted before TikTok is asked anything.
+      var sealedRefresh, sealedAccess;
+      try {
+        sealedRefresh = crypt.encrypt(grant.refreshToken);
+        sealedAccess = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: ta.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var nowMs = Date.now();
+      var tokenExpiry = new Date(nowMs + grant.expiresIn * 1000 - ta.EXPIRY_SLACK_MS).toISOString();
+      var refreshExpiry = grant.refreshExpiresIn ? new Date(nowMs + grant.refreshExpiresIn * 1000).toISOString() : null;
+      var user;
+      try {
+        user = await tk.readUser(tiktokDeps(), grant.accessToken);
+      } catch (userErr) {
+        return res.status(502).json({ error: ta.MESSAGES.unreachable, code: "unreachable", saved: false });
+      }
+      var openId = grant.openId;
+      var scopes = String(grant.scope || "").toLowerCase().replace(/[^a-z0-9_.,]/g, "").slice(0, 500);
+      grant = null;
+      if (!user || user.open_id !== openId) return res.status(502).json({ error: ta.MESSAGES.unreachable, code: "unreachable", saved: false });
+
+      var connectedAt = nowIso();
+      var saved = await supabase.from("member_tiktok_connections").upsert({
+        user_id:            req.user.id,
+        open_id:            openId,
+        display_name:       user.display_name,
+        refresh_ciphertext: sealedRefresh.ciphertext,
+        refresh_iv:         sealedRefresh.iv,
+        refresh_auth_tag:   sealedRefresh.authTag,
+        access_ciphertext:  sealedAccess.ciphertext,
+        access_iv:          sealedAccess.iv,
+        access_auth_tag:    sealedAccess.authTag,
+        access_expires_at:  tokenExpiry,
+        refresh_expires_at: refreshExpiry,
+        token_version:      0,
+        granted_scopes:     scopes,
+        status:             "connected",
+        last_ok_at:         connectedAt,
+        last_error_at:      null,
+        last_error_code:    null,
+        created_at:         connectedAt,
+        updated_at:         connectedAt
+      }, { onConflict: "user_id" }).select(tk.STATUS_COLUMNS).single();
+      if (saved.error) throw saved.error;
+      return res.json(tk.statusOf(saved.data, true));
+    } catch (error) {
+      console.error("[tiktok/finish] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/tiktok/status", requireAuth, async function (req, res, next) {
+  try {
+    var tk = require("./lib/tiktokApi");
+    var row = await tk.readConnection(supabase, req.user.id);
+    return res.json(tk.statusOf(row, require("./lib/tiktokAuth").configured(process.env) !== null));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not, configured or not: a member can always take their account's access back.
+app.post("/api/tiktok/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var ta = require("./lib/tiktokAuth");
+    var tk = require("./lib/tiktokApi");
+    var row = await tk.readConnection(supabase, req.user.id);
+    var config = ta.configured(process.env);
+    var revoked = false;
+    if (row && config) {
+      // Best effort: a failure to reach TikTok never blocks the disconnect.
+      try {
+        var accessTokenNow = require("./lib/apiKeyCrypto").decrypt({ ciphertext: row.access_ciphertext, iv: row.access_iv, authTag: row.access_auth_tag });
+        revoked = await ta.revoke(config, accessTokenNow);
+        accessTokenNow = null;
+      } catch (revokeErr) {
+        revoked = false;
+      }
+    }
+    var dropped = await supabase.from("member_tiktok_connections").delete().eq("user_id", req.user.id).select("id");
+    if (dropped.error) throw dropped.error;
+    // Only this sign-in's states: a YouTube, Shopify or Microsoft sign-in in progress keeps its own.
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", ta.PURPOSE);
+    if (statesDropped.error) throw statesDropped.error;
+    return res.json(Object.assign(tk.statusOf(null, config !== null), {
+      removed: (dropped.data || []).length > 0,
+      revoked: revoked,
+      note: row ? ta.MESSAGES.disconnected : "No TikTok account was connected."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/tiktok/creator-info", requireAuth, async function (req, res, next) {
+  try {
+    res.set("Cache-Control", "no-store");
+    if (!require("./lib/tiktokAuth").configured(process.env)) return tiktokNotConfigured(res);
+    var out = await require("./lib/tiktokApi").creatorView(tiktokDeps(), req.user.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[tiktok/creator-info] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+app.post("/api/tiktok/propose-post", requireAuth, requireActiveSubscription, tiktokProposeLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/tiktokAuth").configured(process.env)) return tiktokNotConfigured(res);
+      var out = await require("./lib/tiktokApi").proposePost(tiktokDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[tiktok/propose-post] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+/* The model's caption, after one CAPTION: marker; null when it is not there. */
+function parseTiktokDraft(text) {
+  var m = /CAPTION:\s*([\s\S]*)$/.exec(String(text || ""));
+  return m ? m[1].trim() : null;
+}
+
+app.post("/api/tiktok/draft-caption", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/tiktokAuth").configured(process.env)) return tiktokNotConfigured(res);
+      var mv = require("./lib/memberVideos");
+      var video = await mv.readVideo(supabase, req.user.id, req.body && req.body.video_id);
+      if (!video) return res.status(404).json({ error: mv.MESSAGES.notFound, code: "not_found" });
+      var idea = req.body && typeof req.body.idea === "string" ? req.body.idea.trim() : "";
+      if (!idea || idea.length > 1000) {
+        return res.status(400).json({ error: "Say what the video is about, in up to 1000 characters.", code: "bad_idea", field: "idea" });
+      }
+      var profileResult = await supabase.from("business_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
+      var bp = (profileResult && profileResult.data) || {};
+      var L = SOCIAL_SEARCH_LIMITS.tiktok;
+      // The model sees the idea and the business profile, and nothing else: no file, no label, no account.
+      var prompt =
+        "You write a TikTok caption for a small business.\n\n" +
+        "BUSINESS CONTEXT:\n" +
+        "Business Name: " + (bp.business_name || "Not provided") + "\n" +
+        "Industry: " + (bp.industry || "Not provided") + "\n" +
+        "Products/Services: " + (bp.products_services || "Not provided") + "\n" +
+        "Target Audience: " + (bp.target_audience || "Not provided") + "\n\n" +
+        "WHAT THE VIDEO IS ABOUT, in the owner's words: " + JSON.stringify(idea) + "\n\n" +
+        "OUTPUT FORMAT, exactly one part:\n" +
+        "CAPTION: <the caption, at most " + L.caption_max + " characters; the first " + L.truncates_at +
+        " or so are what shows over the video; at most " + L.hashtag_practical + " hashtags>\n\n" +
+        "RULES:\n- No < or > anywhere.\n- Invent no figures, reviews, results or health claims.\n" +
+        "- Do not claim or predict views, ranking or reach.";
+      var generation = await callAnthropicText(prompt, 1200, req.user.id, undefined, {
+        user_id: req.user.id, agent_type: "social", route: "POST /api/tiktok/draft-caption"
+      });
+      var caption = parseTiktokDraft(generation && generation.text);
+      if (!caption) return res.status(502).json({ error: "The draft came back incomplete. Try again, or write the caption yourself.", code: "draft_unreadable" });
+      var length = Array.from(caption).length;
+      var refused = blueskyClaimsRefusal(caption);
+      return res.json({
+        draft: { caption: caption },
+        measured: { caption: { length: length, limit: L.caption_max, within_limit: length <= L.caption_max && !/[<>]/.test(caption), shows_first: L.truncates_at } },
+        within_limits: length <= L.caption_max && !/[<>]/.test(caption),
+        claims_refused: refused ? [{ field: "caption", error: refused.error }] : [],
+        note: "A draft only. Nothing was filed or sent. Read it, change what you want, then file it for approval."
+      });
+    } catch (error) {
+      console.error("[tiktok/draft-caption] Error:", (error && error.message) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/tiktok/videos/:id/status", requireAuth, async function (req, res, next) {
+  try {
+    if (!require("./lib/tiktokAuth").configured(process.env)) return tiktokNotConfigured(res);
+    var out = await require("./lib/tiktokApi").videoStatus(tiktokDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* The publish_tiktok_post executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal; throws with the member's message on any failure.
+   lib/tiktokApi.js executePublish checks the account, the cap and a fresh
+   creator_info again, stores the publish and the sealed upload URL before
+   the one PUT, and never starts a second post while a valid upload is
+   stored. Always through approval: no automation runs it. */
+async function executePublishTiktokPost(proposal) {
+  return require("./lib/tiktokApi").executePublish(tiktokDeps(), proposal);
+}
+
 /* ── YouTube uploads (migration 177; lib/googleAuth.js, lib/youtubeApi.js, lib/memberVideos.js) ──
    POST   /api/youtube/start                   Connect YouTube: a single-use state (purpose
                                                youtube_google) and a sealed PKCE verifier
@@ -33592,7 +33935,9 @@ async function executePublishMastodonPost(proposal) {
    Connect, upload-url, finalize and the propose routes need an active
    subscription. Without GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET
    every YouTube route but status, disconnect, the list and delete answers 503,
-   and status says youtube_available false. The upload and the removal run
+   and status says youtube_available false; upload-url and finalize answer 503
+   only when TikTok is not set up either (NAMED, Nov 7 2026: a video can go to
+   either platform). The upload and the removal run
    only when the member approves the proposal (executePublishYoutubeVideo and
    executeDeleteYoutubeVideo below), never automatically. Nothing here logs a
    token, a code, a verifier, a signed URL or a session URI. */
@@ -33626,6 +33971,11 @@ async function videoRetentionTick() {
     console.error("[VideoRetention] Scheduled run error: " + ((err && err.code) || "error"));
     return null;
   }
+}
+
+/* Either platform a video can go to is set up. */
+function videoPlatformConfigured() {
+  return require("./lib/googleAuth").configured(process.env) !== null || require("./lib/tiktokAuth").configured(process.env) !== null;
 }
 
 function youtubeNotConfigured(res) {
@@ -33848,7 +34198,8 @@ app.post("/api/videos/upload-url", requireAuth, requireActiveSubscription, video
   async function (req, res, next) {
     try {
       res.set("Cache-Control", "no-store");
-      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      // NAMED (Nov 7 2026, TikTok posting): a video can go to YouTube or TikTok, so these answer 503 only when neither is set up.
+      if (!videoPlatformConfigured()) return youtubeNotConfigured(res);
       var out = await require("./lib/memberVideos").uploadUrl(youtubeDeps(), req.user.id, req.body || {});
       return res.status(out.status).json(out.body);
     } catch (error) {
@@ -33860,7 +34211,8 @@ app.post("/api/videos/upload-url", requireAuth, requireActiveSubscription, video
 app.post("/api/videos/finalize", requireAuth, requireActiveSubscription, videoUploadLimiter,
   async function (req, res, next) {
     try {
-      if (!require("./lib/googleAuth").configured(process.env)) return youtubeNotConfigured(res);
+      // NAMED (Nov 7 2026, TikTok posting): a video can go to YouTube or TikTok, so these answer 503 only when neither is set up.
+      if (!videoPlatformConfigured()) return youtubeNotConfigured(res);
       var out = await require("./lib/memberVideos").finalize(youtubeDeps(), req.user.id, req.body || {});
       return res.status(out.status).json(out.body);
     } catch (error) {
@@ -58901,9 +59253,11 @@ shutdownControl.setServer(app.listen(PORT, function () {
      NAMED (Nov 7 2026, YouTube uploads, migration 177): that purge deletes the
      youtube_google states too. Then the video retention pass
      (lib/memberVideos.js retentionTick), claimed through job_runs
-     member_videos_retention: a ready video never uploaded is deleted after 14
-     days, an uploaded video's leftover file at once, and a bf-video file with
-     no record after a day. lib/youtubeRetention.js stays the radar's alone. */
+     member_videos_retention: NAMED (Nov 7 2026, TikTok posting, migration
+     178) a video's file is deleted once YouTube has it AND TikTok has posted
+     it and no pending proposal names it, or 14 days after it was added; a
+     bf-video file with no record after a day. The same purge deletes the
+     tiktok_login states. lib/youtubeRetention.js stays the radar's alone. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
