@@ -10574,7 +10574,7 @@ app.post("/api/inventory/items/:id/movements", requireAuth, async function (req,
        disconnect (inventory_movements is ON DELETE RESTRICT). */
     var syncedItem = await findOwnedInventoryItem(req.params.id, req.user.id);
     if (syncedItem && syncedItem.source) {
-      var storeName = syncedItem.source === "shopify" ? "Shopify" : "WooCommerce";
+      var storeName = require("./lib/storeSync").PLATFORM_LABEL[syncedItem.source] || "connected";
       return res.status(409).json({
         error: "This item's stock comes from your " + storeName + " store and is read from it each sync. Change the stock in " + storeName + ".",
         code: "synced_item"
@@ -13292,7 +13292,7 @@ function measureStockAndMargin(items, movements, windowDays) {
     if (it.sku) row.sku = it.sku;
     row.unit = it.unit || "unit"; row.on_hand = onHand; row.unit_cost = cost; row.unit_price = price;
     // Where the stock figure comes from: what the member entered, or a store they connected (lib/storeSync.js).
-    row.source = it.source === "shopify" || it.source === "woocommerce" ? it.source : "manual";
+    row.source = it.source === "shopify" || it.source === "woocommerce" || it.source === "etsy" ? it.source : "manual";
     // A synced row names its item, so the page can offer "Propose a change" for it (migration 175).
     if (row.source !== "manual" && it.id) row.store_item_id = it.id;
 
@@ -13526,6 +13526,12 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
    POST   /api/store/shopify/finish            the callback's query, from the
                                                Store Agent page: HMAC, time,
                                                shop, state, code exchange
+   POST   /api/store/etsy/start                Connect Etsy (Nov 8 2026,
+                                               migration 181): a one-time
+                                               state and a sealed PKCE
+                                               verifier, then Etsy's own page
+   POST   /api/store/etsy/finish               the code and state, from the
+                                               Store Agent page
    GET    /api/store/connections               each connection, safe fields only
    GET    /api/store/connections/:id/locations a Shopify shop's locations, live
    PUT    /api/store/connections/:id/location  the location stock changes apply at
@@ -13566,6 +13572,9 @@ function storeSyncDeps() {
     // Shopify (migration 176): the GraphQL reader the sync calls, and the app's client id and secret for a token refresh.
     shopifyReader: require("./lib/shopifyApi"),
     shopifyConfig: function () { return require("./lib/shopifyAuth").configured(process.env); },
+    // Etsy (Nov 8 2026, migration 181): the GET reader the sync calls, and the keystring and shared secret every Etsy request carries.
+    etsyReader: require("./lib/etsyApi"),
+    etsyConfig: function () { return require("./lib/etsyAuth").configured(process.env); },
     userPlan: async function (userId) {
       try { return { plan: await getUserPlan(userId), error: null }; } catch (planErr) { return { plan: null, error: planErr }; }
     }
@@ -13645,6 +13654,10 @@ app.post("/api/store/connections", requireAuth, requireActiveSubscription, store
       if (body.platform === "shopify") {
         return res.status(400).json({ error: require("./lib/shopifyAuth").MESSAGES.useConnect, code: "use_connect_shopify", saved: false });
       }
+      // Etsy (Nov 8 2026, migration 181) connects only through Connect Etsy (/api/store/etsy/start and /finish).
+      if (body.platform === "etsy") {
+        return res.status(400).json({ error: require("./lib/etsyAuth").MESSAGES.useConnect, code: "use_connect_etsy", saved: false });
+      }
       if (body.platform === "woocommerce") {
         var storeUrl = ss.normalizeWooUrl(body.store_url);
         if (!storeUrl) return res.status(400).json({ error: ss.MESSAGES.wooUrl, code: "woo_url", field: "store_url", saved: false });
@@ -13665,7 +13678,7 @@ app.post("/api/store/connections", requireAuth, requireActiveSubscription, store
             : "Your store will ask you to approve Read access for BizForce AI. " + ss.MESSAGES.readOnly
         });
       }
-      return res.status(400).json({ error: "Choose Shopify or WooCommerce.", code: "platform", field: "platform", saved: false });
+      return res.status(400).json({ error: "Choose Shopify, WooCommerce or Etsy.", code: "platform", field: "platform", saved: false });
     } catch (error) {
       console.error("[store/connect] Error:", (error && error.code) || "unknown");
       next(error);
@@ -13863,6 +13876,181 @@ app.post("/api/store/shopify/finish", requireAuth, requireActiveSubscription, sh
     }
   });
 
+/* ── Connect Etsy (Nov 8 2026, migration 181, lib/etsyAuth.js, lib/etsyApi.js) ──
+   start: 503 unless ETSY_KEYSTRING and ETSY_SHARED_SECRET are both set. A
+   one-time state (only its sha256 stored, in oauth_states, purpose store_etsy,
+   for 10 minutes) with a PKCE verifier SEALED beside it and flow_context
+   { permission }, and Etsy's own authorization page, asking for shops_r,
+   listings_r and transactions_r, plus listings_w only when allow_changes is
+   exactly true. The redirect is the Store Agent page, as Shopify's is.
+   finish: the code and the state, from the Store Agent page. The state is
+   consumed by one conditional update (this member, this purpose, not
+   consumed, not expired), the verifier opened, the code exchanged (JSON, with
+   the x-api-key header), the scopes checked when Etsy lists them, both tokens
+   SEALED before any API call, then users/me (the shop id, and the user the
+   token was made for) and the shop (its name and currency). One Etsy shop,
+   one member: the unique index member_store_connections_etsy_shop_key backs
+   the check. */
+app.post("/api/store/etsy/start", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ea = require("./lib/etsyAuth");
+      var crypt = require("./lib/apiKeyCrypto");
+      var etsyConfig = ea.configured(process.env);
+      if (!etsyConfig) return res.status(503).json({ error: ea.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var body = req.body || {};
+      if (body.allow_changes !== undefined && typeof body.allow_changes !== "boolean") {
+        return res.status(400).json({ error: "allow_changes must be true or false.", code: "allow_changes", field: "allow_changes", saved: false });
+      }
+      if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: ea.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      var etsyPermission = body.allow_changes === true ? "read_write" : "read";
+      var etsyState = ea.newState();
+      var etsyVerifier = ea.newVerifier();
+      var etsySealedVerifier;
+      try { etsySealedVerifier = crypt.encrypt(etsyVerifier); } catch (cryptErr) {
+        return res.status(503).json({ error: ea.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var startMs = Date.now();
+      // Tidy first: this member's Etsy states older than a day. The daily purge removes everyone's.
+      var etsyTidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", ea.PURPOSE)
+        .lt("created_at", new Date(startMs - 24 * 60 * 60 * 1000).toISOString());
+      if (etsyTidied.error) throw etsyTidied.error;
+      var etsyStored = await supabase.from("oauth_states").insert({
+        user_id:             req.user.id,
+        purpose:             ea.PURPOSE,
+        state_hash:          ea.stateHash(etsyState),
+        verifier_ciphertext: etsySealedVerifier.ciphertext,
+        verifier_iv:         etsySealedVerifier.iv,
+        verifier_auth_tag:   etsySealedVerifier.authTag,
+        flow_context:        { permission: etsyPermission },
+        expires_at:          new Date(startMs + ea.STATE_TTL_MS).toISOString(),
+        created_at:          new Date(startMs).toISOString()
+      });
+      if (etsyStored.error) throw etsyStored.error;
+      var etsyUrl = ea.authorizeUrl(etsyConfig, etsyPermission, shopifyRedirectUri(), etsyState, ea.challengeFor(etsyVerifier));
+      etsyState = null;
+      etsyVerifier = null;
+      return res.json({ authorize_url: etsyUrl, permission: etsyPermission, saved: false });
+    } catch (error) {
+      console.error("[store/etsy/start] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+app.post("/api/store/etsy/finish", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var ea = require("./lib/etsyAuth");
+      var eapi = require("./lib/etsyApi");
+      var ss = require("./lib/storeSync");
+      var crypt = require("./lib/apiKeyCrypto");
+      var etsyConfig = ea.configured(process.env);
+      if (etsyConfig === null) return res.status(503).json({ error: ea.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var refused = function () { return res.status(400).json({ error: ea.MESSAGES.stateInvalid, code: "state_invalid", saved: false }); };
+      var etsyShape = ea.finishShape(req.body);
+      if (!etsyShape.ok) return refused();
+      // One conditional update spends the state: this member, this purpose, not consumed, not expired. No reason is given.
+      var spentAt = nowIso();
+      var spentRows = await supabase.from("oauth_states").update({ consumed_at: spentAt })
+        .eq("state_hash", ea.stateHash(etsyShape.state)).eq("user_id", req.user.id).eq("purpose", ea.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", spentAt)
+        .select("verifier_ciphertext, verifier_iv, verifier_auth_tag, flow_context");
+      if (spentRows.error) throw spentRows.error;
+      var spentState = (spentRows.data || [])[0];
+      if (!spentState) return refused();
+      var etsyPermission = spentState.flow_context && spentState.flow_context.permission;
+      if (ss.PERMISSIONS.indexOf(etsyPermission) === -1) return refused();
+      var etsyVerifier;
+      try {
+        etsyVerifier = crypt.decrypt({ ciphertext: spentState.verifier_ciphertext, iv: spentState.verifier_iv, authTag: spentState.verifier_auth_tag });
+      } catch (cryptErr) {
+        return refused();
+      }
+
+      var deps = storeSyncDeps();
+      var etsyGrant;
+      try {
+        etsyGrant = await ea.exchangeCode(etsyConfig, etsyShape.code, etsyVerifier, shopifyRedirectUri(), deps.jsonRequest);
+      } catch (exchangeErr) {
+        if (exchangeErr && exchangeErr.kind === "rejected") return refused();
+        return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+      } finally {
+        etsyVerifier = null;
+        etsyShape.code = null;
+      }
+      var asked = ea.scopesFor(etsyPermission);
+      if (!ea.grantCovers(etsyGrant.scopes, asked)) {
+        etsyGrant = null;
+        return res.status(422).json({ error: ea.MESSAGES.scopesMissing, code: "scopes_missing", saved: false });
+      }
+      // Sealed first: both tokens are encrypted before Etsy's API is asked anything.
+      var etsyRefresh, etsyAccess;
+      try {
+        etsyRefresh = ss.sealCredentials({ refresh_token: etsyGrant.refreshToken }, crypt.encrypt);
+        etsyAccess = crypt.encrypt(etsyGrant.accessToken);
+      } catch (cryptErr) {
+        etsyGrant = null;
+        return res.status(503).json({ error: ea.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var etsyExpiries = ea.expiriesFor(etsyGrant, Date.now());
+      // The scopes Etsy's token answer lists, or, when it lists none, the ones asked for.
+      var etsyScopes = (etsyGrant.scopes || asked).join(",").slice(0, 500);
+      var tokenUser = etsyGrant.userId;
+      etsyGrant = null;
+      var etsyRow = Object.assign({
+        user_id: req.user.id, platform: "etsy", status: "connected", permission: etsyPermission,
+        granted_scopes: /^[a-z_,]*$/.test(etsyScopes) ? etsyScopes : null,
+        access_ciphertext: etsyAccess.ciphertext, access_iv: etsyAccess.iv, access_auth_tag: etsyAccess.authTag,
+        access_expires_at: etsyExpiries.access_expires_at, refresh_expires_at: etsyExpiries.refresh_expires_at, token_version: 0,
+        location_id: null, location_name: null
+      }, etsyRefresh);
+      var who, etsyShop;
+      try {
+        // A fresh token: these reads never refresh it (the row is not stored yet, so a refresh could not be saved).
+        var firstEtsyRead = eapi.session(Object.assign({ id: null }, etsyRow));
+        firstEtsyRead.refreshed = true;
+        who = await eapi.me(deps, firstEtsyRead);
+        if (!who.user_id || who.user_id !== tokenUser) return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+        if (!who.shop_id) return res.status(422).json({ error: ea.MESSAGES.noShop, code: "no_shop", saved: false });
+        etsyShop = await eapi.shop(deps, firstEtsyRead, who.shop_id);
+      } catch (readErr) {
+        return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+      }
+      if (!etsyShop) return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+      // One Etsy shop, one member.
+      var etsyHeld = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "etsy").eq("external_account_id", who.shop_id);
+      if (etsyHeld.error) throw etsyHeld.error;
+      var heldRows = etsyHeld.data || [];
+      if (heldRows.some(function (r) { return r.user_id !== req.user.id; })) {
+        return res.status(409).json({ error: ea.MESSAGES.takenByOther, code: "shop_taken", saved: false });
+      }
+      var etsyStamp = nowIso();
+      Object.assign(etsyRow, {
+        external_account_id: who.shop_id, store_url: etsyShop.url, currency: etsyShop.currency,
+        last_error_code: null, last_error_at: null, updated_at: etsyStamp
+      });
+      var etsySaved;
+      if (heldRows.length) {
+        // Connecting the same shop again: this member's own row, replaced in place.
+        etsySaved = await supabase.from("member_store_connections").update(etsyRow)
+          .eq("id", heldRows[0].id).eq("user_id", req.user.id).eq("platform", "etsy").select(STORE_STATUS_COLUMNS).single();
+      } else {
+        etsySaved = await supabase.from("member_store_connections").insert(etsyRow).select(STORE_STATUS_COLUMNS).single();
+      }
+      if (etsySaved.error) {
+        if (etsySaved.error.code === "23505") return res.status(409).json({ error: ea.MESSAGES.takenByOther, code: "shop_taken", saved: false });
+        throw etsySaved.error;
+      }
+      return res.json({ saved: true, connection: ss.statusOf(etsySaved.data),
+        note: etsyPermission === "read_write" ? ss.MESSAGES.readWrite : ss.MESSAGES.readOnly });
+    } catch (error) {
+      console.error("[store/etsy/finish] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
 app.get("/api/store/connections", requireAuth, async function (req, res, next) {
   try {
     var read = await supabase
@@ -13875,7 +14063,8 @@ app.get("/api/store/connections", requireAuth, async function (req, res, next) {
     var shownConnections = (read.data || []).map(ss.statusOf);
     var anyWritable = shownConnections.some(function (c) { return c.permission === "read_write"; });
     return res.json({ connections: shownConnections, note: ss.noteFor(anyWritable ? "read_write" : "read"),
-      shopify_available: require("./lib/shopifyAuth").configured(process.env) !== null });
+      shopify_available: require("./lib/shopifyAuth").configured(process.env) !== null,
+      etsy_available: require("./lib/etsyAuth").configured(process.env) !== null });
   } catch (error) {
     next(error);
   }
@@ -13952,6 +14141,7 @@ app.delete("/api/store/connections/:id", requireAuth, async function (req, res, 
     return res.json({
       removed: true, items_removed: gone.items,
       note: gone.platform === "shopify" ? require("./lib/shopifyAuth").MESSAGES.disconnected
+        : gone.platform === "etsy" ? require("./lib/etsyAuth").MESSAGES.disconnected
         : "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
           "You can also revoke the key in WooCommerce, under Settings, Advanced, REST API."
     });

@@ -581,9 +581,14 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        NAMED BEFORE → AFTER (Nov 7 2026, TikTok posting). BEFORE: KEPT had 18 keys. AFTER: 19; bf_oauth_return is which
        sign-in (the word youtube or tiktok) is coming back to the Social page in this tab (sessionStorage, scripts/youtube.js
        and scripts/tiktok.js), cleared when that return is handled: no member data, so sign-out leaves it and bf-session.js's
-       LEFT ON PURPOSE list names it. */
+       LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Nov 8 2026, Etsy store connection, migration 181). BEFORE: KEPT had 19 keys. AFTER: 20;
+       bf_store_return is which store's page (the word etsy or shopify) the member left the Store page for in this tab
+       (sessionStorage, scripts/store-connect.js), removed when that return is read: no member data, so sign-out leaves it
+       and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",
+      bf_store_return: "which store's page, etsy or shopify, the Store page is coming back from in this tab",
       bf_exec_tab: "which tab the Executive command deck opens on",
       bf_tmx_not_now: "which Termaximus suggestions were set aside with Not now on this device",
       bf_boombox: "where the music boombox sits and whether it is minimised",

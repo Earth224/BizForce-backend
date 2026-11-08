@@ -1551,7 +1551,9 @@ function pageAnswers(over) {
   check("G3. privacy.html and terms.html carry both, as built, and Instagram (Meta) is a named third party", FILES.privacy.split(esc(PRIVACY)).length === 2 && FILES.terms.split(esc(TERMS)).length === 2 &&
     FILES.privacy.indexOf(esc("Instagram (Meta) (publishing the posts you approve to your own Instagram account, when you connect it)")) !== -1);
   const LEGAL = realRequire("./lib/legal");
-  check("G4. TERMS_VERSION is Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
+  // the Etsy privacy sentence set (this change still set Nov 7).
+  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
   const YD_IG = (compile(FILES.yourData, "lib/yourData.js", {}).DATA || []).filter(function (e) { return e.table === "instagram_posts"; })[0];
   check("G5. yourData: the connection exported as its username and date only, the posts without ids; Instagram (Meta) a third party; the never-exported lines; the delete order",
     FILES.yourData.indexOf("{ table: \"member_instagram_connections\", group: \"account\",") !== -1 && /table: "member_instagram_connections"[\s\S]*?select: "username, created_at"/.test(FILES.yourData) &&
@@ -1563,7 +1565,8 @@ function pageAnswers(over) {
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebook_posts and member_facebook_pages follow the Instagram tables in the delete order, and the states name Connect Facebook last.
     FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_videos\"") !== -1 &&
     FILES.yourData.indexOf("\"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1);
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the states name Connect Etsy last.
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1);
   check("G6. schemaCheck knows both tables at 179; the backup leaves the connection out and skips the posts",
     FILES.schema.indexOf("[\"member_instagram_connections\", \"179_instagram_posting.sql\"],") !== -1 && FILES.schema.indexOf("[\"instagram_posts\", \"179_instagram_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_instagram_connections: \"members' Instagram access, sealed; members connect again\",") !== -1 && /\n  instagram_posts: +"/.test(FILES.backup));
@@ -1589,9 +1592,11 @@ function pageAnswers(over) {
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
   // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): BEFORE 179 was the highest. AFTER it is the only 179, and only
   // 180_facebook_pages.sql is above it; "the highest" is checkFacebookPages R1's.
-  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql is above it (checkFacebookPages R1)", highest === 180 &&
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE only 180_facebook_pages.sql was above 179 and 180 the highest.
+  // AFTER 180_facebook_pages.sql and 181_etsy_store.sql are above it, by name; "the highest" is checkEtsyConnect R1's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql and 181_etsy_store.sql are above it (checkEtsyConnect R1)", highest === 181 &&
     migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

@@ -352,7 +352,11 @@ const ADDED = [
   ["post", "/api/facebook/draft-caption"],                   // subscribed: an AI draft of the post text; nothing stored (481 -> 482)
   ["get", "/api/facebook/posts"],                            // login-only: the member's own Facebook posts, newest first (482 -> 483)
   ["get", "/api/facebook/posts/:id/status"],                 // login-only: the member's own post rechecked; permalink and video state recorded (483 -> 484)
-  ["post", "/api/facebook/posts/:id/propose-delete"]         // login-only: removal filed as a proposal, once per post; never executes; a removal stays free (484 -> 485)
+  ["post", "/api/facebook/posts/:id/propose-delete"],        // login-only: removal filed as a proposal, once per post; never executes; a removal stays free (484 -> 485)
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 485 routes; AFTER 487, Connect Etsy (OAuth 2.0 with PKCE, a
+  // single-use state with a sealed verifier, both tokens sealed before the shop is read) (checkEtsyConnect)
+  ["post", "/api/store/etsy/start"],                         // subscribed: stores a single-use state and a sealed PKCE verifier, returns Etsy's authorize URL; 503 until configured (485 -> 486)
+  ["post", "/api/store/etsy/finish"]                         // subscribed: state consumed once, the code exchanged with the verifier, both tokens sealed, the shop read, stored (486 -> 487)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -1515,7 +1515,9 @@ function pageAnswers(over) {
   check("G4. privacy.html and terms.html carry both, as built", FILES.privacy.split(esc(PRIVACY)).length === 2 && FILES.terms.split(esc(TERMS)).length === 2 &&
     FILES.privacy.indexOf(esc("TikTok (posting the videos you approve to your own TikTok account, when you connect it)")) !== -1);
   const LEGAL = realRequire("./lib/legal");
-  check("G5. TERMS_VERSION is Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
+  // the Etsy privacy sentence set (this change still set Nov 7).
+  check("G5. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
   const YD = realRequire("./lib/yourData");
   const ttEntry = (YD.DATA || []).filter(function (e) { return e.table === "member_tiktok_connections"; })[0] ||
     (FILES.yourData.indexOf("{ table: \"member_tiktok_connections\", group: \"account\"") !== -1 ? { select: (/table: "member_tiktok_connections"[\s\S]*?select: "([^"]*)"/.exec(FILES.yourData) || [])[1], onDelete: "delete" } : null);
@@ -1531,7 +1533,8 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("{ name: \"TikTok\", for: \"posting the videos you approve to your own TikTok account, when you connect it\" }") !== -1 &&
     // NAMED (Nov 7 2026, Instagram posting): BEFORE "..., Connect YouTube and Connect TikTok". AFTER Connect Instagram is named last.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last.
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1);
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER Connect Etsy is named last.
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1);
   check("G8. schemaCheck knows member_tiktok_connections at 178; the backup leaves it out", FILES.schema.indexOf("[\"member_tiktok_connections\", \"178_tiktok_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_tiktok_connections: \"members' TikTok access, sealed; members connect again\",") !== -1);
   const tts = (FILES.readme.split("## TikTok app setup")[1] || "").split("\n## ")[0];
@@ -1554,9 +1557,11 @@ function pageAnswers(over) {
   // 179_instagram_posting.sql is above it; "the highest" is checkInstagramPosting R1's.
   // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): AFTER 179_instagram_posting.sql and 180_facebook_pages.sql
   // are above it, by name; "the highest" is checkFacebookPages R1's.
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql and 180_facebook_pages.sql are above it (checkFacebookPages R1)", highest === 180 &&
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 180 was the highest. AFTER 181_etsy_store.sql is above it too,
+  // by name; "the highest" is checkEtsyConnect R1's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql, 180_facebook_pages.sql and 181_etsy_store.sql are above it (checkEtsyConnect R1)", highest === 181 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql", highest);
   check("G14. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
   OUT("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (failures + passes) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));

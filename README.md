@@ -112,6 +112,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 |---|---|---|
 | `SHOPIFY_CLIENT_ID` | none | The Client ID of BizForce's Shopify app (see "Shopify app setup" below). Needed only for Connect Shopify on the Store Agent page; without it (or `SHOPIFY_CLIENT_SECRET`) the Shopify routes and `POST /api/webhooks/shopify` answer 503 "Shopify connection isn't set up yet.", `GET /api/store/connections` answers `shopify_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `SHOPIFY_CLIENT_SECRET` | none | That app's client secret. It is sent in the token exchange and refresh, and it verifies the HMAC on Shopify's return to the Store Agent page and on every webhook. Needed only for Shopify, with `SHOPIFY_CLIENT_ID`. A secret; set it on Railway and never commit it. Rotating it in the Partner Dashboard means setting the new value on Railway at once, or webhooks are refused with 401. |
+| `ETSY_KEYSTRING` | none | The keystring of BizForce's Etsy app (see "Etsy app setup" below). Needed only for Connect Etsy on the Store Agent page; without it (or `ETSY_SHARED_SECRET`) the Etsy routes answer 503 "Etsy connection isn't set up yet.", `GET /api/store/connections` answers `etsy_available: false` and the page disables the button. It is the OAuth client id, and the first half of the `x-api-key` header. Set it on Railway; never commit it. |
+| `ETSY_SHARED_SECRET` | none | That app's shared secret, the second half of the `x-api-key` header every Etsy request carries (`<keystring>:<shared secret>`). Needed only for Etsy, with `ETSY_KEYSTRING`. A secret; set it on Railway and never commit it. |
 | `GOOGLE_OAUTH_CLIENT_ID` | none | The client ID of BizForce's Google OAuth client (see "YouTube app setup" below). Needed only for YouTube on the Social Agent page; without it (or `GOOGLE_OAUTH_CLIENT_SECRET`) the YouTube connect, video and proposal routes answer 503 "YouTube connection isn't set up yet.", `GET /api/youtube/status` answers `youtube_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | none | That client's secret, sent in the code exchange and every refresh. Needed only for YouTube, with `GOOGLE_OAUTH_CLIENT_ID`. A secret; set it on Railway and never commit it. |
 | `TIKTOK_CLIENT_KEY` | none | The client key of BizForce's TikTok app (see "TikTok app setup" below). Needed only for TikTok on the Social Agent page; without it (or `TIKTOK_CLIENT_SECRET`) the TikTok connect, creator-info, caption, proposal and status routes answer 503 "TikTok connection isn't set up yet.", `GET /api/tiktok/status` answers `tiktok_available: false` and the page disables the button. Set it on Railway; never commit it. |
@@ -271,6 +273,19 @@ Connect Shopify on the Store Agent page (`lib/shopifyAuth.js`, `lib/shopifyApi.j
 - **Credentials:** the Client ID in `SHOPIFY_CLIENT_ID` and the client secret in `SHOPIFY_CLIENT_SECRET`, on Railway only.
 
 Until both variables are set, the Shopify routes answer 503 and the page shows "Shopify connection isn't set up yet." One shop connects to one BizForce account. Disconnecting deletes BizForce's copy; the member removes the app from their Shopify admin under Settings, then Apps. Webhook receipts are kept 30 days (`shopify_webhook_events`).
+
+## Etsy app setup
+
+Connect Etsy on the Store Agent page (`lib/etsyAuth.js`, `lib/etsyApi.js`, migration 181) needs one app on Etsy's developer site:
+
+- **Developer account and app:** sign in at Etsy's developer site with the Etsy account that will own BizForce's app, and create an app. Etsy shows its **keystring** and its **shared secret**.
+- **Credentials:** the keystring in `ETSY_KEYSTRING` and the shared secret in `ETSY_SHARED_SECRET`, both on Railway only. The shared secret is a secret; never commit it or paste it anywhere else.
+- **The x-api-key header:** every request BizForce makes to Etsy, the token endpoint included, carries `x-api-key: <keystring>:<shared secret>` (the two joined with a colon). This is why both values are needed on the server.
+- **Callback URL**, exactly: `https://bizforceai.net/store-agent.html` (the server sends `FRONTEND_URL` + `/store-agent.html`, so the two must match).
+- **Scopes:** `shops_r`, `listings_r` and `transactions_r`; with "Let BizForce make changes I approve" ticked, also `listings_w`. Sign-in uses OAuth 2.0 with PKCE (S256).
+- **Access tiers:** a new app starts with personal access, which works only for the shops of the developer account itself (and a small number of invited users). Connecting other members' shops needs commercial access, which Etsy grants on request after reviewing the app.
+
+Until both variables are set, the Etsy routes answer 503 and the page shows "Etsy connection isn't set up yet." One Etsy shop connects to one BizForce account. Etsy has no endpoint to revoke a token: Disconnecting deletes BizForce's copy, and the member removes BizForce from their Etsy account settings, under Apps.
 
 ## YouTube app setup
 

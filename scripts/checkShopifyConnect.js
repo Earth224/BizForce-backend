@@ -141,8 +141,10 @@ const MUTATIONS = {
     "      var ss = require(\"./lib/storeSync\");\n      var config = sa.configured(process.env) || { clientId: \"\", clientSecret: \"\" };\n"],
   "replacestate-skipped": ["ui",
     "    }).then(function (res) {\n      stripQuery();\n", "    }).then(function (res) {\n"],
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE anchored on "...uninstall BizForce from Shopify, or delete
+  // your account.". AFTER the sentence names Etsy's removal too, so the anchor is the line as it now reads; the stale text is the same.
   "privacy-sentence-stale": ["legal",
-    "\"deleted when you disconnect the store, uninstall BizForce from Shopify, or delete your account.\"",
+    "\"deleted when you disconnect the store, uninstall BizForce from Shopify, remove it from your Etsy account, or delete your account.\"",
     "\"deleted when you disconnect the store or delete your account.\""],
   "innerHTML-on-page": ["ui",
     "    if (text !== undefined) e.textContent = text;\n", "    if (text !== undefined) e.innerHTML = text;\n"],
@@ -1359,19 +1361,24 @@ function listAnswers(over) {
   check("G2. lib/storeSync.js keeps no Shopify token check (no access_scopes.json, no shpat_)", !/access_scopes\.json|shpat_/.test(stripComments(FILES.sync)));
   check("G3. the mailbox disconnect deletes only its own sign-in states (purpose mailbox_microsoft), never a Connect Shopify in progress",
     FILES.server.indexOf("var statesDropped = await supabase.from(\"oauth_states\").delete().eq(\"user_id\", req.user.id).eq(\"purpose\", \"mailbox_microsoft\");") !== -1);
-  const PRIVACY = "If you connect a Shopify or WooCommerce store, BizForce stores the store's address and the access it is given, encrypted (for WooCommerce, " +
-    "the key you made for it; for Shopify, the access you approve when you connect), and reads from the store only your products (name, SKU, price, " +
+  /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "a Shopify or WooCommerce store", "for Shopify, the access
+     you approve when you connect" and "uninstall BizForce from Shopify, or delete your account". AFTER the three replacements the
+     Etsy brief decided, word for word, and nothing else changed. */
+  const PRIVACY = "If you connect a Shopify, WooCommerce or Etsy store, BizForce stores the store's address and the access it is given, encrypted (for WooCommerce, " +
+    "the key you made for it; for Shopify or Etsy, the access you approve when you connect), and reads from the store only your products (name, SKU, price, " +
     "cost where the store has one), your stock levels, your store's currency and location names, and summaries of your orders (each order's number, " +
     "date, total, currency, and its items as SKU and quantity), never any customer's name, email, address or phone number; BizForce changes a " +
     "product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store, " +
     "and it keeps a record of each change (the item, the old and new value, and when). What it reads is used only for your own agents, the store's " +
     "key or access is never shown back to you or exported, and it, the products, the stock, the order summaries and the record of changes are " +
-    "deleted when you disconnect the store, uninstall BizForce from Shopify, or delete your account.";
+    "deleted when you disconnect the store, uninstall BizForce from Shopify, remove it from your Etsy account, or delete your account.";
   const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
   check("G4. the privacy sentence is word for word the decided one, held whole in lib/legalPages.js", LP.STORE_PRIVACY_SENTENCE === PRIVACY);
   check("G5. privacy.html carries it once, as built", FILES.privacy.split(esc(PRIVACY)).length === 2);
   const LEGAL = realRequire("./lib/legal");
-  check("G6. TERMS_VERSION and TERMS_UPDATED are Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07" && LEGAL.TERMS_UPDATED === "Last updated November 7, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026. AFTER the privacy sentence changed again (Etsy), so
+  // the terms date is Nov 8 2026 by the rule in lib/legal.js.
+  check("G6. TERMS_VERSION and TERMS_UPDATED are Nov 8 2026", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): the sign-in states line now also names Connect YouTube;
   // Connect Shopify is still required in it.
   // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "..., Connect Shopify and Connect YouTube". AFTER the line
@@ -1380,8 +1387,10 @@ function listAnswers(over) {
   // Connect Instagram last; Connect Shopify is still required in it.
   // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "..., Connect TikTok and Connect Instagram". AFTER the line names Connect Facebook last; Connect
   // Shopify is still required in it.
-  check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook), the receipts are not member data, and Shopify is a third party",
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1 &&
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the line names
+  // Connect Etsy last (all seven sign-ins); Connect Shopify is still required in it.
+  check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy), the receipts are not member data, and Shopify is a third party",
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1 &&
     FILES.yourData.indexOf("shopify_webhook_events: \"Shopify's notifications about app installs and privacy requests, kept 30 days\"") !== -1 &&
     FILES.yourData.indexOf("{ name: \"Shopify\", for: \"connecting your Shopify store, reading it and making the changes you approve, when you connect one\" }") !== -1);
   check("G8. README: the two env vars, the Shopify app setup section and the webhook address",
@@ -1406,12 +1415,15 @@ function listAnswers(over) {
      179_instagram_posting.sql is above 176 too, by name; "the highest" is checkInstagramPosting R1's, for 179. */
   /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): BEFORE the highest was 179. AFTER the highest is 180 and
      180_facebook_pages.sql is above 176 too, by name; "the highest" is checkFacebookPages R1's, for 180. */
-  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql and 180_facebook_pages.sql is 176 or lower (checkFacebookPages R1)",
-    highest === 180 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+  /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE the highest was 180. AFTER the highest is 181 and
+     181_etsy_store.sql is above 176 too, by name; "the highest" is checkEtsyConnect R1's, for 181. */
+  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql and 181_etsy_store.sql is 176 or lower (checkEtsyConnect R1)",
+    highest === 181 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
     migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return /^181_/.test(f); }).join() === "181_etsy_store.sql" &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

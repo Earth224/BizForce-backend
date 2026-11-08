@@ -49,7 +49,9 @@
     13. THE JSON MODE (guardedJsonRequest, NAMED Nov 3 2026 for Connect
         Mastodon). https on 443 only; every blocked literal and name refused
         before connecting; one resolution against rebinding; GET or POST only
-        (NAMED Nov 7 2026, YouTube uploads: GET, POST or DELETE, see 13b);
+        (NAMED Nov 7 2026, YouTube uploads: GET, POST or DELETE, see 13b;
+        NAMED Nov 8 2026, Etsy store connection: GET, POST, PUT or DELETE,
+        a PUT carrying exactly one JSON object, see 13b);
         no redirect followed; 1 MB of body after decompression; a 2xx must be
         JSON; a non-2xx is returned with its json; only three answer headers
         come back; the Authorization value is in no error, detail, log line or
@@ -146,6 +148,8 @@ const MUTATIONS = {
   "json-dns-unchecked":     [["          lookup: guardedLookup,", "          lookup: json ? function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); } : guardedLookup,"]],
   "json-auth-logged":       [["        req.on(\"error\", fail);", "        req.on(\"error\", function (e) { fail(new GuardedFetchError(\"network\", (e && e.code) + \" sending \" + JSON.stringify(requestOptions.headers))); });"]],
   "json-method-unrestricted": [["    if (JSON_METHODS.indexOf(method) === -1) {", "    if (false) {"]],
+  // NAMED (Nov 8 2026, Etsy store connection): a PUT that takes any body, or none (section 13b)
+  "put-body-unchecked":     [["      if (putBody === undefined || putBody === null || typeof putBody !== \"object\" || Array.isArray(putBody) || Buffer.isBuffer(putBody) ||", "      if (false &&"]],
   // NAMED (Nov 3 2026, store connections): what a caller may raise in the JSON mode, and how far (section 13i)
   "expose-set-cookie":      [["const JSON_UNEXPOSABLE_HEADERS = [\"set-cookie\", \"authorization\"];", "const JSON_UNEXPOSABLE_HEADERS = [\"authorization\"];"]],
   "expose-unbounded":       [["    if (!Array.isArray(expose) || expose.length > JSON_MAX_EXPOSED_HEADERS) {", "    if (!Array.isArray(expose)) {"]],
@@ -829,11 +833,27 @@ async function sectionJson() {
      and is proved to go through, carrying no body; every other method is still refused before any lookup, and the
      json-method-unrestricted mutation is still caught by them. The emptyOk option (a 2xx with an empty body is json null)
      is proved here too; without it an empty 2xx is still refused. */
-  console.log("\n══ 13b. GET, POST or DELETE only ══");
-  for (const m of ["PUT", "PATCH", "get", "delete", "HEAD"]) {
+  /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "GET, POST or DELETE only", with PUT among the refused
+     methods. AFTER GET, POST, PUT or DELETE: Etsy's inventory update is a PUT of the whole inventory as JSON
+     (lib/etsyApi.js writeInventory). PUT leaves the refused list and is proved to go through with its Authorization and
+     exactly one JSON object as its body, sent as application/json; a PUT with no body, a string, a Buffer, an array, a
+     form, or a caller's own Content-Type is refused before any lookup. Every other method is still refused, and the
+     json-method-unrestricted mutation is still caught by them. */
+  console.log("\n══ 13b. GET, POST, PUT or DELETE only ══");
+  for (const m of ["PATCH", "get", "put", "delete", "HEAD"]) {
     resolverCalls = {};
     a = await attemptJson("https://public.test/j/echo", { method: m });
     check("method " + m + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
+  }
+  a = await attemptJson("https://public.test/j/echo", { method: "PUT", headers: auth, body: { products: [{ sku: "A", offerings: [{ price: 12.5, quantity: 3 }] }] } });
+  check("a PUT goes through with its Authorization and one JSON object as its body, as application/json",
+    a.ok && a.value.json.method === "PUT" && a.value.json.body === JSON.stringify({ products: [{ sku: "A", offerings: [{ price: 12.5, quantity: 3 }] }] }) &&
+    a.value.json.headers.authorization === "Bearer " + FAKE_TOKEN && /^application\/json/.test(a.value.json.headers["content-type"] || ""), code(a));
+  for (const [label, opts] of [["no body", {}], ["a string body", { body: "{\"x\":1}" }], ["a Buffer body", { body: Buffer.from("{}") }],
+    ["an array body", { body: [1, 2] }], ["a form", { body: { x: 1 }, form: true }], ["a caller's Content-Type", { body: { x: 1 }, headers: { "Content-Type": "text/plain" } }]]) {
+    resolverCalls = {};
+    a = await attemptJson("https://public.test/j/echo", Object.assign({ method: "PUT" }, opts));
+    check("a PUT with " + label + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
   }
   a = await attemptJson("https://public.test/j/echo", { method: "DELETE", headers: auth });
   check("a DELETE goes through, with its Authorization and no body", a.ok && a.value.json.method === "DELETE" && a.value.json.body === "" &&

@@ -1736,7 +1736,9 @@ function pageAnswers(over) {
     bt.indexOf(esc(LP.MAILBOX_REPLY_TERMS_SENTENCE)) < bt.indexOf(esc(TERMS)));
   check("G3. privacy.html and terms.html carry them, as built", FILES.privacy.split(esc(PRIVACY)).length === 2 && FILES.terms.split(esc(TERMS)).length === 2);
   const LEGAL = realRequire("./lib/legal");
-  check("G4. TERMS_VERSION is Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
+  // the Etsy privacy sentence set (this change still set Nov 7).
+  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
   const GR = realRequire("./lib/gateRules");
   check("G5. gateRules: both actions known, channel youtube", GR.ACTION_TYPES.indexOf("publish_youtube_video") !== -1 && GR.ACTION_TYPES.indexOf("delete_youtube_video") !== -1 &&
     GR.CHANNELS.indexOf("youtube") !== -1 && GR.channelFor("publish_youtube_video") === "youtube" && GR.channelFor("delete_youtube_video") === "youtube");
@@ -1747,7 +1749,8 @@ function pageAnswers(over) {
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the sign-in states line names Connect Instagram last, and the
     // Instagram connection is deleted between the TikTok one and the sign-in states.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last, and member_facebook_pages is deleted after the Instagram connection.
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1 &&
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER Connect Etsy is named last.
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1 &&
     FILES.yourData.indexOf("{ name: \"YouTube (Google)\", for: \"uploading the videos you approve to your own channel, when you connect it\" }") !== -1 &&
     FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
   check("G7. schemaCheck knows both tables at migration 177; backup leaves both out; accountFiles lists bf-video",
@@ -1776,9 +1779,11 @@ function pageAnswers(over) {
   // 179_instagram_posting.sql are, by name; "the highest" is checkInstagramPosting R1's.
   // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): AFTER 180_facebook_pages.sql is above it too, by name;
   // "the highest" is checkFacebookPages R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql and 180_facebook_pages.sql are above it (checkFacebookPages R1)", highest === 180 &&
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 180 was the highest. AFTER 181_etsy_store.sql is above it too,
+  // by name; "the highest" is checkEtsyConnect R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql and 181_etsy_store.sql are above it (checkEtsyConnect R1)", highest === 181 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

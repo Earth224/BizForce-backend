@@ -772,8 +772,10 @@ function shopifyConn(db, userId) {
   // "read_write"), so the page can say "Read only" or "Changes allowed with your approval"; still never a credential.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE nine fields. AFTER currency, location_id, location_name and
   // stock_scope too (Shopify's location for stock changes; the latter three null on WooCommerce); still never a credential or a token.
-  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "currency", "id", "last_error_code", "last_sync_at", "location_id", "location_name", "permission", "platform", "platform_label", "status", "stock_scope", "store"]) &&
-    st.permission === "read" && st.location_id === null && st.stock_scope === null &&
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE thirteen fields. AFTER shop_name too (an Etsy shop's name,
+  // read from its https://www.etsy.com/shop/<ShopName> address; null on WooCommerce and Shopify); still never a credential or a token.
+  check("S1. status answers exactly the safe fields", J(Object.keys(st).sort()) === J(["connected_since", "currency", "id", "last_error_code", "last_sync_at", "location_id", "location_name", "permission", "platform", "platform_label", "shop_name", "status", "stock_scope", "store"]) &&
+    st.permission === "read" && st.location_id === null && st.stock_scope === null && st.shop_name === null &&
     !/ciphertext|credential|auth_tag|_iv/.test(J(r.body)), J(r.body));
   check("S2. the list and disconnect need only a login (a member can always take their key back)",
     m.routes["get /api/store/connections"].middleware.length === 1 && m.routes["get /api/store/connections"].middleware[0] === requireAuth &&
@@ -1187,7 +1189,9 @@ function shopifyConn(db, userId) {
   let sig = null;
   try { sig = SIG.build("store", { items: { rows: items }, trades: { rows: { trades: [] } } }, { measureStock: mctx.measure, pendingFor: 0 }); } catch (e) { sig = { error: String(e) }; }
   const sigStock = sig && (sig.stock || (sig.body && sig.body.stock));
-  check("R4. the Store signature counts stock by source", sigStock && J(sigStock.sources) === J({ manual: 1, shopify: 1, woocommerce: 1 }), J(sig).slice(0, 300));
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE { manual: 1, shopify: 1, woocommerce: 1 }. AFTER etsy is the
+  // third store source and is counted too (0 here: no Etsy row); checkEtsyConnect counts an Etsy row.
+  check("R4. the Store signature counts stock by source", sigStock && J(sigStock.sources) === J({ manual: 1, shopify: 1, woocommerce: 1, etsy: 0 }), J(sig).slice(0, 300));
   check("R5. the live panel shows the stock's source (manual / Shopify / WooCommerce)",
     /sigTile\("Stock source"/.test(FILES.profile) && /"Manual " \+ src\.manual/.test(FILES.profile) && /"Shopify " \+ src\.shopify/.test(FILES.profile) && /"WooCommerce " \+ src\.woocommerce/.test(FILES.profile));
   check("R6. a movement on a synced item is refused (its stock belongs to the store)", /if \(syncedItem && syncedItem\.source\) \{/.test(FILES.server));
@@ -1275,10 +1279,14 @@ function shopifyConn(db, userId) {
   /* NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "...are deleted when you disconnect the store or delete your
      account". AFTER uninstalling BizForce from Shopify deletes them too (the app/uninstalled webhook), and the sentence
      names the Shopify access approved on connecting, the currency and the location names. Held whole by checkShopifyConnect. */
+  /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "...uninstall BizForce from Shopify, or delete your account"
+     and "for Shopify, the access you approve when you connect". AFTER "...uninstall BizForce from Shopify, remove it from your
+     Etsy account, or delete your account" and "for Shopify or Etsy, the access you approve when you connect", and the sentence
+     opens "If you connect a Shopify, WooCommerce or Etsy store". Held whole by checkEtsyConnect. */
   check("L1. the Privacy sentence says what is stored, never customer details, own agents only, changes only with approval, deleted on disconnect, on uninstall or with the account",
     /encrypted/.test(sentence) && /never any customer's name, email, address or phone number/.test(sentence) && /used only for your own agents/.test(sentence) &&
-    /the order summaries and the record of changes are deleted when you disconnect the store, uninstall BizForce from Shopify, or delete your account/.test(sentence) &&
-    /for Shopify, the access you approve when you connect/.test(sentence) && /your store's currency and location names/.test(sentence) &&
+    /the order summaries and the record of changes are deleted when you disconnect the store, uninstall BizForce from Shopify, remove it from your Etsy account, or delete your account/.test(sentence) &&
+    /for Shopify or Etsy, the access you approve when you connect/.test(sentence) && /^If you connect a Shopify, WooCommerce or Etsy store,/.test(sentence) && /your store's currency and location names/.test(sentence) &&
     /BizForce changes a product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store/.test(sentence) &&
     !/read-only key|never changes anything/.test(sentence));
   check("L2. privacy.html carries it once, as built", sentence.length > 100 && FILES.privacy.split(esc(sentence)).length === 2);
@@ -1329,7 +1337,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 7 2026, TikTok posting, migration 178): the allowlist adds 178_tiktok_posting.sql; "the highest" is checkTiktokPosting R1's.
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
     // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the allowlist adds 180_facebook_pages.sql; "the highest" is checkFacebookPages R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   // NAMED (Nov 7 2026, migration 176): lib/shopifyApi.js, lib/shopifyAuth.js and 176_shopify_oauth.sql join the list.

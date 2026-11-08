@@ -282,7 +282,12 @@ const EXPECTED_GATED = [
   // on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_facebook_post). The Pages list, status, disconnect, the
   // list of posts, a post's status and filing a removal stay login-only: a removal stays free (checkFacebookPages).
   "post /api/facebook/start", "post /api/facebook/finish", "post /api/facebook/choose-page", "post /api/facebook/propose-post",
-  "post /api/facebook/draft-caption"
+  "post /api/facebook/draft-caption",
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181; gated 122 -> 124): BEFORE a store was Shopify or WooCommerce only.
+  // AFTER Connect Etsy starts (a single-use state and a sealed PKCE verifier stored) and finishes (the state consumed once, the
+  // code exchanged, both tokens sealed, the shop read and stored); both need a subscription, under Connect Shopify's limiter.
+  // The list, sync now and disconnect are the existing store routes, unchanged (checkEtsyConnect).
+  "post /api/store/etsy/start", "post /api/store/etsy/finish"
 ];
 
 const EXPECTED_ADMIN = [

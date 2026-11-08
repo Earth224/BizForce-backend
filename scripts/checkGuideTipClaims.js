@@ -367,9 +367,11 @@ const MUTATIONS = {
   /* NAMED (store connections, Nov 3 2026): BEFORE anchored on "It connects to no store or channel; audits are written ...".
      AFTER the tip says the member can connect a store read-only, so the anchor is the new sentence; the restored lie is the same.
      NAMED (Nov 6 2026, store changes, migration 175): BEFORE anchored on "... reads Shopify or WooCommerce read-only; ...". AFTER
-     the tip no longer says read-only (a store can be changed with approval), so the anchor is the tip as it now reads. */
+     the tip no longer says read-only (a store can be changed with approval), so the anchor is the tip as it now reads.
+     NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE anchored on "... reads Shopify or WooCommerce; ...". AFTER
+     the tip names Etsy too (Connect Etsy on the Store page), so the anchor is the tip as it now reads; the restored lie is the same. */
   "restore-store-159": [[GUIDE,
-    "\\\"Connect your store\\\" reads Shopify or WooCommerce; audits are written from your Business Profile and what you tell it, not your store's own data.",
+    "\\\"Connect your store\\\" reads Shopify, WooCommerce or Etsy; audits are written from your Business Profile and what you tell it, not your store's own data.",
     "This agent manages multi-store commerce intelligence — inventory, product performance, and omnichannel strategy across every channel you sell on."]],
   // the SEO report is called a Google report again
   "restore-google-seo-report": [[SEO, '<h3 class="seo-opt-report-title">Website SEO Report</h3>', '<h3 class="seo-opt-report-title">Google SEO Report</h3>']],
@@ -1083,8 +1085,10 @@ const B = [
   /* NAMED (Nov 6 2026, store changes, migration 175): BEFORE the tip said "reads Shopify or WooCommerce read-only" and the page
      "BizForce only reads your store. It never changes your products, prices or orders." AFTER a WooCommerce store connected with
      changes allowed can be changed after approval, so the tip says only "reads Shopify or WooCommerce;" (no read-only claim), and
-     the page carries the new line word for word (checkStoreChanges P3 holds it too). */
-  ["6 store 159", stTips, "\"Connect your store\" reads Shopify or WooCommerce;", /manages multi-store|across every channel|commerce intelligence|read-only/,
+     the page carries the new line word for word (checkStoreChanges P3 holds it too).
+     NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "reads Shopify or WooCommerce;". AFTER the tip names
+     Etsy too, "reads Shopify, WooCommerce or Etsy;", true now that the page has Connect Etsy (checkEtsyConnect holds it). */
+  ["6 store 159", stTips, "\"Connect your store\" reads Shopify, WooCommerce or Etsy;", /manages multi-store|across every channel|commerce intelligence|read-only/,
     () => ["Store Audit", "Inventory Plan", "Omnichannel Strategy", "Conversion Audit", "Product Launch Plan"].every(n => offers(STORE, n)) &&
       /does not fetch or open the store/.test(taskPrompt("store_audit")) && !/bigcommerce/i.test(FILES[STORE]) &&
       FILES[STORE].indexOf("BizForce reads your store. It changes a price or stock level only when you approve that change, and only if you allowed changes when you connected.") !== -1 && /id="storeConnect"/.test(FILES[STORE])],

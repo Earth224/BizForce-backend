@@ -631,7 +631,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     // NAMED (Nov 7 2026, TikTok posting, migration 178): the allowlist adds 178_tiktok_posting.sql; "the highest" is checkTiktokPosting R1's.
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
     // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the allowlist adds 180_facebook_pages.sql; "the highest" is checkFacebookPages R1's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -1358,7 +1359,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   // NAMED (Nov 6 2026, card upgrades C1): BEFORE "2026-11-05" (images in social posts). AFTER "2026-11-06", the version the
   // card visits privacy sentence set.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-07 (Shopify on OAuth; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-08 (Etsy; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

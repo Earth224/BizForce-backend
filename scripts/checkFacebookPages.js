@@ -1604,7 +1604,9 @@ function pageAnswers(over) {
   check("G3. privacy.html and terms.html carry both, as built, and Facebook (Meta) is a named third party", FILES.privacy.split(esc(PRIVACY)).length === 2 &&
     FILES.terms.split(esc(TERMS)).length === 2 && FILES.privacy.indexOf(esc("Facebook (Meta) (publishing the posts you approve to the Facebook Page you connect)")) !== -1);
   const LEGAL = realRequire("./lib/legal");
-  check("G4. TERMS_VERSION is Nov 7 2026", LEGAL.TERMS_VERSION === "2026-11-07", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
+  // the Etsy privacy sentence set (this change still set Nov 7).
+  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
   const YD = compile(FILES.yourData, "lib/yourData.js", {});
   const ydOf = function (t) { return (YD.DATA || []).filter(function (e) { return e.table === t; })[0] || {}; };
   check("G5. yourData: the Page exported as its name and date only, the posts without ids (keyed by created_at); Facebook (Meta) a third party; the never-exported lines; the delete order; the sign-in states",
@@ -1615,7 +1617,9 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("\"Your Facebook posts' ids at Facebook: the export lists each post's kind, status, Facebook address and dates.\"") !== -1 &&
     FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_videos\"") !== -1 &&
     FILES.yourData.indexOf("\"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
-    FILES.yourData.indexOf("Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1, J([ydOf("facebook_posts").key, ydOf("member_facebook_pages").select]));
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the line
+    // names Connect Etsy last; Connect Facebook is still required in it.
+    FILES.yourData.indexOf("Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1, J([ydOf("facebook_posts").key, ydOf("member_facebook_pages").select]));
   check("G6. schemaCheck knows both tables at 180; the backup leaves the Page access out and skips the posts",
     FILES.schema.indexOf("[\"member_facebook_pages\", \"180_facebook_pages.sql\"],") !== -1 && FILES.schema.indexOf("[\"facebook_posts\", \"180_facebook_pages.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_facebook_pages: \"members' Facebook Page access, sealed; members connect again\",") !== -1 && /\n  facebook_posts: +"/.test(FILES.backup));
@@ -1644,7 +1648,11 @@ function pageAnswers(over) {
     /function videoPlatformConfigured\(\) \{[\s\S]*?require\("\.\/lib\/facebookAuth"\)\.configured\(process\.env\) !== null;\n\}/.test(FILES.server));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("R1. 180_facebook_pages.sql is the highest migration and the only 180", highest === 180 && migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql", highest);
+  /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "180_facebook_pages.sql is the highest migration and the
+     only 180". AFTER it is the only 180, and only 181_etsy_store.sql is above it, by name; "the highest" is checkEtsyConnect R1's. */
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql is above it (checkEtsyConnect R1)", highest === 181 &&
+    migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
