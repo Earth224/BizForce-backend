@@ -1378,8 +1378,10 @@ function listAnswers(over) {
   // names Connect TikTok last; Connect Shopify is still required in it.
   // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "..., Connect YouTube and Connect TikTok". AFTER the line names
   // Connect Instagram last; Connect Shopify is still required in it.
-  check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube, Connect TikTok and Connect Instagram), the receipts are not member data, and Shopify is a third party",
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok and Connect Instagram") !== -1 &&
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "..., Connect TikTok and Connect Instagram". AFTER the line names Connect Facebook last; Connect
+  // Shopify is still required in it.
+  check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook), the receipts are not member data, and Shopify is a third party",
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1 &&
     FILES.yourData.indexOf("shopify_webhook_events: \"Shopify's notifications about app installs and privacy requests, kept 30 days\"") !== -1 &&
     FILES.yourData.indexOf("{ name: \"Shopify\", for: \"connecting your Shopify store, reading it and making the changes you approve, when you connect one\" }") !== -1);
   check("G8. README: the two env vars, the Shopify app setup section and the webhook address",
@@ -1402,11 +1404,14 @@ function listAnswers(over) {
      checkTiktokPosting R1's, for 178. */
   /* NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE the highest was 178. AFTER the highest is 179 and
      179_instagram_posting.sql is above 176 too, by name; "the highest" is checkInstagramPosting R1's, for 179. */
-  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql and 179_instagram_posting.sql is 176 or lower (checkInstagramPosting R1)",
-    highest === 179 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+  /* NAMED (Nov 7 2026, Facebook Pages posting, migration 180): BEFORE the highest was 179. AFTER the highest is 180 and
+     180_facebook_pages.sql is above 176 too, by name; "the highest" is checkFacebookPages R1's, for 180. */
+  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql and 180_facebook_pages.sql is 176 or lower (checkFacebookPages R1)",
+    highest === 180 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

@@ -337,7 +337,22 @@ const ADDED = [
   ["post", "/api/instagram/propose-post"],                   // subscribed: every photo's bytes checked JPEG, or the Reel's type, frozen in a proposal; never executes (470 -> 471)
   ["post", "/api/instagram/draft-caption"],                  // subscribed: an AI draft of the caption; nothing stored (471 -> 472)
   ["get", "/api/instagram/posts"],                           // login-only: the member's own Instagram posts, newest first (472 -> 473)
-  ["get", "/api/instagram/posts/:id/status"]                 // login-only: the member's own post rechecked, published once under a compare-and-set claim (473 -> 474)
+  ["get", "/api/instagram/posts/:id/status"],                // login-only: the member's own post rechecked, published once under a compare-and-set claim (473 -> 474)
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages); migration 180: BEFORE 474 routes; AFTER 485, Connect Facebook (Facebook Login, a
+  // single-use state, the user token sealed, then a Page chosen from those the member manages), a post filed for approval (text,
+  // photos or a video), an AI caption draft, the member's own posts listed, a post's status, and a removal filed for approval
+  // (checkFacebookPages)
+  ["post", "/api/facebook/start"],                           // subscribed: stores a single-use state, returns Facebook's authorize URL; 503 until configured (474 -> 475)
+  ["post", "/api/facebook/finish"],                          // subscribed: state, code; every scope granted; the long-lived user token sealed; Pages listed to choose from (475 -> 476)
+  ["get", "/api/facebook/pages"],                            // login-only: the Pages to choose from, names only, never a token (476 -> 477)
+  ["post", "/api/facebook/choose-page"],                     // subscribed: one listed Page chosen, its token sealed, the user token dropped (477 -> 478)
+  ["get", "/api/facebook/status"],                           // login-only: the member's own connection, never a token; facebook_available (478 -> 479)
+  ["post", "/api/facebook/disconnect"],                      // login-only: the row and this purpose's states deleted (479 -> 480)
+  ["post", "/api/facebook/propose-post"],                    // subscribed: text, photos or a video checked and fingerprinted, frozen in a proposal; never executes (480 -> 481)
+  ["post", "/api/facebook/draft-caption"],                   // subscribed: an AI draft of the post text; nothing stored (481 -> 482)
+  ["get", "/api/facebook/posts"],                            // login-only: the member's own Facebook posts, newest first (482 -> 483)
+  ["get", "/api/facebook/posts/:id/status"],                 // login-only: the member's own post rechecked; permalink and video state recorded (483 -> 484)
+  ["post", "/api/facebook/posts/:id/propose-delete"]         // login-only: removal filed as a proposal, once per post; never executes; a removal stays free (484 -> 485)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

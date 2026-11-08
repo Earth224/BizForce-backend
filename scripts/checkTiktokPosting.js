@@ -130,8 +130,9 @@ const MUTATIONS = {
     "pathPrefix: \"/upload/\", allow308: false,", "pathPrefix: \"/upload/\", allow308: true,"],
   "delete-ignores-tiktok": ["videos",
     // NAMED, item 8 part 3a: FILE_ACTIONS now also names publish_instagram_post.
-    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\"]);",
-    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_instagram_post\"]);"],
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and publish_facebook_post after it; the mutation still drops publish_tiktok_post alone.
+    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\", \"publish_facebook_post\"]);",
+    "const FILE_ACTIONS = Object.freeze([\"publish_youtube_video\", \"delete_youtube_video\", \"publish_instagram_post\", \"publish_facebook_post\"]);"],
   "privacy-defaulted-on-page": ["ui",
     "      opt.value = o;\n      privacy.appendChild(opt);", "      opt.value = o;\n      if (privacy.children.length === 1) { none.selected = false; opt.selected = true; }\n      privacy.appendChild(opt);"],
   "upload-not-whole": ["api",
@@ -298,7 +299,9 @@ function makeStorage() {
 }
 function makeDb() {
   // NAMED, item 8 part 3a: instagram_posts added; retention and deleting a video now read it.
-  const t = { member_tiktok_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], business_profiles: [], instagram_posts: [] };
+  const t = { member_tiktok_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], business_profiles: [], instagram_posts: [],
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): lib/memberVideos.js reads facebook_posts too.
+    facebook_posts: [] };
   const fail = {};
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
   function sealedOk(c, i, a) { return HEX.test(c || "") && /^[0-9a-f]{24}$/.test(i || "") && /^[0-9a-f]{32}$/.test(a || ""); }
@@ -1342,9 +1345,11 @@ function pageAnswers(over) {
   db.t.agent_proposals.push({ id: uuid(), user_id: USER, action_type: "publish_tiktok_post", status: "pending", payload: { video_id: heldV.id } });
   // NAMED, item 8 part 3a: the early delete now also needs a published Instagram reel; bothV, ytOnly and heldV have one, so only the platform under test differs.
   [bothV, ytOnly, heldV].forEach(function (v) { db.t.instagram_posts.push({ id: uuid(), user_id: USER, kind: "reel", status: "published", video_id: v.id, created_at: iso(now - 600000) }); });
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and a published Facebook video post; again only the platform under test differs.
+  [bothV, ytOnly, heldV].forEach(function (v) { db.t.facebook_posts.push({ id: uuid(), user_id: USER, kind: "video", status: "published", post_id: "1200000000000009", video_id: v.id, created_at: iso(now - 600000) }); });
   const tick =await MV.retentionTick({ supabase: db, storage: db.storage, now: function () { return now; } }, now);
   const rowIn = function (id) { return db.t.member_videos.filter(function (x) { return x.id === id; })[0]; };
-  check("J1. YouTube, TikTok AND Instagram have it (NAMED, item 8 part 3a: Instagram added): the file deleted at once, status uploaded (a platform got it)", !db.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null, J(tick));
+  check("J1. YouTube, TikTok, Instagram AND Facebook have it (NAMED, item 8 parts 3a and 3b: Instagram, then Facebook added): the file deleted at once, status uploaded (a platform got it)", !db.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null, J(tick));
   check("J2. only one platform has it, under 14 days: the file kept", !!db.storage.objects[ytOnly.path] && rowIn(ytOnly.id).status === "ready" && !!db.storage.objects[ttOnly.path] && rowIn(ttOnly.id).status === "ready");
   check("J3. a pending proposal names it: kept, even with both platforms done", !!db.storage.objects[heldV.path] && rowIn(heldV.id).status === "ready");
   check("J4. 14 days after it was added: deleted whatever the platforms have (uploaded when one got it, removed when none did)",
@@ -1484,10 +1489,12 @@ function pageAnswers(over) {
   const card = function (name) { return (new RegExp("<p class=\"int-card-name\">" + name.replace("/", "\\/") + "</p>\\s*<p class=\"int-card-desc\">([^<]*)</p>\\s*<span class=\"int-status\">([^<]*)</span>").exec(FILES.integrations) || []); };
   check("P25. Integrations: TikTok and YouTube say they connect on the Social page (not Removed), and say what is true until review",
     card("TikTok")[2] === "On the Social page" && /Social Agent page/.test(card("TikTok")[1] || "") && /visible only to you/.test(card("TikTok")[1] || "") &&
-    card("YouTube")[2] === "On the Social page" && /keeps uploads from BizForce private/.test(card("YouTube")[1] || "") && card("Facebook")[2] === "Removed");
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE Facebook was Removed; AFTER it connects on the Social page too.
+    card("YouTube")[2] === "On the Social page" && /keeps uploads from BizForce private/.test(card("YouTube")[1] || "") && card("Facebook")[2] === "On the Social page");
   check("P26. the guide tips: Social names TikTok as connecting, Integrations names the new state; still 4 Integrations tips",
     // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "Bluesky, Mastodon, YouTube and TikTok connect so far"; AFTER Instagram is named too.
-    FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far, and posts cannot be scheduled") !== -1 &&
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): AFTER Facebook Pages are named after Instagram.
+    FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok, Instagram and Facebook Pages connect so far, and posts cannot be scheduled") !== -1 &&
     ((/"integrations\.html": \[([\s\S]*?)\n    \]/.exec(FILES.guide) || ["", ""])[1].match(/\n      "/g) || []).length === 4 &&
     FILES.guide.indexOf("\\\"On the Social page\\\"") !== -1);
 
@@ -1517,12 +1524,14 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("\"Your TikTok access: stored encrypted; the export shows only your TikTok name and the date you connected.\"") !== -1 &&
     // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "member_tiktok_connections", "oauth_states" side by side. AFTER
     // member_instagram_connections sits between them; the TikTok connection is still deleted before the sign-in states.
-    FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"oauth_states\"") !== -1);
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): member_facebook_pages sits after the Instagram connection, before the sign-in states.
+    FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
   check("G7. ...the videos export TikTok's status, time and post id, never the publish id or the upload address; TikTok a third party; the sign-in states line",
     FILES.yourData.indexOf("select: \"id, label, bytes, status, youtube_video_id, uploaded_at, tiktok_status, tiktok_posted_at, tiktok_post_id, created_at\"") !== -1 &&
     FILES.yourData.indexOf("{ name: \"TikTok\", for: \"posting the videos you approve to your own TikTok account, when you connect it\" }") !== -1 &&
     // NAMED (Nov 7 2026, Instagram posting): BEFORE "..., Connect YouTube and Connect TikTok". AFTER Connect Instagram is named last.
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok and Connect Instagram") !== -1);
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last.
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1);
   check("G8. schemaCheck knows member_tiktok_connections at 178; the backup leaves it out", FILES.schema.indexOf("[\"member_tiktok_connections\", \"178_tiktok_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_tiktok_connections: \"members' TikTok access, sealed; members connect again\",") !== -1);
   const tts = (FILES.readme.split("## TikTok app setup")[1] || "").split("\n## ")[0];
@@ -1543,9 +1552,11 @@ function pageAnswers(over) {
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
   // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE 178 was the highest. AFTER it is the only 178, and only
   // 179_instagram_posting.sql is above it; "the highest" is checkInstagramPosting R1's.
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql is above it (checkInstagramPosting R1)", highest === 179 &&
+  // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): AFTER 179_instagram_posting.sql and 180_facebook_pages.sql
+  // are above it, by name; "the highest" is checkFacebookPages R1's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql and 180_facebook_pages.sql are above it (checkFacebookPages R1)", highest === 180 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql", highest);
   check("G14. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
   OUT("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (failures + passes) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));

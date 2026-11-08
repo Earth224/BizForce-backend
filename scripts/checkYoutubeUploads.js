@@ -119,7 +119,8 @@ const MUTATIONS = {
   // is deleted by the retention pass once YouTube AND TikTok have it (J8), so the mutation keeps every such file instead.
   // NAMED, item 8 part 3a (Instagram posting): the filter now also needs Instagram and maps each row; the mutation still keeps every file.
   "file-kept-after-upload": ["videos",
-    "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id] && bothIg.published[r.id] && !bothIg.holding[r.id]; })\n      .map(function (r) { return withInstagram(r, bothIg); });\n", "    var bothRows = [];\n"],
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the filter now also needs Facebook and maps each row through withFacebook; the mutation still keeps every file.
+    "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id] && bothIg.published[r.id] && !bothIg.holding[r.id]; })\n      .filter(function (r) { return bothFb.published[r.id] && !bothFb.holding[r.id]; })\n      .map(function (r) { return withFacebook(withInstagram(r, bothIg), bothFb); });\n", "    var bothRows = [];\n"],
   "retention-missing": ["server",
     "    return await require(\"./lib/memberVideos\").retentionTick(youtubeDeps());\n", "    return null;\n"],
   "foreign-video-visible": ["videos",
@@ -373,7 +374,9 @@ function makeStorage() {
 }
 function makeDb() {
   // NAMED, item 8 part 3a (Instagram posting): instagram_posts added; retention and deleting a video now read it.
-  const t = { member_youtube_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], youtube_api_calls: [], business_profiles: [], instagram_posts: [] };
+  const t = { member_youtube_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], youtube_api_calls: [], business_profiles: [], instagram_posts: [],
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): lib/memberVideos.js reads facebook_posts too.
+    facebook_posts: [] };
   const log = [];
   const fail = {};   // table -> error for the next read
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
@@ -1257,7 +1260,8 @@ function pageAnswers(over) {
     FILES.server.indexOf("if (actionType === \"delete_youtube_video\") {\n      return res.status(400).json({\n        error: \"A YouTube removal cannot be filed here.") !== -1 &&
     // NAMED (Nov 7 2026, TikTok posting): the gated list goes on with publish_tiktok_post; both YouTube types still in it.
     // NAMED, item 8 part 3a (Instagram posting): publish_instagram_post now ends the list.
-    FILES.server.indexOf("\"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\"];") !== -1 &&
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): publish_facebook_post now ends the list.
+    FILES.server.indexOf("\"update_store_item\", \"publish_youtube_video\", \"delete_youtube_video\", \"publish_tiktok_post\", \"publish_instagram_post\", \"publish_facebook_post\"];") !== -1 &&
     FILES.server.indexOf("  publish_youtube_video: executePublishYoutubeVideo,\n") !== -1 && FILES.server.indexOf("  delete_youtube_video: executeDeleteYoutubeVideo,\n") !== -1);
   // draft
   m = mountRoutes({ env: CONFIGURED });
@@ -1557,9 +1561,11 @@ function pageAnswers(over) {
   dbB.t.agent_proposals.push({ id: uuid(), user_id: USER, action_type: "delete_youtube_video", status: "pending", payload: { video_id: heldV.id, youtube_video_id: YT_ID, channel_id: CHANNEL } });
   // NAMED, item 8 part 3a (Instagram posting): the early delete now also needs a published Instagram reel; all three have one, so YouTube and TikTok are what differ.
   [bothV, ytOnly, heldV].forEach(function (v) { dbB.t.instagram_posts.push({ id: uuid(), user_id: USER, kind: "reel", status: "published", video_id: v.id, created_at: iso(now - 600000) }); });
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and a published Facebook video post; YouTube and TikTok are still what differ.
+  [bothV, ytOnly, heldV].forEach(function (v) { dbB.t.facebook_posts.push({ id: uuid(), user_id: USER, kind: "video", status: "published", post_id: "1200000000000008", video_id: v.id, created_at: iso(now - 600000) }); });
   const tickBoth = await MV.retentionTick({ supabase: dbB, storage: dbB.storage, now: function () { return now; } }, now);
   const rowIn = function (id) { return dbB.t.member_videos.filter(function (x) { return x.id === id; })[0]; };
-  check("J8. YouTube AND TikTok (and Instagram, NAMED item 8 part 3a) have it: the file deleted at once, status uploaded; YouTube alone, or named by a pending proposal: kept",
+  check("J8. YouTube AND TikTok (and Instagram and Facebook, NAMED item 8 parts 3a and 3b) have it: the file deleted at once, status uploaded; YouTube alone, or named by a pending proposal: kept",
     !dbB.storage.objects[bothV.path] && rowIn(bothV.id).status === "uploaded" && rowIn(bothV.id).path === null &&
     !!dbB.storage.objects[ytOnly.path] && rowIn(ytOnly.id).status === "ready" && !!dbB.storage.objects[heldV.path] && rowIn(heldV.id).status === "ready" && tickBoth.both === 1, J(tickBoth));
   check("J3. a file with no row: deleted after a day (both members' folders); one an hour old kept",
@@ -1582,14 +1588,16 @@ function pageAnswers(over) {
     cron: { schedule: function (spec, fn, o) { scheduled.push({ spec: spec, fn: fn, tz: o && o.timezone }); } },
     cardLeads: { cardLeadsPurgeTick: async function () { order.push("leads"); }, PURGE_JOB_NAME: "card_leads_purge" },
     // NAMED, item 8 part 3a (Instagram posting): instagramRefreshTick now follows videoRetentionTick in the chain.
-    supabase: {}, videoRetentionTick: async function () { order.push("videos"); }, instagramRefreshTick: async function () { order.push("instagram"); }, console: console
+    supabase: {}, videoRetentionTick: async function () { order.push("videos"); }, instagramRefreshTick: async function () { order.push("instagram"); },
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebookChoosingPurgeTick follows instagramRefreshTick.
+    facebookChoosingPurgeTick: async function () { order.push("facebook"); }, console: console
   };
   vm.createContext(cctx);
   let cronOk = true;
   try { vm.runInContext(CRON_SECTION + "\n  }\n", cctx, { filename: "server.js (04:45 chain)" }); } catch (e) { cronOk = false; }
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
-  check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick (NAMED, item 8 part 3a)", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
-    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram"]), J(order));
+  check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick, then facebookChoosingPurgeTick (NAMED, item 8 parts 3a and 3b)", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
+    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook"]), J(order));
   m = mountRoutes({ env: CONFIGURED });
   const vr = await attempt(m.ctx.videoRetentionTick());
   check("J6. videoRetentionTick runs lib/memberVideos.js retentionTick on youtubeDeps() (its job_runs row claimed)", vr.ok && vr.v && vr.v.claimed === true &&
@@ -1738,9 +1746,10 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("select: \"id, label, bytes, status, youtube_video_id, uploaded_at, tiktok_status, tiktok_posted_at, tiktok_post_id, created_at\"") !== -1 &&
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the sign-in states line names Connect Instagram last, and the
     // Instagram connection is deleted between the TikTok one and the sign-in states.
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok and Connect Instagram") !== -1 &&
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last, and member_facebook_pages is deleted after the Instagram connection.
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1 &&
     FILES.yourData.indexOf("{ name: \"YouTube (Google)\", for: \"uploading the videos you approve to your own channel, when you connect it\" }") !== -1 &&
-    FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"oauth_states\"") !== -1);
+    FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
   check("G7. schemaCheck knows both tables at migration 177; backup leaves both out; accountFiles lists bf-video",
     FILES.schema.split("177_youtube_uploads.sql").length - 1 >= 2 && /member_videos/.test(FILES.backup) && /member_youtube_connections/.test(FILES.backup) &&
     FILES.accountFiles.indexOf("const BUCKETS = [PUBLIC, BOOKS, GOODS, MUSIC, VIDEO];") !== -1 && FILES.accountFiles.indexOf("const VIDEO = \"bf-video\";") !== -1);
@@ -1765,9 +1774,11 @@ function pageAnswers(over) {
   // 178_tiktok_posting.sql is above it; "the highest" is checkTiktokPosting R1's.
   // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE only 178 was above 177. AFTER 178_tiktok_posting.sql and
   // 179_instagram_posting.sql are, by name; "the highest" is checkInstagramPosting R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql and 179_instagram_posting.sql are above it (checkInstagramPosting R1)", highest === 179 &&
+  // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): AFTER 180_facebook_pages.sql is above it too, by name;
+  // "the highest" is checkFacebookPages R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql and 180_facebook_pages.sql are above it (checkFacebookPages R1)", highest === 180 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

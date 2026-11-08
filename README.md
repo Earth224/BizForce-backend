@@ -118,6 +118,8 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `TIKTOK_CLIENT_SECRET` | none | That app's client secret, sent in the code exchange, every refresh and the revoke. Needed only for TikTok, with `TIKTOK_CLIENT_KEY`. A secret; set it only on Railway and never commit it. |
 | `INSTAGRAM_APP_ID` | none | The app id of BizForce's Instagram app (see "Instagram app setup" below). Needed only for Instagram on the Social Agent page; without it (or `INSTAGRAM_APP_SECRET`) the Instagram connect, caption, proposal and post routes answer 503 "Instagram connection isn't set up yet.", `GET /api/instagram/status` answers `instagram_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `INSTAGRAM_APP_SECRET` | none | That app's secret, sent in the code exchange and the long-lived token exchange. Needed only for Instagram, with `INSTAGRAM_APP_ID`. A secret; set it only on Railway and never commit it. |
+| `FACEBOOK_APP_ID` | none | The main App ID of the same Meta app (see "Facebook Pages setup" below); Instagram keeps its own pair. Needed only for Facebook on the Social Agent page; without it (or `FACEBOOK_APP_SECRET`) the Facebook connect, Page, caption, proposal and post routes answer 503 "Facebook connection isn't set up yet.", `GET /api/facebook/status` answers `facebook_available: false` and the page disables the button. Set it on Railway; never commit it. |
+| `FACEBOOK_APP_SECRET` | none | That app's App Secret, sent in the code exchange and the long-lived token exchange. Needed only for Facebook, with `FACEBOOK_APP_ID`. A secret; set it only on Railway and never commit it. |
 
 ### Google Wallet
 
@@ -184,10 +186,11 @@ Every job is started by `server.js` only when it is the program (`node server.js
 | `pendingStorageDeletionTick`: deleted accounts' files | cron `15 4 * * *`, UTC | on unless `ENABLE_STORAGE_DELETION_RETRY` is exactly `false` |
 | `gateDecisionsSweepTick`: gate decisions older than 90 days | cron `30 4 * * *`, UTC | on unless `ENABLE_GATE_DECISIONS_SWEEP` is exactly `false` |
 | `cardLeadsPurgeTick`: card leads older than 12 months | cron `45 4 * * *`, UTC, claimed `card_leads_purge` | always on (no flag): a promised deletion; scheduled only when server.js is the program |
-| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify, YouTube, TikTok and Instagram sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
+| `oauthStatesPurgeTick` (`lib/microsoftAuth.js`): one-time Microsoft, Shopify, YouTube, TikTok, Instagram and Facebook sign-in states older than a day | the same 04:45 UTC run, after the card leads purge, claimed `oauth_states_purge` | always on (no flag); runs only when server.js is the program |
 | `webhookEventsPurgeTick` (`lib/shopifyAuth.js`): Shopify notification receipts older than 30 days | the same 04:45 UTC run, after the sign-in states purge, claimed `shopify_webhook_events_purge` | always on (no flag); runs only when server.js is the program |
-| `retentionTick` (`lib/memberVideos.js`): a video's file once YouTube has it, TikTok has posted it and an Instagram Reel of it is published (and no pending proposal or unfinished Instagram post needs it), any video's file 14 days after it was added, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
+| `retentionTick` (`lib/memberVideos.js`): a video's file once YouTube has it, TikTok has posted it, an Instagram Reel of it is published and a Facebook video post of it is published (and no pending proposal or unfinished Instagram or Facebook post needs it), any video's file 14 days after it was added, and bf-video files with no record after a day | the same 04:45 UTC run, after the Shopify receipts purge, claimed `member_videos_retention` | always on (no flag): a promised deletion; runs only when server.js is the program |
 | `refreshTick` (`lib/instagramApi.js`): every connected Instagram token that expires within 10 days and is at least a day old is refreshed; an expired one is marked to reconnect, with one notice | the same 04:45 UTC run, after the video retention pass, claimed `instagram_token_refresh` | always on (no flag), skipped while `INSTAGRAM_APP_ID` or `INSTAGRAM_APP_SECRET` is missing; runs only when server.js is the program |
+| `choosingPurgeTick` (`lib/facebookApi.js`): a Facebook connection still waiting for the member to choose a Page more than an hour after sign-in is deleted, with the user token it holds | the same 04:45 UTC run, after the Instagram refresh, claimed `facebook_choosing_purge` | always on (no flag); runs only when server.js is the program |
 | `schemaCheckTick`: every table the code relies on exists (read-only head counts) | cron `0 6 * * *`, UTC, claimed `schema_check`; and once 60 s after boot | on unless `ENABLE_SCHEMA_CHECK` is exactly `false` |
 | `storeSyncTick`: read connected Shopify and WooCommerce stores (the sync only reads) | cron `0 5 * * *`, UTC, claimed `store_sync` | `ENABLE_STORE_SYNC` exactly `true` |
 | `triggerTick`: member triggers, each firing gated (G13, G9) and recorded | cron `30 * * * *`, UTC, claimed `hourly_triggers_h<hh>` | off unless `ENABLE_TRIGGERS` is exactly `true` |
@@ -310,6 +313,19 @@ Instagram on the Social Agent page (`lib/instagramAuth.js`, `lib/instagramApi.js
 - **Accounts:** only Instagram Business and Creator accounts can publish through the API; a personal account is refused at connect.
 
 Until both variables are set, the Instagram routes but status and disconnect answer 503 and the page shows "Instagram connection isn't set up yet." Photos must be JPEG (from the Media Library) and Reels MP4 or MOV (from Your videos); each file's fingerprint is checked right before Instagram is given its address, and a Reel's address is a signed link that stops working after 2 hours. Every post waits for the member's approval and is published once. Instagram has no API to delete a post, so the member deletes it in the Instagram app. Disconnecting deletes BizForce's copy; the member removes BizForce in Instagram's settings, under Apps and websites.
+
+## Facebook Pages setup
+
+Facebook on the Social Agent page (`lib/facebookAuth.js`, `lib/facebookApi.js`, migration 180) uses the same Meta app as Instagram:
+
+- **Product:** add Facebook Login for Business to that app.
+- **Scopes:** `pages_show_list`, `pages_manage_posts` and `pages_read_engagement`. All three must be granted, or nothing is saved.
+- **Redirect URI:** exactly `https://bizforceai.net/agents/social.html` (the server sends `FRONTEND_URL` + `/agents/social.html`, so the two must match).
+- **Credentials:** the app's main App ID in `FACEBOOK_APP_ID` and its App Secret in `FACEBOOK_APP_SECRET`. The App Secret is kept only on Railway.
+- **Before the public can connect:** App Review for the three permissions and Business verification. Until then, only people with a role on the app can connect.
+- **Pages:** a member connects one Page they can create content on (its tasks include CREATE_CONTENT). With several, they choose one; an unfinished choice is deleted after an hour.
+
+Until both variables are set, the Facebook routes but status and disconnect answer 503 and the page shows "Facebook connection isn't set up yet." Photos must be JPEG, PNG or GIF (from the Media Library) and videos MP4 or MOV (from Your videos); each file's fingerprint is checked right before Facebook is given its address, and a video's address is a signed link that stops working after 2 hours. Every post and every removal waits for the member's approval and runs once. Disconnecting deletes BizForce's copy; the member removes BizForce in Facebook's settings, under Business integrations.
 
 ## Google Wallet setup
 

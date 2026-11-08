@@ -12354,6 +12354,17 @@ const PROPOSAL_EXECUTORS = {
   // Defined further down the file.
   publish_instagram_post: executePublishInstagramPost,
 
+  // Publishes text, photos (1 to 10) or a video to the Facebook Page a member connected,
+  // from an approved POST /api/facebook/propose-post (migration 180, lib/facebookApi.js):
+  // the facebook_posts row inserted before any call, every file's fingerprint checked
+  // right before its address is handed over, the row set publishing before the final
+  // call, never that call twice. Always through approval. Defined further down the file.
+  publish_facebook_post: executePublishFacebookPost,
+
+  // Removes a post BizForce published from the member's Facebook Page, from an approved
+  // POST /api/facebook/posts/:id/propose-delete. Once only. Always through approval.
+  delete_facebook_post: executeDeleteFacebookPost,
+
   // Changes one WooCommerce or Shopify item's price or stock level, from an approved
   // POST /api/store/changes/propose (migrations 175 and 176, lib/storeWrite.js), after a
   // live compare-and-set, with one write and no retry. Always through approval:
@@ -12433,6 +12444,17 @@ app.post("/api/proposals", requireAuth, async function (req, res, next) {
     if (actionType === "publish_instagram_post") {
       return res.status(400).json({
         error: "An Instagram post cannot be filed here. Use POST /api/instagram/propose-post from the Social Agent page."
+      });
+    }
+    // A Facebook post or removal: filed only by the routes that read each file and the Page (migration 180).
+    if (actionType === "publish_facebook_post") {
+      return res.status(400).json({
+        error: "A Facebook post cannot be filed here. Use POST /api/facebook/propose-post from the Social Agent page."
+      });
+    }
+    if (actionType === "delete_facebook_post") {
+      return res.status(400).json({
+        error: "A Facebook removal cannot be filed here. Use POST /api/facebook/posts/:id/propose-delete from the Social Agent page."
       });
     }
     // A store change: filed only by the route that reads the store's live value.
@@ -12692,10 +12714,12 @@ app.post("/api/proposals/:id/reject", requireAuth, async function (req, res, nex
    or removal (migration 177) changes what the member's channel shows. A TikTok
    post (migration 178) puts a video on the member's TikTok account. An
    Instagram post (migration 179) puts photos or a Reel on the member's
-   Instagram account. */
+   Instagram account. A Facebook post (migration 180) puts text, photos or a
+   video on the member's Facebook Page; its removal takes something down and
+   stays free. */
 const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = ["publish_blog_post", "publish_listing", "update_listing", "send_email_sequence",
   "publish_social_post", "update_bluesky_profile", "reply_bluesky_mention", "publish_mastodon_post", "send_mailbox_reply",
-  "update_store_item", "publish_youtube_video", "delete_youtube_video", "publish_tiktok_post", "publish_instagram_post"];
+  "update_store_item", "publish_youtube_video", "delete_youtube_video", "publish_tiktok_post", "publish_instagram_post", "publish_facebook_post"];
 
 app.post("/api/proposals/:id/approve", requireAuth, async function (req, res, next) {
   try {
@@ -34185,7 +34209,7 @@ app.post("/api/instagram/draft-caption", requireAuth, requireActiveSubscription,
         "WHAT THE POST IS ABOUT, in the owner's words: " + JSON.stringify(idea) + "\n\n" +
         "OUTPUT FORMAT, exactly one part:\n" +
         "CAPTION: <the caption, at most " + L.max + " characters; the first " + L.truncates_at +
-        " or so show before \"more\"; at most " + L.hashtag_practical + " hashtags and no @mentions>\n\n" +
+        " or so show before \"more\"; at most " + ig.HASHTAG_MAX + " hashtags (Instagram's limit) and no @mentions>\n\n" +
         "RULES:\n- No < or > anywhere.\n- Invent no figures, reviews, results or health claims.\n" +
         "- Do not claim or predict likes, followers or reach.";
       var generation = await callAnthropicText(prompt, 1200, req.user.id, undefined, {
@@ -34198,7 +34222,7 @@ app.post("/api/instagram/draft-caption", requireAuth, requireActiveSubscription,
       var refused = blueskyClaimsRefusal(caption);
       return res.json({
         draft: { caption: caption },
-        measured: { caption: { length: length, limit: L.max, hashtags: ig.hashtagCount(caption), hashtag_limit: L.hashtag_max,
+        measured: { caption: { length: length, limit: L.max, hashtags: ig.hashtagCount(caption), hashtag_limit: ig.HASHTAG_MAX,
           mentions: ig.mentionCount(caption), mention_limit: ig.MENTION_MAX, within_limit: measured.ok, shows_first: L.truncates_at } },
         within_limits: measured.ok,
         claims_refused: refused ? [{ field: "caption", error: refused.error }] : [],
@@ -34253,6 +34277,340 @@ async function instagramRefreshTick() {
     return await require("./lib/instagramApi").refreshTick(instagramDeps());
   } catch (err) {
     console.error("[InstagramRefresh] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
+/* ── Facebook Pages posting (migration 180; lib/facebookAuth.js, lib/facebookApi.js) ──
+   POST   /api/facebook/start                  Connect Facebook: a single-use state (purpose
+                                               facebook_login), no PKCE
+   POST   /api/facebook/finish                 { code, state } from the Social page: the state
+                                               consumed once, the code exchanged, the short
+                                               user token swapped at once for the long-lived
+                                               one, SEALED, and only then the permissions (all
+                                               three) and the Pages read; one Page that can be
+                                               posted to connects at once, several wait
+   GET    /api/facebook/pages                  the Pages to choose from, read live, never a token
+   POST   /api/facebook/choose-page            { page_id }: only a Page that list names
+   GET    /api/facebook/status                 the connection, never a token
+   POST   /api/facebook/disconnect             the row and this sign-in's states deleted
+   POST   /api/facebook/propose-post           files publish_facebook_post; never runs it
+   POST   /api/facebook/draft-caption          { idea }: a message from the model, measured in code
+   GET    /api/facebook/posts                  the member's own posts, newest first
+   GET    /api/facebook/posts/:id/status       the address and processing read again; a post
+                                               Facebook never confirmed is looked up, never sent again
+   POST   /api/facebook/posts/:id/propose-delete  files delete_facebook_post; never runs it
+   Photos come from the Media Library (JPEG, PNG or GIF), a video from "Your
+   videos" (MP4 or MOV). Connect, choose-page and the propose-post and draft
+   routes need an active subscription. Without FACEBOOK_APP_ID and
+   FACEBOOK_APP_SECRET every Facebook route but status and disconnect answers
+   503 "Facebook connection isn't set up yet.", and status says
+   facebook_available false. The post and the removal run only when the member
+   approves the proposal (executePublishFacebookPost and
+   executeDeleteFacebookPost below), never automatically. Nothing here logs a
+   token, a code or a signed link. */
+function facebookRedirectUri() {
+  return String(FRONTEND_URL).replace(/\/+$/, "") + "/agents/social.html";
+}
+
+function facebookDeps() {
+  var gf = require("./lib/guardedFetch");
+  return {
+    supabase: supabase,
+    storage: supabase.storage,
+    crypt: require("./lib/apiKeyCrypto"),
+    jsonRequest: gf.guardedJsonRequest,
+    now: function () { return Date.now(); },
+    claims: blueskyClaimsRefusal,
+    base: process.env.SUPABASE_URL
+  };
+}
+
+function facebookNotConfigured(res) {
+  return res.status(503).json({ error: require("./lib/facebookAuth").MESSAGES.notConfigured, code: "not_configured", saved: false });
+}
+
+/* Per account: ten Facebook sign-in steps an hour, start, finish and choose-page together. */
+const facebookConnectLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyGenerator: function (req) { return "facebook-connect:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many Facebook sign-in attempts. Try again in an hour. Nothing was saved.", code: "rate_limited" }
+});
+/* Per account: thirty Facebook proposals an hour, posts and removals together. */
+const facebookProposeLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: function (req) { return "facebook-propose:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can file 30 Facebook proposals an hour. Nothing was filed.", code: "rate_limited" }
+});
+
+app.post("/api/facebook/start", requireAuth, requireActiveSubscription, facebookConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var fa = require("./lib/facebookAuth");
+      var config = fa.configured(process.env);
+      if (!config) return facebookNotConfigured(res);
+      var state = fa.newState();
+      var nowMs = Date.now();
+      // Tidy first: this member's sign-in states older than a day; each is consumed or expired.
+      var tidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id)
+        .lt("created_at", new Date(nowMs - fa.STATES_RETENTION_MS).toISOString());
+      if (tidied.error) throw tidied.error;
+      // Only the state's sha256 is stored; Facebook Login uses no verifier.
+      var stored = await supabase.from("oauth_states").insert({
+        user_id:    req.user.id,
+        purpose:    fa.PURPOSE,
+        state_hash: fa.stateHash(state),
+        expires_at: new Date(nowMs + fa.STATE_TTL_MS).toISOString(),
+        created_at: new Date(nowMs).toISOString()
+      });
+      if (stored.error) throw stored.error;
+      var url = fa.authorizeUrl(config.appId, facebookRedirectUri(), state);
+      state = null;
+      return res.json({ authorize_url: url });
+    } catch (error) {
+      console.error("[facebook/start] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.post("/api/facebook/finish", requireAuth, requireActiveSubscription, facebookConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var fa = require("./lib/facebookAuth");
+      var fb = require("./lib/facebookApi");
+      var crypt = require("./lib/apiKeyCrypto");
+      var config = fa.configured(process.env);
+      if (!config) return facebookNotConfigured(res);
+      var shape = fa.finishShape(req.body);
+      if (!shape.ok) return res.status(400).json({ error: fa.MESSAGES.badRequest, code: "bad_request", saved: false });
+
+      // One conditional update consumes the state: this member, this purpose, not consumed, not expired. No reason is ever given.
+      var consumedAt = nowIso();
+      var consumed = await supabase.from("oauth_states").update({ consumed_at: consumedAt })
+        .eq("state_hash", fa.stateHash(shape.state)).eq("user_id", req.user.id).eq("purpose", fa.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", consumedAt)
+        .select("id");
+      if (consumed.error) throw consumed.error;
+      if (!(consumed.data || [])[0]) return res.status(400).json({ error: fa.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+
+      var short, grant;
+      try {
+        short = await fa.exchangeCode(config, shape.code, facebookRedirectUri());
+        // The short-lived user token is never stored: it is swapped at once for the long-lived one.
+        grant = await fa.longLived(config, short.accessToken);
+      } catch (exchangeErr) {
+        if (exchangeErr && exchangeErr.kind === "invalid_grant") return res.status(400).json({ error: fa.MESSAGES.stateInvalid, code: "state_invalid", saved: false });
+        return res.status(502).json({ error: fa.MESSAGES.unreachable, code: "unreachable", saved: false });
+      } finally {
+        shape.code = null;
+        if (short) short.accessToken = null;
+      }
+
+      // Sealed first: the long-lived user token is encrypted before Facebook is asked anything else.
+      var sealedUser;
+      try {
+        sealedUser = crypt.encrypt(grant.accessToken);
+      } catch (cryptErr) {
+        return res.status(503).json({ error: fa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var out;
+      try {
+        out = await fb.connectAfterSeal(facebookDeps(), req.user.id, grant.accessToken, sealedUser, fa.expiresAt(Date.now(), grant.expiresIn));
+      } finally {
+        grant = null;
+      }
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[facebook/finish] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/facebook/pages", requireAuth, async function (req, res, next) {
+  try {
+    res.set("Cache-Control", "no-store");
+    if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+    var out = await require("./lib/facebookApi").listChoices(facebookDeps(), req.user.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[facebook/pages] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+app.post("/api/facebook/choose-page", requireAuth, requireActiveSubscription, facebookConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+      var out = await require("./lib/facebookApi").choosePage(facebookDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[facebook/choose-page] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/facebook/status", requireAuth, async function (req, res, next) {
+  try {
+    var fb = require("./lib/facebookApi");
+    var row = await fb.readConnection(supabase, req.user.id);
+    return res.json(fb.statusOf(row, require("./lib/facebookAuth").configured(process.env) !== null));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Always open, subscribed or not, configured or not: a member can always take their Page's access back.
+app.post("/api/facebook/disconnect", requireAuth, async function (req, res, next) {
+  try {
+    var fa = require("./lib/facebookAuth");
+    var fb = require("./lib/facebookApi");
+    var row = await fb.readConnection(supabase, req.user.id);
+    var dropped = await supabase.from("member_facebook_pages").delete().eq("user_id", req.user.id).select("id");
+    if (dropped.error) throw dropped.error;
+    // Only this sign-in's states: another platform's sign-in in progress keeps its own.
+    var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", fa.PURPOSE);
+    if (statesDropped.error) throw statesDropped.error;
+    return res.json(Object.assign(fb.statusOf(null, fa.configured(process.env) !== null), {
+      removed: (dropped.data || []).length > 0,
+      note: row ? fa.MESSAGES.disconnected : "No Facebook Page was connected."
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/facebook/propose-post", requireAuth, requireActiveSubscription, facebookProposeLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+      var out = await require("./lib/facebookApi").proposePost(facebookDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[facebook/propose-post] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+
+/* The model's message, after one MESSAGE: marker; null when it is not there. */
+function parseFacebookDraft(text) {
+  var m = /MESSAGE:\s*([\s\S]*)$/.exec(String(text || ""));
+  return m ? m[1].trim() : null;
+}
+
+app.post("/api/facebook/draft-caption", requireAuth, requireActiveSubscription, aiLimiter,
+  async function (req, res, next) {
+    try {
+      if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+      var fb = require("./lib/facebookApi");
+      var idea = req.body && typeof req.body.idea === "string" ? req.body.idea.trim() : "";
+      if (!idea || idea.length > 1000) {
+        return res.status(400).json({ error: "Say what the post is about, in up to 1000 characters.", code: "bad_idea", field: "idea" });
+      }
+      var profileResult = await supabase.from("business_profiles").select("*").eq("user_id", req.user.id).maybeSingle();
+      var bp = (profileResult && profileResult.data) || {};
+      // The model sees the idea and the business profile, and nothing else: no photo, no video, no Page.
+      var prompt =
+        "You write a Facebook Page post for a small business.\n\n" +
+        "BUSINESS CONTEXT:\n" +
+        "Business Name: " + (bp.business_name || "Not provided") + "\n" +
+        "Industry: " + (bp.industry || "Not provided") + "\n" +
+        "Products/Services: " + (bp.products_services || "Not provided") + "\n" +
+        "Target Audience: " + (bp.target_audience || "Not provided") + "\n\n" +
+        "WHAT THE POST IS ABOUT, in the owner's words: " + JSON.stringify(idea) + "\n\n" +
+        "OUTPUT FORMAT, exactly one part:\n" +
+        "MESSAGE: <the post's text, at most " + fb.DRAFT_MAX + " characters, plain and friendly>\n\n" +
+        "RULES:\n- No < or > anywhere.\n- Invent no figures, reviews, results or health claims.\n" +
+        "- Do not claim or predict likes, followers or reach.";
+      var generation = await callAnthropicText(prompt, 800, req.user.id, undefined, {
+        user_id: req.user.id, agent_type: "social", route: "POST /api/facebook/draft-caption"
+      });
+      var message = parseFacebookDraft(generation && generation.text);
+      if (!message) return res.status(502).json({ error: "The draft came back incomplete. Try again, or write the post yourself.", code: "draft_unreadable" });
+      var length = Array.from(message).length;
+      var refused = blueskyClaimsRefusal(message);
+      return res.json({
+        draft: { message: message },
+        measured: { message: { length: length, limit: fb.DRAFT_MAX, within_limit: length <= fb.DRAFT_MAX } },
+        within_limits: length <= fb.DRAFT_MAX,
+        claims_refused: refused ? [{ field: "message", error: refused.error }] : [],
+        note: "A draft only. Nothing was filed or sent. Read it, change what you want, then file it for approval."
+      });
+    } catch (error) {
+      console.error("[facebook/draft-caption] Error:", (error && error.message) || "error");
+      next(error);
+    }
+  });
+
+app.get("/api/facebook/posts", requireAuth, async function (req, res, next) {
+  try {
+    if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+    var posts = await require("./lib/facebookApi").listPosts(facebookDeps(), req.user.id);
+    return res.json({ posts: posts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/facebook/posts/:id/status", requireAuth, async function (req, res, next) {
+  try {
+    res.set("Cache-Control", "no-store");
+    if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+    var out = await require("./lib/facebookApi").postStatus(facebookDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[facebook/post-status] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+// A removal is filed by any signed-in member: taking a post down never needs a subscription.
+app.post("/api/facebook/posts/:id/propose-delete", requireAuth, facebookProposeLimiter, async function (req, res, next) {
+  try {
+    if (!require("./lib/facebookAuth").configured(process.env)) return facebookNotConfigured(res);
+    var out = await require("./lib/facebookApi").proposeDelete(facebookDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[facebook/propose-delete] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+/* The publish_facebook_post executor (PROPOSAL_EXECUTORS). One argument, the
+   claimed proposal; throws with the member's message on any failure.
+   lib/facebookApi.js executePublish checks the Page, the files and the cap
+   again, inserts the facebook_posts row before any call, checks each file's
+   fingerprint right before its address is handed over, sets the row
+   publishing before the final call, and never sends that call twice: a
+   replay looks the post up. Always through approval: no automation runs it. */
+async function executePublishFacebookPost(proposal) {
+  return require("./lib/facebookApi").executePublish(facebookDeps(), proposal);
+}
+
+/* The delete_facebook_post executor (PROPOSAL_EXECUTORS): one DELETE of the
+   post on the member's Page, then removed_at. Never twice. Always through approval. */
+async function executeDeleteFacebookPost(proposal) {
+  return require("./lib/facebookApi").executeDelete(facebookDeps(), proposal);
+}
+
+/* A step of the 04:45 UTC chain (see the cron block): unfinished Page choices
+   older than an hour are deleted, with the user token they hold
+   (lib/facebookApi.js choosingPurgeTick), claimed through its own job_runs
+   row, facebook_choosing_purge. Never rejects. */
+async function facebookChoosingPurgeTick() {
+  try {
+    return await require("./lib/facebookApi").choosingPurgeTick(facebookDeps());
+  } catch (err) {
+    console.error("[FacebookChoosingPurge] Scheduled run error: " + ((err && err.code) || "error"));
     return null;
   }
 }
@@ -34319,10 +34677,11 @@ async function videoRetentionTick() {
 }
 
 /* Any platform a video can go to is set up. NAMED (Nov 7 2026, Instagram
-   posting): Instagram Reels come from these videos too. */
+   posting): Instagram Reels come from these videos too. NAMED (Nov 7 2026,
+   Facebook Pages posting): and Facebook video posts. */
 function videoPlatformConfigured() {
   return require("./lib/googleAuth").configured(process.env) !== null || require("./lib/tiktokAuth").configured(process.env) !== null ||
-    require("./lib/instagramAuth").configured(process.env) !== null;
+    require("./lib/instagramAuth").configured(process.env) !== null || require("./lib/facebookAuth").configured(process.env) !== null;
 }
 
 function youtubeNotConfigured(res) {
@@ -59612,7 +59971,13 @@ shutdownControl.setServer(app.listen(PORT, function () {
      Instagram's daily token refresh (lib/instagramApi.js refreshTick),
      claimed through its OWN job_runs row, instagram_token_refresh: every
      connection whose token expires within 10 days and is at least a day old
-     is refreshed; an expired one is marked to reconnect, with one notice. */
+     is refreshed; an expired one is marked to reconnect, with one notice.
+     NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the retention
+     pass keeps a file until Facebook has it too, and holds it while a Facebook
+     post of it is pending, creating or publishing. The same purge deletes the
+     facebook_login states. Then unfinished Facebook Page choices older than an
+     hour are deleted (lib/facebookApi.js choosingPurgeTick), claimed through
+     their OWN job_runs row, facebook_choosing_purge. */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -59625,7 +59990,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
-      }).then(videoRetentionTick).then(instagramRefreshTick);
+      }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick);
     }, {
       timezone: "UTC"
     });
@@ -59633,6 +59998,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] Shopify notification receipts older than 30 days are deleted in the same 04:45 UTC run, claimed through job_runs.shopify_webhook_events_purge.");
     console.log("[startup] Videos for YouTube are cleaned in the same 04:45 UTC run, claimed through job_runs.member_videos_retention: unsent after 14 days, leftovers at once, unrecorded files after a day.");
     console.log("[startup] Instagram tokens expiring within 10 days are refreshed in the same 04:45 UTC run, claimed through job_runs.instagram_token_refresh.");
+    console.log("[startup] Facebook Page choices left unfinished for an hour are deleted in the same 04:45 UTC run, claimed through job_runs.facebook_choosing_purge.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

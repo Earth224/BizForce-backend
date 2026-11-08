@@ -274,7 +274,15 @@ const EXPECTED_GATED = [
   // checked JPEG, or the Reel's type); and an AI draft of the caption (aiLimiter). All need a subscription; approving a post is
   // G3-gated on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_instagram_post). Status, disconnect, the list
   // of posts and a post's status stay login-only (checkInstagramPosting).
-  "post /api/instagram/start", "post /api/instagram/finish", "post /api/instagram/propose-post", "post /api/instagram/draft-caption"
+  "post /api/instagram/start", "post /api/instagram/finish", "post /api/instagram/propose-post", "post /api/instagram/draft-caption",
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages); migration 180; gated 117 -> 122: BEFORE no Facebook connection. AFTER Connect
+  // Facebook starts (a single-use state stored) and finishes (the code exchanged, every scope required, the long-lived user
+  // token sealed, the Pages listed); a Page is chosen (its token sealed); a post is filed for approval (text, photos or a
+  // video, fingerprinted); and an AI draft of the post text (aiLimiter). All need a subscription; approving a post is G3-gated
+  // on the approve route (SUBSCRIPTION_GATED_PROPOSAL_ACTIONS publish_facebook_post). The Pages list, status, disconnect, the
+  // list of posts, a post's status and filing a removal stay login-only: a removal stays free (checkFacebookPages).
+  "post /api/facebook/start", "post /api/facebook/finish", "post /api/facebook/choose-page", "post /api/facebook/propose-post",
+  "post /api/facebook/draft-caption"
 ];
 
 const EXPECTED_ADMIN = [
@@ -489,7 +497,13 @@ const EXPECTED_OWN = [
   // instagram_login oauth_states are deleted; nothing another member is served is written, and disconnecting must always
   // work, subscribed or not. The posts list and a post's status (through lib/instagramApi.js) write only the member's own
   // rows, finishing a post the member already approved, and need no entry here.
-  "post /api/instagram/disconnect"
+  "post /api/instagram/disconnect",
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages; migration 180; one more effectful login-only route): BEFORE no Facebook
+  // connection. AFTER a member disconnects their own Facebook Page: their own member_facebook_pages row and their own
+  // facebook_login oauth_states are deleted; nothing another member is served is written, and disconnecting must always work,
+  // subscribed or not. The Pages list, the posts list, a post's status and filing a removal (through lib/facebookApi.js) write
+  // only the member's own rows and need no entry here.
+  "post /api/facebook/disconnect"
 ];
 
 /* Unauthenticated routes that write. */

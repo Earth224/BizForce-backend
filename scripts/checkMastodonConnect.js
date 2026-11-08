@@ -630,7 +630,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     // NAMED (Nov 7 2026, YouTube uploads, migration 177): the allowlist adds 177_youtube_uploads.sql; "the highest" is checkYoutubeUploads R1's.
     // NAMED (Nov 7 2026, TikTok posting, migration 178): the allowlist adds 178_tiktok_posting.sql; "the highest" is checkTiktokPosting R1's.
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
-    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
+    // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the allowlist adds 180_facebook_pages.sql; "the highest" is checkFacebookPages R1's.
+    migFiles.filter(f => !/^(166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages)\.sql$/.test(f)).every(f => Number(f.split("_")[0]) <= 165) && migFiles.some(f => /^164_/.test(f)), migFiles.slice(-3).join(","));
   check("P8. the header says the owner applied it by hand", /Applied by the owner by hand in the Supabase SQL editor on Nov 3, 2026\. This file is the text as run\./.test(MIGRATION));
 
   /* ── N. the server a member types ───────────────────────────────────────── */
@@ -1368,8 +1369,10 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
     // NAMED (Nov 7 2026, YouTube uploads, migration 177): BEFORE "Bluesky and Mastodon connect so far, ..."; AFTER YouTube is named too.
     // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "Bluesky, Mastodon and YouTube connect so far"; AFTER TikTok is named too. Still 5 tips.
     // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE "Bluesky, Mastodon, YouTube and TikTok connect so far"; AFTER Instagram is named too. Still 5 tips.
-    check("G1. social.html keeps 5 tips, and tip 5 says Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far",
-      tips.length === 5 && tips[4] === "Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far, and posts cannot be scheduled; plans for the other platforms are yours to carry out.", JSON.stringify(tips[4]));
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far"; AFTER Facebook Pages are named too,
+    // and the end is shortened to "plans for other platforms are yours." to stay within checkGuideStandard's 160 characters. Still 5 tips.
+    check("G1. social.html keeps 5 tips, and tip 5 says Bluesky, Mastodon, YouTube, TikTok, Instagram and Facebook Pages connect so far",
+      tips.length === 5 && tips[4] === "Bluesky, Mastodon, YouTube, TikTok, Instagram and Facebook Pages connect so far, and posts cannot be scheduled; plans for other platforms are yours.", JSON.stringify(tips[4]));
     check("G2. no tip still says only Bluesky connects", guide.indexOf("Only Bluesky connects") === -1);
   }
 

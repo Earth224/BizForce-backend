@@ -179,6 +179,10 @@ function listAfter(html, marker) {
    <body>, with the table of contents and the postal address left out (the
    address is a block, printed where it is needed); split at each paragraph,
    list item or heading, and after each . ! or ? that ends a sentence. */
+/* NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE no sentence could appear twice. AFTER exactly one sentence may
+   appear twice, no more: the owner's FACEBOOK_PRIVACY_SENTENCE (word for word, by the brief) ends with the same closing
+   sentence as INSTAGRAM_PRIVACY_SENTENCE. Any other repeat, or a third copy of this one, still fails A5. */
+const ALLOWED_COPIES = { "You can disconnect at any time, and everything is deleted with your account.": 2 };
 function repeatedSentences(html) {
   if (html == null) return [];
   const body = String(html).slice(String(html).indexOf("<body>"))
@@ -187,7 +191,7 @@ function repeatedSentences(html) {
   const seen = {}, twice = [];
   decodeHTML(body).split(/\n|(?<=[.!?])\s+/).map(x => x.replace(/\s+/g, " ").trim()).filter(x => /[a-z]/i.test(x)).forEach(x => {
     seen[x] = (seen[x] || 0) + 1;
-    if (seen[x] === 2) twice.push(x.slice(0, 120));
+    if (seen[x] === (ALLOWED_COPIES[x] || 1) + 1) twice.push(x.slice(0, 120));
   });
   return twice;
 }

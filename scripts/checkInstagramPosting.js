@@ -50,11 +50,13 @@ const MUTATIONS = {
   "personal-account-accepted": [["server", "      if (!ig.professional(me)) return res.status(422)", "      if (false) return res.status(422)"]],
   "refresh-too-early": [["auth", "  return nowMs - stored >= REFRESH_MIN_AGE_MS;", "  return true;"]],
   "refresh-cas-missing": [["api", ".eq(\"id\", row.id).eq(\"user_id\", row.user_id).eq(\"token_version\", version).select(\"id\");", ".eq(\"id\", row.id).eq(\"user_id\", row.user_id).select(\"id\");"]],
-  "refresh-job-missing": [["server", "      }).then(videoRetentionTick).then(instagramRefreshTick);", "      }).then(videoRetentionTick);"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the chain continues with facebookChoosingPurgeTick, so the anchor ends at instagramRefreshTick.
+  "refresh-job-missing": [["server", "      }).then(videoRetentionTick).then(instagramRefreshTick)", "      }).then(videoRetentionTick)"]],
   // filing
   "png-accepted": [["api", "  if (!buf || buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return false;", "  if (!buf || buf.length < 4) return false;"]],
   "eleven-items-accepted": [["api", "value.length > ITEMS_MAX) return { error: MESSAGES.items };", "value.length > ITEMS_MAX + 1) return { error: MESSAGES.items };"]],
   "webm-reel-accepted": [["api", "const REEL_MIMES = Object.freeze([\"video/mp4\", \"video/quicktime\"]);", "const REEL_MIMES = Object.freeze([\"video/mp4\", \"video/quicktime\", \"video/webm\"]);"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the limit is now 5 (HASHTAG_MAX); F10 files a 6-hashtag caption, which this mutation lets through.
   "caption-hashtags-unchecked": [["api", "  if (!(typeof tags === \"number\" && hashtagCount(caption) <= tags)) return { ok: false, error: MESSAGES.caption };\n", ""]],
   // the executor
   "sha-unchecked-before-container": [["api", "        await readPhoto(deps, ownerId, mediaRows[p.items[0].id], p.items[0]);\n", ""]],
@@ -80,7 +82,8 @@ const MUTATIONS = {
   "library-delete-while-posting": [["media", "    if (igHit) uses.push(", "    if (false) uses.push("]],
   "wrong-dispatcher": [["server", "  publish_instagram_post: executePublishInstagramPost,\n", "  publish_instagram_post: executePublishTiktokPost,\n"]],
   "unconfigured-not-503": [["server", "  return res.status(503).json({ error: require(\"./lib/instagramAuth\").MESSAGES.notConfigured,", "  return res.status(200).json({ error: require(\"./lib/instagramAuth\").MESSAGES.notConfigured,"]],
-  "facebook-claimed-connectable": [["page", "X, LinkedIn and Facebook are coming, through each platform's own sign-in.", "X and LinkedIn are coming, through each platform's own sign-in. Facebook can be connected below."]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Facebook now connects; the line names X and LinkedIn as coming, and this mutation claims they connect.
+  "facebook-claimed-connectable": [["page", "X and LinkedIn are coming, through each platform's own sign-in.", "X and LinkedIn can be connected below."]],
   "privacy-sentence-removed": [["legal", "      INSTAGRAM_PRIVACY_SENTENCE,\n", ""]],
   "innerHTML-on-page": [["ui", "    if (text !== undefined && text !== null) node.textContent = text;", "    if (text !== undefined && text !== null) node.innerHTML = text;"]],
   // the others the code earns
@@ -101,12 +104,15 @@ const MUTATIONS = {
   "account-changed-ignored": [["api", "  if (conn.ig_user_id !== p.ig_user_id) throw fail(MESSAGES.accountChanged);\n", ""]],
   "published-lookup-skipped": [["api", "  if (found) return recordPublished(deps, conn, row, found);\n", ""]],
   "delete-while-instagram-holds": [["videos", "  if (ig.holding[row.id]) return { status: 409,", "  if (false) return { status: 409,"]],
-  "delete-ignores-instagram-proposal": [["videos", "\"publish_tiktok_post\", \"publish_instagram_post\"]);", "\"publish_tiktok_post\"]);"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): FILE_ACTIONS ends with publish_facebook_post now.
+  "delete-ignores-instagram-proposal": [["videos", "\"publish_tiktok_post\", \"publish_instagram_post\", \"publish_facebook_post\"]);", "\"publish_tiktok_post\", \"publish_facebook_post\"]);"]],
   "library-live-post-ignored": [["media", "    var liveIds = (live.data || []).map(function (r) { return r.proposal_id; }).filter(function (pid) { return pid && !igProposals[pid]; });", "    var liveIds = [];"]],
   "disconnect-deletes-all-states": [["server", "var statesDropped = await supabase.from(\"oauth_states\").delete().eq(\"user_id\", req.user.id).eq(\"purpose\", ia.PURPOSE);",
     "var statesDropped = await supabase.from(\"oauth_states\").delete().eq(\"user_id\", req.user.id);"]],
-  "terms-sentence-removed": [["legal", "      TIKTOK_TERMS_SENTENCE,\n      INSTAGRAM_TERMS_SENTENCE\n", "      TIKTOK_TERMS_SENTENCE\n"]],
-  "content-facebook-connectable": [["content", "Facebook is coming, through its own sign-in.</p>", "Facebook connects there too.</p>"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): FACEBOOK_TERMS_SENTENCE follows it now.
+  "terms-sentence-removed": [["legal", "      TIKTOK_TERMS_SENTENCE,\n      INSTAGRAM_TERMS_SENTENCE,\n", "      TIKTOK_TERMS_SENTENCE,\n"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the intro now says a Facebook Page connects; this mutation puts the old "coming" back.
+  "content-facebook-connectable": [["content", "A Facebook Page connects there too, through Facebook's own sign-in, and every Facebook post waits for your approval.</p>", "Facebook is coming, through its own sign-in.</p>"]],
   "marker-ignored": [["oauth", "    if (!pending || pending.name !== name) return false;\n", "    if (!pending) return false;\n"]],
   "replacestate-skipped": [["ui", "    }).then(function (res) {\n      strip();\n", "    }).then(function (res) {\n"]],
   "foreign-authorize-followed": [["ui", "url.indexOf(AUTH_PREFIX) === 0", "url.indexOf(\"https://\") === 0"]],
@@ -117,8 +123,10 @@ const MUTATIONS = {
     "'<pre class=\"exec-block ig-caption\">' + String(payload.caption == null ? \"\" : payload.caption)"]],
   "content-refusal-disconnects": [["api", "  return c === 190 || c === 102 || c === 10 ||", "  return (e && e.type === \"OAuthException\") || c === 190 || c === 102 || c === 10 ||"]],
   "rate-limit-refusal": [["auth", "    if (refusedGrant(j) || status === 401) throw", "    if (refusedGrant(j) || status === 400 || status === 401) throw"]],
-  "export-key-missing": [["yourData", "owner: [\"user_id\"], key: \"created_at\", select: \"kind, status, permalink", "owner: [\"user_id\"], select: \"kind, status, permalink"]],
-  "card-link-unchecked": [["proposals", "/.test(result.permalink) ? result.permalink : null;", "/.test(result.permalink) || true ? result.permalink : null;"]]
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebook_posts has the same start, so the anchor runs on to Instagram's own last column.
+  "export-key-missing": [["yourData", "owner: [\"user_id\"], key: \"created_at\", select: \"kind, status, permalink, created_at, published_at\", onDelete", "owner: [\"user_id\"], select: \"kind, status, permalink, created_at, published_at\", onDelete"]],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Facebook's result card has the same ending, so the anchor starts at Instagram's length rule.
+  "card-link-unchecked": [["proposals", "{1,280}$/.test(result.permalink) ? result.permalink : null;", "{1,280}$/.test(result.permalink) || true ? result.permalink : null;"]]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -296,7 +304,8 @@ function makeStorage() {
   return { from: function (b) { if (b === "bf-video") return video; if (b === "bf-public") return pub; throw new Error("unexpected bucket " + b); }, objects: objects, calls: calls };
 }
 function makeDb() {
-  const t = { member_instagram_connections: [], instagram_posts: [], member_media: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebook_posts too (lib/memberVideos.js and lib/memberMedia.js read it).
+  const t = { member_instagram_connections: [], instagram_posts: [], facebook_posts: [], member_media: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [],
     job_runs: [], business_profiles: [], social_post_drafts: [] };
   const fail = {};
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
@@ -628,8 +637,9 @@ function sliceOf(src, start, end) {
   const a = src.indexOf(start), b = src.indexOf(end, a);
   return a === -1 || b === -1 ? "" : src.slice(a, b);
 }
+// NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the Instagram section now ends where the Facebook section begins (BEFORE: at the YouTube header).
 const IG_SECTION = sliceOf(FILES.server, "/* ── Instagram posting (migration 179; lib/instagramAuth.js, lib/instagramApi.js) ──",
-  "/* ── YouTube uploads (migration 177; lib/googleAuth.js, lib/youtubeApi.js, lib/memberVideos.js) ──");
+  "/* ── Facebook Pages posting (migration 180;");
 const CRON_START = "  if (require.main === module) {\n    cron.schedule(\"45 4 * * *\", function () {\n      cardLeads.cardLeadsPurgeTick(supabase)";
 const CRON_SECTION = sliceOf(FILES.server, CRON_START, "    console.log(\"[startup] card leads purge scheduled");
 function requireAuth() {} function requireActiveSubscription() {} function aiLimiter() {}
@@ -1019,14 +1029,16 @@ function pageAnswers(over) {
     module: cronMod,
     cron: { schedule: function (spec, fn, o) { scheduled.push({ spec: spec, fn: fn, tz: o && o.timezone }); } },
     cardLeads: { cardLeadsPurgeTick: async function () { orderRun.push("leads"); }, PURGE_JOB_NAME: "card_leads_purge" },
-    supabase: {}, videoRetentionTick: async function () { orderRun.push("videos"); }, instagramRefreshTick: async function () { orderRun.push("instagram"); }, console: console
+    supabase: {}, videoRetentionTick: async function () { orderRun.push("videos"); }, instagramRefreshTick: async function () { orderRun.push("instagram"); },
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebookChoosingPurgeTick follows instagramRefreshTick.
+    facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console
   };
   vm.createContext(cctx);
   let cronOk = true;
   try { vm.runInContext(CRON_SECTION + "\n  }\n", cctx, { filename: "server.js (04:45 chain)" }); } catch (e) { cronOk = false; }
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
-  check("T11. the 04:45 UTC chain runs instagramRefreshTick last, after the video retention", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram"]), J(orderRun));
+  check("T11. the 04:45 UTC chain runs instagramRefreshTick after the video retention, then Facebook's cleanup (NAMED, item 8 part 3b)", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook"]), J(orderRun));
   m = mountRoutes({ env: CONFIGURED });
   const rt = await attempt(m.ctx.instagramRefreshTick());
   check("T12. instagramRefreshTick runs lib/instagramApi.js refreshTick on instagramDeps() and never rejects", rt.ok && rt.v && rt.v.claimed === true &&
@@ -1096,10 +1108,11 @@ function pageAnswers(over) {
   const cap = function (caption) { return hit(m, "post /api/instagram/propose-post", { body: { kind: "photos", media_ids: [p1.id], caption: caption } }); };
   const tags = function (n) { return Array.from({ length: n }, function (_, i) { return "#tag" + i; }).join(" "); };
   const ats = function (n) { return Array.from({ length: n }, function (_, i) { return "@friend" + i; }).join(" "); };
-  const cLong = await cap("a".repeat(2201)), cMax = await cap("a".repeat(2200)), c31 = await cap(tags(31)), c30 = await cap(tags(30)), c21 = await cap(ats(21)), c20 = await cap(ats(20));
+  const cLong = await cap("a".repeat(2201)), cMax = await cap("a".repeat(2200)), c31 = await cap(tags(6)), c30 = await cap(tags(5)), c21 = await cap(ats(21)), c20 = await cap(ats(20));
   const cEmail = await cap("Write to cakes@" + "example.com " + ats(20));
   const cClaims = await cap("Guaranteed fresh.");
-  check("F10. the caption: at most 2200 characters, 30 hashtags and 20 @mentions (an email address is not a mention); the claims screen (422)",
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE 30 and 31 hashtags. AFTER Instagram's limit is 5 (since Dec 2025): 5 files, 6 is refused.
+  check("F10. the caption: at most 2200 characters, 5 hashtags and 20 @mentions (an email address is not a mention); the claims screen (422)",
     cLong.status === 400 && cLong.body.field === "caption" && cMax.status === 201 && c31.status === 400 && c30.status === 201 && c21.status === 400 && c20.status === 201 &&
     cEmail.status === 201 && cClaims.status === 422 && cClaims.body.code === "claims", J([cLong.status, cMax.status, c31.status, c30.status, c21.status, c20.status, cEmail.status, cClaims.status]));
   const mc = mountRoutes({ env: CONFIGURED });
@@ -1124,7 +1137,8 @@ function pageAnswers(over) {
     rRe.body.code === "needs_reconnect" && rKind.status === 400 && rKind.body.field === "kind" && mn.db.t.agent_proposals.length === 0);
   check("F13. the generic proposals route refuses publish_instagram_post; it is subscription-gated; its executor is registered",
     FILES.server.indexOf("if (actionType === \"publish_instagram_post\") {\n      return res.status(400).json({\n        error: \"An Instagram post cannot be filed here.") !== -1 &&
-    /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[[^\]]*"publish_instagram_post"\];/.test(FILES.server) &&
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): publish_facebook_post follows it in the gated list.
+    /const SUBSCRIPTION_GATED_PROPOSAL_ACTIONS = \[[^\]]*"publish_instagram_post"[^\]]*\];/.test(FILES.server) &&
     (/\n  publish_instagram_post: (\w+),\n/.exec(FILES.server) || [])[1] === "executePublishInstagramPost" &&
     /async function executePublishInstagramPost\(proposal\) \{\n  return require\("\.\/lib\/instagramApi"\)\.executePublish\(instagramDeps\(\), proposal\);\n\}/.test(IG_SECTION));
   check("F14. the three platform executors each go to their own dispatcher", (/\n  publish_youtube_video: (\w+),\n/.exec(FILES.server) || [])[1] === "executePublishYoutubeVideo" &&
@@ -1365,12 +1379,17 @@ function pageAnswers(over) {
   db.t.instagram_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "reel", status: "published", media_id: "18000000000000001", published_at: iso(now - 600000), video_id: all3.id, created_at: iso(now - 700000), updated_at: iso(now - 600000) });
   db.t.instagram_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "reel", status: "published", media_id: "18000000000000002", published_at: iso(now - 600000), video_id: igBusy.id, created_at: iso(now - 700000), updated_at: iso(now - 600000) });
   db.t.instagram_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "reel", status: "processing", container_id: "17900000000000001", video_id: igBusy.id, created_at: iso(now - 300000), updated_at: iso(now - 300000) });
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Facebook is a fourth platform; all3 is published there too, so it still goes early.
+  db.t.facebook_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "video", status: "published", post_id: "1200000000000001", published_at: iso(now - 600000), video_id: all3.id, created_at: iso(now - 700000), updated_at: iso(now - 600000) });
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): ytTt and igBusy are on Facebook too, so Instagram alone is what keeps them (file-deleted-before-instagram).
+  db.t.facebook_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "video", status: "published", post_id: "1200000000000002", published_at: iso(now - 600000), video_id: ytTt.id, created_at: iso(now - 700000), updated_at: iso(now - 600000) });
+  db.t.facebook_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "video", status: "published", post_id: "1200000000000003", published_at: iso(now - 600000), video_id: igBusy.id, created_at: iso(now - 700000), updated_at: iso(now - 600000) });
   const oldIg = seedVideo(db, mp4(4000, 53), { created_at: iso(now - 15 * DAY) });
   db.t.instagram_posts.push({ id: uuid(), user_id: USER, proposal_id: uuid(), kind: "reel", status: "published", media_id: "18000000000000003", published_at: iso(now - 14 * DAY), video_id: oldIg.id, created_at: iso(now - 14 * DAY), updated_at: iso(now - 14 * DAY) });
   const tickV = await MV.retentionTick({ supabase: db, storage: db.storage, now: function () { return now; } }, now);
   const vrow = function (id) { return db.t.member_videos.filter(function (x) { return x.id === id; })[0]; };
   check("L1. retention: YouTube and TikTok have it but Instagram doesn't: the file kept", !!db.storage.objects["bf-video/" + ytTt.path] && vrow(ytTt.id).status === "ready", J(tickV));
-  check("L2. ...all three have it: the file deleted at once, status uploaded", !db.storage.objects["bf-video/" + all3.path] && vrow(all3.id).status === "uploaded" && vrow(all3.id).path === null);
+  check("L2. ...all three have it, and Facebook too (NAMED, item 8 part 3b): the file deleted at once, status uploaded", !db.storage.objects["bf-video/" + all3.path] && vrow(all3.id).status === "uploaded" && vrow(all3.id).path === null);
   check("L3. ...an Instagram post of it still processing: kept", !!db.storage.objects["bf-video/" + igBusy.path] && vrow(igBusy.id).status === "ready");
   check("L4. ...14 days on, a published Reel counts as a platform that got it (uploaded, not removed)", vrow(oldIg.id).status === "uploaded" && vrow(oldIg.id).path === null, J(vrow(oldIg.id)));
   db = makeDb();
@@ -1413,7 +1432,9 @@ function pageAnswers(over) {
   check("P1. the Social page: the Instagram panel's lines word for word, and the scripts in order (oauth-return, youtube, tiktok, instagram)",
     LINES.every(function (l) { return FILES.page.split(l).length === 2; }) && FILES.page.indexOf("id=\"igConnect\"") !== -1 &&
     FILES.page.indexOf("<script src=\"/scripts/oauth-return.js\"></script>\n<script src=\"/scripts/youtube.js\"></script>\n<script src=\"/scripts/tiktok.js\"></script>\n<script src=\"/scripts/instagram.js\"></script>") !== -1);
-  check("P2. the other-platforms line: Facebook still coming, Instagram connectable below", FILES.page.indexOf("<p class=\"bsky-quiet\" id=\"bskyOtherPlatforms\">X, LinkedIn and Facebook are coming, through each platform's own sign-in. Instagram can be connected below, and every Instagram post waits for your approval.</p>") !== -1);
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "X, LinkedIn and Facebook are coming, ... Instagram can be connected below, and every Instagram post waits for your approval."
+  // AFTER X and LinkedIn are coming; Instagram and a Facebook Page connect below, approval only.
+  check("P2. the other-platforms line: X and LinkedIn still coming, Instagram and a Facebook Page connectable below", FILES.page.indexOf("<p class=\"bsky-quiet\" id=\"bskyOtherPlatforms\">X and LinkedIn are coming, through each platform's own sign-in. Instagram and a Facebook Page can be connected below, and every post to them waits for your approval.</p>") !== -1);
   let dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers(), "instagram");
   await flush();
   const finCall = dom.fetches.filter(function (x) { return x.path === "/api/instagram/finish"; })[0];
@@ -1504,13 +1525,16 @@ function pageAnswers(over) {
     FILES.proposals.indexOf("fieldsHtml = instagramPostPayloadFields(p.payload || {});") !== -1 && FILES.proposals.indexOf("execHtml = instagramResultHtml(p.execution_result);") !== -1 &&
     FILES.proposals.indexOf("  fillMailboxReplies(container);\n  fillInstagramVideos(container);\n}") !== -1 && /spot\.textContent = /.test(fnSrc("fillInstagramVideos")));
   const icard = function (name) { return (new RegExp("<p class=\"int-card-name\">" + name + "</p>\\s*<p class=\"int-card-desc\">([^<]*)</p>\\s*<span class=\"int-status\">([^<]*)</span>").exec(FILES.integrations) || []); };
-  check("P16. Integrations: Instagram connects on the Social page (Business or Creator, JPEG photos and Reels, approval); Facebook still Removed",
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE Facebook was Removed. AFTER it is On the Social page (checkFacebookPages holds its words).
+  check("P16. Integrations: Instagram connects on the Social page (Business or Creator, JPEG photos and Reels, approval); Facebook on the Social page too",
     icard("Instagram")[2] === "On the Social page" && icard("Instagram")[1] === "Connect your own Instagram Business or Creator account on the Social Agent page, through Instagram's own sign-in, and publish the JPEG photos and Reels you approve. Every post waits for your approval." &&
-    icard("Facebook")[2] === "Removed", J([icard("Instagram")[2], icard("Facebook")[2]]));
-  check("P17. the Content page's intro: Instagram connects on the Social page; Facebook is coming, not connectable",
-    FILES.content.indexOf(">Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post waits for your approval. Facebook is coming, through its own sign-in.</p>") !== -1);
+    icard("Facebook")[2] === "On the Social page", J([icard("Instagram")[2], icard("Facebook")[2]]));
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "... Facebook is coming, through its own sign-in." AFTER a Facebook Page connects there too, approval only.
+  check("P17. the Content page's intro: Instagram connects on the Social page; a Facebook Page does too, approval only",
+    FILES.content.indexOf(">Bluesky connects on the Social Agent page, with an app password you make in Bluesky, never your main password. Instagram connects on the Social Agent page too, through Instagram's own sign-in, and every Instagram post waits for your approval. A Facebook Page connects there too, through Facebook's own sign-in, and every Facebook post waits for your approval.</p>") !== -1);
   check("P18. the guide: Instagram named as connecting; the guide's false-promise rule no longer refuses Instagram",
-    FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok and Instagram connect so far") !== -1 && FILES.guideAsk.indexOf("NAMED (Nov 7 2026, Instagram posting): instagram left this list") !== -1);
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the tip now names Facebook Pages after Instagram.
+    FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok, Instagram and Facebook Pages connect so far") !== -1 && FILES.guideAsk.indexOf("NAMED (Nov 7 2026, Instagram posting): instagram left this list") !== -1);
 
   /* ── G ── */
   OUT("\n══ G. legal, yourData, README, registries, the migration ══");
@@ -1536,9 +1560,10 @@ function pageAnswers(over) {
     (YD_IG || {}).key === "created_at" && (YD_IG || {}).select === "kind, status, permalink, created_at, published_at" &&
     FILES.yourData.indexOf("{ name: \"Instagram (Meta)\", for: \"publishing the posts you approve to your own Instagram account, when you connect it\" }") !== -1 &&
     FILES.yourData.indexOf("\"Your Instagram access: stored encrypted; the export shows only your Instagram username and the date you connected.\"") !== -1 &&
-    FILES.yourData.indexOf("\"instagram_posts\", \"member_media\", \"member_videos\"") !== -1 &&
-    FILES.yourData.indexOf("\"member_tiktok_connections\", \"member_instagram_connections\", \"oauth_states\"") !== -1 &&
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok and Connect Instagram") !== -1);
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebook_posts and member_facebook_pages follow the Instagram tables in the delete order, and the states name Connect Facebook last.
+    FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_videos\"") !== -1 &&
+    FILES.yourData.indexOf("\"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram and Connect Facebook") !== -1);
   check("G6. schemaCheck knows both tables at 179; the backup leaves the connection out and skips the posts",
     FILES.schema.indexOf("[\"member_instagram_connections\", \"179_instagram_posting.sql\"],") !== -1 && FILES.schema.indexOf("[\"instagram_posts\", \"179_instagram_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_instagram_connections: \"members' Instagram access, sealed; members connect again\",") !== -1 && /\n  instagram_posts: +"/.test(FILES.backup));
@@ -1562,7 +1587,11 @@ function pageAnswers(over) {
     !/process\.env/.test(stripComments(FILES.api)));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("R1. 179_instagram_posting.sql is the highest migration and the only 179", highest === 179 && migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql", highest);
+  // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): BEFORE 179 was the highest. AFTER it is the only 179, and only
+  // 180_facebook_pages.sql is above it; "the highest" is checkFacebookPages R1's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql is above it (checkFacebookPages R1)", highest === 180 &&
+    migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

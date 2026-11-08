@@ -59,7 +59,7 @@ const REPO = path.join(__dirname, "..");
 // defined in FRONT_MUTANTS (TikTok block) but missing here, so MUTATE=all never ran them; they run now, with
 // integrations-instagram-stale.
 const MUTATIONS = ["zernio-call-restored", "publish-claims-published", "connect-returns-url", "integrations-zernio-runs", "integrations-connect-built",
-  "integrations-removed-claims-social", "integrations-tiktok-stale", "integrations-instagram-stale"];
+  "integrations-removed-claims-social", "integrations-tiktok-stale", "integrations-instagram-stale", "integrations-facebook-stale"];
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const INTEGRATIONS = "integrations.html", GUIDE = "scripts/termaximus-guide.js";
 /* Frontend mutations, applied in memory to the file named. */
@@ -68,8 +68,9 @@ const FRONT_MUTANTS = {
   "integrations-zernio-runs": [INTEGRATIONS, "BizForce posts nothing through it.</p>\n          <span class=\"int-status\">Removed</span>",
     "BizForce posts nothing through it.</p>\n          <span class=\"int-status\">Runs on BizForce</span>"],
   // a social card says connecting was built and is only paused
-  "integrations-connect-built": [INTEGRATIONS, "BizForce does not post to Facebook. Connecting an account was removed because it could not be tied to the person who connected it.</p>\n          <span class=\"int-status\">Removed</span>",
-    "Schedule posts and manage your Facebook business page.</p>\n          <span class=\"int-status\">Unavailable</span>\n          <div class=\"int-card-footer\">\n            <button class=\"int-connect-btn\" disabled>Unavailable</button>\n            <span class=\"int-note\">Connecting was built and is turned off for now, while each connected account is tied to the person who connected it.</span>\n          </div>"],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the Facebook card connects now, so this mutation targets the X / Twitter card (BEFORE: the Facebook card).
+  "integrations-connect-built": [INTEGRATIONS, "BizForce does not post to X / Twitter. Connecting an account was removed because it could not be tied to the person who connected it.</p>\n          <span class=\"int-status\">Removed</span>",
+    "Schedule posts to your X / Twitter account.</p>\n          <span class=\"int-status\">Unavailable</span>\n          <div class=\"int-card-footer\">\n            <button class=\"int-connect-btn\" disabled>Unavailable</button>\n            <span class=\"int-note\">Connecting was built and is turned off for now, while each connected account is tied to the person who connected it.</span>\n          </div>"],
   // NAMED (Nov 7 2026, TikTok posting, migration 178): YouTube and TikTok connect on the Social page now. A removed
   // platform's card claiming the same is still a lie, and the TikTok card going back to "Removed" is a stale one.
   "integrations-removed-claims-social": [INTEGRATIONS, "BizForce does not post to LinkedIn. Connecting an account was removed because it could not be tied to the person who connected it.</p>\n          <span class=\"int-status\">Removed</span>",
@@ -78,7 +79,10 @@ const FRONT_MUTANTS = {
     "keeps posts from BizForce visible only to you.</p>\n          <span class=\"int-status\">Removed</span>"],
   // NAMED (Nov 7 2026, Instagram posting): the Instagram card going back to "Removed" is a stale one.
   "integrations-instagram-stale": [INTEGRATIONS, "Every post waits for your approval.</p>\n          <span class=\"int-status\">On the Social page</span>",
-    "Every post waits for your approval.</p>\n          <span class=\"int-status\">Removed</span>"]
+    "Every post waits for your approval.</p>\n          <span class=\"int-status\">Removed</span>"],
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): the Facebook card going back to "Removed" is a stale one.
+  "integrations-facebook-stale": [INTEGRATIONS, "Every post, and every removal, waits for your approval.</p>\n          <span class=\"int-status\">On the Social page</span>",
+    "Every post, and every removal, waits for your approval.</p>\n          <span class=\"int-status\">Removed</span>"]
 };
 const MUTATE = process.env.MUTATE || "";
 const MUT = require("./_shared");
@@ -235,13 +239,15 @@ function source(route) {
   // Social page"; Zernio and the other four stay Removed. The intent is kept: no card claims more than is true.
   // NAMED (Nov 7 2026, Instagram posting, migration 179): BEFORE Instagram was Removed. AFTER it connects on the Social Agent
   // page (approval only), so it moved from SOCIAL to ONPAGE; Zernio and the other three stay Removed.
-  const SOCIAL = ["Zernio", "Facebook", "X / Twitter", "LinkedIn"];
+  // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE Facebook was Removed. AFTER a Facebook Page connects on the Social Agent page (approval only), so it
+  // moved from SOCIAL to ONPAGE; Zernio, X / Twitter and LinkedIn stay Removed.
+  const SOCIAL = ["Zernio", "X / Twitter", "LinkedIn"];
   const wrong = SOCIAL.filter(function (n) { return cards[n] !== "Removed"; });
-  check("5. Zernio and the three social platforms not rebuilt are each marked Removed (" + SOCIAL.length + ")", wrong.length === 0, wrong.map(function (n) { return n + "=" + cards[n]; }).join(", "));
-  const ONPAGE = ["YouTube", "TikTok", "Instagram"];
+  check("5. Zernio and the two social platforms not rebuilt are each marked Removed (" + SOCIAL.length + ")", wrong.length === 0, wrong.map(function (n) { return n + "=" + cards[n]; }).join(", "));
+  const ONPAGE = ["YouTube", "TikTok", "Instagram", "Facebook"];
   const wrongOn = ONPAGE.filter(function (n) { return cards[n] !== "On the Social page"; });
-  check("5. YouTube, TikTok and Instagram are marked On the Social page, and only they are", wrongOn.length === 0 &&
-    Object.keys(cards).filter(function (n) { return cards[n] === "On the Social page"; }).sort().join(",") === "Instagram,TikTok,YouTube",
+  check("5. YouTube, TikTok, Instagram and Facebook are marked On the Social page, and only they are", wrongOn.length === 0 &&
+    Object.keys(cards).filter(function (n) { return cards[n] === "On the Social page"; }).sort().join(",") === "Facebook,Instagram,TikTok,YouTube",
     wrongOn.map(function (n) { return n + "=" + cards[n]; }).join(", "));
   check("5. no card says connecting was built, and no connect button is left", !/Connecting was built/.test(front[INTEGRATIONS]) && !/int-connect-btn/.test(front[INTEGRATIONS]));
   const tips = (/"integrations\.html": \[([\s\S]*?)\n    \]/.exec(front[GUIDE]) || ["", ""])[1];
@@ -249,7 +255,8 @@ function source(route) {
     // NAMED (Nov 7 2026, TikTok posting): BEFORE "Zernio and the six social platforms it posted to". AFTER four of the six, since
     // YouTube and TikTok connect on the Social Agent page again.
     // NAMED (Nov 7 2026, Instagram posting): BEFORE "four of the six"; AFTER three of the six, since Instagram connects too.
-    tips.length > 0 && !/Zernio and email|connecting was built/.test(tips) && /Zernio and three of the six social platforms it posted to/.test(tips), tips.slice(0, 200));
+    // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE "three of the six"; AFTER two of the six, since Facebook Pages connect too.
+    tips.length > 0 && !/Zernio and email|connecting was built/.test(tips) && /Zernio and two of the six social platforms it posted to/.test(tips), tips.slice(0, 200));
 
   console.log("\n" + (failures ? failures + " FAILED" : "ALL PASS") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
   process.exit(failures ? 1 : 0);
