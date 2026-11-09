@@ -51,7 +51,9 @@
         before connecting; one resolution against rebinding; GET or POST only
         (NAMED Nov 7 2026, YouTube uploads: GET, POST or DELETE, see 13b;
         NAMED Nov 8 2026, Etsy store connection: GET, POST, PUT or DELETE,
-        a PUT carrying exactly one JSON object, see 13b);
+        a PUT carrying exactly one JSON object, see 13b; NAMED Nov 8 2026,
+        Amazon store connection: GET, POST, PUT, PATCH or DELETE, a PATCH
+        held to the PUT's rules, see 13b);
         no redirect followed; 1 MB of body after decompression; a 2xx must be
         JSON; a non-2xx is returned with its json; only three answer headers
         come back; the Authorization value is in no error, detail, log line or
@@ -147,7 +149,10 @@ const MUTATIONS = {
                              ["            if (json && bytes > json.limit) {", "            if (false) {"]],
   "json-dns-unchecked":     [["          lookup: guardedLookup,", "          lookup: json ? function (h, o, cb) { resolve(h, { all: true, verbatim: true }, function (e, a) { return o && o.all ? cb(e, a) : cb(e, a[0].address, a[0].family); }); } : guardedLookup,"]],
   "json-auth-logged":       [["        req.on(\"error\", fail);", "        req.on(\"error\", function (e) { fail(new GuardedFetchError(\"network\", (e && e.code) + \" sending \" + JSON.stringify(requestOptions.headers))); });"]],
+  // NAMED (Nov 8 2026, Amazon store connection): PATCH is allowed now; this is caught by "patch", HEAD and OPTIONS (section 13b)
   "json-method-unrestricted": [["    if (JSON_METHODS.indexOf(method) === -1) {", "    if (false) {"]],
+  // NAMED (Nov 8 2026, Amazon store connection): a PATCH that skips the PUT's one-JSON-object rule (section 13b)
+  "patch-body-unchecked":   [["    } else if (method === \"PUT\" || method === \"PATCH\") {", "    } else if (method === \"PUT\") {"]],
   // NAMED (Nov 8 2026, Etsy store connection): a PUT that takes any body, or none (section 13b)
   "put-body-unchecked":     [["      if (putBody === undefined || putBody === null || typeof putBody !== \"object\" || Array.isArray(putBody) || Buffer.isBuffer(putBody) ||", "      if (false &&"]],
   // NAMED (Nov 3 2026, store connections): what a caller may raise in the JSON mode, and how far (section 13i)
@@ -839,11 +844,27 @@ async function sectionJson() {
      exactly one JSON object as its body, sent as application/json; a PUT with no body, a string, a Buffer, an array, a
      form, or a caller's own Content-Type is refused before any lookup. Every other method is still refused, and the
      json-method-unrestricted mutation is still caught by them. */
-  console.log("\n══ 13b. GET, POST, PUT or DELETE only ══");
-  for (const m of ["PATCH", "get", "put", "delete", "HEAD"]) {
+  /* NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "GET, POST, PUT or DELETE only", with PATCH among
+     the refused methods. AFTER GET, POST, PUT, PATCH or DELETE: Amazon's listings update is a PATCH of one JSON object
+     (lib/amazonApi.js submitPatch). PATCH leaves the refused list and is proved to go through with its Authorization and
+     exactly one JSON object as its body, under the same rules as a PUT (no body, a string, a Buffer, an array, a form or
+     a caller's own Content-Type is refused before any lookup). "patch" in lower case and HEAD join the refused methods,
+     so the json-method-unrestricted mutation is still caught by them. */
+  console.log("\n══ 13b. GET, POST, PUT, PATCH or DELETE only ══");
+  for (const m of ["patch", "get", "put", "delete", "HEAD", "OPTIONS"]) {
     resolverCalls = {};
     a = await attemptJson("https://public.test/j/echo", { method: m });
     check("method " + m + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
+  }
+  a = await attemptJson("https://public.test/j/echo", { method: "PATCH", headers: auth, body: { productType: "MUG", patches: [{ op: "replace", path: "/attributes/fulfillment_availability", value: [{ fulfillment_channel_code: "DEFAULT", quantity: 4 }] }] } });
+  check("a PATCH goes through with its Authorization and one JSON object as its body, as application/json",
+    a.ok && a.value.json.method === "PATCH" && a.value.json.body === JSON.stringify({ productType: "MUG", patches: [{ op: "replace", path: "/attributes/fulfillment_availability", value: [{ fulfillment_channel_code: "DEFAULT", quantity: 4 }] }] }) &&
+    a.value.json.headers.authorization === "Bearer " + FAKE_TOKEN && /^application\/json/.test(a.value.json.headers["content-type"] || ""), code(a));
+  for (const [label, opts] of [["no body", {}], ["a string body", { body: "{\"x\":1}" }], ["a Buffer body", { body: Buffer.from("{}") }],
+    ["an array body", { body: [1, 2] }], ["a form", { body: { x: 1 }, form: true }], ["a caller's Content-Type", { body: { x: 1 }, headers: { "Content-Type": "text/plain" } }]]) {
+    resolverCalls = {};
+    a = await attemptJson("https://public.test/j/echo", Object.assign({ method: "PATCH" }, opts));
+    check("a PATCH with " + label + " is refused before any lookup", !a.ok && a.err instanceof TypeError && !resolverCalls["public.test"], a.ok ? "fetched" : String(a.err && a.err.message));
   }
   a = await attemptJson("https://public.test/j/echo", { method: "PUT", headers: auth, body: { products: [{ sku: "A", offerings: [{ price: 12.5, quantity: 3 }] }] } });
   check("a PUT goes through with its Authorization and one JSON object as its body, as application/json",

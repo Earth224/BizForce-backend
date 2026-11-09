@@ -1619,7 +1619,9 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("\"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
     // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the line
     // names Connect Etsy last; Connect Facebook is still required in it.
-    FILES.yourData.indexOf("Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1, J([ydOf("facebook_posts").key, ydOf("member_facebook_pages").select]));
+    // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., Connect Facebook and Connect Etsy". AFTER Connect
+    // Amazon is named last; Connect Facebook is still required in it.
+    FILES.yourData.indexOf("Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon") !== -1, J([ydOf("facebook_posts").key, ydOf("member_facebook_pages").select]));
   check("G6. schemaCheck knows both tables at 180; the backup leaves the Page access out and skips the posts",
     FILES.schema.indexOf("[\"member_facebook_pages\", \"180_facebook_pages.sql\"],") !== -1 && FILES.schema.indexOf("[\"facebook_posts\", \"180_facebook_pages.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_facebook_pages: \"members' Facebook Page access, sealed; members connect again\",") !== -1 && /\n  facebook_posts: +"/.test(FILES.backup));
@@ -1649,10 +1651,12 @@ function pageAnswers(over) {
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
   /* NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "180_facebook_pages.sql is the highest migration and the
-     only 180". AFTER it is the only 180, and only 181_etsy_store.sql is above it, by name; "the highest" is checkEtsyConnect R1's. */
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql is above it (checkEtsyConnect R1)", highest === 181 &&
+     only 180". AFTER it is the only 180, and only 181_etsy_store.sql is above it, by name; "the highest" is checkEtsyConnect R1's.
+     NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE only 181_etsy_store.sql was above it and 181 the highest.
+     AFTER 181_etsy_store.sql and 182_amazon_store.sql are above it, by name; "the highest" is checkAmazonConnect R1's. */
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql and 182_amazon_store.sql are above it (checkAmazonConnect R1)", highest === 182 &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

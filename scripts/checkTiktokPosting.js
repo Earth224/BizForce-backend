@@ -1534,7 +1534,8 @@ function pageAnswers(over) {
     // NAMED (Nov 7 2026, Instagram posting): BEFORE "..., Connect YouTube and Connect TikTok". AFTER Connect Instagram is named last.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last.
     // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER Connect Etsy is named last.
-    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1);
+    // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., Connect Facebook and Connect Etsy". AFTER Connect Amazon is named last.
+    FILES.yourData.indexOf("Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon") !== -1);
   check("G8. schemaCheck knows member_tiktok_connections at 178; the backup leaves it out", FILES.schema.indexOf("[\"member_tiktok_connections\", \"178_tiktok_posting.sql\"],") !== -1 &&
     FILES.backup.indexOf("member_tiktok_connections: \"members' TikTok access, sealed; members connect again\",") !== -1);
   const tts = (FILES.readme.split("## TikTok app setup")[1] || "").split("\n## ")[0];
@@ -1559,9 +1560,11 @@ function pageAnswers(over) {
   // are above it, by name; "the highest" is checkFacebookPages R1's.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 180 was the highest. AFTER 181_etsy_store.sql is above it too,
   // by name; "the highest" is checkEtsyConnect R1's.
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql, 180_facebook_pages.sql and 181_etsy_store.sql are above it (checkEtsyConnect R1)", highest === 181 &&
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181 the highest. AFTER 182_amazon_store.sql is above it
+  // too, by name; "the highest" is checkAmazonConnect R1's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql and 182_amazon_store.sql are above it (checkAmazonConnect R1)", highest === 182 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql", highest);
   check("G14. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
   OUT("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (failures + passes) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));

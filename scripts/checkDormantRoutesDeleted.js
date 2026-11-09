@@ -356,7 +356,11 @@ const ADDED = [
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 485 routes; AFTER 487, Connect Etsy (OAuth 2.0 with PKCE, a
   // single-use state with a sealed verifier, both tokens sealed before the shop is read) (checkEtsyConnect)
   ["post", "/api/store/etsy/start"],                         // subscribed: stores a single-use state and a sealed PKCE verifier, returns Etsy's authorize URL; 503 until configured (485 -> 486)
-  ["post", "/api/store/etsy/finish"]                         // subscribed: state consumed once, the code exchanged with the verifier, both tokens sealed, the shop read, stored (486 -> 487)
+  ["post", "/api/store/etsy/finish"],                        // subscribed: state consumed once, the code exchanged with the verifier, both tokens sealed, the shop read, stored (486 -> 487)
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 487 routes; AFTER 489, Connect Amazon (the SP-API website
+  // authorization workflow: a marketplace chosen first, a single-use state, both LWA tokens sealed before the SP-API is read) (checkAmazonConnect)
+  ["post", "/api/store/amazon/start"],                       // subscribed: the marketplace checked, a single-use state stored, returns Seller Central's consent URL; 503 until configured (487 -> 488)
+  ["post", "/api/store/amazon/finish"]                       // subscribed: the seller id checked, state consumed once, the code exchanged, both tokens sealed, participation read, stored (488 -> 489)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

@@ -1750,7 +1750,8 @@ function pageAnswers(over) {
     // Instagram connection is deleted between the TikTok one and the sign-in states.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): Connect Facebook is named last, and member_facebook_pages is deleted after the Instagram connection.
     // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER Connect Etsy is named last.
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy") !== -1 &&
+    // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., Connect Facebook and Connect Etsy". AFTER Connect Amazon is named last.
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon") !== -1 &&
     FILES.yourData.indexOf("{ name: \"YouTube (Google)\", for: \"uploading the videos you approve to your own channel, when you connect it\" }") !== -1 &&
     FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
   check("G7. schemaCheck knows both tables at migration 177; backup leaves both out; accountFiles lists bf-video",
@@ -1781,9 +1782,11 @@ function pageAnswers(over) {
   // "the highest" is checkFacebookPages R1's.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE 180 was the highest. AFTER 181_etsy_store.sql is above it too,
   // by name; "the highest" is checkEtsyConnect R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql and 181_etsy_store.sql are above it (checkEtsyConnect R1)", highest === 181 &&
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181 the highest. AFTER 182_amazon_store.sql is above it
+  // too, by name; "the highest" is checkAmazonConnect R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql and 182_amazon_store.sql are above it (checkAmazonConnect R1)", highest === 182 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

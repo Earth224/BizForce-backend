@@ -91,9 +91,14 @@ const MUTATIONS = {
   "write-without-permission": [["sync",
     "  if (row.platform === \"etsy\") return ETSY_WRITE_SCOPES.every(function (s) { return granted.indexOf(s) !== -1; }) ? \"read_write\" : \"read\";",
     "  if (row.platform === \"etsy\") return \"read_write\";"]],
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE the anchor was the Etsy line and the not-WooCommerce
+  // line, adjacent, both removed. AFTER the Amazon line sits between them, so the anchor spans all three and the replacement
+  // keeps the Amazon line: Etsy still falls through to WooCommerce, and nothing else changes.
   "etsy-falls-to-woocommerce": [["write",
     "  if (conn.platform === \"etsy\") return readLiveEtsyItem(deps, s, field, item);\n" +
-    "  if (conn.platform !== \"woocommerce\") return { ok: false, code: \"not_synced\", error: MESSAGES.notSynced };\n", ""]],
+    "  if (conn.platform === \"amazon\") return readLiveAmazonItem(deps, s, field, item);\n" +
+    "  if (conn.platform !== \"woocommerce\") return { ok: false, code: \"not_synced\", error: MESSAGES.notSynced };\n",
+    "  if (conn.platform === \"amazon\") return readLiveAmazonItem(deps, s, field, item);\n"]],
   "read-sends-put": [["api",
     "      answer = await deps.jsonRequest(API_BASE + path, { method: \"GET\", headers: headersFor(config, token),",
     "      answer = await deps.jsonRequest(API_BASE + path, { method: \"PUT\", headers: headersFor(config, token),"]],
@@ -106,8 +111,10 @@ const MUTATIONS = {
   "storefront-mentions-etsy": [["guide",
     "\"\\\"Pricing Strategy\\\" works out the range, median and your margin from comparable listings you type in, then writes a rationale.\",",
     "\"\\\"Pricing Strategy\\\" works out the range, median and your margin from comparable Etsy listings you type in, then writes a rationale.\","]],
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE anchored on "...remove it from your Etsy account, or delete
+  // your account."; AFTER the sentence names Amazon Seller Central too, so the anchor is the sentence's end as it now reads.
   "privacy-sentence-stale": [["legal",
-    "uninstall BizForce from Shopify, remove it from your Etsy account, or delete your account.\";",
+    "uninstall BizForce from Shopify, remove it from your Etsy account or Amazon Seller Central, or delete your account.\";",
     "uninstall BizForce from Shopify, or delete your account.\";"]],
   "innerHTML-on-page": [["ui", "    if (text !== undefined) e.textContent = text;\n", "    if (text !== undefined) e.innerHTML = text;\n"]],
   // the others the code earns
@@ -1103,7 +1110,8 @@ function allText(n) { return n ? n.textContent : ""; }
     P.indexOf("<label class=\"store-allow\"><input type=\"checkbox\" id=\"storeEtsyAllow\" /> Let BizForce make changes I approve (prices and stock)</label>") !== -1 &&
     P.indexOf("<button type=\"button\" class=\"action-btn\" id=\"storeEtsyBtn\">Connect Etsy</button>") !== -1 &&
     P.indexOf("<p class=\"store-msg\" id=\"storeEtsyUnset\" hidden>Etsy connection isn't set up yet.</p>") !== -1 &&
-    P.indexOf("Connect your own Shopify, WooCommerce or Etsy store and Stock") !== -1);
+    // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "Shopify, WooCommerce or Etsy store"; AFTER Amazon too.
+    P.indexOf("Connect your own Shopify, WooCommerce, Etsy or Amazon store and Stock") !== -1);
   let dom = runPage("", listAnswers({ "GET /api/store/connections": { status: 200, body: { connections: [], note: "", shopify_available: true, etsy_available: false } } }));
   await flush();
   check("F2. unconfigured: Connect Etsy disabled and \"Etsy connection isn't set up yet.\" shown", dom.els.storeEtsyBtn.disabled === true && dom.els.storeEtsyUnset.hidden === false &&
@@ -1152,7 +1160,8 @@ function allText(n) { return n ? n.textContent : ""; }
     listed.indexOf("Etsy shop: " + HOSTILE) !== -1 && listed.indexOf("Read only") !== -1 && listed.indexOf("Currency: USD") !== -1 && listed.indexOf("(Etsy, since") !== -1 &&
     dom.innerHTML.length === 0, listed.slice(0, 300));
   check("F10. the sessionStorage key is on checkOfflineMode's KEPT list and named in bf-session.js's LEFT ON PURPOSE comment",
-    /bf_store_return: "/.test(read("scripts/checkOfflineMode.js")) && /bf_store_return\n\s+\(sessionStorage: which store's page, etsy or shopify/.test(FILES.session) &&
+    // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "etsy or shopify"; AFTER "etsy, amazon or shopify".
+    /bf_store_return: "/.test(read("scripts/checkOfflineMode.js")) && /bf_store_return\n\s+\(sessionStorage: which store's page, etsy, amazon or shopify/.test(FILES.session) &&
     /var RETURN_KEY = "bf_store_return";/.test(FILES.ui));
   const cardFns = ["escapeHtml", "storeChangeText", "storeChangePayloadFields"].map(function (n) { return fnSource(FILES.proposals, n); });
   let card = "";
@@ -1162,37 +1171,46 @@ function allText(n) { return n ? n.textContent : ""; }
   check("F11. the Approvals card names Etsy, the currency and the variations note, every value escaped",
     card.indexOf("Change &lt;img src=x onerror=alert(1)&gt; price in your Etsy store from 25.00 USD to 27.50 USD") !== -1 && card.indexOf("your Etsy store, connected with changes allowed") !== -1 &&
     card.indexOf("&lt;b&gt;x&lt;/b&gt; This price applies to 2 variations of this listing.") !== -1 && card.indexOf("<img") === -1 && card.indexOf("<b>") === -1, card.slice(0, 300));
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE the writable list ended with etsy; AFTER amazon follows it.
   check("F12. the propose control: an Etsy connection with changes allowed is writable, with \"Etsy allows a stock level from 0 to 999.\"",
-    /c\.platform === "etsy"\) && c\.permission === "read_write"/.test(FILES.changesUi) && FILES.changesUi.indexOf("\"Etsy allows a stock level from 0 to 999.\"") !== -1);
+    /c\.platform === "etsy" \|\| c\.platform === "amazon"\) && c\.permission === "read_write"/.test(FILES.changesUi) && FILES.changesUi.indexOf("\"Etsy allows a stock level from 0 to 999.\"") !== -1);
   const guideStore = (/"store-agent\.html": \[([\s\S]*?)\]/.exec(FILES.guide) || [])[1] || "";
   const guideFront = (/"etsy-agent\.html": \[([\s\S]*?)\]/.exec(FILES.guide) || [])[1] || "";
-  check("F13. the guide: the Store tip says it reads Shopify, WooCommerce or Etsy (within 160 characters); the Storefront tips never say Etsy",
-    guideStore.indexOf("\"\\\"Connect your store\\\" reads Shopify, WooCommerce or Etsy; audits are written from your Business Profile and what you tell it, not your store's own data.\"") !== -1 &&
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "reads Shopify, WooCommerce or Etsy;"; AFTER the tip names
+  // Amazon too (159 characters; checkAmazonConnect holds it).
+  check("F13. the guide: the Store tip says it reads Shopify, WooCommerce, Etsy or Amazon (within 160 characters); the Storefront tips never say Etsy",
+    guideStore.indexOf("\"\\\"Connect your store\\\" reads Shopify, WooCommerce, Etsy or Amazon; audits are written from your Business Profile and what you tell it, not your store's own data.\"") !== -1 &&
     guideFront.length > 100 && !/etsy/i.test(guideFront.replace(/"etsy-agent\.html"/g, "")), guideFront.slice(0, 200));
   check("F14. the Storefront agent's name is \"Storefront\" in lib/triggers.js (never \"Etsy\")", /etsy: "Storefront"/.test(FILES.triggers) && !/etsy: "Etsy"/.test(FILES.triggers));
-  check("F15. the Store signature counts Etsy stock, and the live panel names it", /var s = \{ manual: 0, shopify: 0, woocommerce: 0, etsy: 0 \};/.test(FILES.signatures) &&
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE { manual, shopify, woocommerce, etsy }; AFTER amazon too.
+  check("F15. the Store signature counts Etsy stock, and the live panel names it", /var s = \{ manual: 0, shopify: 0, woocommerce: 0, etsy: 0, amazon: 0 \};/.test(FILES.signatures) &&
     /if \(src\.etsy\) srcParts\.push\("Etsy " \+ src\.etsy\);/.test(FILES.profile));
 
   /* ── G. the words and the registries ───────────────────────────────────── */
   console.log("\n══ G. the words and the registries ══");
-  const PRIVACY = "If you connect a Shopify, WooCommerce or Etsy store, BizForce stores the store's address and the access it is given, encrypted (for WooCommerce, " +
-    "the key you made for it; for Shopify or Etsy, the access you approve when you connect), and reads from the store only your products (name, SKU, price, " +
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE the sentence named Shopify, WooCommerce or Etsy; AFTER it
+  // names Amazon in its three places too (checkAmazonConnect holds it word for word as well).
+  const PRIVACY = "If you connect a Shopify, WooCommerce, Etsy or Amazon store, BizForce stores the store's address and the access it is given, encrypted (for WooCommerce, " +
+    "the key you made for it; for Shopify, Etsy or Amazon, the access you approve when you connect), and reads from the store only your products (name, SKU, price, " +
     "cost where the store has one), your stock levels, your store's currency and location names, and summaries of your orders (each order's number, " +
     "date, total, currency, and its items as SKU and quantity), never any customer's name, email, address or phone number; BizForce changes a " +
     "product's price or stock level in your store only when you approve that change, and only if you allowed changes when you connected the store, " +
     "and it keeps a record of each change (the item, the old and new value, and when). What it reads is used only for your own agents, the store's " +
     "key or access is never shown back to you or exported, and it, the products, the stock, the order summaries and the record of changes are " +
-    "deleted when you disconnect the store, uninstall BizForce from Shopify, remove it from your Etsy account, or delete your account.";
+    "deleted when you disconnect the store, uninstall BizForce from Shopify, remove it from your Etsy account or Amazon Seller Central, or delete your account.";
   const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); };
   check("G1. the privacy sentence word for word, and privacy.html carries it once, as built", LP.STORE_PRIVACY_SENTENCE === PRIVACY && FILES.privacy.split(esc(PRIVACY)).length === 2, LP.STORE_PRIVACY_SENTENCE);
   check("G2. Etsy is a named third party, word for word, on the privacy page too",
     FILES.yourData.indexOf("{ name: \"Etsy\", for: \"connecting your Etsy shop, reading it and making the changes you approve, when you connect one\" }") !== -1 &&
     FILES.privacy.indexOf(esc("Etsy (connecting your Etsy shop, reading it and making the changes you approve, when you connect one)")) !== -1);
-  check("G3. yourData: the sign-in states name all seven sign-ins; the connections and the change log name Etsy; the backup note names Etsy access",
-    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook and Connect Etsy,") !== -1 &&
-    FILES.yourData.indexOf("connected to each Shopify, WooCommerce or Etsy store") !== -1 && FILES.yourData.indexOf("or the access Shopify or Etsy granted when you connected") !== -1 &&
-    FILES.yourData.indexOf("Changes BizForce made to your store with your approval, on Shopify, WooCommerce or Etsy:") !== -1 &&
-    FILES.backup.indexOf("member_store_connections: \"members' WooCommerce store keys and Shopify and Etsy access (encrypted); members connect again\",") !== -1);
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE seven sign-ins ending "and Connect Etsy", the store lines
+  // naming Shopify, WooCommerce or Etsy, and "Shopify and Etsy access". AFTER eight sign-ins ending "Connect Etsy and Connect
+  // Amazon", the lines name Amazon too, and "Shopify, Etsy and Amazon access" (checkAmazonConnect holds them as well).
+  check("G3. yourData: the sign-in states name all eight sign-ins; the connections and the change log name Etsy; the backup note names Etsy access",
+    FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon,") !== -1 &&
+    FILES.yourData.indexOf("connected to each Shopify, WooCommerce, Etsy or Amazon store") !== -1 && FILES.yourData.indexOf("or the access Shopify, Etsy or Amazon granted when you connected") !== -1 &&
+    FILES.yourData.indexOf("Changes BizForce made to your store with your approval, on Shopify, WooCommerce, Etsy or Amazon:") !== -1 &&
+    FILES.backup.indexOf("member_store_connections: \"members' WooCommerce store keys and Shopify, Etsy and Amazon access (encrypted); members connect again\",") !== -1);
   const LEGAL = realRequire("./lib/legal");
   check("G4. TERMS_VERSION and TERMS_UPDATED are Nov 8 2026", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
   const ets = (FILES.readme.split("## Etsy app setup")[1] || "").split("\n## ")[0];
@@ -1212,12 +1230,18 @@ function allText(n) { return n ? n.textContent : ""; }
     FILES.migration.indexOf("((purpose IN ('store_shopify', 'store_etsy')) = (flow_context IS NOT NULL))") !== -1);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("R1. 181_etsy_store.sql is the highest migration and the only 181", highest === 181 && migFiles.filter(function (x) { return /^181_/.test(x); }).join() === "181_etsy_store.sql", highest);
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181_etsy_store.sql was the highest. AFTER it is the only
+  // 181 and only 182_amazon_store.sql is above it, by name; "the highest" is checkAmazonConnect R1's.
+  check("R1. 181_etsy_store.sql is the only 181, and only 182_amazon_store.sql is above it (checkAmazonConnect R1)", highest === 182 &&
+    migFiles.filter(function (x) { return /^181_/.test(x); }).join() === "181_etsy_store.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 181; }).join() === "182_amazon_store.sql", highest);
   check("G8. no other new env var: lib/etsyAuth.js reads only ETSY_KEYSTRING and ETSY_SHARED_SECRET, lib/etsyApi.js reads none",
     (stripComments(FILES.auth).match(/env\.[A-Z_]+/g) || []).sort().join() === "env.ETSY_KEYSTRING,env.ETSY_KEYSTRING,env.ETSY_SHARED_SECRET,env.ETSY_SHARED_SECRET" &&
     !/process\.env|env\.[A-Z]/.test(stripComments(FILES.api)));
-  check("G9. the guarded fetcher's PUT carries one JSON object and nothing else (checkGuardedFetch 13b proves it)", /const JSON_METHODS = \["GET", "POST", "PUT", "DELETE"\];/.test(FILES.guarded) &&
-    FILES.guarded.indexOf("guardedJsonRequest: a PUT carries one JSON object body") !== -1);
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE GET, POST, PUT or DELETE and "a PUT carries one JSON
+  // object body". AFTER PATCH joins (Amazon's listings patch) under the PUT's own rule: "a PUT or a PATCH carries one JSON object body".
+  check("G9. the guarded fetcher's PUT carries one JSON object and nothing else (checkGuardedFetch 13b proves it)", /const JSON_METHODS = \["GET", "POST", "PUT", "PATCH", "DELETE"\];/.test(FILES.guarded) &&
+    FILES.guarded.indexOf("guardedJsonRequest: a PUT or a PATCH carries one JSON object body") !== -1);
   const etsySection = sliceOf(FILES.server, "/* ── Connect Etsy (Nov 8 2026, migration 181", "app.get(\"/api/store/connections\"");
   check("G10. no emoji in any Etsy file", [FILES.auth, FILES.api, FILES.migration, FILES.ui, etsySection, fs.readFileSync(__filename, "utf8")].every(function (x) { return !EMOJI.test(x); }) && etsySection.length > 2000);
   check("G11. no secret, token, code or buyer email in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));

@@ -13292,7 +13292,7 @@ function measureStockAndMargin(items, movements, windowDays) {
     if (it.sku) row.sku = it.sku;
     row.unit = it.unit || "unit"; row.on_hand = onHand; row.unit_cost = cost; row.unit_price = price;
     // Where the stock figure comes from: what the member entered, or a store they connected (lib/storeSync.js).
-    row.source = it.source === "shopify" || it.source === "woocommerce" || it.source === "etsy" ? it.source : "manual";
+    row.source = it.source === "shopify" || it.source === "woocommerce" || it.source === "etsy" || it.source === "amazon" ? it.source : "manual";
     // A synced row names its item, so the page can offer "Propose a change" for it (migration 175).
     if (row.source !== "manual" && it.id) row.store_item_id = it.id;
 
@@ -13532,6 +13532,13 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
                                                verifier, then Etsy's own page
    POST   /api/store/etsy/finish               the code and state, from the
                                                Store Agent page
+   POST   /api/store/amazon/start              Connect Amazon (Nov 8 2026,
+                                               migration 182): the chosen
+                                               marketplace, a one-time state,
+                                               then Seller Central's own page
+   POST   /api/store/amazon/finish             spapi_oauth_code, state and
+                                               selling_partner_id, from the
+                                               Store Agent page
    GET    /api/store/connections               each connection, safe fields only
    GET    /api/store/connections/:id/locations a Shopify shop's locations, live
    PUT    /api/store/connections/:id/location  the location stock changes apply at
@@ -13575,6 +13582,9 @@ function storeSyncDeps() {
     // Etsy (Nov 8 2026, migration 181): the GET reader the sync calls, and the keystring and shared secret every Etsy request carries.
     etsyReader: require("./lib/etsyApi"),
     etsyConfig: function () { return require("./lib/etsyAuth").configured(process.env); },
+    // Amazon (Nov 8 2026, migration 182): the GET reader the sync calls, and the LWA client a token refresh uses.
+    amazonReader: require("./lib/amazonApi"),
+    amazonConfig: function () { return require("./lib/amazonAuth").configured(process.env); },
     userPlan: async function (userId) {
       try { return { plan: await getUserPlan(userId), error: null }; } catch (planErr) { return { plan: null, error: planErr }; }
     }
@@ -13639,7 +13649,8 @@ async function saveStoreConnection(userId, platform, storeUrl, sealed, permissio
   return saved.data;
 }
 // What lib/storeSync.js statusOf reads: never a credential or a token.
-const STORE_STATUS_COLUMNS = "id, platform, store_url, status, permission, granted_scopes, currency, location_id, location_name, created_at, last_sync_at, last_error_code";
+// Amazon (migration 182): the marketplace and its region; never the seller id.
+const STORE_STATUS_COLUMNS = "id, platform, store_url, status, permission, granted_scopes, currency, location_id, location_name, marketplace_id, region, created_at, last_sync_at, last_error_code";
 
 app.post("/api/store/connections", requireAuth, requireActiveSubscription, storeConnectLimiter,
   async function (req, res, next) {
@@ -13657,6 +13668,10 @@ app.post("/api/store/connections", requireAuth, requireActiveSubscription, store
       // Etsy (Nov 8 2026, migration 181) connects only through Connect Etsy (/api/store/etsy/start and /finish).
       if (body.platform === "etsy") {
         return res.status(400).json({ error: require("./lib/etsyAuth").MESSAGES.useConnect, code: "use_connect_etsy", saved: false });
+      }
+      // Amazon (Nov 8 2026, migration 182) connects only through Connect Amazon (/api/store/amazon/start and /finish).
+      if (body.platform === "amazon") {
+        return res.status(400).json({ error: require("./lib/amazonAuth").MESSAGES.useConnect, code: "use_connect_amazon", saved: false });
       }
       if (body.platform === "woocommerce") {
         var storeUrl = ss.normalizeWooUrl(body.store_url);
@@ -14051,6 +14066,171 @@ app.post("/api/store/etsy/finish", requireAuth, requireActiveSubscription, shopi
     }
   });
 
+/* ── Connect Amazon (Nov 8 2026, migration 182, lib/amazonAuth.js, lib/amazonApi.js) ──
+   start: 503 unless AMAZON_SPAPI_APP_ID, AMAZON_LWA_CLIENT_ID and
+   AMAZON_LWA_CLIENT_SECRET are all set. The member chooses ONE marketplace
+   first (marketplace_id, one of lib/amazonAuth.js MARKETPLACES); its region
+   follows from the table. A one-time state (only its sha256 stored, in
+   oauth_states, purpose store_amazon, for 10 minutes) with flow_context
+   { marketplace_id, region, permission } and no verifier (this workflow has
+   no PKCE), and Seller Central's own consent page on that marketplace's host,
+   with version=beta while AMAZON_SPAPI_DRAFT is not "false". The redirect is
+   the app's registered one, the Store Agent page, as Shopify's and Etsy's
+   are. permission is read_write only when allow_changes is exactly true.
+   finish: spapi_oauth_code, state and selling_partner_id, from the Store
+   Agent page. The seller id must match ^[A-Z0-9]{8,20}$; the state is
+   consumed by one conditional update (this member, this purpose, not
+   consumed, not expired); the code is exchanged with LWA (a form); both
+   tokens are SEALED before the SP-API is asked anything; then the seller's
+   marketplace participations: the chosen marketplace must be one the seller
+   sells in, and its default currency is stored. One seller account and
+   marketplace, one member: the unique index
+   member_store_connections_amazon_seller_key backs the check. */
+app.post("/api/store/amazon/start", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var aa = require("./lib/amazonAuth");
+      var amazonConfig = aa.configured(process.env);
+      if (!amazonConfig) return res.status(503).json({ error: aa.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var body = req.body || {};
+      var market = aa.marketplaceOf(body.marketplace_id);
+      if (!market) return res.status(400).json({ error: aa.MESSAGES.marketplace, code: "marketplace", field: "marketplace_id", saved: false });
+      if (body.allow_changes !== undefined && typeof body.allow_changes !== "boolean") {
+        return res.status(400).json({ error: "allow_changes must be true or false.", code: "allow_changes", field: "allow_changes", saved: false });
+      }
+      if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: aa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      var amazonPermission = body.allow_changes === true ? "read_write" : "read";
+      var amazonState = aa.newState();
+      var amazonStartMs = Date.now();
+      // Tidy first: this member's Amazon states older than a day. The daily purge removes everyone's.
+      var amazonTidied = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", aa.PURPOSE)
+        .lt("created_at", new Date(amazonStartMs - 24 * 60 * 60 * 1000).toISOString());
+      if (amazonTidied.error) throw amazonTidied.error;
+      var amazonStored = await supabase.from("oauth_states").insert({
+        user_id:      req.user.id,
+        purpose:      aa.PURPOSE,
+        state_hash:   aa.stateHash(amazonState),
+        flow_context: { marketplace_id: body.marketplace_id, region: market.region, permission: amazonPermission },
+        expires_at:   new Date(amazonStartMs + aa.STATE_TTL_MS).toISOString(),
+        created_at:   new Date(amazonStartMs).toISOString()
+      });
+      if (amazonStored.error) throw amazonStored.error;
+      var amazonUrl = aa.consentUrl(amazonConfig, body.marketplace_id, amazonState);
+      amazonState = null;
+      return res.json({ authorize_url: amazonUrl, permission: amazonPermission, marketplace_id: body.marketplace_id, draft: amazonConfig.draft, saved: false });
+    } catch (error) {
+      console.error("[store/amazon/start] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
+app.post("/api/store/amazon/finish", requireAuth, requireActiveSubscription, shopifyConnectLimiter,
+  async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      var aa = require("./lib/amazonAuth");
+      var aapi = require("./lib/amazonApi");
+      var ss = require("./lib/storeSync");
+      var crypt = require("./lib/apiKeyCrypto");
+      var amazonConfig = aa.configured(process.env);
+      if (amazonConfig === null) return res.status(503).json({ error: aa.MESSAGES.notConfigured, code: "not_configured", saved: false });
+      var refused = function () { return res.status(400).json({ error: aa.MESSAGES.stateInvalid, code: "state_invalid", saved: false }); };
+      // The code, the state and the seller id, each in its own shape, before anything is spent.
+      var amazonShape = aa.finishShape(req.body);
+      if (!amazonShape.ok) return refused();
+      // One conditional update spends the state: this member, this purpose, not consumed, not expired. No reason is given.
+      var amazonSpentAt = nowIso();
+      var amazonSpent = await supabase.from("oauth_states").update({ consumed_at: amazonSpentAt })
+        .eq("state_hash", aa.stateHash(amazonShape.state)).eq("user_id", req.user.id).eq("purpose", aa.PURPOSE)
+        .is("consumed_at", null).gt("expires_at", amazonSpentAt)
+        .select("flow_context");
+      if (amazonSpent.error) throw amazonSpent.error;
+      var amazonFlow = ((amazonSpent.data || [])[0] || {}).flow_context || null;
+      if (!amazonFlow) return refused();
+      var amazonMarket = aa.marketplaceOf(amazonFlow.marketplace_id);
+      var amazonPermission = amazonFlow.permission;
+      if (!amazonMarket || amazonMarket.region !== amazonFlow.region || ss.PERMISSIONS.indexOf(amazonPermission) === -1) return refused();
+      if (!process.env.ENCRYPTION_SECRET) return res.status(503).json({ error: aa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+
+      var deps = storeSyncDeps();
+      var amazonGrant;
+      try {
+        amazonGrant = await aa.exchangeCode(amazonConfig, amazonShape.code, deps.jsonRequest);
+      } catch (exchangeErr) {
+        if (exchangeErr && (exchangeErr.kind === "rejected" || exchangeErr.kind === "refused")) return refused();
+        return res.status(502).json({ error: aa.MESSAGES.unreachable, code: "unreachable", saved: false });
+      } finally {
+        amazonShape.code = null;
+      }
+      // Sealed first: both tokens are encrypted before the SP-API is asked anything.
+      var amazonRefresh, amazonAccess;
+      try {
+        amazonRefresh = ss.sealCredentials({ refresh_token: amazonGrant.refreshToken }, crypt.encrypt);
+        amazonAccess = crypt.encrypt(amazonGrant.accessToken);
+      } catch (cryptErr) {
+        amazonGrant = null;
+        return res.status(503).json({ error: aa.MESSAGES.noSecret, code: "no_encryption_key", saved: false });
+      }
+      var amazonExpiries = aa.expiriesFor(amazonGrant, Date.now());
+      amazonGrant = null;
+      var amazonRow = Object.assign({
+        user_id: req.user.id, platform: "amazon", status: "connected", permission: amazonPermission,
+        // The SP-API grants roles to the app, not scopes to the member.
+        granted_scopes: null,
+        access_ciphertext: amazonAccess.ciphertext, access_iv: amazonAccess.iv, access_auth_tag: amazonAccess.authTag,
+        access_expires_at: amazonExpiries.access_expires_at, refresh_expires_at: null, token_version: 0,
+        location_id: null, location_name: null,
+        external_account_id: amazonShape.sellerId, marketplace_id: amazonFlow.marketplace_id, region: amazonMarket.region
+      }, amazonRefresh);
+      var amazonMarkets;
+      try {
+        // A fresh token: this read never refreshes it (the row is not stored yet, so a refresh could not be saved).
+        var firstAmazonRead = aapi.session(Object.assign({ id: null }, amazonRow));
+        firstAmazonRead.refreshed = true;
+        amazonMarkets = await aapi.participations(deps, firstAmazonRead);
+      } catch (readErr) {
+        return res.status(502).json({ error: aa.MESSAGES.unreachable, code: "unreachable", saved: false });
+      }
+      var chosen = amazonMarkets.filter(function (p) { return p.marketplace_id === amazonFlow.marketplace_id && p.participating === true; })[0];
+      if (!chosen) return res.status(422).json({ error: aa.MESSAGES.notParticipating, code: "not_participating", saved: false });
+      var amazonStoreUrl = "https://" + amazonMarket.storefront;
+      // One seller account and marketplace, one member.
+      var amazonHeld = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "amazon")
+        .eq("external_account_id", amazonShape.sellerId).eq("marketplace_id", amazonFlow.marketplace_id);
+      if (amazonHeld.error) throw amazonHeld.error;
+      if ((amazonHeld.data || []).some(function (r) { return r.user_id !== req.user.id; })) {
+        return res.status(409).json({ error: aa.MESSAGES.takenByOther, code: "seller_taken", saved: false });
+      }
+      // This member's own connection to this marketplace, if any, is replaced in place.
+      var amazonMine = await supabase.from("member_store_connections").select("id").eq("platform", "amazon")
+        .eq("user_id", req.user.id).eq("store_url", amazonStoreUrl);
+      if (amazonMine.error) throw amazonMine.error;
+      var amazonStamp = nowIso();
+      Object.assign(amazonRow, {
+        store_url: amazonStoreUrl, currency: chosen.currency,
+        last_error_code: null, last_error_at: null, updated_at: amazonStamp
+      });
+      var amazonSaved;
+      var mineRow = (amazonMine.data || [])[0];
+      if (mineRow) {
+        amazonSaved = await supabase.from("member_store_connections").update(amazonRow)
+          .eq("id", mineRow.id).eq("user_id", req.user.id).eq("platform", "amazon").select(STORE_STATUS_COLUMNS).single();
+      } else {
+        amazonSaved = await supabase.from("member_store_connections").insert(amazonRow).select(STORE_STATUS_COLUMNS).single();
+      }
+      if (amazonSaved.error) {
+        if (amazonSaved.error.code === "23505") return res.status(409).json({ error: aa.MESSAGES.takenByOther, code: "seller_taken", saved: false });
+        throw amazonSaved.error;
+      }
+      return res.json({ saved: true, connection: ss.statusOf(amazonSaved.data),
+        note: amazonPermission === "read_write" ? ss.MESSAGES.readWrite : ss.MESSAGES.readOnly });
+    } catch (error) {
+      console.error("[store/amazon/finish] Error:", (error && error.code) || "unknown");
+      next(error);
+    }
+  });
+
 app.get("/api/store/connections", requireAuth, async function (req, res, next) {
   try {
     var read = await supabase
@@ -14064,7 +14244,10 @@ app.get("/api/store/connections", requireAuth, async function (req, res, next) {
     var anyWritable = shownConnections.some(function (c) { return c.permission === "read_write"; });
     return res.json({ connections: shownConnections, note: ss.noteFor(anyWritable ? "read_write" : "read"),
       shopify_available: require("./lib/shopifyAuth").configured(process.env) !== null,
-      etsy_available: require("./lib/etsyAuth").configured(process.env) !== null });
+      etsy_available: require("./lib/etsyAuth").configured(process.env) !== null,
+      // Amazon (migration 182): whether Connect Amazon works, and whether only the registering seller can use it yet.
+      amazon_available: require("./lib/amazonAuth").configured(process.env) !== null,
+      amazon_draft: require("./lib/amazonAuth").isDraft(process.env) });
   } catch (error) {
     next(error);
   }
@@ -14140,10 +14323,13 @@ app.delete("/api/store/connections/:id", requireAuth, async function (req, res, 
     if (!gone.removed) return res.status(404).json({ error: "Connection not found" });
     return res.json({
       removed: true, items_removed: gone.items,
+      // Four platforms, each named (migration 182); anything else gets the plain note.
       note: gone.platform === "shopify" ? require("./lib/shopifyAuth").MESSAGES.disconnected
         : gone.platform === "etsy" ? require("./lib/etsyAuth").MESSAGES.disconnected
-        : "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
+        : gone.platform === "amazon" ? require("./lib/amazonAuth").MESSAGES.disconnected
+        : gone.platform === "woocommerce" ? "Disconnected. BizForce no longer holds your store's key, and the products, stock and order summaries it read, and its record of changes, are deleted. " +
           "You can also revoke the key in WooCommerce, under Settings, Advanced, REST API."
+        : "Disconnected. BizForce no longer holds your store's access, and what it read from the store is deleted."
     });
   } catch (error) {
     next(error);

@@ -287,7 +287,13 @@ const EXPECTED_GATED = [
   // AFTER Connect Etsy starts (a single-use state and a sealed PKCE verifier stored) and finishes (the state consumed once, the
   // code exchanged, both tokens sealed, the shop read and stored); both need a subscription, under Connect Shopify's limiter.
   // The list, sync now and disconnect are the existing store routes, unchanged (checkEtsyConnect).
-  "post /api/store/etsy/start", "post /api/store/etsy/finish"
+  "post /api/store/etsy/start", "post /api/store/etsy/finish",
+  // NAMED (Nov 8 2026, Amazon store connection, migration 182; gated 124 -> 126): BEFORE a store was Shopify, WooCommerce or
+  // Etsy. AFTER Connect Amazon starts (the marketplace checked, a single-use state stored) and finishes (the seller id checked,
+  // the state consumed once, the code exchanged, both tokens sealed, the participation read and stored); both need a
+  // subscription, under Connect Shopify's limiter. The list, sync now and disconnect are the existing store routes,
+  // unchanged (checkAmazonConnect).
+  "post /api/store/amazon/start", "post /api/store/amazon/finish"
 ];
 
 const EXPECTED_ADMIN = [
