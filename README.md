@@ -391,12 +391,11 @@ The restore refuses to write into production unless it is passed `--i-mean-produ
 
 `scripts/checkDependencyFloors.js` is the record. It reads `package-lock.json` and fails if a floor below regresses, or if this list and the lockfile disagree in either direction.
 
-**Floors** (lockfile refresh, Nov 6 2026, versions published at least 14 days before): body-parser 1.20.9, qs 6.16.1, undici 8.12.3.
+**Floors** (lockfile refreshes, Nov 6 and Nov 8 2026, versions published at least 14 days before): body-parser 1.20.9, qs 6.16.1, undici 8.12.3, follow-redirects 1.16.2.
 
 **Accepted residue** from the Nov 6 2026 `npm audit`, each with its reason:
 
 - **zod 3.25.76**, under @atproto/api 0.20.25 and its @atproto/common-web 0.5.3, @atproto/lexicon 0.7.4 and @atproto/xrpc 0.8.3 (advisory 1243066). No compatible fixed release exists: every @atproto/api release still requires zod 3, and no zod 3 release is fixed. An override to zod 4 is unsafe. The runtime use is a two-field error-body check on bsky.social responses, and no public route drives it.
 - **uuid 8.3.2**, under node-cron 3.0.3 (advisory 1119441). Only `uuid.v4()` with no buffer is called. node-cron stays at 3.0.3 for the DST reason recorded in `scripts/checkCronJobs.js`.
-- **follow-redirects 1.16.1**, under twilio and axios (advisory 1244003), until its fix (1.16.2, published Oct 25 2026) passes the 14-day rule on Nov 8 2026. Twilio is created without `allowRedirects`, so redirects are never followed.
 
 Never run `npm audit fix` in any form. `--force` would downgrade @atproto/api to 0.13.6 and move node-cron to 4.

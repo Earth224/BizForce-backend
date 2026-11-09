@@ -8,7 +8,9 @@
    WHAT THIS PROVES
      F. FLOORS: every installed copy of body-parser is at least 1.20.9, qs at
         least 6.16.1 and undici at least 8.12.3 (the lockfile refresh of Nov 6
-        2026). Versions are compared numerically by a comparison written here,
+        2026), and follow-redirects at least 1.16.2 (the lockfile refresh of
+        Nov 8 2026; NAMED Nov 8 2026: follow-redirects moved from the accepted
+        residue to this floor). Versions are compared numerically by a comparison written here,
         which is itself tested (F4: 1.20.10 is above 1.20.9).
      P. PINS: node-cron is 3.0.3 in the lockfile and "^3.0.3" in package.json,
         for the DST reason recorded in checkCronJobs (which pins it too).
@@ -22,8 +24,8 @@
         A2. Every listed entry is present at exactly that version and path
             (a fixed or moved one fails, so the list is updated when it is
             fixed).
-        A3. follow-redirects is never below 1.16.1, and never above it while
-            it is still listed.
+        A3. (removed, NAMED Nov 8 2026: the follow-redirects rule is now its
+            floor in F; A3 held it at 1.16.1 while it was accepted residue.)
         A4. The README's "Dependency exceptions" section names each one.
      N. NO_FORCE: no package.json script runs "npm audit fix".
      Z. Zero network.
@@ -62,10 +64,13 @@ const MUTATIONS = {
   "floor-compare-wrong": [["core", "  const pa = String(a).split(\"-\")[0].split(\".\").map(Number), pb = String(b).split(\"-\")[0].split(\".\").map(Number);",
     "  const pa = String(a).split(\"-\")[0].split(\".\"), pb = String(b).split(\"-\")[0].split(\".\");"]],
   // ── earned ──
-  // follow-redirects is fixed but the entry stays
-  "follow-redirects-bumped-listed": [["lock", lockEntry("follow-redirects", "1.16.1"), lockEntry("follow-redirects", "1.16.2")]],
-  // follow-redirects goes below the accepted version
-  "follow-redirects-below": [["lock", lockEntry("follow-redirects", "1.16.1"), lockEntry("follow-redirects", "1.16.0")]],
+  // NAMED Nov 8 2026 (follow-redirects floor): follow-redirects-bumped-listed and
+  // follow-redirects-below are replaced by the two below.
+  // the Nov 8 refresh is undone for follow-redirects (fails its floor)
+  "follow-redirects-regressed": [["lock", lockEntry("follow-redirects", "1.16.2"), lockEntry("follow-redirects", "1.16.1")]],
+  // the fixed follow-redirects is put back on the accepted list (fails A2)
+  "follow-redirects-relisted": [["core", "its only finding is the unreachable uuid path\" }\n];",
+    "its only finding is the unreachable uuid path\" },\n  { name: \"follow-redirects\", version: \"1.16.1\", path: \"node_modules/follow-redirects\", via: \"twilio 6.0.2 > axios 1.20.0\", advisories: [\"1244003\"],\n    reason: \"Twilio is created without allowRedirects, so redirects are never followed\" }\n];"]],
   // a script that runs npm audit fix
   "audit-fix-script": [["pkg", "    \"dev\": \"nodemon server.js\"\n", "    \"dev\": \"nodemon server.js\",\n    \"fix\": \"npm audit fix --force\"\n"]],
   // the README loses an exception
@@ -75,8 +80,9 @@ const MUTATIONS = {
   // a second, nested copy of qs below the floor
   "qs-nested-low": [["lock", "    \"node_modules/qs\": {", "    \"node_modules/stripe/node_modules/qs\": {\n      \"version\": \"6.11.0\"\n    },\n    \"node_modules/qs\": {"]],
   // a floor package disappears from the lockfile
-  "floor-package-missing": [["core", "const FLOORS = { \"body-parser\": \"1.20.9\", qs: \"6.16.1\", undici: \"8.12.3\" };",
-    "const FLOORS = { \"body-parser\": \"1.20.9\", qs: \"6.16.1\", undici: \"8.12.3\", \"undici-gone\": \"1.0.0\" };"]]
+  // NAMED Nov 8 2026: the anchor carries the follow-redirects floor
+  "floor-package-missing": [["core", "const FLOORS = { \"body-parser\": \"1.20.9\", qs: \"6.16.1\", undici: \"8.12.3\", \"follow-redirects\": \"1.16.2\" };",
+    "const FLOORS = { \"body-parser\": \"1.20.9\", qs: \"6.16.1\", undici: \"8.12.3\", \"follow-redirects\": \"1.16.2\", \"undici-gone\": \"1.0.0\" };"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -93,7 +99,8 @@ function cmpVersion(a, b) {
   for (let i = 0; i < 3; i++) { if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1; }
   return 0;
 }
-const FLOORS = { "body-parser": "1.20.9", qs: "6.16.1", undici: "8.12.3" };
+// NAMED Nov 8 2026: follow-redirects 1.16.2 (lockfile refresh of Nov 8 2026) joins the floors.
+const FLOORS = { "body-parser": "1.20.9", qs: "6.16.1", undici: "8.12.3", "follow-redirects": "1.16.2" };
 const LOCK_PINS = { "node-cron": "3.0.3", imapflow: "2.9.1", nodemailer: "10.2.1", "postal-mime": "2.7.5" };
 // The ranges the Nov 6 2026 npm audit named vulnerable, both ends inclusive ("*" is every version).
 const AUDIT_NOV6 = {
@@ -111,10 +118,9 @@ const ACCEPTED = [
   { name: "uuid", version: "8.3.2", path: "node_modules/uuid", via: "node-cron 3.0.3", advisories: ["1119441"],
     reason: "only uuid.v4() with no buffer is called; node-cron stays at 3.0.3 for the DST reason in checkCronJobs" },
   { name: "node-cron", version: "3.0.3", path: "node_modules/node-cron", via: "direct", advisories: ["1119441 (via uuid)"],
-    reason: "kept at 3.0.3 by the recorded DST decision (checkCronJobs); its only finding is the unreachable uuid path" },
-  { name: "follow-redirects", version: "1.16.1", path: "node_modules/follow-redirects", via: "twilio 6.0.2 > axios 1.20.0", advisories: ["1244003"],
-    reason: "until Nov 8 2026, when 1.16.2 passes the 14-day rule; Twilio is created without allowRedirects, so redirects are never followed" }
+    reason: "kept at 3.0.3 by the recorded DST decision (checkCronJobs); its only finding is the unreachable uuid path" }
 ];
+// NAMED Nov 8 2026: the follow-redirects 1.16.1 entry left this list; 1.16.2 is a floor above.
 // CORE END
 }
 
@@ -175,7 +181,9 @@ for (const name of Object.keys(FLOORS)) {
 check("F4. the comparison is numeric: 1.20.10 > 1.20.9, 6.16.1 > 6.9.0, 1.9.0 < 1.10.0, 8.12.3 = 8.12.3, 10.0.0 > 9.99.99",
   cmpVersion("1.20.10", "1.20.9") === 1 && cmpVersion("6.16.1", "6.9.0") === 1 && cmpVersion("1.9.0", "1.10.0") === -1 && cmpVersion("8.12.3", "8.12.3") === 0 &&
   cmpVersion("10.0.0", "9.99.99") === 1 && cmpVersion("1.20.8", "1.20.9") === -1);
-check("F5. the floors are the Nov 6 refresh's: body-parser 1.20.9, qs 6.16.1, undici 8.12.3", J(FLOORS) === J({ "body-parser": "1.20.9", qs: "6.16.1", undici: "8.12.3" }));
+// NAMED Nov 8 2026: F5 adds the Nov 8 refresh's follow-redirects 1.16.2.
+check("F5. the floors are the Nov 6 refresh's (body-parser 1.20.9, qs 6.16.1, undici 8.12.3) and the Nov 8 refresh's (follow-redirects 1.16.2)",
+  J(FLOORS) === J({ "body-parser": "1.20.9", qs: "6.16.1", undici: "8.12.3", "follow-redirects": "1.16.2" }));
 
 /* ════ P. pins ════ */
 console.log("\n══ P. pins ══");
@@ -197,19 +205,18 @@ check("A1. every copy still inside a range the Nov 6 audit named vulnerable is o
 const stale = ACCEPTED.filter(e => !(LOCK.packages[e.path] && LOCK.packages[e.path].version === e.version && copies(e.name).every(c => c.version === e.version)));
 check("A2. every accepted entry is present at exactly its version and path, and no other copy of it differs (update the list when one is fixed)",
   stale.length === 0, stale.map(e => e.name + " listed " + e.version + ", lockfile " + J(copies(e.name).map(c => c.version))).join("; "));
-const fr = copies("follow-redirects"), frListed = ACCEPTED.some(e => e.name === "follow-redirects");
-check("A3. follow-redirects is never below 1.16.1, and never above it while it is still listed",
-  fr.length >= 1 && fr.every(c => cmpVersion(c.version, "1.16.1") >= 0) && (!frListed || fr.every(c => cmpVersion(c.version, "1.16.1") <= 0)), J(fr));
+// A3 removed, NAMED Nov 8 2026: follow-redirects is held by its floor in F.
 check("A4. each accepted entry names its version, path, dependency path, advisory ids and a reason",
   ACCEPTED.length >= 1 && ACCEPTED.every(e => e.name && /^\d+\.\d+\.\d+$/.test(e.version) && /^node_modules\//.test(e.path) && e.via && Array.isArray(e.advisories) &&
     e.advisories.length >= 1 && e.advisories.every(a => /^\d{6,7}\b/.test(a)) && typeof e.reason === "string" && e.reason.length >= 40));
 const secAt = ALL.readme.indexOf("\n## Dependency exceptions\n");
 const sec = secAt === -1 ? "" : ALL.readme.slice(secAt, (ALL.readme.indexOf("\n## ", secAt + 5) + 1 || ALL.readme.length + 1) - 1);
-const readmeNames = [["zod", "3.25.76"], ["uuid", "8.3.2"], ["follow-redirects", "1.16.1"]];
+// NAMED Nov 8 2026: follow-redirects 1.16.1 and "allowRedirects" left the residue; the floors line adds follow-redirects 1.16.2.
+const readmeNames = [["zod", "3.25.76"], ["uuid", "8.3.2"]];
 check("A5. the README's \"Dependency exceptions\" section names checkDependencyFloors, the floors, and each accepted residue with its version",
-  sec.indexOf("`scripts/checkDependencyFloors.js` is the record.") !== -1 && sec.indexOf("body-parser 1.20.9, qs 6.16.1, undici 8.12.3") !== -1 &&
+  sec.indexOf("`scripts/checkDependencyFloors.js` is the record.") !== -1 && sec.indexOf("body-parser 1.20.9, qs 6.16.1, undici 8.12.3, follow-redirects 1.16.2") !== -1 &&
   readmeNames.every(([n, v]) => sec.indexOf("- **" + n + " " + v + "**") !== -1) &&
-  ["@atproto/api 0.20.25", "@atproto/common-web 0.5.3", "@atproto/lexicon 0.7.4", "@atproto/xrpc 0.8.3", "node-cron 3.0.3", "allowRedirects"].every(t => sec.indexOf(t) !== -1) &&
+  ["@atproto/api 0.20.25", "@atproto/common-web 0.5.3", "@atproto/lexicon 0.7.4", "@atproto/xrpc 0.8.3", "node-cron 3.0.3"].every(t => sec.indexOf(t) !== -1) &&
   ACCEPTED.every(e => sec.indexOf(e.name) !== -1), sec.slice(0, 200));
 
 /* ════ N. no force ════ */
