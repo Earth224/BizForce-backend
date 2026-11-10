@@ -8,11 +8,16 @@
         across a track change, a volume change and a page change; they go still when the pop-out pauses,
         and the pop-out sends nothing but one silent frame then. Under prefers-reduced-motion nothing is
         sent and the display is a still meter.
-     I  THE MUSIC BUTTON (scripts/bf-boombox.js): one icon source, MUSIC_ICON, an eighth note flowing into a
-        sine wave, every stroke and fill currentColor, used on the dashboard and as the floating icon on
-        other pages; the button is the header's round control (40 px, 50%, the accent border, a glow on hover
-        and focus, a visible focus ring), named aria-label and title "Music player"; the wave drifts only
-        while music plays, and never under reduced motion; the old two-circle boombox icon is gone.
+     I  THE MUSIC BUTTON (scripts/bf-boombox.js): one icon source, MUSIC_ICON, "the golden note" (Nov 9
+        2026): a golden-ratio spiral as the note head, under a soft glow, with a music stem and flag; no
+        colour of its own (no hex), every line currentColor; used on the dashboard and as the floating icon
+        on other pages; the button is the header's round control (40 px, 50%, the accent border, a visible
+        focus ring), named aria-label and title "Music player"; hover and focus fade a ring and the glow in
+        by opacity only; while music plays the glow pulses (an opacity keyframe), the spiral lightens and a
+        second ring shows; under reduced motion the glow is steady, and while hidden the pulse is paused;
+        neither the two-circle boombox icon nor the note-and-wave icon is left.
+        NAMED BEFORE → AFTER (Nov 9 2026, golden note icon): BEFORE, the note-and-wave icon whose wave
+        drifted (bfm-note-wave), and a hover that switched the border at once.
      P  THE PLACEMENT: centred between the logo's right edge and the header's horizontal centre, level with
         the logo; narrower, never closer than 24 px to the logo and never over another header item.
      M  THE MIST (scripts/termaximus-presence.js): TMX_NO_MIST_PAGES is exactly the sign-in pages and the
@@ -55,17 +60,34 @@ const MUTATIONS = {
   "frames-not-sent": [[MUSIC, "      post(levelsFrame());\n", "      levelsFrame();\n"]],
   // the pop-out keeps sending live frames while paused
   "frames-sent-when-paused": [[MUSIC, "      if (!R.playing) { post({ type: \"levels\", from: ID,", "      if (false) { post({ type: \"levels\", from: ID,"]],
-  // the two-circle boombox icon comes back
-  "old-icon-restored": [[BOOMBOX, "      '<ellipse class=\"bfm-note-head\" cx=\"7.6\" cy=\"15\" rx=\"2.6\" ry=\"1.9\" transform=\"rotate(-22 7.6 15)\" fill=\"currentColor\" stroke=\"none\"/>' +\n",
-    "      '<circle cx=\"6\" cy=\"14\" r=\"4\" fill=\"currentColor\"/><circle cx=\"18\" cy=\"14\" r=\"4\" fill=\"currentColor\"/>' +\n"]],
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: old-icon-restored put two circles in place of the
+     note head, icon-hardcoded-color gave the svg a hex stroke, reduced-motion-ignored dropped the wave's still rule.
+     AFTER: the golden note's own mutations below; icon-label-missing and placement-too-close are unchanged. */
+  // the note-and-wave icon comes back in place of the golden note (its head, its wave and their clip)
+  "old-icon-restored": [[BOOMBOX, "      '<g class=\"bfm-gn-spiral\" transform=\"translate(3 13.3) scale(.16)\" stroke-width=\"10\"><path d=\"M0 55 A55 55 0 0 1 55 0 A34 34 0 0 1 89 34 A21 21 0 0 1 68 55 A13 13 0 0 1 55 42 A8 8 0 0 1 63 34\"/></g>' +\n",
+    "      '<defs><clipPath id=\"bfmNoteWaveClip\"><rect x=\"2\" y=\"15\" width=\"20\" height=\"8\"/></clipPath></defs>' +\n" +
+    "      '<ellipse class=\"bfm-note-head\" cx=\"7.6\" cy=\"15\" rx=\"2.6\" ry=\"1.9\" transform=\"rotate(-22 7.6 15)\" fill=\"currentColor\" stroke=\"none\"/>' +\n" +
+    "      '<g clip-path=\"url(#bfmNoteWaveClip)\"><path class=\"bfm-note-wave\" d=\"M-4 19c1.5 0 1.5-2 3-2s1.5 2 3 2 1.5-2 3-2 1.5 2 3 2\"/></g>' +\n"]],
+  // the spiral's arcs are no longer the golden-ratio radii
+  "spiral-path-changed": [[BOOMBOX, "stroke-width=\"10\"><path d=\"M0 55 A55 55 0 0 1 55 0 A34 34 0 0 1 89 34", "stroke-width=\"10\"><path d=\"M0 55 A55 55 0 0 1 55 0 A30 30 0 0 1 85 30"]],
+  // the stem is shortened
+  "stem-path-changed": [[BOOMBOX, "d=\"M17.24 18.74V2.6c1.6 1", "d=\"M17.24 18.74V5.6c1.6 1"]],
   // the icon is drawn in a fixed colour, not the theme's
-  "icon-hardcoded-color": [[BOOMBOX, "viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"currentColor\"", "viewBox=\"0 0 24 24\" width=\"22\" height=\"22\" fill=\"none\" stroke=\"#22d3ee\""]],
+  "icon-hex-color": [[BOOMBOX, "<path class=\"bfm-gn-stem\" d=", "<path class=\"bfm-gn-stem\" stroke=\"#d4af37\" d="]],
+  // the glow switches on at once on hover, with no fade
+  "hover-not-faded": [[BOOMBOX, "\".bfm-gn-glow{opacity:0;transition:opacity 200ms}\"", "\".bfm-gn-glow{opacity:0}\""]],
+  // while music plays the glow holds still
+  "glow-not-pulsing": [[BOOMBOX, ".bfm-gn-glow{animation:bfm-gn-pulse 2.4s ease-in-out infinite}", ".bfm-gn-glow{opacity:.3}"]],
+  // the glow keeps pulsing under prefers-reduced-motion
+  "reduced-motion-pulses": [[BOOMBOX, "@media (prefers-reduced-motion: reduce){.bfm-gn-glow{animation:none!important}", "@media (prefers-reduced-motion: reduce){"]],
+  // the glow keeps pulsing while the tab is hidden
+  "hidden-still-pulses": [[BOOMBOX, "    \".bfm[data-hidden=true] .bfm-gn-glow{animation-play-state:paused}\",\n", ""]],
+  // the keyboard focus ring is gone
+  "focus-ring-removed": [[BOOMBOX, "    \".bfm-icon:focus-visible{outline:2px solid var(--bf-accent-a, #22d3ee);outline-offset:2px}\",\n", ""]],
   // the button loses its name
   "icon-label-missing": [[BOOMBOX, "data-act=\"bbx-open\" aria-label=\"Music player\" title=\"Music player\">", "data-act=\"bbx-open\">"]],
   // the button creeps back toward the logo
   "placement-too-close": [[BOOMBOX, "  var ICON_MIN_GAP = 24;", "  var ICON_MIN_GAP = 4;"]],
-  // the wave keeps drifting under prefers-reduced-motion
-  "reduced-motion-ignored": [[BOOMBOX, "    \"@media (prefers-reduced-motion: reduce){.bfm-note-wave{animation:none!important}}\",\n", ""]],
   // the mist comes back to the Oracle
   "mist-on-oracle": [[PRESENCE, "\"verify-email\", \"oracle\", \"mychart\"", "\"verify-email\", \"mychart\""]],
   // the mist shows on the sign-in page
@@ -333,7 +355,7 @@ async function visualChecks() {
 
 /* ════ I. the music button ════ */
 async function iconChecks() {
-  console.log("\n══ I. the music button: one icon, a note flowing into a wave, in the theme's colour ══");
+  console.log("\n══ I. the music button: one icon, the golden note, in the theme's colour ══");
   const BX = FILES[BOOMBOX];
   const D = await openPage({ name: "dash" });
   const icon = D.document.querySelector(".bfm-icon");
@@ -348,25 +370,45 @@ async function iconChecks() {
     const walk = dir => fs.readdirSync(path.join(FRONTEND, dir), { withFileTypes: true }).forEach(e => {
       const rel = dir ? dir + "/" + e.name : e.name;
       if (e.isDirectory()) { if (!/^(\.git|node_modules|icons)$/.test(e.name)) walk(rel); }
-      else if (/\.(html|js|css)$/.test(e.name) && rel !== BOOMBOX && /bfm-note-wave|bfm-icon-art|bbxIconBody|bbxIconChrome|bfm-icon-eq/.test(fs.readFileSync(path.join(FRONTEND, rel), "utf8"))) out.push(rel);
+      else if (/\.(html|js|css)$/.test(e.name) && rel !== BOOMBOX && /bfm-gn-|bfm-note-wave|bfm-icon-art|bbxIconBody|bbxIconChrome|bfm-icon-eq/.test(fs.readFileSync(path.join(FRONTEND, rel), "utf8"))) out.push(rel);
     });
     walk("");
     return out;
   })();
   check("I1. ... and no other frontend file draws a music icon of its own", others.length === 0, others.join(", "));
   const paints = svg ? Array.prototype.slice.call(svg.querySelectorAll("*")).concat([svg]).map(el => [el.getAttribute("stroke"), el.getAttribute("fill")]) : [];
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: the svg itself carried stroke="currentColor". AFTER: the
+     svg carries no colour at all (the owner's geometry), and the CSS strokes the stem, the spiral and the glow currentColor. */
   const colourOk = paints.length > 0 && paints.every(([st, fi]) => [null, "none", "currentColor"].indexOf(st) !== -1 && [null, "none", "currentColor"].indexOf(fi) !== -1) &&
-    svg.getAttribute("stroke") === "currentColor" && !/#[0-9a-f]{3,6}\b|rgba?\(/i.test(ICON || "x");
-  check("I2. every stroke and fill of the icon is currentColor (no colour of its own), so the theme's accent colours it", colourOk, JSON.stringify(paints));
+    !/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(ICON || "x") && BX.indexOf("\".bfm-gn-stem,.bfm-gn-spiral,.bfm-gn-glow{stroke:currentColor}\"") !== -1;
+  check("I2. the icon has no colour of its own (no hex, no rgb, every stroke and fill none or currentColor), and its CSS strokes every line currentColor, so the theme's accent colours it",
+    colourOk, JSON.stringify(paints));
+  /* the icon's own CSS: every rule naming the golden note's parts or the button's two rings */
+  const iconCss = (BX.match(/"[^"\n]*(?:\.bfm-gn-|\.bfm-icon::|\.bfm-icon:hover::|\.bfm-icon:focus-visible::)[^\n]*",?\n/g) || []).join("");
+  check("I2. ... and no hex colour in the icon's CSS (its rules and its rings)", iconCss.length > 0 && !/#[0-9a-f]{3,8}\b/i.test(iconCss), iconCss.slice(0, 200));
   const rule = sel => { const i = BX.indexOf("\"" + sel + "{"); return i === -1 ? "" : BX.slice(i, BX.indexOf("}", i) + 1); };
   check("I2. ... the button's colour is the theme's accent token (var(--bf-accent-a3, #00e5ff)), and its border the accent's channels",
     /color:var\(--bf-accent-a3, #00e5ff\)/.test(rule(".bfm-icon")) && /border:1px solid rgba\(var\(--bf-accent-a3-rgb, 0, 229, 255\),\.32\)/.test(rule(".bfm-icon")), rule(".bfm-icon"));
-  const shape = svg ? { ellipse: svg.querySelectorAll("ellipse").length, stem: !!svg.querySelector("path.bfm-note-stem"), wave: !!svg.querySelector("path.bfm-note-wave"), circles: svg.querySelectorAll("circle").length } : {};
-  check("I3. the icon is an eighth note (a head, its stem and flag) flowing into a sine wave across the base, one stroke weight (1.8), on a 24 grid",
-    shape.ellipse === 1 && shape.stem && shape.wave && svg.getAttribute("viewBox") === "0 0 24 24" && svg.getAttribute("stroke-width") === "1.8" &&
-    /M-4 19c1\.5 0 1\.5-2 3-2s1\.5 2 3 2/.test(svg.querySelector("path.bfm-note-wave").getAttribute("d")), JSON.stringify(shape));
-  check("I4. no two-circle boombox icon anywhere: no circle in the button, and none of the old icon's parts in bf-boombox.js",
-    shape.circles === 0 && !/ICON_ART|bbxIconBody|bbxIconChrome|bfm-icon-eq|bfm-icon-sheen|bbx-icon-eq|bbx-icon-sheen/.test(BX.replace(/\/\*[\s\S]*?\*\//g, "")));
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: I3 pinned an eighth note (an ellipse head, bfm-note-stem)
+     flowing into a sine wave (bfm-note-wave), stroke-width 1.8 on the svg, 22 x 22. AFTER: the owner's golden note, exactly. */
+  const SPIRAL_D = "M0 55 A55 55 0 0 1 55 0 A34 34 0 0 1 89 34 A21 21 0 0 1 68 55 A13 13 0 0 1 55 42 A8 8 0 0 1 63 34";
+  const STEM_D = "M17.24 18.74V2.6c1.6 1 3.9 1.9 3.9 4.8c0 1.3-.6 2.1-1.5 2.7";
+  const one = sel => svg ? svg.querySelectorAll(sel).length : 0;
+  const glowG = svg && svg.querySelector("g.bfm-gn-glow"), spiralG = svg && svg.querySelector("g.bfm-gn-spiral"), stemP = svg && svg.querySelector("path.bfm-gn-stem");
+  const shape = svg ? {
+    glow: one(".bfm-gn-glow"), spiral: one(".bfm-gn-spiral"), stem: one(".bfm-gn-stem"), paths: one("path"), circles: one("circle"), ellipses: one("ellipse"),
+    glowD: glowG && glowG.querySelector("path") && glowG.querySelector("path").getAttribute("d"), spiralD: spiralG && spiralG.querySelector("path") && spiralG.querySelector("path").getAttribute("d"),
+    stemD: stemP && stemP.getAttribute("d")
+  } : {};
+  check("I3. the icon is the golden note: the golden-ratio spiral (exact path) as the head, under its glow, and the stem and flag (exact path), on a 24 grid",
+    shape.glow === 1 && shape.spiral === 1 && shape.stem === 1 && shape.paths === 3 && shape.glowD === SPIRAL_D && shape.spiralD === SPIRAL_D && shape.stemD === STEM_D &&
+    svg.getAttribute("viewBox") === "0 0 24 24" && svg.getAttribute("width") === "24" && svg.getAttribute("height") === "24" &&
+    svg.getAttribute("aria-hidden") === "true" && svg.getAttribute("focusable") === "false" && svg.getAttribute("class") === "bfm-icon-art" &&
+    glowG.getAttribute("transform") === "translate(3 13.3) scale(.16)" && spiralG.getAttribute("transform") === "translate(3 13.3) scale(.16)" &&
+    glowG.getAttribute("stroke-width") === "26" && spiralG.getAttribute("stroke-width") === "10" && stemP.getAttribute("stroke-width") === "1.7", JSON.stringify(shape));
+  check("I4. neither old icon is left: no circle (the two-circle boombox) and no note head, wave or clip (the note-and-wave), in the button or in bf-boombox.js",
+    shape.circles === 0 && shape.ellipses === 0 && !svg.querySelector("clipPath,[clip-path]") &&
+    !/ICON_ART|bbxIconBody|bbxIconChrome|bfm-icon-eq|bfm-icon-sheen|bbx-icon-eq|bbx-icon-sheen|bfm-note-head|bfm-note-stem|bfm-note-wave|bfmNoteWaveClip/.test(BX.replace(/\/\*[\s\S]*?\*\//g, "")));
   check("I5. the button is named: aria-label and title \"Music player\", a real button",
     !!icon && icon.tagName === "BUTTON" && icon.getAttribute("type") === "button" && icon.getAttribute("aria-label") === "Music player" && icon.getAttribute("title") === "Music player",
     icon && icon.outerHTML.slice(0, 120));
@@ -374,20 +416,42 @@ async function iconChecks() {
   check("I6. it matches the header's round control (css/bizforce-ui.css .topbar-icon-btn: 40 px, round, a one-pixel accent border, the dark glass)",
     /width: 40px;/.test(uiBtn) && /height: 40px;/.test(uiBtn) && /border-radius: 50%;/.test(uiBtn) && D.BFBoombox.ICON_W === 40 && D.BFBoombox.ICON_H === 40 &&
     /border-radius:50%/.test(rule(".bfm-icon")) && /background:rgba\(8,12,28,\.85\)/.test(rule(".bfm-icon")) && css(D, icon).width === "40px" && css(D, icon).height === "40px");
-  check("I6. ... a soft glow on hover and on focus, and a visible focus ring",
-    /"\.bfm-icon:hover,\.bfm-icon:focus-visible\{border-color:rgba\(var\(--bf-accent-a3-rgb, 0, 229, 255\),\.6\);box-shadow:0 0 16px rgba\(var\(--bf-accent-a3-rgb, 0, 229, 255\),\.25\)\}"/.test(BX) &&
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: I6 pinned a hover and focus rule that switched the
+     border colour and box-shadow at once; I7 the wave's drift (bfm-note-wave, translateX, 3 s); I8 its reduced-motion
+     rule. AFTER: the focus ring is kept (I6); the hover fades by opacity only (I7); the playing pulse (I8), reduced
+     motion (I9) and the hidden pause (I10) are the golden note's; the floating icon is I11 (BEFORE I9). */
+  check("I6. ... a visible focus ring, in the theme's accent",
     /"\.bfm-icon:focus-visible\{outline:2px solid var\(--bf-accent-a, #22d3ee\);outline-offset:2px\}"/.test(BX));
-  const waveEl = icon && icon.querySelector(".bfm-note-wave");
-  const stillAtFirst = !/bfm-note-wave/.test(css(D, waveEl).animation || "");
+  const glowEl = icon && icon.querySelector(".bfm-gn-glow");
+  const iconTransitions = iconCss.match(/transition:[^;}"]+/g) || [];
+  check("I7. hover and focus fade in by opacity only (200 ms): the glow from 0 to .2, and a brighter ring over the border; nothing switches the border or shadow at once",
+    BX.indexOf("\".bfm-gn-glow{opacity:0;transition:opacity 200ms}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon:hover .bfm-gn-glow,.bfm-icon:focus-visible .bfm-gn-glow{opacity:.2}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon::before,.bfm-icon::after{content:\\\"\\\";position:absolute;inset:-1px;border-radius:50%;pointer-events:none;opacity:0;transition:opacity 200ms}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon::before{border:1px solid rgba(var(--bf-accent-a3-rgb, 0, 229, 255),.6);box-shadow:0 0 16px rgba(var(--bf-accent-a3-rgb, 0, 229, 255),.25)}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon:hover::before,.bfm-icon:focus-visible::before{opacity:1}\"") !== -1 &&
+    iconTransitions.length === 2 && iconTransitions.every(t => t === "transition:opacity 200ms") &&
+    !/"\.bfm-icon:(hover|focus-visible)[^"]*\{[^}"]*(border-color|box-shadow|border:)/.test(BX) &&
+    !!glowEl && css(D, glowEl).opacity === "0", JSON.stringify(iconTransitions) + " " + (glowEl && css(D, glowEl).opacity));
+  const restAnim = css(D, glowEl).animation || "";
   D.BFMusic.playTrack(T1); D.document.dispatchEvent(new D.Event("pointerdown", { bubbles: true })); await settle();
   D.BFMusic.play(); await settle();
-  const drifting = D.BFMusic.playing() && /bfm-note-wave/.test(css(D, waveEl).animation || "");
+  const pulsing = D.BFMusic.playing() && /bfm-gn-pulse/.test(css(D, glowEl).animation || "");
   D.BFMusic.pause(); await settle();
-  const stillAgain = !/bfm-note-wave/.test(css(D, waveEl).animation || "");
-  check("I7. while music plays the wave drifts (a slow phase shift, one period every 3 s); paused, it is still",
-    stillAtFirst && drifting && stillAgain && /"@keyframes bfm-note-wave\{from\{transform:translateX\(0\)\}to\{transform:translateX\(-6px\)\}\}"/.test(BX) &&
-    /"\.bfm-float\[data-playing=true\] \.bfm-note-wave\{animation:bfm-note-wave 3s linear infinite\}"/.test(BX), [stillAtFirst, drifting, stillAgain].join());
-  check("I8. under prefers-reduced-motion the wave never moves", /"@media \(prefers-reduced-motion: reduce\)\{\.bfm-note-wave\{animation:none!important\}\}"/.test(BX));
+  const stillAgain = !/bfm-gn-pulse/.test(css(D, glowEl).animation || "");
+  const pulseKf = (BX.match(/@keyframes bfm-gn-pulse\{[\s\S]*?\}\}/) || [""])[0];
+  check("I8. while music plays the glow pulses (an opacity keyframe, .22 to .45 over 2.4 s, ease-in-out), the spiral lightens and the ring takes the second accent at .55; paused, all at rest",
+    !/bfm-gn-pulse/.test(restAnim) && pulsing && stillAgain &&
+    pulseKf === "@keyframes bfm-gn-pulse{0%,100%{opacity:.22}50%{opacity:.45}}" && (pulseKf.match(/[\w-]+(?=:)/g) || []).every(p => p === "opacity") &&
+    BX.indexOf("\".bfm-float[data-playing=true] .bfm-gn-glow{animation:bfm-gn-pulse 2.4s ease-in-out infinite}\"") !== -1 &&
+    BX.indexOf("\".bfm-float[data-playing=true] .bfm-gn-spiral{stroke:currentColor;stroke:color-mix(in srgb,currentColor 70%,white)}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon::after{border:1px solid currentColor}\"") !== -1 &&
+    BX.indexOf("\".bfm-float[data-playing=true] .bfm-icon::after{opacity:.55}\"") !== -1, [restAnim, pulsing, stillAgain, pulseKf].join(" | "));
+  check("I9. under prefers-reduced-motion the glow never pulses: no animation, a steady .3 glow while playing",
+    BX.indexOf("\"@media (prefers-reduced-motion: reduce){.bfm-gn-glow{animation:none!important}.bfm-float[data-playing=true] .bfm-gn-glow{opacity:.3}}\"") !== -1);
+  check("I10. while the tab is hidden the pulse is paused (the root that carries data-hidden holds the glow)",
+    BX.indexOf("\".bfm[data-hidden=true] .bfm-gn-glow{animation-play-state:paused}\"") !== -1 && !!glowEl && !!glowEl.closest(".bfm") &&
+    !!D.document.querySelector(".bfm-float").closest(".bfm"));
   closeOne(D); await settle();
   /* the floating icon on another page is the same button */
   const Q = await openPage({ page: "crm.html", live: true, store: { v: 1, uid: UID, track_id: T1, position: 5 }, name: "floating" });
@@ -395,7 +459,7 @@ async function iconChecks() {
   const QB = Q.document.querySelector(".bfm-float");
   Q.BFMusic._box().setState("icon");
   const qi = Q.document.querySelector(".bfm-icon");
-  check("I9. the floating icon on another page is the same button and the same icon",
+  check("I11. the floating icon on another page is the same button and the same icon",
     !!qi && qi.innerHTML === parsed && qi.getAttribute("aria-label") === "Music player" && QB.getAttribute("data-state") === "icon");
   closeOne(Q); await settle();
 }

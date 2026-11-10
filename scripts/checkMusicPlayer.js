@@ -1431,7 +1431,10 @@ async function boomboxChecks(c) {
   const placeOnly = (BX.match(/\w+\.style\.(left|top|right|bottom)\s*=/g) || []).every(x => /^root\./.test(x));
   const frames_ = (BX.match(/@keyframes [\w-]+\{[\s\S]*?\}\}/g) || []);
   const kfOk = frames_.length >= 2 && frames_.every(k => (k.match(/[\w-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity"));
-  const transOk = (BX.match(/transition:[^;}"]+/g) || []).every(t => t.split(",").every(p => /^(transition:)?\s*transform\b/.test(p.trim()) || /none/.test(p)));
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: a transition could name transform only, narrower than
+     this check's own label ("transform or opacity"). AFTER: transform or opacity, as the label and the keyframe rule say,
+     so the music button's hover can fade (transition:opacity 200ms). Every other property is still refused. */
+  const transOk = (BX.match(/transition:[^;}"]+/g) || []).every(t => t.split(",").every(p => /^(transition:)?\s*(transform|opacity)\b/.test(p.trim()) || /none/.test(p)));
   check("G7. all motion is transform or opacity: the moving parts' styles, every keyframe and transition; only the root's place is left/top",
     styled.length === 0 && [...styleProps].every(p => ["transform", "opacity", "left", "top", "right", "bottom"].indexOf(p) !== -1) && placeOnly && kfOk && transOk,
     styled.slice(0, 3).join(" | ") + " " + [...styleProps].join());
@@ -1990,9 +1993,13 @@ async function stageChecks(c) {
     css(icon).display === "block" && css(DI.document.querySelector(".bfm-tag")).display === "none" && css(DI.document.querySelector(".bbx")).display === "none" &&
     css(DI.document.querySelector(".bfm-drawer")).display === "none" && !DI.BFMusic.playing() && AUDIOS.filter(x => x.win === DI).every(a => a.plays === 0) && signed() === 0,
     DIR.getAttribute("data-state") + " " + spot(DI) + " " + css(icon).display);
-  check("I3. the icon is the music button: the note and its wave drawn in currentColor, no circles, named \"Music player\"",
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: the note and its wave (.bfm-note-wave), the svg stroked
+     currentColor. AFTER: the golden note (.bfm-gn-glow, .bfm-gn-spiral, .bfm-gn-stem), no colour of its own on the svg, no
+     circle, no ellipse, no wave; scripts/checkFinishingTouches.js pins its exact paths and CSS. */
+  check("I3. the icon is the music button: the golden note (its glow, spiral and stem), no colour of its own, no circles, named \"Music player\"",
     icon.tagName === "BUTTON" && icon.getAttribute("aria-label") === "Music player" && icon.getAttribute("title") === "Music player" &&
-    !!icon.querySelector("svg.bfm-icon-art .bfm-note-wave") && !icon.querySelector("circle") && icon.querySelector("svg.bfm-icon-art").getAttribute("stroke") === "currentColor" &&
+    !!icon.querySelector("svg.bfm-icon-art .bfm-gn-glow") && !!icon.querySelector("svg.bfm-icon-art .bfm-gn-spiral") && !!icon.querySelector("svg.bfm-icon-art .bfm-gn-stem") &&
+    !icon.querySelector("circle,ellipse,.bfm-note-wave") && !icon.querySelector("[stroke]:not([stroke=none]):not([stroke=currentColor])") &&
     DI.BFBoombox.ICON_W === 40 && DI.BFBoombox.ICON_H === 40);
   const PI3 = await openPage(Object.assign({}, base, { width: 390 }));
   check("I3. the icon is in place (pinned, never fixed or dragged), and on a phone it stays beside the logo, not docked",
@@ -2066,10 +2073,12 @@ async function stageChecks(c) {
   click(Q1, ".bbx-fkeys [data-act=bbx-close]");
   /* NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the floating icon was the drawn boombox (#bbxIconBody) and, while
      music played, a four-bar equaliser (.bfm-icon-eq, bbx-icon-eq). AFTER: the music button, whose wave drifts (bfm-note-wave). */
-  const fIcon = Q1.document.querySelector(".bfm-icon"), fWave = Q1.document.querySelector(".bfm-icon .bfm-note-wave");
-  check("I6. on another page, \"Close to icon\" while music plays keeps it playing and leaves a small floating icon, the music button with its wave drifting",
+  /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: the button's wave drifted (bfm-note-wave). AFTER: its
+     golden note's glow pulses (bfm-gn-pulse). */
+  const fIcon = Q1.document.querySelector(".bfm-icon"), fWave = Q1.document.querySelector(".bfm-icon .bfm-gn-glow");
+  check("I6. on another page, \"Close to icon\" while music plays keeps it playing and leaves a small floating icon, the music button with its glow pulsing",
     Q1.BFMusic.playing() && Q1R.getAttribute("data-state") === "icon" && shown(Q1) && css(fIcon).display === "block" && !!fWave &&
-    Q1R.getAttribute("data-playing") === "true" && /bfm-note-wave/.test(css(fWave).animation),
+    Q1R.getAttribute("data-playing") === "true" && /bfm-gn-pulse/.test(css(fWave).animation),
     [Q1.BFMusic.playing(), Q1R.getAttribute("data-state"), shown(Q1), css(fIcon).display, fWave && css(fWave).animation].join(" "));
   check("I6. ... where the player was, by the Follow me rule: fixed on screen and not pinned",
     Q1R.getAttribute("data-pinned") === "false" && css(Q1R).position === "fixed" && spot(Q1).join() === atPlayer, Q1R.getAttribute("data-pinned") + " " + css(Q1R).position + " " + spot(Q1) + " vs " + atPlayer);
@@ -2093,13 +2102,14 @@ async function stageChecks(c) {
   gesture(DQ); DQ.BFMusic.playTrack(T2); await settle();
   click(DQ, ".bfm-tag [data-act=bbx-close]");
   // NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon's equaliser showed and went. AFTER: the button's wave drifts and stops.
-  const eqWave = DQ.document.querySelector(".bfm-icon .bfm-note-wave");
-  check("I6. on the dashboard, \"Close to icon\" keeps the music playing and the music button's wave drifts",
+  // NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: the wave drifted (bfm-note-wave, translateX). AFTER: the glow pulses (bfm-gn-pulse, opacity).
+  const eqWave = DQ.document.querySelector(".bfm-icon .bfm-gn-glow");
+  check("I6. on the dashboard, \"Close to icon\" keeps the music playing and the music button's glow pulses",
     DQ.BFMusic.playing() && boxOf(DQ).getAttribute("data-state") === "icon" && boxOf(DQ).getAttribute("data-playing") === "true" && shown(DQ) &&
-    !!eqWave && /bfm-note-wave/.test(css(eqWave).animation) && /@keyframes bfm-note-wave\{from\{transform:translateX\(0\)\}to\{transform:translateX\(-6px\)\}\}/.test(BX),
+    !!eqWave && /bfm-gn-pulse/.test(css(eqWave).animation) && /@keyframes bfm-gn-pulse\{0%,100%\{opacity:\.22\}50%\{opacity:\.45\}\}/.test(BX),
     eqWave && css(eqWave).animation);
   DQ.BFMusic.pause(); await settle();
-  check("I6. ... paused, the wave is still", !!eqWave && !/bfm-note-wave/.test(css(eqWave).animation || ""));
+  check("I6. ... paused, the glow is still", !!eqWave && !/bfm-gn-pulse/.test(css(eqWave).animation || ""));
   click(DQ, "[data-act=bbx-open]");
   gesture(DQ); DQ.BFMusic.play(); await settle(); CLOCK.t += 1; await settle();
   click(DQ, ".bfm-tag [data-act=stop]"); await settle();
