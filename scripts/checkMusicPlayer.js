@@ -149,6 +149,27 @@ const MUTATIONS = {
   // I: the volume fader's lane moved back over the R meter
   "fader-overlaps-meter": [[BOOMBOX, "\".bbx-vol{left:268px;top:2px;width:30px;height:40px}\"", "\".bbx-vol{left:246px;top:2px;width:30px;height:40px}\""]],
   // I: Pinned still fixed on screen
+  /* NAMED (Nov 10 2026, artist name, screen-aware motion): the pop-up's own mutations. */
+  // the banner always moves right, wherever the boombox is
+  "always-moves-right": [[BOOMBOX, "    var dir = c > view.left + view.width / 2 ? -1 : 1;", "    var dir = 1;"]],
+  // its start and end are not held inside the viewport
+  "not-clamped-to-viewport": [[BOOMBOX, "    var from = clampX(home - dir * half), to = clampX(home + dir * half);", "    var from = home - dir * half, to = home + dir * half;"]],
+  // a name wider than the room on both sides still travels
+  "wide-text-overflows": [[BOOMBOX, "    if (w > home - lo && w > hi - home) return { dir: dir, from: home, to: home, travel: 0 };\n", ""]],
+  // the path is measured once and reused, wherever the boombox and the window are now
+  "measured-once": [[BOOMBOX, "      var plan = measureSweep(sw);", "      var plan = window.__bfmSweepPlan || (window.__bfmSweepPlan = measureSweep(sw));"]],
+  // "Now Playing" is shown although the track has an artist
+  "shows-now-playing-despite-artist": [[BOOMBOX, "    if (a) return a;", "    if (a) return NOW_PLAYING;"]],
+  // with no artist it says "Now Playing", not the title
+  "no-title-fallback": [[BOOMBOX, "    if (t) return t;\n", ""]],
+  // the artist's name is built as markup
+  "artist-innerHTML": [[BOOMBOX, "      sp.textContent = nowName;", "      sp.innerHTML = nowName;"]],
+  // under reduced motion it still travels
+  "reduced-motion-travels": [[BOOMBOX, "    if (still) return { dir: dir, from: home, to: home, travel: 0 };\n", ""]],
+  // keep playing: the pop-out's new track shows the page's old name
+  "popout-name-stale": [[BOOMBOX, "      nowName = sweepName(loaded ? v : {});", "      if (typeof v.starts === \"number\") nowName = sweepName(loaded ? v : {});"]],
+  // the travel is carried by left, not the transform
+  "transition-not-transform": [[BOOMBOX, ";transition:transform \" + (SWEEP_MS", ";transition:left \" + (SWEEP_MS"]],
   /* NAMED (Nov 9 2026, button kept in the top bar). */
   // the music button is not in the top bar on the dashboard
   "icon-outside-bar": [[BOOMBOX, "  function inBar() { return !popout && state === \"icon\" && pinned() && !away() && !!barOf(); }", "  function inBar() { return false; }"]],
@@ -1489,8 +1510,10 @@ async function boomboxChecks(c) {
     /* NAMED BEFORE → AFTER (Oct 31 2026, now playing): BEFORE data-long and the one marquee in the media query; AFTER data-scroll, and every moving part. */
     RM.document.querySelector(".bfm-viz").getAttribute("data-viz") === "static" && RM.document.querySelector(".bbx-marquee").getAttribute("data-scroll") === "false" &&
     /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the four scrolling parts and the sweep. AFTER: the sheen, the rim's shine and the bar's sheen are
-       stopped and the sheens hidden, and the keys and the panel do not slide. */
-    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,\.bbx-ticker-track,\.bfm-tag-scroll,\.bbx-sweep,\.bbx-ticker,\.bbx-sheen,\.bbx-rim-shine,\.bfm-tag-sheen\{animation:none!important\}\.bbx-sweep,\.bbx-sheen,\.bfm-tag \.bfm-tag-sheen\{display:none\}\.bbx-keys button,\.bbx-fkeys button,\.bfm-panel\{transition:none\}/.test(BX), JSON.stringify(rm));
+       stopped and the sheens hidden, and the keys and the panel do not slide.
+       NAMED BEFORE → AFTER (Nov 10 2026, artist name, screen-aware motion). BEFORE: the sweep in the animation:none list and hidden
+       (display:none). AFTER: the sweep only fades in place (its opacity keyframes kept), with no transform transition; every other part as before. */
+    /@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,\.bbx-ticker-track,\.bfm-tag-scroll,\.bbx-ticker,\.bbx-sheen,\.bbx-rim-shine,\.bfm-tag-sheen\{animation:none!important\}\.bbx-sweep\{transition:none!important\}\.bbx-sheen,\.bfm-tag \.bfm-tag-sheen\{display:none\}\.bbx-keys button,\.bbx-fkeys button,\.bfm-panel\{transition:none\}/.test(BX), JSON.stringify(rm));
   await nowPlayingReducedChecks(RM, T4);
   RM.BFMusic.pause();
   SPECTRUM.level = 0;
@@ -1600,6 +1623,7 @@ async function boomboxChecks(c) {
     !/Internal server error|Loading your music/.test(nsText), NS.document.querySelector(".bfm-queue li").textContent);
   check("G12. no emoji in anything the boombox draws or says", !/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]/u.test(BX + boxOf(D).textContent + boxOf(F).textContent));
   await nowPlayingChecks(c);
+  await sweepScreenChecks(c);
   await liveOrderChecks();
   await mixerChecks(c);
   await stageChecks(c);
@@ -2427,11 +2451,14 @@ async function nowPlayingChecks(c) {
   /* the sweep */
   const s0 = nb.sweeps();
   N.BFMusic.playTrack(T1); await settle();
-  check("G13. a new track starts the neon \"Now playing\" sweep across the face, once", nb.sweeps() === s0 + 1 && bbx.getAttribute("data-sweep") === "on" &&
-    q1(".bbx-sweep").textContent === "Now playing" && q1(".bbx-sweep").getAttribute("aria-hidden") === "true" &&
-    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep 1\.2s cubic-bezier\(\.3,\.6,\.4,1\) 1 both\}/.test(BX) &&
-    /@keyframes bbx-sweep\{0%\{transform:translateX\(-150%\);opacity:0\}18%\{opacity:1\}82%\{opacity:1\}100%\{transform:translateX\(150%\);opacity:0\}\}/.test(BX) &&
-    /\.bbx\[data-sweep=on\] \.bbx-ticker\{opacity:0\}/.test(BX), nb.sweeps() - s0);
+  /* NAMED BEFORE → AFTER (Nov 10 2026, artist name, screen-aware motion). BEFORE: the banner read "Now playing", and its keyframes moved it
+     from translateX(-150%) to translateX(150%). AFTER: it reads the track's artist ("Artist" here), its keyframes fade it (opacity only),
+     and its travel is a transform transition over the same 1.2 s and curve, set from the screen (G14). */
+  check("G13. a new track starts the neon sweep across the face, once, with the artist's name", nb.sweeps() === s0 + 1 && bbx.getAttribute("data-sweep") === "on" &&
+    q1(".bbx-sweep").textContent === "Artist" && q1(".bbx-sweep").getAttribute("aria-hidden") === "true" &&
+    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep 1\.2s cubic-bezier\(\.3,\.6,\.4,1\) 1 both;transition:transform 1\.2s cubic-bezier\(\.3,\.6,\.4,1\)\}/.test(BX) &&
+    /@keyframes bbx-sweep\{0%\{opacity:0\}18%\{opacity:1\}82%\{opacity:1\}100%\{opacity:0\}\}/.test(BX) &&
+    /\.bbx\[data-sweep=on\] \.bbx-ticker\{opacity:0\}/.test(BX), nb.sweeps() - s0 + " " + q1(".bbx-sweep").textContent);
   N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.play(); await settle();
   N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.toggle(); await settle(); N.BFMusic.seek(20); await settle();
   check("G13. a pause and a resume (twice), and a seek, start no sweep", nb.sweeps() === s0 + 1 && N.BFMusic.playing(), nb.sweeps() - s0);
@@ -2493,6 +2520,7 @@ async function nowPlayingChecks(c) {
 async function nowPlayingReducedChecks(RM, track) {
   const q1 = s => RM.document.querySelector(s), bx = RM.BFMusic._box();
   const t = RM.BFMusic.library().tracks.find(x => x.id === track);
+  const rs0 = bx.sweeps();
   RM.BFMusic.next(); await settle();
   const now = RM.BFMusic.library().tracks.find(x => x.id === RM.BFMusic.state().track_id);
   check("G13. under reduced motion the VFD and the ticker hold still: one copy each, cut short with an ellipsis, the whole line as the tooltip",
@@ -2502,9 +2530,117 @@ async function nowPlayingReducedChecks(RM, track) {
     /\.bbx-marquee\{position:relative;height:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;/.test(FILES[BOOMBOX]), q1(".bbx-ticker").getAttribute("title"));
   bx.setState("tag");
   bx.render({ title: "A Title Much Longer Than The Minimised Tag Can Hold", artist: "Artist", tagText: "A Title Much Longer Than The Minimised Tag Can Hold" });
-  check("G13. ... the tag's long title does not scroll either, and no sweep has run", q1(".bfm-tag-clip").getAttribute("data-overflow") === "false" && !q1(".bfm-tag-ghost") &&
-    q1(".bfm-tag-clip").getAttribute("title") === "A Title Much Longer Than The Minimised Tag Can Hold" && bx.sweeps() === 0 && q1(".bbx").getAttribute("data-sweep") === "off", t && t.title);
+  /* NAMED BEFORE → AFTER (Nov 10 2026, artist name, screen-aware motion). BEFORE: under reduced motion no sweep ran (sweeps 0, data-sweep off).
+     AFTER: the owner's pop-up shows the artist's name under reduced motion too, as a fade only, in place: the page's new track (T4) showed it,
+     with no travel (its start and end are the same spot, and its transform is the same at both). */
+  const swR = q1(".bbx-sweep");
+  check("G13. ... the tag's long title does not scroll either, and the new track's pop-up only fades, in place: no travel", q1(".bfm-tag-clip").getAttribute("data-overflow") === "false" && !q1(".bfm-tag-ghost") &&
+    q1(".bfm-tag-clip").getAttribute("title") === "A Title Much Longer Than The Minimised Tag Can Hold" && bx.sweeps() >= 1 &&
+    swR.getAttribute("data-from") === swR.getAttribute("data-to") && /^translateX\(-?\d+px\)$/.test(swR.style.transform) && swR.textContent === "Artist",
+    [t && t.title, rs0, bx.sweeps(), swR.textContent, swR.getAttribute("data-from"), swR.getAttribute("data-to"), swR.style.transform].join(" "));
   bx.setState("box");
+}
+
+/* ════ G14 (Nov 10 2026, artist name, screen-aware motion): the pop-up shows the artist's name and moves across the screen
+   from wherever the boombox sits, its whole box 12 px inside the viewport from start to end. A mocked layout: the boombox's
+   box where the check puts it (440 x 250), the banner at its CSS spot (100 px into the face) plus its own translateX, as wide
+   as its text (8 px a character and 28 px of padding, at least 240 px, at most 60% of the window). ════ */
+async function sweepScreenChecks(c) {
+  console.log("\n══ G14. the pop-up: the artist's name, moving across the screen from wherever the boombox sits ══");
+  const { base, T1, T2 } = c;
+  const N = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const nb = N.BFMusic._box(), q1 = s => N.document.querySelector(s), B = N.BFBoombox;
+  nb.setState("box");
+  const bbx = q1(".bbx"), sw = q1(".bbx-sweep"), sp = sw.querySelector("span");
+  const at = { left: 824 };
+  const vw = () => N.innerWidth;
+  const txOf = () => { const m = /translateX\((-?[\d.]+)px\)/.exec(sw.style.transform || ""); return m ? Number(m[1]) : 0; };
+  const swW = () => Math.max(Math.min(240, 0.6 * vw()), Math.min(sp.textContent.length * 8 + 28, 0.6 * vw()));
+  bbx.getBoundingClientRect = () => ({ left: at.left, right: at.left + 440, top: 300, bottom: 550, width: 440, height: 250, x: at.left, y: 300 });
+  sw.getBoundingClientRect = () => { const l = at.left + 100 + txOf(), w = swW(); return { left: l, right: l + w, top: 372, bottom: 398, width: w, height: 26, x: l, y: 372 }; };
+  let n = 5000;
+  /* a new track (its own starts number), the boombox at `left`; read at once, before anything else renders */
+  const show = (left, artist, title) => {
+    at.left = left; n++;
+    nb.render({ title: title === undefined ? "Song" : title, artist: artist, track_id: "t" + n, starts: n });
+    const w = swW(), from = Number(sw.getAttribute("data-from")), to = Number(sw.getAttribute("data-to"));
+    const view = N.visualViewport && N.visualViewport.width > 0 ? { left: N.visualViewport.offsetLeft || 0, width: N.visualViewport.width } : { left: 0, width: vw() };
+    const lo = view.left + 12, hi = view.left + view.width - 12 - w;
+    return { w, from, to, dir: sw.getAttribute("data-dir"), endAt: left + 100 + txOf(), lo, hi, inside: from >= lo && to >= lo && from <= hi + 0.5 && to <= hi + 0.5,
+      name: sp.textContent, title: sw.getAttribute("title"), centre: left + 220, home: Math.min(Math.max(left + 220 - w / 2, lo), Math.max(hi, lo)) };
+  };
+  const R = show(824, "Right Side");
+  check("G14. the boombox at the far right (824 … 1264 of 1280): the name moves LEFT, and its whole box stays 12 px inside the screen from start to end",
+    R.dir === "left" && R.to < R.from && R.inside && R.endAt === R.to && R.name === "Right Side", JSON.stringify(R));
+  const L = show(16, "Left Side");
+  check("G14. at the far left (16 … 456): it moves RIGHT and stays inside; measured again for this showing, not the last one",
+    L.dir === "right" && L.to > L.from && L.inside && L.endAt === L.to, JSON.stringify(L));
+  const C = show(400, "Middle");
+  check("G14. near the centre (its centre 620, left of the screen's 640): it moves toward the side with more room, the right",
+    C.dir === "right" && C.to > C.from && C.inside && (C.hi - C.home) > (C.home - C.lo), JSON.stringify(C));
+  const longName = "The Extraordinarily Long Name Of An Orchestra ".repeat(7).trim();
+  const G = show(824, longName);
+  check("G14. a very long name: wider than the room on both sides, so no travel, centred on the boombox as far as the screen allows, still inside",
+    G.from === G.to && G.inside && G.w === 0.6 * 1280, JSON.stringify(Object.assign({}, G, { name: G.name.length })));
+  check("G14. ... cut short with an ellipsis at 60% of the window, on one line, and the whole name in its title",
+    G.title === longName && G.name === longName && /\.bbx-sweep\{[^}]*max-width:60vw;[^}]*white-space:nowrap;overflow:hidden;text-overflow:ellipsis;/.test(FILES[BOOMBOX]), G.title && G.title.length);
+  N.__w = 900;
+  const Z = show(444, "Narrow Window");
+  check("G14. after the window narrows (900 px) the next showing is measured against the new width: it moves left, inside",
+    Z.dir === "left" && Z.inside && Z.hi === 900 - 12 - Z.w, JSON.stringify(Z));
+  N.__w = 1280;
+  N.visualViewport = { width: 800, offsetLeft: 100, height: 700 };
+  const V = show(400, "Zoomed");
+  check("G14. where the browser reports a visual viewport (zoomed: 800 px from x 100), that is the screen it stays inside",
+    V.inside && V.lo === 112 && V.hi === 100 + 800 - 12 - V.w, JSON.stringify(V));
+  delete N.visualViewport;
+  check("G14. moved by its transform only: the banner's inline style is a translateX and nothing else, carried by a transform transition",
+    /^transform: translateX\(-?\d+px\);?$/.test(sw.getAttribute("style") || "") &&
+    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep [^}]*;transition:transform 1\.2s/.test((N.document.getElementById("bf-boombox-style") || {}).textContent || ""), sw.getAttribute("style"));
+  const still = B.sweepPlan({ left: 824, right: 1264 }, 240, { left: 0, width: 1280 }, true);
+  check("G14. under reduced motion the plan has no travel (it fades in place)", still.travel === 0 && still.from === still.to, JSON.stringify(still));
+
+  /* the name */
+  const a1 = show(400, "  Mx Artist  ");
+  const a2 = show(400, "", "Only A Title");
+  const a3 = show(400, "   ", "Title Again");
+  check("G14. the text is the track's artist, trimmed; with no artist (empty or blank) the title",
+    a1.name === "Mx Artist" && a2.name === "Only A Title" && a3.name === "Title Again", [a1.name, a2.name, a3.name].join(" | "));
+  check("G14. ... and with neither, \"Now Playing\" (also the banner's first text)",
+    B.sweepName({ title: "", artist: "" }) === "Now Playing" && B.sweepName({}) === "Now Playing" && B.sweepName({ title: " ", artist: null }) === "Now Playing" &&
+    /'<div class="bbx-sweep" aria-hidden="true"><span>' \+ NOW_PLAYING \+ '<\/span><\/div>'/.test(FILES[BOOMBOX]) && B.NOW_PLAYING === "Now Playing");
+  const evil = '<img src=x onerror="window.__pwned=1"><b>Bold</b> & Co';
+  const e1 = show(400, evil);
+  check("G14. a member's upload names it, so it is set as text only: markup in an artist's name is shown as characters, never built",
+    e1.name === evil && sp.children.length === 0 && !sw.querySelector("img,b") && !N.__pwned && /sp\.textContent = nowName;/.test(FILES[BOOMBOX]) && !/sp\.innerHTML/.test(FILES[BOOMBOX]), sp.innerHTML.slice(0, 80));
+
+  /* keep playing between pages: the page is the pop-out's remote (starts null); the pop-out's new track is a new track here */
+  at.left = 400;
+  const k0 = nb.sweeps();
+  nb.render({ title: "Remote One", artist: "First Remote", track_id: "r-1", starts: null, playing: true });
+  const k1 = nb.sweeps();
+  nb.render({ title: "Remote One", artist: "First Remote", track_id: "r-1", starts: null, playing: false });
+  const k2 = nb.sweeps();
+  nb.render({ title: "Remote Two", artist: "Second Remote", track_id: "r-2", starts: null, playing: true });
+  check("G14. keep playing between pages: the pop-out's new track shows its artist on the page (\"" + sp.textContent + "\"); a pause there starts nothing",
+    k2 === k1 && nb.sweeps() === k2 + 1 && sp.textContent === "Second Remote" && sw.getAttribute("title") === "Second Remote", [k0, k1, k2, nb.sweeps(), sp.textContent].join(" "));
+  closeOne(N);
+
+  /* the triggers, from the real player: play (a first track begun), a chosen track, Next, Previous */
+  const P = await openPage(Object.assign({}, base, { page: "tasks.html" }));
+  const pb = P.BFMusic._box(), pname = () => P.document.querySelector(".bbx-sweep span").textContent;
+  const p0 = pb.sweeps();
+  gesture(P); P.BFMusic.play(); await settle();
+  const p1 = pb.sweeps(), n1 = pname();
+  P.BFMusic.playTrack(P.BFMusic.state().track_id === T1 ? T2 : T1); await settle();
+  const p2 = pb.sweeps();
+  P.BFMusic.next(); await settle();
+  const p3 = pb.sweeps();
+  P.BFMusic.prev(); await settle();
+  const p4 = pb.sweeps(), n4 = pname();
+  check("G14. it shows on play (a track begun), on a chosen track, on Next and on Previous, each time with the artist's name",
+    p1 === p0 + 1 && p2 === p1 + 1 && p3 === p2 + 1 && p4 === p3 + 1 && n1 === "Artist" && n4 === "Artist", [p0, p1, p2, p3, p4, n1, n4].join(" "));
+  P.BFMusic.pause(); await settle(); closeOne(P);
 }
 
 function legalPages_musicText() { const lp = require("../lib/legalPages"); return lp.musicTerms().join(" ") + " " + lp.musicPrivacySentence(); }

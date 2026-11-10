@@ -66,6 +66,9 @@ const MUTATIONS = {
   // the pop-out measures its frames and never sends them
   "frames-not-sent": [[MUSIC, "      post(levelsFrame());\n", "      levelsFrame();\n"]],
   // the pop-out keeps sending live frames while paused
+  /* NAMED (Nov 10 2026, artist name, screen-aware motion) */
+  // keep playing: the pop-out's new track shows the page's old name on the page's pop-up
+  "popout-name-stale": [[BOOMBOX, "      nowName = sweepName(loaded ? v : {});", "      if (typeof v.starts === \"number\") nowName = sweepName(loaded ? v : {});"]],
   "frames-sent-when-paused": [[MUSIC, "      if (!R.playing) { post({ type: \"levels\", from: ID,", "      if (false) { post({ type: \"levels\", from: ID,"]],
   /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: old-icon-restored put two circles in place of the
      note head, icon-hardcoded-color gave the svg a hex stroke, reduced-motion-ignored dropped the wave's still rule.
@@ -346,6 +349,10 @@ async function visualChecks() {
   POP.BFMusic.next(); await settle(); POP.BFMusic._tick(); await settle(); await untilHeard(P, true);
   P.__bars = []; frames(P, 10);
   check("V5. a track change in the pop-out keeps the page's display moving (" + tallest(P).toFixed(1) + " px)", tallest(P) > 10 && POP.BFMusic.state().track_id === T2);
+  /* NAMED (Nov 10 2026, artist name, screen-aware motion): the pop-out's new track is a new track on the page too */
+  const pSweep = P.document.querySelector(".bbx-sweep");
+  check("V5. ... and the page's pop-up shows the pop-out's new track's artist (\"" + (pSweep && pSweep.textContent) + "\", T2's artist B), not the last one's",
+    !!pSweep && pSweep.textContent === "B" && pSweep.getAttribute("title") === "B" && P.BFMusic._box().sweeps() >= 1, pSweep && pSweep.textContent + " " + P.BFMusic._box().sweeps());
   P.BFMusic.setVolume(0.3); await settle(); await wait(80); P.__bars = []; frames(P, 10);
   check("V5. ... and a volume change made on the page (relayed to the pop-out) too (" + tallest(P).toFixed(1) + " px)", tallest(P) > 10 && Math.abs(POP.BFMusic.state().volume - 0.3) < 1e-9);
 
