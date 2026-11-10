@@ -1999,7 +1999,10 @@ async function stageChecks(c) {
   check("I3. the icon is the music button: the golden note (its glow, spiral and stem), no colour of its own, no circles, named \"Music player\"",
     icon.tagName === "BUTTON" && icon.getAttribute("aria-label") === "Music player" && icon.getAttribute("title") === "Music player" &&
     !!icon.querySelector("svg.bfm-icon-art .bfm-gn-glow") && !!icon.querySelector("svg.bfm-icon-art .bfm-gn-spiral") && !!icon.querySelector("svg.bfm-icon-art .bfm-gn-stem") &&
-    !icon.querySelector("circle,ellipse,.bfm-note-wave") && !icon.querySelector("[stroke]:not([stroke=none]):not([stroke=currentColor])") &&
+    /* NAMED BEFORE → AFTER (Nov 9 2026, violet spiral per the approved design). BEFORE: a stroke attribute of currentColor
+       was allowed in the markup. AFTER: the markup holds no colour at all (no stroke, color or style attribute, every fill
+       "none"); the colours are the CSS's: the stem currentColor, the spiral and glow var(--bf-accent-b, #a855f7). */
+    !icon.querySelector("circle,ellipse,.bfm-note-wave") && !icon.querySelector("[stroke],[color],[style],[fill]:not([fill=none])") &&
     DI.BFBoombox.ICON_W === 40 && DI.BFBoombox.ICON_H === 40);
   const PI3 = await openPage(Object.assign({}, base, { width: 390 }));
   check("I3. the icon is in place (pinned, never fixed or dragged), and on a phone it stays beside the logo, not docked",

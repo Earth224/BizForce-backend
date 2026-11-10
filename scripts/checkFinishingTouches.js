@@ -10,7 +10,8 @@
         sent and the display is a still meter.
      I  THE MUSIC BUTTON (scripts/bf-boombox.js): one icon source, MUSIC_ICON, "the golden note" (Nov 9
         2026): a golden-ratio spiral as the note head, under a soft glow, with a music stem and flag; no
-        colour of its own (no hex), every line currentColor; used on the dashboard and as the floating icon
+        colour in its markup; its CSS strokes the stem currentColor (the primary accent) and the spiral and
+        glow the theme violet, var(--bf-accent-b, #a855f7), and no other colour; used on the dashboard and as the floating icon
         on other pages; the button is the header's round control (40 px, 50%, the accent border, a visible
         focus ring), named aria-label and title "Music player"; hover and focus fade a ring and the glow in
         by opacity only; while music plays the glow pulses (an opacity keyframe), the spiral lightens and a
@@ -84,6 +85,15 @@ const MUTATIONS = {
   "hidden-still-pulses": [[BOOMBOX, "    \".bfm[data-hidden=true] .bfm-gn-glow{animation-play-state:paused}\",\n", ""]],
   // the keyboard focus ring is gone
   "focus-ring-removed": [[BOOMBOX, "    \".bfm-icon:focus-visible{outline:2px solid var(--bf-accent-a, #22d3ee);outline-offset:2px}\",\n", ""]],
+  /* NAMED (Nov 9 2026, violet spiral per the approved design): the two-tone golden note's own mutations. */
+  // the spiral and its glow go back to the primary accent
+  "spiral-not-violet": [[BOOMBOX, "\".bfm-gn-spiral,.bfm-gn-glow{stroke:var(--bf-accent-b, #a855f7)}\"", "\".bfm-gn-spiral,.bfm-gn-glow{stroke:currentColor}\""]],
+  // the stem takes the violet
+  "stem-violet": [[BOOMBOX, "\".bfm-gn-stem{stroke:currentColor}\"", "\".bfm-gn-stem{stroke:var(--bf-accent-b, #a855f7)}\""]],
+  // a stray hex colour is added to the icon's CSS, in a rule of its own
+  "stray-hex": [[BOOMBOX, "    \".bfm-gn-stem{stroke:currentColor}\",\n", "    \".bfm-gn-stem{stroke:currentColor}\",\n    \".bfm-icon:hover .bfm-gn-stem{stroke:#ffd700}\",\n"]],
+  // a stroke colour is written into the svg markup itself
+  "svg-inline-color": [[BOOMBOX, "<g class=\"bfm-gn-spiral\" transform=", "<g class=\"bfm-gn-spiral\" stroke=\"#a855f7\" transform="]],
   // the button loses its name
   "icon-label-missing": [[BOOMBOX, "data-act=\"bbx-open\" aria-label=\"Music player\" title=\"Music player\">", "data-act=\"bbx-open\">"]],
   // the button creeps back toward the logo
@@ -379,13 +389,33 @@ async function iconChecks() {
   const paints = svg ? Array.prototype.slice.call(svg.querySelectorAll("*")).concat([svg]).map(el => [el.getAttribute("stroke"), el.getAttribute("fill")]) : [];
   /* NAMED BEFORE → AFTER (Nov 9 2026, golden note icon). BEFORE: the svg itself carried stroke="currentColor". AFTER: the
      svg carries no colour at all (the owner's geometry), and the CSS strokes the stem, the spiral and the glow currentColor. */
-  const colourOk = paints.length > 0 && paints.every(([st, fi]) => [null, "none", "currentColor"].indexOf(st) !== -1 && [null, "none", "currentColor"].indexOf(fi) !== -1) &&
-    !/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(ICON || "x") && BX.indexOf("\".bfm-gn-stem,.bfm-gn-spiral,.bfm-gn-glow{stroke:currentColor}\"") !== -1;
-  check("I2. the icon has no colour of its own (no hex, no rgb, every stroke and fill none or currentColor), and its CSS strokes every line currentColor, so the theme's accent colours it",
+  /* NAMED BEFORE → AFTER (Nov 9 2026, violet spiral per the approved design). BEFORE: one CSS rule stroked the stem, the
+     spiral and the glow currentColor, and the svg could hold currentColor strokes. AFTER: the svg markup holds no colour at
+     all (no stroke, color or style attribute, every fill "none"), the stem is stroked currentColor and the spiral and its
+     glow the theme violet, var(--bf-accent-b, #a855f7), as BizForce writes the violet everywhere. */
+  const markupNoColour = !!ICON && !/\s(stroke|color|style|stop-color)=/.test(ICON) && (ICON.match(/\sfill="[^"]*"/g) || []).every(f => f === " fill=\"none\"") &&
+    !/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|currentColor/i.test(ICON);
+  const colourOk = paints.length > 0 && paints.every(([st, fi]) => st === null && [null, "none"].indexOf(fi) !== -1) && markupNoColour &&
+    BX.indexOf("\".bfm-gn-stem{stroke:currentColor}\"") !== -1 && BX.indexOf("\".bfm-gn-spiral,.bfm-gn-glow{stroke:var(--bf-accent-b, #a855f7)}\"") !== -1;
+  check("I2. the icon's markup holds no colour at all; its CSS strokes the stem currentColor (the primary accent) and the spiral and its glow the theme violet, var(--bf-accent-b, #a855f7)",
     colourOk, JSON.stringify(paints));
   /* the icon's own CSS: every rule naming the golden note's parts or the button's two rings */
   const iconCss = (BX.match(/"[^"\n]*(?:\.bfm-gn-|\.bfm-icon::|\.bfm-icon:hover::|\.bfm-icon:focus-visible::)[^\n]*",?\n/g) || []).join("");
-  check("I2. ... and no hex colour in the icon's CSS (its rules and its rings)", iconCss.length > 0 && !/#[0-9a-f]{3,8}\b/i.test(iconCss), iconCss.slice(0, 200));
+  /* NAMED BEFORE → AFTER (Nov 9 2026, violet spiral per the approved design). BEFORE: no hex at all in the icon's CSS.
+     AFTER: every colour is one of the project's accent forms, and the only hex is the violet's own fallback:
+       the primary accent: currentColor, var(--bf-accent-a3, #00e5ff) or its channels rgba(var(--bf-accent-a3-rgb, 0, 229, 255),a);
+       the violet: var(--bf-accent-b, #a855f7), only for the spiral, the glow and the playing ring (::after);
+       white, only as the playing spiral's tint inside color-mix. */
+  const ALLOWED_COLOURS = [/var\(--bf-accent-b, #a855f7\)/g, /var\(--bf-accent-a3, #00e5ff\)/g, /rgba\(var\(--bf-accent-a3-rgb, 0, 229, 255\),\.\d+\)/g, /\bcurrentColor\b/g, /color-mix\(in srgb,,? ?\d+%,white\)/g];
+  const colourLeft = ALLOWED_COLOURS.reduce((t, re) => t.replace(re, ""), iconCss);
+  const iconRules = iconCss.split("\n").filter(Boolean);
+  const violetRules = iconRules.filter(r => /--bf-accent-b\b/.test(r));
+  const violetWhere = violetRules.every(r => { const sel = r.slice(r.indexOf("\"") + 1, r.indexOf("{")); return !/bfm-gn-stem/.test(sel) && /\.bfm-gn-spiral|\.bfm-gn-glow|::after/.test(sel); });
+  const stemRules = iconRules.filter(r => /\.bfm-gn-stem/.test(r.slice(0, r.indexOf("{"))));
+  check("I2. ... every colour in the icon's CSS is the primary accent (currentColor, var(--bf-accent-a3, ...)) or, for the spiral, glow and playing ring only, var(--bf-accent-b, #a855f7); no other hex, rgb, hsl or named colour",
+    iconCss.length > 0 && !/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\b(white|black|gold|violet|purple|cyan)\b/i.test(colourLeft) &&
+    violetRules.length === 3 && violetWhere && stemRules.length === 1 && stemRules[0].indexOf("\".bfm-gn-stem{stroke:currentColor}\"") !== -1,
+    JSON.stringify({ left: (colourLeft.match(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)|\b(white|black|gold|violet|purple|cyan)\b/ig) || []), violet: violetRules.length, stem: stemRules }));
   const rule = sel => { const i = BX.indexOf("\"" + sel + "{"); return i === -1 ? "" : BX.slice(i, BX.indexOf("}", i) + 1); };
   check("I2. ... the button's colour is the theme's accent token (var(--bf-accent-a3, #00e5ff)), and its border the accent's channels",
     /color:var\(--bf-accent-a3, #00e5ff\)/.test(rule(".bfm-icon")) && /border:1px solid rgba\(var\(--bf-accent-a3-rgb, 0, 229, 255\),\.32\)/.test(rule(".bfm-icon")), rule(".bfm-icon"));
@@ -444,8 +474,10 @@ async function iconChecks() {
     !/bfm-gn-pulse/.test(restAnim) && pulsing && stillAgain &&
     pulseKf === "@keyframes bfm-gn-pulse{0%,100%{opacity:.22}50%{opacity:.45}}" && (pulseKf.match(/[\w-]+(?=:)/g) || []).every(p => p === "opacity") &&
     BX.indexOf("\".bfm-float[data-playing=true] .bfm-gn-glow{animation:bfm-gn-pulse 2.4s ease-in-out infinite}\"") !== -1 &&
-    BX.indexOf("\".bfm-float[data-playing=true] .bfm-gn-spiral{stroke:currentColor;stroke:color-mix(in srgb,currentColor 70%,white)}\"") !== -1 &&
-    BX.indexOf("\".bfm-icon::after{border:1px solid currentColor}\"") !== -1 &&
+    /* NAMED BEFORE → AFTER (Nov 9 2026, violet spiral per the approved design). BEFORE: the playing spiral and the playing
+       ring were currentColor. AFTER: the theme violet, var(--bf-accent-b, #a855f7), the spiral tinted 70% violet, 30% white. */
+    BX.indexOf("\".bfm-float[data-playing=true] .bfm-gn-spiral{stroke:var(--bf-accent-b, #a855f7);stroke:color-mix(in srgb,var(--bf-accent-b, #a855f7) 70%,white)}\"") !== -1 &&
+    BX.indexOf("\".bfm-icon::after{border:1px solid var(--bf-accent-b, #a855f7)}\"") !== -1 &&
     BX.indexOf("\".bfm-float[data-playing=true] .bfm-icon::after{opacity:.55}\"") !== -1, [restAnim, pulsing, stillAgain, pulseKf].join(" | "));
   check("I9. under prefers-reduced-motion the glow never pulses: no animation, a steady .3 glow while playing",
     BX.indexOf("\"@media (prefers-reduced-motion: reduce){.bfm-gn-glow{animation:none!important}.bfm-float[data-playing=true] .bfm-gn-glow{opacity:.3}}\"") !== -1);
