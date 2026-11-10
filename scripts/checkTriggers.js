@@ -704,7 +704,20 @@ const MEMBER_TABLES = ["inventory_items", "content_library", "ai_tasks", "agent_
     const app = {};
     ["get", "post", "put", "delete"].forEach(m => { app[m] = function (p) { handlers[m + " " + p] = Array.prototype.slice.call(arguments, 1); }; });
     const mw = name => { const f = function (req, res, next) { next(); }; f.mw = name; return f; };
+    // NAMED (Nov 8 2026, fixed clock so the check no longer depends on the real date): the route block
+    // calls Date.now() for the preview window, so the sandbox gets a Date whose now() and no-argument
+    // constructor return the check's own NOW. Every other constructor form, Date.parse and Date.UTC behave
+    // normally. BEFORE: the sandbox used the real clock, and F's preview dates drifted once real time passed
+    // Nov 9 2026 05:30 UTC.
+    function FixedDate(...a) {
+      if (!new.target) return new Date(NOW).toString();
+      return Reflect.construct(Date, a.length ? a : [NOW], new.target);
+    }
+    FixedDate.prototype = Date.prototype;
+    Object.setPrototypeOf(FixedDate, Date);
+    FixedDate.now = () => NOW;
     const ctx = Object.assign({
+      Date: FixedDate,
       app, rateLimit: () => mw("limiter"), requireAuth: mw("auth"), requireActiveSubscription: mw("sub"),
       supabase: db, isOwnerAccount: id => id === OWNER, getUserPlan: async () => ({ active: true }),
       entitlementGateObservation: PLAN_OBS, enforcePlatformDailySpendCeiling: async () => ({ allowed: true }),

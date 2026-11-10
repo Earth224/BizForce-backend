@@ -668,7 +668,8 @@ function themeCache(theme) {
    inline left and top.
    NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the tag 290 x 40, the boombox 320 x 176, with the library
    320 x 484. AFTER: the bar 300 x 40 and the boombox 440 x 250 (bf-boombox.js's BAR_W/BAR_H, BOX_W/BOX_H).
-   NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the bar or the boombox. AFTER: the icon too, 40 x 36 (ICON_W/ICON_H). */
+   NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the bar or the boombox. AFTER: the icon too, 40 x 36 (ICON_W/ICON_H).
+   NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon 40 x 36. AFTER: 40 x 40. */
 const MIST_TAG = '<script src="/scripts/termaximus-presence.js"></script>';
 function layoutStub(win) {
   const HE = win.HTMLElement.prototype;
@@ -677,7 +678,7 @@ function layoutStub(win) {
     if (ds) { const [sw, sh] = ds.split("x").map(Number); return { w: sw, h: sh }; }
     if (el.classList && el.classList.contains("bfm-float")) {
       const st = el.getAttribute("data-state");
-      return st === "box" ? { w: 440, h: 250 } : st === "icon" ? { w: 40, h: 36 } : { w: 300, h: 40 };
+      return st === "box" ? { w: 440, h: 250 } : st === "icon" ? { w: 40, h: 40 } : { w: 300, h: 40 };
     }
     return { w: 0, h: 0 };
   };
@@ -1119,10 +1120,12 @@ async function playerChecks() {
      NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: "Library" and "Pop out". AFTER: the bar beside the logo, "Library" sliding out the tracks, and
      "Keep playing between pages" (no Pop out key any more).
      NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: "The bar beside the logo is your music: press it for the boombox, then \"Library\" ...;
-     \"Keep playing between pages\" carries it on." AFTER: the icon beside the logo, then the bar, then the boombox; "Library" and "Close to icon". */
+     \"Keep playing between pages\" carries it on." AFTER: the icon beside the logo, then the bar, then the boombox; "Library" and "Close to icon".
+     NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: "The small boombox icon beside the logo is your music: ..." and the icon
+     named "Open music". AFTER: "The music button in the top bar is your music: ..." and the icon named "Music player". */
   check("F4. the dashboard's guide names the icon, the bar, the boombox and its own labels, \"Library\" and \"Close to icon\"",
-    /The small boombox icon beside the logo is your music: press it for the bar, then the boombox; \\"Library\\" slides out your tracks, \\"Close to icon\\" tucks it away\./.test(tip) &&
-    !/Pop out/.test(tip) && !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") && !!A.document.querySelector(".bfm-icon[aria-label='Open music']") &&
+    /The music button in the top bar is your music: press it for the bar, then the boombox; \\"Library\\" slides out your tracks, \\"Close to icon\\" tucks it away\./.test(tip) &&
+    !/Pop out/.test(tip) && !!A.document.querySelector("[data-act=bbx-library][aria-label=Library]") && !!A.document.querySelector(".bfm-icon[aria-label='Music player']") &&
     A.document.querySelectorAll("[data-act=bbx-close][aria-label='Close to icon']").length === 2 &&
     /^Keep playing between pages \(opens a small window\)$/.test(A.document.querySelector(".bfm-panel [data-act=keep-playing]").textContent.trim()));
   ear.close();
@@ -1252,9 +1255,12 @@ async function boomboxChecks(c) {
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: the dashboard opened as the boombox. AFTER: every page starts as the bar; on the dashboard it
      sits 12 px right of the logo, centred on the header's height (the stub's logo is 16…200 x 10…50).
      NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the bar at (212, 10). AFTER: the dashboard starts as the 40 x 36 icon, centred the same way
-     (212, 12); "Open music" opens the bar at (212, 10). */
-  check("G2. on the dashboard it starts as the icon in the top bar, 12 px right of the BizForce AI logo and level with it",
-    !!DR && DR.getAttribute("data-state") === "icon" && DR.style.left === "212px" && DR.style.top === "12px", DR && DR.getAttribute("style"));
+     (212, 12); "Open music" opens the bar at (212, 10).
+     NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the 40 x 36 icon 12 px right of the logo (212, 12). AFTER: the 40 x 40
+     music button, named "Music player", centred between the logo's right edge (200) and the header's centre (the stub's header has no
+     width, so the window's, 640): (400, 10), level with the logo. The bar it opens is still at (212, 10). */
+  check("G2. on the dashboard it starts as the icon in the top bar, between the BizForce AI logo and the header's centre, level with it",
+    !!DR && DR.getAttribute("data-state") === "icon" && DR.style.left === "400px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
   click(D, "[data-act=bbx-open]");
   check("G2. ... and \"Open music\" opens the bar in its place, level with the logo", DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px",
     DR.getAttribute("style"));
@@ -1606,8 +1612,9 @@ async function mixerChecks(c) {
   closeOne(TH);
   const iconAt = spot(D).join();
   click(D, "[data-act=bbx-open]");
-  check("H1. beside the logo it sits 12 px to the right, centred on the header (the icon 212, 12; the bar 212, 10); with no logo header, the top-left corner (16, 16); never bottom left",
-    iconAt === "212,12" && spot(D).join() === "212,10" && spot(T).join() === "16,16" && T.BFMusic._box().defaultSpot().top === 16 && D.BFBoombox.GAP === 12, iconAt + " " + spot(D) + " " + spot(T));
+  /* NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon at (212, 12). AFTER: the music button at (400, 10) (see G2). */
+  check("H1. beside the logo the bar sits 12 px to the right, centred on the header (the bar 212, 10; the music button 400, 10); with no logo header, the top-left corner (16, 16); never bottom left",
+    iconAt === "400,10" && spot(D).join() === "212,10" && spot(T).join() === "16,16" && T.BFMusic._box().defaultSpot().top === 16 && D.BFBoombox.GAP === 12, iconAt + " " + spot(D) + " " + spot(T));
   /* a logo at the right end of its header: the bar goes to its left, still level with it */
   const RL = await openPage(Object.assign({}, base, { page: "crm.html", extra: '<nav class="top-nav" data-size="1280x60"><span class="brand-badge" data-bf-boombox-anchor>BizForce AI</span></nav>' }));
   const rlSpot = RL.BFMusic._box().defaultSpot();
@@ -1974,19 +1981,23 @@ async function stageChecks(c) {
   await settle(20);
   const icon = DI.document.querySelector(".bfm-icon");
   const signed = () => DI.__calls.filter(x => /\/url$/.test(x)).length;
-  check("I3. the dashboard's first stage is the icon beside the logo (212, 12): the bar and the boombox are not shown, and no audio has started",
-    DIR.getAttribute("data-state") === "icon" && DIR.getAttribute("data-home") === "true" && DIR.getAttribute("data-away") === "false" && spot(DI).join() === "212,12" &&
+  /* NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon at (212, 12), a small drawn boombox in the finish's tokens
+     with a sheen, 40 x 36, named "Open music"; on a phone at (212, 12). AFTER: the music button at (400, 10), the note and its wave in
+     currentColor, 40 x 40, named "Music player"; on a 390 px phone the space to the centre is too small, so it keeps 24 px from the
+     logo: (224, 10). scripts/checkFinishingTouches.js pins the icon, the placement rule and the labels in full. */
+  check("I3. the dashboard's first stage is the icon beside the logo (400, 10): the bar and the boombox are not shown, and no audio has started",
+    DIR.getAttribute("data-state") === "icon" && DIR.getAttribute("data-home") === "true" && DIR.getAttribute("data-away") === "false" && spot(DI).join() === "400,10" &&
     css(icon).display === "block" && css(DI.document.querySelector(".bfm-tag")).display === "none" && css(DI.document.querySelector(".bbx")).display === "none" &&
     css(DI.document.querySelector(".bfm-drawer")).display === "none" && !DI.BFMusic.playing() && AUDIOS.filter(x => x.win === DI).every(a => a.plays === 0) && signed() === 0,
     DIR.getAttribute("data-state") + " " + spot(DI) + " " + css(icon).display);
-  check("I3. the icon is a small drawn SVG boombox in the finish's tokens (chrome or black), with a sheen, named \"Open music\"",
-    icon.tagName === "BUTTON" && icon.getAttribute("aria-label") === "Open music" && !!icon.querySelector("svg.bfm-icon-art #bbxIconBody") &&
-    /stop-color:var\(--bbx-m1\)/.test(icon.innerHTML) && /stop-color:var\(--bbx-h1\)/.test(icon.innerHTML) && !!icon.querySelector(".bfm-icon-sheen") &&
-    /bbx-icon-sheen/.test(css(icon.querySelector(".bfm-icon-sheen")).animation) && DI.BFBoombox.ICON_W === 40 && DI.BFBoombox.ICON_H === 36);
+  check("I3. the icon is the music button: the note and its wave drawn in currentColor, no circles, named \"Music player\"",
+    icon.tagName === "BUTTON" && icon.getAttribute("aria-label") === "Music player" && icon.getAttribute("title") === "Music player" &&
+    !!icon.querySelector("svg.bfm-icon-art .bfm-note-wave") && !icon.querySelector("circle") && icon.querySelector("svg.bfm-icon-art").getAttribute("stroke") === "currentColor" &&
+    DI.BFBoombox.ICON_W === 40 && DI.BFBoombox.ICON_H === 40);
   const PI3 = await openPage(Object.assign({}, base, { width: 390 }));
   check("I3. the icon is in place (pinned, never fixed or dragged), and on a phone it stays beside the logo, not docked",
     DIR.getAttribute("data-pinned") === "true" && css(DIR).position === "absolute" && boxOf(PI3).getAttribute("data-state") === "icon" &&
-    boxOf(PI3).getAttribute("data-dock") === "desktop" && spot(PI3).join() === "212,12", boxOf(PI3).getAttribute("data-dock") + " " + spot(PI3));
+    boxOf(PI3).getAttribute("data-dock") === "desktop" && spot(PI3).join() === "224,10", boxOf(PI3).getAttribute("data-dock") + " " + spot(PI3));
   closeOne(PI3);
 
   /* I4. icon -> bar -> boombox, and back; Escape one stage at a time */
@@ -2016,10 +2027,11 @@ async function stageChecks(c) {
   click(DI, "[data-act=bbx-open]"); click(DI, ".bfm-tag [data-act=bbx-close]");
   check("I4. with the library out, Escape slides it back first; Minimise steps back to the bar; Enter on the bar opens the boombox; \"Close to icon\" on the boombox's body and on the bar goes to the icon",
     libFirst && minTag && enterBox && boxToIcon && DIR.getAttribute("data-state") === "icon", [libFirst, minTag, enterBox, boxToIcon].join());
-  const names = [["Open music", ".bfm-icon"], ["Open the boombox", ".bfm-tag [data-act=bbx-expand]"], ["Close to icon", ".bfm-tag [data-act=bbx-close]"],
+  // NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon named "Open music". AFTER: "Music player".
+  const names = [["Music player", ".bfm-icon"], ["Open the boombox", ".bfm-tag [data-act=bbx-expand]"], ["Close to icon", ".bfm-tag [data-act=bbx-close]"],
     ["Close to icon", ".bbx-fkeys [data-act=bbx-close]"], ["Stop music", ".bfm-tag [data-act=stop]"], ["Stop music", ".bbx-keys [data-act=stop]"]];
   const misnamed = names.filter(([n, sel]) => { const el = DI.document.querySelector(sel); return !el || el.tagName !== "BUTTON" || el.getAttribute("aria-label") !== n || !el.querySelector("svg"); }).map(x => x[1]);
-  check("I4. the accessible names: \"Open music\", \"Open the boombox\", \"Close to icon\" (the bar and the boombox), \"Stop music\" (the bar and the boombox), each a button with a drawn icon",
+  check("I4. the accessible names: \"Music player\", \"Open the boombox\", \"Close to icon\" (the bar and the boombox), \"Stop music\" (the bar and the boombox), each a button with a drawn icon",
     misnamed.length === 0, misnamed.join(", "));
 
   /* I5. other pages: nothing without music; the bar or the boombox follows while it plays */
@@ -2052,12 +2064,13 @@ async function stageChecks(c) {
   gesture(Q1); Q1.BFMusic.play(); await settle();
   const Q1R = boxOf(Q1), atPlayer = spot(Q1).join();
   click(Q1, ".bbx-fkeys [data-act=bbx-close]");
-  const fIcon = Q1.document.querySelector(".bfm-icon"), fEq = Q1.document.querySelector(".bfm-icon-eq");
-  const fBars = fEq ? fEq.querySelectorAll("span") : [];
-  check("I6. on another page, \"Close to icon\" while music plays keeps it playing and leaves a small floating icon, the drawn boombox with its animated equaliser",
-    Q1.BFMusic.playing() && Q1R.getAttribute("data-state") === "icon" && shown(Q1) && css(fIcon).display === "block" && !!fIcon.querySelector("svg.bfm-icon-art #bbxIconBody") &&
-    Q1R.getAttribute("data-playing") === "true" && css(fEq).display === "flex" && fBars.length === 4 && /bbx-icon-eq/.test(css(fBars[0]).animation),
-    [Q1.BFMusic.playing(), Q1R.getAttribute("data-state"), shown(Q1), css(fIcon).display, css(fEq).display].join(" "));
+  /* NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the floating icon was the drawn boombox (#bbxIconBody) and, while
+     music played, a four-bar equaliser (.bfm-icon-eq, bbx-icon-eq). AFTER: the music button, whose wave drifts (bfm-note-wave). */
+  const fIcon = Q1.document.querySelector(".bfm-icon"), fWave = Q1.document.querySelector(".bfm-icon .bfm-note-wave");
+  check("I6. on another page, \"Close to icon\" while music plays keeps it playing and leaves a small floating icon, the music button with its wave drifting",
+    Q1.BFMusic.playing() && Q1R.getAttribute("data-state") === "icon" && shown(Q1) && css(fIcon).display === "block" && !!fWave &&
+    Q1R.getAttribute("data-playing") === "true" && /bfm-note-wave/.test(css(fWave).animation),
+    [Q1.BFMusic.playing(), Q1R.getAttribute("data-state"), shown(Q1), css(fIcon).display, fWave && css(fWave).animation].join(" "));
   check("I6. ... where the player was, by the Follow me rule: fixed on screen and not pinned",
     Q1R.getAttribute("data-pinned") === "false" && css(Q1R).position === "fixed" && spot(Q1).join() === atPlayer, Q1R.getAttribute("data-pinned") + " " + css(Q1R).position + " " + spot(Q1) + " vs " + atPlayer);
   click(Q1, ".bfm-icon");
@@ -2079,13 +2092,14 @@ async function stageChecks(c) {
   const DQ = await openPage(Object.assign({}, base, { boombox: { state: "tag" } }));
   gesture(DQ); DQ.BFMusic.playTrack(T2); await settle();
   click(DQ, ".bfm-tag [data-act=bbx-close]");
-  const eq = DQ.document.querySelector(".bfm-icon-eq"), bars = eq ? eq.querySelectorAll("span") : [];
-  check("I6. on the dashboard, \"Close to icon\" keeps the music playing and the icon shows a tiny animated equaliser",
+  // NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon's equaliser showed and went. AFTER: the button's wave drifts and stops.
+  const eqWave = DQ.document.querySelector(".bfm-icon .bfm-note-wave");
+  check("I6. on the dashboard, \"Close to icon\" keeps the music playing and the music button's wave drifts",
     DQ.BFMusic.playing() && boxOf(DQ).getAttribute("data-state") === "icon" && boxOf(DQ).getAttribute("data-playing") === "true" && shown(DQ) &&
-    css(eq).display === "flex" && bars.length === 4 && /bbx-icon-eq/.test(css(bars[0]).animation) && /@keyframes bbx-icon-eq\{from\{transform:scaleY\(\.25\)\}to\{transform:scaleY\(1\)\}\}/.test(BX),
-    css(eq).display + " " + (bars[0] && css(bars[0]).animation));
+    !!eqWave && /bfm-note-wave/.test(css(eqWave).animation) && /@keyframes bfm-note-wave\{from\{transform:translateX\(0\)\}to\{transform:translateX\(-6px\)\}\}/.test(BX),
+    eqWave && css(eqWave).animation);
   DQ.BFMusic.pause(); await settle();
-  check("I6. ... paused, the equaliser goes", css(eq).display === "none");
+  check("I6. ... paused, the wave is still", !!eqWave && !/bfm-note-wave/.test(css(eqWave).animation || ""));
   click(DQ, "[data-act=bbx-open]");
   gesture(DQ); DQ.BFMusic.play(); await settle(); CLOCK.t += 1; await settle();
   click(DQ, ".bfm-tag [data-act=stop]"); await settle();
@@ -2268,11 +2282,12 @@ async function liveOrderChecks() {
     const box = await untilBox(p.w, 3000);
     const anchor = p.w.document.querySelector("[data-bf-boombox-anchor]");
     /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: drawn as the boombox. AFTER: drawn, and shown as the bar beside the logo.
-       NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: shown as the bar. AFTER: shown as the icon beside the logo (the first visit). */
+       NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: shown as the bar. AFTER: shown as the icon beside the logo (the first visit).
+       NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon named "Open music". AFTER: named "Music player". */
     const fl = box && box.closest(".bfm-float");
     check("G2. live order, the real dashboard, " + what + ": the boombox is drawn, shown as the icon beside the logo, with no warning",
       !!box && !!anchor && p.w.BFMusic && p.w.BFMusic.mode === "float" && fl.getAttribute("data-state") === "icon" && fl.getAttribute("data-away") === "false" &&
-      fl.getAttribute("data-home") === "true" && !!fl.querySelector(".bfm-icon[aria-label='Open music']") &&
+      fl.getAttribute("data-home") === "true" && !!fl.querySelector(".bfm-icon[aria-label='Music player']") &&
       !p.w.document.getElementById("bfmFail") && p.warns.filter(x => /\[boombox\]/.test(x)).length === 0,
       JSON.stringify({ box: !!box, mode: p.w.BFMusic && p.w.BFMusic.mode, bbx: p.w.document.querySelectorAll("[class*=bbx]").length, warns: p.warns.slice(0, 2) }));
     if (o.api === "503") {

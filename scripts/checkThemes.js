@@ -378,6 +378,12 @@ function before(f) {
 }
 const wrong = [], zWrong = [];
 let compared = 0;
+/* NAMED BEFORE → AFTER (Nov 8 2026, the Oracle pages darker). BEFORE: every page drew exactly its 1b12268 layers.
+   AFTER: the four Oracle pages draw them without the bottom-right glow (the radial at 85% 90%); every other layer,
+   and every other page, is exactly as it was. ORACLE_DARK is the one line each of them adds (H3). */
+const ORACLE_PAGES = ["oracle.html", "mychart.html", "synastry.html", "the-third.html"];
+const ORACLE_DARK = ":root { --bf-glow-b-alpha: 0 !important; }";
+const withoutBottomRight = layers => layers.filter(l => !(l.kind === "radial" && l.at === "85% 90%"));
 THEMED.filter(f => NEW_PAGES.indexOf(f) === -1).concat([SHELL]).forEach(f => {
   const old = before(f);
   if (old === null) { wrong.push(f + ": not readable at " + BEFORE_COMMIT); return; }
@@ -385,7 +391,7 @@ THEMED.filter(f => NEW_PAGES.indexOf(f) === -1).concat([SHELL]).forEach(f => {
   const oldRule = rulesOf(oldCss, /(^|[\s,}])body::before$/).filter(d => d.background)[0];
   if (!oldRule) { wrong.push(f + ": no body::before at " + BEFORE_COMMIT); return; }
   const oldVars = {}; rulesOf(oldCss, /^:root$/).forEach(d => Object.assign(oldVars, d));
-  const oldLayers = layersOf(resolveVars(oldRule.background, oldVars));
+  const oldLayers = ORACLE_PAGES.indexOf(f) !== -1 ? withoutBottomRight(layersOf(resolveVars(oldRule.background, oldVars))) : layersOf(resolveVars(oldRule.background, oldVars));
   const vars = Object.assign({}, ruleRoot);
   rulesOf(f === SHELL ? FILES[f] : stylesOf(FILES[f]), /^:root$/).forEach(d => Object.assign(vars, d));
   const newLayers = layersOf(resolveVars(ruleBody.background || "", vars)).concat(layersOf(resolveVars(ruleHtml.background || "", vars)));
@@ -1302,7 +1308,9 @@ async function elements() {
     now.forEach(l => { if (j < was.length && l === was[j]) j++; else if (l) added.push(l); });
     if (j < was.length) drift.push(f + ": lost or changed " + JSON.stringify(was[j].slice(0, 140)));
     // an added line: each theme token in it is a var() with a fallback, and it is no engine tag
-    added.filter(l => l.indexOf(TAG) !== -1 || /var\(--(?:bf|tmx)-[a-z0-9-]+\)/.test(l) || l.replace(/var\(--(?:bf|tmx)-[a-z0-9-]+, [^()]+?\)/g, "").match(/--(?:bf|tmx)-/))
+    // NAMED (Nov 8 2026, the Oracle pages darker): an Oracle page may add ORACLE_DARK, once, and nothing else.
+    added.filter(l => !(ORACLE_PAGES.indexOf(f) !== -1 && l.trim() === ORACLE_DARK && added.filter(x => x.trim() === ORACLE_DARK).length === 1))
+      .filter(l => l.indexOf(TAG) !== -1 || /var\(--(?:bf|tmx)-[a-z0-9-]+\)/.test(l) || l.replace(/var\(--(?:bf|tmx)-[a-z0-9-]+, [^()]+?\)/g, "").match(/--(?:bf|tmx)-/))
       .forEach(l => drift.push(f + ": added " + JSON.stringify(l.trim().slice(0, 140))));
   });
   check("H3. since " + THEMES_DONE + " (the last theme commit) no page and not css/bizforce-ui.css changed a theme-bearing line: every --bf- and --tmx- token, wordmark and engine tag is as built",
