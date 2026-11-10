@@ -21,6 +21,12 @@
         drifted (bfm-note-wave), and a hover that switched the border at once.
      P  THE PLACEMENT: centred between the logo's right edge and the header's horizontal centre, level with
         the logo; narrower, never closer than 24 px to the logo and never over another header item.
+        NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: with no room on the header's row
+        it sat just below the header, under the logo. AFTER: the button is a child of the top bar's own element
+        on every top-bar page (the dashboard; any page where it is pinned), level with the logo's centre (2 px),
+        at the midpoint, at least 24 px from the logo, over no item, 32 px as the last resort, and measured
+        again after the fonts, the load and any late header item; at 1920, 1440, 1280, 1024, 768 and 390 px in a
+        mocked layout. Follow me on other pages keeps the floating icon.
      M  THE MIST (scripts/termaximus-presence.js): TMX_NO_MIST_PAGES is exactly the sign-in pages and the
         Oracle pages, and the mist shows on every other signed-in page (a sample), never logged out.
      O  THE ORACLE BACKGROUNDS: on oracle.html, mychart.html, synastry.html and the-third.html the
@@ -98,6 +104,22 @@ const MUTATIONS = {
   "icon-label-missing": [[BOOMBOX, "data-act=\"bbx-open\" aria-label=\"Music player\" title=\"Music player\">", "data-act=\"bbx-open\">"]],
   // the button creeps back toward the logo
   "placement-too-close": [[BOOMBOX, "  var ICON_MIN_GAP = 24;", "  var ICON_MIN_GAP = 4;"]],
+  /* NAMED (Nov 9 2026, button kept in the top bar): the button's own mutations. */
+  // the drop-below-the-header fallback comes back for a crowded row
+  "dropped-below-header": [[BOOMBOX, "    var left = side === \"right\" ? edge + gap : edge - gap - size;\n",
+    "    if (size === ICON_SMALL) return { side: side, size: ICON_W, gap: 0, left: Math.round(logo.left), top: Math.round((wide ? bar.bottom : logo.bottom) + GAP) };\n    var left = side === \"right\" ? edge + gap : edge - gap - size;\n"]],
+  // the button is mounted in the page, not in the bar
+  "mounted-outside-bar": [[BOOMBOX, "      if (root.parentNode !== bar) bar.appendChild(root);", "      if (root.parentNode !== doc.body) doc.body.appendChild(root);"]],
+  // it is centred on the bar's middle, not the logo's
+  "not-vertically-centred": [[BOOMBOX, "top: Math.round(cy - size / 2) };", "top: Math.round((wide ? (bar.top + bar.bottom) / 2 : cy) - size / 2) };"]],
+  // a third of the way to the centre, not halfway
+  "midpoint-wrong": [[BOOMBOX, "var want = (side === \"right\" ? centre - edge : edge - centre) / 2;", "var want = (side === \"right\" ? centre - edge : edge - centre) / 3;"]],
+  // at the last resort the 24 px minimum is no longer held
+  "min-gap-broken": [[BOOMBOX, "gap = Math.max(ICON_MIN_GAP, Math.min(want - ICON_SMALL / 2, room - ICON_SMALL)); }", "gap = Math.min(want - ICON_SMALL / 2, room - ICON_SMALL); }"]],
+  // on a narrow window the button leaves the bar
+  "leaves-bar-when-narrow": [[BOOMBOX, "pinned() && !away() && !!barOf(); }", "pinned() && !away() && !!barOf() && window.innerWidth > PHONE_MAX; }"]],
+  // measured once: no second look after the fonts, the load or a late header item
+  "measured-before-load": [[BOOMBOX, "    if (!popout) watchBar();\n", ""]],
   // the mist comes back to the Oracle
   "mist-on-oracle": [[PRESENCE, "\"verify-email\", \"oracle\", \"mychart\"", "\"verify-email\", \"mychart\""]],
   // the mist shows on the sign-in page
@@ -200,7 +222,8 @@ function layoutStub(win, width) {
   const HE = win.HTMLElement.prototype;
   const rectAttr = el => { const v = el.getAttribute && el.getAttribute("data-rect"); if (!v) return null; const [l, t, w, h] = v.split(",").map(Number); return { l, t, w, h }; };
   const own = el => {
-    if (el.classList && el.classList.contains("bfm-float")) { const st = el.getAttribute("data-state"); return st === "box" ? { w: 440, h: 250 } : st === "icon" ? { w: 40, h: 40 } : { w: 300, h: 40 }; }
+    /* NAMED (Nov 9 2026, button kept in the top bar): the button's last-resort size, 32 px, is its box too. */
+    if (el.classList && el.classList.contains("bfm-float")) { const st = el.getAttribute("data-state"), sm = el.getAttribute("data-icon-size") === "small"; return st === "box" ? { w: 440, h: 250 } : st === "icon" ? (sm ? { w: 32, h: 32 } : { w: 40, h: 40 }) : { w: 300, h: 40 }; }
     const r = rectAttr(el); return r ? { w: r.w, h: r.h } : { w: 0, h: 0 };
   };
   Object.defineProperty(HE, "offsetWidth", { configurable: true, get() { return own(this).w; } });
@@ -209,7 +232,9 @@ function layoutStub(win, width) {
     const r = rectAttr(this);
     if (r) return { left: r.l, top: r.t, right: r.l + r.w, bottom: r.t + r.h, width: r.w, height: r.h, x: r.l, y: r.t };
     const z = own(this), l = parseFloat(this.style.left), t = parseFloat(this.style.top);
-    const left = isNaN(l) ? 0 : l, top = isNaN(t) ? 0 : t;
+    let left = isNaN(l) ? 0 : l, top = isNaN(t) ? 0 : t;
+    /* NAMED (Nov 9 2026, button kept in the top bar): inside the bar the root is placed in the bar's own coordinates */
+    if (this.getAttribute("data-inbar") === "true" && this.parentElement) { const pb = this.parentElement.getBoundingClientRect(); left += pb.left; top += pb.top; }
     return { left, top, right: left + z.w, bottom: top + z.h, width: z.w, height: z.h, x: left, y: top };
   };
   Object.defineProperty(win, "innerWidth", { configurable: true, get: () => width });
@@ -248,6 +273,8 @@ async function openPage(o) {
       layoutStub(win, o.width || 1280);
       win.localStorage.setItem("bf_token", TOKEN);
       if (o.store) win.localStorage.setItem("bf_music", JSON.stringify(o.store));
+      if (o.boombox) win.localStorage.setItem("bf_boombox", JSON.stringify(o.boombox));
+      if (o.fonts) win.document.fonts = { ready: o.fonts };
       if (o.live) win.sessionStorage.setItem("bf_music_live", UID);
       win.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
       win.Audio = fakeAudio();
@@ -499,7 +526,8 @@ async function iconChecks() {
 /* ════ P. the placement ════ */
 async function placementChecks() {
   console.log("\n══ P. the music button sits between the logo and the header's centre ══");
-  const spotOf = w => { const r = w.document.querySelector(".bfm-float"); return { left: parseFloat(r.style.left), top: parseFloat(r.style.top) }; };
+  /* NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: the root's style.left/top. AFTER: its box on screen. */
+  const spotOf = w => { const r = w.document.querySelector(".bfm-float").getBoundingClientRect(); return { left: r.left, top: r.top }; };
   const hit = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
   const items = w => Array.prototype.slice.call(w.document.querySelectorAll("header [data-rect]")).filter(el => !el.hasAttribute("data-bf-boombox-anchor") && el.tagName !== "HEADER").map(el => el.getBoundingClientRect());
   const gapToLogo = (p, logo) => { const dx = Math.max(0, p.left - logo.right), dy = Math.max(0, p.top - logo.bottom); return Math.sqrt(dx * dx + dy * dy); };
@@ -519,14 +547,161 @@ async function placementChecks() {
   check("P2. on a narrow header (420 px) it keeps exactly 24 px from the logo, level with it, and covers no other item: (206, 14)",
     pn.left === 206 && pn.top === 14 && pn.left - logoN.right === 24 && !items(N).some(b => hit(box(pn), b)), JSON.stringify(pn));
   closeOne(N);
-  /* crowded: no room on the header's row: below the header, under the logo, at least 24 px from it, over nothing */
+  /* NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: P3, "on a crowded header (360 px) with no room
+     on its row, it sits just below the header under the logo" at (16, 80). AFTER: there is no spot below the header: on
+     that crowded header it stays in the bar, level with the logo, 24 px from it, at the last-resort 32 px. P1 and P2 keep
+     their numbers; P1 and P2 now read the root's box, which is the same as its style.left/top on a bar at (0, 0). The
+     crowded header is laid out as the browser now lays it out: the logo block's reservation (24 + 32 + 12 px with the bar's
+     gap) keeps the first item at 250 or beyond (BEFORE: Agents at 220, the user at 290). */
   const CROWD = '<header class="topbar" data-rect="0,0,360,68"><div class="topbar-brand" data-bf-boombox-anchor data-rect="16,14,166,40">BizForce AI</div>' +
-    '<div class="topbar-actions"><a href="agents-hub.html" data-rect="220,16,60,36">Agents</a><div class="topbar-user" data-rect="290,14,56,40">BF</div></div></header>';
+    '<div class="topbar-actions"><a href="agents-hub.html" data-rect="250,16,56,36">Agents</a><div class="topbar-user" data-rect="314,14,40,40">BF</div></div></header>';
   const C = await openPage({ name: "crowded", width: 360, header: CROWD });
-  const pc = spotOf(C), logoC = C.document.querySelector("[data-bf-boombox-anchor]").getBoundingClientRect();
-  check("P3. on a crowded header (360 px) with no room on its row, it sits just below the header under the logo: at least 24 px from the logo and over no header item",
-    pc.left === 16 && pc.top === 80 && gapToLogo(pc, logoC) >= 24 && !items(C).some(b => hit(box(pc), b)), JSON.stringify(pc));
+  const CR = C.document.querySelector(".bfm-float"), cb = CR.getBoundingClientRect(), logoC = C.document.querySelector("[data-bf-boombox-anchor]").getBoundingClientRect();
+  check("P3. on a crowded header (360 px) it stays IN the bar, a child of it, level with the logo, exactly 24 px from it, at the last-resort 32 px, over no item: (206, 18)",
+    CR.parentElement === C.document.querySelector("header") && cb.left === 206 && cb.top === 18 && cb.width === 32 && cb.left - logoC.right === 24 &&
+    !items(C).some(b => hit(cb, b)) && cb.bottom <= 68, JSON.stringify(cb));
   closeOne(C); await settle();
+  await placementWidths();
+}
+
+/* ════ P. the music button kept in the top bar, at every width (Nov 9 2026) ════
+   A mocked layout of the dashboard's top bar at a width, as the browser lays it out: padding 24 px (16 at 640 and
+   narrower), a safe-area inset above (22 px) and 14 px below, so the bar's centre is NOT the logo's; the logo block
+   166 x 40; the bar's items right-aligned in rows of 46 px (12 px apart), wrapping where the logo block's reservation
+   (52 px) and the bar's gap (16 px) leave too little room; the logo centred on the rows. */
+const TOPBAR_ITEMS = [["a", "Agents", 90, 36, 90], ["a", "Oracle", 46, 46, 46], ["label", "Termaximus", 150, 28, 120],
+  ["div class=\"topbar-user\"", "BF", 66, 40, 46], ["a", "Settings", 80, 36, 80], ["button", "Sign Out", 90, 36, 90]];
+function dashBar(W) {
+  const phone = W <= 640, p = phone ? 16 : 24, padTop = 22, padBottom = 14, RESERVE = 52, FLEX_GAP = 16, ROW = 46, ROW_GAP = 12, GAP_X = 12;
+  const logoL = p, logoR = p + 166, right = W - p, avail = right - (logoR + RESERVE + FLEX_GAP);
+  const rows = [[]];
+  let used = 0;
+  TOPBAR_ITEMS.forEach(it => {
+    const w = phone ? it[4] : it[2], need = rows[rows.length - 1].length ? used + GAP_X + w : w;
+    if (rows[rows.length - 1].length && need > avail) { rows.push([]); used = w; } else used = need;
+    rows[rows.length - 1].push({ tag: it[0], text: it[1], w, h: it[3] });
+  });
+  const contentH = rows.length * ROW + (rows.length - 1) * ROW_GAP, barH = padTop + contentH + padBottom;
+  const logoT = padTop + (contentH - 40) / 2;
+  let html = "";
+  rows.forEach((row, i) => {
+    const rowW = row.reduce((s, it) => s + it.w, 0) + (row.length - 1) * GAP_X, rowT = padTop + i * (ROW + ROW_GAP);
+    let x = right - rowW;
+    row.forEach(it => {
+      const close = it.tag.split(" ")[0];
+      html += "<" + it.tag + " data-rect=\"" + [x, rowT + (ROW - it.h) / 2, it.w, it.h].join(",") + "\">" + it.text + "</" + close + ">";
+      x += it.w + GAP_X;
+    });
+  });
+  return { rows: rows.length, html: "<header class=\"topbar\" data-rect=\"0,0," + W + "," + barH + "\"><div class=\"topbar-brand\" data-bf-boombox-anchor data-rect=\"" +
+    [logoL, logoT, 166, 40].join(",") + "\">BizForce AI</div><div class=\"topbar-actions\">" + html + "</div></header>" };
+}
+/* The rule, written out here on its own: the centre halfway between the logo's right edge and the bar's centre, held
+   between 24 px from the logo and GAP (12 px) short of the next item on the logo's row; 40 px, else 32 px. */
+function expectedSpot(bar, logo, items) {
+  const centre = (bar.left + bar.right) / 2, cy = (logo.top + logo.bottom) / 2, mid = (logo.right + centre) / 2;
+  const next = Math.min.apply(null, [bar.right].concat(items.filter(b => b.top < cy + 20 && b.bottom > cy - 20 && b.left >= logo.right).map(b => b.left)));
+  for (const size of [40, 32]) {
+    const lo = logo.right + 24 + size / 2, hi = next - 12 - size / 2;
+    if (lo <= hi || size === 32) return { size, cx: Math.min(Math.max(mid, lo), Math.max(hi, lo)), cy, mid, fits40: size === 40 };
+  }
+}
+async function placementWidths() {
+  const WIDTHS = [1920, 1440, 1280, 1024, 768, 390];
+  const hit = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  const rows = [], bad = { parent: [], vert: [], horiz: [], mid: [], gap: [], over: [], inside: [], size: [], reserve: [] };
+  for (const W of WIDTHS) {
+    const fx = dashBar(W);
+    const w = await openPage({ name: "w" + W, width: W, header: fx.html });
+    await wait(5); await settle();
+    const head = w.document.querySelector("header.topbar"), logoEl = w.document.querySelector("[data-bf-boombox-anchor]"), R = w.document.querySelector(".bfm-float");
+    const bar = head.getBoundingClientRect(), logo = logoEl.getBoundingClientRect(), b = R.getBoundingClientRect();
+    const items = Array.prototype.slice.call(head.querySelectorAll("[data-rect]")).filter(el => el !== logoEl && el !== head).map(el => el.getBoundingClientRect());
+    const e = expectedSpot(bar, logo, items), cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2;
+    const cs = w.getComputedStyle(head), barGap = parseFloat(cs.columnGap || cs.gap) || 0;
+    const row = { W, rows: fx.rows, at: [b.left, b.top, b.width], cx, cy, want: [Math.round(e.cx * 10) / 10, e.cy, e.size], logoRight: logo.right, mid: e.mid };
+    rows.push(row);
+    if (!(R.parentElement === head && R.getAttribute("data-inbar") === "true")) bad.parent.push(W);
+    if (Math.abs(cy - e.cy) > 2) bad.vert.push(JSON.stringify(row));
+    if (Math.abs(cx - e.cx) > 1) bad.horiz.push(JSON.stringify(row));
+    if (e.fits40 && W >= 1024 && Math.abs(cx - e.mid) > 1) bad.mid.push(JSON.stringify(row));
+    if (b.left - logo.right < 24) bad.gap.push(JSON.stringify(row));
+    if (items.some(it => hit(b, it))) bad.over.push(JSON.stringify(row));
+    if (!(b.left >= bar.left && b.right <= bar.right && b.top >= bar.top && b.bottom <= bar.bottom)) bad.inside.push(JSON.stringify(row));
+    if (b.width !== e.size || b.height !== e.size) bad.size.push(JSON.stringify(row));
+    if (parseFloat(logoEl.style.marginRight) + barGap !== 24 + 32 + 12) bad.reserve.push(W + ": " + logoEl.style.marginRight + " + " + barGap);
+    closeOne(w);
+  }
+  console.log("      widths: " + rows.map(r => r.W + " -> (" + r.at.join(", ") + ") centre " + r.cx + "," + r.cy + " rows " + r.rows).join(" | "));
+  check("P4. at 1920, 1440, 1280, 1024, 768 and 390 px the music button is a child of the top bar's own element (header.topbar), marked in the bar", bad.parent.length === 0, bad.parent.join(","));
+  check("P5. ... its centre is within 2 px of the logo's centre, vertically (the bar's centre is 4 px off it)", bad.vert.length === 0, bad.vert.join(" | "));
+  check("P6. ... its horizontal centre follows the midpoint rule: halfway between the logo's right edge and the bar's centre, held by the 24 px minimum and the next item", bad.horiz.length === 0, bad.horiz.join(" | "));
+  check("P6. ... and on a wide bar (1024 px and up) it is exactly the midpoint", bad.mid.length === 0, bad.mid.join(" | "));
+  check("P7. ... at least 24 px right of the logo block at every width", bad.gap.length === 0, bad.gap.join(" | "));
+  check("P7. ... over no other item of the bar, and wholly inside the bar's box", bad.over.length === 0 && bad.inside.length === 0, bad.over.concat(bad.inside).join(" | "));
+  const r390 = rows.find(r => r.W === 390), r1920 = rows.find(r => r.W === 1920);
+  check("P8. 40 px where it fits, and the last-resort 32 px only where the logo's row is short (it is, at 390: " + (r390 && r390.at[2]) + " px)",
+    bad.size.length === 0 && !!r390 && r390.at[2] === 32 && !!r1920 && r1920.at[2] === 40, bad.size.join(" | "));
+  check("P8. the logo block keeps room beside it: its margin and the bar's gap make 24 + 32 + 12 px, so no item can come closer", bad.reserve.length === 0, bad.reserve.join(" | "));
+
+  /* a late header item, and the fonts arriving: measured again, not only at the first look */
+  let fontsDone;
+  const fonts = new Promise(r => { fontsDone = r; });
+  const L = await openPage({ name: "late", width: 1280, header: dashBar(1280).html, fonts });
+  await wait(5); await settle();
+  const LR = L.document.querySelector(".bfm-float"), Lhead = L.document.querySelector("header.topbar"), Llogo = L.document.querySelector("[data-bf-boombox-anchor]");
+  const before = LR.getBoundingClientRect().left;
+  const badge = L.document.createElement("span");
+  badge.className = "bf-badge"; badge.textContent = "Pro"; badge.setAttribute("data-rect", "380,32,90,32");
+  Lhead.appendChild(badge);
+  await wait(20); await settle();
+  const afterBadge = LR.getBoundingClientRect();
+  check("P9. a header item that arrives late (a badge in the button's way) moves it: still in the bar, level with the logo, 12 px short of the badge (" + before + " -> " + afterBadge.left + ")",
+    before === 395 && afterBadge.left === 328 && afterBadge.right <= 380 - 12 && LR.parentElement === Lhead, before + " " + JSON.stringify(afterBadge));
+  Lhead.removeChild(badge);
+  await wait(20); await settle();
+  Llogo.setAttribute("data-rect", "24,22,206,40");
+  fontsDone(); await wait(20); await settle();
+  const afterFonts = LR.getBoundingClientRect();
+  check("P9. ... and so do the fonts arriving (the logo block grows to 206 px): it is placed again from the new logo, at the midpoint (" + afterFonts.left + ")",
+    afterFonts.left === Math.round((230 + 640) / 2 - 20), JSON.stringify(afterFonts));
+  /* the bar and the boombox are not in the top bar; closing to the icon puts it back */
+  L.document.querySelector("[data-act=bbx-open]").click();
+  const opened = LR.parentElement === L.document.body && LR.getAttribute("data-inbar") === null && LR.getAttribute("data-state") === "tag";
+  L.BFMusic._box().setState("icon");
+  check("P10. opened to the bar it goes back to the page (as before), and back to the icon it is in the top bar again, in the same spot",
+    opened && LR.parentElement === Lhead && LR.getBoundingClientRect().left === afterFonts.left, opened + " " + (LR.parentElement && LR.parentElement.tagName));
+  closeOne(L); await settle();
+
+  /* THE OTHER PAGES' TOP BAR (.top-nav: the back link at the left, the logo at the right end): the same rule, mirrored */
+  const NAV = "<nav class=\"top-nav\" data-rect=\"0,0,1280,60\"><a href=\"dashboard.html\" class=\"back-link\" data-rect=\"24,18,130,24\">Executive HQ</a>" +
+    "<span class=\"brand-badge\" data-bf-boombox-anchor data-rect=\"1166,20,90,20\">BizForce AI</span></nav>";
+  const live = { v: 1, uid: UID, track_id: T1, position: 5, queue: [T1, T2], placement: "pinned" };
+  const PN = await openPage({ page: "crm.html", name: "nav-pinned", width: 1280, header: NAV, live: true, store: live, boombox: { state: "icon" } });
+  await wait(5); await settle();
+  const PR = PN.document.querySelector(".bfm-float"), pb = PR.getBoundingClientRect(), navLogo = PN.document.querySelector("[data-bf-boombox-anchor]").getBoundingClientRect();
+  const navMid = (navLogo.left + 640) / 2;
+  check("P11. on another page with a top bar (.top-nav), the pinned music button is a child of that bar, on the logo's side facing the centre (left), level with it, at the midpoint",
+    PR.parentElement === PN.document.querySelector("nav.top-nav") && PR.getAttribute("data-state") === "icon" && (pb.left + pb.right) / 2 === navMid &&
+    (pb.top + pb.bottom) / 2 === (navLogo.top + navLogo.bottom) / 2 && navLogo.left - pb.right >= 24,
+    (PR.parentElement && PR.parentElement.tagName) + " " + JSON.stringify(pb));
+  closeOne(PN);
+  const FN = await openPage({ page: "crm.html", name: "nav-follow", width: 1280, header: NAV, live: true, store: Object.assign({}, live, { placement: "follow" }), boombox: { state: "icon" } });
+  await wait(5); await settle();
+  const FR = FN.document.querySelector(".bfm-float");
+  check("P11. ... and where the member chose Follow me it is the floating icon as before: on the page, not in the bar, fixed and draggable",
+    FR.parentElement === FN.document.body && FR.getAttribute("data-inbar") === null && FR.getAttribute("data-pinned") === "false", FR.parentElement && FR.parentElement.tagName);
+  closeOne(FN); await settle();
+
+  /* no other way out of the bar, in the code */
+  const BX = FILES[BOOMBOX];
+  const planSrc = (BX.match(/  function iconPlan\([\s\S]*?\n  \}\n/) || [""])[0], barSrc = (BX.match(/    function placeInBar\(\)[\s\S]*?\n    \}\n/) || [""])[0];
+  const placeSrc = (BX.match(/    function place\(\) \{[\s\S]*?\n    \}\n/) || [""])[0];
+  check("P12. no code path puts it below or outside the bar: iconSpot and its drop-below are gone, the plan's only top is the logo's centre, the bar's only top is the plan's, and place() puts the button in the bar before anything else",
+    !/iconSpot\(/.test(BX) && !/hr\.bottom/.test(BX) && !/\.bottom\s*\+\s*GAP/.test(planSrc + barSrc) && planSrc.length > 0 && (planSrc.match(/top:/g) || []).length === 1 && /top: Math\.round\(cy - size \/ 2\)/.test(planSrc) &&
+    (barSrc.match(/root\.style\.top =/g) || []).length === 1 && /root\.style\.top = Math\.round\(plan\.top - br\.top/.test(barSrc) && /bar\.appendChild\(root\)/.test(barSrc) &&
+    /^    function place\(\) \{\n      if \(popout\) return;\n      if \(inBar\(\)\) \{ root\.setAttribute\("data-dock", "desktop"\); placeInBar\(\); side\(\); return; \}/.test(placeSrc),
+    [planSrc.length, barSrc.length, placeSrc.slice(0, 160)].join(" | "));
 }
 
 /* ════ M. the mist ════ */

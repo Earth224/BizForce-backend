@@ -149,6 +149,11 @@ const MUTATIONS = {
   // I: the volume fader's lane moved back over the R meter
   "fader-overlaps-meter": [[BOOMBOX, "\".bbx-vol{left:268px;top:2px;width:30px;height:40px}\"", "\".bbx-vol{left:246px;top:2px;width:30px;height:40px}\""]],
   // I: Pinned still fixed on screen
+  /* NAMED (Nov 9 2026, button kept in the top bar). */
+  // the music button is not in the top bar on the dashboard
+  "icon-outside-bar": [[BOOMBOX, "  function inBar() { return !popout && state === \"icon\" && pinned() && !away() && !!barOf(); }", "  function inBar() { return false; }"]],
+  // opened to the bar, the player stays inside the top bar
+  "open-bar-stays-in-header": [[BOOMBOX, "      (opts.host || doc.body || doc.documentElement).appendChild(root);\n    }\n    function placeInBar() {", "    }\n    function placeInBar() {"]],
   "pinned-still-fixed": [[BOOMBOX, "    \".bfm-float[data-pinned=true]:not([data-dock=phone]){position:absolute}\",\n", ""]],
   // I: Escape skipping a stage (the boombox straight to the icon)
   "escape-skips-a-stage": [[BOOMBOX, "      if (state === \"box\") setState(\"tag\", focus);", "      if (state === \"box\") setState(\"icon\", focus);"]],
@@ -687,7 +692,10 @@ function layoutStub(win) {
   HE.getBoundingClientRect = function () {
     if (this.hasAttribute("data-bf-boombox-anchor")) return { left: 16, top: 10, right: 200, bottom: 50, width: 184, height: 40, x: 16, y: 10 };
     const z = size(this), l = parseFloat(this.style.left), t = parseFloat(this.style.top);
-    const left = isNaN(l) ? 16 : l, top = isNaN(t) ? (this.classList.contains("bfm-float") ? win.innerHeight - 16 - z.h : 0) : t;
+    let left = isNaN(l) ? 16 : l, top = isNaN(t) ? (this.classList.contains("bfm-float") ? win.innerHeight - 16 - z.h : 0) : t;
+    /* NAMED (Nov 9 2026, button kept in the top bar): the music button inside the top bar is placed in the bar's own
+       coordinates (position: absolute in the bar), so its box on screen is the bar's offset plus its own left/top. */
+    if (this.getAttribute("data-inbar") === "true" && this.parentElement) { const pb = this.parentElement.getBoundingClientRect(); left += pb.left; top += pb.top; }
     return { left, top, right: left + z.w, bottom: top + z.h, width: z.w, height: z.h, x: left, y: top };
   };
   win.__w = win.__w || 1280; win.__h = 800;
@@ -1149,6 +1157,10 @@ async function freshStage(db) {
 const liveOn = (T1, o) => Object.assign({ live: true, store: { v: 1, uid: UID, track_id: T1, position: 5 } }, o || {});
 const shown = w => { const r = boxOf(w); return !!r && r.getAttribute("data-away") !== "true" && w.getComputedStyle(r).display !== "none"; };
 const spot = w => { const r = boxOf(w); return r ? [parseFloat(r.style.left), parseFloat(r.style.top)] : null; };
+/* NAMED (Nov 9 2026, button kept in the top bar): where the music button shows on screen, and whether it is a child of the
+   top bar. Inside the bar its style.left/top are the bar's own coordinates, so the icon's pins read its box instead. */
+const iconSpotOf = w => { const r = boxOf(w); if (!r) return null; const b = r.getBoundingClientRect(); return [b.left, b.top]; };
+const inTopBar = w => { const r = boxOf(w); return !!r && !!r.parentElement && r.parentElement.matches("header.topbar, .top-nav") && r.getAttribute("data-inbar") === "true"; };
 const scaleOf = el => el ? parseFloat((/scale\((-?[\d.]+)\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
 const angleOf = el => el ? parseFloat((/rotate\((-?[\d.]+)deg\)/.exec(el.style.transform) || [0, "NaN"])[1]) : NaN;
 const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
@@ -1258,12 +1270,16 @@ async function boomboxChecks(c) {
      (212, 12); "Open music" opens the bar at (212, 10).
      NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the 40 x 36 icon 12 px right of the logo (212, 12). AFTER: the 40 x 40
      music button, named "Music player", centred between the logo's right edge (200) and the header's centre (the stub's header has no
-     width, so the window's, 640): (400, 10), level with the logo. The bar it opens is still at (212, 10). */
+     width, so the window's, 640): (400, 10), level with the logo. The bar it opens is still at (212, 10).
+     NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: style.left/top "400px"/"10px" on a root in the page.
+     AFTER: the root is a child of the top bar, its box on screen still at (400, 10); style.left/top are the bar's own coordinates. */
   check("G2. on the dashboard it starts as the icon in the top bar, between the BizForce AI logo and the header's centre, level with it",
-    !!DR && DR.getAttribute("data-state") === "icon" && DR.style.left === "400px" && DR.style.top === "10px", DR && DR.getAttribute("style"));
+    !!DR && DR.getAttribute("data-state") === "icon" && iconSpotOf(D).join() === "400,10" && inTopBar(D), DR && DR.getAttribute("style") + " " + iconSpotOf(D));
   click(D, "[data-act=bbx-open]");
-  check("G2. ... and \"Open music\" opens the bar in its place, level with the logo", DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px",
-    DR.getAttribute("style"));
+  /* NAMED (Nov 9 2026, button kept in the top bar): the bar it opens is on the page again, not in the top bar. */
+  check("G2. ... and \"Open music\" opens the bar in its place, level with the logo", DR.getAttribute("data-state") === "tag" && DR.style.left === "212px" && DR.style.top === "10px" &&
+    DR.parentElement === D.document.body && DR.getAttribute("data-inbar") === null,
+    DR.getAttribute("style") + " " + (DR.parentElement && DR.parentElement.tagName));
   click(D, "[data-act=bbx-expand]");
   click(D, "[data-act=bbx-library]");
   const CAPS = [["play and pause", ".bbx-keys [data-act=toggle]"], ["previous", ".bbx-keys [data-act=prev]"], ["next", ".bbx-keys [data-act=next]"],
@@ -1613,7 +1629,8 @@ async function mixerChecks(c) {
     DR.getAttribute("data-library") === "false" && D.document.querySelector("[data-act=bbx-expand]").getAttribute("aria-expanded") === "false",
     DR.getAttribute("data-state") + " " + TR.getAttribute("data-state") + " " + shown(TH));
   closeOne(TH);
-  const iconAt = spot(D).join();
+  /* NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: spot(D), the root's style.left/top. AFTER: its box on screen (see G2). */
+  const iconAt = iconSpotOf(D).join();
   click(D, "[data-act=bbx-open]");
   /* NAMED BEFORE → AFTER (Nov 8 2026, the music button). BEFORE: the icon at (212, 12). AFTER: the music button at (400, 10) (see G2). */
   check("H1. beside the logo the bar sits 12 px to the right, centred on the header (the bar 212, 10; the music button 400, 10); with no logo header, the top-left corner (16, 16); never bottom left",
@@ -1989,7 +2006,8 @@ async function stageChecks(c) {
      currentColor, 40 x 40, named "Music player"; on a 390 px phone the space to the centre is too small, so it keeps 24 px from the
      logo: (224, 10). scripts/checkFinishingTouches.js pins the icon, the placement rule and the labels in full. */
   check("I3. the dashboard's first stage is the icon beside the logo (400, 10): the bar and the boombox are not shown, and no audio has started",
-    DIR.getAttribute("data-state") === "icon" && DIR.getAttribute("data-home") === "true" && DIR.getAttribute("data-away") === "false" && spot(DI).join() === "400,10" &&
+    /* NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: spot(DI). AFTER: its box on screen, and a child of the top bar. */
+    DIR.getAttribute("data-state") === "icon" && DIR.getAttribute("data-home") === "true" && DIR.getAttribute("data-away") === "false" && iconSpotOf(DI).join() === "400,10" && inTopBar(DI) &&
     css(icon).display === "block" && css(DI.document.querySelector(".bfm-tag")).display === "none" && css(DI.document.querySelector(".bbx")).display === "none" &&
     css(DI.document.querySelector(".bfm-drawer")).display === "none" && !DI.BFMusic.playing() && AUDIOS.filter(x => x.win === DI).every(a => a.plays === 0) && signed() === 0,
     DIR.getAttribute("data-state") + " " + spot(DI) + " " + css(icon).display);
@@ -2007,7 +2025,8 @@ async function stageChecks(c) {
   const PI3 = await openPage(Object.assign({}, base, { width: 390 }));
   check("I3. the icon is in place (pinned, never fixed or dragged), and on a phone it stays beside the logo, not docked",
     DIR.getAttribute("data-pinned") === "true" && css(DIR).position === "absolute" && boxOf(PI3).getAttribute("data-state") === "icon" &&
-    boxOf(PI3).getAttribute("data-dock") === "desktop" && spot(PI3).join() === "224,10", boxOf(PI3).getAttribute("data-dock") + " " + spot(PI3));
+    /* NAMED BEFORE → AFTER (Nov 9 2026, button kept in the top bar). BEFORE: spot(PI3). AFTER: its box on screen, in the top bar. */
+    boxOf(PI3).getAttribute("data-dock") === "desktop" && iconSpotOf(PI3).join() === "224,10" && inTopBar(PI3), boxOf(PI3).getAttribute("data-dock") + " " + iconSpotOf(PI3));
   closeOne(PI3);
 
   /* I4. icon -> bar -> boombox, and back; Escape one stage at a time */
