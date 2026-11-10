@@ -163,13 +163,34 @@ const MUTATIONS = {
   // with no artist it says "Now Playing", not the title
   "no-title-fallback": [[BOOMBOX, "    if (t) return t;\n", ""]],
   // the artist's name is built as markup
-  "artist-innerHTML": [[BOOMBOX, "      sp.textContent = nowName;", "      sp.innerHTML = nowName;"]],
+  /* NAMED re-anchor (Nov 10 2026, readable timing and shortened names). BEFORE: anchored on "sp.textContent = nowName;".
+     AFTER: the same mutant (the name built as markup) on today's line, which shows displayName(nowName). */
+  "artist-innerHTML": [[BOOMBOX, "      sp.textContent = displayName(nowName);", "      sp.innerHTML = nowName;"]],
   // under reduced motion it still travels
   "reduced-motion-travels": [[BOOMBOX, "    if (still) return { dir: dir, from: home, to: home, travel: 0 };\n", ""]],
   // keep playing: the pop-out's new track shows the page's old name
   "popout-name-stale": [[BOOMBOX, "      nowName = sweepName(loaded ? v : {});", "      if (typeof v.starts === \"number\") nowName = sweepName(loaded ? v : {});"]],
   // the travel is carried by left, not the transform
   "transition-not-transform": [[BOOMBOX, ";transition:transform \" + (SWEEP_MS", ";transition:left \" + (SWEEP_MS"]],
+  /* NAMED (Nov 10 2026, readable timing and shortened names): the readable pop-up's own mutations. */
+  // the pop-up is back to 1.2 s
+  "too-fast": [[BOOMBOX, "  var SWEEP_MS = 4200;", "  var SWEEP_MS = 1200;"]],
+  // the name is held only from 18% to 82% again
+  "hold-too-short": [[BOOMBOX, "\"@keyframes bbx-sweep{0%{opacity:0}12%{opacity:1}88%{opacity:1}100%{opacity:0}}\"", "\"@keyframes bbx-sweep{0%{opacity:0}18%{opacity:1}82%{opacity:1}100%{opacity:0}}\""]],
+  // a featuring credit is kept
+  "feat-kept": [[BOOMBOX, "    if (m) s = s.slice(0, m.index);\n", ""]],
+  // bracketed parts are kept
+  "brackets-kept": [[BOOMBOX, "    do { prev = s; s = s.replace(/\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\}/g, \" \"); } while (s !== prev);\n    s = s.replace(/[(\\[{].*$/, \"\").replace(/[)\\]}]/g, \" \");\n", ""]],
+  // a long name is cut in the middle of a word although it has a space
+  "cut-mid-word": [[BOOMBOX, "    var head = trimSeps(g.slice(0, cut > 0 ? cut : NAME_MAX - 1).join(\"\"));", "    var head = trimSeps(g.slice(0, NAME_MAX - 1).join(\"\"));"]],
+  // a cut name has no "..."
+  "no-ellipsis": [[BOOMBOX, "    return head + \"...\";", "    return head;"]],
+  // the full name is not put in the title
+  "full-name-dropped-from-title": [[BOOMBOX, "      sw.setAttribute(\"title\", nowName);       // the full name kept\n", ""]],
+  // the title holds the short name, not the full one
+  "shortened-name-in-title": [[BOOMBOX, "      sw.setAttribute(\"title\", nowName);       // the full name kept", "      sw.setAttribute(\"title\", displayName(nowName));"]],
+  // the travel is three widths again, not one and a half
+  "travel-not-halved": [[BOOMBOX, "  var SWEEP_TRAVEL = 1.5;", "  var SWEEP_TRAVEL = 3;"]],
   /* NAMED (Nov 9 2026, button kept in the top bar). */
   // the music button is not in the top bar on the dashboard
   "icon-outside-bar": [[BOOMBOX, "  function inBar() { return !popout && state === \"icon\" && pinned() && !away() && !!barOf(); }", "  function inBar() { return false; }"]],
@@ -2450,21 +2471,34 @@ async function nowPlayingChecks(c) {
   } else check("G13. a playlist with T2 and one more track exists to test the ticker's playlist name", false);
   /* the sweep */
   const s0 = nb.sweeps();
-  N.BFMusic.playTrack(T1); await settle();
+  N.BFMusic.playTrack(T1);
+  const tSweep = Date.now();
+  await settle();
   /* NAMED BEFORE → AFTER (Nov 10 2026, artist name, screen-aware motion). BEFORE: the banner read "Now playing", and its keyframes moved it
      from translateX(-150%) to translateX(150%). AFTER: it reads the track's artist ("Artist" here), its keyframes fade it (opacity only),
-     and its travel is a transform transition over the same 1.2 s and curve, set from the screen (G14). */
+     and its travel is a transform transition over the same 1.2 s and curve, set from the screen (G14).
+     NAMED BEFORE → AFTER (Nov 10 2026, readable timing and shortened names). BEFORE: 1.2 s on cubic-bezier(.3,.6,.4,1), held from 18% to 82%.
+     AFTER: 4.2 s for both the fade and the transform transition, on the ease-out cubic-bezier(.16,.84,.3,1), held from 12% to 88%
+     (about 0.5 s in, 3.2 s held, 0.5 s out). */
   check("G13. a new track starts the neon sweep across the face, once, with the artist's name", nb.sweeps() === s0 + 1 && bbx.getAttribute("data-sweep") === "on" &&
     q1(".bbx-sweep").textContent === "Artist" && q1(".bbx-sweep").getAttribute("aria-hidden") === "true" &&
-    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep 1\.2s cubic-bezier\(\.3,\.6,\.4,1\) 1 both;transition:transform 1\.2s cubic-bezier\(\.3,\.6,\.4,1\)\}/.test(BX) &&
-    /@keyframes bbx-sweep\{0%\{opacity:0\}18%\{opacity:1\}82%\{opacity:1\}100%\{opacity:0\}\}/.test(BX) &&
+    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep 4\.2s cubic-bezier\(\.16,\.84,\.3,1\) 1 both;transition:transform 4\.2s cubic-bezier\(\.16,\.84,\.3,1\)\}/.test(BX) &&
+    /@keyframes bbx-sweep\{0%\{opacity:0\}12%\{opacity:1\}88%\{opacity:1\}100%\{opacity:0\}\}/.test(BX) &&
     /\.bbx\[data-sweep=on\] \.bbx-ticker\{opacity:0\}/.test(BX), nb.sweeps() - s0 + " " + q1(".bbx-sweep").textContent);
+  /* the opacity the keyframes give at a time t into the pop-up (the curve only shapes each step, so between two keyframes of 1 it is 1) */
+  const kf = (() => { const m = /@keyframes bbx-sweep\{([^@]*?)\}\}/.exec(BX); const out = []; if (m) (m[1] + "}").replace(/(\d+)%\{opacity:([\d.]+)\}/g, (_, p, o) => { out.push([Number(p) / 100, Number(o)]); return ""; }); return out; })();
+  const fullAt = ms => { const f = ms / N.BFBoombox.SWEEP_MS; for (let i = 1; i < kf.length; i++) if (f <= kf[i][0]) return f >= kf[i - 1][0] && kf[i - 1][1] === 1 && kf[i][1] === 1; return false; };
+  const until = async ms => { const d = tSweep + ms - Date.now(); if (d > 0) await wait(d); return Date.now() - tSweep; };
   N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.play(); await settle();
   N.BFMusic.pause(); await settle(); gesture(N); N.BFMusic.toggle(); await settle(); N.BFMusic.seek(20); await settle();
   check("G13. a pause and a resume (twice), and a seek, start no sweep", nb.sweeps() === s0 + 1 && N.BFMusic.playing(), nb.sweeps() - s0);
-  await wait(N.BFBoombox.SWEEP_MS + 150);
-  check("G13. after about 1.2 s the sweep is done and the ticker settles in (opacity only)", bbx.getAttribute("data-sweep") === "done" &&
-    /\.bbx\[data-sweep=done\] \.bbx-ticker\{animation:bbx-settle \.45s ease-out 1 both\}/.test(BX) && /@keyframes bbx-settle\{from\{opacity:0\}to\{opacity:1\}\}/.test(BX) && N.BFBoombox.SWEEP_MS === 1200);
+  const at1 = await until(1000), on1 = bbx.getAttribute("data-sweep");
+  check("G13. at 1.0 s the name is fully shown (past the 0.5 s fade in, held at opacity 1)", on1 === "on" && at1 < 1400 && fullAt(1000), at1 + " ms " + on1 + " " + JSON.stringify(kf));
+  const at35 = await until(3500), on35 = bbx.getAttribute("data-sweep");
+  check("G13. at 3.5 s it is still fully shown, about 3.2 s held in all", on35 === "on" && at35 < 3900 && fullAt(3500) && !fullAt(0) && !fullAt(N.BFBoombox.SWEEP_MS), at35 + " ms " + on35);
+  await until(N.BFBoombox.SWEEP_MS + 150);
+  check("G13. after 4.2 s the sweep is done (faded out) and the ticker settles in (opacity only)", bbx.getAttribute("data-sweep") === "done" &&
+    /\.bbx\[data-sweep=done\] \.bbx-ticker\{animation:bbx-settle \.45s ease-out 1 both\}/.test(BX) && /@keyframes bbx-settle\{from\{opacity:0\}to\{opacity:1\}\}/.test(BX) && N.BFBoombox.SWEEP_MS === 4200);
   N.BFMusic.next(); await settle();
   check("G13. Next is a new track: one more sweep", nb.sweeps() === s0 + 2);
   /* the announcement, once per track */
@@ -2539,6 +2573,28 @@ async function nowPlayingReducedChecks(RM, track) {
     swR.getAttribute("data-from") === swR.getAttribute("data-to") && /^translateX\(-?\d+px\)$/.test(swR.style.transform) && swR.textContent === "Artist",
     [t && t.title, rs0, bx.sweeps(), swR.textContent, swR.getAttribute("data-from"), swR.getAttribute("data-to"), swR.style.transform].join(" "));
   bx.setState("box");
+  /* NAMED (Nov 10 2026, readable timing and shortened names): under reduced motion the same 4.2 s fade in, hold and fade out, in place.
+     A new track shown now: its spot read at once, half way and at the end, the same each time; the fade still runs (only the
+     transition is switched off there). */
+  const rb = RM.document.querySelector(".bbx");
+  const curR = RM.BFMusic.state().track_id, pickR = RM.BFMusic.library().tracks.find(x => x.id !== curR);
+  gesture(RM);
+  const rsw0 = bx.sweeps(), tR = Date.now();
+  RM.BFMusic.playTrack(pickR.id);
+  const rT0 = swR.style.transform, rOn0 = rb.getAttribute("data-sweep");
+  await wait(Math.max(0, tR + RM.BFBoombox.SWEEP_MS / 2 - Date.now()));
+  const rT1 = swR.style.transform, rOn1 = rb.getAttribute("data-sweep");
+  await wait(Math.max(0, tR + RM.BFBoombox.SWEEP_MS - 150 - Date.now()));
+  const rT2 = swR.style.transform, rOn2 = rb.getAttribute("data-sweep");
+  await wait(Math.max(0, tR + RM.BFBoombox.SWEEP_MS + 150 - Date.now()));
+  const RMS = (RM.document.getElementById("bf-boombox-style") || {}).textContent || "";
+  const rmRule = (/@media \(prefers-reduced-motion: reduce\)\{\.bbx-scroll,[^@]*?\}\}/.exec(RMS) || [""])[0];
+  check("G13. under reduced motion the pop-up holds still for the whole 4.2 s (the same fade in, hold and fade out, in place), then is done",
+    bx.sweeps() === rsw0 + 1 && swR.textContent === "Artist" && rOn0 === "on" && rOn1 === "on" && rOn2 === "on" && rb.getAttribute("data-sweep") === "done" &&
+    rT0 === rT1 && rT1 === rT2 && swR.getAttribute("data-from") === swR.getAttribute("data-to") &&
+    /\.bbx-sweep\{transition:none!important\}/.test(rmRule) && !/\.bbx-sweep[^{]*\{animation:none/.test(rmRule) && RM.BFBoombox.SWEEP_MS === 4200,
+    [bx.sweeps() - rsw0, rOn0, rOn1, rOn2, rb.getAttribute("data-sweep"), rT0, rT1, rT2, swR.textContent].join(" "));
+  RM.BFMusic.pause(); await settle();
 }
 
 /* ════ G14 (Nov 10 2026, artist name, screen-aware motion): the pop-up shows the artist's name and moves across the screen
@@ -2555,7 +2611,9 @@ async function sweepScreenChecks(c) {
   const at = { left: 824 };
   const vw = () => N.innerWidth;
   const txOf = () => { const m = /translateX\((-?[\d.]+)px\)/.exec(sw.style.transform || ""); return m ? Number(m[1]) : 0; };
-  const swW = () => Math.max(Math.min(240, 0.6 * vw()), Math.min(sp.textContent.length * 8 + 28, 0.6 * vw()));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, readable timing and shortened names). BEFORE: at most 60% of the window. AFTER: at most
+     min(320 px, 60% of the window), as the CSS now caps it. */
+  const swW = () => Math.max(Math.min(240, 0.6 * vw()), Math.min(sp.textContent.length * 8 + 28, 320, 0.6 * vw()));
   bbx.getBoundingClientRect = () => ({ left: at.left, right: at.left + 440, top: 300, bottom: 550, width: 440, height: 250, x: at.left, y: 300 });
   sw.getBoundingClientRect = () => { const l = at.left + 100 + txOf(), w = swW(); return { left: l, right: l + w, top: 372, bottom: 398, width: w, height: 26, x: l, y: 372 }; };
   let n = 5000;
@@ -2578,12 +2636,41 @@ async function sweepScreenChecks(c) {
   const C = show(400, "Middle");
   check("G14. near the centre (its centre 620, left of the screen's 640): it moves toward the side with more room, the right",
     C.dir === "right" && C.to > C.from && C.inside && (C.hi - C.home) > (C.home - C.lo), JSON.stringify(C));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, readable timing and shortened names). BEFORE: the boombox at 824 of 1280 travels SWEEP_TRAVEL 3
+     widths. AFTER: one and a half widths (the old reach halved): from home less 0.75 of its width to home plus 0.75, each end clamped. */
+  const cl = (x, r) => Math.min(Math.max(x, r.lo), Math.max(r.hi, r.lo));
+  check("G14. it travels one and a half of its widths (half the old reach), centred on its home, toward the side with more room",
+    B.SWEEP_TRAVEL === 1.5 && C.from === cl(C.home - 0.75 * C.w, C) && C.to === cl(C.home + 0.75 * C.w, C) && C.to - C.from === 1.5 * C.w &&
+    L.to === cl(L.home + 0.75 * L.w, L), JSON.stringify({ C: [C.home, C.w, C.from, C.to], L: [L.home, L.w, L.from, L.to] }));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, readable timing and shortened names). BEFORE: a 322-character name was shown whole, 60% of a 1280
+     window wide, cut by the ellipsis CSS. AFTER: it is shortened to "The Extraordinarily Long..." (27 characters, 244 px here), so a
+     window too narrow to move it is now a 600 px one; the whole name stays in the title, the ellipsis CSS stays as a safety net. */
   const longName = "The Extraordinarily Long Name Of An Orchestra ".repeat(7).trim();
-  const G = show(824, longName);
-  check("G14. a very long name: wider than the room on both sides, so no travel, centred on the boombox as far as the screen allows, still inside",
-    G.from === G.to && G.inside && G.w === 0.6 * 1280, JSON.stringify(Object.assign({}, G, { name: G.name.length })));
-  check("G14. ... cut short with an ellipsis at 60% of the window, on one line, and the whole name in its title",
-    G.title === longName && G.name === longName && /\.bbx-sweep\{[^}]*max-width:60vw;[^}]*white-space:nowrap;overflow:hidden;text-overflow:ellipsis;/.test(FILES[BOOMBOX]), G.title && G.title.length);
+  N.__w = 600;
+  const G = show(80, longName);
+  N.__w = 1280;
+  check("G14. a long name is shortened at a space with \"...\" (\"" + G.name + "\"), and still too wide for a 600 px window's room on both sides, so no travel, still inside",
+    G.from === G.to && G.inside && G.name === "The Extraordinarily Long..." && G.name === B.displayName(longName) && G.w === 27 * 8 + 28, JSON.stringify(Object.assign({}, G, { title: (G.title || "").length })));
+  check("G14. ... on one line, at most min(320 px, 60% of the window), the ellipsis CSS kept as a safety net, and the whole name in its title",
+    G.title === longName && /\.bbx-sweep\{[^}]*max-width:min\(320px,60vw\);[^}]*white-space:nowrap;overflow:hidden;text-overflow:ellipsis;/.test(FILES[BOOMBOX]), G.title && G.title.length);
+  /* NAMED (Nov 10 2026, readable timing and shortened names): the shortening table, asserted exactly. */
+  const TABLE = [
+    ["Kendrick Lamar", "Kendrick Lamar"], ["Drake feat. Future", "Drake"], ["Metro Boomin ft. 21 Savage", "Metro Boomin"],
+    ["The Weeknd (Live)", "The Weeknd"], ["Earth, Wind & Fire", "Earth, Wind & Fire"],
+    ["Florence and the Machine with Strings", "Florence and the Machine"],
+    ["Alexandra Savior Wonderland Orchestra", "Alexandra Savior..."], ["Supercalifragilisticexpialidocious", "Supercalifragilisticexp..."],
+  ];
+  TABLE.forEach(([raw, want]) => {
+    const got = B.displayName(raw), S = show(400, raw);
+    check("G14. shortened: \"" + raw + "\" -> \"" + want + "\"", got === want && S.name === want && S.title === raw, JSON.stringify([got, S.name, S.title]));
+  });
+  const blank = show(400, "   ", "Fallback Title"), blank2 = show(400, "   ", "   ");
+  check("G14. shortened: a blank artist still takes the fallback order (the title, then \"Now Playing\")",
+    blank.name === "Fallback Title" && blank.title === "Fallback Title" && blank2.name === "Now Playing" && blank2.title === "Now Playing", [blank.name, blank2.name].join(" | "));
+  const w300 = ("Wordy Name ").repeat(28).slice(0, 300), n300 = B.displayName(w300), solid300 = B.displayName("Q".repeat(300));
+  check("G14. shortened: a 300-character name comes out at most 27 characters, ending \"...\" and never on a separator",
+    w300.length === 300 && n300.length <= 27 && /\.\.\.$/.test(n300) && solid300.length <= 27 && /\.\.\.$/.test(solid300) &&
+    B.displayName("Aaaaaaaaaa Bbbbbbbbbbb & Ccccccccccc") === "Aaaaaaaaaa Bbbbbbbbbbb..." && B.displayName("[feat. X] (Y)") === "[feat. X] (Y)", [n300, solid300].join(" | "));
   N.__w = 900;
   const Z = show(444, "Narrow Window");
   check("G14. after the window narrows (900 px) the next showing is measured against the new width: it moves left, inside",
@@ -2596,7 +2683,7 @@ async function sweepScreenChecks(c) {
   delete N.visualViewport;
   check("G14. moved by its transform only: the banner's inline style is a translateX and nothing else, carried by a transform transition",
     /^transform: translateX\(-?\d+px\);?$/.test(sw.getAttribute("style") || "") &&
-    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep [^}]*;transition:transform 1\.2s/.test((N.document.getElementById("bf-boombox-style") || {}).textContent || ""), sw.getAttribute("style"));
+    /\.bbx\[data-sweep=on\] \.bbx-sweep\{animation:bbx-sweep [^}]*;transition:transform 4\.2s/.test((N.document.getElementById("bf-boombox-style") || {}).textContent || ""), sw.getAttribute("style"));
   const still = B.sweepPlan({ left: 824, right: 1264 }, 240, { left: 0, width: 1280 }, true);
   check("G14. under reduced motion the plan has no travel (it fades in place)", still.travel === 0 && still.from === still.to, JSON.stringify(still));
 
@@ -2612,7 +2699,10 @@ async function sweepScreenChecks(c) {
   const evil = '<img src=x onerror="window.__pwned=1"><b>Bold</b> & Co';
   const e1 = show(400, evil);
   check("G14. a member's upload names it, so it is set as text only: markup in an artist's name is shown as characters, never built",
-    e1.name === evil && sp.children.length === 0 && !sw.querySelector("img,b") && !N.__pwned && /sp\.textContent = nowName;/.test(FILES[BOOMBOX]) && !/sp\.innerHTML/.test(FILES[BOOMBOX]), sp.innerHTML.slice(0, 80));
+    /* NAMED BEFORE → AFTER (Nov 10 2026, readable timing and shortened names). BEFORE: the text was the whole name, set by
+       "sp.textContent = nowName;". AFTER: the text is its short form, set by "sp.textContent = displayName(nowName);", the whole name in the title. */
+    e1.name === B.displayName(evil) && e1.name === "<img src=x..." && e1.title === evil && sp.children.length === 0 && !sw.querySelector("img,b") && !N.__pwned &&
+    /sp\.textContent = displayName\(nowName\);/.test(FILES[BOOMBOX]) && !/sp\.innerHTML/.test(FILES[BOOMBOX]), sp.innerHTML.slice(0, 80));
 
   /* keep playing between pages: the page is the pop-out's remote (starts null); the pop-out's new track is a new track here */
   at.left = 400;
