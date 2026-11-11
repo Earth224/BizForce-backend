@@ -43,10 +43,15 @@
      O15 NAMED (Nov 11 2026, still stars): the Oracle's abyss stars, STILL. The
          copy draws with oracle.html's own drawStarAt and makeStar numbers (read
          from that file), each star a halo, a core and, on the large bright
-         ones, thin cross rays; 14 to 18 of them, wide and on the phone row;
-         nothing animates or transitions them; none on a portal (anywhere it
-         can drift), the core, a label or the search; seeded, so they do not
-         jump; the eight plain dots gone.
+         ones, thin cross rays; nothing animates or transitions them; seeded,
+         so they do not jump; the eight plain dots gone.
+         NAMED (Nov 11 2026, more and even stars): at 1440, 1024 and 390 px, in
+         the boxes Chrome measured, the count is the density rule (40 on the
+         1152 x 565 panel, 18 to 48); each quadrant 20-30% and each half
+         40-60% of them; sizes within 10 points of 60/30/10 with Oracle's
+         layer counts; no two large ones in neighbouring cells; one star a
+         cell; none closer than 60% of a cell; none on a portal, the core, a
+         label or the search; the same places on every load.
 
    NAMED (Nov 10 2026, visual match), pins moved: the directory card is no
    longer BASELINE's byte for byte (it was rebuilt for one grid cell; O1 now
@@ -112,7 +117,17 @@ const MUTATIONS = {
   // plain white dots again, with no halo
   "stars-plain-dots": [[ORBIT, "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: (L.r * O.haloR).toFixed(3), fill: \"url(#\" + id + \"h)\", \"class\": \"orbit-star-halo\" }));\n", "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: L.r.toFixed(3), fill: \"#fff\", \"class\": \"orbit-star-halo\" }));\n"]],
   // the ring's band no longer kept clear, so a star can sit where a portal drifts
-  "star-over-portal": [[ORBIT, "        g.circles.push({ x: x, y: y, r: 43 * scale });\n", ""]],
+  // NAMED (Nov 11 2026, more and even stars): the ring's circles of r 43 became the discs' boxes along the ring (stars-on-ring-band
+  // below), so star-over-portal now drops the phone row's discs.
+  "star-over-portal": [[ORBIT, "        g.boxes.push(box(portalBtn[p.key].querySelector(\".orbit-disc\"), 3));\n", ""]],
+  // NAMED (Nov 11 2026, more and even stars): the fuller, even sky (O15 at 1440, 1024 and 390 px).
+  "stars-clustered-low": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw, y0 = g.h / 2 + row * grid.ch / 2;"]],
+  "stars-one-quadrant": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw / 2, y0 = row * grid.ch / 2;"]],
+  "stars-random-each-load": [[ORBIT, "var rnd = seeded(STAR_LAYOUT_SEED + 7919 * (row * grid.cols + col)), ", "var rnd = Math.random, "]],
+  "stars-on-ring-band": [[ORBIT, "        g.boxes.push({ x: x - (VIEW.portalR + 3) * scale, y: y - (VIEW.portalR + 3) * scale, w: 2 * (VIEW.portalR + 3) * scale, h: 2 * (VIEW.portalR + 3) * scale });\n", ""]],
+  "stars-too-close": [[ORBIT, "var minGap = STAR_SKY.spacing * Math.min(grid.cw, grid.ch), ", "var minGap = 0, "]],
+  "stars-fixed-count": [[ORBIT, "var n = starCount(g.w, g.h), ", "var n = 16, "]],
+  "stars-all-large": [[ORBIT, "    return [small, n - small - large, large];\n", "    return [0, 0, n];\n"]],
   // the outer ring drawn rounder than the mockup
   "ring-ratio-wrong": [[ORBIT, "rx: 275, ry: 110, innerRx: 150, innerRy: 60,", "rx: 250, ry: 125, innerRx: 150, innerRy: 60,"]],
   // the open portal without its halo
@@ -223,7 +238,8 @@ function page(o) {
   w.cancelAnimationFrame = () => {};
   const media = { reduce: !!o.reduce, narrow: !!o.narrow };
   w.matchMedia = q => ({ matches: (/reduced-motion: reduce/.test(q) && media.reduce) || (/max-width: 640px/.test(q) && media.narrow), addEventListener() {}, addListener() {} });
-  Object.defineProperty(w.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.id === "orbitStage" ? 600 : 0; } });
+  // NAMED (Nov 11 2026, more and even stars): the stage's width may be given (o.stageW), as Chrome measured it; 600 otherwise.
+  Object.defineProperty(w.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.id === "orbitStage" ? (o.stageW || 600) : 0; } });
   if (o.rects) w.Element.prototype.getBoundingClientRect = function () { return o.rects(this); };
   let err = null;
   try { w.eval(FILES[ORBIT]); } catch (e) { err = e; }
@@ -687,34 +703,55 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     /spiked: r > L\.minR \+ \(L\.maxR - L\.minR\) \* 0\.6 && alpha > 0\.6/.test(FILES[ORBIT]), JSON.stringify(tints));
   S0.dom.window.close();
 
-  // A wide panel and a phone row, with the boxes a browser would give (jsdom has no layout).
-  const WIDE = { panel: [0, 0, 760, 400], stage: [80, 14, 600, 600 * 330 / 680], search: [120, 316, 520, 38], name: 44 };
-  const PHONE = { panel: [0, 0, 358, 300], stage: [10, 12, 338, 200], search: [10, 222, 338, 38], core: [10, 16, 338, 64], name: 40 };
-  function rectsFor(G, narrow) {
+  /* NAMED BEFORE → AFTER (Nov 11 2026, more and even stars). BEFORE: 14 to 18 stars on a synthetic 760 x 400 panel and
+     a synthetic phone row. AFTER: the panel's own boxes as Chrome 156 measured them at 1440, 1024 and 390 px (the panel,
+     the ring's stage, each portal, disc, label and title, the core and the search; the hidden results, status and preview
+     lines at nothing), and the count is the owner's density rule: 40 on the 1152 x 565 panel, the same stars per square
+     pixel elsewhere, never under 18 or over 48. Every other O15 promise is kept, at all three sizes. */
+  const GEO = {
+    1440: { narrow: false, panel: [0, 0, 1152, 564.6], stage: [86, 15, 980, 475.6], search: [316, 500.6, 520, 45], core: [527, 196.6, 98, 98],
+      btn: [[160.2, 157.7, 77.8, 77.8], [304.1, 334.9, 77.8, 77.8], [770.1, 334.9, 77.8, 77.8], [914, 157.7, 77.8, 77.8], [537.1, 48.2, 77.8, 77.8]],
+      disc: [[160.2, 157.7, 77.8, 77.8], [299.8, 330.6, 86.4, 86.4], [770.1, 334.9, 77.8, 77.8], [914, 157.7, 77.8, 77.8], [537.1, 48.2, 77.8, 77.8]],
+      name: [[181.1, 250.8, 36.1, 12.6], [309.5, 428, 67.1, 12.6], [781.4, 428, 55.2, 12.6], [930, 250.8, 45.7, 12.6], [553.7, 141.3, 44.6, 12.6]],
+      title: [[181.1, 249.8, 36.1, 14], [309.5, 427, 25.6, 14], [781.4, 427, 55.2, 14], [930, 249.8, 45.7, 14], [553.7, 140.3, 44.6, 14]] },
+    1024: { narrow: false, panel: [0, 0, 976, 546.1], stage: [17, 15, 942, 457.1], search: [228, 482.1, 520, 45], core: [440.9, 189.5, 94.2, 94.2],
+      btn: [[88.3, 152.2, 74.8, 74.8], [226.7, 322.5, 74.8, 74.8], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
+      disc: [[88.3, 152.2, 74.8, 74.8], [222.6, 318.4, 83.1, 83.1], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
+      name: [[107.6, 241.5, 36.1, 12.6], [230.6, 411.8, 67.1, 12.6], [684.3, 411.8, 55.2, 12.6], [827.4, 241.5, 45.7, 12.6], [465.7, 136.2, 44.6, 12.6]],
+      title: [[107.6, 240.5, 36.1, 14], [230.6, 410.8, 25.6, 14], [684.3, 410.8, 55.2, 14], [827.4, 240.5, 45.7, 14], [465.7, 135.2, 44.6, 14]] },
+    390: { narrow: true, panel: [0, 0, 342, 255], stage: [11, 29, 320, 154], search: [11, 193, 320, 45], core: [11, 33, 320, 64],
+      btn: [[11, 105, 57.6, 72], [76.6, 105, 57.6, 72], [142.2, 105, 57.6, 72], [207.8, 105, 57.6, 72], [273.4, 105, 57.6, 72]],
+      disc: [[16.8, 109, 46, 46], [82.4, 109, 46, 46], [148, 109, 46, 46], [213.6, 109, 46, 46], [279.2, 109, 46, 46]],
+      name: [[23.8, 161, 32, 12], [76.8, 161, 57.3, 12], [146.8, 161, 48.3, 12], [216.6, 161, 39.9, 12], [282.8, 161, 38.9, 12]],
+      title: [[23.8, 160, 32, 14], [76.8, 160, 22, 14], [146.8, 160, 48.3, 14], [216.6, 160, 39.9, 14], [282.8, 160, 38.9, 14]] }
+  };
+  const KEYS = ["grow", "sell", "connect", "agents", "oracle"];
+  function rectsFor(G) {
     return function (node) {
       const box = a => ({ left: a[0], top: a[1], width: a[2], height: a[3], right: a[0] + a[2], bottom: a[1] + a[3], x: a[0], y: a[1] });
       if (node.id === "orbitPanel") return box(G.panel);
       if (node.id === "orbitStage") return box(G.stage);
+      if (node.id === "orbitCore") return box(G.core);
       if (node.classList && node.classList.contains("orbit-search")) return box(G.search);
       const portal = node.closest && node.closest(".orbit-portal");
-      const i = portal ? ["grow", "sell", "connect", "agents", "oracle"].indexOf(portal.getAttribute("data-portal")) : -1;
-      if (narrow && node.id === "orbitCore") return box(G.core);
-      if (narrow && i >= 0 && node.classList.contains("orbit-disc")) { const cx = 10 + 67.6 * i + 33.8; return box([cx - 23, 88, 46, 46]); }
-      if (narrow && i >= 0 && node.classList.contains("orbit-portal")) return box([10 + 67.6 * i, 84, 67.6, 74]);
-      if (node.classList && (node.classList.contains("orbit-portal-name") || node.classList.contains("orbit-portal-title"))) { const cx = narrow ? 10 + 67.6 * i + 33.8 : 0; return box([cx - G.name / 2, narrow ? 140 : 0, G.name, 13]); }
+      const i = portal ? KEYS.indexOf(portal.getAttribute("data-portal")) : -1;
+      if (i >= 0 && node.classList.contains("orbit-portal")) return box(G.btn[i]);
+      if (i >= 0 && node.classList.contains("orbit-disc")) return box(G.disc[i]);
+      if (i >= 0 && node.classList.contains("orbit-portal-name")) return box(G.name[i]);
+      if (i >= 0 && node.classList.contains("orbit-portal-title")) return box(G.title[i]);
       return box([0, 0, 0, 0]);
     };
   }
-  const W = page({ rects: rectsFor(WIDE, false) });
+  const skyPage = W0 => page({ narrow: GEO[W0].narrow, rects: rectsFor(GEO[W0]), stageW: GEO[W0].stage[2] });
   const starsOf = P0 => Array.prototype.map.call(P0.d.querySelectorAll("#orbitStars g.orbit-star"), g => {
     const core = g.querySelector("circle.orbit-star-core"), halo = g.querySelector("circle.orbit-star-halo");
     const r = Number(g.getAttribute("data-r")), a = Number(g.getAttribute("data-alpha")), spiked = g.getAttribute("data-spiked") === "1";
-    return { g, r, a, spiked, x: Number(core && core.getAttribute("cx")), y: Number(core && core.getAttribute("cy")), core, halo, rays: g.querySelectorAll("rect.orbit-star-ray") };
+    return { g, r, a, spiked, size: g.getAttribute("data-size"), cell: g.getAttribute("data-cell"), x: Number(core && core.getAttribute("cx")), y: Number(core && core.getAttribute("cy")), core, halo, rays: g.querySelectorAll("rect.orbit-star-ray") };
   });
+  // The owner's rule, written here and not read from the page: 40 on the 1152 x 565 panel, the same density, 18 to 48.
+  const ruleCount = (w, h) => Math.max(18, Math.min(48, Math.round(40 * w * h / (1152 * 565))));
+  const W = skyPage(1440);
   const wide = starsOf(W);
-  check("O15 about 14 to 18 stars of mixed sizes on a wide panel, in one layer under the panel's contents", wide.length >= 14 && wide.length <= 18 &&
-    W.d.getElementById("orbitPanel").firstElementChild === W.d.getElementById("orbitStars") && W.d.getElementById("orbitStars").getAttribute("aria-hidden") === "true" &&
-    Math.max(...wide.map(x => x.r)) / Math.min(...wide.map(x => x.r)) > 2.5, wide.length);
   const stops = (P0, fill) => { const id = (/url\(#([^)]+)\)/.exec(fill || "") || [])[1]; const gr = id && P0.d.getElementById(id); return gr ? Array.prototype.map.call(gr.querySelectorAll("stop"), st => [Number(st.getAttribute("offset")), st.getAttribute("stop-color"), Number(st.getAttribute("stop-opacity"))]) : []; };
   const near = (p, q) => Math.abs(p - q) < 0.002;
   const shapeBad = wide.filter(st => {
@@ -735,55 +772,79 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   // Still: nothing on them animates or transitions, and nothing redraws them as time passes.
   const starRules = (CSS.replace(/\/\*[\s\S]*?\*\//g, "").match(/[^{}]*orbit-star[^{}]*\{[^}]*\}/g) || []);
   const stillCss = starRules.filter(r => /animation|transition/.test(r));
-  const snap = W.d.getElementById("orbitStars").innerHTML;
-  W.run(6000);
-  check("O15 none animated: their one rule is animation:none and transition:none (important), no other rule animates them, and six seconds of the orbit's clock change nothing",
+  check("O15 none animated: their one rule is animation:none and transition:none (important), no other rule animates them, and drawStars is called once at start (then on load, resize and the panel's own resize)",
     stillCss.length === 1 && /^\s*\.orbit-star,\.orbit-star \*\{animation:none !important;transition:none !important\}$/.test(stillCss[0]) &&
-    W.d.getElementById("orbitStars").innerHTML === snap && (FILES[ORBIT].match(/drawStars\(\);/g) || []).length === 1 && (FILES[ORBIT].match(/\n  drawStars\(\);\n/g) || []).length === 1 &&
-    !/@keyframes[^{]*\{[^@]*orbit-star/.test(CSS), stillCss.join(" | "));
-  // Clear of everything, measured here, not by the layout's own list: every place on the ring a portal disc (r 30 open) or its label
-  // can drift to, the core (r 34), and the search with the lines under it.
-  function clashes(list, G, narrow) {
+    (FILES[ORBIT].match(/drawStars\(\);/g) || []).length === 1 && (FILES[ORBIT].match(/\n  drawStars\(\);\n/g) || []).length === 1 &&
+    !/@keyframes[^{]*\{[^@]*orbit-star/.test(CSS) && !/Math\.random/.test(FILES[ORBIT]), stillCss.join(" | "));
+  check("O15 the stars keep Oracle's mix: STAR_LAYERS holds oracle.html's own counts (240, 120, 50), which give the small, medium and large shares",
+    JSON.stringify((B.STAR_LAYERS || []).map(l => l.count)) === JSON.stringify(((/var LAYERS = \[([\s\S]*?)\];/.exec(ORACLE) || ["", ""])[1].match(/count: (\d+)/g) || []).map(c => Number(c.slice(7)))) &&
+    JSON.stringify((B.STAR_LAYERS || []).map(l => l.count)) === "[240,120,50]");
+  W.dom.window.close();
+  // Clear of everything, measured here from the boxes, not by the layout's own list: wide, every place on the ring a portal
+  // disc's box (r 30 open) or its label can drift to, and the core (r 34); phone, each disc, label and the core's box; both,
+  // the search.
+  function clashes(list, G) {
     const bad = [];
     const hitBox = (st, b) => { const dx = Math.max(b[0] - st.x, 0, st.x - (b[0] + b[2])), dy = Math.max(b[1] - st.y, 0, st.y - (b[1] + b[3])); return dx * dx + dy * dy < st.reach * st.reach; };
+    const maxTitle = Math.max(...G.title.map(t => t[2]));
     list.forEach(st => {
       st.reach = st.r * (st.spiked ? 6 : 2.2);
-      const sb = [G.search[0], Math.min(G.search[1], G.stage[1] + G.stage[3]), G.search[2], G.panel[3]];
-      if (hitBox(st, sb)) bad.push(st.g.getAttribute("data-star") + " on the search");
-      if (!narrow) {
+      if (hitBox(st, G.search)) bad.push(st.g.getAttribute("data-star") + " on the search");
+      if (!G.narrow) {
         const sc = G.stage[2] / 680, ox = G.stage[0], oy = G.stage[1];
         for (let a = 0; a < 360; a += 1) {
           const rad = a * Math.PI / 180, px = ox + (340 + 275 * Math.sin(rad)) * sc, py = oy + (160 + 110 * Math.cos(rad)) * sc;
-          if (Math.hypot(st.x - px, st.y - py) < 30 * sc + st.reach) { bad.push(st.g.getAttribute("data-star") + " on a portal at " + a); break; }
-          if (hitBox(st, [px - G.name / 2 - 20, py + 42 * sc - 7, G.name + 40, 14])) { bad.push(st.g.getAttribute("data-star") + " on a label at " + a); break; }
+          if (hitBox(st, [px - 30 * sc, py - 30 * sc, 60 * sc, 60 * sc])) { bad.push(st.g.getAttribute("data-star") + " on a portal at " + a); break; }
+          if (hitBox(st, [px - maxTitle / 2 - 20, py + 42 * sc - 7, maxTitle + 40, 14])) { bad.push(st.g.getAttribute("data-star") + " on a label at " + a); break; }
         }
         if (Math.hypot(st.x - (ox + 340 * sc), st.y - (oy + 160 * sc)) < 34 * sc + st.reach) bad.push(st.g.getAttribute("data-star") + " on the core");
       } else {
         if (hitBox(st, G.core)) bad.push(st.g.getAttribute("data-star") + " on the core");
         for (let i = 0; i < 5; i++) {
-          const cx = 10 + 67.6 * i + 33.8;
-          if (hitBox(st, [cx - 23, 88, 46, 46])) bad.push(st.g.getAttribute("data-star") + " on a portal");
-          if (hitBox(st, [cx - G.name / 2, 140, G.name, 13])) bad.push(st.g.getAttribute("data-star") + " on a label");
+          if (hitBox(st, G.disc[i])) bad.push(st.g.getAttribute("data-star") + " on a portal");
+          if (hitBox(st, G.name[i])) bad.push(st.g.getAttribute("data-star") + " on a label");
         }
       }
-      if (st.x - st.reach < 0 || st.y - st.reach < 0 || st.x + st.reach > G.panel[2] || st.y + st.reach > G.panel[3]) bad.push(st.g.getAttribute("data-star") + " off the panel");
+      const edge = G.narrow ? 3 : 0;
+      if (st.x - st.reach < edge || st.y - st.reach < edge || st.x + st.reach > G.panel[2] - edge || st.y + st.reach > G.panel[3] - edge) bad.push(st.g.getAttribute("data-star") + " off the panel's edge");
     });
     return bad;
   }
-  const wideBad = clashes(wide, WIDE, false);
-  check("O15 wide: none on a portal (anywhere it can drift), the core, a label or the search", wideBad.length === 0, wideBad.join(", "));
-  const placesWide = JSON.stringify(wide.map(x => [x.x, x.y]));
-  W.w.BFOrbit.drawStars();
-  const W2 = page({ rects: rectsFor(WIDE, false) });
-  check("O15 fixed per load from a seeded layout: drawing again, or loading again, puts every star in the same place", JSON.stringify(starsOf(W).map(x => [x.x, x.y])) === placesWide &&
-    JSON.stringify(starsOf(W2).map(x => [x.x, x.y])) === placesWide && !/Math\.random/.test(FILES[ORBIT]));
-  W.dom.window.close(); W2.dom.window.close();
-  const N = page({ narrow: true, rects: rectsFor(PHONE, true) });
-  const phone = starsOf(N);
-  const phoneBad = clashes(phone, PHONE, true);
-  check("O15 the 640 px row: 14 to 18 of the same stars, none on a portal, its label, the core or the search", phone.length >= 14 && phone.length <= 18 && phoneBad.length === 0,
-    phone.length + " " + phoneBad.join(", "));
-  N.dom.window.close();
+  const skyReport = {};
+  for (const W0 of [1440, 1024, 390]) {
+    const G = GEO[W0], P1 = skyPage(W0), list = starsOf(P1), n = list.length, w = G.panel[2], h = G.panel[3];
+    const sky = (P1.d.getElementById("orbitStars").getAttribute("data-sky") || "").split(",").map(Number);
+    const cols = sky[1], rows = sky[2], cw = w / cols, ch = h / rows;
+    skyReport[W0] = { count: n, cols, rows, skipped: sky[3], reused: sky[4], asMedium: sky[5], dimmed: sky[6], unplaced: sky[7] };
+    const want = ruleCount(w, h);
+    check("O15 " + W0 + " px: " + want + " stars, the density rule's count for a " + w + " x " + h + " panel (40 on 1152 x 565, 18 to 48)",
+      n === want && sky[0] === want && sky[7] === 0, n + " " + sky.join(","));
+    const q = [0, 0, 0, 0];
+    list.forEach(st => q[(st.y < h / 2 ? 0 : 2) + (st.x < w / 2 ? 0 : 1)]++);
+    check("O15 " + W0 + " px: each quadrant holds 20% to 30% of them, and each half 40% to 60% (top-left, top-right, bottom-left, bottom-right " + q.join(", ") + ")",
+      n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
+    const mix = ["small", "medium", "large"].map(s => list.filter(st => st.size === s).length / Math.max(1, n) * 100);
+    check("O15 " + W0 + " px: the sizes within 10 points of 60% small, 30% medium, 10% large bright (" + mix.map(v => v.toFixed(1)).join(" / ") + "), each large one with rays",
+      Math.abs(mix[0] - 60) <= 10 && Math.abs(mix[1] - 30) <= 10 && Math.abs(mix[2] - 10) <= 10 && list.every(st => st.size !== "large" || st.spiked) && mix[0] + mix[1] + mix[2] > 99.9, mix.join(","));
+    // the cell each star is in, from its position and the grid, not from its label
+    const cellOf = st => Math.min(rows - 1, Math.floor(st.y / ch)) + "," + Math.min(cols - 1, Math.floor(st.x / cw));
+    const cellsSeen = list.map(cellOf);
+    check("O15 " + W0 + " px: one star at most in each cell of the " + cols + " x " + rows + " grid (an even grid, so each quadrant is whole cells), each where it says",
+      cols >= 2 && rows >= 2 && cols % 2 === 0 && rows % 2 === 0 && new Set(cellsSeen).size === n && list.every((st, k) => st.cell === cellsSeen[k]), cellsSeen.join(" "));
+    const larges = list.filter(st => st.size === "large").map(cellOf).map(c => c.split(",").map(Number));
+    check("O15 " + W0 + " px: no two large bright stars in neighbouring cells", larges.every((a, i) => larges.every((b, j) => j <= i || Math.abs(a[0] - b[0]) > 1 || Math.abs(a[1] - b[1]) > 1)), JSON.stringify(larges));
+    let md = Infinity; list.forEach((a, i) => list.forEach((b, j) => { if (j > i) md = Math.min(md, Math.hypot(a.x - b.x, a.y - b.y)); }));
+    check("O15 " + W0 + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * Math.min(cw, ch)).toFixed(1) + " px; closest " + md.toFixed(1) + ")", md >= 0.6 * Math.min(cw, ch) - 1e-9, md);
+    const bad = clashes(list, G);
+    check("O15 " + W0 + " px: none on a portal (anywhere it can drift), the core, a label or the search, and none past the panel's edge (3 px on the phone)", bad.length === 0, bad.join(", "));
+    const snap = P1.d.getElementById("orbitStars").innerHTML;
+    P1.run(6000);
+    const P2 = skyPage(W0);
+    check("O15 " + W0 + " px: still and seeded: six seconds of the orbit's clock change nothing, and a second load puts every star in the same place",
+      P1.d.getElementById("orbitStars").innerHTML === snap && JSON.stringify(starsOf(P2).map(st => [st.x, st.y, st.r])) === JSON.stringify(list.map(st => [st.x, st.y, st.r])));
+    P1.dom.window.close(); P2.dom.window.close();
+  }
+  console.log("    sky  " + JSON.stringify(skyReport));
   check("O15 the old plain dots are gone: no STARS list, no circle.orbit-star in the ring's drawing, no white fill rule, no radial-gradient dots on a phone",
     !/var STARS = \[/.test(FILES[ORBIT]) && !/\.orbit-star\{fill:#fff\}/.test(CSS) && !/radial-gradient\(/.test(CSS) &&
     L.d.querySelectorAll("#orbitSvg .orbit-star, circle.orbit-star").length === 0);

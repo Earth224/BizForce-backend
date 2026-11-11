@@ -40,6 +40,12 @@
    overlaps a portal's disc, the core, a portal's label or the search bar,
    measured twice, three seconds apart, while the portals drift. Screenshots
    stars-1440.png and stars-390.png to <top>.
+   THE FULLER, EVEN SKY (Nov 11 2026, more and even stars): at 1440, 1024 and
+   390 px, every star measured: the count is the density rule's (40 on the
+   1152 x 565 panel, the same per square pixel, 18 to 48); each quadrant holds
+   20% to 30% of them and each half 40% to 60%; none closer than 60% of a grid
+   cell's smaller side; then the no-animation and no-overlap checks above.
+   Screenshots stars-1440.png, stars-1024.png and stars-390.png.
      TOP_HALF_OUT           that folder (default Downloads\top-half)
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
@@ -254,12 +260,27 @@ const STARS_EVAL = "(function(){var r=function(n){var x=n.getBoundingClientRect(
   "var things=[].slice.call(document.querySelectorAll('.orbit-portal .orbit-disc, #orbitCore, .orbit-portal-name, .orbit-search')).filter(vis).map(function(n){return {n:n.className||n.id,b:r(n)}});" +
   "var hits=[];stars.forEach(function(g){var c=g.querySelector('.orbit-star-core'),k=r(c),cx=(k.l+k.r)/2,cy=(k.t+k.b)/2,rr=Number(g.getAttribute('data-r'))*(g.getAttribute('data-spiked')==='1'?6:2.2);" +
   "things.forEach(function(t){var dx=Math.max(t.b.l-cx,0,cx-t.b.r),dy=Math.max(t.b.t-cy,0,cy-t.b.b);if(dx*dx+dy*dy<rr*rr)hits.push(g.getAttribute('data-star')+' on '+t.n)})});" +
-  "return {count:stars.length,moving:moving,hits:hits,things:things.length,spiked:stars.filter(function(g){return g.getAttribute('data-spiked')==='1'}).length}})()";
+  "var p=document.getElementById('orbitPanel').getBoundingClientRect(),sky=(document.getElementById('orbitStars').getAttribute('data-sky')||'').split(',').map(Number);" +
+  "var pts=stars.map(function(g){var k=r(g.querySelector('.orbit-star-core'));return [(k.l+k.r)/2-p.left,(k.t+k.b)/2-p.top]});" +
+  "return {count:stars.length,moving:moving,hits:hits,things:things.length,spiked:stars.filter(function(g){return g.getAttribute('data-spiked')==='1'}).length," +
+  "large:stars.filter(function(g){return g.getAttribute('data-size')==='large'}).length,w:p.width,h:p.height,cols:sky[1],rows:sky[2],pts:pts}})()";
+// The owner's density rule (Nov 11 2026): 40 stars on the 1152 x 565 panel of a 1440 px screen, the same per square pixel, 18 to 48.
+const skyCount = (w, h) => Math.max(18, Math.min(48, Math.round(40 * w * h / (1152 * 565))));
 async function starsAt(W, file) {
   const a = await evaluate(cdp0, STARS_EVAL);
   await sleep(3000);
   const b = await evaluate(cdp0, STARS_EVAL);
-  check(W + " px: 14 to 18 still Oracle stars, rays on the large bright ones", a.count >= 14 && a.count <= 18 && a.spiked >= 2, JSON.stringify(a));
+  // NAMED (Nov 11 2026, more and even stars): 14 to 18 became the density rule's count, measured, with its balance and spacing.
+  const n = a.count, q = [0, 0, 0, 0];
+  a.pts.forEach(pt => q[(pt[1] < a.h / 2 ? 0 : 2) + (pt[0] < a.w / 2 ? 0 : 1)]++);
+  let md = Infinity; a.pts.forEach((p1, i) => a.pts.forEach((p2, j) => { if (j > i) md = Math.min(md, Math.hypot(p1[0] - p2[0], p1[1] - p2[1])); }));
+  const cell = Math.min(a.w / a.cols, a.h / a.rows);
+  console.log("    " + W + " px sky: panel " + Math.round(a.w) + " x " + Math.round(a.h) + ", " + n + " stars, grid " + a.cols + " x " + a.rows + ", quadrants " + q.join("/") + ", closest " + md.toFixed(1) + " px");
+  check(W + " px: the density rule's " + skyCount(a.w, a.h) + " still Oracle stars for a " + Math.round(a.w) + " x " + Math.round(a.h) + " panel" + (W === 390 ? "" : ", rays on the large bright ones"),
+    n === skyCount(a.w, a.h) && (W === 390 || a.spiked >= 2), JSON.stringify(Object.assign({}, a, { pts: undefined })));
+  check(W + " px: each quadrant holds 20% to 30% of the stars and each half 40% to 60% (" + q.join(", ") + ")",
+    n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
+  check(W + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * cell).toFixed(1) + " px; closest " + md.toFixed(1) + ")", a.cols >= 2 && md >= 0.6 * cell - 0.5, md);
   check(W + " px: no star has a running animation (getAnimations() empty, no animation or transition computed)", a.moving === 0 && b.moving === 0, a.moving + "/" + b.moving);
   check(W + " px: no star overlaps a portal, the core, a label or the search (twice, 3 s apart, as the portals drift)", a.things >= 11 && a.hits.length === 0 && b.hits.length === 0, a.hits.concat(b.hits).join(", "));
   await shot(cdp0, file, "#orbitTop");
@@ -425,12 +446,14 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     const coreParts = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitCore > span, #orbitCore > strong'),function(x){return x.textContent})");
     check("the core reads This week, 29, tracked visits, All tools, and no \"%\"", JSON.stringify(coreParts) === JSON.stringify(["This week", "29", "tracked visits", "All tools"]) && renders.core_text.indexOf("%") === -1, JSON.stringify(coreParts));
     const panel = await evaluate(cdp, "(function(){var p=document.getElementById('orbitPanel'),cs=getComputedStyle(p),s=document.querySelector('.orbit-search');" +
-      "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitStars .orbit-star').length, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
+      "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitStars .orbit-star').length, pw:p.getBoundingClientRect().width, ph:p.getBoundingClientRect().height, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
       "ring:[].map.call(document.querySelectorAll('#orbitSvg ellipse.orbit-ring, #orbitSvg ellipse.orbit-ring-inner'),function(e){return e.getAttribute('rx')+'/'+e.getAttribute('ry')}).join()," +
       "pill:getComputedStyle(s).borderTopLeftRadius, key:(s.querySelector('kbd.orbit-key')||{}).textContent, refresh:[(document.getElementById('orbitRefresh')||{}).getAttribute&&document.getElementById('orbitRefresh').getAttribute('aria-label'), s.contains(document.getElementById('orbitRefresh')), (document.getElementById('orbitRefresh')||{}).textContent]," +
       "hint:/Press \\/ to search/.test(document.getElementById('orbitTop').textContent)};})()");
     // NAMED (Nov 11 2026, still stars): the eight plain dots became 14 to 18 still Oracle stars.
-    check("a starfield panel (radius 18 px, 14 to 18 still Oracle stars) holds the orbit and the search bar", panel.radius === "18px" && panel.stars >= 14 && panel.stars <= 18 && panel.holds, JSON.stringify(panel));
+    // NAMED (Nov 11 2026, more and even stars): 14 to 18 became the density rule's count for the panel's own size.
+    check("a starfield panel (radius 18 px, the density rule's count of still Oracle stars: " + skyCount(panel.pw, panel.ph) + ") holds the orbit and the search bar",
+      panel.radius === "18px" && panel.stars === skyCount(panel.pw, panel.ph) && panel.holds, JSON.stringify(panel));
     check("the rings are 275/110 and 150/60 (2.5 to 1)", panel.ring === "275/110,150/60", panel.ring);
     check("the search pill (radius 16 px) holds the \"/\" key cap and an icon Refresh named \"Refresh\"; no \"Press / to search\", no text button",
       panel.pill === "16px" && panel.key === "/" && panel.refresh[0] === "Refresh" && panel.refresh[1] === true && panel.refresh[2] === "" && !panel.hint, JSON.stringify(panel));
@@ -564,7 +587,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       const over = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitTop, #orbitTop *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&(x.right>" + (W + 1) + "||x.left<-1)}).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)})");
       check(W + " px: nothing in the top half passes the screen's edge", over.length === 0, over.join(" | "));
       await shot(cdp, path.join(TOP_OUT, "orbit-" + W + ".png"), "#orbitTop");
-      if (W === 1440) await starsAt(1440, path.join(TOP_OUT, "stars-1440.png"));
+      await starsAt(W, path.join(TOP_OUT, "stars-" + W + ".png"));
     }
 
     // 390 px: a row of portals, stacked main boxes, one column.
