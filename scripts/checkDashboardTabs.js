@@ -15,8 +15,10 @@
    bf-command-center.js, and executive-agent.html's markup with bf-tabs.js and
    bf-exec-deck.js, over fixture answers. No network, no database.
 
-     T1  the top half: everything in dashboard.html above the Command Center,
-         and everything after it, is byte for byte what it was at BASELINE;
+     T1  around the Command Center: everything before the orbit, everything
+         from Business Profile down to the Command Center, and everything after
+         it, is byte for byte what it was at BASELINE, and the orbit is held
+         structurally (re-baselined Nov 10 2026, orbit top half);
          the Agent Memory markup is byte for byte the same, inside its tab;
      T2  the tabs: a tablist with roles, aria-selected, aria-controls and
          aria-labelledby; Right, Left (wrapping), Home and End; #cc-<tab> in
@@ -285,9 +287,27 @@ async function mountExec(o) {
   /* ── T1. the top half ── */
   console.log("\n══ T1. everything around the Command Center is unchanged ══");
   const cur = FILES[DASH];
-  const baseTop = BASE_DASH.slice(0, BASE_DASH.indexOf(CC_COMMENT));
-  check("dashboard.html above the Command Center is byte for byte " + BASELINE + "'s (" + baseTop.length + " characters)",
-    baseTop.length > 1000 && cur.slice(0, cur.indexOf(CC_COMMENT)) === baseTop, cur.slice(0, cur.indexOf(CC_COMMENT)).length + " vs " + baseTop.length);
+  /* NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: one snapshot, everything above the Command Center byte for
+     byte BASELINE's. AFTER: the frontend's orbit replaced the feature grid and the AI Agent Directory card (the tiles are
+     kept byte for byte in its template; checkDashboardOrbit O1 holds them), so that one snapshot is split around the
+     orbit and the orbit itself is held structurally:
+       (a) everything before the old grid's place (head, top bar, hero, banners) is BASELINE's byte for byte;
+       (b) one orbit: one style, one section, one template, bf-orbit.js once right after it, and no feature grid;
+       (c) everything from the end of the top half (Business Profile down) to the Command Center is BASELINE's byte for byte.
+     Nothing outside the orbit may change, as before. */
+  const GRID_OPEN = "<div class=\"bf-feature-grid cards\">\n", ORBIT_START = "<!-- THE ORBIT (Nov 10 2026, orbit top half).", TOP_END = "<!-- Recent Activity was removed here.";
+  const ORBIT_STYLE = "\n<style id=\"orbitStyle\">", ORBIT_TPL = "\n<template id=\"orbitTools\">\n";
+  const baseHead = BASE_DASH.slice(0, BASE_DASH.indexOf(GRID_OPEN));
+  check("dashboard.html before the top half is byte for byte " + BASELINE + "'s (" + baseHead.length + " characters)",
+    baseHead.length > 1000 && cur.indexOf(ORBIT_START) !== -1 && cur.slice(0, cur.indexOf(ORBIT_START)) === baseHead, cur.slice(0, cur.indexOf(ORBIT_START)).length + " vs " + baseHead.length);
+  check("the top half is one orbit: one style, one section, one template, bf-orbit.js once after it, no feature grid",
+    cur.split(ORBIT_STYLE).length === 2 && cur.split("\n<section id=\"orbitTop\" class=\"bf-orbit\"").length === 2 && cur.split(ORBIT_TPL).length === 2 &&
+    cur.split("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>\n" + TOP_END).length === 2 && cur.indexOf(GRID_OPEN) === -1 &&
+    (cur.slice(cur.indexOf(ORBIT_TPL), cur.indexOf("</template>")).match(/ data-card="/g) || []).length === 37);
+  const baseMid = BASE_DASH.slice(BASE_DASH.indexOf(TOP_END), BASE_DASH.indexOf(CC_COMMENT));
+  const curMid = cur.slice(cur.indexOf(TOP_END), cur.indexOf(CC_COMMENT));
+  check("from the end of the top half (Business Profile down) to the Command Center, byte for byte " + BASELINE + "'s (" + baseMid.length + " characters)",
+    baseMid.length > 1000 && baseMid.indexOf("<section id=\"businessProfileSection\"") !== -1 && curMid === baseMid, curMid.length + " vs " + baseMid.length);
   const memA = BASE_DASH.indexOf("<section id=\"agentMemorySection\""), memB = BASE_DASH.indexOf("</section>", memA) + "</section>".length;
   const baseMemory = BASE_DASH.slice(memA, memB), baseRest = BASE_DASH.slice(memB);
   check("everything after the Command Center and Agent Memory is byte for byte " + BASELINE + "'s", baseRest.length > 1000 && cur.endsWith(baseRest));

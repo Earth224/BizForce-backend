@@ -44359,6 +44359,298 @@ app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
   }
 });
 
+/* ── GET /api/dashboard/top (Nov 10 2026, orbit top half) ─────────────────────
+   The live figures the dashboard's orbit, main boxes and portal grid draw
+   from, in ONE read-only answer. requireAuth only: every read is scoped to the
+   caller, so a member whose subscription lapsed still sees their own numbers.
+   No model call, no external call and no write: unlike POST
+   /api/agents/analytics/arrivals it starts no ai_tasks row.
+
+   REUSED, NOT COPIED: the arrivals through the member's own refs are
+   loadArrivals (blog bl- refs AND outreach or- refs); low stock is
+   measureStockAndMargin over every inventory row; "running now" is
+   lib/agentLive.js nowState, the function GET /api/agents/live uses; the
+   certification total is publicCertificationCatalog; media is
+   memberMedia.usage. Every list read is bounded: paged with a cap that throws
+   (arrivalsReadAll), or limited; the counts are exact head counts.
+
+   A FIGURE THAT COULD NOT BE READ IS NULL, NEVER 0, with its reason in
+   _unreadable, as getLiveStats does. The mailbox is { connected } only: no
+   unread count exists without reading the mailbox itself, so none is claimed.
+
+   The answer is kept for 60 seconds per member (DASHBOARD_TOP_CACHE_MS), keyed
+   by the member's id; 60 requests a minute per member (dashboardTopLimiter). */
+var DASHBOARD_TOP_DAYS = 14;
+var DASHBOARD_TOP_CACHE_MS = 60 * 1000;
+var DASHBOARD_TOP_NAMED = 5;
+var DASHBOARD_TOP_CARD_CAP = 500;
+var DASHBOARD_TOP_VIEW_ROW_CAP = 5000;
+var DASHBOARD_TOP_RUNNING_CAP = 200;
+var DASHBOARD_TOP_CERT_CAP = 500;
+var DASHBOARD_TOP_DAY_MS = 24 * 60 * 60 * 1000;
+var dashboardTopCache = new Map();
+
+const dashboardTopLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: function (req) { return "dashboard-top:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many dashboard reads in a minute. Try again shortly.", reason: "rate_limited" }
+});
+
+// The window's UTC days, oldest first; the last is today.
+function dashboardTopDays(nowMs) {
+  var d = new Date(nowMs);
+  var today = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  var days = [];
+  for (var i = DASHBOARD_TOP_DAYS - 1; i >= 0; i--) days.push(new Date(today - i * DASHBOARD_TOP_DAY_MS).toISOString().slice(0, 10));
+  return days;
+}
+
+// One count per day of the window, from timestamps; a time outside it is left out.
+function dashboardTopPerDay(times, days) {
+  var at = {};
+  days.forEach(function (k, i) { at[k] = i; });
+  var counts = days.map(function () { return 0; });
+  times.forEach(function (t) {
+    var k = typeof t === "string" ? t.slice(0, 10) : null;
+    if (k !== null && Object.prototype.hasOwnProperty.call(at, k)) counts[at[k]] += 1;
+  });
+  return counts;
+}
+
+// This week is the last 7 days of the window, today included; last week the 7 before.
+function dashboardTopWeeks(perDay) {
+  var add = function (a, b) { return a + b; };
+  return { this_week: perDay.slice(-7).reduce(add, 0), last_week: perDay.slice(-14, -7).reduce(add, 0) };
+}
+
+// An exact head count, or a throw: a count that did not come back is never 0.
+function dashboardTopCount(result, what) {
+  commandCenterRead(result, what);
+  if (typeof result.count !== "number") throw new Error(what + ": the count did not come back");
+  return result.count;
+}
+
+async function dashboardTopBody(userId, now) {
+  var nowMs = now.getTime();
+  var days = dashboardTopDays(nowMs);
+  var weekFrom = days[DASHBOARD_TOP_DAYS - 7];
+  var unreadable = [];
+  async function figure(name, read) {
+    try {
+      return await read();
+    } catch (error) {
+      var message = (error && error.message) || String(error);
+      console.error("[dashboard/top] the " + name + " read failed for " + userId + ": " + message);
+      unreadable.push(name);
+      return null;
+    }
+  }
+
+  var body = { generated_at: now.toISOString(), days: days };
+
+  body.visits = await figure("visits", async function () {
+    var loaded = await loadArrivals(userId, false);
+    [loaded.posts, loaded.sends, loaded.visits].forEach(function (part) { if (part.reason) throw new Error(part.reason); });
+    var tracked = loaded.posts.rows.some(function (p) { return p.tracked; }) || loaded.sends.rows.length > 0;
+    var perDay = dashboardTopPerDay(loaded.visits.rows.map(function (v) { return v.created_at; }), days);
+    var weeks = dashboardTopWeeks(perDay);
+    return { per_day: perDay, this_week: weeks.this_week, last_week: weeks.last_week, tracked: tracked };
+  });
+
+  var store = {};
+  store.connected = await figure("store.connected", async function () {
+    var conns = commandCenterRead(await supabase
+      .from("member_store_connections")
+      .select("platform, status")
+      .eq("user_id", userId)
+      .limit(20), "store connections").data || [];
+    return conns.some(function (c) { return c.status === "connected"; });
+  });
+  store.low_stock = await figure("store.low_stock", async function () {
+    var items = await arrivalsReadAll("inventory_items", function () {
+      return supabase.from("inventory_items")
+        .select("id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status, source")
+        .eq("user_id", userId);
+    });
+    var stock = measureStockAndMargin(items, [], 30);
+    return { count: stock.items_at_or_below_reorder_point, names: stock.items_at_or_below_reorder_point_named.slice(0, DASHBOARD_TOP_NAMED) };
+  });
+  var orders = await figure("store.orders", async function () {
+    var rows = await arrivalsReadAll("store_order_summaries", function () {
+      return supabase.from("store_order_summaries").select("id, ordered_at").eq("user_id", userId).gte("ordered_at", days[0]);
+    });
+    return dashboardTopPerDay(rows.map(function (r) { return r.ordered_at; }), days);
+  });
+  store.orders_this_week = orders === null ? null : dashboardTopWeeks(orders).this_week;
+  store.orders_per_day = orders;
+  body.store = store;
+
+  body.proposals_pending = await figure("proposals_pending", async function () {
+    return dashboardTopCount(await supabase
+      .from("agent_proposals")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("status", "pending"), "pending proposals");
+  });
+
+  body.cards = await figure("cards", async function () {
+    var cards = commandCenterRead(await supabase
+      .from("digital_cards")
+      .select("id")
+      .eq("user_id", userId)
+      .limit(DASHBOARD_TOP_CARD_CAP), "digital cards").data || [];
+    var ids = cards.map(function (c) { return c.id; });
+    var out = { count: ids.length, views_today: 0, views_7d: 0 };
+    if (!ids.length) return out;
+    // ONE read across every card, never one per card.
+    var viewRows = commandCenterRead(await supabase
+      .from("card_view_counts")
+      .select("card_id, day, views")
+      .in("card_id", ids)
+      .gte("day", weekFrom)
+      .limit(DASHBOARD_TOP_VIEW_ROW_CAP), "card views").data || [];
+    var today = days[DASHBOARD_TOP_DAYS - 1];
+    viewRows.forEach(function (r) {
+      var n = Number(r.views);
+      if (!isFinite(n) || n <= 0) return;
+      var day = String(r.day || "").slice(0, 10);
+      if (day < weekFrom) return;
+      out.views_7d += Math.floor(n);
+      if (day === today) out.views_today += Math.floor(n);
+    });
+    return out;
+  });
+
+  body.certifications = await figure("certifications", async function () {
+    var passed = commandCenterRead(await supabase
+      .from("user_certifications")
+      .select("cert_id")
+      .eq("user_id", userId)
+      .eq("passed", true)
+      .limit(DASHBOARD_TOP_CERT_CAP), "certifications earned").data || [];
+    var distinct = {};
+    passed.forEach(function (r) { distinct[r.cert_id] = true; });
+    return { earned: Object.keys(distinct).length, total: publicCertificationCatalog().length };
+  });
+
+  body.wallet = await figure("wallet", async function () {
+    var held = commandCenterRead(await supabase
+      .from("user_wallets")
+      .select("balance")
+      .eq("user_id", userId)
+      .limit(1), "wallet").data || [];
+    if (!held.length) return { balance: null, exists: false };
+    var b = Number(held[0].balance);
+    if (!isFinite(b)) throw new Error("wallet: the balance is not a number");
+    return { balance: b, exists: true };
+  });
+
+  body.marketplace = await figure("marketplace", async function () {
+    return { orders_this_week: dashboardTopCount(await supabase
+      .from("marketplace_orders")
+      .select("id", { count: "exact", head: true })
+      .eq("seller_id", userId)
+      .gte("created_at", weekFrom), "marketplace orders as seller") };
+  });
+
+  body.self_reviews = await figure("self_reviews", async function () {
+    var newest = commandCenterRead(await supabase
+      .from("self_reviews")
+      .select("created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1), "self-reviews").data || [];
+    return { latest_at: newest.length ? newest[0].created_at : null };
+  });
+
+  // Connected or not, and nothing else: there is no unread count without reading the mailbox.
+  body.mailbox = await figure("mailbox", async function () {
+    var mail = commandCenterRead(await supabase
+      .from("member_email_connections")
+      .select("status")
+      .eq("user_id", userId)
+      .limit(1), "mailbox").data || [];
+    return { connected: mail.length > 0 && mail[0].status === "connected" };
+  });
+
+  var COUNTED = [
+    ["crm_customers", "crm_customers", "user_id"],
+    ["prospects", "prospects", "user_id"],
+    ["sms_subscribers", "sms_subscribers", "user_id"],
+    ["campaigns", "crowdfunding_campaigns", "owner_id"],
+    ["routines", "routines", "user_id"],
+    ["saved_prompts", "saved_prompts", "user_id"],
+    ["purchases", "marketplace_orders", "buyer_id"],
+    ["bizdoc_documents", "bizdoc_documents", "owner_id"]
+  ];
+  var counts = {};
+  for (var c = 0; c < COUNTED.length; c++) {
+    var spec = COUNTED[c];
+    counts[spec[0]] = await figure("counts." + spec[0], async function () {
+      return dashboardTopCount(await supabase.from(spec[1]).select("id", { count: "exact", head: true }).eq(spec[2], userId), spec[0]);
+    });
+  }
+  // bsky_leads has no owner column, so every row is the credential owner's (GET /api/leads); anyone else reads none.
+  if (userId === OUTREACH_CREDENTIAL_OWNER_ID) {
+    counts.leads = await figure("counts.leads", async function () {
+      return dashboardTopCount(await supabase
+        .from("bsky_leads")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "scored")
+        .not("intent_score", "is", null), "leads");
+    });
+  } else {
+    counts.leads = null;
+    unreadable.push("counts.leads (Lead Radar reads the owner account's leads only)");
+  }
+  body.counts = counts;
+
+  body.media = await figure("media", async function () {
+    var used = await memberMedia.usage(supabase, userId);
+    return { used_bytes: used.used_bytes, cap_bytes: used.cap_bytes };
+  });
+
+  body.agents = await figure("agents", async function () {
+    var live = require("./lib/agentLive");
+    var open = commandCenterRead(await supabase
+      .from("ai_tasks")
+      .select("id, agent_type, task_type, status, created_at")
+      .eq("user_id", userId)
+      .eq("status", "processing")
+      .order("created_at", { ascending: false })
+      .limit(DASHBOARD_TOP_RUNNING_CAP), "running now").data || [];
+    return { running_now: live.AGENT_KEYS.filter(function (type) {
+      return live.nowState(open.filter(function (r) { return r.agent_type === type; }), nowMs).state === "running";
+    }) };
+  });
+
+  body._unreadable = unreadable;
+  return body;
+}
+
+app.get("/api/dashboard/top", requireAuth, dashboardTopLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var now = new Date();
+    var kept = dashboardTopCache.get(userId);
+    if (kept && now.getTime() - kept.at < DASHBOARD_TOP_CACHE_MS) {
+      return res.json(Object.assign({}, kept.body, { cached: true }));
+    }
+    var body = await dashboardTopBody(userId, now);
+    // Old answers are dropped before the map grows past a thousand members.
+    if (dashboardTopCache.size >= 1000) {
+      dashboardTopCache.forEach(function (v, k) { if (now.getTime() - v.at >= DASHBOARD_TOP_CACHE_MS) dashboardTopCache.delete(k); });
+    }
+    dashboardTopCache.set(userId, { at: now.getTime(), body: body });
+    return res.json(Object.assign({}, body, { cached: false }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Self-reviews ─────────────────────────────────────────────────────────────
 //
 // Stored weekly and monthly review cycles. Both routes scope to req.user.id and

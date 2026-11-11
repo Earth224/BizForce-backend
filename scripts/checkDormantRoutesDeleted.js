@@ -360,7 +360,9 @@ const ADDED = [
   // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 487 routes; AFTER 489, Connect Amazon (the SP-API website
   // authorization workflow: a marketplace chosen first, a single-use state, both LWA tokens sealed before the SP-API is read) (checkAmazonConnect)
   ["post", "/api/store/amazon/start"],                       // subscribed: the marketplace checked, a single-use state stored, returns Seller Central's consent URL; 503 until configured (487 -> 488)
-  ["post", "/api/store/amazon/finish"]                       // subscribed: the seller id checked, state consumed once, the code exchanged, both tokens sealed, participation read, stored (488 -> 489)
+  ["post", "/api/store/amazon/finish"],                      // subscribed: the seller id checked, state consumed once, the code exchanged, both tokens sealed, participation read, stored (488 -> 489)
+  // NAMED (Nov 10 2026, orbit top half): BEFORE 489 routes; AFTER 490, the dashboard's live figures in one read-only answer (checkDashboardTop)
+  ["get", "/api/dashboard/top"]                              // login-only, read-only: the caller's own figures, null with a reason when unreadable; 60 s per-member cache (489 -> 490)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

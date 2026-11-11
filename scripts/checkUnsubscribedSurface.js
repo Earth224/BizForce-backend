@@ -514,7 +514,13 @@ const EXPECTED_OWN = [
   // facebook_login oauth_states are deleted; nothing another member is served is written, and disconnecting must always work,
   // subscribed or not. The Pages list, the posts list, a post's status and filing a removal (through lib/facebookApi.js) write
   // only the member's own rows and need no entry here.
-  "post /api/facebook/disconnect"
+  "post /api/facebook/disconnect",
+  // NAMED (Nov 10 2026, orbit top half; one more effectful login-only route): BEFORE no dashboard aggregate. AFTER GET
+  // /api/dashboard/top reads the caller's own figures for the dashboard's orbit. It is listed for the same reason as the
+  // live routes above: it reaches blogRefToken through loadArrivals, whose crypto hash .update( this file's WRITES pattern
+  // reads as a write. It writes nothing and starts no task; checkDashboardTop holds every query it makes to the caller's
+  // own rows and to reads, and holds it login-only on purpose, so a lapsed member still sees their own numbers.
+  "get /api/dashboard/top"
 ];
 
 /* Unauthenticated routes that write. */

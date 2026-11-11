@@ -552,8 +552,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        AFTER: 10; bf_theme moved here from KEPT, so sign-out clears the member's cached themes (their look and their backdrop
        photo's address) and the sign-in page shows the original look.
        NAMED BEFORE → AFTER (Oct 30 2026, the BizForce music player). BEFORE: PER_USER had 10 keys. AFTER: 11; bf_music
-       (the player's track, position, volume, queue and settings, for the member signed in) is cleared at sign-out. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "mcTargetGoalConversions", "bf_theme", "bf_music"];
+       (the player's track, position, volume, queue and settings, for the member signed in) is cleared at sign-out.
+       NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: PER_USER had 11 keys. AFTER: 12; bf_main_boxes (the two
+       tools the member chose with Swap for the dashboard's main boxes, scripts/bf-orbit.js) is the member's choice, so
+       sign-out clears it. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "mcTargetGoalConversions", "bf_theme", "bf_music"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
@@ -591,8 +594,14 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        browser tab (sessionStorage), a display choice like bf_exec_tab, so sign-out leaves it and bf-session.js's LEFT ON
        PURPOSE list names it. Both tab keys are now stored by scripts/bf-tabs.js through its store() helper, which the
        direct-call scan cannot read, so the scan also reads each page's window.BFTabs.create({ storage: { kind, key } })
-       (a literal key or a var/const holding one). Without that, bf_exec_tab looked unused here. */
+       (a literal key or a var/const holding one). Without that, bf_exec_tab looked unused here.
+       NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: KEPT had 21 keys, bf_dashboard_order and bf_dashboard_custom
+       among them, and DYNAMIC read scripts/bf-dashboard-order.js. AFTER: 20; the dashboard's card ordering (that module and
+       settings.html's control) is retired, so both keys and the DYNAMIC entry go; bf_orbit_portal is added, which orbit portal
+       is open in this browser tab (sessionStorage, scripts/bf-orbit.js), a display choice like bf_cc_tab, so sign-out leaves it
+       and bf-session.js's LEFT ON PURPOSE list names it. */
     const KEPT = {
+      bf_orbit_portal: "which dashboard orbit portal is open, in this browser tab",
       bf_cc_tab: "which Command Center tab the dashboard opens on, in this browser tab",
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",
       bf_store_return: "which store's page, etsy or shopify, the Store page is coming back from in this tab",
@@ -603,11 +612,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       tmx_presence_active: "Termaximus on or off", tmx_presence_pos: "where Termaximus sits", tmx_mist_corner: "where Termaximus sits",
       tmx_chat_pos: "where the Termaximus chat box sits",
       tmx_agent_language: "the language Termaximus speaks", oracle_corner_star_pos: "where an Oracle widget sits", bf_oracle_moon_pos: "where an Oracle widget sits",
-      bf_active_calendar: "which calendar is shown", bf_agent_order: "card order", bf_dashboard_order: "card order", bf_dashboard_custom: "card order",
+      bf_active_calendar: "which calendar is shown", bf_agent_order: "card order",
       bf_return_to: "the public page to return to after signing in; app.html must still find it"
     };
     // Calls whose key is a parameter, each read here as a helper over keys that are on the lists.
-    const DYNAMIC = { "scripts/bf-session.js": ["key"], "scripts/bf-dashboard-order.js": ["key"], "bizdoc.html": ["storageKey"], "scripts/termaximus-guide.js": ["insightCacheKey("] };
+    const DYNAMIC = { "scripts/bf-session.js": ["key"],"bizdoc.html": ["storageKey"], "scripts/termaximus-guide.js": ["insightCacheKey("] };
     const found = {}, unknown = [];
     (function walk(dir) {
       fs.readdirSync(dir, { withFileTypes: true }).forEach(d => {

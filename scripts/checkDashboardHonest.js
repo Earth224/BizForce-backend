@@ -315,7 +315,14 @@ function reachability(html, externals) {
      scripts/bf-command-center.js (shared with executive-agent.html), so the page
      has one inline script fewer. Before: scripts.length >= 10. After: >= 9, and the
      shared script is pinned as loaded right after its section and parsing. */
-  check("all " + scripts.length + " inline scripts in dashboard.html parse", scripts.length >= 9 && bad.length === 0, bad.join(" | "));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: scripts.length >= 9 (the feature grid's card-order
+     IIFE was inline). AFTER: >= 8; the grid and its ordering are replaced by scripts/bf-orbit.js, pinned just below
+     as loaded once, right after its template, and parsing. Every inline script must still parse. */
+  check("all " + scripts.length + " inline scripts in dashboard.html parse", scripts.length >= 8 && bad.length === 0, bad.join(" | "));
+  const ORBIT_SRC = '</template>\n<script src="/scripts/bf-orbit.js"></script>';
+  let orbitParses = true; try { new vm.Script(FILES["scripts/bf-orbit.js"] || ""); } catch (e) { orbitParses = false; }
+  check("the top half is scripts/bf-orbit.js, loaded once right after its template, and it parses",
+    FILES[DASH].split(ORBIT_SRC).length === 2 && FILES[DASH].split("/scripts/bf-orbit.js").length === 2 && orbitParses && !!FILES["scripts/bf-orbit.js"]);
   const CC_SRC = '</section>\n<script src="/scripts/bf-command-center.js"></script>';
   let ccParses = true; try { new vm.Script(FILES["scripts/bf-command-center.js"] || ""); } catch (e) { ccParses = false; }
   check("the Command Center is scripts/bf-command-center.js, loaded right after its section, and it parses",
@@ -375,12 +382,15 @@ function reachability(html, externals) {
     bf_token: "the session token", bf_refresh: "the refresh token (removed at logout)", bf_user: "the signed-in profile row",
     tmx_presence_active: "Termaximus presence on/off, this browser's own choice",
     bizforce_ai_mailbox: "a cache of the AI Agent Tasks mailbox, refilled from GET /api/ai/tasks",
-    bf_agent_memories: "a cache of Agent Memory, refilled from GET /api/memory"
+    bf_agent_memories: "a cache of Agent Memory, refilled from GET /api/memory",
+    bf_main_boxes: "the two tools the member chose with Swap for the main boxes (a display choice; cleared at sign-out)"
+    /* NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: the scan read dashboard.html's inline scripts only.
+       AFTER: it also reads scripts/bf-orbit.js, the page's top half, so its key bf_main_boxes is listed here. */
     /* BEFORE (backend 48334d9): bf_offline_copy was listed, because logout() removed it by name.
        AFTER: logout() calls scripts/bf-session.js clearDevice(), which clears it with every other
        per-member key (checkOfflineMode IV), so the dashboard no longer names it. */
   };
-  const dashCode = inlineScripts(FILES[DASH]).join("\n");
+  const dashCode = inlineScripts(FILES[DASH]).join("\n") + "\n" + (FILES["scripts/bf-orbit.js"] || "");
   const consts = {};
   (dashCode.match(/\bvar\s+[A-Za-z_$][\w$]*\s*=\s*"[^"]*"\s*;/g) || []).forEach(d => { const m = /var\s+([\w$]+)\s*=\s*"([^"]*)"/.exec(d); consts[m[1]] = m[2]; });
   const used = [], unresolved = [];

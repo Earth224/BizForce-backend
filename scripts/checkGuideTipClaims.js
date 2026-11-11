@@ -404,10 +404,12 @@ const MUTATIONS = {
      Center\": its \"Command\" tab lists …" (the dashboard's Needs you panel is now its Command tab). The same
      replacement texts. */
   // the dashboard tip points at the removed Recent Activity feed again
-  "restore-recent-activity": [[GUIDE, "Start in \\\"Command Center\\\": its \\\"Command\\\" tab lists the proposals waiting for your approval and the runs that failed",
+  // NAMED (Nov 10 2026, orbit top half): both restore-* anchors re-pointed to the rewritten Command Center tip
+  // (BEFORE "Start in \"Command Center\": ... and the runs that failed."); the restored wording is unchanged.
+  "restore-recent-activity": [[GUIDE, "In \\\"Command Center\\\", its \\\"Command\\\" tab lists the proposals waiting for your approval",
     "Use the Active Queue card and Recent Activity feed to see what's actually running"]],
   // the dashboard tip points at the removed Active Queue card again (launch audit #22a)
-  "restore-active-queue-tip": [[GUIDE, "Start in \\\"Command Center\\\": its \\\"Command\\\" tab lists the proposals waiting for your approval and the runs that failed.",
+  "restore-active-queue-tip": [[GUIDE, "In \\\"Command Center\\\", its \\\"Command\\\" tab lists the proposals waiting for your approval; under \\\"Plans\\\", \\\"Show steps\\\" then \\\"Dispatch\\\" runs one.",
     "Use the Active Queue card and its View Queue button to see your active assignments before you dig into any single tool."]],
   // the Active Queue card comes back while the tip names the Command Center
   "restore-active-queue-card": [["dashboard.html", "<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\"",
@@ -980,7 +982,8 @@ const WHY_JS = "scripts/bf-why.js";
 const TRG_JS = "scripts/bf-triggers.js";
 const NET_JS = "scripts/bf-network.js";
 const CYC_JS = "scripts/bf-cycles.js";
-[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS, NET_JS, CYC_JS].forEach(readFrontend);
+const ORBIT_JS = "scripts/bf-orbit.js";   // NAMED (Nov 10 2026, orbit top half): read for rows 10 dashboard 20 and 21
+[CC_JS, HQ_JS, DECK_JS, WHY_JS, TRG_JS, NET_JS, CYC_JS, ORBIT_JS].forEach(readFrontend);
 const NETWORK_JS = FILES[NET_JS];
 const CYCLES_JS = FILES[CYC_JS];
 const TRIGGERS_LIB = fs.readFileSync(path.join(REPO, "lib/triggers.js"), "utf8").replace(/\r\n/g, "\n");
@@ -1045,6 +1048,28 @@ const B = [
     () => /onclick="window\.location\.href='agents-hub\.html';">Agent Hub<\/button>/.test(FILES[DASHBOARD]) &&
       /onclick="window\.location\.href='ai-agents\.html';">Full Directory<\/button>/.test(FILES[DASHBOARD]) &&
       (FILES[HUB].match(/class="agent-card/g) || []).length === 18 && /agents\.forEach\(function \(agent\) \{/.test(FILES[DIRECTORY])],
+  /* NAMED BEFORE → AFTER (Nov 10 2026, orbit top half): the dashboard's top half became an orbit of five portals
+     (scripts/bf-orbit.js). BEFORE five tips: two Command Center tips, music, "Expand Profile", and "Agent Hub" or
+     "Full Directory". AFTER five tips: the two Command Center tips are one (rows 18 keeps its fragment), "Expand
+     Profile" and the directory share one (rows 17 and 19 keep theirs), and two new tips name the orbit; rows 20 and 21
+     prove them from the script: the portals, the badges (proposals on Agents, low stock on Sell, none at 0), "All
+     tools" in the core, "/" focusing "Go to any tool..." and "Swap". */
+  ["10 dashboard 20", hqTips, "a number on a portal is waiting for you: low stock on Sell, proposals on Agents", /Active Queue|Work Queue|unread/,
+    () => /\{ key: "sell", title: "Sell", tools: \[/.test(FILES[ORBIT_JS]) && /\{ key: "agents", title: "Agents", tools: \[/.test(FILES[ORBIT_JS]) &&
+      /var p = top \? n\(top\.proposals_pending\) : null;\n    if \(p !== null && p > 0\) out\.agents = p;/.test(FILES[ORBIT_JS]) &&
+      /var low = top && top\.store && top\.store\.low_stock \? n\(top\.store\.low_stock\.count\) : null;\n    if \(low !== null && low > 0\) out\.sell = low;/.test(FILES[ORBIT_JS]) &&
+      /badge\[p\.key\]\.hidden = !\(k > 0\);/.test(FILES[ORBIT_JS]) &&
+      /store\.low_stock = await figure\("store\.low_stock", [\s\S]{0,500}?return \{ count: stock\.items_at_or_below_reorder_point, /.test(SV) &&
+      /body\.proposals_pending = await figure\("proposals_pending", [\s\S]{0,200}?\.from\("agent_proposals"\)[\s\S]{0,200}?\.eq\("status", "pending"\)/.test(SV) &&
+      FILES[DASHBOARD].indexOf("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>") !== -1],
+  ["10 dashboard 21", hqTips, "Press \"All tools\" in the middle for every page by group", /Active Queue|Work Queue/,
+    () => /core\.appendChild\(el\("span", "orbit-core-all", "All tools"\)\);/.test(FILES[ORBIT_JS]) &&
+      /core\.addEventListener\("click", function \(\) \{ setAllTools\(!state\.allOpen\); \}\);/.test(FILES[ORBIT_JS]) &&
+      /GROUPS\.forEach\(function \(g\) \{\n      var sec = el\("div", "orbit-group"\);/.test(FILES[ORBIT_JS]) &&
+      /if \(e\.key !== "\/" \|\| e\.ctrlKey \|\| e\.metaKey \|\| e\.altKey \|\| e\.defaultPrevented\) return false;/.test(FILES[ORBIT_JS]) &&
+      /if \(!slashKey\(e\)\) return;\n    e\.preventDefault\(\);\n    search\.focus\(\);/.test(FILES[ORBIT_JS]) &&
+      /<input id="orbitSearch" type="search" placeholder="Go to any tool\.\.\."/.test(FILES[DASHBOARD]) &&
+      /var swap = el\("button", "orbit-swap", "Swap"\);/.test(FILES[ORBIT_JS]) && /writeLocal\(JSON\.stringify\(state\.mains\)\);/.test(FILES[ORBIT_JS])],
   // group 9 — the directory: ai_agents.description is seeded empty, so a card shows a name and a link
   // NAMED (Oct 28 2026, one honest description per agent): BEFORE "each card here holds only a name and that link", proven
   // by seeding description "" (untrue for any row that held one, as the owner's did). AFTER every card shows the agent's

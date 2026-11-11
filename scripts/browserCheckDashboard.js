@@ -21,6 +21,21 @@
    and assert they open. The Executive page's six tabs: click each, assert
    only its panel shows, save <out>/exec-<tab>.png.
 
+   THE TOP HALF (Nov 10 2026, orbit top half): GET /api/dashboard/top is
+   answered from a fixture (2 proposals waiting, 3 items at or below their
+   reorder point, 14 orders this week, 12 card visits today, tracked visits),
+   and once more for a member with no store. Chrome checks that the orbit
+   renders; each portal opens only its own grid and turns to the front; the
+   badges and their beams; the core opens All tools; "/" and the search, and
+   Enter opens the tool; Swap survives a reload; at 390 px the portals are a
+   row, the main boxes stack and the grid is one column; under reduced motion
+   (Emulation.setEmulatedMedia) nothing moves. It counts the API requests the
+   dashboard makes on load at frontend 889cb13 (served from git) and now.
+   Screenshots to <top>: orbit-sell.png, orbit-grow.png, orbit-connect.png,
+   orbit-agents.png, orbit-oracle.png, all-tools.png, search.png, swap.png,
+   mobile.png and member-no-store.png.
+     TOP_HALF_OUT           that folder (default Downloads\top-half)
+
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
      CHROME_PATH            the browser (default: the usual Windows paths)
@@ -39,6 +54,9 @@ const { spawn, execFileSync } = require("child_process");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.CC_TABS_OUT || path.join(os.homedir(), "Downloads", "cc-tabs");
+const TOP_OUT = process.env.TOP_HALF_OUT || path.join(os.homedir(), "Downloads", "top-half");
+// The frontend commit before the orbit, served from git once to count the dashboard's requests before.
+const BEFORE_ORBIT = "889cb13";
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const DIAGNOSE = process.env.DIAGNOSE === "1";
 
@@ -98,7 +116,24 @@ function centerBody(admin) {
   }
   return body;
 }
+/* ── the fixture for GET /api/dashboard/top ── */
+let topMode = "store";   // "store": the owner's figures; "nostore": a member with no store connected
+function topBody() {
+  const store = topMode === "store"
+    ? { connected: true, low_stock: { count: 3, names: ["Blue mug", "Tea tin", "Spoon"] }, orders_this_week: 14, orders_per_day: [1, 0, 2, 0, 1, 0, 1, 2, 3, 1, 2, 2, 3, 1] }
+    : { connected: false, low_stock: { count: 0, names: [] }, orders_this_week: 0, orders_per_day: Array(14).fill(0) };
+  return {
+    generated_at: new Date(NOW).toISOString(),
+    visits: { per_day: [3, 1, 0, 4, 2, 5, 1, 2, 6, 3, 4, 2, 5, 7], this_week: 29, last_week: 16, tracked: true },
+    store, proposals_pending: 2, cards: { count: 2, views_today: 12, views_7d: 31 }, certifications: { earned: 2, total: 8 },
+    wallet: { balance: 1100, exists: true }, marketplace: { orders_this_week: 0 }, self_reviews: { latest_at: ago(30) }, mailbox: { connected: true },
+    counts: { crm_customers: 18, prospects: 4, leads: topMode === "store" ? 6 : null, sms_subscribers: 0, campaigns: 1, routines: 2, saved_prompts: 3, purchases: 1, bizdoc_documents: 5 },
+    media: { used_bytes: 52428800, cap_bytes: 1073741824 }, agents: { running_now: [] },
+    _unreadable: topMode === "store" ? [] : ["counts.leads (Lead Radar reads the owner account's leads only)"], cached: false
+  };
+}
 function apiAnswer(pathname, admin) {
+  if (pathname === "/api/dashboard/top") return topBody();
   if (pathname === "/api/command-center") return centerBody(admin);
   if (pathname === "/api/auth/me") return { user: { id: uid(1), email: "owner@example.test", role: admin ? "admin" : "member" }, access: { active: true } };
   if (pathname === "/api/ai/tasks") return { tasks: [] };
@@ -110,11 +145,16 @@ function apiAnswer(pathname, admin) {
 /* ── a small static server over the frontend ── */
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
   ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".webp": "image/webp", ".jpg": "image/jpeg", ".woff2": "font/woff2", ".mp3": "audio/mpeg" };
+const OVERRIDE = {};   // path -> text, served in place of the file on disk (the before-orbit count)
 function serve() {
   const root = path.resolve(FRONTEND);
   const server = http.createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, "http://x").pathname);
     if (p.endsWith("/")) p += "index.html";
+    if (Object.prototype.hasOwnProperty.call(OVERRIDE, p)) {
+      res.writeHead(200, { "Content-Type": TYPES[path.extname(p).toLowerCase()] || "application/octet-stream" });
+      res.end(OVERRIDE[p]); return;
+    }
     const file = path.resolve(root, "." + p);
     if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end("not found"); return; }
     res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] || "application/octet-stream" });
@@ -132,7 +172,10 @@ async function launch() {
   const portFile = path.join(profile, "DevToolsActivePort");
   for (let i = 0; i < 150 && !fs.existsSync(portFile); i++) await sleep(100);
   if (!fs.existsSync(portFile)) throw new Error("Chrome did not open its debugging port");
-  const port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim();
+  // Chrome may still hold the file open as it writes it (EBUSY on Windows): read again for a few seconds.
+  let port = "";
+  for (let i = 0; i < 50 && !/^\d+$/.test(port); i++) { try { port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim(); } catch (e) { /* still being written */ } if (!/^\d+$/.test(port)) await sleep(100); }
+  if (!/^\d+$/.test(port)) throw new Error("Chrome's debugging port could not be read");
   let list = [];
   for (let i = 0; i < 50 && !list.some(t => t.type === "page"); i++) { try { list = await (await fetch("http://127.0.0.1:" + port + "/json/list")).json(); } catch (e) { /* not yet */ } await sleep(100); }
   const target = list.find(t => t.type === "page");
@@ -300,6 +343,180 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     check("member: no platform ceiling chip", !/Platform ceiling/.test(memCmd), memCmd);
     fs.writeFileSync(path.join(OUT, "tab-text-member.json"), JSON.stringify({ command: memCmd, system: mem.text }, null, 2));
 
+    /* ── the top half: the orbit ── */
+    console.log("\n══ the top half: the orbit ══");
+    fs.mkdirSync(TOP_OUT, { recursive: true });
+    admin = true; topMode = "store";
+    const orbitReady = async () => {
+      for (let i = 0; i < 80; i++) { if (await evaluate(cdp, "!!(window.BFOrbit && window.BFOrbit.state && window.BFOrbit.state.top)")) break; await sleep(100); }
+      await evaluate(cdp, HELPERS); await sleep(300);
+    };
+    const settleCalls = async () => { let n = -1; for (let i = 0; i < 20 && n !== apiCalls.length; i++) { n = apiCalls.length; await sleep(400); } return apiCalls.slice(); };
+    // The requests on load, before the orbit (frontend BEFORE_ORBIT's dashboard and its ordering module, from git) and now.
+    OVERRIDE["/dashboard.html"] = execFileSync("git", ["show", BEFORE_ORBIT + ":dashboard.html"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
+    OVERRIDE["/scripts/bf-dashboard-order.js"] = execFileSync("git", ["show", BEFORE_ORBIT + ":scripts/bf-dashboard-order.js"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
+    apiCalls = [];
+    await openPage(cdp, origin, "dashboard.html", {});
+    const before = await settleCalls();
+    delete OVERRIDE["/dashboard.html"]; delete OVERRIDE["/scripts/bf-dashboard-order.js"];
+    apiCalls = []; exceptions.length = 0;
+    await openPage(cdp, origin, "dashboard.html", {});
+    await orbitReady();
+    const after = await settleCalls();
+    // GETs only: each cross-origin read here also sends a CORS preflight (OPTIONS), listed but not counted.
+    const gets = l => l.filter(c => /^GET /.test(c));
+    const extra = gets(after); gets(before).forEach(c => { const i = extra.indexOf(c); if (i !== -1) extra.splice(i, 1); });
+    console.log("    requests on load: before (" + BEFORE_ORBIT + ") " + gets(before).length + " GET, " + before.length + " with preflights [" + gets(before).join(", ") + "]");
+    console.log("    requests on load: now " + gets(after).length + " GET, " + after.length + " with preflights [" + gets(after).join(", ") + "]");
+    fs.writeFileSync(path.join(TOP_OUT, "requests.json"), JSON.stringify({ before: before, now: after }, null, 2));
+    check("the top half adds exactly one read on load, GET /api/dashboard/top (" + gets(before).length + " GETs before, " + gets(after).length + " now)",
+      gets(after).length === gets(before).length + 1 && extra.length === 1 && extra[0] === "GET /api/dashboard/top", extra.join(", "));
+    check("no script error from bf-orbit.js", !exceptions.some(e => /bf-orbit/.test(e)), exceptions.filter(e => /bf-orbit/.test(e)).join(" | "));
+
+    const PORTAL_KEYS = ["grow", "sell", "connect", "agents", "oracle"];
+    const orbitState = () => evaluate(cdp, "(function(){var b=window.__bf,O=window.BFOrbit;var ps=[].slice.call(document.querySelectorAll('.orbit-portal'));" +
+      "return {open:O.state.open, pressed:ps.filter(function(p){return p.getAttribute('aria-pressed')==='true'}).map(function(p){return p.getAttribute('data-portal')})," +
+      "widths:ps.map(function(p){return [p.getAttribute('data-portal'), Math.round(p.getBoundingClientRect().width*10)/10]})," +
+      "dim:ps.filter(function(p){return p.classList.contains('is-dim')}).length," +
+      "gridShown:b.shown(document.getElementById('orbitGrid')), gridPortal:document.getElementById('orbitGrid').getAttribute('data-portal')," +
+      "grid:[].map.call(document.querySelectorAll('#orbitGrid > *'),function(x){return x.getAttribute('data-card')||(x.id==='agentDirectoryLanding'?'agent-directory':'?')})," +
+      "tools:(O.PORTALS.filter(function(p){return p.key===O.state.open})[0]||{tools:[]}).tools, mains:O.state.mains.slice()};})()");
+    const front = st => st.widths.slice().sort((a, b) => b[1] - a[1])[0][0];
+    const renders = await evaluate(cdp, "(function(){var b=window.__bf;return {svg:b.shown(document.getElementById('orbitSvg')), core:b.shown(document.getElementById('orbitCore'))," +
+      "portals:[].filter.call(document.querySelectorAll('.orbit-portal'),function(p){return b.shown(p)}).length, rings:document.querySelectorAll('#orbitSvg ellipse').length," +
+      "main:[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(x){return x.getAttribute('data-card')}), core_text:document.getElementById('orbitCore').textContent};})()");
+    check("the orbit renders: the ring, the core and five portals displayed", renders.svg && renders.core && renders.portals === 5 && renders.rings >= 2, JSON.stringify(renders));
+    check("the core reads This week, 29 tracked visits and All tools", /This week/.test(renders.core_text) && /29 tracked visits/.test(renders.core_text) && /All tools/.test(renders.core_text), renders.core_text);
+    check("the main boxes are Analytics and Store", renders.main.join() === "analytics,store", renders.main.join());
+    const marks = await evaluate(cdp, "(function(){var b=window.__bf;return " + JSON.stringify(PORTAL_KEYS) + ".map(function(k){var g=document.querySelector('.orbit-beam[data-portal=\"'+k+'\"]');" +
+      "return [k, b.shown(document.getElementById('orbitBadge-'+k)) ? document.getElementById('orbitBadge-'+k).textContent : null, !!g && b.shown(g)]});})()");
+    check("badges: Agents 2 and Sell 3, no other portal", JSON.stringify(marks.map(m => [m[0], m[1]])) === JSON.stringify([["grow", null], ["sell", "3"], ["connect", null], ["agents", "2"], ["oracle", null]]), JSON.stringify(marks));
+    check("beams are displayed from Sell and Agents only", JSON.stringify(marks.map(m => m[2])) === JSON.stringify([false, true, false, true, false]), JSON.stringify(marks));
+    const dotAnim = await evaluate(cdp, "getComputedStyle(document.querySelector('.orbit-beam[data-portal=\"agents\"] .orbit-beam-dot')).animationName");
+    check("each beam's dot travels (an animation runs on it)", dotAnim === "orbitDot", dotAnim);
+
+    // Each portal: open it, it alone is pressed, only its grid shows, and it turns to the front.
+    let st0 = await orbitState();
+    check("a first visit opens Sell (3 low stock beats 2 proposals)", st0.open === "sell", st0.open);
+    for (const k of ["sell", "grow", "connect", "agents", "oracle"]) {
+      if (st0.open !== k) await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"" + k + "\"]').click(), true");
+      await sleep(900);
+      const st = await orbitState();
+      const want = st.tools.filter(t => st.mains.indexOf(t) === -1);
+      check("portal " + k + ": pressed alone, the others dimmed, only its grid shown (" + want.length + " boxes)",
+        st.open === k && st.pressed.join() === k && st.dim === 4 && st.gridShown && st.gridPortal === k && st.grid.slice().sort().join() === want.slice().sort().join(), JSON.stringify({ pressed: st.pressed, dim: st.dim, grid: st.grid, want }));
+      check("portal " + k + ": turned to the front (drawn largest)", front(st) === k, JSON.stringify(st.widths));
+      await shot(cdp, path.join(TOP_OUT, "orbit-" + k + ".png"), "#orbitTop");
+      st0 = st;
+    }
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(300);
+    const folded = await orbitState();
+    check("pressing the open portal again folds its grid", folded.open === null && !folded.gridShown && folded.pressed.length === 0, JSON.stringify(folded));
+    const moon = await evaluate(cdp, "(function(){var m=document.querySelector('.orbit-portal[data-portal=\"oracle\"] .orbit-moon');return m ? [m.getAttribute('data-moon'), m.querySelector('title').textContent, window.BFOrbit.moonPhase(Date.now()).name] : null;})()");
+    check("the Oracle portal shows tonight's moon, named in its title (" + (moon && moon[2]) + ")", !!moon && moon[0] === moon[2] && moon[1] === moon[2], JSON.stringify(moon));
+    const d0 = await evaluate(cdp, "window.BFOrbit.state.base"); await sleep(1000); const d1 = await evaluate(cdp, "window.BFOrbit.state.base");
+    check("folded, the orbit drifts (about 3 degrees a second)", d1 - d0 > 1.5 && d1 - d0 < 4.5, (d1 - d0).toFixed(2));
+
+    // The core opens All tools.
+    await evaluate(cdp, "document.getElementById('orbitCore').click(), true"); await sleep(300);
+    const all = await evaluate(cdp, "(function(){return {shown:window.__bf.shown(document.getElementById('orbitAllTools')), groups:[].map.call(document.querySelectorAll('#orbitAllTools .orbit-group h3'),function(h){return h.textContent}), links:document.querySelectorAll('#orbitAllTools a').length};})()");
+    check("the core opens All tools: Grow, Sell, Connect, Agents, Oracle, Utilities, 38 links", all.shown && all.groups.join() === "Grow,Sell,Connect,Agents,Oracle,Utilities" && all.links === 38, JSON.stringify(all));
+    await shot(cdp, path.join(TOP_OUT, "all-tools.png"), "#orbitAllTools");
+    await evaluate(cdp, "document.getElementById('orbitCore').click(), true"); await sleep(200);
+
+    // "/" and the search, then Enter.
+    await evaluate(cdp, "document.activeElement && document.activeElement.blur && document.activeElement.blur(), window.scrollTo(0,0), true");
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "/", code: "Slash", windowsVirtualKeyCode: 191, text: "/" });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "/", code: "Slash", windowsVirtualKeyCode: 191 });
+    await sleep(150);
+    const focused = await evaluate(cdp, "[document.activeElement && document.activeElement.id, document.getElementById('orbitSearch').value]");
+    check("\"/\" focuses \"Go to any tool...\" and types nothing", focused[0] === "orbitSearch" && focused[1] === "", JSON.stringify(focused));
+    await cdp.send("Input.insertText", { text: "inv" });
+    await sleep(250);
+    const found = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitResults li a'),function(a){return a.textContent})");
+    check("typing \"inv\" lists Inventory", found.join() === "Inventory", found.join());
+    await shot(cdp, path.join(TOP_OUT, "search.png"), "#orbitTop");
+    const invHref = await evaluate(cdp, "window.BFOrbit.tools().inventory.href");
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    let landed = "";
+    for (let i = 0; i < 40; i++) { landed = await evaluate(cdp, "location.pathname").catch(() => ""); if (landed && landed !== "/dashboard.html") break; await sleep(100); }
+    check("Enter opens the tool (" + invHref + ")", landed === "/" + invHref.replace(/^\//, ""), landed);
+
+    // Swap, then a reload keeps the choice.
+    apiCalls = [];
+    await openPage(cdp, origin, "dashboard.html", {});
+    await orbitReady();
+    await evaluate(cdp, "document.querySelectorAll('#orbitMain .orbit-swap')[1].click(), true"); await sleep(200);
+    await evaluate(cdp, "document.querySelector('#orbitMain .orbit-swap-list button[data-tool=\"crm\"]').click(), true"); await sleep(300);
+    const swapped = await evaluate(cdp, "[[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(x){return x.getAttribute('data-card')}).join(), localStorage.getItem('bf_main_boxes')]");
+    check("Swap puts CRM System in the second main box and stores it in bf_main_boxes", swapped[0] === "analytics,crm" && swapped[1] === "[\"analytics\",\"crm\"]", JSON.stringify(swapped));
+    await shot(cdp, path.join(TOP_OUT, "swap.png"), "#orbitMain");
+    await cdp.send("Page.reload", {});
+    await sleep(500);
+    await orbitReady();
+    const kept2 = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(x){return x.getAttribute('data-card')}).join()");
+    check("after a reload the main boxes are still Analytics and CRM System", kept2 === "analytics,crm", kept2);
+    await evaluate(cdp, "document.getElementById('orbitRefresh').click(), true");
+    await sleep(800);
+    check("Refresh reads GET /api/dashboard/top once more", apiCalls.filter(c => c === "GET /api/dashboard/top").length === 3, apiCalls.filter(c => /dashboard\/top/.test(c)).join(", "));
+
+    // 390 px: a row of portals, stacked main boxes, one column.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await openPage(cdp, origin, "dashboard.html", {});
+    await orbitReady();
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"sell\"]').getAttribute('aria-pressed')==='true' || document.querySelector('.orbit-portal[data-portal=\"sell\"]').click(), true");
+    await sleep(300);
+    const mob = await evaluate(cdp, "(function(){var b=window.__bf,r=function(n){var x=n.getBoundingClientRect();return [Math.round(x.left),Math.round(x.top),Math.round(x.width),Math.round(x.bottom)]};" +
+      "return {portals:[].map.call(document.querySelectorAll('.orbit-portal'),r), svg:b.shown(document.getElementById('orbitSvg')), mains:[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),r)," +
+      "grid:[].map.call(document.querySelectorAll('#orbitGrid > *'),r), scrollW:document.documentElement.scrollWidth," +
+      "wide:[].filter.call(document.querySelectorAll('body *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391&&getComputedStyle(n).position!=='fixed'}).slice(0,8).map(function(n){var x=n.getBoundingClientRect();return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)+' '+Math.round(x.left)+'-'+Math.round(x.right)})};})()");
+    const tops = mob.portals.map(p => p[1]);
+    check("390 px: the portals are one row (same top), the ring hidden", mob.portals.length === 5 && Math.max.apply(null, tops) - Math.min.apply(null, tops) <= 4 && !mob.svg, JSON.stringify(mob.portals));
+    check("390 px: the main boxes stack", mob.mains.length === 2 && mob.mains[1][1] >= mob.mains[0][3] - 1 && mob.mains[0][0] === mob.mains[1][0], JSON.stringify(mob.mains));
+    check("390 px: the grid is one column", mob.grid.length >= 2 && mob.grid.every(g => g[0] === mob.grid[0][0]) && mob.grid.every((g, i) => i === 0 || g[1] >= mob.grid[i - 1][3] - 1), JSON.stringify(mob.grid));
+    const wideTop = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitTop, #orbitTop *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391}).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)})");
+    check("390 px: nothing in the top half reaches past the screen's edge", wideTop.length === 0, wideTop.join(" | "));
+    // The page as a whole, against the same page before the orbit: the top half may not widen it.
+    const mobileWidth = async () => evaluate(cdp, "[document.documentElement.scrollWidth, [].filter.call(document.querySelectorAll('body *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391&&getComputedStyle(n).position!=='fixed'}).slice(0,3).map(function(n){return n.tagName+'#'+n.id})]");
+    const nowW = await mobileWidth();
+    await shot(cdp, path.join(TOP_OUT, "mobile.png"), "#orbitTop");
+    OVERRIDE["/dashboard.html"] = execFileSync("git", ["show", BEFORE_ORBIT + ":dashboard.html"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
+    OVERRIDE["/scripts/bf-dashboard-order.js"] = execFileSync("git", ["show", BEFORE_ORBIT + ":scripts/bf-dashboard-order.js"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
+    await openPage(cdp, origin, "dashboard.html", {});
+    await sleep(600);
+    const beforeW = await mobileWidth();
+    delete OVERRIDE["/dashboard.html"]; delete OVERRIDE["/scripts/bf-dashboard-order.js"];
+    console.log("    390 px page width: before (" + BEFORE_ORBIT + ") " + beforeW[0] + " [" + beforeW[1].join(", ") + "], now " + nowW[0] + " [" + nowW[1].join(", ") + "]");
+    check("390 px: the page is no wider than before the orbit (" + beforeW[0] + " before, " + nowW[0] + " now)", nowW[0] <= Math.max(390, beforeW[0]), JSON.stringify({ beforeW, nowW }));
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+
+    // Reduced motion: no drift, the turn snaps, the dot still.
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await openPage(cdp, origin, "dashboard.html", {});
+    await orbitReady();
+    await evaluate(cdp, "window.BFOrbit.fold(), true");
+    const r0 = await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"grow\"]').style.transform"); await sleep(1200);
+    const r1 = await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"grow\"]').style.transform");
+    check("reduced motion: no drift", r0 === r1 && !!r0, r0 + " | " + r1);
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"connect\"]').click(), true"); await sleep(60);
+    const snap1 = await orbitState(); await sleep(800); const snap2 = await orbitState();
+    check("reduced motion: the turn snaps (Connect at the front at once, nothing moves after)", front(snap1) === "connect" && JSON.stringify(snap1.widths) === JSON.stringify(snap2.widths), JSON.stringify(snap1.widths));
+    const still = await evaluate(cdp, "getComputedStyle(document.querySelector('.orbit-beam[data-portal=\"agents\"] .orbit-beam-dot')).animationName");
+    check("reduced motion: the beam's dot is still (no animation)", still === "none", still);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [] });
+
+    // A member with no store.
+    admin = false; topMode = "nostore";
+    await openPage(cdp, origin, "dashboard.html", {});
+    await orbitReady();
+    const ns = await evaluate(cdp, "(function(){var s=document.querySelector('#orbitMain [data-card=\"store\"]');var a=s&&s.querySelector('a.orbit-connect');return {link:a?[a.textContent,a.getAttribute('href')]:null, text:s?s.innerText:'', sellBadge:window.__bf.shown(document.getElementById('orbitBadge-sell')), open:window.BFOrbit.state.open};})()");
+    check("no store: \"Connect a store to see orders\" links store-agent.html, no orders figure, no Sell badge",
+      !!ns.link && ns.link[0] === "Connect a store to see orders" && ns.link[1] === "store-agent.html" && !/orders this week/.test(ns.text) && !ns.sellBadge, JSON.stringify(ns));
+    check("no store: the first visit opens Agents (2 proposals waiting)", ns.open === "agents", ns.open);
+    await shot(cdp, path.join(TOP_OUT, "member-no-store.png"), "#orbitTop");
+    topMode = "store";
+
     /* ── the Executive page ── */
     console.log("\n══ the Executive page ══");
     admin = true;
@@ -324,7 +541,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT);
+  console.log("\nScreenshots: " + OUT + " and " + TOP_OUT);
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);

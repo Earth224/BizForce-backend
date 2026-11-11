@@ -72,8 +72,11 @@ const GUIDE_TAG = '<script src="/scripts/termaximus-guide.js"></script>';
 
 const MUTATIONS = {
   // a sixth tip on the dashboard (S1)
-  "sixth-tip": [[GUIDE, '      "To delegate new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents."\n',
-    '      "To delegate new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents.",\n      "Check back after each task finishes."\n']],
+  // NAMED (Nov 10 2026, orbit top half): sixth-tip and duplicate-sentence follow the rewritten dashboard tips. BEFORE
+  // sixth-tip was anchored on "To delegate new work, ..." and duplicate-sentence inserted "Name or industry wrong? ...
+  // every agent reads this profile."; both tips became one, which is now the anchor and the inserted duplicate.
+  "sixth-tip": [[GUIDE, '      "Name or industry wrong? Press \\"Expand Profile\\" and edit it. For new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents."\n',
+    '      "Name or industry wrong? Press \\"Expand Profile\\" and edit it. For new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents.",\n      "Check back after each task finishes."\n']],
   // a 200-character tip (S1)
   "long-tip": [[GUIDE, '"Press \\"Download my data\\" for a copy of everything BizForce stores about you."',
     '"Press \\"Download my data\\" for a copy of everything BizForce stores about you, which arrives as one file holding your profile, your runs, your wallet history, your listings and your messages, all of it."']],
@@ -81,7 +84,7 @@ const MUTATIONS = {
   "ghost-button": [[GUIDE, 'press \\"Draft the framework\\"', 'press \\"Draft the term sheet\\"']],
   // a sentence another entry already has (S4)
   "duplicate-sentence": [[GUIDE, '"Lost in another month? Press \\"Today\\" to come back."',
-    '"Name or industry wrong? Press \\"Expand Profile\\" and edit it; every agent reads this profile."']],
+    '"Name or industry wrong? Press \\"Expand Profile\\" and edit it. For new work, open \\"Agent Hub\\" or \\"Full Directory\\"; each lists all 18 agents."']],
   // a page loads the guide and has no entry (S6)
   "page-without-entry": [["contact.html", "</body>", GUIDE_TAG + "\n</body>"]],
   // the phone button is never added to the page (S8)
