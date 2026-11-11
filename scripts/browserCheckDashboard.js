@@ -46,6 +46,18 @@
    20% to 30% of them and each half 40% to 60%; none closer than 60% of a grid
    cell's smaller side; then the no-animation and no-overlap checks above.
    Screenshots stars-1440.png, stars-1024.png and stars-390.png.
+   ONE LIVING SKY (Nov 11 2026, one living sky): "no running animation"
+   became "no POSITION animation" (the stars twinkle in place now). At 1440,
+   1024 and 390 px every star's centre is recorded, then each portal is
+   hovered for 1 s, each clicked (its turn waited for), Escape pressed, 6 s
+   waited, Refresh pressed and the figures read again: after each step every
+   centre is where it was (within 0.5 px) and the panel's height is
+   unchanged. The stars' getAnimations() run on opacity and transform
+   scale() only, the star's own group on nothing, each part on one at most;
+   they pause with the panel off the screen; none under reduced motion. At
+   least three distinct halo hues are sampled from the stars as drawn.
+   Screenshots one-sky-sell.png, one-sky-oracle.png, sparkle-a.png and
+   sparkle-b.png (1.5 s apart).
      TOP_HALF_OUT           that folder (default Downloads\top-half)
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
@@ -255,11 +267,15 @@ true`;
 // The still stars: how many, any animation on them, and any star box meeting a portal's disc, the core, a label or the search.
 const STARS_EVAL = "(function(){var r=function(n){var x=n.getBoundingClientRect();return {l:x.left,t:x.top,r:x.right,b:x.bottom,w:x.width,h:x.height}};" +
   "var stars=[].slice.call(document.querySelectorAll('#orbitStars g.orbit-star'));" +
-  "var moving=stars.filter(function(g){var parts=[g].concat([].slice.call(g.querySelectorAll('*')));return parts.some(function(p){var cs=getComputedStyle(p);return (p.getAnimations&&p.getAnimations().length)||cs.animationName!=='none'||parseFloat(cs.transitionDuration)>0})}).length;" +
+  // NAMED (Nov 11 2026, one living sky): the open halo is a circle (border-radius 50%), so it is measured as one.
+  // NAMED (Nov 11 2026, one living sky): "moving" counts a POSITION animation: any on the star's own group, any transition,
+  // any keyframe on a part that sets something other than opacity or a transform of scale() alone, or two on one part.
+  "var bad=function(a){return (a.effect&&a.effect.getKeyframes?a.effect.getKeyframes():[]).some(function(f){return Object.keys(f).some(function(k){return ['offset','computedOffset','easing','composite'].indexOf(k)===-1&&k!=='opacity'&&!(k==='transform'&&/^scale\\([\\d.]+\\)$/.test(String(f[k]).trim()))})})};" +
+  "var moving=stars.filter(function(g){var parts=[].slice.call(g.querySelectorAll('*'));if(g.getAnimations().length||parseFloat(getComputedStyle(g).transitionDuration)>0)return true;return parts.some(function(p){var an=p.getAnimations();return an.length>1||an.some(bad)||parseFloat(getComputedStyle(p).transitionDuration)>0})}).length;" +
   "var vis=function(n){var x=n.getBoundingClientRect();return x.width>0&&x.height>0&&getComputedStyle(n).display!=='none'&&getComputedStyle(n).visibility!=='hidden'};" +
-  "var things=[].slice.call(document.querySelectorAll('.orbit-portal .orbit-disc, #orbitCore, .orbit-portal-name, .orbit-search')).filter(vis).map(function(n){return {n:n.className||n.id,b:r(n)}});" +
-  "var hits=[];stars.forEach(function(g){var c=g.querySelector('.orbit-star-core'),k=r(c),cx=(k.l+k.r)/2,cy=(k.t+k.b)/2,rr=Number(g.getAttribute('data-r'))*(g.getAttribute('data-spiked')==='1'?6:2.2);" +
-  "things.forEach(function(t){var dx=Math.max(t.b.l-cx,0,cx-t.b.r),dy=Math.max(t.b.t-cy,0,cy-t.b.b);if(dx*dx+dy*dy<rr*rr)hits.push(g.getAttribute('data-star')+' on '+t.n)})});" +
+  "var things=[].slice.call(document.querySelectorAll('.orbit-portal .orbit-disc, .orbit-portal .orbit-halo, #orbitCore, .orbit-portal-name, .orbit-search, #orbitSay')).filter(vis).map(function(n){return {n:n.className||n.id,b:r(n)}});" +
+  "var hits=[];stars.forEach(function(g){var c=g.querySelector('.orbit-star-core'),k=r(c),cx=(k.l+k.r)/2,cy=(k.t+k.b)/2,rr=Number(g.getAttribute('data-r'))*(g.getAttribute('data-spiked')==='1'?6*1.15:2.2);" +
+  "things.forEach(function(t){var dx=Math.max(t.b.l-cx,0,cx-t.b.r),dy=Math.max(t.b.t-cy,0,cy-t.b.b);if(/orbit-halo/.test(t.n)?Math.hypot(cx-(t.b.l+t.b.r)/2,cy-(t.b.t+t.b.b)/2)<t.b.w/2+rr:dx*dx+dy*dy<rr*rr)hits.push(g.getAttribute('data-star')+' on '+t.n)})});" +
   "var p=document.getElementById('orbitPanel').getBoundingClientRect(),sky=(document.getElementById('orbitStars').getAttribute('data-sky')||'').split(',').map(Number);" +
   "var pts=stars.map(function(g){var k=r(g.querySelector('.orbit-star-core'));return [(k.l+k.r)/2-p.left,(k.t+k.b)/2-p.top]});" +
   "return {count:stars.length,moving:moving,hits:hits,things:things.length,spiked:stars.filter(function(g){return g.getAttribute('data-spiked')==='1'}).length," +
@@ -281,8 +297,9 @@ async function starsAt(W, file) {
   check(W + " px: each quadrant holds 20% to 30% of the stars and each half 40% to 60% (" + q.join(", ") + ")",
     n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
   check(W + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * cell).toFixed(1) + " px; closest " + md.toFixed(1) + ")", a.cols >= 2 && md >= 0.6 * cell - 0.5, md);
-  check(W + " px: no star has a running animation (getAnimations() empty, no animation or transition computed)", a.moving === 0 && b.moving === 0, a.moving + "/" + b.moving);
-  check(W + " px: no star overlaps a portal, the core, a label or the search (twice, 3 s apart, as the portals drift)", a.things >= 11 && a.hits.length === 0 && b.hits.length === 0, a.hits.concat(b.hits).join(", "));
+  // NAMED (Nov 11 2026, one living sky): "no running animation" became "no POSITION animation".
+  check(W + " px: no star has a POSITION animation (getAnimations(): none on a star's group, opacity and scale() only on its parts, one at most each; no transition)", a.moving === 0 && b.moving === 0, a.moving + "/" + b.moving);
+  check(W + " px: no star overlaps a portal, the open halo, the core, a label, the search or the preview and status row (twice, 3 s apart, as the portals drift)", a.things >= 13 && a.hits.length === 0 && b.hits.length === 0, a.hits.concat(b.hits).join(", "));
   await shot(cdp0, file, "#orbitTop");
 }
 let cdp0 = null;
@@ -622,6 +639,98 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     check("390 px: the page is no wider than before the orbit (" + beforeW[0] + " before, " + nowW[0] + " now)", nowW[0] <= Math.max(390, beforeW[0]), JSON.stringify({ beforeW, nowW }));
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
 
+    /* ── ONE LIVING SKY (Nov 11 2026, one living sky): one fixed set that twinkles in place, in the Oracle's colours ── */
+    console.log("\n══ one living sky: the same stars through everything, twinkling in place ══");
+    const SKY_NOW = "(function(){var p=document.getElementById('orbitPanel').getBoundingClientRect(),gs=[].slice.call(document.querySelectorAll('#orbitStars g.orbit-star'));" +
+      "return {h:+p.height.toFixed(2),w:+p.width.toFixed(2),same:gs.length>0&&gs[0].__bfMark===1,c:gs.map(function(g){var x=g.querySelector('.orbit-star-core').getBoundingClientRect();return [(x.left+x.right)/2-p.left,(x.top+x.bottom)/2-p.top]})}})()";
+    const ANIMS = "(function(){var gs=[].slice.call(document.querySelectorAll('#orbitStars g.orbit-star'));var parts=0,groups=0,durs=[],props={},paused=0,running=0;" +
+      "gs.forEach(function(g){groups+=g.getAnimations().length;[].slice.call(g.querySelectorAll('*')).forEach(function(n){n.getAnimations().forEach(function(a){parts++;if(n.classList.contains('orbit-star-halo'))durs.push(Math.round(a.effect.getTiming().duration));" +
+      "if(a.playState==='paused')paused++;else if(a.playState==='running')running++;a.effect.getKeyframes().forEach(function(f){Object.keys(f).forEach(function(k){if(['offset','computedOffset','easing','composite'].indexOf(k)===-1)props[k+(k==='transform'?(/^scale\\([\\d.]+\\)$/.test(String(f[k]).trim())?':scale':':'+f[k]):'')]=1})})})})});" +
+      "return {stars:gs.length,parts:parts,groups:groups,durs:durs,props:Object.keys(props).sort(),paused:paused,running:running,isPaused:document.getElementById('orbitStars').classList.contains('is-paused')}})()";
+    // The stars as drawn, onto a canvas: the hue at the most coloured pixel of each star.
+    const HUES = "new Promise(function(done){var s=document.getElementById('orbitStars'),p=s.getBoundingClientRect(),k=2,c=s.cloneNode(true);c.setAttribute('xmlns','http://www.w3.org/2000/svg');c.setAttribute('width',p.width);c.setAttribute('height',p.height);" +
+      "var img=new Image();img.onload=function(){var cv=document.createElement('canvas');cv.width=Math.round(p.width*k);cv.height=Math.round(p.height*k);var x=cv.getContext('2d');x.scale(k,k);x.drawImage(img,0,0);" +
+      "var hues={},seen=[];[].slice.call(s.querySelectorAll('g.orbit-star')).forEach(function(g){var co=g.querySelector('.orbit-star-core'),cx=Number(co.getAttribute('cx'))*k,cy=Number(co.getAttribute('cy'))*k,rr=Math.max(2,Math.ceil(Number(g.getAttribute('data-r'))*2.2*k));" +
+      "var d=x.getImageData(Math.round(cx-rr),Math.round(cy-rr),2*rr+1,2*rr+1).data,best=null;for(var i=0;i<d.length;i+=4){if(d[i+3]<26)continue;var r=d[i]/255,gg=d[i+1]/255,b=d[i+2]/255,mx=Math.max(r,gg,b),mn=Math.min(r,gg,b),sat=mx?(mx-mn)/mx:0;if(!best||sat>best.sat)best={sat:sat,r:r,g:gg,b:b,mx:mx,mn:mn}}" +
+      "if(!best||best.sat<0.3)return;var h,dl=best.mx-best.mn;if(best.mx===best.r)h=((best.g-best.b)/dl)%6;else if(best.mx===best.g)h=(best.b-best.r)/dl+2;else h=(best.r-best.g)/dl+4;h=(h*60+360)%360;seen.push(Math.round(h));hues[Math.round(h/30)%12]=1});" +
+      "done({buckets:Object.keys(hues).length,hues:seen})};img.onerror=function(){done({buckets:-1,hues:[]})};img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(new XMLSerializer().serializeToString(c))})";
+    const sameSky = (a, b) => a.c.length === b.c.length && a.c.every((p, i) => Math.abs(p[0] - b.c[i][0]) <= 0.5 && Math.abs(p[1] - b.c[i][1]) <= 0.5);
+    for (const W of [1440, 1024, 390]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", W === 390 ? { width: 390, height: 844, deviceScaleFactor: 1, mobile: true } : { width: W, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await openPage(cdp, origin, "dashboard.html", {});
+      await orbitReady();
+      await sleep(600);
+      await evaluate(cdp, "(document.querySelector('#orbitStars g.orbit-star').__bfMark=1, document.getElementById('orbitTop').scrollIntoView({block:'start'}), true)");
+      await sleep(300);
+      const base = await evaluate(cdp, SKY_NOW), log = [];
+      const after = async name => { const now = await evaluate(cdp, SKY_NOW); log.push([name, sameSky(base, now) && now.same, now.h === base.h, now.h]); };
+      const centreOf = sel => evaluate(cdp, "(function(){var x=document.querySelector(" + JSON.stringify(sel) + ").getBoundingClientRect();return [x.left+x.width/2,x.top+x.height/2]})()");
+      let previewsShown = 0;
+      for (const k of ["grow", "sell", "connect", "agents", "oracle"]) {
+        const [x, y] = await centreOf(".orbit-portal[data-portal=\"" + k + "\"] .orbit-disc");
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+        await sleep(1000);
+        previewsShown += await evaluate(cdp, "(function(){var p=document.getElementById('orbitPreview');return !p.hidden&&p.getBoundingClientRect().height>0?1:0})()");
+        await after("hover " + k);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4 });
+        await sleep(200);
+        await after("leave " + k);
+      }
+      for (const k of ["grow", "sell", "connect", "agents", "oracle"]) {
+        const [x, y] = await centreOf(".orbit-portal[data-portal=\"" + k + "\"] .orbit-disc");
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+        await sleep(900);
+        await after("click " + k + " and its turn");
+      }
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+      await sleep(400);
+      await after("Escape");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4 });
+      await sleep(6000);
+      await after("6 s of drift and twinkle");
+      await evaluate(cdp, "document.getElementById('orbitRefresh').click(), true");
+      await sleep(900);
+      await after("Refresh");
+      await evaluate(cdp, "window.BFOrbit.load(), true");
+      await sleep(900);
+      await after("a data reload");
+      const moved = log.filter(s => !s[1]).map(s => s[0]), grew = log.filter(s => !s[2]).map(s => s[0] + " " + s[3]);
+      console.log("    " + W + " px: " + base.c.length + " stars, panel " + base.w + " x " + base.h + ", " + log.length + " steps, " + previewsShown + " previews shown");
+      check(W + " px: one fixed set: after hovering each portal 1 s, clicking each (its turn waited for), Escape, 6 s, Refresh and a data reload, every star's centre is where it was (within 0.5 px), the same nodes",
+        base.c.length > 0 && log.length === 19 && moved.length === 0, moved.join(", "));
+      check(W + " px: the panel's height never changed (" + base.h + " px), with " + previewsShown + " of 5 previews shown on hover", grew.length === 0 && previewsShown === 5, grew.join(", "));
+      const an = await evaluate(cdp, ANIMS);
+      check(W + " px: the stars twinkle: every halo and core animated, the rays and glints too, on opacity and transform scale() only, nothing on a star's own group; seeded 2.5 to 6 s, not in unison (" + new Set(an.durs).size + " durations)",
+        an.stars > 0 && an.parts >= 2 * an.stars && an.groups === 0 && an.props.every(p => p === "opacity" || p === "transform:scale") && an.props.indexOf("opacity") !== -1 &&
+        an.durs.length === an.stars && an.durs.every(d => d >= 2500 && d <= 6000) && new Set(an.durs).size >= 0.8 * an.stars && an.running > 0, JSON.stringify(Object.assign({}, an, { durs: an.durs.slice(0, 8) })));
+      const hues = await evaluate(cdp, HUES);
+      check(W + " px: at least 3 distinct halo hues sampled from the stars as drawn (" + hues.hues.join(", ") + ")", hues.buckets >= 3, JSON.stringify(hues));
+      if (W === 1440) {
+        await evaluate(cdp, "window.scrollTo(0, document.documentElement.scrollHeight), true");
+        await sleep(600);
+        const off = await evaluate(cdp, ANIMS);
+        await evaluate(cdp, "document.getElementById('orbitTop').scrollIntoView({block:'start'}), true");
+        await sleep(600);
+        const on = await evaluate(cdp, ANIMS);
+        check("1440 px: the twinkle pauses with the panel off the screen and runs again when it is back", off.isPaused && off.paused === off.parts && off.running === 0 && !on.isPaused && on.running === on.parts,
+          JSON.stringify({ off: [off.isPaused, off.paused, off.running], on: [on.isPaused, on.paused, on.running] }));
+        if (await evaluate(cdp, "window.BFOrbit.state.open") !== "sell") { await evaluate(cdp, "window.BFOrbit.open('sell'), true"); await sleep(900); }
+        await shot(cdp, path.join(TOP_OUT, "one-sky-sell.png"), "#orbitTop");
+        const sellSky = await evaluate(cdp, SKY_NOW);
+        await evaluate(cdp, "window.BFOrbit.open('oracle'), true");
+        await sleep(900);
+        await shot(cdp, path.join(TOP_OUT, "one-sky-oracle.png"), "#orbitTop");
+        const oracleSky = await evaluate(cdp, SKY_NOW);
+        check("1440 px: the same sky with Sell open and with Oracle open (one-sky-sell.png, one-sky-oracle.png)", sameSky(sellSky, oracleSky) && sameSky(base, oracleSky));
+        await shot(cdp, path.join(TOP_OUT, "sparkle-a.png"), "#orbitTop");
+        await sleep(1350);
+        await shot(cdp, path.join(TOP_OUT, "sparkle-b.png"), "#orbitTop");
+      }
+    }
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+
     // Reduced motion: no drift, the turn snaps, the dot still.
     await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await openPage(cdp, origin, "dashboard.html", {});
@@ -635,6 +744,10 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     check("reduced motion: the turn snaps (Connect at the front at once, nothing moves after)", atFront(snap1, "connect") && JSON.stringify(snap1.slots) === JSON.stringify(snap2.slots), JSON.stringify(snap1.slots));
     const still = await evaluate(cdp, "getComputedStyle(document.querySelector('.orbit-beam[data-portal=\"agents\"] .orbit-beam-dot')).animationName");
     check("reduced motion: the beam's dot is still (no animation)", still === "none", still);
+    // NAMED (Nov 11 2026, one living sky): no twinkle and no glint under reduced motion; each star shines steadily at full.
+    const rmSky = await evaluate(cdp, ANIMS);
+    const rmLook = await evaluate(cdp, "(function(){var gs=[].slice.call(document.querySelectorAll('#orbitStars g.orbit-star'));return {full:gs.every(function(g){return [].slice.call(g.querySelectorAll('.orbit-star-halo,.orbit-star-core')).every(function(n){return getComputedStyle(n).opacity==='1'})}),glints:[].filter.call(document.querySelectorAll('.orbit-star-glint'),function(n){return getComputedStyle(n).display!=='none'}).length}})()");
+    check("reduced motion: no twinkle and no glint, every star at full shine (" + rmSky.stars + " stars, " + rmSky.parts + " animations)", rmSky.stars > 0 && rmSky.parts === 0 && rmLook.full && rmLook.glints === 0, JSON.stringify({ rmSky, rmLook }));
     await cdp.send("Emulation.setEmulatedMedia", { features: [] });
 
     // A member with no store.

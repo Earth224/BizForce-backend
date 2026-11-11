@@ -52,6 +52,23 @@
          layer counts; no two large ones in neighbouring cells; one star a
          cell; none closer than 60% of a cell; none on a portal, the core, a
          label or the search; the same places on every load.
+         NAMED (Nov 11 2026, one living sky): ONE fixed set. Every star stays
+         where it is, byte for byte and the very same nodes, through hover and
+         focus on each portal, every preview shown and hidden, a click on each
+         portal, Escape, a full turn, six seconds of drift and twinkle,
+         Refresh, a data reload and a height-only change; only a width change
+         lays them out again; the same set on two loads. None in the reserved
+         row above the search (the preview and status lines, at a fixed
+         height, so the panel's height never changes), nor under any portal,
+         open halo or label with " (open)", wherever they drift. "Still"
+         became "no POSITION animation": they twinkle in place, the halo and
+         core by opacity (1 to .55), the rays by opacity and a scale of .8 to
+         1.15 about the star's centre, the large ones' glint every 6 to 14 s;
+         keyframes on opacity and scale only; each star's own 2.5 to 6 s and
+         start; paused while hidden; none under reduced motion. The Oracle's
+         colours: white 5/6 and cyan, violet and gold 1/18 each (its pickTint),
+         within 10 points, at least three tints at every size, a tinted core
+         lightened toward white, not white.
 
    NAMED (Nov 10 2026, visual match), pins moved: the directory card is no
    longer BASELINE's byte for byte (it was rebuilt for one grid cell; O1 now
@@ -113,18 +130,56 @@ const MUTATIONS = {
   "no-starfield": [[ORBIT, "  drawStars();\n", ""]],
   // NAMED (Nov 11 2026, still stars): the three below are the still Oracle stars (O15).
   // the stars twinkle
-  "stars-animated": [[DASH, "  .orbit-star,.orbit-star *{animation:none !important;transition:none !important}\n", "  .orbit-star{animation:orbitTwinkle 3s ease-in-out infinite}\n  @keyframes orbitTwinkle{50%{opacity:.3}}\n"]],
+  // NAMED (Nov 11 2026, one living sky): "no animation" became "no POSITION animation": the star's own group (its place)
+  // animated, a drift of a few pixels.
+  "stars-animated": [[DASH, "  .orbit-star{animation:none !important}\n", "  .orbit-star{animation:orbitStarDrift 3s ease-in-out infinite}\n  @keyframes orbitStarDrift{50%{transform:translate(2px,1px)}}\n"]],
   // plain white dots again, with no halo
   "stars-plain-dots": [[ORBIT, "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: (L.r * O.haloR).toFixed(3), fill: \"url(#\" + id + \"h)\", \"class\": \"orbit-star-halo\" }));\n", "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: L.r.toFixed(3), fill: \"#fff\", \"class\": \"orbit-star-halo\" }));\n"]],
   // the ring's band no longer kept clear, so a star can sit where a portal drifts
   // NAMED (Nov 11 2026, more and even stars): the ring's circles of r 43 became the discs' boxes along the ring (stars-on-ring-band
   // below), so star-over-portal now drops the phone row's discs.
-  "star-over-portal": [[ORBIT, "        g.boxes.push(box(portalBtn[p.key].querySelector(\".orbit-disc\"), 3));\n", ""]],
+  // NAMED (Nov 11 2026, one living sky): the phone disc's box is measured once into `disc`, and its open halo kept clear around
+  // it (the halo's circle holds the box, so the disc is uncovered only when both are gone).
+  "star-over-portal": [[ORBIT, "        g.boxes.push(disc);\n", ""], [ORBIT, "        g.circles.push({ x: disc.x + disc.w / 2, y: disc.y + disc.h / 2, r: hr });\n", ""]],
   // NAMED (Nov 11 2026, more and even stars): the fuller, even sky (O15 at 1440, 1024 and 390 px).
   "stars-clustered-low": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw, y0 = g.h / 2 + row * grid.ch / 2;"]],
   "stars-one-quadrant": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw / 2, y0 = row * grid.ch / 2;"]],
   "stars-random-each-load": [[ORBIT, "var rnd = seeded(STAR_LAYOUT_SEED + 7919 * (row * grid.cols + col)), ", "var rnd = Math.random, "]],
-  "stars-on-ring-band": [[ORBIT, "        g.boxes.push({ x: x - (VIEW.portalR + 3) * scale, y: y - (VIEW.portalR + 3) * scale, w: 2 * (VIEW.portalR + 3) * scale, h: 2 * (VIEW.portalR + 3) * scale });\n", ""]],
+  // NAMED (Nov 11 2026, one living sky): the band is the open halo's circle (r 43) and the open disc's box at every degree;
+  // the halo holds the box, so the band is gone only when both are.
+  "stars-on-ring-band": [[ORBIT, "        g.boxes.push({ x: x - (VIEW.portalR + 3) * scale, y: y - (VIEW.portalR + 3) * scale, w: 2 * (VIEW.portalR + 3) * scale, h: 2 * (VIEW.portalR + 3) * scale });\n", ""],
+    [ORBIT, "        g.circles.push({ x: x, y: y, r: STAR_KEEP.haloR * scale });\n", ""]],
+  // NAMED (Nov 11 2026, one living sky): ONE fixed set that twinkles in place, in the Oracle's colours (O15).
+  // a hover lays the stars out again
+  "hover-redraws": [[ORBIT, "  function showPreview(key) { preview.textContent = previewText(key); preview.hidden = false; }", "  function showPreview(key) { preview.textContent = previewText(key); preview.hidden = false; starsDrawn = \"\"; drawStars(); }"]],
+  // opening a portal lays them out again
+  "click-redraws": [[ORBIT, "    state.open = key;\n    writeSession(key);\n", "    state.open = key;\n    writeSession(key);\n    starsDrawn = \"\"; drawStars();\n"]],
+  // each open portal its own sky
+  "seed-per-portal": [[ORBIT, "    var key = starsWidth();\n", "    var key = starsWidth() + \"|\" + state.open;\n"],
+    [ORBIT, "var rnd = seeded(STAR_LAYOUT_SEED + 7919 * (row * grid.cols + col)), ", "var rnd = seeded(STAR_LAYOUT_SEED + 31 * String(state.open).length + 7919 * (row * grid.cols + col)), "],
+    [ORBIT, "    state.open = key;\n    writeSession(key);\n", "    state.open = key;\n    writeSession(key);\n    drawStars();\n"]],
+  // the preview grows the panel when it shows
+  "preview-resizes-panel": [[DASH, "  .orbit-say{height:2.6rem;", "  .orbit-say{min-height:0;"]],
+  // a height-only change lays them out again
+  "height-change-redraws": [[ORBIT, "    var key = starsWidth();\n", "    var key = starsWidth() + \"x\" + Math.round(panel.getBoundingClientRect().height);\n"]],
+  // the reserved row above the search not kept clear
+  "star-in-preview-row": [[ORBIT, "    if (say) g.boxes.push(box(say, 4));\n", ""]],
+  // a label's " (open)" not kept clear
+  "star-under-open-label": [[ORBIT, "    return (most * STAR_KEEP.titleCh + \" (open)\".length * STAR_KEEP.openCh) / 2 + STAR_KEEP.labelPad;", "    return (most * STAR_KEEP.titleCh) / 2;"]],
+  // Refresh lays them out again
+  "refresh-redraws": [[ORBIT, "  refresh.addEventListener(\"click\", function () { load(); });", "  refresh.addEventListener(\"click\", function () { starsDrawn = \"\"; drawStars(); load(); });"]],
+  // the twinkle moves a star
+  "twinkle-moves-star": [[DASH, "  @keyframes orbitTwinkle{0%,100%{opacity:1}50%{opacity:.55}}", "  @keyframes orbitTwinkle{0%,100%{opacity:1}50%{opacity:.55;transform:translate(1px,-1px)}}"]],
+  // every star pulses together
+  "twinkle-in-unison": [[ORBIT, "    var dur = T.minDur + rnd() * (T.maxDur - T.minDur), delay = -rnd() * dur,", "    var dur = 4, delay = 0,"]],
+  // the twinkle runs under reduced motion
+  "twinkle-under-reduced-motion": [[DASH, "    .orbit-star *{animation:none !important}\n    .orbit-star-glint{display:none}\n", ""]],
+  // the twinkle runs on in a hidden tab
+  "twinkle-not-paused-hidden": [[ORBIT, "  document.addEventListener(\"visibilitychange\", starsPause);\n", ""]],
+  // every star white
+  "one-colour-sky": [[ORBIT, "s.tint = tints[i] ? STAR_TINTS[tints[i] - 1] : STAR_WHITE;", "s.tint = STAR_WHITE;"]],
+  // a tinted star's core washed to white
+  "white-core-washout": [[ORBIT, "    var c = tinted ? mixWhite(t, T.coreMix) :", "    var c = tinted ? STAR_WHITE :"]],
   "stars-too-close": [[ORBIT, "var minGap = STAR_SKY.spacing * Math.min(grid.cw, grid.ch), ", "var minGap = 0, "]],
   "stars-fixed-count": [[ORBIT, "var n = starCount(g.w, g.h), ", "var n = 16, "]],
   "stars-all-large": [[ORBIT, "    return [small, n - small - large, large];\n", "    return [0, 0, n];\n"]],
@@ -241,6 +296,11 @@ function page(o) {
   // NAMED (Nov 11 2026, more and even stars): the stage's width may be given (o.stageW), as Chrome measured it; 600 otherwise.
   Object.defineProperty(w.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.id === "orbitStage" ? (o.stageW || 600) : 0; } });
   if (o.rects) w.Element.prototype.getBoundingClientRect = function () { return o.rects(this); };
+  // NAMED (Nov 11 2026, one living sky): the panel's visibility on the screen and the tab's, set by the check.
+  const io = [];
+  w.IntersectionObserver = function (cb) { io.push(cb); this.observe = () => {}; this.disconnect = () => {}; };
+  let hidden = false;
+  Object.defineProperty(w.document, "hidden", { configurable: true, get: () => hidden });
   let err = null;
   try { w.eval(FILES[ORBIT]); } catch (e) { err = e; }
   let clock = 0;
@@ -252,7 +312,7 @@ function page(o) {
       q.forEach(cb => cb(clock));
     }
   }
-  return { dom, w, d: w.document, fetches, err, run, media, frames };
+  return { dom, w, d: w.document, fetches, err, run, media, frames, io, setHidden: v => { hidden = !!v; } };
 }
 const settle = () => new Promise(r => setTimeout(r, 30));
 const texts = (d, sel) => Array.prototype.map.call(d.querySelectorAll(sel), x => x.textContent);
@@ -566,7 +626,9 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const transitions = (CSS.match(/transition:[^;}]+/g) || []);
   check("every transition moves only opacity or transform", transitions.length > 0 && transitions.every(t => t.replace(/^transition:/, "").split(",").every(part => /^\s*(opacity|transform|none)\b/.test(part))), transitions.join(" | "));
   const frames = (CSS.match(/@keyframes [a-zA-Z]+\{[\s\S]*?\}\}/g) || []);
-  check("every keyframe sets only transform and opacity", frames.length === 1 && frames.every(k => (k.replace(/@keyframes [a-zA-Z]+\{/, "").match(/[a-z-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity")), frames.join(" | "));
+  // NAMED (Nov 11 2026, one living sky): one keyframe (the beam's dot) became four: the dot and the stars' twinkle, flare and glint.
+  check("every keyframe sets only transform and opacity (the beam's dot, and the stars' twinkle, flare and glint)", frames.length === 4 &&
+    frames.map(k => /@keyframes ([a-zA-Z]+)/.exec(k)[1]).sort().join() === "orbitDot,orbitFlare,orbitGlint,orbitTwinkle" && frames.every(k => (k.replace(/@keyframes [a-zA-Z]+\{/, "").match(/[a-z-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity")), frames.join(" | "));
   const placeFn = s.definitionOf ? (FILES[ORBIT].match(/  function place\(\) \{[\s\S]*?\n  \}\n/) || [""])[0] : "";
   check("each frame writes only transforms (place: style.transform and a transform attribute)", placeFn.length > 100 && !/\.style\.(?!transform)[a-zA-Z]+\s*=|setAttribute\("(?!transform)/.test(placeFn), placeFn.slice(0, 200));
 
@@ -709,17 +771,17 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
      lines at nothing), and the count is the owner's density rule: 40 on the 1152 x 565 panel, the same stars per square
      pixel elsewhere, never under 18 or over 48. Every other O15 promise is kept, at all three sizes. */
   const GEO = {
-    1440: { narrow: false, panel: [0, 0, 1152, 564.6], stage: [86, 15, 980, 475.6], search: [316, 500.6, 520, 45], core: [527, 196.6, 98, 98],
+    1440: { narrow: false, panel: [0, 0, 1152, 610.2], stage: [86, 15, 980, 475.6], say: [256, 494.6, 640, 41.6], search: [316, 546.2, 520, 45], core: [527, 196.6, 98, 98],
       btn: [[160.2, 157.7, 77.8, 77.8], [304.1, 334.9, 77.8, 77.8], [770.1, 334.9, 77.8, 77.8], [914, 157.7, 77.8, 77.8], [537.1, 48.2, 77.8, 77.8]],
       disc: [[160.2, 157.7, 77.8, 77.8], [299.8, 330.6, 86.4, 86.4], [770.1, 334.9, 77.8, 77.8], [914, 157.7, 77.8, 77.8], [537.1, 48.2, 77.8, 77.8]],
       name: [[181.1, 250.8, 36.1, 12.6], [309.5, 428, 67.1, 12.6], [781.4, 428, 55.2, 12.6], [930, 250.8, 45.7, 12.6], [553.7, 141.3, 44.6, 12.6]],
       title: [[181.1, 249.8, 36.1, 14], [309.5, 427, 25.6, 14], [781.4, 427, 55.2, 14], [930, 249.8, 45.7, 14], [553.7, 140.3, 44.6, 14]] },
-    1024: { narrow: false, panel: [0, 0, 976, 546.1], stage: [17, 15, 942, 457.1], search: [228, 482.1, 520, 45], core: [440.9, 189.5, 94.2, 94.2],
+    1024: { narrow: false, panel: [0, 0, 976, 591.7], stage: [17, 15, 942, 457.1], say: [168, 476.1, 640, 41.6], search: [228, 527.7, 520, 45], core: [440.9, 189.5, 94.2, 94.2],
       btn: [[88.3, 152.2, 74.8, 74.8], [226.7, 322.5, 74.8, 74.8], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
       disc: [[88.3, 152.2, 74.8, 74.8], [222.6, 318.4, 83.1, 83.1], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
       name: [[107.6, 241.5, 36.1, 12.6], [230.6, 411.8, 67.1, 12.6], [684.3, 411.8, 55.2, 12.6], [827.4, 241.5, 45.7, 12.6], [465.7, 136.2, 44.6, 12.6]],
       title: [[107.6, 240.5, 36.1, 14], [230.6, 410.8, 25.6, 14], [684.3, 410.8, 55.2, 14], [827.4, 240.5, 45.7, 14], [465.7, 135.2, 44.6, 14]] },
-    390: { narrow: true, panel: [0, 0, 342, 255], stage: [11, 29, 320, 154], search: [11, 193, 320, 45], core: [11, 33, 320, 64],
+    390: { narrow: true, panel: [0, 0, 342, 300.6], stage: [11, 29, 320, 154], say: [11, 187, 320, 41.6], search: [11, 238.6, 320, 45], core: [11, 33, 320, 64],
       btn: [[11, 105, 57.6, 72], [76.6, 105, 57.6, 72], [142.2, 105, 57.6, 72], [207.8, 105, 57.6, 72], [273.4, 105, 57.6, 72]],
       disc: [[16.8, 109, 46, 46], [82.4, 109, 46, 46], [148, 109, 46, 46], [213.6, 109, 46, 46], [279.2, 109, 46, 46]],
       name: [[23.8, 161, 32, 12], [76.8, 161, 57.3, 12], [146.8, 161, 48.3, 12], [216.6, 161, 39.9, 12], [282.8, 161, 38.9, 12]],
@@ -732,6 +794,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       if (node.id === "orbitPanel") return box(G.panel);
       if (node.id === "orbitStage") return box(G.stage);
       if (node.id === "orbitCore") return box(G.core);
+      if (node.id === "orbitSay") return box(G.say);
       if (node.classList && node.classList.contains("orbit-search")) return box(G.search);
       const portal = node.closest && node.closest(".orbit-portal");
       const i = portal ? KEYS.indexOf(portal.getAttribute("data-portal")) : -1;
@@ -742,7 +805,9 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       return box([0, 0, 0, 0]);
     };
   }
-  const skyPage = W0 => page({ narrow: GEO[W0].narrow, rects: rectsFor(GEO[W0]), stageW: GEO[W0].stage[2] });
+  // NAMED (Nov 11 2026, one living sky): re-measured in Chrome 156 with the reserved row (#orbitSay, the preview and status
+  // lines at a fixed height above the search); a page may be given its own copy of the boxes, to change the panel's size.
+  const skyPage = (W0, G0) => { const G = G0 || GEO[W0]; return page({ narrow: G.narrow, rects: rectsFor(G), stageW: G.stage[2] }); };
   const starsOf = P0 => Array.prototype.map.call(P0.d.querySelectorAll("#orbitStars g.orbit-star"), g => {
     const core = g.querySelector("circle.orbit-star-core"), halo = g.querySelector("circle.orbit-star-halo");
     const r = Number(g.getAttribute("data-r")), a = Number(g.getAttribute("data-alpha")), spiked = g.getAttribute("data-spiked") === "1";
@@ -754,28 +819,81 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const wide = starsOf(W);
   const stops = (P0, fill) => { const id = (/url\(#([^)]+)\)/.exec(fill || "") || [])[1]; const gr = id && P0.d.getElementById(id); return gr ? Array.prototype.map.call(gr.querySelectorAll("stop"), st => [Number(st.getAttribute("offset")), st.getAttribute("stop-color"), Number(st.getAttribute("stop-opacity"))]) : []; };
   const near = (p, q) => Math.abs(p - q) < 0.002;
+  // A tint lightened toward white by f, as an rgb() string; the Oracle's four colours.
+  const lighten = (rgb, f) => "rgb(" + rgb.match(/\d+/g).map(Number).map(v => Math.round(v + (255 - v) * f)).join(",") + ")";
+  const COLOURS = ["rgb(255,255,255)", "rgb(34,211,238)", "rgb(139,92,246)", "rgb(251,191,36)"];
   const shapeBad = wide.filter(st => {
     const h = stops(W, st.halo && st.halo.getAttribute("fill")), c = stops(W, st.core && st.core.getAttribute("fill"));
-    const okHalo = !!st.halo && near(Number(st.halo.getAttribute("r")), st.r * 2.2) && h.length === 2 && near(h[0][2], st.a * 0.5) && h[1][2] === 0 && h[0][1] === h[1][1];
     const tint = h[0] && h[0][1];
-    const white = !!c[0] && (st.a > 0.7 ? c[0][1] !== tint || tint === "rgb(255,255,255)" : c[0][1] === tint);
-    const okCore = !!st.core && near(Number(st.core.getAttribute("r")), st.r * 0.7) && c.length === 2 && near(c[0][2], st.a) && near(c[1][2], st.a * 0.15) && c[1][1] === tint && white;
+    // NAMED (Nov 11 2026, one living sky): a white star is drawn as the Oracle draws it; a tinted one carries its tint
+    // clearly: halo at alpha x .8, rays at alpha x .8, core's centre the tint 35% toward white, its edge at alpha x .6, alpha .5 at least.
+    const tinted = !!tint && tint !== "rgb(255,255,255)";
+    const okHalo = !!st.halo && near(Number(st.halo.getAttribute("r")), st.r * 2.2) && h.length === 2 && near(h[0][2], st.a * (tinted ? 0.8 : 0.5)) && h[1][2] === 0 && h[0][1] === h[1][1];
+    const white = !!c[0] && (tinted ? c[0][1] === lighten(tint, 0.35) && st.a >= 0.5 : st.a > 0.7 ? c[0][1] === "rgb(255,255,255)" : c[0][1] === tint);
+    const okCore = !!st.core && near(Number(st.core.getAttribute("r")), st.r * 0.7) && c.length === 2 && near(c[0][2], st.a) && near(c[1][2], st.a * (tinted ? 0.6 : 0.15)) && c[1][1] === tint && white;
     const okRays = st.spiked ? st.rays.length === 2 && Array.prototype.every.call(st.rays, ry => { const s2 = stops(W, ry.getAttribute("fill")); const wd = Number(ry.getAttribute("width")), ht = Number(ry.getAttribute("height"));
-      return s2.length === 3 && s2[0][2] === 0 && near(s2[1][2], st.a * 0.5) && s2[2][2] === 0 && ((near(wd, 0.8) && Math.abs(ht - st.r * 12) < 0.01) || (near(ht, 0.8) && Math.abs(wd - st.r * 12) < 0.01)); }) : st.rays.length === 0;
-    return !(okHalo && okCore && okRays);
+      return s2.length === 3 && s2[0][2] === 0 && near(s2[1][2], st.a * (tinted ? 0.8 : 0.5)) && s2[1][1] === tint && s2[2][2] === 0 && ((near(wd, 0.8) && Math.abs(ht - st.r * 12) < 0.01) || (near(ht, 0.8) && Math.abs(wd - st.r * 12) < 0.01)); }) &&
+      !!st.g.querySelector("g.orbit-star-rays > rect.orbit-star-ray") : st.rays.length === 0;
+    const okGlint = st.size === "large" ? !!st.g.querySelector("g.orbit-star-glint > circle") : !st.g.querySelector(".orbit-star-glint");
+    return !(okHalo && okCore && okRays && okGlint);
   });
-  check("O15 every star is Oracle's shape: a radial halo, a sharp core whitened on the brightest, and thin cross rays on the large bright ones (at least two)", shapeBad.length === 0 &&
+  check("O15 every star is Oracle's shape: a radial halo, a sharp core whitened on the brightest white ones and lightened toward white (not white) on the tinted ones, thin cross rays on the large bright ones (at least two), and a glint on each large one", shapeBad.length === 0 &&
     wide.filter(x => x.spiked && x.r >= 1.4).length >= 2, shapeBad.map(x => x.g.getAttribute("data-star")).join(","));
-  const tintsSeen = new Set(wide.map(st => (stops(W, st.halo.getAttribute("fill"))[0] || [])[1]));
-  check("O15 white stars with a few tinted ones, in Oracle's colours only", [...tintsSeen].every(t => ["rgb(255,255,255)", "rgb(34,211,238)", "rgb(139,92,246)", "rgb(251,191,36)"].indexOf(t) !== -1) &&
-    tintsSeen.has("rgb(255,255,255)") && tintsSeen.size >= 2, [...tintsSeen].join(" "));
-  // Still: nothing on them animates or transitions, and nothing redraws them as time passes.
-  const starRules = (CSS.replace(/\/\*[\s\S]*?\*\//g, "").match(/[^{}]*orbit-star[^{}]*\{[^}]*\}/g) || []);
-  const stillCss = starRules.filter(r => /animation|transition/.test(r));
-  check("O15 none animated: their one rule is animation:none and transition:none (important), no other rule animates them, and drawStars is called once at start (then on load, resize and the panel's own resize)",
-    stillCss.length === 1 && /^\s*\.orbit-star,\.orbit-star \*\{animation:none !important;transition:none !important\}$/.test(stillCss[0]) &&
-    (FILES[ORBIT].match(/drawStars\(\);/g) || []).length === 1 && (FILES[ORBIT].match(/\n  drawStars\(\);\n/g) || []).length === 1 &&
-    !/@keyframes[^{]*\{[^@]*orbit-star/.test(CSS) && !/Math\.random/.test(FILES[ORBIT]), stillCss.join(" | "));
+  // The colour each star is drawn in, read from its halo's gradient (not from its data-tint).
+  const colourOf = (P0, st) => (stops(P0, st.halo.getAttribute("fill"))[0] || [])[1];
+  const tintsSeen = new Set(wide.map(st => colourOf(W, st)));
+  check("O15 in Oracle's colours only: white, cyan, violet and gold", [...tintsSeen].every(t => COLOURS.indexOf(t) !== -1) && tintsSeen.has("rgb(255,255,255)"), [...tintsSeen].join(" "));
+  // NAMED (Nov 11 2026, one living sky): "none animated" became "no POSITION animation". The star's own group never
+  // animates or transitions; only the halo, core, rays and glint do, each with ONE animation of its own, on keyframes that
+  // change opacity and scale() and nothing else; the rays and glint scale about their own centre.
+  const css0 = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+  const starRules = (css0.match(/[^{}]*orbit-star[^{}]*\{[^}]*\}/g) || []).map(r => r.trim());
+  const animRules = starRules.filter(r => /animation(?!-play-state)|transition/.test(r) && !/animation:none !important\}$|transition:none !important\}$/.test(r));
+  const wantAnim = [".orbit-star-halo,.orbit-star-core{animation:orbitTwinkle var(--tw-dur, 4s) ease-in-out var(--tw-delay, 0s) infinite}",
+    ".orbit-star-rays{animation:orbitFlare var(--tw-dur, 4s) ease-in-out var(--tw-delay, 0s) infinite}",
+    ".orbit-star-glint{opacity:0;animation:orbitGlint var(--gl-dur, 10s) ease-in-out var(--gl-delay, 0s) infinite}"];
+  const frames = {};
+  (css0.match(/@keyframes (orbit(?:Twinkle|Flare|Glint|Star\w*))\{((?:[^{}]*\{[^}]*\})*)\}/g) || []).forEach(k => { const m = /@keyframes (\w+)\{([\s\S]*)\}$/.exec(k); frames[m[1]] = m[2]; });
+  const declsOf = body => (body.match(/\{([^}]*)\}/g) || []).map(b => b.slice(1, -1)).join(";").split(";").filter(Boolean).map(d => d.split(":").map(x => x.trim()));
+  const onlyOpacityScale = body => declsOf(body).every(([p, v]) => p === "opacity" || (p === "transform" && /^scale\([\d.]+\)$/.test(v)));
+  const TW = B.STAR_TWINKLE || {};
+  const ops = name => declsOf(frames[name] || "").filter(([p]) => p === "opacity").map(([, v]) => Number(v));
+  const scales = name => declsOf(frames[name] || "").filter(([p]) => p === "transform").map(([, v]) => Number(/[\d.]+/.exec(v)[0]));
+  check("O15 no POSITION animation: the star's group has animation:none and no transition; the halo and core twinkle, the rays flare and the glint flashes, each part with one animation, on keyframes of opacity and scale() only",
+    starRules.indexOf(".orbit-star{animation:none !important}") !== -1 && starRules.indexOf(".orbit-star,.orbit-star *{transition:none !important}") !== -1 &&
+    JSON.stringify(animRules) === JSON.stringify(wantAnim) && Object.keys(frames).sort().join() === "orbitFlare,orbitGlint,orbitTwinkle" &&
+    Object.keys(frames).every(k => onlyOpacityScale(frames[k])) && !/@keyframes orbitTwinkle[^@]*transform/.test(css0) &&
+    starRules.indexOf(".orbit-star-rays,.orbit-star-glint{transform-box:fill-box;transform-origin:center}") !== -1 && !/Math\.random/.test(FILES[ORBIT]),
+    JSON.stringify({ animRules, frames }));
+  check("O15 the twinkle is the brief's: halo and core between 55% and 100%, the rays' scale .8 to 1.15 with them, the glint brighter (to 1.25), matching STAR_TWINKLE",
+    JSON.stringify(ops("orbitTwinkle").sort()) === JSON.stringify([0.55, 1]) && Math.min(...ops("orbitTwinkle")) === TW.low &&
+    Math.min(...scales("orbitFlare")) === TW.flareMin && Math.max(...scales("orbitFlare")) === TW.flareMax && Math.max(...scales("orbitGlint")) === 1.25 &&
+    Math.max(...ops("orbitGlint")) === 1 && Math.min(...ops("orbitGlint")) === 0 && TW.minDur === 2.5 && TW.maxDur === 6 && TW.glintMin === 6 && TW.glintMax === 14,
+    JSON.stringify({ tw: ops("orbitTwinkle"), flare: scales("orbitFlare"), glint: scales("orbitGlint"), TW }));
+  const rmBlock = (/@media \(prefers-reduced-motion: reduce\)\{([\s\S]*?)\n  \}/.exec(css0) || ["", ""])[1];
+  check("O15 under reduced motion no twinkle and no glint: every star part's animation off, the glint not shown, so each shines steadily at full",
+    /\n\s*\.orbit-star \*\{animation:none !important\}/.test(rmBlock) && /\n\s*\.orbit-star-glint\{display:none\}/.test(rmBlock), rmBlock);
+  check("O15 the twinkle rests while hidden: one rule pauses every star part under .is-paused, toggled by visibilitychange and an IntersectionObserver",
+    starRules.indexOf(".orbit-stars.is-paused .orbit-star *{animation-play-state:paused}") !== -1 && /document\.addEventListener\("visibilitychange", starsPause\);/.test(FILES[ORBIT]) &&
+    /new IntersectionObserver\(/.test(FILES[ORBIT]));
+  { // paused, measured on the page: the tab hidden, then the panel off the screen
+    const H = skyPage(1440), sv0 = H.d.getElementById("orbitStars");
+    const before = sv0.classList.contains("is-paused");
+    H.setHidden(true); H.d.dispatchEvent(new H.w.Event("visibilitychange"));
+    const whenHidden = sv0.classList.contains("is-paused");
+    H.setHidden(false); H.d.dispatchEvent(new H.w.Event("visibilitychange"));
+    const back = sv0.classList.contains("is-paused");
+    H.io.forEach(cb => cb([{ isIntersecting: false }]));
+    const offScreen = sv0.classList.contains("is-paused");
+    H.io.forEach(cb => cb([{ isIntersecting: true }]));
+    const onScreen = sv0.classList.contains("is-paused");
+    check("O15 paused while the tab is hidden and while the panel is off the screen, running again when it is back", !before && whenHidden && !back && offScreen && !onScreen && H.io.length >= 1,
+      JSON.stringify({ before, whenHidden, back, offScreen, onScreen, observers: H.io.length }));
+    H.dom.window.close();
+  }
+  check("O15 drawn once at start (then on load, resize and a change in the panel's WIDTH), and laid out again only when the width changed",
+    (FILES[ORBIT].match(/\n  drawStars\(\);\n/g) || []).length === 1 && /var key = starsWidth\(\);\n    if \(key === starsDrawn\) return;/.test(FILES[ORBIT]) &&
+    /new ResizeObserver\(function \(\) \{ if \(starsWidth\(\) !== starsDrawn\) drawStars\(\); \}\)/.test(FILES[ORBIT]));
   check("O15 the stars keep Oracle's mix: STAR_LAYERS holds oracle.html's own counts (240, 120, 50), which give the small, medium and large shares",
     JSON.stringify((B.STAR_LAYERS || []).map(l => l.count)) === JSON.stringify(((/var LAYERS = \[([\s\S]*?)\];/.exec(ORACLE) || ["", ""])[1].match(/count: (\d+)/g) || []).map(c => Number(c.slice(7)))) &&
     JSON.stringify((B.STAR_LAYERS || []).map(l => l.count)) === "[240,120,50]");
@@ -783,26 +901,33 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   // Clear of everything, measured here from the boxes, not by the layout's own list: wide, every place on the ring a portal
   // disc's box (r 30 open) or its label can drift to, and the core (r 34); phone, each disc, label and the core's box; both,
   // the search.
+  // NAMED (Nov 11 2026, one living sky): and, in every open state, the open halo (r 43 x the scale) wherever a portal can
+  // be, the widest label with " (open)" (the widest title plus " (open)" as Chrome measured it on Sell), the reserved row,
+  // with each star's reach at its rays' longest flare (6 x 1.15).
   function clashes(list, G) {
     const bad = [];
     const hitBox = (st, b) => { const dx = Math.max(b[0] - st.x, 0, st.x - (b[0] + b[2])), dy = Math.max(b[1] - st.y, 0, st.y - (b[1] + b[3])); return dx * dx + dy * dy < st.reach * st.reach; };
-    const maxTitle = Math.max(...G.title.map(t => t[2]));
+    const maxTitle = Math.max(...G.title.map(t => t[2])), openW = G.name[1][2] - G.title[1][2], labelW = maxTitle + openW;
     list.forEach(st => {
-      st.reach = st.r * (st.spiked ? 6 : 2.2);
+      st.reach = st.r * (st.spiked ? 6 * 1.15 : 2.2);
       if (hitBox(st, G.search)) bad.push(st.g.getAttribute("data-star") + " on the search");
+      if (hitBox(st, G.say)) bad.push(st.g.getAttribute("data-star") + " in the preview and status row");
       if (!G.narrow) {
         const sc = G.stage[2] / 680, ox = G.stage[0], oy = G.stage[1];
         for (let a = 0; a < 360; a += 1) {
           const rad = a * Math.PI / 180, px = ox + (340 + 275 * Math.sin(rad)) * sc, py = oy + (160 + 110 * Math.cos(rad)) * sc;
           if (hitBox(st, [px - 30 * sc, py - 30 * sc, 60 * sc, 60 * sc])) { bad.push(st.g.getAttribute("data-star") + " on a portal at " + a); break; }
-          if (hitBox(st, [px - maxTitle / 2 - 20, py + 42 * sc - 7, maxTitle + 40, 14])) { bad.push(st.g.getAttribute("data-star") + " on a label at " + a); break; }
+          if (Math.hypot(st.x - px, st.y - py) < 43 * sc + st.reach) { bad.push(st.g.getAttribute("data-star") + " under an open halo at " + a); break; }
+          if (hitBox(st, [px - labelW / 2, py + 42 * sc - 7, labelW, 14])) { bad.push(st.g.getAttribute("data-star") + " under an open label at " + a); break; }
         }
         if (Math.hypot(st.x - (ox + 340 * sc), st.y - (oy + 160 * sc)) < 34 * sc + st.reach) bad.push(st.g.getAttribute("data-star") + " on the core");
       } else {
         if (hitBox(st, G.core)) bad.push(st.g.getAttribute("data-star") + " on the core");
         for (let i = 0; i < 5; i++) {
-          if (hitBox(st, G.disc[i])) bad.push(st.g.getAttribute("data-star") + " on a portal");
-          if (hitBox(st, G.name[i])) bad.push(st.g.getAttribute("data-star") + " on a label");
+          const d = G.disc[i], cell = G.btn[i];
+          if (hitBox(st, d)) bad.push(st.g.getAttribute("data-star") + " on a portal");
+          if (Math.hypot(st.x - (d[0] + d[2] / 2), st.y - (d[1] + d[3] / 2)) < 43 * 46 / 54 + st.reach) bad.push(st.g.getAttribute("data-star") + " under an open halo");
+          if (hitBox(st, [cell[0], G.name[i][1], cell[2], G.name[i][3]])) bad.push(st.g.getAttribute("data-star") + " under an open label");
         }
       }
       const edge = G.narrow ? 3 : 0;
@@ -810,6 +935,15 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     });
     return bad;
   }
+  // NAMED (Nov 11 2026, one living sky): the preview and status lines share one row above the search, always there at a
+  // fixed height, each line laid over it (absolutely) and cut at two lines, so showing or hiding either never changes the
+  // panel's height (the browser harness measures it).
+  const sayRow = (/<div class="orbit-say" id="orbitSay">\n\s*<p class="orbit-preview" id="orbitPreview" role="status" hidden><\/p>\n\s*<p class="orbit-status" id="orbitStatus" role="status"><\/p>\n\s*<\/div>\n\s*<div class="orbit-search">/.exec(ORBIT_MARKUP) || [""])[0];
+  check("O15 a reserved row above the search holds the preview and status lines at a fixed height (2.6rem, each line over it and cut at two lines), the status stepping back while a preview shows",
+    !!sayRow && ORBIT_MARKUP.split("id=\"orbitStatus\"").length === 2 && ORBIT_MARKUP.split("id=\"orbitPreview\"").length === 2 &&
+    starRules.length > 0 && /\n  \.orbit-say\{height:2\.6rem;margin:4px auto 0;max-width:640px;line-height:1\.4\}/.test(CSS) &&
+    /\n  \.orbit-say > p\{position:absolute;left:0;right:0;top:0;margin:0;[^}]*-webkit-line-clamp:2;max-height:2\.6rem\}/.test(CSS) &&
+    /\n  \.orbit-preview:not\(\[hidden\]\) \+ \.orbit-status\{visibility:hidden\}/.test(CSS) && !/\.orbit-say\{[^}]*min-height/.test(CSS), sayRow.length);
   const skyReport = {};
   for (const W0 of [1440, 1024, 390]) {
     const G = GEO[W0], P1 = skyPage(W0), list = starsOf(P1), n = list.length, w = G.panel[2], h = G.panel[3];
@@ -836,12 +970,50 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     let md = Infinity; list.forEach((a, i) => list.forEach((b, j) => { if (j > i) md = Math.min(md, Math.hypot(a.x - b.x, a.y - b.y)); }));
     check("O15 " + W0 + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * Math.min(cw, ch)).toFixed(1) + " px; closest " + md.toFixed(1) + ")", md >= 0.6 * Math.min(cw, ch) - 1e-9, md);
     const bad = clashes(list, G);
-    check("O15 " + W0 + " px: none on a portal (anywhere it can drift), the core, a label or the search, and none past the panel's edge (3 px on the phone)", bad.length === 0, bad.join(", "));
-    const snap = P1.d.getElementById("orbitStars").innerHTML;
-    P1.run(6000);
+    check("O15 " + W0 + " px: none on a portal (anywhere it can drift), under an open halo or a label with \" (open)\", on the core, the search or the reserved preview and status row, and none past the panel's edge (3 px on the phone)", bad.length === 0, bad.join(", "));
+    // NAMED (Nov 11 2026, one living sky): the Oracle's colours, read from each star's halo.
+    const cols4 = COLOURS.map(c => list.filter(st => colourOf(P1, st) === c).length / Math.max(1, n) * 100);
+    const oracleShare = [500 / 6, 100 / 18, 100 / 18, 100 / 18];
+    check("O15 " + W0 + " px: the colours in the Oracle's shares within 10 points (white, cyan, violet, gold " + cols4.map(v => v.toFixed(1)).join(" / ") + " against 83.3 / 5.6 / 5.6 / 5.6), all three tints, none but white over 45%",
+      cols4.every((v, k) => Math.abs(v - oracleShare[k]) <= 10) && cols4.slice(1).every(v => v > 0 && v <= 45) && Math.abs(cols4.reduce((a, b) => a + b, 0) - 100) < 0.01, cols4.join(","));
+    // Each star's own twinkle: 2.5 to 6 s, a start within it, carried to the CSS; no two sets in step.
+    const tw = list.map(st => ({ dur: Number(st.g.getAttribute("data-tw-dur")), delay: Number(st.g.getAttribute("data-tw-delay")), gl: st.g.getAttribute("data-gl-dur"), style: st.g.getAttribute("style") || "", size: st.size }));
+    const phases = tw.map(t => -t.delay / t.dur), meanP = phases.reduce((a, b) => a + b, 0) / Math.max(1, n);
+    const spread = Math.sqrt(phases.reduce((a, p) => a + (p - meanP) * (p - meanP), 0) / Math.max(1, n));
+    check("O15 " + W0 + " px: each star its own seeded twinkle: 2.5 to 6 s, a start within it, set as --tw-dur and --tw-delay; durations and starts all but distinct (" + new Set(tw.map(t => t.dur)).size + " and " + new Set(tw.map(t => t.delay)).size + " of " + n + "), phases spread " + spread.toFixed(2) + "; the large ones glint every 6 to 14 s",
+      n > 0 && tw.every(t => t.dur >= 2.5 && t.dur <= 6 && t.delay <= 0 && t.delay > -t.dur && t.style.indexOf("--tw-dur:" + t.dur + "s;--tw-delay:" + t.delay + "s") === 0 &&
+        (t.size === "large" ? Number(t.gl) >= 6 && Number(t.gl) <= 14 && t.style.indexOf(";--gl-dur:" + t.gl + "s;--gl-delay:") !== -1 : t.gl === null)) &&
+      new Set(tw.map(t => t.dur)).size >= 0.8 * n && new Set(tw.map(t => t.delay)).size >= 0.8 * n && spread > 0.15, JSON.stringify(tw.slice(0, 4)));
+    // ONE fixed set: the very same star nodes, byte for byte, through everything a member does; only a width change lays out.
+    const svgOf = P0 => P0.d.getElementById("orbitStars");
+    const G1 = JSON.parse(JSON.stringify(G)), P3 = skyPage(W0, G1), sky3 = svgOf(P3), nodes0 = Array.prototype.slice.call(sky3.children), html0 = sky3.innerHTML;
+    const same = () => sky3.innerHTML === html0 && sky3.children.length === nodes0.length && nodes0.every((nd, k) => sky3.children[k] === nd);
+    const steps = [], step = (name) => steps.push([name, same()]);
+    const portals = Array.prototype.slice.call(P3.d.querySelectorAll(".orbit-portal")), prev = P3.d.getElementById("orbitPreview");
+    let previews = 0, hides = 0;
+    portals.forEach(b => {
+      const k = b.getAttribute("data-portal");
+      b.dispatchEvent(new P3.w.MouseEvent("mouseenter")); previews += prev.hidden ? 0 : 1; step("hover " + k);
+      b.dispatchEvent(new P3.w.MouseEvent("mouseleave")); hides += prev.hidden ? 1 : 0; step("leave " + k);
+      b.dispatchEvent(new P3.w.FocusEvent("focus")); previews += prev.hidden ? 0 : 1; step("focus " + k);
+      b.dispatchEvent(new P3.w.FocusEvent("blur")); hides += prev.hidden ? 1 : 0; step("blur " + k);
+    });
+    for (const b of portals) { b.click(); P3.run(800); step("click " + b.getAttribute("data-portal") + " and its turn"); }
+    P3.d.getElementById("orbitTop").dispatchEvent(new P3.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); step("Escape");
+    const Bo = P3.w.BFOrbit; Bo.open("oracle"); P3.run(800); Bo.fold(); P3.run(Bo.DRIFT_MS + 100); step("a full turn of the drift");
+    P3.run(6000); step("six seconds of drift and twinkle");
+    P3.d.getElementById("orbitRefresh").click(); await settle(); P3.run(100); step("Refresh");
+    Bo.load(); await settle(); P3.run(100); step("a data reload");
+    G1.panel[3] += 60; P3.w.dispatchEvent(new P3.w.Event("resize")); P3.w.dispatchEvent(new P3.w.Event("load")); step("the panel 60 px taller (height only)");
+    const kept = steps.filter(x => !x[1]).map(x => x[0]);
+    check("O15 " + W0 + " px: ONE fixed set: every star the same node in the same place, byte for byte, after hover and focus on each portal (" + previews + " previews shown and hidden), a click on each, Escape, a full turn, 6 s of drift and twinkle, Refresh, a data reload and a height-only change",
+      steps.length === 31 && kept.length === 0 && previews === 10 && hides === 10 && P3.fetches.length >= 3, kept.join(", ") + " | " + previews + "/" + hides + " " + P3.fetches.length);
+    G1.panel[2] -= 40; P3.w.dispatchEvent(new P3.w.Event("resize"));
+    check("O15 " + W0 + " px: a WIDTH change, and only that, lays them out again (new nodes for the panel 40 px narrower)", !same() && sky3.children.length > 0 && sky3.children[1] !== nodes0[1]);
+    P3.dom.window.close();
     const P2 = skyPage(W0);
-    check("O15 " + W0 + " px: still and seeded: six seconds of the orbit's clock change nothing, and a second load puts every star in the same place",
-      P1.d.getElementById("orbitStars").innerHTML === snap && JSON.stringify(starsOf(P2).map(st => [st.x, st.y, st.r])) === JSON.stringify(list.map(st => [st.x, st.y, st.r])));
+    check("O15 " + W0 + " px: seeded: a second load puts the very same set (every star, size and colour) in the same place",
+      JSON.stringify(starsOf(P2).map(st => [st.x, st.y, st.r, colourOf(P2, st)])) === JSON.stringify(list.map(st => [st.x, st.y, st.r, colourOf(P1, st)])) && svgOf(P2).innerHTML === svgOf(P1).innerHTML);
     P1.dom.window.close(); P2.dom.window.close();
   }
   console.log("    sky  " + JSON.stringify(skyReport));
