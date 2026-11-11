@@ -33,7 +33,21 @@
      O10 transform and opacity only;
      O11 phones: a row of portals, stacked boxes, one column;
      O12 textContent only;
-     O13 one fetch on load, one per Refresh, none per portal.
+     O13 one fetch on load, one per Refresh, none per portal;
+     O14 NAMED (Nov 10 2026, visual match): the approved mockup's look. The
+         starfield panel and its stars, the rings' proportions (275/110 and
+         150/60), each label under its circle, the open portal's halo and
+         "(open)" with no dimming, the core's text with no percentage, the
+         search pill's contents, the main boxes' layout and the AI Agent
+         Directory box's layout.
+
+   NAMED (Nov 10 2026, visual match), pins moved: the directory card is no
+   longer BASELINE's byte for byte (it was rebuilt for one grid cell; O1 now
+   checks its parts and links); the beam dot travels 275 (O2); a main box
+   shows one big number, one green line and no description (O4); the core
+   reads THIS WEEK, the number, "tracked visits", All tools (O7); pressing a
+   portal no longer dims the others (O8); "the front" is the lower-left slot,
+   BFOrbit.frontBase(key) (O9).
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check.
@@ -78,7 +92,32 @@ const MUTATIONS = {
   // under reduced motion the orbit still turns (O9)
   "reduced-motion-moves": [[ORBIT, "    if (reduced() || narrow()) { state.turn = null;", "    if (narrow()) { state.turn = null;"]],
   // a transition on a layout property (O10)
-  "non-transform-animation": [[DASH, "    font:inherit;transition:opacity .3s ease}", "    font:inherit;transition:opacity .3s ease,left .6s ease-out,top .6s ease-out}"]],
+  "non-transform-animation": [[DASH, "transform-origin:0 0;font:inherit;cursor:pointer;transition:opacity .3s ease}", "transform-origin:0 0;font:inherit;cursor:pointer;transition:opacity .3s ease,left .6s ease-out,top .6s ease-out}"]],
+  // NAMED (Nov 10 2026, visual match): the twelve below are the approved look (O14).
+  // the portal labels back inside the circles
+  "labels-inside-circles": [[DASH, ".orbit-portal-name{position:absolute;left:50%;top:calc(50% + var(--os) * 42px);", ".orbit-portal-name{position:absolute;left:50%;top:50%;"]],
+  // no stars on the panel
+  "no-starfield": [[ORBIT, "    STARS.forEach(function (s) { svg.appendChild(sv(\"circle\", { cx: s[0], cy: s[1], r: s[2], opacity: s[3], \"class\": \"orbit-star\" })); });\n", ""]],
+  // the outer ring drawn rounder than the mockup
+  "ring-ratio-wrong": [[ORBIT, "rx: 275, ry: 110, innerRx: 150, innerRy: 60,", "rx: 250, ry: 125, innerRx: 150, innerRy: 60,"]],
+  // the open portal without its halo
+  "open-halo-missing": [[DASH, ".orbit-portal:not(.is-open) .orbit-halo{display:none}", ".orbit-halo{display:none}"]],
+  // the other portals dimmed again
+  "others-dimmed": [[ORBIT, "      portalBtn[p.key].classList.toggle(\"is-open\", on);\n", "      portalBtn[p.key].classList.toggle(\"is-open\", on);\n      portalBtn[p.key].classList.toggle(\"is-dim\", !on);\n"]],
+  // the core showing a percentage
+  "core-shows-percent": [[ORBIT, "    else { figure = String(v.this_week); words", "    else { figure = String(v.this_week) + \"%\"; words"]],
+  // "Press / to search" written under the search again
+  "press-slash-text-back": [[DASH, "<p class=\"orbit-status\" id=\"orbitStatus\" role=\"status\"></p>", "<p class=\"orbit-hint\">Press / to search</p>\n      <p class=\"orbit-status\" id=\"orbitStatus\" role=\"status\"></p>"]],
+  // the big Refresh button back
+  "big-refresh-back": [[DASH, "<button type=\"button\" class=\"orbit-refresh\" id=\"orbitRefresh\" aria-label=\"Refresh\" title=\"Refresh\">", "<button type=\"button\" class=\"orbit-refresh bf-btn\" id=\"orbitRefresh\">Refresh"]],
+  // a main box keeps its long description
+  "main-box-description-back": [[ORBIT, "      Array.prototype.slice.call(box.querySelectorAll(\"p\")).forEach(function (p) { p.parentNode.removeChild(p); });\n", ""]],
+  // the agents in five fixed 20 px columns, as when the old card was squeezed into one cell
+  "agent-icons-overlap": [[DASH, ".orbit-dir-agents{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:14px 16px}", ".orbit-dir-agents{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,20px);gap:0}"]],
+  // each agent's column narrower than its name, so the names overprint
+  "agent-labels-merged": [[DASH, "gap:6px;flex:0 0 auto;min-width:56px}", "gap:6px;flex:0 0 auto;width:20px;min-width:0}"]],
+  // the two directory buttons stacked
+  "directory-buttons-stacked": [[DASH, ".orbit-dir-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:auto}", ".orbit-dir-actions{display:flex;flex-direction:column;gap:10px;margin-top:auto}"]],
   // every portal press reads the route again (O13)
   "fetch-per-portal": [[ORBIT, "  function toggle(key) { if (state.open === key) fold(); else openPortal(key, true); }",
     "  function toggle(key) { load(); if (state.open === key) fold(); else openPortal(key, true); }"]],
@@ -104,6 +143,7 @@ if (MUTATE) {
   for (const [file, from, to] of MUTATIONS[MUTATE]) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
 }
+const UI_CSS = lf(fs.readFileSync(path.join(FRONTEND, "css/bizforce-ui.css"), "utf8"));
 const BASE = lf(execFileSync("git", ["show", BASELINE + ":" + DASH], { cwd: FRONTEND, maxBuffer: 1 << 27 }).toString("utf8"));
 
 let JSDOM;
@@ -194,8 +234,12 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const tpl = (/<template id="orbitTools">([\s\S]*?)<\/template>/.exec(FILES[DASH]) || ["", ""])[1];
   const notKept = OLD.filter(t => tpl.indexOf(t.text) === -1 || FILES[DASH].split(t.text).length !== 2).map(t => t.slug);
   check("each of the 29 tiles is in the template byte for byte, once", notKept.length === 0, notKept.join(", "));
-  check("the AI Agent Directory card is in the template byte for byte, with \"Agent Hub\" and \"Full Directory\"", BASE_DIR.length > 1000 && tpl.indexOf(BASE_DIR) !== -1 &&
-    /id="openAgentHubBtn"[^>]*onclick="window\.location\.href='agents-hub\.html';">Agent Hub</.test(tpl) && /id="openAgentDirectoryBtn"[^>]*onclick="window\.location\.href='ai-agents\.html';">Full Directory</.test(tpl));
+  // NAMED (Nov 10 2026, visual match): rebuilt for one grid cell, so its parts and links are checked, not its bytes.
+  const tplDir = (/<div id="agentDirectoryLanding"[\s\S]*?\n<\/div>\n/.exec(tpl) || [""])[0];
+  const baseBtn = id => (new RegExp("<button type=\"button\" id=\"" + id + "\"[^\\n]*<\\/button>").exec(BASE_DIR) || ["?"])[0];
+  check("the AI Agent Directory card is in the template once, with BASELINE's \"Agent Hub\" and \"Full Directory\" buttons byte for byte", BASE_DIR.length > 1000 &&
+    FILES[DASH].split("id=\"agentDirectoryLanding\"").length === 2 && tplDir.indexOf(baseBtn("openAgentHubBtn")) !== -1 && tplDir.indexOf(baseBtn("openAgentDirectoryBtn")) !== -1 &&
+    /id="openAgentHubBtn"[^>]*onclick="window\.location\.href='agents-hub\.html';">Agent Hub</.test(tplDir) && /id="openAgentDirectoryBtn"[^>]*onclick="window\.location\.href='ai-agents\.html';">Full Directory</.test(tplDir));
   check("the feature grid, its ordering module and its two keys are gone from the page", FILES[DASH].indexOf("bf-dashboard-order.js") === -1 && !/bf_dashboard_order|bf_dashboard_custom/.test(FILES[DASH] + FILES[ORBIT]) &&
     FILES[DASH].indexOf("<div class=\"bf-feature-grid cards\">") === -1);
   const P = page();
@@ -255,7 +299,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("Grow, Connect and Oracle show no badge", ["grow", "connect", "oracle"].every(k => badgeOf(P.d, k) === null));
   check("a beam runs from Agents and from Sell, and from no other portal", beamOn(P.d, "agents") && beamOn(P.d, "sell") && ["grow", "connect", "oracle"].every(k => !beamOn(P.d, k)));
   check("each beam is a curve to the core with a travelling dot", ["agents", "sell"].every(k => { const g = P.d.querySelector(".orbit-beam[data-portal=\"" + k + "\"]"); return g.querySelector("path.orbit-beam-line") && g.querySelector("circle.orbit-beam-dot"); }) &&
-    /@keyframes orbitDot\{0%\{transform:translate\(0px,250px\);opacity:0\}/.test(CSS));
+    /@keyframes orbitDot\{0%\{transform:translate\(0px,275px\);opacity:0\}/.test(CSS));
   const Z = page({ top: QUIET() });
   await settle();
   check("with nothing waiting: no badge at all, and no beam", ["grow", "sell", "connect", "agents", "oracle"].every(k => badgeOf(Z.d, k) === null && !beamOn(Z.d, k)));
@@ -285,17 +329,25 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const mains = d => Array.prototype.map.call(d.querySelectorAll("#orbitMain > .orbit-main-box"), b => b.getAttribute("data-card"));
   check("Analytics and Store are the two main boxes by default", JSON.stringify(mains(P.d)) === JSON.stringify(["analytics", "store"]), JSON.stringify(mains(P.d)));
   const an = P.d.querySelector("#orbitMain [data-card=\"analytics\"]"), stb = P.d.querySelector("#orbitMain [data-card=\"store\"]");
-  check("Analytics: 9 tracked visits this week, +3 against last week (6), and a 14-point line", /9 tracked visits this week/.test(an.textContent) && /\+3 against last week \(6\)/.test(an.textContent) &&
-    an.querySelector("svg.orbit-spark polyline").getAttribute("points").split(" ").length === 14, an.textContent.replace(/\s+/g, " ").slice(-160));
-  check("Store: 3 at or below reorder point, 6 orders this week, and a 14-point line", /3 at or below reorder point/.test(stb.textContent) && /6 orders this week/.test(stb.textContent) &&
-    stb.querySelector("svg.orbit-spark polyline").getAttribute("points").split(" ").length === 14);
-  check("each main box keeps its icon, title, description and Open button", [an, stb].every(b => b.querySelector(".bf-neon-icon") && b.querySelector("h3") && b.querySelector("p") && b.querySelector("a.bf-btn")) &&
+  // NAMED (Nov 10 2026, visual match): one big number and its label, one green line, the 14-day line; no description.
+  const bigOf = b => { const x = b && b.querySelector(".orbit-big"); return x ? [x.querySelector("strong").textContent, x.querySelector("span").textContent] : null; };
+  const secondOf = b => { const x = b && b.querySelector("p.orbit-second"); return x ? x.textContent : null; };
+  const sparkPts = b => { const x = b.querySelector("svg.orbit-spark polyline.orbit-spark-line"); return x ? x.getAttribute("points").split(" ").length : 0; };
+  check("Analytics: 9 big (tracked visits), \"+50% on last week\" (6 last week), and a 14-point line", JSON.stringify(bigOf(an)) === "[\"9\",\"tracked visits\"]" && secondOf(an) === "+50% on last week" && sparkPts(an) === 14,
+    JSON.stringify([bigOf(an), secondOf(an), sparkPts(an)]));
+  check("Store: 3 big (items low on stock), \"6 orders this week\", and a 14-point line", JSON.stringify(bigOf(stb)) === "[\"3\",\"items low on stock\"]" && secondOf(stb) === "6 orders this week" && sparkPts(stb) === 14,
+    JSON.stringify([bigOf(stb), secondOf(stb), sparkPts(stb)]));
+  check("each main box keeps its icon, title and Open button, and shows no description", [an, stb].every(b => b.querySelector(".bf-neon-icon") && b.querySelector("h3") && b.querySelector("a.bf-btn") &&
+    Array.prototype.every.call(b.querySelectorAll("p"), p => /^orbit-(big|second|live)$/.test(p.className))) &&
     an.querySelector("a.bf-btn").getAttribute("href") === "/analytics-dashboard.html" && stb.querySelector("a.bf-btn").getAttribute("href") === "store-agent.html");
   const zs = Z.d.querySelector("#orbitMain [data-card=\"store\"]");
   const za = Z.d.querySelector("#orbitMain [data-card=\"analytics\"]");
-  check("no store: \"Connect a store to see orders\", linking store-agent.html, and no orders figure", !!zs.querySelector("a.orbit-connect") && zs.querySelector("a.orbit-connect").textContent === "Connect a store to see orders" &&
-    zs.querySelector("a.orbit-connect").getAttribute("href") === "store-agent.html" && !/orders this week/.test(zs.textContent));
-  check("no tracked link: \"No tracked visits yet\", and no line", /No tracked visits yet/.test(za.textContent) && !za.querySelector("svg.orbit-spark"));
+  check("no store: 0 big (items low on stock), the link \"Connect a store to see orders\" to store-agent.html, no orders figure, no line", JSON.stringify(bigOf(zs)) === "[\"0\",\"items low on stock\"]" &&
+    !!zs.querySelector("a.orbit-connect") && zs.querySelector("a.orbit-connect").textContent === "Connect a store to see orders" &&
+    zs.querySelector("a.orbit-connect").getAttribute("href") === "store-agent.html" && !/orders this week/.test(zs.textContent) && !zs.querySelector("svg.orbit-spark"));
+  check("no tracked link: 0 big (tracked visits), the link \"Add tracked links to see visits\" to the analytics page, no line", JSON.stringify(bigOf(za)) === "[\"0\",\"tracked visits\"]" &&
+    !!za.querySelector("a.orbit-connect") && za.querySelector("a.orbit-connect").textContent === "Add tracked links to see visits" &&
+    za.querySelector("a.orbit-connect").getAttribute("href") === "/analytics-dashboard.html" && !za.querySelector("svg.orbit-spark"));
   P.w.BFOrbit.open("grow");
   check("Analytics is not repeated in Grow's grid", gridSlugs(P.d).indexOf("analytics") === -1 && gridSlugs(P.d).length === 5, gridSlugs(P.d).join(","));
   P.w.BFOrbit.open("sell");
@@ -309,7 +361,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   let stored = null; try { stored = P.w.localStorage.getItem("bf_main_boxes"); } catch (e) { stored = "unreadable"; }
   check("the choice is stored in localStorage bf_main_boxes", stored === JSON.stringify(["analytics", "crm"]), stored);
   check("the main boxes are now Analytics and CRM System, CRM with its live line", JSON.stringify(mains(P.d)) === JSON.stringify(["analytics", "crm"]) &&
-    /18 customers/.test(P.d.querySelector("#orbitMain [data-card=\"crm\"]").textContent));
+    JSON.stringify(bigOf(P.d.querySelector("#orbitMain [data-card=\"crm\"]"))) === "[\"18\",\"customers\"]");
   check("CRM is no longer in Sell's grid, and Store is back in it", gridSlugs(P.d).indexOf("crm") === -1 && gridSlugs(P.d).indexOf("store") !== -1, gridSlugs(P.d).join(","));
   const R = page({ local: { bf_main_boxes: stored || "" } });
   await settle();
@@ -369,8 +421,12 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   /* ── O7. All tools ── */
   console.log("\n══ O7. the core opens All tools ══");
   const core = T.d.getElementById("orbitCore");
-  check("the core is a button reading This week, the tracked visits, and All tools", core.tagName === "BUTTON" && /This week/.test(core.textContent) && /9 tracked visits/.test(core.textContent) && /All tools/.test(core.textContent));
-  check("with no tracked link the core says \"No tracked visits yet\"", /No tracked visits yet/.test(Z.d.getElementById("orbitCore").textContent));
+  // NAMED (Nov 10 2026, visual match): THIS WEEK, the number, "tracked visits", All tools, in that order; never a percentage.
+  const coreParts = c => Array.prototype.filter.call(c.children, x => !x.hidden).map(x => x.textContent);
+  check("the core is a button reading This week, 9, tracked visits, All tools", core.tagName === "BUTTON" && JSON.stringify(coreParts(core)) === JSON.stringify(["This week", "9", "tracked visits", "All tools"]),
+    JSON.stringify(coreParts(core)));
+  check("with no tracked link the core says \"No tracked visits yet\", and shows no number", JSON.stringify(coreParts(Z.d.getElementById("orbitCore"))) === JSON.stringify(["This week", "No tracked visits yet", "All tools"]),
+    JSON.stringify(coreParts(Z.d.getElementById("orbitCore"))));
   core.click();
   const all = T.d.getElementById("orbitAllTools");
   const heads = texts(T.d, "#orbitAllTools .orbit-group h3");
@@ -424,8 +480,9 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("each portal is a button named \"Grow, 6 tools\" and so on, with aria-pressed", Array.prototype.every.call(K.d.querySelectorAll(".orbit-portal"), b => b.tagName === "BUTTON" && /^[A-Z][a-z]+, \d+ tools$/.test(b.getAttribute("aria-label")) && b.hasAttribute("aria-pressed")) &&
     K.d.querySelector(".orbit-portal[data-portal=\"grow\"]").getAttribute("aria-label") === "Grow, 6 tools");
   growBtn.click();
-  check("pressing a portal opens it: aria-pressed true, its grid shown, the others dimmed", growBtn.getAttribute("aria-pressed") === "true" && !K.d.getElementById("orbitGrid").hidden &&
-    K.d.getElementById("orbitGrid").getAttribute("data-portal") === "grow" && K.d.querySelectorAll(".orbit-portal.is-dim").length === 4);
+  // NAMED (Nov 10 2026, visual match): the others are no longer dimmed (O14 checks the halo and "(open)").
+  check("pressing a portal opens it: aria-pressed true, its grid shown, none dimmed", growBtn.getAttribute("aria-pressed") === "true" && !K.d.getElementById("orbitGrid").hidden &&
+    K.d.getElementById("orbitGrid").getAttribute("data-portal") === "grow" && K.d.querySelectorAll(".orbit-portal.is-dim").length === 0);
   growBtn.click();
   check("pressing the open portal again folds it", growBtn.getAttribute("aria-pressed") === "false" && K.d.getElementById("orbitGrid").hidden);
   let sess = null; K.d.querySelector(".orbit-portal[data-portal=\"connect\"]").click(); try { sess = K.w.sessionStorage.getItem("bf_orbit_portal"); } catch (e) { /* none */ }
@@ -451,7 +508,8 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("hovering the orbit pauses the drift", D.w.BFOrbit.state.base === h0);
   D.d.getElementById("orbitStage").dispatchEvent(new D.w.MouseEvent("mouseleave"));
   D.w.BFOrbit.open("connect"); D.run(700);
-  const front = ((D.w.BFOrbit.state.base + 2 * 72) % 360 + 360) % 360;
+  // NAMED (Nov 10 2026, visual match): "the front" is the lower-left slot, BFOrbit.frontBase(key).
+  const front = ((D.w.BFOrbit.state.base - D.w.BFOrbit.frontBase("connect")) % 360 + 360) % 360;
   check("pressing a portal turns it to the front in about 600 ms", front < 0.5 || front > 359.5, front.toFixed(2));
   const RM = page({ reduce: true, top: TOP(), session: { bf_orbit_portal: "x" } });
   await settle();
@@ -459,7 +517,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const r0 = RM.w.BFOrbit.state.base; RM.run(2000);
   check("under reduced motion there is no drift", RM.w.BFOrbit.state.base === r0);
   RM.w.BFOrbit.open("agents");
-  const rf = ((RM.w.BFOrbit.state.base + 3 * 72) % 360 + 360) % 360;
+  const rf = ((RM.w.BFOrbit.state.base - RM.w.BFOrbit.frontBase("agents")) % 360 + 360) % 360;
   check("under reduced motion the turn snaps: no animation, the portal at the front at once", RM.w.BFOrbit.state.turn === null && (rf < 0.01 || rf > 359.99), rf);
   check("under reduced motion the beam's dot is still (is-still, and the CSS stops it)", RM.d.querySelector(".orbit-beam[data-portal=\"agents\"]").classList.contains("is-still") &&
     /@media \(prefers-reduced-motion: reduce\)\{\s*\.orbit-beam-dot\{animation:none;/.test(CSS));
@@ -516,6 +574,75 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("Refresh reads the route once more", C.fetches.length === 2, C.fetches.length);
   check("the page loads bf-orbit.js once, right after the template", FILES[DASH].split("<script src=\"/scripts/bf-orbit.js\"></script>").length === 2 &&
     FILES[DASH].indexOf("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>") !== -1);
+
+  /* ── O14. the approved look (NAMED Nov 10 2026, visual match) ── */
+  console.log("\n══ O14. the approved look: starfield panel, rings, labels, halo, core, search, main boxes, directory ══");
+  // a top-level rule's body, by its exact selector (the first one, outside the @media blocks)
+  const rule = sel => { const i = CSS.indexOf("\n  " + sel + "{"); if (i < 0) return null; const a = i + 3 + sel.length + 1; return CSS.slice(a, CSS.indexOf("}", a)); };
+  const L = page({ session: { bf_orbit_portal: "x" } });
+  await settle();
+  const svg = L.d.getElementById("orbitSvg");
+  const stars = Array.prototype.map.call(svg.querySelectorAll("circle.orbit-star"), c => [Number(c.getAttribute("r")), Number(c.getAttribute("opacity"))]);
+  const panelCss = rule(".orbit-panel") || "";
+  check("the panel: deep background, radius 18, 1 px accent border at 20%, holding the orbit and the search", /background:var\(--bf-bg, #060b1e\)/.test(panelCss) && /border-radius:18px/.test(panelCss) &&
+    /border:1px solid rgba\(var\(--bf-accent-a-rgb, 34,211,238\),\.2\)/.test(panelCss) && !!L.d.querySelector("#orbitPanel #orbitStage") && !!L.d.querySelector("#orbitPanel .orbit-search #orbitSearch"), panelCss);
+  check("about eight stars (r .7-1, opacity .4-.6) on the panel, and eight on a phone", stars.length === 8 && stars.every(([r, o]) => r >= 0.7 && r <= 1 && o >= 0.4 && o <= 0.6) &&
+    ((/@media \(max-width: 640px\)\{([\s\S]*?)\n  \}/.exec(CSS) || ["", ""])[1].match(/radial-gradient\(/g) || []).length === 8, JSON.stringify(stars));
+  const ell = Array.prototype.map.call(svg.querySelectorAll("ellipse"), e => e.getAttribute("class") + " " + e.getAttribute("rx") + "/" + e.getAttribute("ry"));
+  check("the rings: outer 275/110 (accent at 30%, 1 px), inner 150/60 (violet at 25%, dashed 3 6)", JSON.stringify(ell) === JSON.stringify(["orbit-ring 275/110", "orbit-ring-inner 150/60"]) &&
+    rule(".orbit-ring") === "fill:none;stroke:rgba(var(--bf-accent-a-rgb, 34,211,238),.3);stroke-width:1" &&
+    rule(".orbit-ring-inner") === "fill:none;stroke:rgba(var(--bf-accent-b-rgb, 208,140,255),.25);stroke-width:1;stroke-dasharray:3 6", JSON.stringify(ell));
+  const nameCss = rule(".orbit-portal-name") || "";
+  const labelsOut = Array.prototype.every.call(L.d.querySelectorAll(".orbit-portal"), b => { const nm = b.querySelector(".orbit-portal-name"); return !!nm && nm.parentNode === b && !b.querySelector(".orbit-disc .orbit-portal-name"); });
+  check("each label sits about 42 units under its circle's centre (radius 27), outside the circle, bold and uppercase", labelsOut && L.w.BFOrbit.VIEW.labelDy === 42 && L.w.BFOrbit.VIEW.portalR === 27 &&
+    /top:calc\(50% \+ var\(--os\) \* 42px\)/.test(nameCss) && /white-space:nowrap/.test(nameCss) && /font-weight:700/.test(nameCss) && /font-size:10\.5px/.test(nameCss) &&
+    rule(".orbit-portal-title") === "text-transform:uppercase", nameCss);
+  L.w.BFOrbit.open("connect");
+  const nm = k => L.d.querySelector(".orbit-portal[data-portal=\"" + k + "\"] .orbit-portal-name").textContent;
+  check("the open portal reads \"<Name> (open)\", the others their names alone", nm("connect") === "Connect (open)" && ["grow", "sell", "agents", "oracle"].every(k => nm(k) === k.charAt(0).toUpperCase() + k.slice(1)),
+    ["grow", "sell", "connect", "agents", "oracle"].map(nm).join(","));
+  check("the open portal's halo: r 38 at 10 wide (86 across), accent at 12%, shown only on the open portal", /width:calc\(var\(--os\) \* 86px\)/.test(rule(".orbit-halo") || "") &&
+    /border:calc\(var\(--os\) \* 10px\) solid rgba\(var\(--bf-accent-a-rgb, 34,211,238\),\.12\)/.test(rule(".orbit-halo") || "") &&
+    rule(".orbit-portal:not(.is-open) .orbit-halo") === "display:none" && L.d.querySelectorAll(".orbit-portal .orbit-halo").length === 5 &&
+    rule(".orbit-portal.is-open .orbit-disc") === "inset:calc(var(--os) * -3px);border:1.8px solid var(--bf-accent-a, #22d3ee)");
+  const dimmed = Array.prototype.filter.call(L.d.querySelectorAll(".orbit-portal"), b => b.classList.contains("is-dim") || (b.style.opacity !== "" && b.style.opacity !== "1"));
+  check("no portal is dimmed: no is-dim, no opacity below 1, no rule for one", dimmed.length === 0 && !/is-dim/.test(CSS) && !/is-dim/.test(FILES[ORBIT].replace(/\/\*[\s\S]*?\*\//g, "")), dimmed.length);
+  L.w.BFOrbit.fold();
+  check("the core shows a count, never a percentage", !/%/.test(L.d.getElementById("orbitCore").textContent) && !/%/.test(P.d.getElementById("orbitCore").textContent),
+    L.d.getElementById("orbitCore").textContent);
+  const sb = L.d.querySelector("#orbitPanel .orbit-search");
+  const rfb = L.d.getElementById("orbitRefresh");
+  check("the search pill: \"Go to any tool...\", a \"/\" key cap and a small Refresh icon button inside it",
+    !!sb && sb.querySelector("input").getAttribute("placeholder") === "Go to any tool..." && !!sb.querySelector("kbd.orbit-key") && sb.querySelector("kbd.orbit-key").textContent === "/" &&
+    rfb.parentNode === sb && rfb.getAttribute("aria-label") === "Refresh" && rfb.getAttribute("title") === "Refresh" && rfb.textContent.trim() === "" && !!rfb.querySelector("svg") && !rfb.classList.contains("bf-btn") &&
+    /border-radius:16px/.test(rule(".orbit-search") || "") && /background:#0a1128/.test(rule(".orbit-search") || ""));
+  check("no \"Press / to search\" line anywhere in the top half", !/Press \/ to search/i.test(ORBIT_MARKUP + FILES[ORBIT]) && !/Press \/ to search/i.test(L.d.getElementById("orbitTop").textContent));
+  const mb = L.d.querySelector("#orbitMain [data-card=\"analytics\"]");
+  const head = mb && mb.querySelector(".orbit-main-head");
+  check("a main box: the header row holds the icon, the title and Swap (in that order); then the big number, the green line, the line and Open",
+    !!head && JSON.stringify(Array.prototype.map.call(head.children, x => x.tagName + (x.classList.contains("orbit-swap") ? ".swap" : x.classList.contains("bf-neon-icon") ? ".icon" : ""))) === JSON.stringify(["DIV.icon", "H3", "BUTTON.swap"]) &&
+    /font-size:27px;font-weight:800/.test(rule(".orbit-big strong") || "") && /color:#7cf0c9/.test(rule(".orbit-main .orbit-main-box p.orbit-second") || "") &&
+    /stroke-width:1\.8/.test(rule(".orbit-spark-line") || "") && /stroke-width:5;opacity:\.15/.test(rule(".orbit-spark-glow") || "") &&
+    Array.prototype.every.call(L.d.querySelectorAll("#orbitMain > .orbit-main-box p"), p => /^orbit-(big|second|live)$/.test(p.className)));
+  // The directory box (layout as rules: no layout engine here; the real-browser harness measures it).
+  const dirTpl = (/<div id="agentDirectoryLanding"[\s\S]*?\n<\/div>\n/.exec((/<template id="orbitTools">([\s\S]*?)<\/template>/.exec(FILES[DASH]) || ["", ""])[1]) || [""])[0];
+  const dirNames = (dirTpl.match(/<li class="orbit-dir-agent"><span class="bf-neon-icon bf-hq-icon orbit-dir-icon [a-z-]+" aria-hidden="true"><svg[\s\S]*?<\/svg><\/span><span class="orbit-dir-name">[A-Za-z]+<\/span><\/li>/g) || [])
+    .map(x => />([A-Za-z]+)<\/span><\/li>$/.exec(x)[1]);
+  check("the directory: icon and title, the one line, five agents (SEO, Sales, Content, Analytics, Social), two buttons", /class="orbit-dir bf-glass-panel bf-card"/.test(dirTpl) &&
+    /<div class="orbit-dir-head">/.test(dirTpl) && /<h3>AI Agent Directory<\/h3>/.test(dirTpl) &&
+    /<p class="orbit-dir-copy bf-compact-sub">Deploy specialists across SEO, sales, content, analytics and social\.<\/p>/.test(dirTpl) &&
+    JSON.stringify(dirNames) === JSON.stringify(["SEO", "Sales", "Content", "Analytics", "Social"]) && /<div class="orbit-dir-actions">\s*<button[^\n]*Agent Hub<\/button>\s*<button[^\n]*Full Directory<\/button>\s*<\/div>/.test(dirTpl),
+    JSON.stringify(dirNames));
+  const agentsCss = rule(".orbit-dir-agents") || "", agentCss = rule(".orbit-dir-agent") || "";
+  const colGap = Number(((/gap:(\d+)px (\d+)px/.exec(agentsCss)) || [0, 0, 0])[2]);
+  check("the agents: a wrapping row, 44 px circles at least 12 px apart, never in fixed columns", /display:flex/.test(agentsCss) && /flex-wrap:wrap/.test(agentsCss) && !/grid/.test(agentsCss) && colGap >= 12 &&
+    /width:44px;height:44px/.test(rule(".orbit-dir-agent .bf-hq-icon.orbit-dir-icon") || ""), agentsCss);
+  check("each agent's column is at least as wide as its circle and its name, on one line", /flex:0 0 auto/.test(agentCss) && /min-width:56px/.test(agentCss) && !/(^|;)width:/.test(agentCss) &&
+    /white-space:nowrap/.test(rule(".orbit-dir-name") || ""), agentCss);
+  const actCss = rule(".orbit-dir-actions") || "";
+  check("the two buttons side by side, and the box two columns wide (one on a phone)", /display:flex/.test(actCss) && !/flex-direction:column/.test(actCss) && rule(".orbit-grid .orbit-dir") === "grid-column:span 2" &&
+    /\.orbit-grid \.orbit-box-wide,\.orbit-grid \.orbit-dir\{grid-column:auto\}/.test(CSS), actCss);
+  check("the old landing's squeezing rules are gone from bizforce-ui.css", !/bf-directory-preview|bf-agent-icon-grid|bf-agent-icon-block|bf-agent-icon-lg|bf-hq-icon\.bf-agent-icon|bf-directory-heading/.test(UI_CSS));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

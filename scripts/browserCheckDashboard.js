@@ -376,17 +376,37 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     const PORTAL_KEYS = ["grow", "sell", "connect", "agents", "oracle"];
     const orbitState = () => evaluate(cdp, "(function(){var b=window.__bf,O=window.BFOrbit;var ps=[].slice.call(document.querySelectorAll('.orbit-portal'));" +
       "return {open:O.state.open, pressed:ps.filter(function(p){return p.getAttribute('aria-pressed')==='true'}).map(function(p){return p.getAttribute('data-portal')})," +
-      "widths:ps.map(function(p){return [p.getAttribute('data-portal'), Math.round(p.getBoundingClientRect().width*10)/10]})," +
-      "dim:ps.filter(function(p){return p.classList.contains('is-dim')}).length," +
+      // NAMED (Nov 10 2026, visual match): every portal is drawn the same size and none is dimmed, so the old "drawn
+      // largest" and "others dimmed" readings became: where each disc sits on the ring (in viewBox units), each
+      // portal's opacity, which portals show a halo, and each label's box against its circle's box.
+      "slots:ps.map(function(p){var st=document.getElementById('orbitStage').getBoundingClientRect(),s=st.width/680,r=p.querySelector('.orbit-disc').getBoundingClientRect();" +
+      "return [p.getAttribute('data-portal'), Math.round((r.left+r.width/2-st.left)/s*10)/10, Math.round((r.top+r.height/2-st.top)/s*10)/10]})," +
+      "opacity:ps.map(function(p){return getComputedStyle(p).opacity}).join()," +
+      "halos:ps.filter(function(p){return b.shown(p.querySelector('.orbit-halo'))}).map(function(p){return p.getAttribute('data-portal')})," +
+      "labels:ps.map(function(p){var d=p.querySelector('.orbit-disc').getBoundingClientRect(),l=p.querySelector('.orbit-portal-name').getBoundingClientRect();" +
+      "return [p.getAttribute('data-portal'), p.querySelector('.orbit-portal-name').textContent, Math.round(l.top-d.bottom), Math.round(l.height), Math.round(Math.abs((l.left+l.width/2)-(d.left+d.width/2)))]})," +
       "gridShown:b.shown(document.getElementById('orbitGrid')), gridPortal:document.getElementById('orbitGrid').getAttribute('data-portal')," +
       "grid:[].map.call(document.querySelectorAll('#orbitGrid > *'),function(x){return x.getAttribute('data-card')||(x.id==='agentDirectoryLanding'?'agent-directory':'?')})," +
       "tools:(O.PORTALS.filter(function(p){return p.key===O.state.open})[0]||{tools:[]}).tools, mains:O.state.mains.slice()};})()");
-    const front = st => st.widths.slice().sort((a, b) => b[1] - a[1])[0][0];
+    // The lower-left slot an opened portal turns to: (340 - 275 sin 36, 160 + 110 cos 36) in the 680-wide viewBox.
+    const FRONT = [340 - 275 * Math.sin(36 * Math.PI / 180), 160 + 110 * Math.cos(36 * Math.PI / 180)];
+    const atFront = (st, k) => { const s = st.slots.find(x => x[0] === k); return !!s && Math.abs(s[1] - FRONT[0]) < 3 && Math.abs(s[2] - FRONT[1]) < 3; };
+    const labelsUnder = st => st.labels.every(l => l[2] >= 0 && l[3] <= 18 && l[4] <= 2);
     const renders = await evaluate(cdp, "(function(){var b=window.__bf;return {svg:b.shown(document.getElementById('orbitSvg')), core:b.shown(document.getElementById('orbitCore'))," +
       "portals:[].filter.call(document.querySelectorAll('.orbit-portal'),function(p){return b.shown(p)}).length, rings:document.querySelectorAll('#orbitSvg ellipse').length," +
       "main:[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(x){return x.getAttribute('data-card')}), core_text:document.getElementById('orbitCore').textContent};})()");
     check("the orbit renders: the ring, the core and five portals displayed", renders.svg && renders.core && renders.portals === 5 && renders.rings >= 2, JSON.stringify(renders));
-    check("the core reads This week, 29 tracked visits and All tools", /This week/.test(renders.core_text) && /29 tracked visits/.test(renders.core_text) && /All tools/.test(renders.core_text), renders.core_text);
+    const coreParts = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitCore > span, #orbitCore > strong'),function(x){return x.textContent})");
+    check("the core reads This week, 29, tracked visits, All tools, and no \"%\"", JSON.stringify(coreParts) === JSON.stringify(["This week", "29", "tracked visits", "All tools"]) && renders.core_text.indexOf("%") === -1, JSON.stringify(coreParts));
+    const panel = await evaluate(cdp, "(function(){var p=document.getElementById('orbitPanel'),cs=getComputedStyle(p),s=document.querySelector('.orbit-search');" +
+      "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitSvg .orbit-star').length, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
+      "ring:[].map.call(document.querySelectorAll('#orbitSvg ellipse.orbit-ring, #orbitSvg ellipse.orbit-ring-inner'),function(e){return e.getAttribute('rx')+'/'+e.getAttribute('ry')}).join()," +
+      "pill:getComputedStyle(s).borderTopLeftRadius, key:(s.querySelector('kbd.orbit-key')||{}).textContent, refresh:[(document.getElementById('orbitRefresh')||{}).getAttribute&&document.getElementById('orbitRefresh').getAttribute('aria-label'), s.contains(document.getElementById('orbitRefresh')), (document.getElementById('orbitRefresh')||{}).textContent]," +
+      "hint:/Press \\/ to search/.test(document.getElementById('orbitTop').textContent)};})()");
+    check("a starfield panel (radius 18 px, 8 stars) holds the orbit and the search bar", panel.radius === "18px" && panel.stars === 8 && panel.holds, JSON.stringify(panel));
+    check("the rings are 275/110 and 150/60 (2.5 to 1)", panel.ring === "275/110,150/60", panel.ring);
+    check("the search pill (radius 16 px) holds the \"/\" key cap and an icon Refresh named \"Refresh\"; no \"Press / to search\", no text button",
+      panel.pill === "16px" && panel.key === "/" && panel.refresh[0] === "Refresh" && panel.refresh[1] === true && panel.refresh[2] === "" && !panel.hint, JSON.stringify(panel));
     check("the main boxes are Analytics and Store", renders.main.join() === "analytics,store", renders.main.join());
     const marks = await evaluate(cdp, "(function(){var b=window.__bf;return " + JSON.stringify(PORTAL_KEYS) + ".map(function(k){var g=document.querySelector('.orbit-beam[data-portal=\"'+k+'\"]');" +
       "return [k, b.shown(document.getElementById('orbitBadge-'+k)) ? document.getElementById('orbitBadge-'+k).textContent : null, !!g && b.shown(g)]});})()");
@@ -403,12 +423,59 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       await sleep(900);
       const st = await orbitState();
       const want = st.tools.filter(t => st.mains.indexOf(t) === -1);
-      check("portal " + k + ": pressed alone, the others dimmed, only its grid shown (" + want.length + " boxes)",
-        st.open === k && st.pressed.join() === k && st.dim === 4 && st.gridShown && st.gridPortal === k && st.grid.slice().sort().join() === want.slice().sort().join(), JSON.stringify({ pressed: st.pressed, dim: st.dim, grid: st.grid, want }));
-      check("portal " + k + ": turned to the front (drawn largest)", front(st) === k, JSON.stringify(st.widths));
+      check("portal " + k + ": pressed alone, none dimmed, only its grid shown (" + want.length + " boxes)",
+        st.open === k && st.pressed.join() === k && st.opacity === "1,1,1,1,1" && st.gridShown && st.gridPortal === k && st.grid.slice().sort().join() === want.slice().sort().join(), JSON.stringify({ pressed: st.pressed, opacity: st.opacity, grid: st.grid, want }));
+      check("portal " + k + ": turned forward to the lower-left slot", atFront(st, k), JSON.stringify(st.slots));
+      check("portal " + k + ": only it has the halo, and its label reads \"(open)\"", st.halos.join() === k && st.labels.filter(l => / \(open\)$/.test(l[1])).map(l => l[0]).join() === k, JSON.stringify({ halos: st.halos, labels: st.labels }));
+      check("portal " + k + ": every label is one line, below its circle and centred under it", labelsUnder(st), JSON.stringify(st.labels));
       await shot(cdp, path.join(TOP_OUT, "orbit-" + k + ".png"), "#orbitTop");
       st0 = st;
     }
+    // The AI Agent Directory box in the Agents grid (Nov 10 2026, visual match).
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"agents\"]').click(), true"); await sleep(900);
+    const dir = await evaluate(cdp, "(function(){var box=document.querySelector('#orbitGrid #agentDirectoryLanding');if(!box) return null;var R=function(n){var r=n.getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,h:r.height}};" +
+      "var lis=[].slice.call(box.querySelectorAll('.orbit-dir-agent'));var icons=lis.map(function(li){return R(li.querySelector('.orbit-dir-icon'))});" +
+      "var names=lis.map(function(li){var n=li.querySelector('.orbit-dir-name');return {text:n.textContent,box:R(n),li:R(li),lh:parseFloat(getComputedStyle(n).lineHeight)||14}});" +
+      "var others=[].filter.call(document.querySelectorAll('#orbitGrid > *'),function(x){return x!==box}).map(function(x){return x.getBoundingClientRect().width});" +
+      "var p=box.querySelector('.orbit-dir-copy'),cs=getComputedStyle(box);var inner=box.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);" +
+      "return {box:R(box), others:others, icons:icons, names:names, copy:{text:p.textContent,w:p.getBoundingClientRect().width,h:p.getBoundingClientRect().height,lh:parseFloat(getComputedStyle(p).lineHeight)||20,inner:inner}," +
+      "hub:R(document.querySelector('#orbitGrid #openAgentHubBtn')), full:R(document.querySelector('#orbitGrid #openAgentDirectoryBtn')), hubText:document.querySelector('#orbitGrid #openAgentHubBtn').textContent, fullText:document.querySelector('#orbitGrid #openAgentDirectoryBtn').textContent};})()");
+    if (!dir) check("the Agents grid shows the AI Agent Directory box", false, "missing");
+    else {
+      const overlap = (a, b) => Math.min(a.r, b.r) - Math.max(a.l, b.l) > 0.5 && Math.min(a.b, b.b) - Math.max(a.t, b.t) > 0.5;
+      const pairs = []; dir.icons.forEach((a, i) => dir.icons.forEach((b, j) => { if (i < j && overlap(a, b)) pairs.push(i + "-" + j); }));
+      const gaps = []; dir.icons.forEach((a, i) => { const b = dir.icons[i + 1]; if (b && Math.abs(a.t - b.t) < 2) gaps.push(Math.round(b.l - a.r)); });
+      const col = Math.min.apply(null, dir.others);
+      check("Directory: the box spans two columns (about twice the one-column boxes)", dir.others.length > 0 && dir.box.w > 1.9 * col && dir.box.w < 2.3 * col, JSON.stringify({ box: dir.box.w, others: dir.others }));
+      check("Directory: five 44 px agent circles, no two overlapping, at least 12 px apart", dir.icons.length === 5 && dir.icons.every(r => Math.round(r.w) === 44 && Math.round(r.h) === 44) && pairs.length === 0 && gaps.every(g => g >= 12),
+        JSON.stringify({ pairs, gaps, sizes: dir.icons.map(r => Math.round(r.w) + "x" + Math.round(r.h)) }));
+      check("Directory: SEO, Sales, Content, Analytics, Social, each on one line, under its circle and inside its column",
+        dir.names.map(n => n.text).join() === "SEO,Sales,Content,Analytics,Social" &&
+        dir.names.every((n, i) => n.box.h <= n.lh * 1.5 && n.box.t >= dir.icons[i].b - 0.5 && n.box.l >= n.li.l - 0.5 && n.box.r <= n.li.r + 0.5 &&
+          Math.abs((n.box.l + n.box.r) / 2 - (dir.icons[i].l + dir.icons[i].r) / 2) <= 1.5), JSON.stringify(dir.names.map(n => [n.text, Math.round(n.box.h), Math.round(n.box.l), Math.round(n.box.r), Math.round(n.li.l), Math.round(n.li.r)])));
+      check("Directory: the one line runs across the box's full width (at most two lines)", dir.copy.text === "Deploy specialists across SEO, sales, content, analytics and social." &&
+        dir.copy.w >= dir.copy.inner - 2 && dir.copy.h <= dir.copy.lh * 2.2, JSON.stringify(dir.copy));
+      check("Directory: \"Agent Hub\" and \"Full Directory\" side by side", dir.hubText === "Agent Hub" && dir.fullText === "Full Directory" && Math.abs(dir.hub.t - dir.full.t) < 2 && dir.full.l >= dir.hub.r,
+        JSON.stringify({ hub: dir.hub, full: dir.full }));
+      await shot(cdp, path.join(TOP_OUT, "agents-grid.png"), "#orbitGrid");
+    }
+    // The main boxes (Nov 10 2026, visual match).
+    const mb = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(box){var R=function(n){if(!n) return null;var r=n.getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom}};" +
+      "var big=box.querySelector('.orbit-big strong'),sec=box.querySelector('.orbit-second'),h=box.querySelector('.orbit-main-head h3'),sw=box.querySelector('.orbit-main-head .orbit-swap'),open=box.querySelector('a.bf-btn'),icon=box.querySelector('.orbit-main-head .bf-neon-icon'),spark=box.querySelector('.orbit-spark');" +
+      "return {card:box.getAttribute('data-card'), descriptions:[].filter.call(box.querySelectorAll('p'),function(p){return !/orbit-big|orbit-second|orbit-live/.test(p.className)}).length," +
+      "big:big?[big.textContent,getComputedStyle(big).fontSize,getComputedStyle(big).color,getComputedStyle(big).fontWeight]:null, second:sec?[sec.textContent,getComputedStyle(sec).color]:null," +
+      "head:[R(h),R(sw),R(icon)], open:R(open), spark:R(spark)};})");
+    const mbA = mb.find(x => x.card === "analytics") || {}, mbS = mb.find(x => x.card === "store") || {};
+    const headOk = x => !!x.head && x.head.every(Boolean) && x.head[1].l > x.head[0].r && Math.min(x.head[0].b, x.head[1].b) > Math.max(x.head[0].t, x.head[1].t) && x.head[2].r <= x.head[0].l;
+    check("main boxes: the icon and title left, Swap right, on one header row; no description", mb.length === 2 && mb.every(headOk) && mb.every(x => x.descriptions === 0), JSON.stringify(mb.map(x => [x.card, x.descriptions, x.head])));
+    check("Analytics: 29 big and bold (26-28 px) in cyan, \"+81% on last week\" in green", !!mbA.big && mbA.big[0] === "29" && /^2[678](\.\d+)?px$/.test(mbA.big[1]) && mbA.big[2] === "rgb(34, 211, 238)" && Number(mbA.big[3]) >= 700 &&
+      !!mbA.second && mbA.second[0] === "+81% on last week" && mbA.second[1] === "rgb(124, 240, 201)", JSON.stringify(mbA));
+    check("Store: 3 (items low on stock) big in amber, \"14 orders this week\" in green", !!mbS.big && mbS.big[0] === "3" && /^2[678](\.\d+)?px$/.test(mbS.big[1]) && mbS.big[2] === "rgb(255, 196, 107)" &&
+      !!mbS.second && mbS.second[0] === "14 orders this week" && mbS.second[1] === "rgb(124, 240, 201)", JSON.stringify(mbS));
+    check("main boxes: the sparkline above the Open button, which sits at the bottom left", mb.every(x => x.spark && x.open && x.open.t >= x.spark.b - 1 && Math.abs(x.open.l - x.head[2].l) <= 2), JSON.stringify(mb.map(x => [x.spark, x.open, x.head[2]])));
+    await shot(cdp, path.join(TOP_OUT, "main-boxes.png"), "#orbitMain");
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(900);
+
     await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(300);
     const folded = await orbitState();
     check("pressing the open portal again folds its grid", folded.open === null && !folded.gridShown && folded.pressed.length === 0, JSON.stringify(folded));
@@ -461,6 +528,17 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await sleep(800);
     check("Refresh reads GET /api/dashboard/top once more", apiCalls.filter(c => c === "GET /api/dashboard/top").length === 3, apiCalls.filter(c => /dashboard\/top/.test(c)).join(", "));
 
+    // 1440 and 1024 px: nothing in the top half passes the screen's edge (Nov 10 2026, visual match).
+    for (const W of [1440, 1024]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await openPage(cdp, origin, "dashboard.html", {});
+      await orbitReady();
+      await sleep(400);
+      const over = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitTop, #orbitTop *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&(x.right>" + (W + 1) + "||x.left<-1)}).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)})");
+      check(W + " px: nothing in the top half passes the screen's edge", over.length === 0, over.join(" | "));
+      await shot(cdp, path.join(TOP_OUT, "orbit-" + W + ".png"), "#orbitTop");
+    }
+
     // 390 px: a row of portals, stacked main boxes, one column.
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await openPage(cdp, origin, "dashboard.html", {});
@@ -481,6 +559,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     const mobileWidth = async () => evaluate(cdp, "[document.documentElement.scrollWidth, [].filter.call(document.querySelectorAll('body *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391&&getComputedStyle(n).position!=='fixed'}).slice(0,3).map(function(n){return n.tagName+'#'+n.id})]");
     const nowW = await mobileWidth();
     await shot(cdp, path.join(TOP_OUT, "mobile.png"), "#orbitTop");
+    await shot(cdp, path.join(TOP_OUT, "orbit-390.png"), "#orbitTop");
     OVERRIDE["/dashboard.html"] = execFileSync("git", ["show", BEFORE_ORBIT + ":dashboard.html"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     OVERRIDE["/scripts/bf-dashboard-order.js"] = execFileSync("git", ["show", BEFORE_ORBIT + ":scripts/bf-dashboard-order.js"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     await openPage(cdp, origin, "dashboard.html", {});
@@ -501,7 +580,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     check("reduced motion: no drift", r0 === r1 && !!r0, r0 + " | " + r1);
     await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"connect\"]').click(), true"); await sleep(60);
     const snap1 = await orbitState(); await sleep(800); const snap2 = await orbitState();
-    check("reduced motion: the turn snaps (Connect at the front at once, nothing moves after)", front(snap1) === "connect" && JSON.stringify(snap1.widths) === JSON.stringify(snap2.widths), JSON.stringify(snap1.widths));
+    check("reduced motion: the turn snaps (Connect at the front at once, nothing moves after)", atFront(snap1, "connect") && JSON.stringify(snap1.slots) === JSON.stringify(snap2.slots), JSON.stringify(snap1.slots));
     const still = await evaluate(cdp, "getComputedStyle(document.querySelector('.orbit-beam[data-portal=\"agents\"] .orbit-beam-dot')).animationName");
     check("reduced motion: the beam's dot is still (no animation)", still === "none", still);
     await cdp.send("Emulation.setEmulatedMedia", { features: [] });
