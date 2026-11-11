@@ -1026,9 +1026,13 @@ const B = [
     () => /id="ccTab-command" data-cc-tab="command"[^>]*>Command<\/button>/.test(FILES[DASHBOARD]) && /id="ccTab-plans" data-cc-tab="plans"[^>]*>Plans<\/button>/.test(FILES[DASHBOARD]) &&
       /id="ccTab-activity" data-cc-tab="activity"[^>]*>Activity<\/button>/.test(FILES[DASHBOARD]) &&
       /<section id="commandCenterSection" class="bf-section" data-cc-mode="tabs">/.test(FILES[DASHBOARD]) &&
-      /"Proposals waiting for you \(" \+ p\.count \+ "\)"/.test(FILES[CC_JS]) && /"Runs that failed in the last 7 days \(" \+ f\.count \+ "\)"/.test(FILES[CC_JS]) &&
+      /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): the Command tab's two lines were shortened
+         and Activity's counts became one line. BEFORE "Proposals waiting for you (", "Runs that failed in the last 7
+         days (" and plural(total, "run", "runs"); AFTER "Proposals waiting (", "Failed in the last 7 days (" and the
+         "Last 7 days: " line. The tip's claims (proposals, failed runs, the counts under Activity) are the same. */
+      /"Proposals waiting \(" \+ p\.count \+ "\)"/.test(FILES[CC_JS]) && /"Failed in the last 7 days \(" \+ f\.count \+ "\)"/.test(FILES[CC_JS]) &&
       /var b = toggle\("Show steps", steps, fill\);/.test(FILES[CC_JS]) && /setPanel\(steps\.id, renderPlans\(\[plan\]\)\)/.test(FILES[CC_JS]) &&
-      /plural\(total, "run", "runs"\)/.test(FILES[CC_JS]) &&
+      /"Last 7 days: " \+ counts\.map\(/.test(FILES[CC_JS]) &&
       // NAMED (Block 3a, Oct 29 2026): the Command Center's renderer moved from dashboard.html into
       // scripts/bf-command-center.js, which the dashboard loads right after its section; these four
       // read that script now (before: FILES[DASHBOARD]).

@@ -56,6 +56,8 @@ const MUTATE = process.env.MUTATE || "";
 const BASELINE = "b6be965";
 
 const DASH = "dashboard.html", EXEC = "executive-agent.html", CC = "scripts/bf-command-center.js", TABS_JS = "scripts/bf-tabs.js", DECK = "scripts/bf-exec-deck.js";
+// NAMED (Nov 10 2026, real-browser fix and essentials): the site stylesheet, read for T11's static [hidden] rule.
+const UI_CSS = "css/bizforce-ui.css";
 const CC_COMMENT = "<!-- COMMAND CENTER. Everything in it is read from GET /api/command-center,";
 const CC_TAG = "<script src=\"/scripts/bf-command-center.js\"></script>";
 
@@ -77,26 +79,57 @@ const MUTATIONS = {
   "runs-uncapped": [[CC, "runs: 5, runsMore: 20,", "runs: 500, runsMore: 20,"]],
   // "Show more" shows all 200 (T4)
   "show-more-uncapped": [[CC, "runs: 5, runsMore: 20,", "runs: 5, runsMore: 2000,"]],
+  /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): five anchors moved with the code they edit,
+     the same mutant each time. past-plans-not-folded: BEFORE `past.hidden = true;`, AFTER the past fold drawn as a
+     plain heading instead of a toggle (toggle() now hides every fold itself). jobs-listed-when-healthy and
+     empty-state-missing: BEFORE el("p", …), AFTER line(…). system-shown-to-member: BEFORE the hasOwnProperty test,
+     AFTER isAdmin(). */
   // past plans open from the start (T4)
-  "past-plans-not-folded": [[CC, "                past.hidden = true;\n", "                past.hidden = false;\n"]],
+  "past-plans-not-folded": [[CC, "                out.appendChild(toggle(\"Past plans (\" + d.past_count + \")\", past));\n",
+    "                out.appendChild(el(\"div\", \"cc-sub\", \"Past plans (\" + d.past_count + \")\"));\n"]],
   // the 24 hourly rows counted one by one (T6)
   "hourly-not-grouped": [[CC, "                if (m && v.cadence === \"hourly\") {\n", "                if (false) {\n"]],
   // a healthy system still lists every job (T6)
-  "jobs-listed-when-healthy": [[CC, "            else if (!bad.length) { out.appendChild(el(\"p\", \"cc-clear\", \"All \" + units.length + \" background jobs ran on time\")); }\n",
-    "            else if (!bad.length) { out.appendChild(el(\"p\", \"cc-clear\", \"All \" + units.length + \" background jobs ran on time\")); out.appendChild(list(units, function (u) { return el(\"li\", null, u.text); })); }\n"]],
+  "jobs-listed-when-healthy": [[CC, "            else if (!bad.length) { out.appendChild(line(\"All \" + units.length + \" background jobs ran on time\", \"cc-clear\")); }\n",
+    "            else if (!bad.length) { out.appendChild(line(\"All \" + units.length + \" background jobs ran on time\", \"cc-clear\")); out.appendChild(list(units, function (u) { return el(\"li\", null, u.text); })); }\n"]],
   // Command's empty state loses its words (T5)
-  "empty-state-missing": [[CC, "out.appendChild(el(\"p\", \"cc-clear\", \"Nothing needs you right now.\"));", "out.appendChild(el(\"p\", \"cc-clear\", \"\"));"]],
+  "empty-state-missing": [[CC, "out.appendChild(line(\"Nothing needs you right now.\", \"cc-clear\"));", "out.appendChild(line(\"\", \"cc-clear\"));"]],
   // every agent listed under Automatic, manual ones too (T5)
   "manual-agents-listed": [[CC, "            var on = d.autonomy.filter(function (r) { return r.enabled === true; });\n", "            var on = d.autonomy.slice();\n"]],
   // an empty outbound type still shown (T5)
   "outbound-empty-types-shown": [[CC, "            if (d.email_sequences.length) {\n", "            if (true) {\n"]],
   // a member's System tab tries to show the jobs (T6)
-  "system-shown-to-member": [[CC, "            if (!body || !Object.prototype.hasOwnProperty.call(body, \"platform\")) { return; }\n", ""]],
+  "system-shown-to-member": [[CC, "            if (!isAdmin()) { return; }\n", ""]],
   // the Executive deck's hashes change (T9)
   "executive-deck-changed": [[DECK, "    hash: function (n) { return \"#\" + n; },\n", "    hash: function (n) { return \"#deck-\" + n; },\n"]],
   // new code writes markup (T8)
   "innerHTML-in-new-code": [[CC, "        function clear(node) { while (node && node.firstChild) { node.removeChild(node.firstChild); } }\n",
-    "        function clear(node) { if (node) { node.innerHTML = \"\"; } }\n"]]
+    "        function clear(node) { if (node) { node.innerHTML = \"\"; } }\n"]],
+  // ── Nov 10 2026, real-browser fix and essentials ──
+  // the deck's [hidden] override removed, so .bf-panel and .cc-panel ul show every panel and fold again (T11)
+  "hidden-overridden": [[DASH, "#ccDeck [hidden]{display:none !important}\n", ""]],
+  // a tab press no longer hides the other panels (T2)
+  "panels-all-visible": [[TABS_JS, "        if (panel) panel.hidden = !on;\n", "        if (panel) panel.hidden = false;\n"]],
+  // a fold starts open (T4, T6)
+  "fold-starts-open": [[CC, "            target.hidden = true;\n", ""]],
+  // the held sender's reasons back on Command (T5)
+  "email-sender-on-command": [[CC, "            if (p.count === 0 && f.count === 0) {\n",
+    "            if (d.email_sender && d.email_sender.blocked_by.length) { out.appendChild(line(\"Email sender: sequence mail is held\")); }\n            if (p.count === 0 && f.count === 0) {\n"]],
+  // the sales dry-run sentence back in Activity (T10)
+  "dry-run-sentence-shown": [[CC, "            var runs = d.newest_runs_20.slice(0, CC_SHOW.runsMore);\n",
+    "            out.appendChild(line(\"Sales dry runs in the last 30 days, counted apart: \" + d.sales_dry_runs + \" — drafts that were never sent.\"));\n            var runs = d.newest_runs_20.slice(0, CC_SHOW.runsMore);\n"]],
+  // "Active plans (0)" drawn with nothing under it (T5)
+  "empty-heading-shown": [[CC, "            if (active.length) {\n                out.appendChild(el(\"div\", \"cc-sub\", \"Active plans (\" + active.length + \")\"));\n",
+    "            out.appendChild(el(\"div\", \"cc-sub\", \"Active plans (\" + active.length + \")\"));\n            if (active.length) {\n"]],
+  // "Articles: 0 in the last 30 days" while articles are listed (T5)
+  "articles-zero-line-with-list": [[CC, "(d.content_published_30d.count > 0 ? d.content_published_30d.count + \" in the last 30 days\" : \"\")",
+    "(d.content_published_30d.count + \" in the last 30 days\")"]],
+  // the pricing note printed under the spend line instead of in its tooltip (T6, T10)
+  "pricing-note-inline": [[CC, "                spend.title = note.filter(Boolean).join(\" \");\n                out.appendChild(spend);\n",
+    "                out.appendChild(spend);\n                out.appendChild(line(note.filter(Boolean).join(\" \"), \"cc-muted\"));\n"]],
+  // "Show all jobs" open from the start (T6)
+  "jobs-list-open": [[CC, "            out.appendChild(toggle(\"Show all jobs (\" + d.job_runs.length + \")\", all));\n",
+    "            out.appendChild(toggle(\"Show all jobs (\" + d.job_runs.length + \")\", all));\n            all.hidden = false;\n"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -105,7 +138,7 @@ if (MUTATE && !MUTATIONS[MUTATE]) { console.error("Unknown MUTATE=" + MUTATE + "
 
 const lf = t => t.replace(/\r\n/g, "\n");
 const FILES = {};
-[DASH, EXEC, CC, TABS_JS, DECK].forEach(f => {
+[DASH, EXEC, CC, TABS_JS, DECK, UI_CSS].forEach(f => {
   const p = path.join(FRONTEND, f);
   if (!fs.existsSync(p)) { console.error("Frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }
   FILES[f] = lf(fs.readFileSync(p, "utf8"));
@@ -131,6 +164,7 @@ const NOW = Date.now();
 const ago = h => new Date(NOW - h * 3600000).toISOString();
 const uid = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
 const HOSTILE = "<img src=x id=ccHostile>";
+const PRICING_NOTE = "Figures are estimates from token counts at list prices.";
 
 function bigBody(o) {
   o = o || {};
@@ -168,7 +202,7 @@ function bigBody(o) {
       schedules: [{ agent_type: "seo", task_type: "audit", cadence: "weekly", hour_utc: 9, enabled: true, last_run_on: "2026-11-09" },
         { agent_type: "store", task_type: "sync", cadence: "daily", hour_utc: 4, enabled: true, last_run_on: null }] } },
     outbound: { ok: true, data: { email_sequences: [], social_drafts_by_status: { draft: 12, posted: 8 }, content_published_30d: { count: 20 }, social_latest: social, articles_latest: articles } },
-    spend: { ok: true, data: { usd: 12.5, monthly_cap_usd: 60 } },
+    spend: { ok: true, data: { usd: 12.5, monthly_cap_usd: 60, resets_at: "2026-12-01T00:00:00.000Z", note: PRICING_NOTE } },
     usage: { ok: true, data: { model_calls_today: 41, model_calls_daily_cap: 250, model_calls_unavailable: null, subscription_active: true } }
   };
   if (o.admin !== false) body.platform = { ok: true, data: { job_runs: jobRuns, jobs_on_time: verdicts, job_cadence: {},
@@ -316,7 +350,8 @@ async function mountExec(o) {
     /Proposals waiting/.test(p.text("ccCommand")) && p.text("ccPlansTab") === "Loading…" && p.text("ccActivityTab") === "Loading…" && p.text("ccSystemTab") === "Loading…");
   for (const n of TABS) await p.open(n);
   check("opening all seven tabs reads GET /api/command-center once", p.ccCalls() === 1 && p.calls.length === 1, p.calls.map(c => c.url).join(" | "));
-  check("each tab was drawn when opened", /Active plans/.test(p.text("ccPlansTab")) && /Newest runs/.test(p.text("ccActivityTab")) && /Automatic/.test(p.text("ccAutopilotTab")) &&
+  // NAMED (Nov 10 2026, real-browser fix and essentials): BEFORE /Newest runs/ in Activity; AFTER /Last 7 days:/ (the heading is gone).
+  check("each tab was drawn when opened", /Active plans/.test(p.text("ccPlansTab")) && /Last 7 days:/.test(p.text("ccActivityTab")) && /Automatic/.test(p.text("ccAutopilotTab")) &&
     /Social posts/.test(p.text("ccOutboundTab")) && /Spend/.test(p.text("ccSystemTab")));
   check("the Read stamp is set from the read", /^Read /.test(p.text("ccStatus")), p.text("ccStatus"));
   p.$("ccRefresh").click();
@@ -328,11 +363,15 @@ async function mountExec(o) {
   p = await mountDash();
   const cmd = p.$("ccCommand");
   const cmdLists = [...cmd.querySelectorAll("ul")];
-  check("Command: \"Proposals waiting for you (7)\" with the 3 newest, linked", /Proposals waiting for you \(7\)/.test(p.text("ccCommand")) && cmdLists[0] &&
-    cmdLists[0].querySelectorAll("li").length === 3 && cmdLists[0].querySelectorAll("a[href='proposals.html']").length === 3 && /and 4 more on Proposals/.test(p.text("ccCommand")));
-  check("Command: \"Runs that failed in the last 7 days (9)\" with the 3 newest, each to run.html", /Runs that failed in the last 7 days \(9\)/.test(p.text("ccCommand")) && cmdLists[1] &&
+  /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): BEFORE "Proposals waiting for you (7)" with
+     "and 4 more on Proposals", and "Runs that failed in the last 7 days (9)"; AFTER "Proposals waiting (7)" and
+     "Failed in the last 7 days (9)", each with its 3 newest and no "more" line. */
+  check("Command: \"Proposals waiting (7)\" with the 3 newest, linked, and no other line", /^Proposals waiting \(7\)$/.test(cmd.querySelector(".cc-sub").textContent) && cmdLists[0] &&
+    cmdLists[0].querySelectorAll("li").length === 3 && cmdLists[0].querySelectorAll("a[href='proposals.html']").length === 3 && !/more/.test(p.text("ccCommand")) &&
+    [...cmd.children].map(c => c.tagName).join() === "DIV,UL,DIV,UL", [...cmd.children].map(c => c.tagName).join());
+  check("Command: \"Failed in the last 7 days (9)\" with the 3 newest, each to run.html", /Failed in the last 7 days \(9\)/.test(p.text("ccCommand")) && cmdLists[1] &&
     [...cmdLists[1].querySelectorAll("a")].map(a => a.getAttribute("href")).join() === [0, 1, 2].map(i => "run.html?id=" + uid(9000 + i)).join());
-  check("Command: no email sender line while it is not held", !/Email sender/.test(p.text("ccCommand")));
+  check("Command: no email sender line", !/Email/.test(p.text("ccCommand")));
   const chips = [...p.$("ccChips").querySelectorAll(".cc-chip")].map(c => c.textContent);
   check("Command chips: model calls, subscription, spend and the admin's platform ceiling",
     chips.join(" | ") === "Model calls today: 41 of 250 | Subscription active | Spend this month: $12.50 of $60.00 | Platform ceiling today: $3.00 of $50.00", chips.join(" | "));
@@ -348,7 +387,8 @@ async function mountExec(o) {
   activeCards[0].querySelector("button.cc-toggle").click();
   check("\"Show steps\" opens the plan's steps (the shared renderer's)", !activeCards[0].querySelector(".cc-steps").hidden &&
     /Step one of plan 0/.test(activeCards[0].querySelector(".cc-steps").textContent) && activeCards[0].querySelector("button.cc-toggle").textContent === "Hide steps");
-  check("Plans: a recent finished plan of the last 14 days is listed, an older one is not", /Plan goal 100/.test(p.text("ccPlansTab")) && !/Plan goal 101/.test(p.text("ccPlansTab")));
+  // NAMED (Nov 10 2026, real-browser fix and essentials): BEFORE a "Recent plans" list of the last 14 days; AFTER none (active and past only).
+  check("Plans: only active plans and the past fold (no recent-plans list)", !/Plan goal 10[01]|Recent plans/.test(p.text("ccPlansTab")));
   const pastToggle = [...plansTab.querySelectorAll("button")].find(b => /^Past plans/.test(b.textContent));
   const pastFold = p.$("ccPastPlans");
   check("Plans: \"Past plans (37)\" is folded", pastToggle && pastToggle.textContent === "Past plans (37)" && pastToggle.getAttribute("aria-expanded") === "false" && pastFold && pastFold.hidden);
@@ -357,9 +397,9 @@ async function mountExec(o) {
     !!pastFold.querySelector("a[href='executive-agent.html#plans']") && /Past plan 0/.test(pastFold.textContent) && !/Past plan 5/.test(pastFold.textContent));
   await p.open("activity");
   const act = p.$("ccActivityTab");
-  const agentsLines = [...act.querySelectorAll("ul")][0];
-  check("Activity: the 7-day count per agent with runs only (store has none)", agentsLines && [...agentsLines.querySelectorAll("li")].map(l => l.textContent.replace(/\s+/g, " ").trim()).join(" | ") ===
-    "seo 42 runs completed 40 · failed 2 | social 60 runs completed 60", agentsLines && agentsLines.textContent);
+  // NAMED (Nov 10 2026, real-browser fix and essentials): BEFORE one list item per agent with its statuses; AFTER one line.
+  check("Activity: \"Last 7 days:\" one line of counts, agents with runs only (store has none)", act.firstChild && act.firstChild.tagName === "P" &&
+    act.firstChild.textContent === "Last 7 days: seo 42, social 60", act.firstChild && act.firstChild.textContent);
   const runRows = () => [...act.querySelectorAll("a[href^='run.html']")].filter(a => !a.closest("[hidden]"));
   check("Activity: the 5 newest runs of 200", runRows().length === 5 && runRows()[0].getAttribute("href") === "run.html?id=" + uid(1000), runRows().length);
   const more = [...act.querySelectorAll("button")].find(b => b.textContent === "Show more");
@@ -370,10 +410,17 @@ async function mountExec(o) {
     act.querySelector("a[href='executive-agent.html#history']").textContent === "Full history");
   await p.open("outbound");
   const ob = p.$("ccOutboundTab");
-  const obLists = [...ob.querySelectorAll("ul")];
-  check("Outbound: social posts total 20 with the 3 newest", /Social posts \(20\)/.test(p.text("ccOutboundTab")) && obLists[0] && obLists[0].querySelectorAll("li").length === 3 &&
-    /Social draft 0/.test(obLists[0].textContent) && !/Social draft 3/.test(obLists[0].textContent));
-  check("Outbound: articles total 20 with the 3 newest", /20 articles published in the last 30 days/.test(p.text("ccOutboundTab")) && obLists[1] && obLists[1].querySelectorAll("li").length === 3);
+  /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): BEFORE a heading, a status line and a list per
+     type; AFTER one line per type, and the 3 latest of each behind one "Show latest" fold. */
+  const obLines = [...ob.children].filter(c => c.tagName === "P").map(c => c.textContent);
+  check("Outbound: one line per type with something in it", obLines.length === 2 && obLines[0] === "Social posts: 12 draft, 8 posted" &&
+    /^Articles: 20 in the last 30 days, latest \S+$/.test(obLines[1]), obLines.join(" | "));
+  const latestFold = p.$("ccOutboundLatest"), latestBtn = [...ob.querySelectorAll("button")].find(b => b.textContent === "Show latest");
+  const obLists = latestFold ? [...latestFold.querySelectorAll("ul")] : [];
+  check("Outbound: \"Show latest\" is folded", !!latestBtn && latestBtn.getAttribute("aria-expanded") === "false" && latestFold.hidden);
+  if (latestBtn) latestBtn.click();
+  check("opened: the 3 latest social posts and the 3 latest articles", !!latestFold && !latestFold.hidden && obLists.length === 2 && obLists[0].querySelectorAll("li").length === 3 &&
+    /Social draft 0/.test(obLists[0].textContent) && !/Social draft 3/.test(obLists[0].textContent) && obLists[1].querySelectorAll("li").length === 3 && /Article 0/.test(obLists[1].textContent));
 
   /* ── T5. empty states ── */
   console.log("\n══ T5. the empty states, word for word ══");
@@ -386,19 +433,46 @@ async function mountExec(o) {
   await p.open("outbound");
   check("Outbound: with nothing sent, \"Nothing has gone out yet.\"", p.text("ccOutboundTab") === "Nothing has gone out yet.", p.text("ccOutboundTab"));
   await p.open("plans");
-  check("Plans: none yet says so", /^No executive plans yet\./.test(p.text("ccPlansTab")), p.text("ccPlansTab"));
+  check("Plans: \"No executive plans yet.\" and the \"Make a plan\" link", p.text("ccPlansTab") === "No executive plans yet. Make a plan" &&
+    !!p.$("ccPlansTab").querySelector("a[href='executive-agent.html#tool=plan']"), p.text("ccPlansTab"));
   await p.open("activity");
-  check("Activity: \"No runs in the last 7 days.\" and \"No runs yet.\"", /No runs in the last 7 days\./.test(p.text("ccActivityTab")) && /No runs yet\./.test(p.text("ccActivityTab")));
+  // NAMED (Nov 10 2026, real-browser fix and essentials): BEFORE also "No runs yet." under a "Newest runs" heading; AFTER the one line and the link.
+  const emptyAct = [...p.$("ccActivityTab").children].map(c => c.textContent);
+  check("Activity: \"No runs in the last 7 days.\" and \"Full history\", nothing else", emptyAct.join(" | ") === "No runs in the last 7 days. | Full history", emptyAct.join(" | "));
+  p = await mountDash({ bodies: [(() => { const b = bigBody(); b.plan_lists.data.active = []; b.outbound.data.content_published_30d.count = 0;
+    b.outbound.data.social_drafts_by_status = {}; b.outbound.data.social_latest = []; return b; })()] });
+  await p.open("plans");
+  check("Plans: with no active plan, no \"Active plans\" heading, only \"Past plans (37)\"", !/Active plans/.test(p.text("ccPlansTab")) && /^Past plans \(37\)/.test(p.text("ccPlansTab")),
+    p.text("ccPlansTab"));
+  await p.open("outbound");
+  const zeroLines = [...p.$("ccOutboundTab").children].filter(c => c.tagName === "P").map(c => c.textContent);
+  check("Outbound: articles listed with none in the last 30 days: \"Articles: latest <date>\", no zero count", zeroLines.length === 1 && /^Articles: latest \S+$/.test(zeroLines[0]) &&
+    !/\b0 (articles|in the last)/.test(p.text("ccOutboundTab")), zeroLines.join(" | "));
+  for (const n of TABS) await p.open(n);
+  // Every heading has something under it: the next element is not a heading and not empty.
+  const emptyHeads = [...p.d.querySelectorAll("#ccDeck .cc-sub")].filter(h => { const n = h.nextElementSibling; return !n || n.classList.contains("cc-sub") || !n.textContent.trim(); });
+  check("no heading with nothing under it, on any tab", emptyHeads.length === 0, emptyHeads.map(h => h.textContent).join(", "));
   p = await mountDash();
   await p.open("autopilot");
   const ap = p.text("ccAutopilotTab");
   check("Autopilot: the Automatic-on agents one line each, with only their schedules", p.$("ccAutopilotTab").querySelectorAll("ul")[0].querySelectorAll("li").length === 2 &&
-    /seo Automatic on/.test(ap) && /social Automatic on/.test(ap) && /seo · audit · weekly at 9:00 UTC/.test(ap) && !/sync/.test(ap), ap);
+    /seo: Automatic on/.test(ap) && /social: Automatic on/.test(ap) && /seo · audit · weekly at 9:00 UTC/.test(ap) && !/sync/.test(ap) && !p.$("ccAutopilotTab").querySelector(".cc-sub"), ap);
   check("Autopilot: the manual ones as a count only (\"3 agents manual\"), not by name", /3 agents manual$/.test(ap) && !/store|email|ads/.test(ap), ap);
   await p.open("outbound");
   check("Outbound: an empty type (email sequences) is left out", !/Email sequences/.test(p.text("ccOutboundTab")));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): BEFORE the held sender's reasons on Command;
+     AFTER one short "Email sending: held (…)" line on an admin's System tab, never on Command. */
   p = await mountDash({ blocked: true });
-  check("Command: the email sender shows only while it is held", /Email sender: sequence mail is held/.test(p.text("ccCommand")) && /switched off on the server/.test(p.text("ccCommand")));
+  check("Command: no email sender text, even while sending is held", !/Email|sequence mail|held/.test(p.text("ccCommand")), p.text("ccCommand"));
+  await p.open("system");
+  check("admin System: \"Email sending: held (switched off on the server)\" while held", [...p.$("ccSystemTab").children].some(c => c.textContent === "Email sending: held (switched off on the server)"),
+    p.text("ccSystemTab"));
+  p = await mountDash({ blocked: true, admin: false });
+  await p.open("system");
+  check("member System: no email sending line", !/Email/.test(p.text("ccSystemTab")), p.text("ccSystemTab"));
+  p = await mountDash();
+  await p.open("system");
+  check("admin System: no email sending line while it is not held", !/Email/.test(p.text("ccSystemTab")), p.text("ccSystemTab"));
 
   /* ── T6. System ── */
   console.log("\n══ T6. System: spend for everyone, jobs for an admin ══");
@@ -406,9 +480,14 @@ async function mountExec(o) {
   await p.open("system");
   const sys = p.$("ccSystemTab");
   const visible = node => [...node.querySelectorAll("li")].filter(l => !l.closest("[hidden]"));
-  check("admin: spend this month", /Spend/.test(p.text("ccSystemTab")) && /12\.50/.test(p.text("ccSystemSpend")), p.text("ccSystemSpend"));
+  /* NAMED BEFORE → AFTER (Nov 10 2026, real-browser fix and essentials): BEFORE the shared renderSpend's three lines
+     (figures, the pricing note, "Resets …"); AFTER one line, the note as its title tooltip. */
+  const resetsDay = new Date("2026-12-01T00:00:00.000Z").toLocaleDateString();
+  check("admin: \"Spend: $12.50 of $60.00 this month (resets <date>)\" as one line, the pricing note as its tooltip",
+    p.$("ccSystemSpend") && p.$("ccSystemSpend").tagName === "P" && p.text("ccSystemSpend") === "Spend: $12.50 of $60.00 this month (resets " + resetsDay + ")" &&
+    p.$("ccSystemSpend").title === PRICING_NOTE && p.$("ccSystemTab").textContent.indexOf(PRICING_NOTE) === -1, p.text("ccSystemSpend") + " / " + (p.$("ccSystemSpend") || {}).title);
   check("admin: one health line, \"2 of 17 background jobs need attention\" (the 24 hourly triggers one job)", /2 of 17 background jobs need attention/.test(p.text("ccSystemTab")), p.text("ccSystemTab"));
-  check("admin: only the job that needs attention is listed", visible(sys).length === 1 && /daily_job_03 — the last run failed/.test(visible(sys)[0].textContent),
+  check("admin: only the job that needs attention is listed", visible(sys).length === 1 && /^daily_job_03: the last run failed$/.test(visible(sys)[0].textContent),
     visible(sys).map(l => l.textContent).join(" | "));
   check("admin: \"Hourly triggers: 23 of 24 on time\" as one row", /Hourly triggers: 23 of 24 on time/.test(p.text("ccSystemTab")) && !/hourly_triggers_h05/.test(visible(sys).map(l => l.textContent).join(" ")));
   check("admin: the radar heartbeat in one line", /Radar heartbeat: news last tick/.test(p.text("ccSystemTab")));
@@ -422,7 +501,8 @@ async function mountExec(o) {
     /Hourly triggers: 24 of 24 on time/.test(p.text("ccSystemTab")), visible(p.$("ccSystemTab")).map(l => l.textContent).join(" | "));
   p = await mountDash({ admin: false });
   await p.open("system");
-  check("member: spend only (no jobs, no radar, no error)", /12\.50/.test(p.text("ccSystemSpend")) && !/Background jobs|Radar|Hourly|Could not read/.test(p.text("ccSystemTab")), p.text("ccSystemTab"));
+  check("member: spend only, the one line (no jobs, no radar, no error)", p.$("ccSystemTab").children.length === 1 && /^Spend: \$12\.50 of \$60\.00 this month/.test(p.text("ccSystemTab")) &&
+    !/background jobs|Radar|Hourly|Could not read/i.test(p.text("ccSystemTab")), p.text("ccSystemTab"));
 
   /* ── T7. Memory ── */
   console.log("\n══ T7. Agent Memory in its tab ══");
@@ -442,10 +522,66 @@ async function mountExec(o) {
   console.log("\n══ T8. new DOM by textContent ══");
   const block = FILES[CC].slice(FILES[CC].indexOf("CC-TABS: THE DASHBOARD'S TABBED MODE"), FILES[CC].indexOf("/* ══ end CC-TABS ══ */"));
   check("the CC-TABS block writes no markup (no innerHTML, outerHTML or insertAdjacentHTML)", block.length > 5000 && !/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(block));
-  check("its only HTML is the shared renderers' escaped output: setPanel with renderPlans and renderSpend",
-    (block.match(/setPanel\(/g) || []).length === 2 && /setPanel\(steps\.id, renderPlans\(\[plan\]\)\)/.test(block) && /setPanel\(spend\.id, renderSpend\(sp\.data\)\)/.test(block));
+  // NAMED (Nov 10 2026, real-browser fix and essentials): BEFORE two setPanel calls (renderPlans, renderSpend); AFTER one (the spend is a line now).
+  check("its only HTML is the shared renderer's escaped output: setPanel with renderPlans",
+    (block.match(/setPanel\(/g) || []).length === 1 && /setPanel\(steps\.id, renderPlans\(\[plan\]\)\)/.test(block));
   p = await mountDash();
   check("a proposal title with markup is shown as text", !p.$("ccHostile") && p.$("ccCommand").textContent.indexOf(HOSTILE) !== -1);
+
+  /* ── T10. the removed sentences are nowhere on the dashboard ── */
+  console.log("\n══ T10. only the essential lines ══");
+  const REMOVED = [/dry runs?/i, /drafts that were never sent/, /Email sender/, /sequence mail is held/, /articles published in the last 30 days/, /Proposals waiting for you/,
+    /Runs that failed in the last 7 days/, /Newest runs/, /Recent plans/, /and \d+ more/, /Resets /, new RegExp(PRICING_NOTE.replace(/\./g, "\\."))];
+  for (const o of [{ blocked: true }, { blocked: true, admin: false }, { bodies: [emptyBody()] }]) {
+    p = await mountDash(o);
+    for (const n of TABS) await p.open(n);
+    const all = p.d.body.textContent;
+    const back = REMOVED.filter(r => r.test(all));
+    check("no removed sentence anywhere on the dashboard (" + (o.bodies ? "empty" : o.admin === false ? "member" : "admin") + ", every tab drawn)", back.length === 0,
+      back.map(String).join(", "));
+  }
+
+  /* ── T11. hidden means hidden (a static rule: jsdom applies no stylesheet) ── */
+  console.log("\n══ T11. no display rule beats [hidden] in the deck ══");
+  {
+    const ccStyle = (/style\.textContent = ("(?:[^"\\]|\\.)*");/.exec(FILES[CC]) || [])[1];
+    const tabsStyle = (/css\.textContent =\s*([\s\S]*?);\n/.exec(FILES[TABS_JS]) || [])[1];
+    const sheets = {
+      "css/bizforce-ui.css": FILES[UI_CSS],
+      "dashboard.html style#ccTabsStyle": (/<style id="ccTabsStyle">([\s\S]*?)<\/style>/.exec(FILES[DASH]) || [])[1] || "",
+      "bf-command-center.js style": ccStyle ? JSON.parse(ccStyle) : "",
+      "bf-tabs.js style": tabsStyle ? tabsStyle.split("\n").map(l => (/"((?:[^"\\]|\\.)*)"/.exec(l) || [])[1] || "").map(t => JSON.parse('"' + t + '"')).join("") : ""
+    };
+    check("the four stylesheets were read", Object.values(sheets).every(t => t.length > 50), Object.keys(sheets).filter(k => sheets[k].length <= 50).join(", "));
+    const rules = [];
+    for (const [name, css] of Object.entries(sheets)) {
+      const flat = css.replace(/\/\*[\s\S]*?\*\//g, "").replace(/@media[^{]*\{([\s\S]*?\})\s*\}/g, "$1");
+      for (const m of flat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const d = /(?:^|;)\s*display\s*:\s*([^;!]+?)\s*(!important)?\s*(?:;|$)/.exec(m[2]);
+        if (d) rules.push({ sheet: name, selector: m[1].trim(), value: d[1].trim(), important: !!d[2] });
+      }
+    }
+    p = await mountDash();
+    for (const n of TABS) await p.open(n);
+    const actBtn = [...p.$("ccActivityTab").querySelectorAll("button")].find(b => b.textContent === "Show more"); void actBtn;
+    // Every element the deck hides: each panel (all hidden but one, so look at the markup) and each fold.
+    const targets = TABS.map(n => p.$("ccPanel-" + n)).concat(["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"].map(i => p.$(i)).filter(Boolean),
+      [...p.d.querySelectorAll("#ccDeck .cc-steps")]);
+    const override = rules.find(r => r.sheet === "dashboard.html style#ccTabsStyle" && r.selector === "#ccDeck [hidden]" && r.value === "none" && r.important);
+    const hits = [];
+    rules.filter(r => r.value !== "none").forEach(r => r.selector.split(",").forEach(sel => {
+      let matches = [];
+      try { matches = targets.filter(t => t.matches(sel.trim())); } catch (e) { matches = []; }
+      if (matches.length) hits.push({ rule: r.sheet + "  " + sel.trim() + " { display: " + r.value + (r.important ? " !important" : "") + " }", important: r.important, ids: matches.map(t => t.id) });
+    }));
+    check("the deck's own override is there: #ccDeck [hidden] { display: none !important }", !!override);
+    check("every display rule that reaches a deck panel or fold is beaten by it (none is !important): " + hits.length + " found",
+      !!override && hits.every(h => !h.important), hits.map(h => h.rule + " -> " + h.ids.join("/")).join(" | "));
+    check("and the rules that DO reach them are the two that hid nothing before (.bf-panel, .cc-panel ul)",
+      hits.some(h => /\.bf-panel /.test(h.rule + " ") && h.ids.indexOf("ccPanel-plans") !== -1) && hits.some(h => /\.cc-panel ul/.test(h.rule) && h.ids.indexOf("ccMoreRuns") !== -1),
+      hits.map(h => h.rule).join(" | "));
+    check("the shared tab stylesheet hides a hidden .deck-panel whatever its classes", /\.deck-panel\[hidden\] \{ display: none !important; \}/.test(sheets["bf-tabs.js style"]));
+  }
 
   /* ── T9. the Executive deck ── */
   console.log("\n══ T9. the Executive deck on the shared component, unchanged ══");
