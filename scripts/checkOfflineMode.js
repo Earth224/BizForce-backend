@@ -585,8 +585,15 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        NAMED BEFORE → AFTER (Nov 8 2026, Etsy store connection, migration 181). BEFORE: KEPT had 19 keys. AFTER: 20;
        bf_store_return is which store's page (the word etsy or shopify) the member left the Store page for in this tab
        (sessionStorage, scripts/store-connect.js), removed when that return is read: no member data, so sign-out leaves it
-       and bf-session.js's LEFT ON PURPOSE list names it. */
+       and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs). BEFORE: KEPT had 20 keys, and the scan below found keys only in
+       direct localStorage / sessionStorage calls. AFTER: 21; bf_cc_tab is the dashboard Command Center's last tab in this
+       browser tab (sessionStorage), a display choice like bf_exec_tab, so sign-out leaves it and bf-session.js's LEFT ON
+       PURPOSE list names it. Both tab keys are now stored by scripts/bf-tabs.js through its store() helper, which the
+       direct-call scan cannot read, so the scan also reads each page's window.BFTabs.create({ storage: { kind, key } })
+       (a literal key or a var/const holding one). Without that, bf_exec_tab looked unused here. */
     const KEPT = {
+      bf_cc_tab: "which Command Center tab the dashboard opens on, in this browser tab",
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",
       bf_store_return: "which store's page, etsy or shopify, the Store page is coming back from in this tab",
       bf_exec_tab: "which tab the Executive command deck opens on",
@@ -615,6 +622,16 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
           if (!key) { const c = new RegExp("(?:var|const|let)\\s+" + arg.replace(/[^\w$]/g, "") + "\\s*=\\s*\"([^\"]+)\"").exec(text); if (c) key = c[1]; }
           if (key) found[key] = (found[key] || []).concat(rel);
           else if (!(DYNAMIC[rel] || []).some(a => arg.indexOf(a) === 0)) unknown.push(rel + ": " + arg);
+        }
+        // The shared tab component's key, named where a page creates its tabs (see the NAMED note above KEPT).
+        if (/window\.BFTabs\.create\(/.test(text)) {
+          for (const m of text.matchAll(/storage:\s*\{\s*kind:\s*"(?:local|session)",\s*key:\s*([^\s},]+)\s*\}/g)) {
+            const arg = m[1].trim(), lit = /^["']([^"']+)["']$/.exec(arg);
+            let key = lit ? lit[1] : null;
+            if (!key) { const c = new RegExp("(?:var|const|let)\\s+" + arg.replace(/[^\w$]/g, "") + "\\s*=\\s*\"([^\"]+)\"").exec(text); if (c) key = c[1]; }
+            if (key) found[key] = (found[key] || []).concat(rel);
+            else unknown.push(rel + ": BFTabs storage key " + arg);
+          }
         }
       });
     })(FRONTEND);

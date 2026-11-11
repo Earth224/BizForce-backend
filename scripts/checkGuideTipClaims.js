@@ -399,11 +399,15 @@ const MUTATIONS = {
   // certifications tip 76 names Retake Assessment for a failed attempt again
   "restore-retake-76": [[GUIDE, "Didn't pass? Press \\\"Try Again\\\" on the result screen, or \\\"Start Assessment\\\" on the card later; there is no penalty for trying again.",
     "Didn't pass? Use Retake Assessment; there is no penalty for trying again."]],
+  /* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs): the two mutations below anchor on the same tip, whose
+     words changed. BEFORE "Start in \"Command Center\": \"Needs you\" lists …"; AFTER "Start in \"Command
+     Center\": its \"Command\" tab lists …" (the dashboard's Needs you panel is now its Command tab). The same
+     replacement texts. */
   // the dashboard tip points at the removed Recent Activity feed again
-  "restore-recent-activity": [[GUIDE, "Start in \\\"Command Center\\\": \\\"Needs you\\\" lists the proposals waiting for your approval and the runs that failed",
+  "restore-recent-activity": [[GUIDE, "Start in \\\"Command Center\\\": its \\\"Command\\\" tab lists the proposals waiting for your approval and the runs that failed",
     "Use the Active Queue card and Recent Activity feed to see what's actually running"]],
   // the dashboard tip points at the removed Active Queue card again (launch audit #22a)
-  "restore-active-queue-tip": [[GUIDE, "Start in \\\"Command Center\\\": \\\"Needs you\\\" lists the proposals waiting for your approval and the runs that failed.",
+  "restore-active-queue-tip": [[GUIDE, "Start in \\\"Command Center\\\": its \\\"Command\\\" tab lists the proposals waiting for your approval and the runs that failed.",
     "Use the Active Queue card and its View Queue button to see your active assignments before you dig into any single tool."]],
   // the Active Queue card comes back while the tip names the Command Center
   "restore-active-queue-card": [["dashboard.html", "<div class=\"bf-feature-card card bf-card\" data-card=\"agent-proposals\"",
@@ -1012,9 +1016,19 @@ const B = [
   /* Launch audit #22a removed the Active Queue card and the Agent Work Queue it
      scrolled to (a list kept only in this browser), so this tip now names the
      Command Center's three panels, each read from GET /api/command-center. */
-  ["10 dashboard 18", hqTips, "\"Needs you\" lists the proposals waiting for your approval", /Recent Activity|Active Queue|View Queue|Work Queue/,
-    () => /<h3>Needs you<\/h3><div id="ccNeedsYou">/.test(FILES[DASHBOARD]) && /<h3>Executive plans<\/h3><div id="ccPlans">/.test(FILES[DASHBOARD]) &&
-      /<h3>Agent activity<\/h3><div id="ccActivity">/.test(FILES[DASHBOARD]) &&
+  /* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs):
+     BEFORE  the tip quoted "Needs you", "Executive plans" and "Agent activity", and this pinned the dashboard's
+             three panels by their <h3> headings and ids.
+     AFTER   the dashboard's Command Center is one panel of tabs; the tip quotes "Command", "Plans", "Show steps",
+             "Dispatch" and "Activity", and this pins those three tabs by their buttons, "Show steps" and the
+             tabbed mode's own Proposals, Runs-failed and Activity lines. Every other assertion is unchanged. */
+  ["10 dashboard 18", hqTips, "its \"Command\" tab lists the proposals waiting for your approval", /Recent Activity|Active Queue|View Queue|Work Queue|Needs you|Executive plans|Agent activity/,
+    () => /id="ccTab-command" data-cc-tab="command"[^>]*>Command<\/button>/.test(FILES[DASHBOARD]) && /id="ccTab-plans" data-cc-tab="plans"[^>]*>Plans<\/button>/.test(FILES[DASHBOARD]) &&
+      /id="ccTab-activity" data-cc-tab="activity"[^>]*>Activity<\/button>/.test(FILES[DASHBOARD]) &&
+      /<section id="commandCenterSection" class="bf-section" data-cc-mode="tabs">/.test(FILES[DASHBOARD]) &&
+      /"Proposals waiting for you \(" \+ p\.count \+ "\)"/.test(FILES[CC_JS]) && /"Runs that failed in the last 7 days \(" \+ f\.count \+ "\)"/.test(FILES[CC_JS]) &&
+      /var b = toggle\("Show steps", steps, fill\);/.test(FILES[CC_JS]) && /setPanel\(steps\.id, renderPlans\(\[plan\]\)\)/.test(FILES[CC_JS]) &&
+      /plural\(total, "run", "runs"\)/.test(FILES[CC_JS]) &&
       // NAMED (Block 3a, Oct 29 2026): the Command Center's renderer moved from dashboard.html into
       // scripts/bf-command-center.js, which the dashboard loads right after its section; these four
       // read that script now (before: FILES[DASHBOARD]).

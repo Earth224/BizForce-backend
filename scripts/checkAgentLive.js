@@ -132,7 +132,10 @@ const MUTATIONS = {
     [SIGLIB, "    out.connection = c && c.handle ? {\n", "    out.connection = c && c.handle ? Object.assign({}, c, {\n"],
     [SIGLIB, "      last_error_code: c.last_error_code ? cut(c.last_error_code, 60) : null\n    } : { connected: false", "      last_error_code: c.last_error_code ? cut(c.last_error_code, 60) : null\n    }) : { connected: false"]],
   // the inventory read loses its owner filter (S2)
-  "other-member-inventory": [[SERVER, "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status\", { count: \"exact\" })\n          .eq(\"user_id\", userId)\n", "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status\", { count: \"exact\" })\n"]],
+  /* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs): anchor text only. Commit 15e9103 (store connections)
+     added ", source" to this select, so the anchor matched nothing and MUTATE=all reported an anchor error.
+     BEFORE the select ended "status\"", AFTER "status, source\""; the same edit: the .eq("user_id") is dropped. */
+  "other-member-inventory": [[SERVER, "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status, source\", { count: \"exact\" })\n          .eq(\"user_id\", userId)\n", "          .select(\"id, name, sku, unit, quantity_on_hand, reorder_point, unit_cost, unit_price, status, source\", { count: \"exact\" })\n"]],
   // an inventory read that failed answers as an empty shop (S2)
   "store-failed-read-as-zero": [[SIGLIB, "  if (failed(r.items)) out.stock = unavailableOf(r.items);", "  if (failed(r.items)) out.stock = { items: 0, with_reorder_point: 0, low: { count: 0, named: [] }, margin_bands: {} };"]],
   // Chart.js is loaded on agents/analytics.html without its integrity hash (S7)
@@ -209,7 +212,9 @@ function routeOf(sig) {
 const LIVE_ALL = 'app.get("/api/agents/live", requireAuth, async function (req, res, next) {';
 const LIVE_ONE = 'app.get("/api/agents/:type/live", requireAuth, async function (req, res, next) {';
 const TYPE_ROUTE = 'app.get("/api/agents/:type", requireAuth, async function (req, res, next) {';
-const DEFS = ["agentLiveBody", "commandCenterRead", "commandCenterAllRows", "COMMAND_CENTER_PAGE", "AGENT_SCHEDULE_FIELDS",
+/* NAMED (Nov 10 2026, dashboard tabs): accountUsageToday joins the lifted definitions. agentLiveBody's calls-today
+   and subscription reads moved into it unchanged, shared with GET /api/command-center's usage section. */
+const DEFS = ["agentLiveBody", "accountUsageToday", "commandCenterRead", "commandCenterAllRows", "COMMAND_CENTER_PAGE", "AGENT_SCHEDULE_FIELDS",
   "AGENT_SCHEDULE_CARD_FIELDS", "agentScheduleIsDue", "agentScheduleUtcDay", "agentScheduleDaysInUtcMonth",
   "agentScheduleEffectiveMonthDay", "modelCallCostUsd", "MODEL_PRICES_USD_PER_MILLION", "modelSpendMonth",
   "modelCallUtcDay", "modelCallDailyLimit", "MODEL_CALL_DAILY_LIMIT_DEFAULT",

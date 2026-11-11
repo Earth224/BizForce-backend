@@ -65,6 +65,8 @@ const MUTATE = process.env.MUTATE || "";
 const EXEC = "executive-agent.html", RUN = "run.html", AP = "scripts/agent-profile.js", HQ = "scripts/bf-hq.js", CC = "scripts/bf-command-center.js";
 const DECK = "scripts/bf-exec-deck.js", PAYWALL = "scripts/bf-paywall.js", GUIDE = "scripts/termaximus-guide.js", SESSION = "scripts/bf-session.js";
 const LIB = "lib/agentLive.js", BRAIN = "config/brain.js";
+// NAMED (Nov 10 2026, dashboard tabs): the shared tab component the deck now runs on.
+const TABS_JS = "scripts/bf-tabs.js";
 const AGENT_PAGES = ["ads-agent.html", "broker-agent.html", "community-agent.html", "email-agent.html", "etsy-agent.html", "executive-agent.html",
   "influencer-agent.html", "operations-agent.html", "publicist-agent.html", "rd-agent.html", "reputation-agent.html", "store-agent.html",
   "vertical-marketing-agent.html", "agents/analytics.html", "agents/content.html", "agents/sales.html", "agents/seo.html", "agents/social.html"];
@@ -99,10 +101,13 @@ const MUTATIONS = {
   // a tab link that lands nowhere (D6)
   "tab-link-lands-nowhere": [[HQ, "\" in 7 days\", href: \"#approvals\" });", "\" in 7 days\", href: \"#approval\" });"],
     [EXEC, "on the <a href=\"#history\">History tab</a>", "on the <a href=\"#histroy\">History tab</a>"]],
+  /* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs): file location only. BEFORE these two anchored in
+     scripts/bf-exec-deck.js; AFTER in scripts/bf-tabs.js, where the deck's tab code moved unchanged (the deck
+     still passes localStorage and bf_exec_tab). The same two mutants. */
   // the arrow keys do nothing (D6)
-  "arrow-keys-off": [[DECK, "    if (e.key === \"ArrowRight\") next = TABS[(i + 1) % TABS.length];\n", "    if (e.key === \"ArrowRight\") next = TABS[i];\n"]],
+  "arrow-keys-off": [[TABS_JS, "      if (e.key === \"ArrowRight\") next = TABS[(i + 1) % TABS.length];\n", "      if (e.key === \"ArrowRight\") next = TABS[i];\n"]],
   // the last tab is not remembered (D6)
-  "tab-not-remembered": [[DECK, "  function remember(name) { try { localStorage.setItem(TAB_KEY, name); }", "  function remember(name) { try { void name; }"]],
+  "tab-not-remembered": [[TABS_JS, "    function remember(name) { try { store().setItem(o.storage.key, name); }", "    function remember(name) { try { void name; }"]],
   // History shows 20 a page (D7)
   "history-twenty-a-page": [[DECK, "  var PAGE_SIZE = 10;\n", "  var PAGE_SIZE = 20;\n"]],
   // History lists dry runs (D7)
@@ -125,7 +130,7 @@ if (MUTATE && !MUTATIONS[MUTATE]) { console.error("Unknown MUTATE=" + MUTATE + "
 const lf = t => t.replace(/\r\n/g, "\n");
 const FILES = {};
 [LIB, BRAIN].forEach(f => { FILES[f] = lf(fs.readFileSync(path.join(REPO, f), "utf8")); });
-[EXEC, RUN, AP, HQ, CC, DECK, PAYWALL, GUIDE, SESSION].concat(AGENT_PAGES).forEach(f => {
+[EXEC, RUN, AP, HQ, CC, DECK, TABS_JS, PAYWALL, GUIDE, SESSION].concat(AGENT_PAGES).forEach(f => {
   if (FILES[f] !== undefined) return;
   const p = path.join(FRONTEND, f);
   if (!fs.existsSync(p)) { console.error("Frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }

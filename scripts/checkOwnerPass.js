@@ -304,7 +304,9 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
       "getUserPlan in /api/certifications/award", "getUserPlan in runAgentSchedulePass", "getUserPlan in __selfReviewPlanFor",
       // NAMED (Oct 29 2026, live activity): BEFORE 15 readers; AFTER 16. agentLiveBody reads .active only to
       // say whether a schedule will run (subscription_active, null if the read fails); it gates nothing.
-      "getUserPlan in agentLiveBody",
+      // NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs). BEFORE "getUserPlan in agentLiveBody". AFTER the same read,
+      // moved unchanged into accountUsageToday, which agentLiveBody and the Command Center's usage section share. Still 19.
+      "getUserPlan in accountUsageToday",
       // NAMED (Oct 29 2026, Executive Headquarters, Block 3a): BEFORE 16 readers; AFTER 17. The calendar's agent-run
       // read reads .active only to show whether a schedule will run; unknown (a failed read) shows nothing. It gates nothing.
       "getUserPlan in /api/agents/live/calendar",

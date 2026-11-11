@@ -115,6 +115,19 @@ const inlineScripts = (html) => {
    "(function commandCenter() {" block. It is scripts/bf-command-center.js now, and section 9
    proves both pages load it right after their own #commandCenterSection. */
 const CC_SCRIPT = [FILES[CC] || ""].filter(code => code.indexOf("(function commandCenter() {") !== -1);
+/* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs):
+   BEFORE  page() mounted dashboard.html's own Command Center: six panels (ccNeedsYou, ccPlans, ccActivity,
+           ccAutopilot, ccOutbound, ccSpend) and ccPlatformPanel, each drawn by the shared renderers.
+   AFTER   dashboard.html's section is the tabbed one (data-cc-mode="tabs"; scripts/checkDashboardTabs.js holds
+           its tabs, caps and folds). The six panel renderers are unchanged and still draw the Executive page's
+           panels, so page() mounts the same panel markup, read from the dashboard as it stood at DASH_BASELINE,
+           and every assertion on it is the same. Section 9 pins the dashboard's tabbed section. */
+const DASH_BASELINE = "b6be965";
+const DASH_PANELS = "dashboard.html@" + DASH_BASELINE + " (the six-panel Command Center)";
+{
+  const base = require("child_process").execSync("git show " + DASH_BASELINE + ":" + DASH, { cwd: FRONTEND, maxBuffer: 1 << 27 }).toString("utf8").replace(/\r\n/g, "\n");
+  FILES[DASH_PANELS] = (base.match(/<section id="commandCenterSection"[\s\S]*?<\/section>/) || [""])[0];
+}
 
 /* ── the server, lifted (the same lifter as checkCommandCenter) ──────────── */
 const SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
@@ -397,7 +410,7 @@ const settle = async () => { for (let i = 0; i < 40; i++) await new Promise(r =>
    answers each fetch with { status, body } or throws for a network failure. */
 async function page(serve, opts) {
   const o = opts || {};
-  const html = FILES[o.file || DASH];
+  const html = FILES[o.file || DASH_PANELS];
   const els = {};
   const element = (elId) => {
     if (els[elId]) return els[elId];
@@ -736,13 +749,24 @@ const PANEL_IDS = ["ccNeedsYou", "ccPlans", "ccActivity", "ccAutopilot", "ccOutb
     loadsAfterSection(DASH) && [DASH, EXEC].every(loadsOnce) && at("bf-hq.js") !== -1 && at("bf-hq.js") < at("bf-command-center.js") &&
     at("bf-command-center.js") < at("bf-exec-deck.js") && [DASH, EXEC].every(f => FILES[f].indexOf("(function commandCenter() {") === -1));
   const ids = f => (FILES[f].match(/<section id="commandCenterSection"[\s\S]*?<\/section>/) || [""])[0].match(/id="[A-Za-z]+"/g) || [];
+  /* NAMED BEFORE → AFTER (Nov 10 2026, dashboard tabs): BEFORE ids(DASH), the dashboard's own section; AFTER
+     ids(DASH_PANELS), the same six-panel markup as the dashboard had it at DASH_BASELINE (see page()). The
+     dashboard's tabbed section is pinned by the check after this one. */
   check("both pages carry the same Command Center markup ids, but for the deck's ccPlans (none) and ccNeedsYou (once, on its Approvals tab)",
-    ids(DASH).length === 11 && ids(DASH).indexOf('id="ccPlans"') !== -1 && ids(DASH).indexOf('id="ccNeedsYou"') !== -1 &&
-    JSON.stringify(ids(DASH).filter(i => i !== 'id="ccPlans"' && i !== 'id="ccNeedsYou"')) === JSON.stringify(ids(EXEC)) &&
+    ids(DASH_PANELS).length === 11 && ids(DASH_PANELS).indexOf('id="ccPlans"') !== -1 && ids(DASH_PANELS).indexOf('id="ccNeedsYou"') !== -1 &&
+    JSON.stringify(ids(DASH_PANELS).filter(i => i !== 'id="ccPlans"' && i !== 'id="ccNeedsYou"')) === JSON.stringify(ids(EXEC)) &&
     FILES[EXEC].indexOf('id="ccPlans"') === -1 && (FILES[EXEC].match(/id="ccNeedsYou"/g) || []).length === 1 &&
     FILES[EXEC].indexOf('id="deckPanel-approvals"') !== -1 && FILES[EXEC].indexOf('id="deckPanel-approvals"') < FILES[EXEC].indexOf('id="ccNeedsYou"') &&
     FILES[EXEC].indexOf('id="ccNeedsYou"') < FILES[EXEC].indexOf('id="deckPanel-history"'),
     JSON.stringify([ids(DASH), ids(EXEC)]));
+  const TAB_NAMES = ["command", "plans", "activity", "autopilot", "outbound", "system", "memory"];
+  check("the dashboard's Command Center is the tabbed one: data-cc-mode=\"tabs\", one #ccDeck of seven tabs and panels, none of the six panel ids, bf-tabs.js before it",
+    FILES[DASH].indexOf('<section id="commandCenterSection" class="bf-section" data-cc-mode="tabs">') !== -1 && (FILES[DASH].match(/id="ccDeck"/g) || []).length === 1 &&
+    TAB_NAMES.every(n => FILES[DASH].indexOf('id="ccTab-' + n + '" data-cc-tab="' + n + '" aria-controls="ccPanel-' + n + '"') !== -1 && FILES[DASH].indexOf('id="ccPanel-' + n + '"') !== -1) &&
+    PANEL_IDS.concat(["ccPlatformPanel", "ccPlatform"]).every(i => FILES[DASH].indexOf('id="' + i + '"') === -1) &&
+    FILES[DASH].indexOf('<script src="/scripts/bf-tabs.js"></script>') !== -1 &&
+    FILES[DASH].indexOf('<script src="/scripts/bf-tabs.js"></script>') < FILES[DASH].indexOf('<section id="commandCenterSection"') &&
+    FILES[EXEC].indexOf("data-cc-mode") === -1);
   const onDash = await page(live(full, OWNER)), onExec = await page(live(full, OWNER), { file: EXEC });
   const SAME = PANEL_IDS.filter(k => k !== "ccPlans" && k !== "ccNeedsYou").concat(["ccPlatform"]);
   check("the same answer renders the same panels, word for word, on both pages (all but the deck's plans and Needs you)",

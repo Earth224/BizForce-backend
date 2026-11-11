@@ -10842,6 +10842,39 @@ app.get("/api/agents/tool-specs", requireAuth, function (req, res) {
    commandCenterAllRows, the Command Center's rules). Every query is scoped to
    req.user.id. Registered above /api/agents/:type, which would otherwise
    swallow /api/agents/live. */
+/* An account's model calls today against the daily cap, and whether its subscription is active
+   (Nov 10 2026, dashboard tabs). ONE reader, shared by GET /api/agents/live (agentLiveBody) and
+   GET /api/command-center (commandCenterUsage), so the two can never disagree.
+   dailyCalls is { used, limit } or { unavailable }; subscriptionActive is true, false or null (unknown). */
+async function accountUsageToday(userId, user, now) {
+  // The 250-a-day cap, read the way enforceDailyModelCallLimit counts it. A
+  // count that does not come back as a number is unknown, never 0.
+  var dailyCalls;
+  try {
+    var limit = modelCallDailyLimit();
+    var counted = commandCenterRead(await supabase
+      .from("model_calls")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("created_on", modelCallUtcDay(now)), "model calls today");
+    if (typeof counted.count !== "number") throw new Error("model calls today: the count did not come back");
+    if (limit === null) throw new Error("the daily limit is misconfigured");
+    dailyCalls = { used: counted.count, limit: limit };
+  } catch (error) {
+    dailyCalls = { unavailable: (error && error.message) || String(error) };
+  }
+
+  // Whether the runner would run schedules for this account now; unknown is null.
+  var subscriptionActive = null;
+  try {
+    var plan = await getUserPlan(userId, user);
+    if (plan) subscriptionActive = plan.active === true;
+  } catch (planErr) {
+    console.error("[agents/live] could not read the plan for " + userId + ": " + ((planErr && planErr.message) || planErr));
+  }
+  return { dailyCalls: dailyCalls, subscriptionActive: subscriptionActive };
+}
+
 async function agentLiveBody(req, types) {
   var live = require("./lib/agentLive");
   var userId = req.user.id;
@@ -10951,31 +10984,11 @@ async function agentLiveBody(req, types) {
     }, "model spend this month");
   });
 
-  // The 250-a-day cap, read the way enforceDailyModelCallLimit counts it. A
-  // count that does not come back as a number is unknown, never 0.
-  var dailyCalls;
-  try {
-    var limit = modelCallDailyLimit();
-    var counted = commandCenterRead(await supabase
-      .from("model_calls")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", userId)
-      .eq("created_on", modelCallUtcDay(now)), "model calls today");
-    if (typeof counted.count !== "number") throw new Error("model calls today: the count did not come back");
-    if (limit === null) throw new Error("the daily limit is misconfigured");
-    dailyCalls = { used: counted.count, limit: limit };
-  } catch (error) {
-    dailyCalls = { unavailable: (error && error.message) || String(error) };
-  }
-
-  // Whether the runner would run schedules for this account now; unknown is null.
-  var subscriptionActive = null;
-  try {
-    var plan = await getUserPlan(userId, req.user);
-    if (plan) subscriptionActive = plan.active === true;
-  } catch (planErr) {
-    console.error("[agents/live] could not read the plan for " + userId + ": " + ((planErr && planErr.message) || planErr));
-  }
+  // NAMED (Nov 10 2026, dashboard tabs): the calls today and the subscription are read by accountUsageToday,
+  // which GET /api/command-center's usage section shares; the reads themselves are unchanged.
+  var usageToday = await accountUsageToday(userId, req.user, now);
+  var dailyCalls = usageToday.dailyCalls;
+  var subscriptionActive = usageToday.subscriptionActive;
 
   var body = live.buildLive({
     types: types,
@@ -42875,6 +42888,13 @@ app.post("/api/assignments/dispatch", requireAuth, requireActiveSubscription, ai
 var COMMAND_CENTER_PAGE = 1000;
 var COMMAND_CENTER_LIST_LIMIT = 100;
 var COMMAND_CENTER_PLAN_COUNT = 5;
+/* NAMED (Nov 10 2026, dashboard tabs): the caps of the additive fields. */
+var COMMAND_CENTER_RUNS_MORE = 20;
+var COMMAND_CENTER_LATEST = 3;
+var COMMAND_CENTER_ACTIVE_PLANS = 10;
+var COMMAND_CENTER_PAST_PLANS = 5;
+var COMMAND_CENTER_PAST_AFTER_DAYS = 14;
+var COMMAND_CENTER_FINISHED = ["completed", "cancelled"];
 
 async function commandCenterSection(name, read) {
   try {
@@ -42967,7 +42987,13 @@ async function commandCenterPlans(userId) {
     .eq("task_type", "executive/plan")
     .order("created_at", { ascending: false })
     .limit(COMMAND_CENTER_PLAN_COUNT), "executive plans").data || [];
+  return commandCenterPlanDetail(userId, plans);
+}
 
+/* NAMED (Nov 10 2026, dashboard tabs): the step detail of the plans given (rows with id, status, output,
+   created_at), each assignment with its latest dispatch; split out of commandCenterPlans unchanged so the
+   active plans in plan_lists carry exactly the same detail. */
+async function commandCenterPlanDetail(userId, plans) {
   var planIds = plans.map(function (p) { return p.id; });
   var dispatches = !planIds.length ? [] : await commandCenterAllRows(function () {
     return supabase
@@ -43033,6 +43059,102 @@ async function commandCenterPlans(userId) {
   });
 }
 
+/* plan_lists (Nov 10 2026, dashboard tabs), ADDITIVE, a section of its own: plans.data is a list, so
+   these cannot sit inside it without changing its shape.
+     active       plans whose status is not completed or cancelled, newest first, at most 10, each with
+                  the same step detail as plans.
+     past_count   the exact count of finished plans (completed or cancelled) whose finished time is more
+                  than 14 days ago.
+     past_latest  the 5 most recently finished of those: id, goal, status, created_at, finished_at and
+                  finished_from.
+   The finished time is the latest completed_at among the completed runs the plan's assignments dispatched
+   (executive_dispatches.tool_task_id), and the plan's created_at when none has one (finished_from says
+   which: "runs" or "created_at"). */
+async function commandCenterPlanLists(userId, now) {
+  var all = await commandCenterAllRows(function () {
+    return supabase
+      .from("ai_tasks")
+      .select("id, status, created_at", { count: "exact" })
+      .eq("user_id", userId)
+      .eq("task_type", "executive/plan")
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true });
+  }, "every executive plan");
+  var isFinished = function (p) { return COMMAND_CENTER_FINISHED.indexOf(p.status) !== -1; };
+  var activeRows = all.filter(function (p) { return !isFinished(p); }).slice(0, COMMAND_CENTER_ACTIVE_PLANS);
+  var finished = all.filter(isFinished);
+
+  var finishedIds = finished.map(function (p) { return p.id; });
+  var dispatches = !finishedIds.length ? [] : await commandCenterAllRows(function () {
+    return supabase
+      .from("executive_dispatches")
+      .select("id, plan_task_id, tool_task_id", { count: "exact" })
+      .eq("user_id", userId)
+      .in("plan_task_id", finishedIds)
+      .order("id", { ascending: true });
+  }, "the finished plans' dispatches");
+  var runIds = [];
+  dispatches.forEach(function (d) { if (d.tool_task_id && runIds.indexOf(d.tool_task_id) === -1) runIds.push(d.tool_task_id); });
+  var runs = !runIds.length ? [] : commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, status, completed_at")
+    .eq("user_id", userId)
+    .in("id", runIds), "the finished plans' runs").data || [];
+  var completedAt = {};
+  runs.forEach(function (r) { if (r.status === "completed" && r.completed_at) completedAt[r.id] = r.completed_at; });
+  var lastRun = {};
+  dispatches.forEach(function (d) {
+    var at = completedAt[d.tool_task_id];
+    if (at && (!lastRun[d.plan_task_id] || at > lastRun[d.plan_task_id])) lastRun[d.plan_task_id] = at;
+  });
+
+  var cutoff = commandCenterSince(COMMAND_CENTER_PAST_AFTER_DAYS, now);
+  var past = finished.map(function (p) {
+    return { id: p.id, status: p.status, created_at: p.created_at,
+      finished_at: lastRun[p.id] || p.created_at, finished_from: lastRun[p.id] ? "runs" : "created_at" };
+  }).filter(function (p) { return p.finished_at < cutoff; });
+  past.sort(function (a, b) { return a.finished_at < b.finished_at ? 1 : a.finished_at > b.finished_at ? -1 : 0; });
+  var pastLatest = past.slice(0, COMMAND_CENTER_PAST_PLANS);
+
+  // The goals and outputs of only the plans listed.
+  var wanted = activeRows.map(function (p) { return p.id; }).concat(pastLatest.map(function (p) { return p.id; }));
+  var full = !wanted.length ? [] : commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, status, output, created_at")
+    .eq("user_id", userId)
+    .in("id", wanted), "the listed plans").data || [];
+  var byId = {};
+  full.forEach(function (p) { byId[p.id] = p; });
+  var activeFull = activeRows.map(function (p) { return byId[p.id] || { id: p.id, status: p.status, output: null, created_at: p.created_at }; });
+  var goalOf = function (id) {
+    var o = byId[id] && byId[id].output;
+    return o && typeof o === "object" && typeof o.goal === "string" ? o.goal : null;
+  };
+
+  return {
+    active: await commandCenterPlanDetail(userId, activeFull),
+    past_count: past.length,
+    past_after_days: COMMAND_CENTER_PAST_AFTER_DAYS,
+    past_latest: pastLatest.map(function (p) {
+      return { id: p.id, goal: goalOf(p.id), status: p.status, created_at: p.created_at, finished_at: p.finished_at, finished_from: p.finished_from };
+    })
+  };
+}
+
+/* usage (Nov 10 2026, dashboard tabs), ADDITIVE, a section of its own: the account's model calls today
+   against the daily cap and whether its subscription is active, by accountUsageToday, the reader
+   GET /api/agents/live uses. Unknown is null, never 0; model_calls_unavailable says why. */
+async function commandCenterUsage(userId, user, now) {
+  var usage = await accountUsageToday(userId, user, now);
+  var calls = usage.dailyCalls || {};
+  return {
+    model_calls_today: typeof calls.used === "number" ? calls.used : null,
+    model_calls_daily_cap: typeof calls.limit === "number" ? calls.limit : null,
+    model_calls_unavailable: calls.unavailable !== undefined ? calls.unavailable : null,
+    subscription_active: usage.subscriptionActive
+  };
+}
+
 /* Sales dry runs are counted apart: there are thousands of them, each a
    rehearsal that sent nothing, and they would bury every real run. agent_type
    and status are NOT NULL on ai_tasks, so the neq pair excludes exactly the
@@ -43074,12 +43196,40 @@ async function commandCenterActivity(userId, now) {
     .order("created_at", { ascending: false })
     .limit(10), "newest runs");
 
+  /* NAMED (Nov 10 2026, dashboard tabs), ADDITIVE: the last 7 days by agent and status (the same
+     exclusion of sales dry runs), and the 20 newest runs with newest_runs's fields. newest_runs stays 10. */
+  var since7 = commandCenterSince(7, now);
+  var rows7 = await commandCenterAllRows(function () {
+    return supabase
+      .from("ai_tasks")
+      .select("id, agent_type, status", { count: "exact" })
+      .eq("user_id", userId)
+      .gte("created_at", since7)
+      .or("agent_type.neq.sales,status.neq.dry_run")
+      .order("id", { ascending: true });
+  }, "runs in the last 7 days");
+  var byAgent7 = {};
+  rows7.forEach(function (r) {
+    byAgent7[r.agent_type] = byAgent7[r.agent_type] || {};
+    byAgent7[r.agent_type][r.status] = (byAgent7[r.agent_type][r.status] || 0) + 1;
+  });
+  var newest20 = commandCenterRead(await supabase
+    .from("ai_tasks")
+    .select("id, agent_type, task_type, status, created_at")
+    .eq("user_id", userId)
+    .or("agent_type.neq.sales,status.neq.dry_run")
+    .order("created_at", { ascending: false })
+    .limit(COMMAND_CENTER_RUNS_MORE), "the 20 newest runs");
+
   return {
     since: since,
     total: rows.length,
     by_agent_type: byAgent,
     sales_dry_runs: dryRuns.count,
-    newest_runs: newest.data || []
+    newest_runs: newest.data || [],
+    since_7d: since7,
+    counts_7d: byAgent7,
+    newest_runs_20: newest20.data || []
   };
 }
 
@@ -43133,12 +43283,35 @@ async function commandCenterOutbound(userId, now) {
     throw new Error("published content: the count did not come back");
   }
 
+  /* NAMED (Nov 10 2026, dashboard tabs), ADDITIVE: the 3 newest social drafts (a preview of their first
+     80 characters) and the 3 newest published articles, from the same table and status the 30-day count reads. */
+  var socialLatest = commandCenterRead(await supabase
+    .from("social_post_drafts")
+    .select("id, status, platform, content, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(COMMAND_CENTER_LATEST), "the newest social drafts").data || [];
+  var articlesLatest = commandCenterRead(await supabase
+    .from("content_library")
+    .select("id, title, status, published_at, created_at")
+    .eq("user_id", userId)
+    .eq("status", "published")
+    .order("published_at", { ascending: false })
+    .limit(COMMAND_CENTER_LATEST), "the newest articles").data || [];
+
   return {
     email_sequences: sequences.map(function (seq) {
       return { id: seq.id, name: seq.name, status: seq.status, enrollments: tally[seq.id] };
     }),
     social_drafts_by_status: draftsByStatus,
-    content_published_30d: { since: since, count: published.count }
+    content_published_30d: { since: since, count: published.count },
+    social_latest: socialLatest.map(function (d) {
+      return { id: d.id, status: d.status, platform: d.platform || null,
+        preview: Array.from(String(d.content || "")).slice(0, 80).join(""), created_at: d.created_at };
+    }),
+    articles_latest: articlesLatest.map(function (a) {
+      return { id: a.id, title: a.title || null, status: a.status, published_at: a.published_at || null, created_at: a.created_at || null };
+    })
   };
 }
 
@@ -43181,7 +43354,13 @@ async function commandCenterPlatform(now) {
     var today = await platformSpendToday(now);
     ceiling = today.error ? { unavailable: today.error } : { cap_usd: cap, spent_usd: Number(today.usd.toFixed(4)), day: today.day };
   }
-  return { job_runs: jobs.data || [], radar_status: radar.data || [], ceiling: ceiling };
+  /* NAMED (Nov 10 2026, dashboard tabs), ADDITIVE: each job's expected cadence and whether it ran on time,
+     from lib/jobSchedules.js, the one list of the server's schedules (its header states the on-time rule). */
+  var jobSchedules = require("./lib/jobSchedules");
+  var jobRows = jobs.data || [];
+  return { job_runs: jobRows, radar_status: radar.data || [], ceiling: ceiling,
+    job_cadence: jobSchedules.jobCadences(jobRows, process.env),
+    jobs_on_time: jobRows.map(function (row) { return jobSchedules.jobOnTime(row, now, process.env); }) };
 }
 
 app.get("/api/command-center", requireAuth, async function (req, res, next) {
@@ -43200,7 +43379,13 @@ app.get("/api/command-center", requireAuth, async function (req, res, next) {
     if (isAdmin) {
       reads.push(commandCenterSection("platform", function () { return commandCenterPlatform(now); }));
     }
+    // NAMED (Nov 10 2026, dashboard tabs), ADDITIVE: two sections of their own, read alongside the others.
+    var extraReads = Promise.all([
+      commandCenterSection("plan_lists", function () { return commandCenterPlanLists(userId, now); }),
+      commandCenterSection("usage", function () { return commandCenterUsage(userId, req.user, now); })
+    ]);
     var sections = await Promise.all(reads);
+    var extra = await extraReads;
     var body = {
       generated_at: now.toISOString(),
       // Whether a plan's assignment can be dispatched at all (ENABLE_AGENT_CHAINING exactly "true"), so
@@ -43211,7 +43396,9 @@ app.get("/api/command-center", requireAuth, async function (req, res, next) {
       activity: sections[2],
       autopilot: sections[3],
       outbound: sections[4],
-      spend: sections[5]
+      spend: sections[5],
+      plan_lists: extra[0],
+      usage: extra[1]
     };
     if (isAdmin) {
       body.platform = sections[6];

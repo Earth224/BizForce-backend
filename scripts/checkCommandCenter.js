@@ -62,7 +62,26 @@ const MUTATIONS = {
   "platform-to-everyone": [["    var isAdmin = req.user.role === \"admin\";\n", "    var isAdmin = true;\n"]],
   // the command center needs a subscription
   "gate-on-subscription": [["app.get(\"/api/command-center\", requireAuth, async function",
-    "app.get(\"/api/command-center\", requireAuth, requireActiveSubscription, async function"]]
+    "app.get(\"/api/command-center\", requireAuth, requireActiveSubscription, async function"]],
+  /* NAMED (Nov 10 2026, dashboard tabs): the additive fields' own mutations. A three-part edit names its file
+     (lib/jobSchedules.js); a two-part edit is server.js's. */
+  // the "7-day" counts read 30 days
+  "counts-7d-uses-30d": [["  var since7 = commandCenterSince(7, now);", "  var since7 = commandCenterSince(30, now);"]],
+  // the 20 newest runs are not capped
+  "runs-20-uncapped": [["\n    .limit(COMMAND_CENTER_RUNS_MORE), \"the 20 newest runs\");", ", \"the 20 newest runs\");"]],
+  // the newest social drafts are not capped
+  "social-latest-uncapped": [["\n    .limit(COMMAND_CENTER_LATEST), \"the newest social drafts\")", ", \"the newest social drafts\")"]],
+  // past_count counts only the five listed
+  "past-plans-miscounted": [["    past_count: past.length,", "    past_count: pastLatest.length,"]],
+  // the usage section copies the count instead of sharing accountUsageToday (and counts every day)
+  "usage-copied-not-shared": [["  var usage = await accountUsageToday(userId, user, now);",
+    "  var usage = { dailyCalls: { used: (await supabase.from(\"model_calls\").select(\"*\", { count: \"exact\", head: true }).eq(\"user_id\", userId)).count, limit: modelCallDailyLimit() }, subscriptionActive: null };"]],
+  // the registry's cadence drifts from the scheduler's own declaration
+  "cadence-not-from-scheduler": [["lib/jobSchedules.js", "{ tick: \"opsAlerts.scanTick(\", cron: \"*/30 * * * *\"", "{ tick: \"opsAlerts.scanTick(\", cron: \"*/45 * * * *\""]],
+  // a job whose last run failed still counts as on time
+  "on-time-ignores-error": [["lib/jobSchedules.js", "  if (row.last_error) { out.on_time = false; out.reason = \"the last run failed\"; return out; }\n", ""]],
+  // an existing field changes (newest_runs grows past its pinned 10)
+  "existing-field-changed": [["    .limit(10), \"newest runs\");", "    .limit(20), \"newest runs\");"]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -76,14 +95,29 @@ function check(label, ok, detail) {
 
 /* ── the source ─────────────────────────────────────────────────────────── */
 let SRC = fs.readFileSync(path.join(REPO, "server.js"), "utf8").replace(/\r\n/g, "\n");
+/* NAMED (Nov 10 2026, dashboard tabs): lib/jobSchedules.js is read here too, so a mutation can edit it; the
+   lifted code's require("./lib/jobSchedules") gets this text, compiled, not the file on disk. */
+const LIB_FILES = { "lib/jobSchedules.js": fs.readFileSync(path.join(REPO, "lib", "jobSchedules.js"), "utf8").replace(/\r\n/g, "\n") };
 if (MUTATE) {
   const edits = MUTATIONS[MUTATE];
   if (!edits) { console.error("Unknown MUTATE=" + MUTATE + ". Known: all, " + Object.keys(MUTATIONS).join(", ")); process.exit(2); }
-  for (const [from, to] of edits) {
-    SRC = MUT.replaceOnce(SRC, from, to, MUTATE);
+  for (const edit of edits) {
+    if (edit.length === 3) LIB_FILES[edit[0]] = MUT.replaceOnce(LIB_FILES[edit[0]], edit[1], edit[2], MUTATE);
+    else SRC = MUT.replaceOnce(SRC, edit[0], edit[1], MUTATE);
   }
   console.log("\n!! MUTATION: " + MUTATE);
 }
+function libModule(rel) {
+  const Module = require("module");
+  const file = path.join(REPO, rel);
+  const m = new Module(file, module);
+  m.filename = file;
+  m.paths = Module._nodeModulePaths(path.dirname(file));
+  m._compile(LIB_FILES[rel], file);
+  return m.exports;
+}
+const JOB_SCHEDULES = libModule("lib/jobSchedules.js");
+const serverRequire = require("module").createRequire(path.join(REPO, "server.js"));
 
 const SPANS = [];
 {
@@ -348,7 +382,9 @@ function build(seed, opts) {
     /* BEFORE (backend 5da9dfe): no require; nothing lifted needed one.
        AFTER (legal pages): the sender readiness reads require("./lib/legal").POSTAL_ADDRESS,
        resolved from server.js's directory as server.js resolves it. */
-    require: require("module").createRequire(path.join(REPO, "server.js")),
+    /* NAMED (Nov 10 2026, dashboard tabs): BEFORE server.js's own require for everything. AFTER the same, except
+       "./lib/jobSchedules", which is this check's (possibly mutated) copy. */
+    require: (spec) => spec === "./lib/jobSchedules" ? JOB_SCHEDULES : serverRequire(spec),
     nowIso: () => new Date().toISOString(),
     /* NAMED BEFORE → AFTER (Oct 31 2026). BEFORE: no isTestAccount; the lifted platformSpendTestAccounts reached it only
        when today's fake usage rows were non-empty, so the check passed or threw "isTestAccount is not defined" by the
@@ -637,6 +673,183 @@ const SECTIONS = ["needs_you", "plans", "activity", "autopilot", "outbound", "sp
   check("GET /api/command-center: requireAuth and nothing else before the handler",
     same(b.routes["get /api/command-center"].slice(0, -1).map(f => f.name), ["requireAuth"]), JSON.stringify(b.routes["get /api/command-center"].slice(0, -1).map(f => f.name)));
   check("platform: absent for the lapsed non-admin too", r.body.platform === undefined);
+
+  /* ── 8. NAMED (Nov 10 2026, dashboard tabs): the additive fields ─────── */
+  console.log("\n══ 8. the additive fields: 7-day counts, 20 runs, latest social and articles, plan lists, usage, cadence and on time ══");
+  {
+    /* every existing field keeps its name and shape */
+    b = build(world());
+    const o = (await b.center(OWNER)).body;
+    const keysOf = (x) => Object.keys(x || {}).sort().join(",");
+    check("existing fields unchanged: the top level now adds only plan_lists and usage",
+      keysOf(o) === ["activity", "autopilot", "chaining_on", "generated_at", "needs_you", "outbound", "plan_lists", "plans", "platform", "spend", "usage"].join(","), keysOf(o));
+    check("existing fields unchanged: activity keeps since, total, by_agent_type, sales_dry_runs, newest_runs (10), and adds since_7d, counts_7d, newest_runs_20",
+      keysOf(o.activity.data) === ["by_agent_type", "counts_7d", "newest_runs", "newest_runs_20", "sales_dry_runs", "since", "since_7d", "total"].join(",") &&
+      o.activity.data.newest_runs.length === 10, keysOf(o.activity.data) + " " + o.activity.data.newest_runs.length);
+    check("existing fields unchanged: outbound keeps its three and adds social_latest and articles_latest; plans is still a list of five",
+      keysOf(o.outbound.data) === ["articles_latest", "content_published_30d", "email_sequences", "social_drafts_by_status", "social_latest"].join(",") &&
+      Array.isArray(o.plans.data) && o.plans.data.length === 5, keysOf(o.outbound.data));
+    check("existing fields unchanged: platform keeps job_runs, radar_status, ceiling and adds job_cadence and jobs_on_time",
+      keysOf(o.platform.data) === ["ceiling", "job_cadence", "job_runs", "jobs_on_time", "radar_status"].join(","), keysOf(o.platform.data));
+
+    /* activity.counts_7d: the last 7 days only, dry runs excluded */
+    check("activity.counts_7d: by agent and status over the last 7 days (not the 7.5- and 10-day-old failures), sales dry runs excluded",
+      same(canon(o.activity.data.counts_7d), canon({ executive: { completed: 6 }, content: { completed: 2, failed: 1 }, social: { completed: 1 },
+        sales: { completed: 1 }, email: { completed: 1 } })), JSON.stringify(o.activity.data.counts_7d));
+
+    /* large fixtures: 200 runs, 50 plans, 40 jobs, 20 social drafts, 20 articles */
+    const big = world();
+    for (let k = 0; k < 200; k++) big.ai_tasks.push(task(1000 + k, OWNER, ["content", "seo", "email", "sales"][k % 4], k % 9 === 0 ? "dry_run" : (k % 5 === 0 ? "failed" : "completed"), k * 0.05 + 0.01));
+    big.social_post_drafts.forEach(d => { d.created_at = ago(100); });   // created_at is NOT NULL in the table
+    for (let k = 0; k < 20; k++) {
+      big.social_post_drafts.push({ id: id("78888888", 100 + k), user_id: OWNER, status: "draft", platform: "bluesky", content: "Post " + k + " " + "x".repeat(120), created_at: ago(k + 0.5) });
+      big.content_library.push({ id: id("79999999", 100 + k), user_id: OWNER, title: "Article " + k, status: k % 4 === 3 ? "draft" : "published", published_at: k % 4 === 3 ? null : ago(k + 0.25), created_at: ago(k + 1) });
+    }
+    // 50 plans: 1-12 still running (status processing), 13-50 completed at 1 … 76 days; plan 40 (created 60 days ago) ran an assignment 3 days ago.
+    big.ai_tasks = big.ai_tasks.filter(t => t.task_type !== "executive/plan" || t.user_id !== OWNER);
+    for (let k = 1; k <= 50; k++) {
+      const p = plan(100 + k, OWNER, k <= 12 ? k * 0.5 : (k - 12) * 2 + 0.5, [assignment(1)]);
+      if (k <= 12) p.status = "processing";
+      if (k === 13) p.status = "cancelled";
+      big.ai_tasks.push(p);
+    }
+    big.ai_tasks.push(Object.assign(task(3000, OWNER, "email", "completed", 3, "email/subject-lines"), { completed_at: ago(3) }));
+    big.ai_tasks.push(Object.assign(task(3001, OWNER, "email", "failed", 1, "email/subject-lines"), { completed_at: ago(1) }));
+    big.executive_dispatches.push(dispatchRow(900, OWNER, 140, 1, "ran", 3, { tool_task_id: T(3000) }));
+    big.executive_dispatches.push(dispatchRow(901, OWNER, 141, 1, "ran", 1, { tool_task_id: T(3001) }));
+    const H = 3600000;
+    const at = (ms) => new Date(NOW - ms).toISOString();
+    big.job_runs = [];
+    for (let h = 0; h < 24; h++) {
+      const hh = String(h).padStart(2, "0");
+      big.job_runs.push({ job_name: "hourly_triggers_h" + hh, last_run_on: "2026-11-10",
+        finished_at: h === 3 ? at(25 * H) : at(23 * H), last_error: h === 7 ? "boom" : null });
+    }
+    big.job_runs.push({ job_name: "schema_check", last_run_on: "x", finished_at: at(25 * H), last_error: null });       // daily, inside 26 h
+    big.job_runs.push({ job_name: "store_sync", last_run_on: "x", finished_at: at(27 * H), last_error: null });         // daily, late
+    big.job_runs.push({ job_name: "ops_alert_scan", last_run_on: "x", finished_at: at(44 * 60000), last_error: null }); // 30 min + 15
+    big.job_runs.push({ job_name: "card_leads_purge", last_run_on: "x", finished_at: null, last_error: null });          // running
+    big.job_runs.push({ job_name: "nightly_backup", last_run_on: "x", finished_at: at(H), last_error: "the backup failed" });
+    big.job_runs.push({ job_name: "an_old_job", last_run_on: "x", finished_at: at(H), last_error: null });               // no schedule
+    for (let k = 0; k < 10; k++) big.job_runs.push({ job_name: "hourly_agent_schedules_h" + String(k).padStart(2, "0"), last_run_on: "x", finished_at: at(2 * H), last_error: null });
+    const today = new Date().toISOString().slice(0, 10);
+    big.model_calls.push({ id: 90, user_id: OWNER, model: "claude-sonnet-5", input_tokens: 0, output_tokens: 0, funded_by: "user", created_on: today });
+    big.model_calls.push({ id: 91, user_id: OWNER, model: "claude-sonnet-5", input_tokens: 0, output_tokens: 0, funded_by: "user", created_on: today });
+    big.model_calls.push({ id: 92, user_id: OTHER, model: "claude-sonnet-5", input_tokens: 0, output_tokens: 0, funded_by: "user", created_on: today });
+
+    b = build(big);
+    const g = (await b.center(OWNER)).body;
+    const ga = g.activity.data, gob = g.outbound.data, gp = g.plan_lists && g.plan_lists.data, gu = g.usage && g.usage.data, gf = g.platform.data;
+    const nonDry = big.ai_tasks.filter(t => t.user_id === OWNER && !(t.agent_type === "sales" && t.status === "dry_run")).sort((x, y) => x.created_at < y.created_at ? 1 : -1);
+    check("200 runs: newest_runs_20 is exactly the 20 newest, newest first, no dry run, with newest_runs's fields; newest_runs is still 10",
+      ga.newest_runs_20.length === 20 && same(ga.newest_runs_20.map(r => r.id), nonDry.slice(0, 20).map(r => r.id)) &&
+      same(Object.keys(ga.newest_runs_20[0]), ["id", "agent_type", "task_type", "status", "created_at"]) && ga.newest_runs.length === 10 &&
+      same(ga.newest_runs.map(r => r.id), ga.newest_runs_20.slice(0, 10).map(r => r.id)), ga.newest_runs_20.length);
+    const seven = {};
+    nonDry.filter(t => t.created_at >= ago(7)).forEach(t => { seven[t.agent_type] = seven[t.agent_type] || {}; seven[t.agent_type][t.status] = (seven[t.agent_type][t.status] || 0) + 1; });
+    check("200 runs: counts_7d counts every run of the last 7 days (read in full, not from the 20)", same(canon(ga.counts_7d), canon(seven)), JSON.stringify(ga.counts_7d));
+    const draftsNewest = big.social_post_drafts.filter(d => d.user_id === OWNER && d.created_at).sort((x, y) => x.created_at < y.created_at ? 1 : -1).slice(0, 3);
+    check("20 social drafts: social_latest is the 3 newest, each id, status, platform, preview (the first 80 characters), created_at",
+      gob.social_latest.length === 3 && same(gob.social_latest.map(d => d.id), draftsNewest.map(d => d.id)) &&
+      same(Object.keys(gob.social_latest[0]), ["id", "status", "platform", "preview", "created_at"]) &&
+      gob.social_latest[0].preview === draftsNewest[0].content.slice(0, 80) && gob.social_latest[0].preview.length === 80, JSON.stringify(gob.social_latest));
+    const artNewest = big.content_library.filter(a => a.user_id === OWNER && a.status === "published").sort((x, y) => x.published_at < y.published_at ? 1 : -1).slice(0, 3);
+    check("20 articles: articles_latest is the 3 newest PUBLISHED (the 30-day count's table and status), with id, title, status, published_at, created_at",
+      gob.articles_latest.length === 3 && same(gob.articles_latest.map(a => a.id), artNewest.map(a => a.id)) &&
+      same(Object.keys(gob.articles_latest[0]), ["id", "title", "status", "published_at", "created_at"]) && gob.articles_latest.every(a => a.status === "published"),
+      JSON.stringify(gob.articles_latest));
+
+    /* plan_lists */
+    const planIds = (k) => P(100 + k);
+    check("plan_lists: ok, for an owner of 50 plans", g.plan_lists && g.plan_lists.ok === true, JSON.stringify(g.plan_lists && g.plan_lists.error));
+    check("50 plans: active is the 10 newest of the 12 unfinished, newest first, each with plans's step detail",
+      gp && gp.active.length === 10 && same(gp.active.map(p => p.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(planIds)) &&
+      same(Object.keys(gp.active[0]), ["id", "goal", "status", "created_at", "assignments"]) && gp.active[0].assignments[0].latest_dispatch === "not dispatched",
+      gp && JSON.stringify(gp.active.map(p => p.id)));
+    // finished: plans 13-50, created (k-12)*2 + 0.5 days ago (clear of the 14-day line); past means finished more than
+    // 14 days ago; plan 40 finished by its run 3 days ago.
+    const expectPast = [];
+    for (let k = 13; k <= 50; k++) { if (k === 40) continue; if ((k - 12) * 2 + 0.5 > 14) expectPast.push(k); }
+    check("50 plans: past_count is the exact count of finished plans finished more than 14 days ago (" + expectPast.length + "), the cancelled one included if old",
+      gp && gp.past_count === expectPast.length, gp && gp.past_count);
+    check("50 plans: past_latest is the 5 most recently finished of those, each id, goal, status, created_at, finished_at, finished_from",
+      gp && same(gp.past_latest.map(p => p.id), expectPast.slice(0, 5).map(planIds)) &&
+      same(Object.keys(gp.past_latest[0]), ["id", "goal", "status", "created_at", "finished_at", "finished_from"]) &&
+      gp.past_latest[0].goal === "Goal " + (100 + expectPast[0]) && gp.past_latest.every(p => p.finished_from === "created_at"), gp && JSON.stringify(gp.past_latest.map(p => [p.id, p.finished_at])));
+    check("the finished time is the latest COMPLETED run a plan dispatched: plan 40 (created 56 days ago, ran 3 days ago) is not past; a failed run does not count",
+      gp && gp.past_latest.every(p => p.id !== planIds(40)) && expectPast.indexOf(41) !== -1, "");
+    check("plan_lists says the fold's age: past_after_days 14", gp && gp.past_after_days === 14, gp && gp.past_after_days);
+
+    /* usage */
+    const todayOwner = big.model_calls.filter(m => m.user_id === OWNER && m.created_on === today).length;
+    check("usage: model calls today is the caller's count for today (" + todayOwner + "), against the daily cap (250 by default)",
+      gu && gu.model_calls_today === todayOwner && gu.model_calls_daily_cap === 250 && gu.model_calls_unavailable === null &&
+      same(Object.keys(gu), ["model_calls_today", "model_calls_daily_cap", "model_calls_unavailable", "subscription_active"]), JSON.stringify(gu));
+    check("usage: subscription_active is true, false or null (unknown), never a guess", gu && [true, false, null].indexOf(gu.subscription_active) !== -1, gu && gu.subscription_active);
+    const usageDef = definitionOf("commandCenterUsage") || "", liveDef = definitionOf("agentLiveBody") || "";
+    check("usage: shared, not copied: commandCenterUsage and agentLiveBody both read accountUsageToday; neither counts today's calls itself, and the usage section reads no model_calls at all",
+      /await accountUsageToday\(/.test(usageDef) && /await accountUsageToday\(/.test(liveDef) &&
+      !/from\("model_calls"\)/.test(usageDef) && !/\.eq\("created_on"/.test(liveDef) && /\.eq\("created_on", modelCallUtcDay\(now\)\)/.test(definitionOf("accountUsageToday") || ""), "");
+    b = build(big, { fail: q => q.table === "model_calls" && q.filters.some(f => f[0] === "eq" && f[1] === "created_on") ? { message: "ledger unreachable" } : null });
+    const gu2 = (await b.center(OWNER)).body.usage;
+    check("usage: a failed count is null with the reason, never 0", gu2.ok === true && gu2.data.model_calls_today === null && /ledger unreachable/.test(gu2.data.model_calls_unavailable || ""), JSON.stringify(gu2));
+
+    /* cadence and on time */
+    const verdict = (n) => (gf.jobs_on_time || []).find(j => j.job_name === n) || {};
+    check("40 jobs: every row has a cadence entry and a verdict, in job_runs's order",
+      gf.jobs_on_time.length === big.job_runs.length && same(gf.jobs_on_time.map(j => j.job_name), gf.job_runs.map(j => j.job_name)) &&
+      Object.keys(gf.job_cadence).length === big.job_runs.length, gf.jobs_on_time.length);
+    check("cadence: hourly_triggers_h00..h23 are hourly, schema_check daily, ops_alert_scan every 30 minutes, an undeclared job null",
+      gf.job_cadence.hourly_triggers_h00 === "hourly" && gf.job_cadence.hourly_triggers_h23 === "hourly" && gf.job_cadence.schema_check === "daily" &&
+      gf.job_cadence.ops_alert_scan === "every 30 minutes" && gf.job_cadence.nightly_backup === "daily" && gf.job_cadence.an_old_job === null &&
+      gf.job_cadence.hourly_agent_schedules_h04 === "hourly", JSON.stringify(gf.job_cadence));
+    const trig = gf.jobs_on_time.filter(j => /^hourly_triggers_h/.test(j.job_name));
+    check("on time, per hour's row: finished 23 h ago is on time, 25 h ago (h03) is late, an error (h07) is not on time: 22 of 24",
+      trig.filter(j => j.on_time === true).length === 22 && verdict("hourly_triggers_h03").on_time === false && /late/.test(verdict("hourly_triggers_h03").reason) &&
+      verdict("hourly_triggers_h07").on_time === false && verdict("hourly_triggers_h07").reason === "the last run failed", JSON.stringify(trig.filter(j => !j.on_time)));
+    check("on time, daily: 25 h is inside 24 h + 2 h; 27 h is late",
+      verdict("schema_check").on_time === true && verdict("store_sync").on_time === false, JSON.stringify([verdict("schema_check"), verdict("store_sync")]));
+    check("on time, every 30 minutes: 44 minutes is inside 30 + 15", verdict("ops_alert_scan").on_time === true, JSON.stringify(verdict("ops_alert_scan")));
+    check("on time: an unfinished run is not on time; a failed last run is not, however recent; an undeclared job is null",
+      verdict("card_leads_purge").on_time === false && verdict("nightly_backup").on_time === false && verdict("nightly_backup").reason === "the last run failed" &&
+      verdict("an_old_job").on_time === null, JSON.stringify([verdict("card_leads_purge"), verdict("nightly_backup"), verdict("an_old_job")]));
+    const mine = (await build(big).center(OTHER)).body;
+    check("cadence and on time stay admin only: a member's answer has no platform, no job_cadence, no jobs_on_time",
+      mine.platform === undefined && !/job_cadence|jobs_on_time/.test(JSON.stringify(mine)), Object.keys(mine).join(","));
+
+    /* the registry is the scheduler's own list */
+    const code = uncommented(SRC);
+    const crons = [], intervals = [];
+    { const re = /cron\.schedule\(([^,]+), function \(\) \{\n([\s\S]{0,260})/g; let m;
+      while ((m = re.exec(code))) crons.push({ expr: m[1].trim(), body: m[2] }); }
+    { const re = /trackInterval\("([A-Za-z]+)", setInterval\(([A-Za-z]+), (\d+)\)\)/g; let m;
+      while ((m = re.exec(code))) intervals.push({ tick: m[2], ms: Number(m[3]) }); }
+    const backupDefault = (/var BACKUP_CRON = process\.env\.BACKUP_CRON \|\| "([^"]+)";/.exec(code) || [])[1];
+    const literal = (e) => /^"[^"]+"$/.test(e) ? e.slice(1, -1) : e === "BACKUP_CRON" ? backupDefault : null;
+    const reg = JOB_SCHEDULES.SCHEDULES;
+    const regCron = reg.filter(r => r.cron), regEvery = reg.filter(r => r.every_ms);
+    const matched = crons.map(c => { const hits = regCron.filter(r => c.body.indexOf(r.tick) !== -1); return hits.length === 1 && hits[0].cron === literal(c.expr) ? hits[0] : null; });
+    check("the registry is the scheduler's: each of server.js's " + crons.length + " cron.schedule calls has exactly one entry, with the same expression",
+      crons.length === 13 && regCron.length === crons.length && matched.every(Boolean) && new Set(matched).size === crons.length,
+      JSON.stringify(crons.map((c, i) => [c.expr, matched[i] && matched[i].tick])));
+    check("... and each tracked setInterval has its entry with the same interval",
+      intervals.length === regEvery.length && intervals.every(t => regEvery.some(r => r.tick === t.tick && r.every_ms === t.ms)), JSON.stringify(intervals));
+    const libDir = path.join(REPO, "lib");
+    const declared = [];
+    [SRC].concat(fs.readdirSync(libDir).filter(f => /\.js$/.test(f) && f !== "jobSchedules.js").map(f => fs.readFileSync(path.join(libDir, f), "utf8")))
+      .forEach(t => { const re = /(?:var|const|let) [A-Z_]*JOB_(?:NAME|PREFIX) = "([a-z0-9_]+)";/g; let m; while ((m = re.exec(t))) declared.push(m[1]); });
+    const named = reg.reduce((a, r) => a.concat(r.jobs || [], r.prefix ? [r.prefix] : []), []);
+    check("every job_runs name or prefix the code declares (" + new Set(declared).size + ") is in the registry, and the registry names no other",
+      declared.length > 10 && [...new Set(declared)].every(n => named.indexOf(n) !== -1) && named.every(n => declared.indexOf(n) !== -1),
+      "missing: " + [...new Set(declared)].filter(n => named.indexOf(n) === -1).join(",") + " extra: " + named.filter(n => declared.indexOf(n) === -1).join(","));
+
+    /* plan_lists and usage fail alone */
+    b = build(big, { fail: q => q.table === "ai_tasks" && q.filters.some(f => f[0] === "range") && q.filters.some(f => f[0] === "eq" && f[1] === "task_type") ? { message: "plans unreachable" } : null });
+    r = await b.center(OWNER);
+    check("plan_lists: a failed read is ok false with the error, and plans (the five) still answers",
+      r.body.plan_lists.ok === false && /plans unreachable/.test(r.body.plan_lists.error || "") && r.body.plans.ok === true && r.body.plans.data.length === 5,
+      JSON.stringify(r.body.plan_lists));
+  }
 
   /* ── 7. no model call ─────────────────────────────────────────────────── */
   console.log("\n══ 7. read from rows only ══");
