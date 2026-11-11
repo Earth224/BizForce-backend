@@ -599,8 +599,13 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        among them, and DYNAMIC read scripts/bf-dashboard-order.js. AFTER: 20; the dashboard's card ordering (that module and
        settings.html's control) is retired, so both keys and the DYNAMIC entry go; bf_orbit_portal is added, which orbit portal
        is open in this browser tab (sessionStorage, scripts/bf-orbit.js), a display choice like bf_cc_tab, so sign-out leaves it
-       and bf-session.js's LEFT ON PURPOSE list names it. */
+       and bf-session.js's LEFT ON PURPOSE list names it.
+       NAMED BEFORE → AFTER (Nov 11 2026, agent tabs). BEFORE: KEPT had 20 keys. AFTER: 21; bf_ag_tab_<agent> is which tab an
+       agent page opens on in this browser tab (sessionStorage, through scripts/bf-tabs.js from scripts/agent-profile.js, one
+       key per agent type), a display choice like bf_cc_tab, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list
+       names it. The scan reads its key as the literal prefix "bf_ag_tab_" (AG_TAB_KEY = "bf_ag_tab_" + AGENT_TYPE). */
     const KEPT = {
+      bf_ag_tab_: "which tab each agent page opens on, in this browser tab (bf_ag_tab_<agent>)",
       bf_orbit_portal: "which dashboard orbit portal is open, in this browser tab",
       bf_cc_tab: "which Command Center tab the dashboard opens on, in this browser tab",
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",

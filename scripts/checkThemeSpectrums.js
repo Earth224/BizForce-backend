@@ -277,8 +277,49 @@ function withoutStoreSource(text) {
   if (a < 0 || b < 0 || text.indexOf(from, a + 1) !== -1) return null;
   return text.slice(0, a) + text.slice(b + to.length);
 }
-const profileNow = withoutStoreSource(withoutB8(withoutB5(withoutB2(FILES[PROFILE_JS]))));
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions and the Stock source tile set aside)",
+/* NAMED BEFORE → AFTER (Nov 11 2026, agent tabs). BEFORE the file was compared with B2's, B5's, B8/B9's and the Stock source
+   changes set aside. AFTER the agent pages sit in tab folders (Run, Schedule, Activity, Learning, Business and a page's own
+   tab) and the duplicate Live Status panel is gone (checkAgentTabs T1 to T9 pin it). Every hunk of that change, read from
+   git diff ecfd367, is put back to its old text, exactly once; the 146-line AGENT TABS block is cut by its first and last
+   lines and its exact line count. So the file compared below is ecfd367's, byte for byte, and S2 means what it meant. */
+function withoutAgentTabs(text) {
+  let t = text, ok = true;
+  const back = (now, was) => { const a = t.indexOf(now); if (a < 0 || t.indexOf(now, a + 1) !== -1) { ok = false; return; } t = t.slice(0, a) + was + t.slice(a + now.length); };
+  // cut(from, to, n): the n lines that begin with `from` (found exactly once) and end with `to`
+  const cut = (from, to, n) => { const a = t.indexOf(from); let e = a; for (let k = 0; a >= 0 && k < n && e !== -1; k++) { e = t.indexOf("\n", e); if (e !== -1) e++; }
+    if (a < 0 || e === -1 || t.indexOf(from, a + 1) !== -1 || !t.slice(a, e).endsWith(to)) { ok = false; return; } t = t.slice(0, a) + t.slice(e); };
+  back("  // NAMED (Nov 11 2026, agent tabs): Launch Task is on the Run tab now, not above.\n  var LAUNCH_WORDS = DECK ? \"send it a task from the Command tab\" : \"press Launch Task on the Run tab\";\n",
+    "  var LAUNCH_WORDS = DECK ? \"send it a task from the Command tab\" : \"press Launch Task above\";\n");
+  back("         Autonomous mode and Scheduled runs, and goes to the Settings tab)\n         NAMED (Nov 11 2026, agent tabs): on every other page the launcher and\n         this agent's tools are one card (#apRunSection, the Run tab) and\n         Autonomous mode with Scheduled runs another (#apScheduleSection, the\n         Schedule tab), by the owner's request. The deck's card is unchanged. */\n      '<div class=\"ap-section\"' + (DECK ? ' id=\"apSettingsSection\"' : ' id=\"apRunSection\"') + '>',\n",
+    "         Autonomous mode and Scheduled runs, and goes to the Settings tab) */\n      '<div class=\"ap-section\"' + (DECK ? ' id=\"apSettingsSection\"' : '') + '>',\n");
+  back("          '</p>',\n          /* NOTHING AT ALL when this agent has no tools. Twelve of the eighteen\n             agents have none, and a \"coming soon\" panel on twelve pages is worse\n             than an absence: it takes up the same room as a working control,\n             invites a click that does nothing, and has to be maintained. An agent\n             with no tools configured renders no markup here, no heading, and no\n             divider. */\n          TOOLS.length ? toolsMarkup() : \"\",\n          '</div>',\n          '</div>',\n          '<div class=\"ap-section\" id=\"apScheduleSection\">',\n          '<div class=\"ap-card\">'\n",
+    "          '</p>'\n");
+  back("          /* NAMED (Nov 11 2026, agent tabs): outside the command deck this is the\n             Schedule tab's own card now; the reasoning below still holds for the\n             switch and the schedule, which stay together.\n             IN THIS CARD, NOT A PANEL OF ITS OWN. Running the agent by hand\n",
+    "          /* IN THIS CARD, NOT A PANEL OF ITS OWN. Running the agent by hand\n");
+  back("              'No schedule set. This ' + esc(AGENT_LABEL) + ' runs only when you ' + (DECK ? LAUNCH_WORDS : 'launch it from the Run tab') + '.',\n",
+    "              'No schedule set. This ' + esc(AGENT_LABEL) + ' runs only when you ' + (DECK ? LAUNCH_WORDS : 'launch it above') + '.',\n");
+  back("          /* The tools are drawn in the Run card above (none on the command deck). */\n",
+    "          /* STILL THE SAME CARD, and NOTHING AT ALL when this agent has no tools.\n             Twelve of the eighteen agents have none, and a \"coming soon\" panel on\n             twelve pages is worse than an absence: it takes up the same room as a\n             working control, invites a click that does nothing, and has to be\n             maintained. An agent with no tools configured renders no markup here,\n             no heading, and no divider. */\n          TOOLS.length ? toolsMarkup() : \"\",\n");
+  back("      /* ── 2. Live status ── REMOVED (Nov 11 2026, agent tabs) on every page:\n         the Live Activity strip's Now card under the page header already says\n         what the agent is doing, once (the command deck never had one). */\n",
+    "      /* ── 2. Live status ── (none on the command deck: the panel under the\n         page header already says what the agent is doing, once) */\n      DECK ? '' : [\n      '<div class=\"ap-section\">',\n        '<div class=\"ap-card\">',\n          '<h2 class=\"ap-section-label\">Live Status</h2>',\n          '<div class=\"ap-live-row\">',\n            '<div class=\"ap-dot idle\" id=\"apDot\"></div>',\n            '<span class=\"ap-live-label\" id=\"apLiveLabel\">Idle</span>',\n          '</div>',\n          '<div class=\"ap-live-meta\" id=\"apLiveMeta\">No active task</div>',\n        '</div>',\n      '</div>'\n      ].join(\"\"),\n");
+  back("    // The tab folders (none on the command deck, which has its own); before the tools bind, so #tool=<id> finds its tab.\n    agTabs = buildAgentTabs(page) || agTabs;\n\n",
+    "");
+  cut("  /* ══ AGENT TABS (Nov 11 2026, agent tabs) ════════════════════════════════\n",
+    "\n", 146);
+  back("    if (head) revealInTab(head);   // the Run tab (Nov 11 2026, agent tabs)\n",
+    "");
+  back("  /* NAMED (Nov 11 2026, agent tabs): the Live Status panel is gone, so a task\n     launched here reports on the Live Activity strip's Now card instead, until\n     the strip's next read of /live says what the server knows. */\n",
+    "");
+  back("    liveSet(\"now\", label || \"Idle\", meta || \"\", dotCls === \"running\" ? \"is-running\" : null);\n",
+    "    var dot   = document.getElementById(\"apDot\");\n    var lbl   = document.getElementById(\"apLiveLabel\");\n    var meta2 = document.getElementById(\"apLiveMeta\");\n    if (dot)   dot.className   = \"ap-dot \" + (dotCls || \"idle\");\n    if (lbl)   lbl.textContent = label || \"Idle\";\n    if (meta2) meta2.textContent = meta || \"\";\n");
+  back("        // On every other agent page it sits in the Schedule tab: open that.\n        revealInTab(card);\n",
+    "");
+  back("      revealInTab(target);   // in its tab, wherever that is (Nov 11 2026, agent tabs)\n",
+    "");
+  return ok ? t : null;
+}
+const profileNow = withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(FILES[PROFILE_JS])))));
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile and the agent tabs set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);

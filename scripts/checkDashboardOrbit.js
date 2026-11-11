@@ -40,6 +40,13 @@
          "(open)" with no dimming, the core's text with no percentage, the
          search pill's contents, the main boxes' layout and the AI Agent
          Directory box's layout.
+     O15 NAMED (Nov 11 2026, still stars): the Oracle's abyss stars, STILL. The
+         copy draws with oracle.html's own drawStarAt and makeStar numbers (read
+         from that file), each star a halo, a core and, on the large bright
+         ones, thin cross rays; 14 to 18 of them, wide and on the phone row;
+         nothing animates or transitions them; none on a portal (anywhere it
+         can drift), the core, a label or the search; seeded, so they do not
+         jump; the eight plain dots gone.
 
    NAMED (Nov 10 2026, visual match), pins moved: the directory card is no
    longer BASELINE's byte for byte (it was rebuilt for one grid cell; O1 now
@@ -97,7 +104,15 @@ const MUTATIONS = {
   // the portal labels back inside the circles
   "labels-inside-circles": [[DASH, ".orbit-portal-name{position:absolute;left:50%;top:calc(50% + var(--os) * 42px);", ".orbit-portal-name{position:absolute;left:50%;top:50%;"]],
   // no stars on the panel
-  "no-starfield": [[ORBIT, "    STARS.forEach(function (s) { svg.appendChild(sv(\"circle\", { cx: s[0], cy: s[1], r: s[2], opacity: s[3], \"class\": \"orbit-star\" })); });\n", ""]],
+  // NAMED (Nov 11 2026, still stars): the stars are drawn by drawStars() now, so "no stars" removes that call.
+  "no-starfield": [[ORBIT, "  drawStars();\n", ""]],
+  // NAMED (Nov 11 2026, still stars): the three below are the still Oracle stars (O15).
+  // the stars twinkle
+  "stars-animated": [[DASH, "  .orbit-star,.orbit-star *{animation:none !important;transition:none !important}\n", "  .orbit-star{animation:orbitTwinkle 3s ease-in-out infinite}\n  @keyframes orbitTwinkle{50%{opacity:.3}}\n"]],
+  // plain white dots again, with no halo
+  "stars-plain-dots": [[ORBIT, "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: (L.r * O.haloR).toFixed(3), fill: \"url(#\" + id + \"h)\", \"class\": \"orbit-star-halo\" }));\n", "    g.appendChild(sv(\"circle\", { cx: x, cy: y, r: L.r.toFixed(3), fill: \"#fff\", \"class\": \"orbit-star-halo\" }));\n"]],
+  // the ring's band no longer kept clear, so a star can sit where a portal drifts
+  "star-over-portal": [[ORBIT, "        g.circles.push({ x: x, y: y, r: 43 * scale });\n", ""]],
   // the outer ring drawn rounder than the mockup
   "ring-ratio-wrong": [[ORBIT, "rx: 275, ry: 110, innerRx: 150, innerRy: 60,", "rx: 250, ry: 125, innerRx: 150, innerRy: 60,"]],
   // the open portal without its halo
@@ -209,6 +224,7 @@ function page(o) {
   const media = { reduce: !!o.reduce, narrow: !!o.narrow };
   w.matchMedia = q => ({ matches: (/reduced-motion: reduce/.test(q) && media.reduce) || (/max-width: 640px/.test(q) && media.narrow), addEventListener() {}, addListener() {} });
   Object.defineProperty(w.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.id === "orbitStage" ? 600 : 0; } });
+  if (o.rects) w.Element.prototype.getBoundingClientRect = function () { return o.rects(this); };
   let err = null;
   try { w.eval(FILES[ORBIT]); } catch (e) { err = e; }
   let clock = 0;
@@ -582,12 +598,10 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const L = page({ session: { bf_orbit_portal: "x" } });
   await settle();
   const svg = L.d.getElementById("orbitSvg");
-  const stars = Array.prototype.map.call(svg.querySelectorAll("circle.orbit-star"), c => [Number(c.getAttribute("r")), Number(c.getAttribute("opacity"))]);
   const panelCss = rule(".orbit-panel") || "";
   check("the panel: deep background, radius 18, 1 px accent border at 20%, holding the orbit and the search", /background:var\(--bf-bg, #060b1e\)/.test(panelCss) && /border-radius:18px/.test(panelCss) &&
     /border:1px solid rgba\(var\(--bf-accent-a-rgb, 34,211,238\),\.2\)/.test(panelCss) && !!L.d.querySelector("#orbitPanel #orbitStage") && !!L.d.querySelector("#orbitPanel .orbit-search #orbitSearch"), panelCss);
-  check("about eight stars (r .7-1, opacity .4-.6) on the panel, and eight on a phone", stars.length === 8 && stars.every(([r, o]) => r >= 0.7 && r <= 1 && o >= 0.4 && o <= 0.6) &&
-    ((/@media \(max-width: 640px\)\{([\s\S]*?)\n  \}/.exec(CSS) || ["", ""])[1].match(/radial-gradient\(/g) || []).length === 8, JSON.stringify(stars));
+  // NAMED (Nov 11 2026, still stars): the eight plain dots became the Oracle's still stars, checked in O15.
   const ell = Array.prototype.map.call(svg.querySelectorAll("ellipse"), e => e.getAttribute("class") + " " + e.getAttribute("rx") + "/" + e.getAttribute("ry"));
   check("the rings: outer 275/110 (accent at 30%, 1 px), inner 150/60 (violet at 25%, dashed 3 6)", JSON.stringify(ell) === JSON.stringify(["orbit-ring 275/110", "orbit-ring-inner 150/60"]) &&
     rule(".orbit-ring") === "fill:none;stroke:rgba(var(--bf-accent-a-rgb, 34,211,238),.3);stroke-width:1" &&
@@ -644,6 +658,137 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     /\.orbit-grid \.orbit-box-wide,\.orbit-grid \.orbit-dir\{grid-column:auto\}/.test(CSS), actCss);
   check("the old landing's squeezing rules are gone from bizforce-ui.css", !/bf-directory-preview|bf-agent-icon-grid|bf-agent-icon-block|bf-agent-icon-lg|bf-hq-icon\.bf-agent-icon|bf-directory-heading/.test(UI_CSS));
 
+  { // O15 in its own scope
+  /* ── O15. the still Oracle stars (NAMED Nov 11 2026, still stars) ── */
+  console.log("\n══ O15. the still Oracle stars: Oracle's shape, never animated, never on a portal, the core, a label or the search ══");
+  const ORACLE = lf(fs.readFileSync(path.join(FRONTEND, "oracle.html"), "utf8"));
+  const draw = (/function drawStarAt\(px, py, star, alpha\) \{[\s\S]*?\n    \}\n/.exec(ORACLE) || [""])[0];
+  const make = (/function makeStar\(minR, maxR\) \{[\s\S]*?\n    \}\n/.exec(ORACLE) || [""])[0];
+  const S0 = page();
+  const B = S0.w.BFOrbit || {};
+  const OS = B.ORACLE_STAR || {};
+  // Oracle's own numbers, read from oracle.html's canvas starfield, against the copy's.
+  const oracleNums = {
+    haloR: /var haloR = star\.r \* ([\d.]+);/, haloAlpha: /\(alpha \* ([\d.]+)\) \+ "\)"\);\n      halo\.addColorStop\(1/, spikeLen: /var spikeLen   = star\.r \* ([\d.]+);/,
+    spikeAlpha: /var spikeAlpha = alpha \* ([\d.]+);/, spikeWidth: /ctx\.lineWidth = ([\d.]+);/, coreR: /var coreR = star\.r \* ([\d.]+);/,
+    coreEdgeAlpha: /\(alpha \* ([\d.]+)\) \+ "\)"\);\n      ctx\.fillStyle = core;/, brightAbove: /if \(star\.baseAlpha > ([\d.]+)\) \{/, brightMix: /\(255 - tint\.r\) \* ([\d.]+)\)/
+  };
+  const read = Object.keys(oracleNums).map(k => [k, Number((oracleNums[k].exec(draw) || [])[1]), OS[k]]);
+  check("O15 the copy draws with oracle.html's drawStarAt numbers: halo 2.2 r at alpha x .5, rays 6 r each way .8 wide at alpha x .5, core .7 r fading to alpha x .15, whitened 60% above .7",
+    draw.length > 500 && read.every(([, a, b]) => a === b && typeof b === "number"), JSON.stringify(read));
+  const tints = ((/var TINTS = \[([\s\S]*?)\];/.exec(ORACLE) || ["", ""])[1].match(/\{ r: \d+,\s+g: \d+,\s+b: \d+\s*\}/g) || []).map(t => t.replace(/\s+/g, " "));
+  const layers = (/var LAYERS = \[([\s\S]*?)\];/.exec(ORACLE) || ["", ""])[1].match(/minR: ([\d.]+), maxR: ([\d.]+)/g) || [];
+  check("O15 and with makeStar's tints, sizes and alphas: the same three tints one star in six, the three layers' radii, alpha .12 + u^2 x .8, rays only when large and bright",
+    JSON.stringify(tints.map(t => JSON.parse(t.replace(/(\w+):/g, "\"$1\":")))) === JSON.stringify(B.STAR_TINTS) &&
+    JSON.stringify(layers.map(l => l.match(/[\d.]+/g).map(Number))) === JSON.stringify((B.STAR_LAYERS || []).map(l => [l.minR, l.maxR])) &&
+    /if \(Math\.random\(\) < 1 \/ 6\)/.test(ORACLE) && /var baseAlpha = 0\.12 \+ Math\.pow\(Math\.random\(\), 2\) \* 0\.8;/.test(make) &&
+    /spiked: \(r > \(minR \+ \(maxR - minR\) \* 0\.6\)\) && \(baseAlpha > 0\.6\)/.test(make) &&
+    /var tint = rnd\(\) < 1 \/ 6 \?/.test(FILES[ORBIT]) && /var alpha = 0\.12 \+ Math\.pow\(rnd\(\), 2\) \* 0\.8;/.test(FILES[ORBIT]) &&
+    /spiked: r > L\.minR \+ \(L\.maxR - L\.minR\) \* 0\.6 && alpha > 0\.6/.test(FILES[ORBIT]), JSON.stringify(tints));
+  S0.dom.window.close();
+
+  // A wide panel and a phone row, with the boxes a browser would give (jsdom has no layout).
+  const WIDE = { panel: [0, 0, 760, 400], stage: [80, 14, 600, 600 * 330 / 680], search: [120, 316, 520, 38], name: 44 };
+  const PHONE = { panel: [0, 0, 358, 300], stage: [10, 12, 338, 200], search: [10, 222, 338, 38], core: [10, 16, 338, 64], name: 40 };
+  function rectsFor(G, narrow) {
+    return function (node) {
+      const box = a => ({ left: a[0], top: a[1], width: a[2], height: a[3], right: a[0] + a[2], bottom: a[1] + a[3], x: a[0], y: a[1] });
+      if (node.id === "orbitPanel") return box(G.panel);
+      if (node.id === "orbitStage") return box(G.stage);
+      if (node.classList && node.classList.contains("orbit-search")) return box(G.search);
+      const portal = node.closest && node.closest(".orbit-portal");
+      const i = portal ? ["grow", "sell", "connect", "agents", "oracle"].indexOf(portal.getAttribute("data-portal")) : -1;
+      if (narrow && node.id === "orbitCore") return box(G.core);
+      if (narrow && i >= 0 && node.classList.contains("orbit-disc")) { const cx = 10 + 67.6 * i + 33.8; return box([cx - 23, 88, 46, 46]); }
+      if (narrow && i >= 0 && node.classList.contains("orbit-portal")) return box([10 + 67.6 * i, 84, 67.6, 74]);
+      if (node.classList && (node.classList.contains("orbit-portal-name") || node.classList.contains("orbit-portal-title"))) { const cx = narrow ? 10 + 67.6 * i + 33.8 : 0; return box([cx - G.name / 2, narrow ? 140 : 0, G.name, 13]); }
+      return box([0, 0, 0, 0]);
+    };
+  }
+  const W = page({ rects: rectsFor(WIDE, false) });
+  const starsOf = P0 => Array.prototype.map.call(P0.d.querySelectorAll("#orbitStars g.orbit-star"), g => {
+    const core = g.querySelector("circle.orbit-star-core"), halo = g.querySelector("circle.orbit-star-halo");
+    const r = Number(g.getAttribute("data-r")), a = Number(g.getAttribute("data-alpha")), spiked = g.getAttribute("data-spiked") === "1";
+    return { g, r, a, spiked, x: Number(core && core.getAttribute("cx")), y: Number(core && core.getAttribute("cy")), core, halo, rays: g.querySelectorAll("rect.orbit-star-ray") };
+  });
+  const wide = starsOf(W);
+  check("O15 about 14 to 18 stars of mixed sizes on a wide panel, in one layer under the panel's contents", wide.length >= 14 && wide.length <= 18 &&
+    W.d.getElementById("orbitPanel").firstElementChild === W.d.getElementById("orbitStars") && W.d.getElementById("orbitStars").getAttribute("aria-hidden") === "true" &&
+    Math.max(...wide.map(x => x.r)) / Math.min(...wide.map(x => x.r)) > 2.5, wide.length);
+  const stops = (P0, fill) => { const id = (/url\(#([^)]+)\)/.exec(fill || "") || [])[1]; const gr = id && P0.d.getElementById(id); return gr ? Array.prototype.map.call(gr.querySelectorAll("stop"), st => [Number(st.getAttribute("offset")), st.getAttribute("stop-color"), Number(st.getAttribute("stop-opacity"))]) : []; };
+  const near = (p, q) => Math.abs(p - q) < 0.002;
+  const shapeBad = wide.filter(st => {
+    const h = stops(W, st.halo && st.halo.getAttribute("fill")), c = stops(W, st.core && st.core.getAttribute("fill"));
+    const okHalo = !!st.halo && near(Number(st.halo.getAttribute("r")), st.r * 2.2) && h.length === 2 && near(h[0][2], st.a * 0.5) && h[1][2] === 0 && h[0][1] === h[1][1];
+    const tint = h[0] && h[0][1];
+    const white = !!c[0] && (st.a > 0.7 ? c[0][1] !== tint || tint === "rgb(255,255,255)" : c[0][1] === tint);
+    const okCore = !!st.core && near(Number(st.core.getAttribute("r")), st.r * 0.7) && c.length === 2 && near(c[0][2], st.a) && near(c[1][2], st.a * 0.15) && c[1][1] === tint && white;
+    const okRays = st.spiked ? st.rays.length === 2 && Array.prototype.every.call(st.rays, ry => { const s2 = stops(W, ry.getAttribute("fill")); const wd = Number(ry.getAttribute("width")), ht = Number(ry.getAttribute("height"));
+      return s2.length === 3 && s2[0][2] === 0 && near(s2[1][2], st.a * 0.5) && s2[2][2] === 0 && ((near(wd, 0.8) && Math.abs(ht - st.r * 12) < 0.01) || (near(ht, 0.8) && Math.abs(wd - st.r * 12) < 0.01)); }) : st.rays.length === 0;
+    return !(okHalo && okCore && okRays);
+  });
+  check("O15 every star is Oracle's shape: a radial halo, a sharp core whitened on the brightest, and thin cross rays on the large bright ones (at least two)", shapeBad.length === 0 &&
+    wide.filter(x => x.spiked && x.r >= 1.4).length >= 2, shapeBad.map(x => x.g.getAttribute("data-star")).join(","));
+  const tintsSeen = new Set(wide.map(st => (stops(W, st.halo.getAttribute("fill"))[0] || [])[1]));
+  check("O15 white stars with a few tinted ones, in Oracle's colours only", [...tintsSeen].every(t => ["rgb(255,255,255)", "rgb(34,211,238)", "rgb(139,92,246)", "rgb(251,191,36)"].indexOf(t) !== -1) &&
+    tintsSeen.has("rgb(255,255,255)") && tintsSeen.size >= 2, [...tintsSeen].join(" "));
+  // Still: nothing on them animates or transitions, and nothing redraws them as time passes.
+  const starRules = (CSS.replace(/\/\*[\s\S]*?\*\//g, "").match(/[^{}]*orbit-star[^{}]*\{[^}]*\}/g) || []);
+  const stillCss = starRules.filter(r => /animation|transition/.test(r));
+  const snap = W.d.getElementById("orbitStars").innerHTML;
+  W.run(6000);
+  check("O15 none animated: their one rule is animation:none and transition:none (important), no other rule animates them, and six seconds of the orbit's clock change nothing",
+    stillCss.length === 1 && /^\s*\.orbit-star,\.orbit-star \*\{animation:none !important;transition:none !important\}$/.test(stillCss[0]) &&
+    W.d.getElementById("orbitStars").innerHTML === snap && (FILES[ORBIT].match(/drawStars\(\);/g) || []).length === 1 && (FILES[ORBIT].match(/\n  drawStars\(\);\n/g) || []).length === 1 &&
+    !/@keyframes[^{]*\{[^@]*orbit-star/.test(CSS), stillCss.join(" | "));
+  // Clear of everything, measured here, not by the layout's own list: every place on the ring a portal disc (r 30 open) or its label
+  // can drift to, the core (r 34), and the search with the lines under it.
+  function clashes(list, G, narrow) {
+    const bad = [];
+    const hitBox = (st, b) => { const dx = Math.max(b[0] - st.x, 0, st.x - (b[0] + b[2])), dy = Math.max(b[1] - st.y, 0, st.y - (b[1] + b[3])); return dx * dx + dy * dy < st.reach * st.reach; };
+    list.forEach(st => {
+      st.reach = st.r * (st.spiked ? 6 : 2.2);
+      const sb = [G.search[0], Math.min(G.search[1], G.stage[1] + G.stage[3]), G.search[2], G.panel[3]];
+      if (hitBox(st, sb)) bad.push(st.g.getAttribute("data-star") + " on the search");
+      if (!narrow) {
+        const sc = G.stage[2] / 680, ox = G.stage[0], oy = G.stage[1];
+        for (let a = 0; a < 360; a += 1) {
+          const rad = a * Math.PI / 180, px = ox + (340 + 275 * Math.sin(rad)) * sc, py = oy + (160 + 110 * Math.cos(rad)) * sc;
+          if (Math.hypot(st.x - px, st.y - py) < 30 * sc + st.reach) { bad.push(st.g.getAttribute("data-star") + " on a portal at " + a); break; }
+          if (hitBox(st, [px - G.name / 2 - 20, py + 42 * sc - 7, G.name + 40, 14])) { bad.push(st.g.getAttribute("data-star") + " on a label at " + a); break; }
+        }
+        if (Math.hypot(st.x - (ox + 340 * sc), st.y - (oy + 160 * sc)) < 34 * sc + st.reach) bad.push(st.g.getAttribute("data-star") + " on the core");
+      } else {
+        if (hitBox(st, G.core)) bad.push(st.g.getAttribute("data-star") + " on the core");
+        for (let i = 0; i < 5; i++) {
+          const cx = 10 + 67.6 * i + 33.8;
+          if (hitBox(st, [cx - 23, 88, 46, 46])) bad.push(st.g.getAttribute("data-star") + " on a portal");
+          if (hitBox(st, [cx - G.name / 2, 140, G.name, 13])) bad.push(st.g.getAttribute("data-star") + " on a label");
+        }
+      }
+      if (st.x - st.reach < 0 || st.y - st.reach < 0 || st.x + st.reach > G.panel[2] || st.y + st.reach > G.panel[3]) bad.push(st.g.getAttribute("data-star") + " off the panel");
+    });
+    return bad;
+  }
+  const wideBad = clashes(wide, WIDE, false);
+  check("O15 wide: none on a portal (anywhere it can drift), the core, a label or the search", wideBad.length === 0, wideBad.join(", "));
+  const placesWide = JSON.stringify(wide.map(x => [x.x, x.y]));
+  W.w.BFOrbit.drawStars();
+  const W2 = page({ rects: rectsFor(WIDE, false) });
+  check("O15 fixed per load from a seeded layout: drawing again, or loading again, puts every star in the same place", JSON.stringify(starsOf(W).map(x => [x.x, x.y])) === placesWide &&
+    JSON.stringify(starsOf(W2).map(x => [x.x, x.y])) === placesWide && !/Math\.random/.test(FILES[ORBIT]));
+  W.dom.window.close(); W2.dom.window.close();
+  const N = page({ narrow: true, rects: rectsFor(PHONE, true) });
+  const phone = starsOf(N);
+  const phoneBad = clashes(phone, PHONE, true);
+  check("O15 the 640 px row: 14 to 18 of the same stars, none on a portal, its label, the core or the search", phone.length >= 14 && phone.length <= 18 && phoneBad.length === 0,
+    phone.length + " " + phoneBad.join(", "));
+  N.dom.window.close();
+  check("O15 the old plain dots are gone: no STARS list, no circle.orbit-star in the ring's drawing, no white fill rule, no radial-gradient dots on a phone",
+    !/var STARS = \[/.test(FILES[ORBIT]) && !/\.orbit-star\{fill:#fff\}/.test(CSS) && !/radial-gradient\(/.test(CSS) &&
+    L.d.querySelectorAll("#orbitSvg .orbit-star, circle.orbit-star").length === 0);
+
+  }
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");

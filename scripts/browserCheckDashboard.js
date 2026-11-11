@@ -34,6 +34,12 @@
    Screenshots to <top>: orbit-sell.png, orbit-grow.png, orbit-connect.png,
    orbit-agents.png, orbit-oracle.png, all-tools.png, search.png, swap.png,
    mobile.png and member-no-store.png.
+   THE STILL STARS (Nov 11 2026, still stars): at 1440 and 390 px, 14 to 18
+   Oracle stars; none has a running animation (getAnimations() empty on every
+   star and its parts, no animation or transition computed), and none
+   overlaps a portal's disc, the core, a portal's label or the search bar,
+   measured twice, three seconds apart, while the portals drift. Screenshots
+   stars-1440.png and stars-390.png to <top>.
      TOP_HALF_OUT           that folder (default Downloads\top-half)
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
@@ -240,6 +246,25 @@ window.__bf = {
 };
 true`;
 
+// The still stars: how many, any animation on them, and any star box meeting a portal's disc, the core, a label or the search.
+const STARS_EVAL = "(function(){var r=function(n){var x=n.getBoundingClientRect();return {l:x.left,t:x.top,r:x.right,b:x.bottom,w:x.width,h:x.height}};" +
+  "var stars=[].slice.call(document.querySelectorAll('#orbitStars g.orbit-star'));" +
+  "var moving=stars.filter(function(g){var parts=[g].concat([].slice.call(g.querySelectorAll('*')));return parts.some(function(p){var cs=getComputedStyle(p);return (p.getAnimations&&p.getAnimations().length)||cs.animationName!=='none'||parseFloat(cs.transitionDuration)>0})}).length;" +
+  "var vis=function(n){var x=n.getBoundingClientRect();return x.width>0&&x.height>0&&getComputedStyle(n).display!=='none'&&getComputedStyle(n).visibility!=='hidden'};" +
+  "var things=[].slice.call(document.querySelectorAll('.orbit-portal .orbit-disc, #orbitCore, .orbit-portal-name, .orbit-search')).filter(vis).map(function(n){return {n:n.className||n.id,b:r(n)}});" +
+  "var hits=[];stars.forEach(function(g){var c=g.querySelector('.orbit-star-core'),k=r(c),cx=(k.l+k.r)/2,cy=(k.t+k.b)/2,rr=Number(g.getAttribute('data-r'))*(g.getAttribute('data-spiked')==='1'?6:2.2);" +
+  "things.forEach(function(t){var dx=Math.max(t.b.l-cx,0,cx-t.b.r),dy=Math.max(t.b.t-cy,0,cy-t.b.b);if(dx*dx+dy*dy<rr*rr)hits.push(g.getAttribute('data-star')+' on '+t.n)})});" +
+  "return {count:stars.length,moving:moving,hits:hits,things:things.length,spiked:stars.filter(function(g){return g.getAttribute('data-spiked')==='1'}).length}})()";
+async function starsAt(W, file) {
+  const a = await evaluate(cdp0, STARS_EVAL);
+  await sleep(3000);
+  const b = await evaluate(cdp0, STARS_EVAL);
+  check(W + " px: 14 to 18 still Oracle stars, rays on the large bright ones", a.count >= 14 && a.count <= 18 && a.spiked >= 2, JSON.stringify(a));
+  check(W + " px: no star has a running animation (getAnimations() empty, no animation or transition computed)", a.moving === 0 && b.moving === 0, a.moving + "/" + b.moving);
+  check(W + " px: no star overlaps a portal, the core, a label or the search (twice, 3 s apart, as the portals drift)", a.things >= 11 && a.hits.length === 0 && b.hits.length === 0, a.hits.concat(b.hits).join(", "));
+  await shot(cdp0, file, "#orbitTop");
+}
+let cdp0 = null;
 const CC_TABS = ["command", "plans", "activity", "autopilot", "outbound", "system", "memory"];
 const EXEC_TABS = ["command", "plans", "agents", "approvals", "history", "settings"];
 const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
@@ -255,6 +280,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
   let cdp;
   try {
     cdp = await connect(chrome.ws);
+    cdp0 = cdp;
     let admin = true, apiCalls = [];
     cdp.on(async msg => {
       if (msg.method !== "Fetch.requestPaused") return;
@@ -399,11 +425,12 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     const coreParts = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitCore > span, #orbitCore > strong'),function(x){return x.textContent})");
     check("the core reads This week, 29, tracked visits, All tools, and no \"%\"", JSON.stringify(coreParts) === JSON.stringify(["This week", "29", "tracked visits", "All tools"]) && renders.core_text.indexOf("%") === -1, JSON.stringify(coreParts));
     const panel = await evaluate(cdp, "(function(){var p=document.getElementById('orbitPanel'),cs=getComputedStyle(p),s=document.querySelector('.orbit-search');" +
-      "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitSvg .orbit-star').length, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
+      "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitStars .orbit-star').length, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
       "ring:[].map.call(document.querySelectorAll('#orbitSvg ellipse.orbit-ring, #orbitSvg ellipse.orbit-ring-inner'),function(e){return e.getAttribute('rx')+'/'+e.getAttribute('ry')}).join()," +
       "pill:getComputedStyle(s).borderTopLeftRadius, key:(s.querySelector('kbd.orbit-key')||{}).textContent, refresh:[(document.getElementById('orbitRefresh')||{}).getAttribute&&document.getElementById('orbitRefresh').getAttribute('aria-label'), s.contains(document.getElementById('orbitRefresh')), (document.getElementById('orbitRefresh')||{}).textContent]," +
       "hint:/Press \\/ to search/.test(document.getElementById('orbitTop').textContent)};})()");
-    check("a starfield panel (radius 18 px, 8 stars) holds the orbit and the search bar", panel.radius === "18px" && panel.stars === 8 && panel.holds, JSON.stringify(panel));
+    // NAMED (Nov 11 2026, still stars): the eight plain dots became 14 to 18 still Oracle stars.
+    check("a starfield panel (radius 18 px, 14 to 18 still Oracle stars) holds the orbit and the search bar", panel.radius === "18px" && panel.stars >= 14 && panel.stars <= 18 && panel.holds, JSON.stringify(panel));
     check("the rings are 275/110 and 150/60 (2.5 to 1)", panel.ring === "275/110,150/60", panel.ring);
     check("the search pill (radius 16 px) holds the \"/\" key cap and an icon Refresh named \"Refresh\"; no \"Press / to search\", no text button",
       panel.pill === "16px" && panel.key === "/" && panel.refresh[0] === "Refresh" && panel.refresh[1] === true && panel.refresh[2] === "" && !panel.hint, JSON.stringify(panel));
@@ -537,6 +564,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       const over = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitTop, #orbitTop *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&(x.right>" + (W + 1) + "||x.left<-1)}).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)})");
       check(W + " px: nothing in the top half passes the screen's edge", over.length === 0, over.join(" | "));
       await shot(cdp, path.join(TOP_OUT, "orbit-" + W + ".png"), "#orbitTop");
+      if (W === 1440) await starsAt(1440, path.join(TOP_OUT, "stars-1440.png"));
     }
 
     // 390 px: a row of portals, stacked main boxes, one column.
@@ -560,6 +588,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     const nowW = await mobileWidth();
     await shot(cdp, path.join(TOP_OUT, "mobile.png"), "#orbitTop");
     await shot(cdp, path.join(TOP_OUT, "orbit-390.png"), "#orbitTop");
+    await starsAt(390, path.join(TOP_OUT, "stars-390.png"));
     OVERRIDE["/dashboard.html"] = execFileSync("git", ["show", BEFORE_ORBIT + ":dashboard.html"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     OVERRIDE["/scripts/bf-dashboard-order.js"] = execFileSync("git", ["show", BEFORE_ORBIT + ":scripts/bf-dashboard-order.js"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     await openPage(cdp, origin, "dashboard.html", {});

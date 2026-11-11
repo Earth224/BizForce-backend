@@ -1760,8 +1760,10 @@ check("G3. the allowlist is not stale: each allowed phrase is still in its tip",
 const LIVE_COPY = f => FILES[f].match(/>[^<>\n]*\b(Live|live|real-?time|Real-?time)\b[^<>\n]*</g) || [];
 check("G3. agent-profile.js's Live Status polls the running task: startPoll sets an interval that fetches /api/ai/tasks/<id>",
   /function startPoll\(taskId, promptText\) \{\s*if \(pollTimer\) clearInterval\(pollTimer\);\s*var ticks = 0;\s*pollTimer = setInterval\(function \(\) \{[\s\S]{0,600}?fetch\(API_URL \+ "\/api\/ai\/tasks\/" \+ taskId/.test(FILES[AP]));
-check("G3. the only \"live\" copy left on analytics-dashboard, sales and lead-radar is sales.html's \"Live Activity\" and \"Run Task & Live Status\"",
-  [DASH, SALES, RADAR_PAGE].every(f => LIVE_COPY(f).every(m => m === ">Live Activity<" || m === ">Run Task &amp; Live Status<")) &&
+/* NAMED BEFORE → AFTER (Nov 11 2026, agent tabs). BEFORE sales.html's "Run Task & Live Status" heading was also allowed.
+   AFTER that module is gone (the agent tabs removed the duplicate Live Status), so only "Live Activity" is allowed. */
+check("G3. the only \"live\" copy left on analytics-dashboard, sales and lead-radar is sales.html's \"Live Activity\"",
+  [DASH, SALES, RADAR_PAGE].every(f => LIVE_COPY(f).every(m => m === ">Live Activity<")) &&
   LIVE_COPY(SALES).indexOf(">Live Activity<") !== -1 && !/>[^<>\n]*\breal-?time\b/i.test(FILES[CONTENT]),
   [DASH, SALES, RADAR_PAGE].map(f => LIVE_COPY(f).join(",")).join(" / "));
 
