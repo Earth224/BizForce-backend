@@ -603,9 +603,14 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        NAMED BEFORE → AFTER (Nov 11 2026, agent tabs). BEFORE: KEPT had 20 keys. AFTER: 21; bf_ag_tab_<agent> is which tab an
        agent page opens on in this browser tab (sessionStorage, through scripts/bf-tabs.js from scripts/agent-profile.js, one
        key per agent type), a display choice like bf_cc_tab, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list
-       names it. The scan reads its key as the literal prefix "bf_ag_tab_" (AG_TAB_KEY = "bf_ag_tab_" + AGENT_TYPE). */
+       names it. The scan reads its key as the literal prefix "bf_ag_tab_" (AG_TAB_KEY = "bf_ag_tab_" + AGENT_TYPE).
+       NAMED BEFORE → AFTER (Nov 11 2026, card QR optional, editor tabs). BEFORE: KEPT had 21 keys. AFTER: 22; bf_card_ed_tab
+       is which editing tab the card maker (digital-cards.html) opens on in this browser tab (sessionStorage, through
+       scripts/bf-tabs.js), a display choice like bf_cc_tab, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list
+       names it. */
     const KEPT = {
       bf_ag_tab_: "which tab each agent page opens on, in this browser tab (bf_ag_tab_<agent>)",
+      bf_card_ed_tab: "which editing tab the card maker opens on, in this browser tab",
       bf_orbit_portal: "which dashboard orbit portal is open, in this browser tab",
       bf_cc_tab: "which Command Center tab the dashboard opens on, in this browser tab",
       bf_oauth_return: "which sign-in, youtube or tiktok, is coming back to the Social page in this tab",

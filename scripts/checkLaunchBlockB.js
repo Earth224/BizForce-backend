@@ -825,9 +825,15 @@ function fakeDb(tables, fail) {
       /var cardUrl = window\.bfCard\.publicUrl\(c\) \|\| window\.location\.href;\n  setCanonical\(cardUrl\);\n  var qrUrl = window\.bfCard\.qrUrl\(cardUrl\);/.test(view), JSON.stringify(qrArgs(view)));
     // NAMED (Nov 6 2026, card upgrades C1): BEFORE the editor's QR encoded cardQrUrl(). AFTER it encodes
     // bfCard.qrUrl(cardQrUrl()), the same URL with via=qr; cardQrUrl itself, and the vCard and Share link that use it, are unchanged.
+    // NAMED (Nov 11 2026, card QR optional, editor tabs): BEFORE the editor's only QRCode.toCanvas calls were the card's two,
+    // read over the whole page. AFTER the QR Code tab adds a generator (drawQrGenerator, the link it validated, t.url), so the
+    // card's two are read inside generateQR, and the page has exactly those two plus the generator's one.
+    const genQrBody = (/async function generateQR\(\) \{([\s\S]*?)\n\}\n/.exec(editor) || [])[1] || "";
+    const genToolBody = (/function drawQrGenerator\(\) \{([\s\S]*?)\n\}\n/.exec(editor) || [])[1] || "";
     check("10. digital-cards.html: both QR codes encode url, the card's public URL with via=qr (blank before the first save)",
-      JSON.stringify(qrArgs(editor)) === '["url","url"]' && /var url = window\.bfCard\.qrUrl\(cardQrUrl\(\)\);/.test(editor) &&
-      /function cardQrUrl\(\) \{\n  return window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: activeShareToken \}\);/.test(editor), JSON.stringify(qrArgs(editor)));
+      JSON.stringify(qrArgs(genQrBody)) === '["url","url"]' && JSON.stringify(qrArgs(genToolBody)) === '["t.url"]' && qrArgs(editor).length === 3 &&
+      /var url = window\.bfCard\.qrUrl\(cardQrUrl\(\)\);/.test(genQrBody) &&
+      /function cardQrUrl\(\) \{\n  return window\.bfCard\.publicUrl\(\{ slug: activeSlug, share_token: activeShareToken \}\);/.test(editor), JSON.stringify([qrArgs(genQrBody), qrArgs(genToolBody), qrArgs(editor)]));
     check("10. neither page builds a vCard of its own (bf-card.js is the one builder)",
       !/BEGIN:VCARD/.test(view) && !/BEGIN:VCARD/.test(editor) && /<script src="\/scripts\/bf-card\.js"><\/script>/.test(view) && /<script src="\/scripts\/bf-card\.js"><\/script>/.test(editor));
     check("10. card-view.html: email and phone are tap-to-email and tap-to-call links",

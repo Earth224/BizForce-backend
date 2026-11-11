@@ -793,12 +793,21 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
 
     /* ════ Q. the QR ════ */
     console.log("\n══ Q. the QR codes ══");
-    const q = cardView({ url: "https://bizforceai.net/c/jane-doe", card: CARD });
+    // NAMED (Nov 11 2026, card QR optional, editor tabs): BEFORE every card drew both QR codes. AFTER the card's QR is off unless
+    // media_layout.show_qr is true, so Q1 reads a card that turned it on (the codes and the canonical are as before), and Q1b
+    // reads the same card without show_qr: nothing drawn, and the canonical unchanged.
+    const q = cardView({ url: "https://bizforceai.net/c/jane-doe", card: Object.assign({}, CARD, { media_layout: Object.assign({}, CARD.media_layout || {}, { show_qr: true }) }) });
     q.release(); await settle();
     check("Q1. both QR codes on the card page encode the public URL with ?via=qr; the canonical stays the plain URL",
       J(q.log.qr.map(x => x.text)) === J(["https://bizforceai.net/c/jane-doe?via=qr", "https://bizforceai.net/c/jane-doe?via=qr"]) &&
       q.doc.querySelector('link[rel="canonical"]').getAttribute("href") === "https://bizforceai.net/c/jane-doe", J(q.log.qr));
     q.w.close();
+    const q0 = cardView({ url: "https://bizforceai.net/c/jane-doe", card: CARD });
+    q0.release(); await settle();
+    check("Q1b. a card without show_qr draws no QR code on the card page, and its canonical is the plain URL",
+      q0.log.qr.length === 0 && q0.doc.getElementById("cvQrBlock").hidden === true &&
+      q0.doc.querySelector('link[rel="canonical"]').getAttribute("href") === "https://bizforceai.net/c/jane-doe", J(q0.log.qr));
+    q0.w.close();
     check("Q2. bf-card.js qrUrl adds via=qr with ? or &, and nothing for no URL", BF.qrUrl("https://bizforceai.net/card/" + TOK.token) === "https://bizforceai.net/card/" + TOK.token + "?via=qr" &&
       BF.qrUrl("https://x.example/?a=1") === "https://x.example/?a=1&via=qr" && BF.qrUrl(null) === null && BF.qrUrl("") === null);
     const ed = fe("digital-cards.html");
@@ -919,7 +928,9 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
     .concat(keysIn(fe("card-view.html") + fe("digital-cards.html"), /media_layout\.([a-z_]+)/g));
   const allow = Object.keys(CPL.MEDIA_LAYOUT_ALLOWLIST);
   check("V8. the allowlist is exactly the keys the editor writes, and covers every key the editor and the card page read (" + allow.length + " keys)",
-    written.length === 35 && J(written.slice().sort()) === J(allow.slice().sort()) && read.every(k => allow.indexOf(k) !== -1), J({ written: written.length, missingRead: read.filter(k => allow.indexOf(k) === -1), extra: allow.filter(k => written.indexOf(k) === -1) }));
+    // NAMED (Nov 11 2026, card QR optional, editor tabs): BEFORE 35 keys. AFTER 37: show_qr and qr_corner, which the editor
+    // writes on every save and the card page reads; the allowlist still equals what the editor writes.
+    written.length === 37 && J(written.slice().sort()) === J(allow.slice().sort()) && read.every(k => allow.indexOf(k) !== -1), J({ written: written.length, missingRead: read.filter(k => allow.indexOf(k) === -1), extra: allow.filter(k => written.indexOf(k) === -1) }));
   const dirty = { bg_pos_x: 50, bg_pos_y: "25", bg_zoom: 250, bg_fit: "zoom", card_font: "lobster", text_color: "", accent_color: "#22d3ee", border_style: "gold", border_weight: "16px",
     tagline: "T".repeat(260), still_bg_color: "red", still_overlay: 40, still_img_mode: "fit", trim_end: 12.5, still_text_visible: "true", free_position_mode: true,
     text_positions: { name: { x: 10, y: 20 }, title: { x: 200, y: 1 }, evil: { x: 1, y: 1 } }, text_sizes: { name: 16, tagline: 99 }, corner_style: "cut",
