@@ -7452,7 +7452,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
   try {
     const { data: row, error } = await supabase
       .from("user_preferences")
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order")
+      // NAMED (Nov 11 2026, orbit stage 2): and the weekly goal (migration 183).
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -7483,6 +7484,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         notifications_enabled: true,
         preferred_language: null,
         agent_card_order: null,
+        weekly_goal: null,
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -7493,6 +7495,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       notifications_enabled: row.notifications_enabled,
       preferred_language: row.preferred_language,
       agent_card_order: row.agent_card_order,
+      weekly_goal: require("./lib/orbitStage2").goalOfRow(row),
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -7603,6 +7606,30 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
       }
     }
 
+    /* NAMED (Nov 11 2026, orbit stage 2): THE WEEKLY GOAL (migration 183), the same three cases:
+         key absent      -> leave the goal alone
+         null            -> clear all five goal columns: no goal
+         an object       -> { metric, weekly_target, currency?, time_zone }, validated by lib/orbitStage2.js validateGoal
+                            (the metric, a whole target for counts, each metric's cap, a three-letter currency for
+                            store sales only, the time zone through gateRules.isTimeZone); a refusal is a 400 naming
+                            valid_goal_metrics and the metric's cap. set_at is now.
+       A saved goal clears the member's GET /api/dashboard/top answer, so the ring shows it at once. */
+    var goalTouched = false;
+    if (req.body.weekly_goal !== undefined) {
+      goalTouched = true;
+      if (req.body.weekly_goal === null) {
+        updates.goal_metric = null; updates.goal_weekly_target = null; updates.goal_currency = null; updates.goal_time_zone = null; updates.goal_set_at = null;
+      } else {
+        var goalChecked = require("./lib/orbitStage2").validateGoal(req.body.weekly_goal);
+        if (goalChecked.error) return res.status(400).json(goalChecked);
+        updates.goal_metric = goalChecked.value.metric;
+        updates.goal_weekly_target = goalChecked.value.weekly_target;
+        updates.goal_currency = goalChecked.value.currency;
+        updates.goal_time_zone = goalChecked.value.time_zone;
+        updates.goal_set_at = updates.updated_at;
+      }
+    }
+
     const { error } = await supabase
       .from("user_preferences")
       .upsert(updates, { onConflict: "user_id" });
@@ -7611,6 +7638,7 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
       throw error;
     }
 
+    if (goalTouched) dashboardTopCache.delete(req.user.id);
     return res.json({ saved: true });
   } catch (error) {
     next(error);
@@ -14235,6 +14263,8 @@ app.post("/api/store/connections/:id/sync", requireAuth, requireActiveSubscripti
           code: result.needs_reconnect ? "needs_reconnect" : result.code
         });
       }
+      // NAMED (Nov 11 2026, orbit stage 2): the dashboard's figures are read again after a sync (Sync now on the Store box).
+      dashboardTopCache.delete(req.user.id);
       return res.json({ synced: result });
     } catch (error) {
       next(error);
@@ -44242,7 +44272,18 @@ app.get("/api/analytics/summary", requireAuth, async function (req, res, next) {
    unread count exists without reading the mailbox itself, so none is claimed.
 
    The answer is kept for 60 seconds per member (DASHBOARD_TOP_CACHE_MS), keyed
-   by the member's id; 60 requests a minute per member (dashboardTopLimiter). */
+   by the member's id; 60 requests a minute per member (dashboardTopLimiter).
+
+   NAMED (Nov 11 2026, orbit stage 2): THE WEEKLY GOAL. goal is { set, metric, target, currency, time_zone,
+   week_start, value, not_counted, as_of, stores, suggested, store_currencies, note }. The week starts Monday
+   00:00 in the goal's own time zone (lib/orbitStage2.js weekStartMs, by Intl, correct across daylight saving).
+   Each value is counted from rows this answer already reads: tracked visits from the visits through the
+   member's bl- and lr- refs; store orders and sales from ACTIVE order summaries only (migration 183: a
+   cancelled or refunded order never counts, here or anywhere), sales in the goal's currency only, any other
+   currency listed in not_counted and never converted; card visits by UTC day from the day holding the week's
+   start (rule A, said in note); marketplace orders as seller by one more head count. A value that could not be
+   read is null, never 0. Store figures carry as_of, the newest last_sync_at of the member's connected stores.
+   With no goal: set false, and suggested is store_sales when a store is connected, else tracked_visits. */
 var DASHBOARD_TOP_DAYS = 14;
 var DASHBOARD_TOP_CACHE_MS = 60 * 1000;
 var DASHBOARD_TOP_NAMED = 5;
@@ -44313,10 +44354,23 @@ async function dashboardTopBody(userId, now) {
   }
 
   var body = { generated_at: now.toISOString(), days: days };
+  var S2 = require("./lib/orbitStage2");
+  // NAMED (Nov 11 2026, orbit stage 2): the goal first (its week start bounds the card read), then the rows it is counted from.
+  var goal = await figure("goal", async function () {
+    return S2.goalOfRow((commandCenterRead(await supabase
+      .from("user_preferences")
+      .select("goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at")
+      .eq("user_id", userId)
+      .limit(1), "weekly goal").data || [])[0] || null);
+  });
+  var goalRead = unreadable.indexOf("goal") === -1;
+  var weekStart = goal ? S2.weekStartMs(goal.time_zone, nowMs) : null;
+  var visitTimes = null, storeConns = null, orderRows = null, viewRowsRead = null;
 
   body.visits = await figure("visits", async function () {
     var loaded = await loadArrivals(userId, false);
     [loaded.posts, loaded.sends, loaded.visits].forEach(function (part) { if (part.reason) throw new Error(part.reason); });
+    visitTimes = loaded.visits.rows.map(function (v) { return v.created_at; });
     var tracked = loaded.posts.rows.some(function (p) { return p.tracked; }) || loaded.sends.rows.length > 0;
     var perDay = dashboardTopPerDay(loaded.visits.rows.map(function (v) { return v.created_at; }), days);
     var weeks = dashboardTopWeeks(perDay);
@@ -44327,11 +44381,14 @@ async function dashboardTopBody(userId, now) {
   store.connected = await figure("store.connected", async function () {
     var conns = commandCenterRead(await supabase
       .from("member_store_connections")
-      .select("platform, status")
+      .select("id, platform, status, currency, last_sync_at")
       .eq("user_id", userId)
       .limit(20), "store connections").data || [];
+    storeConns = conns.filter(function (c) { return c.status === "connected"; });
     return conns.some(function (c) { return c.status === "connected"; });
   });
+  // NAMED (Nov 11 2026, orbit stage 2): store figures are as of the newest last sync of a connected store.
+  store.as_of = storeConns ? storeConns.map(function (c) { return c.last_sync_at || ""; }).sort().pop() || null : null;
   store.low_stock = await figure("store.low_stock", async function () {
     var items = await arrivalsReadAll("inventory_items", function () {
       return supabase.from("inventory_items")
@@ -44343,8 +44400,10 @@ async function dashboardTopBody(userId, now) {
   });
   var orders = await figure("store.orders", async function () {
     var rows = await arrivalsReadAll("store_order_summaries", function () {
-      return supabase.from("store_order_summaries").select("id, ordered_at").eq("user_id", userId).gte("ordered_at", days[0]);
+      // NAMED (Nov 11 2026, orbit stage 2): active orders only; a cancelled or refunded order never counts (migration 183).
+      return supabase.from("store_order_summaries").select("id, ordered_at, total, currency, status").eq("user_id", userId).eq("status", "active").gte("ordered_at", days[0]);
     });
+    orderRows = rows;
     return dashboardTopPerDay(rows.map(function (r) { return r.ordered_at; }), days);
   });
   store.orders_this_week = orders === null ? null : dashboardTopWeeks(orders).this_week;
@@ -44367,14 +44426,17 @@ async function dashboardTopBody(userId, now) {
       .limit(DASHBOARD_TOP_CARD_CAP), "digital cards").data || [];
     var ids = cards.map(function (c) { return c.id; });
     var out = { count: ids.length, views_today: 0, views_7d: 0 };
-    if (!ids.length) return out;
+    if (!ids.length) { viewRowsRead = []; return out; }
+    // NAMED (Nov 11 2026, orbit stage 2): from the UTC day holding the goal week's start when that is earlier (rule A).
+    var cardFrom = weekStart !== null && S2.cardDayFrom(weekStart) < weekFrom ? S2.cardDayFrom(weekStart) : weekFrom;
     // ONE read across every card, never one per card.
     var viewRows = commandCenterRead(await supabase
       .from("card_view_counts")
       .select("card_id, day, views")
       .in("card_id", ids)
-      .gte("day", weekFrom)
+      .gte("day", cardFrom)
       .limit(DASHBOARD_TOP_VIEW_ROW_CAP), "card views").data || [];
+    viewRowsRead = viewRows;
     var today = days[DASHBOARD_TOP_DAYS - 1];
     viewRows.forEach(function (r) {
       var n = Number(r.views);
@@ -44490,6 +44552,36 @@ async function dashboardTopBody(userId, now) {
     }) };
   });
 
+  /* NAMED (Nov 11 2026, orbit stage 2): the weekly goal's figure. */
+  var currencies = storeConns ? storeConns.map(function (c) { return c.currency; }).filter(function (c, i, a) { return typeof c === "string" && a.indexOf(c) === i; }) : [];
+  if (!goalRead) {
+    body.goal = null;
+  } else {
+    var g = { set: !!goal, metric: goal ? goal.metric : null, target: goal ? goal.weekly_target : null, currency: goal ? goal.currency : null,
+      time_zone: goal ? goal.time_zone : null, week_start: weekStart === null ? null : new Date(weekStart).toISOString(), value: null,
+      suggested: store.connected === true ? "store_sales" : "tracked_visits", store_currencies: currencies,
+      stores: storeConns ? storeConns.map(function (c) { return { id: c.id, platform: c.platform, currency: c.currency || null, last_sync_at: c.last_sync_at || null }; }) : [] };
+    if (goal) {
+      if (goal.metric === "tracked_visits") g.value = visitTimes ? S2.countSince(visitTimes, weekStart) : null;
+      else if (goal.metric === "store_orders" || goal.metric === "store_sales") {
+        var wk = orderRows ? S2.storeWeek(orderRows, weekStart, goal.metric === "store_sales" ? goal.currency : null) : null;
+        g.value = wk === null ? null : goal.metric === "store_orders" ? wk.orders : wk.sales;
+        if (goal.metric === "store_sales") g.not_counted = wk === null ? null : wk.not_counted;
+        g.as_of = store.as_of;
+      } else if (goal.metric === "card_visits") {
+        g.value = viewRowsRead ? S2.cardVisitsSince(viewRowsRead, weekStart) : null;
+        g.note = S2.CARD_VISITS_NOTE;
+      } else if (goal.metric === "marketplace_orders") {
+        g.value = await figure("goal.marketplace_orders", async function () {
+          return dashboardTopCount(await supabase.from("marketplace_orders").select("id", { count: "exact", head: true })
+            .eq("seller_id", userId).gte("created_at", new Date(weekStart).toISOString()), "marketplace orders this goal week");
+        });
+      }
+      if (g.value === null && unreadable.indexOf("goal") === -1) unreadable.push("goal");
+    }
+    body.goal = g;
+  }
+
   body._unreadable = unreadable;
   return body;
 }
@@ -44509,6 +44601,155 @@ app.get("/api/dashboard/top", requireAuth, dashboardTopLimiter, async function (
     }
     dashboardTopCache.set(userId, { at: now.getTime(), body: body });
     return res.json(Object.assign({}, body, { cached: false }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ── GET /api/dashboard/pulse (Nov 11 2026, orbit stage 2) ──────────────────────
+   What the orbit's satellites and sparks draw from, between reads of /top: the
+   agents running now, and what happened since the page's last pulse. requireAuth
+   only, like /top: every read is the caller's own rows. No model call, no
+   external call and no write.
+
+   running: [{ agent, started_at, portal }], at most DASHBOARD_PULSE_RUNNING_CAP,
+     by lib/agentLive.js nowState (a processing row under ten minutes old), as
+     /top's running_now; portal is lib/orbitStage2.js AGENT_PORTAL's.
+   events: [{ type, agent, portal_from, portal_to, at }] after ?since= (an ISO
+     time; at most 24 hours back, never ahead of now), oldest first, newest
+     last, at most DASHBOARD_PULSE_EVENT_CAP. No since, or one that does not
+     parse, is now: the first pulse of a page has no events, so nothing old
+     sparks. The types are lib/orbitStage2.js EVENT_TYPES:
+       agent_run           ai_tasks completed (completed_at)
+       proposal_executed   agent_proposals executed (executed_at), except the
+                           actions whose result is read as its own record below
+                           (RECORDED_ELSEWHERE), so one action is one spark
+       store_change        store_change_log (executed_at)
+       card_lead           card_leads (created_at)
+       post_published      social_post_drafts published (Bluesky, Mastodon),
+                           instagram_posts and facebook_posts published,
+                           member_videos uploaded to YouTube (uploaded_at) or
+                           posted to TikTok (tiktok_posted_at)
+       article_published   content_library published here (published_at) or
+                           marked published on the member's site
+                           (external_published_at)
+     portal_from and portal_to are lib/orbitStage2.js eventPortals'.
+   links: every portal pair an event can use (linkPairs), so the page draws the
+     links from the one table.
+
+   BOUNDED: twelve reads, each one table's newest DASHBOARD_PULSE_READ_CAP rows
+   in the last 24 hours (the running read DASHBOARD_PULSE_RUNNING_READ). A read
+   that fails is named in _unreadable and adds no events; it is never guessed.
+   CACHED 15 seconds per member (the events of the last 24 hours, filtered by
+   each request's since), and 6 requests a minute per member: the page polls
+   every 30 seconds, only while it is visible and the orbit is on the screen. */
+var DASHBOARD_PULSE_CACHE_MS = 15 * 1000;
+var DASHBOARD_PULSE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+var DASHBOARD_PULSE_RUNNING_CAP = 12;
+var DASHBOARD_PULSE_EVENT_CAP = 20;
+var DASHBOARD_PULSE_READ_CAP = 20;
+var DASHBOARD_PULSE_RUNNING_READ = 50;
+var dashboardPulseCache = new Map();
+
+const dashboardPulseLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 6,
+  keyGenerator: function (req) { return "dashboard-pulse:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many pulses in a minute. Try again shortly.", reason: "rate_limited" }
+});
+
+async function dashboardPulseBody(userId, now) {
+  var S2 = require("./lib/orbitStage2");
+  var live = require("./lib/agentLive");
+  var nowMs = now.getTime();
+  var from = new Date(nowMs - DASHBOARD_PULSE_LOOKBACK_MS).toISOString();
+  var unreadable = [];
+  var events = [];
+  async function source(name, read, toEvents) {
+    try {
+      var rows = commandCenterRead(await read(), name).data || [];
+      toEvents(rows);
+    } catch (error) {
+      console.error("[dashboard/pulse] the " + name + " read failed for " + userId + ": " + ((error && error.message) || String(error)));
+      unreadable.push(name);
+    }
+  }
+  function add(type, agent, at, actionType) {
+    if (typeof at !== "string" || !isFinite(Date.parse(at))) return;
+    var p = S2.eventPortals(type, agent, actionType);
+    if (!p) return;
+    events.push({ type: type, agent: agent || null, portal_from: p.from, portal_to: p.to, at: new Date(Date.parse(at)).toISOString() });
+  }
+  function newest(table, col, cols) {
+    return supabase.from(table).select(cols).eq("user_id", userId).gte(col, from).order(col, { ascending: false }).limit(DASHBOARD_PULSE_READ_CAP);
+  }
+
+  var running = null;
+  await source("running", function () {
+    return supabase.from("ai_tasks").select("id, agent_type, task_type, status, created_at").eq("user_id", userId).eq("status", "processing")
+      .order("created_at", { ascending: false }).limit(DASHBOARD_PULSE_RUNNING_READ);
+  }, function (open) {
+    running = [];
+    live.AGENT_KEYS.forEach(function (type) {
+      var st = live.nowState(open.filter(function (r) { return r.agent_type === type; }), nowMs);
+      if (st.state === "running") running.push({ agent: type, started_at: st.since, portal: S2.portalOfAgent(type) });
+    });
+    running.sort(function (a, b) { return String(a.started_at).localeCompare(String(b.started_at)); });
+    running = running.slice(0, DASHBOARD_PULSE_RUNNING_CAP);
+  });
+
+  await source("agent runs", function () { return newest("ai_tasks", "completed_at", "agent_type, completed_at").eq("status", "completed"); },
+    function (rows) { rows.forEach(function (r) { add("agent_run", r.agent_type, r.completed_at); }); });
+  await source("proposals", function () { return newest("agent_proposals", "executed_at", "agent_type, action_type, executed_at").eq("status", "executed"); },
+    function (rows) { rows.forEach(function (r) { if (S2.RECORDED_ELSEWHERE.indexOf(r.action_type) === -1) add("proposal_executed", r.agent_type, r.executed_at, r.action_type); }); });
+  await source("store changes", function () { return newest("store_change_log", "executed_at", "executed_at"); },
+    function (rows) { rows.forEach(function (r) { add("store_change", null, r.executed_at); }); });
+  await source("card leads", function () { return newest("card_leads", "created_at", "created_at"); },
+    function (rows) { rows.forEach(function (r) { add("card_lead", null, r.created_at); }); });
+  await source("social posts", function () { return newest("social_post_drafts", "published_at", "published_at").eq("status", "published"); },
+    function (rows) { rows.forEach(function (r) { add("post_published", null, r.published_at); }); });
+  await source("instagram posts", function () { return newest("instagram_posts", "published_at", "published_at").eq("status", "published"); },
+    function (rows) { rows.forEach(function (r) { add("post_published", null, r.published_at); }); });
+  await source("facebook posts", function () { return newest("facebook_posts", "published_at", "published_at").eq("status", "published"); },
+    function (rows) { rows.forEach(function (r) { add("post_published", null, r.published_at); }); });
+  await source("youtube uploads", function () { return newest("member_videos", "uploaded_at", "uploaded_at"); },
+    function (rows) { rows.forEach(function (r) { add("post_published", null, r.uploaded_at); }); });
+  await source("tiktok posts", function () { return newest("member_videos", "tiktok_posted_at", "tiktok_posted_at"); },
+    function (rows) { rows.forEach(function (r) { add("post_published", null, r.tiktok_posted_at); }); });
+  await source("articles", function () { return newest("content_library", "published_at", "published_at"); },
+    function (rows) { rows.forEach(function (r) { add("article_published", null, r.published_at); }); });
+  await source("articles on the member's site", function () { return newest("content_library", "external_published_at", "external_published_at"); },
+    function (rows) { rows.forEach(function (r) { add("article_published", null, r.external_published_at); }); });
+
+  events.sort(function (a, b) { return a.at.localeCompare(b.at); });
+  return { generated_at: now.toISOString(), running: running, events: events, links: S2.linkPairs(), _unreadable: unreadable };
+}
+
+app.get("/api/dashboard/pulse", requireAuth, dashboardPulseLimiter, async function (req, res, next) {
+  try {
+    var userId = req.user.id;
+    var now = new Date();
+    var nowMs = now.getTime();
+    var kept = dashboardPulseCache.get(userId);
+    var cached = !!(kept && nowMs - kept.at < DASHBOARD_PULSE_CACHE_MS);
+    var body;
+    if (cached) {
+      body = kept.body;
+    } else {
+      body = await dashboardPulseBody(userId, now);
+      if (dashboardPulseCache.size >= 1000) {
+        dashboardPulseCache.forEach(function (v, k) { if (nowMs - v.at >= DASHBOARD_PULSE_CACHE_MS) dashboardPulseCache.delete(k); });
+      }
+      dashboardPulseCache.set(userId, { at: nowMs, body: body });
+    }
+    // since: an ISO time at most 24 hours back and never ahead of now; none, or one that does not parse, is now.
+    var asked = typeof req.query.since === "string" && req.query.since.length <= 40 ? Date.parse(req.query.since) : NaN;
+    var sinceMs = isFinite(asked) ? Math.min(Math.max(asked, nowMs - DASHBOARD_PULSE_LOOKBACK_MS), nowMs) : nowMs;
+    var after = body.events.filter(function (e) { return Date.parse(e.at) > sinceMs; });
+    return res.json({ generated_at: body.generated_at, since: new Date(sinceMs).toISOString(), running: body.running,
+      events: after.slice(-DASHBOARD_PULSE_EVENT_CAP), links: body.links, _unreadable: body._unreadable, cached: cached });
   } catch (error) {
     next(error);
   }

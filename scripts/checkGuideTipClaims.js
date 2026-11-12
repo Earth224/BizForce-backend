@@ -1066,14 +1066,23 @@ const B = [
       /store\.low_stock = await figure\("store\.low_stock", [\s\S]{0,500}?return \{ count: stock\.items_at_or_below_reorder_point, /.test(SV) &&
       /body\.proposals_pending = await figure\("proposals_pending", [\s\S]{0,200}?\.from\("agent_proposals"\)[\s\S]{0,200}?\.eq\("status", "pending"\)/.test(SV) &&
       FILES[DASHBOARD].indexOf("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>") !== -1],
-  ["10 dashboard 21", hqTips, "Press \"All tools\" in the middle for every page by group", /Active Queue|Work Queue/,
-    () => /core\.appendChild\(el\("span", "orbit-core-all", "All tools"\)\);/.test(FILES[ORBIT_JS]) &&
+  /* NAMED (Nov 11 2026, orbit stage 2): BEFORE row 21 was "Press "All tools" in the middle for every page by group", with
+     "Go to any tool..." and "Swap". AFTER the tip leads with the weekly goal and the satellites, and keeps "All tools" and
+     "/": "Set a weekly goal" is the button under the core, the ring is the goal's arc (value / target, from /top's goal),
+     the dots are one per agent the pulse says is running, and "All tools" and "/" are proven as before. */
+  ["10 dashboard 21", hqTips, "\"Set a weekly goal\" under the middle fills its ring as the week goes; dots circling it are agents at work", /Active Queue|Work Queue|automatic/,
+    () => /goalBtn = el\("button", "orbit-goal-set", "Set a weekly goal"\);/.test(FILES[ORBIT_JS]) &&
+      /goalBtn\.textContent = set \? "Edit weekly goal" : "Set a weekly goal";/.test(FILES[ORBIT_JS]) &&
+      /var pct = Math\.min\(100, g\.value \/ g\.target \* 100\);/.test(FILES[ORBIT_JS]) &&
+      /goalArc\.setAttribute\("stroke-dasharray", \(on \? gv\.pct : 0\) \+ " 100"\);/.test(FILES[ORBIT_JS]) &&
+      /drawSatellites\(body\.running\);/.test(FILES[ORBIT_JS]) &&
+      /if \(st\.state === "running"\) running\.push\(\{ agent: type, started_at: st\.since, portal: S2\.portalOfAgent\(type\) \}\);/.test(SV) &&
+      /core\.appendChild\(el\("span", "orbit-core-all", "All tools"\)\);/.test(FILES[ORBIT_JS]) &&
       /core\.addEventListener\("click", function \(\) \{ setAllTools\(!state\.allOpen\); \}\);/.test(FILES[ORBIT_JS]) &&
       /GROUPS\.forEach\(function \(g\) \{\n      var sec = el\("div", "orbit-group"\);/.test(FILES[ORBIT_JS]) &&
       /if \(e\.key !== "\/" \|\| e\.ctrlKey \|\| e\.metaKey \|\| e\.altKey \|\| e\.defaultPrevented\) return false;/.test(FILES[ORBIT_JS]) &&
       /if \(!slashKey\(e\)\) return;\n    e\.preventDefault\(\);\n    search\.focus\(\);/.test(FILES[ORBIT_JS]) &&
-      /<input id="orbitSearch" type="search" placeholder="Go to any tool\.\.\."/.test(FILES[DASHBOARD]) &&
-      /var swap = el\("button", "orbit-swap", "Swap"\);/.test(FILES[ORBIT_JS]) && /writeLocal\(JSON\.stringify\(state\.mains\)\);/.test(FILES[ORBIT_JS])],
+      /<input id="orbitSearch" type="search" placeholder="Go to any tool\.\.\."/.test(FILES[DASHBOARD])],
   // group 9 — the directory: ai_agents.description is seeded empty, so a card shows a name and a link
   // NAMED (Oct 28 2026, one honest description per agent): BEFORE "each card here holds only a name and that link", proven
   // by seeding description "" (untrue for any row that held one, as the owner's did). AFTER every card shows the agent's

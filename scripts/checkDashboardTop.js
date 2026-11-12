@@ -52,15 +52,19 @@ const MUTATIONS = {
     "    var blogOnly = {}; loaded.posts.rows.forEach(function (p) { if (p.tracked) blogOnly[p.ref] = true; });\n" +
     "    loaded.visits.rows = loaded.visits.rows.filter(function (v) { return blogOnly[v.ref] === true; });\n"]],
   // orders counted from the marketplace instead of the member's store (F)
-  "orders-from-wrong-table": [[SERVER, "      return supabase.from(\"store_order_summaries\").select(\"id, ordered_at\").eq(\"user_id\", userId).gte(\"ordered_at\", days[0]);",
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE the read selected "id, ordered_at". AFTER the total, currency and status
+  // too, and active orders only (migration 183).
+  "orders-from-wrong-table": [[SERVER, "      return supabase.from(\"store_order_summaries\").select(\"id, ordered_at, total, currency, status\").eq(\"user_id\", userId).eq(\"status\", \"active\").gte(\"ordered_at\", days[0]);",
     "      return supabase.from(\"marketplace_orders\").select(\"id, created_at\").eq(\"seller_id\", userId).gte(\"created_at\", days[0]);"],
     [SERVER, "    return dashboardTopPerDay(rows.map(function (r) { return r.ordered_at; }), days);", "    return dashboardTopPerDay(rows.map(function (r) { return r.created_at; }), days);"]],
   // low stock read from the first page only (F)
   "low-stock-paged-miss": [[SERVER, "    var items = await arrivalsReadAll(\"inventory_items\", function () {\n      return supabase.from(\"inventory_items\")",
     "    var items = await (async function (b) { return commandCenterRead(await b().order(\"id\", { ascending: true }).range(0, 999), \"inventory\").data || []; })(function () {\n      return supabase.from(\"inventory_items\")"]],
   // one card_view_counts read per card (G)
-  "cards-per-card-requests": [[SERVER, "    var viewRows = commandCenterRead(await supabase\n      .from(\"card_view_counts\")\n      .select(\"card_id, day, views\")\n      .in(\"card_id\", ids)\n      .gte(\"day\", weekFrom)\n      .limit(DASHBOARD_TOP_VIEW_ROW_CAP), \"card views\").data || [];",
-    "    var viewRows = [];\n    for (var ci = 0; ci < ids.length; ci++) viewRows = viewRows.concat(commandCenterRead(await supabase\n      .from(\"card_view_counts\")\n      .select(\"card_id, day, views\")\n      .eq(\"card_id\", ids[ci])\n      .gte(\"day\", weekFrom)\n      .limit(DASHBOARD_TOP_VIEW_ROW_CAP), \"card views\").data || []);"]],
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE the read began at weekFrom. AFTER at cardFrom (the earlier of weekFrom and
+  // the UTC day the goal's week begins in).
+  "cards-per-card-requests": [[SERVER, "    var viewRows = commandCenterRead(await supabase\n      .from(\"card_view_counts\")\n      .select(\"card_id, day, views\")\n      .in(\"card_id\", ids)\n      .gte(\"day\", cardFrom)\n      .limit(DASHBOARD_TOP_VIEW_ROW_CAP), \"card views\").data || [];",
+    "    var viewRows = [];\n    for (var ci = 0; ci < ids.length; ci++) viewRows = viewRows.concat(commandCenterRead(await supabase\n      .from(\"card_view_counts\")\n      .select(\"card_id, day, views\")\n      .eq(\"card_id\", ids[ci])\n      .gte(\"day\", cardFrom)\n      .limit(DASHBOARD_TOP_VIEW_ROW_CAP), \"card views\").data || []);"]],
   // a failed read becomes 0 (H)
   "null-becomes-zero": [[SERVER, "read failed for \" + userId + \": \" + message);\n      unreadable.push(name);\n      return null;\n",
     "read failed for \" + userId + \": \" + message);\n      unreadable.push(name);\n      return 0;\n"]],
@@ -252,7 +256,9 @@ function world() {
     .concat(repeat(7, i => ({ id: "i-9" + String(i).padStart(5, "0"), user_id: USER, name: "Low " + i, quantity_on_hand: 1, reorder_point: 5, status: "active", source: "shopify" })))
     .concat([{ id: "i-999999", user_id: USER, name: "Gone", quantity_on_hand: 0, reorder_point: 5, status: "archived", source: "manual" },
       { id: "i-000000x", user_id: OTHER, name: "Theirs low", quantity_on_hand: 0, reorder_point: 9, status: "active", source: "manual" }]);
-  const order = (u, ago) => ({ id: id("so"), user_id: u, connection_id: "conn", platform: "shopify", ordered_at: dayAgo(ago), total: 10 });
+  // NAMED (Nov 11 2026, orbit stage 2): an order summary has a status since migration 183 (default active); the route counts
+  // active ones only. These are all active, as before; checkOrbitStage2 holds the cancelled and refunded cases.
+  const order = (u, ago) => ({ id: id("so"), user_id: u, connection_id: "conn", platform: "shopify", ordered_at: dayAgo(ago), total: 10, status: "active" });
   t.store_order_summaries = [].concat(repeat(2, () => order(USER, 0)), repeat(3, () => order(USER, 1)), [order(USER, 5)], repeat(4, () => order(USER, 8)),
     repeat(4, () => order(USER, 12)), [order(USER, 20)], repeat(9, () => order(LAPSED, 0)));
   t.agent_proposals = [].concat(repeat(2, () => ({ id: id("p"), user_id: USER, status: "pending" })), [{ id: id("p"), user_id: USER, status: "approved" }],
@@ -379,7 +385,9 @@ const keysDeep = (o, out) => { out = out || []; if (o && typeof o === "object") 
   const SCOPE = { content_library: "user_id", outreach_sends: "user_id", member_store_connections: "user_id", inventory_items: "user_id", store_order_summaries: "user_id",
     agent_proposals: "user_id", digital_cards: "user_id", user_certifications: "user_id", user_wallets: "user_id", self_reviews: "user_id", member_email_connections: "user_id",
     crm_customers: "user_id", prospects: "user_id", sms_subscribers: "user_id", crowdfunding_campaigns: "owner_id", routines: "user_id", saved_prompts: "user_id",
-    bizdoc_documents: "owner_id", member_media: "user_id", ai_tasks: "user_id" };
+    bizdoc_documents: "owner_id", member_media: "user_id", ai_tasks: "user_id",
+    // NAMED (Nov 11 2026, orbit stage 2): the weekly goal's row is the member's own too.
+    user_preferences: "user_id" };
   const scopedFor = (log, user, cards, refs) => log.filter(q => {
     if (q.table === "marketplace_orders") return !q.filters.some(f => f[0] === "eq" && (f[1] === "seller_id" || f[1] === "buyer_id") && f[2] === user);
     if (q.table === "card_view_counts") return !q.filters.some(f => f[0] === "in" && f[1] === "card_id" && f[2].every(x => cards.indexOf(x) !== -1));

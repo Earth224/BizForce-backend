@@ -294,6 +294,8 @@ function makeDb() {
       if (row.external_inventory_item_id != null && !/^[0-9]{1,100}$/.test(row.external_inventory_item_id)) return "inventory_items_external_inventory_item_id_check";
     }
     if (name === "store_order_summaries" && !Array.isArray(row.line_items)) return "store_order_summaries_line_items_check";
+    // NAMED (Nov 11 2026, orbit stage 2, migration 183): an order's status is active, cancelled or refunded (absent: the default, active).
+    if (name === "store_order_summaries" && row.status !== undefined && ["active", "cancelled", "refunded"].indexOf(row.status) === -1) return "store_order_summaries_status_check";
     if (name === "store_change_log") {
       if (row.currency != null && !/^[A-Z]{3}$/.test(row.currency)) return "store_change_log_currency_check";
       if (row.location_name != null && String(row.location_name).length > 200) return "store_change_log_location_name_check";
@@ -1426,14 +1428,16 @@ function listAnswers(over) {
      181_etsy_store.sql is above 176 too, by name; "the highest" is checkEtsyConnect R1's, for 181. */
   /* NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE the highest was 181. AFTER the highest is 182 and
      182_amazon_store.sql is above 176 too, by name; "the highest" is checkAmazonConnect R1's, for 182. */
-  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql and 182_amazon_store.sql is 176 or lower (checkAmazonConnect R1)",
-    highest === 182 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+  // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
+  check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql is 176 or lower (checkOrbitStage2 R1)",
+    highest === 183 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
     migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
     migFiles.filter(function (f) { return /^181_/.test(f); }).join() === "181_etsy_store.sql" &&
     migFiles.filter(function (f) { return /^182_/.test(f); }).join() === "182_amazon_store.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return /^183_/.test(f); }).join() === "183_weekly_goal_and_order_status.sql" &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

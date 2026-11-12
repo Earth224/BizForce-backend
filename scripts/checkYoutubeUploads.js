@@ -1784,9 +1784,10 @@ function pageAnswers(over) {
   // by name; "the highest" is checkEtsyConnect R1's.
   // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181 the highest. AFTER 182_amazon_store.sql is above it
   // too, by name; "the highest" is checkAmazonConnect R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql and 182_amazon_store.sql are above it (checkAmazonConnect R1)", highest === 182 &&
+  // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 183 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

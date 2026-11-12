@@ -521,6 +521,11 @@ const EXPECTED_OWN = [
   // reads as a write. It writes nothing and starts no task; checkDashboardTop holds every query it makes to the caller's
   // own rows and to reads, and holds it login-only on purpose, so a lapsed member still sees their own numbers.
   "get /api/dashboard/top"
+  // NAMED (Nov 11 2026, orbit stage 2; classified, not listed): GET /api/dashboard/pulse is login-only and READ-ONLY. It reads the
+  // caller's own running agents and recent events (ai_tasks, agent_proposals, store_change_log, card_leads, social_post_drafts,
+  // instagram_posts, facebook_posts, member_videos, content_library), writes nothing, starts no task and calls no model, and does
+  // not reach loadArrivals, so this file's WRITES pattern finds no write and it belongs on no list here. checkOrbitStage2 holds it
+  // read-only (pulse-writes) and login-only, so a lapsed member still sees their own agents.
 ];
 
 /* Unauthenticated routes that write. */

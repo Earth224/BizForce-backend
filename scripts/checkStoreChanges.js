@@ -263,6 +263,8 @@ function makeDb() {
       if (typeof r.old_value !== "number" || typeof r.new_value !== "number" || !(r.old_value >= 0 && r.new_value >= 0 && r.new_value <= 1000000)) return "store_change_log_values_check";
     }
     if (name === "store_order_summaries" && !Array.isArray(r.line_items)) return "store_order_summaries_line_items_check";
+    // NAMED (Nov 11 2026, orbit stage 2, migration 183): an order's status is active, cancelled or refunded (absent: the default, active).
+    if (name === "store_order_summaries" && r.status !== undefined && ["active", "cancelled", "refunded"].indexOf(r.status) === -1) return "store_order_summaries_status_check";
     return null;
   }
   function defaults(name, row) {
@@ -1109,8 +1111,8 @@ function loadPageScript(answers) {
       migFiles.filter(function (f) { return /^175_/.test(f); }).length === 1 && migFiles.indexOf("175_store_changes.sql") !== -1 &&
       // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
       // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the allowlist adds 180_facebook_pages.sql; "the highest" is checkFacebookPages R1's.
-      // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's. NAMED (Nov 8 2026, Amazon store connection, migration 182): it adds 182_amazon_store.sql too; "the highest" is checkAmazonConnect R1's.
-      migFiles.filter(function (f) { return !/^(176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
+      // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's. NAMED (Nov 8 2026, Amazon store connection, migration 182): it adds 182_amazon_store.sql too; "the highest" is checkAmazonConnect R1's. NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's.
+      migFiles.filter(function (f) { return !/^(176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store|183_weekly_goal_and_order_status)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 175; }) && migFiles.some(function (f) { return /^174_/.test(f); }));
     check("M1b. migration 176 drops 175's Shopify CHECK and adds currency and location_name to store_change_log",
       FILES.migration176.indexOf("ALTER TABLE public.member_store_connections\n  DROP CONSTRAINT member_store_connections_write_platform_check;") !== -1 &&
       FILES.migration176.indexOf("ALTER TABLE public.store_change_log\n  ADD COLUMN IF NOT EXISTS currency text,\n  ADD COLUMN IF NOT EXISTS location_name text;") !== -1);

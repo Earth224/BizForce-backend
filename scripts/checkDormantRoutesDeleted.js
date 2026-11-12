@@ -362,7 +362,9 @@ const ADDED = [
   ["post", "/api/store/amazon/start"],                       // subscribed: the marketplace checked, a single-use state stored, returns Seller Central's consent URL; 503 until configured (487 -> 488)
   ["post", "/api/store/amazon/finish"],                      // subscribed: the seller id checked, state consumed once, the code exchanged, both tokens sealed, participation read, stored (488 -> 489)
   // NAMED (Nov 10 2026, orbit top half): BEFORE 489 routes; AFTER 490, the dashboard's live figures in one read-only answer (checkDashboardTop)
-  ["get", "/api/dashboard/top"]                              // login-only, read-only: the caller's own figures, null with a reason when unreadable; 60 s per-member cache (489 -> 490)
+  ["get", "/api/dashboard/top"],                             // login-only, read-only: the caller's own figures, null with a reason when unreadable; 60 s per-member cache (489 -> 490)
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE 490 routes; AFTER 491, the orbit's satellites and sparks between reads of /top (checkOrbitStage2)
+  ["get", "/api/dashboard/pulse"]                            // login-only, read-only: agents running now and events since ?since=, 15 s per-member cache, 6 a minute (490 -> 491)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

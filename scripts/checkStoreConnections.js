@@ -101,8 +101,10 @@ const MUTATIONS = {
   "plaintext-credentials": ["sync",
     "  return { credentials_ciphertext: sealed.ciphertext, credentials_iv: sealed.iv, credentials_auth_tag: sealed.authTag };\n",
     "  return { credentials_ciphertext: plain, credentials_iv: sealed.iv, credentials_auth_tag: sealed.authTag };\n"],
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE anchored on "currency, then line_items". AFTER the order's status sits
+  // between them, so the email goes after the status.
   "customer-email-stored": ["sync",
-    "    currency: currency,\n    line_items:", "    currency: currency,\n    email: o.email || (o.billing && o.billing.email) || null,\n    line_items:"],
+    "    status: orderStatusOf(platform, o),\n    line_items:", "    status: orderStatusOf(platform, o),\n    email: o.email || (o.billing && o.billing.email) || null,\n    line_items:"],
   "manual-row-overwritten": ["sync",
     "      if (owner && !mine && owner.source == null) { result.skipped_sku_manual++; return; }\n",
     "      if (owner && !mine && owner.source == null) { supabase.from(\"inventory_items\").update({ name: it.name, quantity_on_hand: it.quantity_on_hand }).eq(\"id\", owner.id).then(function () {}); result.skipped_sku_manual++; return; }\n"],
@@ -140,8 +142,9 @@ const MUTATIONS = {
     "var GUARD_RETRIED = [\"network\", \"timeout\"];", "var GUARD_RETRIED = [\"network\", \"timeout\", \"too_large\"];"],
   "guard-refusal-retried": ["sync",
     "      if (guard === null || GUARD_RETRIED.indexOf(guard) === -1) {\n", "      if (guard !== null && GUARD_RETRIED.indexOf(guard) === -1 && guard !== \"blocked\") {\n"],
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE the fields had no status. AFTER status, after currency.
   "woo-orders-fields-widened": ["sync",
-    "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items.sku,line_items.quantity\";", "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,line_items\";"],
+    "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,status,line_items.sku,line_items.quantity\";", "var WOO_ORDER_FIELDS = \"id,date_created_gmt,total,currency,status,line_items\";"],
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): the REST mutations paging-header-dropped and
   // write-scope-accepted are gone with their code; these hold what replaced it.
   "pasted-token-back": ["server",
@@ -254,6 +257,8 @@ function makeDb() {
       if (!manual && !synced) return "inventory_items_source_check";
     }
     if (name === "store_order_summaries" && !Array.isArray(row.line_items)) return "store_order_summaries_line_items_check";
+    // NAMED (Nov 11 2026, orbit stage 2, migration 183): an order's status is active, cancelled or refunded (absent: the default, active).
+    if (name === "store_order_summaries" && row.status !== undefined && ["active", "cancelled", "refunded"].indexOf(row.status) === -1) return "store_order_summaries_status_check";
     return null;
   }
   function defaults(name, row) {
@@ -589,6 +594,9 @@ function mountRoutes(env) {
     isValidUuid: function (v) { return /^[0-9a-f-]{36}$/.test(String(v)); },
     getUserPlan: async function (uid) { return { active: (env.inactive || []).indexOf(uid) === -1 }; },
     FRONTEND_URL: "https://bizforceai.net",
+    // NAMED (Nov 11 2026, orbit stage 2): a successful Sync now clears the member's GET /api/dashboard/top answer (server.js
+    // keeps it in dashboardTopCache, outside this section), so the dashboard reads the store again; Y8b holds it.
+    dashboardTopCache: { deleted: [], delete: function (k) { this.deleted.push(k); return true; } },
     // NAMED (store connections security fix): BEFORE the routes' global fetch was the store stand-in. AFTER it is the
     // tripwire's, and the stores are reached only through require("./lib/guardedFetch").guardedJsonRequest below.
     fetch: globalThis.fetch,
@@ -815,9 +823,12 @@ function shopifyConn(db, userId) {
   check("Y3. the member's own row with the same SKU (manual-1 vs MANUAL-1) is left exactly as it was, and the store's product is skipped and counted",
     J(mine1) === J(manualSku) && J(mine2) === J(manualNoSku) && !synced.some(function (x) { return x.external_id === "variant:12"; }) && r.body.synced.skipped_sku_manual === 1 &&
     J(theirs) === J(otherUser), J([mine1, r.body.synced]));
+  check("Y8b. a successful sync clears the member's dashboard answer (dashboardTopCache), and only theirs (Nov 11 2026, orbit stage 2)",
+    r.status === 200 && J(m.ctx.dashboardTopCache.deleted) === J([USER]), J(m.ctx.dashboardTopCache.deleted));
   check("Y4. a 429 was waited out (Retry-After: 2 s) and retried, and the sync finished", m.sleeps.indexOf(2000) !== -1 && r.body.synced.items_written === 2, J(m.sleeps.slice(0, 8)));
   const orders = m.db.t.store_order_summaries;
-  const allowed = ["connection_id", "created_at", "currency", "external_id", "id", "line_items", "ordered_at", "platform", "total", "updated_at", "user_id"];
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE the summary columns had no status. AFTER status too (active, cancelled or refunded); still no customer field.
+  const allowed = ["connection_id", "created_at", "currency", "external_id", "id", "line_items", "ordered_at", "platform", "status", "total", "updated_at", "user_id"];
   check("Y5. orders: two summaries, across two pages, with the total, the currency and the items as SKU and quantity",
     orders.length === 2 && orders.some(function (o) { return o.external_id === "5001" && o.total === 50 && o.currency === "USD" && J(o.line_items) === J([{ sku: "HAT-RED", quantity: 2 }]); }), J(orders));
   check("Y6. an order summary has exactly the summary columns, and NO customer field anywhere",
@@ -826,11 +837,13 @@ function shopifyConn(db, userId) {
   /* NAMED (Nov 7 2026, migration 176): BEFORE the REST orders URL carried fields=id,created_at,total_price,currency,line_items.
      AFTER the Orders query names its fields: id, createdAt, the total and its currency, and line items' sku and quantity, and
      nothing about a customer; it asks only orders created in the window. */
+  /* NAMED (Nov 11 2026, orbit stage 2): BEFORE id createdAt totalPriceSet. AFTER cancelledAt and displayFinancialStatus too, after createdAt, for the
+     order's status; still nothing about a customer. */
   const orderAsks = graphqlCalls(m.stores, "Orders");
   check("Y7. the orders were asked for with fields limited to id, date, total, currency and line items' SKU and quantity, since the window's start",
     orderAsks.length >= 2 && orderAsks.every(function (c) {
       const q = c.body.query;
-      return /nodes \{ id createdAt totalPriceSet \{ shopMoney \{ amount currencyCode \} \} lineItems\(first: 40\) \{ nodes \{ sku quantity \} \} \}/.test(q) &&
+      return /nodes \{ id createdAt cancelledAt displayFinancialStatus totalPriceSet \{ shopMoney \{ amount currencyCode \} \} lineItems\(first: 40\) \{ nodes \{ sku quantity \} \} \}/.test(q) &&
         !/customer|email|phone|billing|shipping|Address|note/i.test(q) && /^created_at:>='\d{4}-\d{2}-\d{2}T/.test(c.body.variables.search);
     }), J(orderAsks.map(function (c) { return c.body; })).slice(0, 400));
   check("Y7b. the shop's currency was read and stored on the connection", (m.db.t.member_store_connections[0] || {}).currency === "CAD" && graphqlCalls(m.stores, "ShopInfo").length >= 1);
@@ -908,8 +921,9 @@ function shopifyConn(db, userId) {
   check("G4b. WooCommerce's currency is read once a sync, by GET, and stored on the connection",
     wooUrls.filter(function (u) { return u.pathname === "/wp-json/wc/v3/data/currencies/current"; }).length === 1 && wconn.currency === "EUR" && wres.currency === "EUR", J([wres.currency, wconn.currency]));
   const wFields = wOrders.length ? String(wOrders[0].searchParams.get("_fields")).split(",") : [];
-  check("G3. WooCommerce orders ask _fields=id,date_created_gmt,total,currency,line_items.sku,line_items.quantity: the line items' fields by name, never the whole line item",
-    wOrders.length === 1 && wOrders[0].searchParams.get("_fields") === "id,date_created_gmt,total,currency,line_items.sku,line_items.quantity" &&
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE _fields had no status. AFTER status too, after currency, for the order's status.
+  check("G3. WooCommerce orders ask _fields=id,date_created_gmt,total,currency,status,line_items.sku,line_items.quantity: the line items' fields by name, never the whole line item",
+    wOrders.length === 1 && wOrders[0].searchParams.get("_fields") === "id,date_created_gmt,total,currency,status,line_items.sku,line_items.quantity" &&
     SS.WOO_ORDER_FIELDS === wOrders[0].searchParams.get("_fields") &&
     wFields.filter(function (f) { return /^line_items/.test(f); }).every(function (f) { return /^line_items\.[a-z_]+$/.test(f); }) && wFields.indexOf("line_items") === -1,
     wOrders.length && wOrders[0].search);
@@ -1155,7 +1169,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., location_name, created_at, last_sync_at". AFTER
     // marketplace_id and region too, after location_name; still never a credential or a token.
     ce && ce.onDelete === "delete" && /^platform, store_url, status, permission, currency, location_name, marketplace_id, region, created_at, last_sync_at$/.test(ce.select) && oe && oe.onDelete === "delete" &&
-    oe.select === "platform, external_id, ordered_at, total, currency, line_items", J([ce, oe]));
+    // NAMED (Nov 11 2026, orbit stage 2): BEFORE "..., currency, line_items". AFTER status too, after currency.
+    oe.select === "platform, external_id, ordered_at, total, currency, status, line_items", J([ce, oe]));
   // NAMED (Nov 6 2026, store changes, migration 175): BEFORE "store_order_summaries", "calendar_events" were adjacent.
   // AFTER store_change_log sits between them (checkStoreChanges G holds it).
   check("D5. the account delete removes both: summaries in DELETE_ORDER, connections in FINAL_DELETES",
@@ -1349,8 +1364,8 @@ function shopifyConn(db, userId) {
     // NAMED (Nov 7 2026, TikTok posting, migration 178): the allowlist adds 178_tiktok_posting.sql; "the highest" is checkTiktokPosting R1's.
     // NAMED (Nov 7 2026, Instagram posting, migration 179): the allowlist adds 179_instagram_posting.sql; "the highest" is checkInstagramPosting R1's.
     // NAMED (Nov 7 2026, Facebook Pages posting, migration 180): the allowlist adds 180_facebook_pages.sql; "the highest" is checkFacebookPages R1's.
-    // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's. NAMED (Nov 8 2026, Amazon store connection, migration 182): it adds 182_amazon_store.sql too; "the highest" is checkAmazonConnect R1's.
-    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
+    // NAMED (Nov 8 2026, Etsy store connection, migration 181): the allowlist adds 181_etsy_store.sql; "the highest" is checkEtsyConnect R1's. NAMED (Nov 8 2026, Amazon store connection, migration 182): it adds 182_amazon_store.sql too; "the highest" is checkAmazonConnect R1's. NAMED (Nov 11 2026, orbit stage 2, migration 183): it adds 183_weekly_goal_and_order_status.sql too; "the highest" is checkOrbitStage2 R1's.
+    migFiles.filter(function (f) { return !/^(164_bluesky_reply_refs|165_member_mastodon_connections|166_campaign_sharing|167_member_media|168_social_post_images|169_member_email_connections|170_member_email_replies|171_card_counts|172_card_leads|173_mailbox_microsoft|174_card_wallet_count|175_store_changes|176_shopify_oauth|177_youtube_uploads|178_tiktok_posting|179_instagram_posting|180_facebook_pages|181_etsy_store|182_amazon_store|183_weekly_goal_and_order_status)\.sql$/.test(f); }).every(function (f) { return Number(f.split("_")[0]) <= 163; }) &&
     migFiles.some(function (f) { return /^162_/.test(f); }));
   const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
   // NAMED (Nov 7 2026, migration 176): lib/shopifyApi.js, lib/shopifyAuth.js and 176_shopify_oauth.sql join the list.

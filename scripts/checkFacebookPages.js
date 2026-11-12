@@ -1654,9 +1654,10 @@ function pageAnswers(over) {
      only 180". AFTER it is the only 180, and only 181_etsy_store.sql is above it, by name; "the highest" is checkEtsyConnect R1's.
      NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE only 181_etsy_store.sql was above it and 181 the highest.
      AFTER 181_etsy_store.sql and 182_amazon_store.sql are above it, by name; "the highest" is checkAmazonConnect R1's. */
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql and 182_amazon_store.sql are above it (checkAmazonConnect R1)", highest === 182 &&
+  // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 183 &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

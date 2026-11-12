@@ -71,6 +71,20 @@
    scrolled to the orbit and part way, its decorative parts taking no pointer
    (mist-1280.png and mist-1024.png to <polish>).
      POLISH_OUT             that folder (default Downloadspolish)
+   NAMED (Nov 11 2026, orbit stage 2): THE GOAL RING, SATELLITES, LINKS AND SPARKS. Fixtures: goals of
+   12 of 50 tracked visits, 840 of 2000 USD (1 EUR order not counted) and one
+   met at 120%; no goal; 3 agents running; pulse events after the page loaded.
+   Asserted: the arc's length, "Goal met", "Set a weekly goal", "Unavailable";
+   the dialog opens, traps Tab, closes on Escape, saves and clears; Sync now;
+   3 satellites, one fading when it stops, 8 then "+3"; a spark along the right
+   link, none for an older event, none during a turn (the newest 3 wait);
+   reduced motion lights the link and portal only; at 390 px the bar, the count
+   on the Agents disc and a pulse on the portal; the stars unmoved by hover and
+   click; no overflow at 1440, 1024 and 390. GET /api/dashboard/pulse is the
+   second read on load. Screenshots to <stage2>: goal-visits.png,
+   goal-sales-not-counted.png, goal-met.png, no-goal.png, goal-dialog.png,
+   satellites.png, spark-mid-travel.png and phone-390.png.
+     STAGE2_OUT             that folder (default Downloads\stage2)
      TOP_HALF_OUT           that folder (default Downloads\top-half)
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
@@ -94,6 +108,8 @@ const OUT = process.env.CC_TABS_OUT || path.join(os.homedir(), "Downloads", "cc-
 const TOP_OUT = process.env.TOP_HALF_OUT || path.join(os.homedir(), "Downloads", "top-half");
 // NAMED (Nov 11 2026, polish): mist-1280.png, mist-1024.png and stars-390-more-sky.png
 const POLISH_OUT = process.env.POLISH_OUT || path.join(os.homedir(), "Downloads", "polish");
+// NAMED (Nov 11 2026, orbit stage 2)
+const STAGE2_OUT = process.env.STAGE2_OUT || path.join(os.homedir(), "Downloads", "stage2");
 // The frontend commit before the orbit, served from git once to count the dashboard's requests before.
 const BEFORE_ORBIT = "889cb13";
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
@@ -168,11 +184,35 @@ function topBody() {
     wallet: { balance: 1100, exists: true }, marketplace: { orders_this_week: 0 }, self_reviews: { latest_at: ago(30) }, mailbox: { connected: true },
     counts: { crm_customers: 18, prospects: 4, leads: topMode === "store" ? 6 : null, sms_subscribers: 0, campaigns: 1, routines: 2, saved_prompts: 3, purchases: 1, bizdoc_documents: 5 },
     media: { used_bytes: 52428800, cap_bytes: 1073741824 }, agents: { running_now: [] },
-    _unreadable: topMode === "store" ? [] : ["counts.leads (Lead Radar reads the owner account's leads only)"], cached: false
+    _unreadable: topMode === "store" ? [] : ["counts.leads (Lead Radar reads the owner account's leads only)"], cached: false,
+    // NAMED (Nov 11 2026, orbit stage 2)
+    goal: goalBody()
   };
 }
-function apiAnswer(pathname, admin) {
+
+/* NAMED (Nov 11 2026, orbit stage 2): the weekly goal (goalMode: "none", "visits" 12 of 50, "sales" 840 of 2000 USD with 1 EUR order not counted, "met"
+   60 of 50, "unread" a goal whose value could not be read), the pulse (pulseRunning, pulseEvents, each event answered once),
+   and every PUT /api/user/preferences body (putBodies). */
+let goalMode = "none", pulseRunning = [], pulseEvents = [], putBodies = [];
+const S2_LINKS = ["grow|sell", "grow|connect", "grow|agents", "sell|connect", "sell|agents", "connect|agents"];
+function goalBody() {
+  const stores = topMode === "store" ? [{ id: uid(9001), platform: "shopify", currency: "USD", last_sync_at: ago(2) }] : [];
+  const g = { set: false, metric: null, target: null, currency: null, time_zone: null, week_start: "2026-11-09T08:00:00.000Z", value: null,
+    suggested: topMode === "store" ? "store_sales" : "tracked_visits", store_currencies: topMode === "store" ? ["USD"] : [], stores: stores };
+  if (goalMode === "visits" || goalMode === "met" || goalMode === "unread") Object.assign(g, { set: true, metric: "tracked_visits", target: 50, time_zone: "America/Los_Angeles", value: goalMode === "visits" ? 12 : goalMode === "met" ? 60 : null });
+  if (goalMode === "sales") Object.assign(g, { set: true, metric: "store_sales", target: 2000, currency: "USD", time_zone: "America/Los_Angeles", value: 840,
+    not_counted: [{ currency: "EUR", orders: 1, total: 45 }], as_of: ago(2) });
+  return g;
+}
+function pulseBody() {
+  return { generated_at: new Date().toISOString(), since: new Date().toISOString(), running: pulseRunning, events: pulseEvents.splice(0), links: S2_LINKS, _unreadable: [], cached: false };
+}
+function apiAnswer(pathname, admin, request) {
   if (pathname === "/api/dashboard/top") return topBody();
+  // NAMED (Nov 11 2026, orbit stage 2)
+  if (pathname === "/api/dashboard/pulse") return pulseBody();
+  if (pathname === "/api/user/preferences" && request && request.method === "PUT") { try { putBodies.push(JSON.parse(request.postData || "null")); } catch (e) { putBodies.push({ unparsed: String(request.postData) }); } return { ok: true }; }
+  if (/^\/api\/store\/connections\/[^/]+\/sync$/.test(pathname)) return { synced: { orders: 0 } };
   if (pathname === "/api/command-center") return centerBody(admin);
   if (pathname === "/api/auth/me") return { user: { id: uid(1), email: "owner@example.test", role: admin ? "admin" : "member" }, access: { active: true } };
   if (pathname === "/api/ai/tasks") return { tasks: [] };
@@ -265,6 +305,91 @@ async function shotNow(cdp, file) {
   fs.writeFileSync(file, Buffer.from(r.data, "base64"));
 }
 
+
+/* NAMED (Nov 11 2026, orbit stage 2): page-side readings for the goal ring, the setter, the satellites, links and sparks, the phone, and overflow. */
+function s2Helpers() {
+  var vis = function (n) { if (!n) return false; for (var e = n; e && e.nodeType === 1; e = e.parentElement) { var st = getComputedStyle(e); if (st.display === "none" || st.visibility === "hidden" || e.hidden) return false; } return true; };
+  var centreOfCore = function () { var m = document.getElementById("orbitSvg").getScreenCTM(); return { m: m, x: m.a * 340 + m.e, y: m.d * 160 + m.f }; };
+  window.__s2 = {
+    core: function () {
+      var c = document.getElementById("orbitCore"), a = document.querySelector(".orbit-goal-arc"), d = document.querySelector(".orbit-core-arc"), b = document.getElementById("orbitGoalSet");
+      var f = c.querySelector(".orbit-core-figure"), asof = c.querySelector(".orbit-core-asof");
+      var dash = String(getComputedStyle(a).strokeDasharray || "").split(/[ ,]+/).map(parseFloat), pl = Number(a.getAttribute("pathLength")) || 100;
+      return { figure: vis(f) ? f.textContent : "", unit: c.querySelector(".orbit-core-unit").textContent, met: vis(c.querySelector(".orbit-core-met")),
+        asof: vis(asof) ? asof.textContent : "", title: c.getAttribute("title") || "", arcShown: getComputedStyle(a).display !== "none", arcPct: Number(a.getAttribute("data-pct")),
+        arcFrac: +((dash[0] || 0) / pl).toFixed(4), arcR: a.getBoundingClientRect().width / 2, decoShown: getComputedStyle(d).display !== "none",
+        btn: b.textContent, btnShown: vis(b) && b.getBoundingClientRect().width > 0 };
+    },
+    store: function () {
+      var box = document.querySelector("#orbitMain .orbit-main-box[data-card=\"store\"]");
+      if (!box) return null;
+      var a = box.querySelector(".orbit-asof"), sy = box.querySelector(".orbit-sync"), nc = box.querySelector(".orbit-not-counted");
+      return { asof: a ? a.textContent : "", sync: sy ? sy.textContent : "", notCounted: nc ? nc.textContent : "" };
+    },
+    dialog: function () {
+      var back = document.getElementById("orbitGoalDialog"), act = document.activeElement && document.activeElement.id;
+      if (!back) return { open: false, active: act };
+      var box = back.querySelector("[role=\"dialog\"]"), radios = [].slice.call(box.querySelectorAll("input[name=\"orbitGoalMetric\"]"));
+      var lab = document.getElementById(box.getAttribute("aria-labelledby")), cur = box.querySelector(".orbit-goal-cur");
+      return { open: !back.hidden && vis(back), role: box.getAttribute("role"), modal: box.getAttribute("aria-modal"), label: lab ? lab.textContent : "",
+        focusInside: box.contains(document.activeElement), active: act,
+        names: radios.map(function (r) { return r.parentNode.querySelector(".orbit-goal-name").textContent; }),
+        disabled: radios.filter(function (r) { return r.disabled; }).map(function (r) { return r.value; }),
+        hints: [].slice.call(box.querySelectorAll(".orbit-goal-hint")).filter(vis).map(function (h) { return h.textContent; }),
+        checked: (radios.filter(function (r) { return r.checked; })[0] || {}).value || null,
+        currencyShown: vis(cur), currencies: [].slice.call(box.querySelectorAll("#orbitGoalCurrency option")).map(function (o) { return o.value; }),
+        week: box.querySelector("#orbitGoalWeek").textContent, error: box.querySelector("#orbitGoalError").textContent, target: box.querySelector("#orbitGoalTarget").value,
+        clearDisabled: box.querySelector("#orbitGoalClear").disabled };
+    },
+    sats: function () {
+      var o = centreOfCore(), m = o.m;
+      var one = function (g) {
+        var r = g.querySelector("circle").getBoundingClientRect();
+        return { agent: g.getAttribute("data-agent"), portal: g.getAttribute("data-portal"), r: +(Math.hypot((r.left + r.right) / 2 - o.x, (r.top + r.bottom) / 2 - o.y) / m.a).toFixed(2),
+          opacity: Number(getComputedStyle(g).opacity), fill: getComputedStyle(g.querySelector("circle")).fill, title: (g.querySelector("title") || {}).textContent || "" };
+      };
+      var all = [].slice.call(document.querySelectorAll(".orbit-sat")), spin = document.querySelector(".orbit-sats-spin");
+      var links = [].slice.call(document.querySelectorAll(".orbit-link")).map(function (p) {
+        var L = p.getTotalLength(), mm = p.getScreenCTM(), best = 1e9;
+        for (var i = 0; i <= 200; i++) { var q = p.getPointAtLength(L * i / 200); best = Math.min(best, Math.hypot(mm.a * q.x + mm.c * q.y + mm.e - o.x, mm.b * q.x + mm.d * q.y + mm.f - o.y) / m.a); }
+        return { link: p.getAttribute("data-link"), minR: +best.toFixed(1) };
+      });
+      return { dots: all.filter(function (g) { return !g.getAttribute("data-leaving"); }).map(one), leaving: all.filter(function (g) { return !!g.getAttribute("data-leaving"); }).map(one),
+        more: (document.querySelector(".orbit-sats-more") || {}).textContent || "",
+        spin: spin.getAnimations().map(function (a) {
+          var props = {};
+          a.effect.getKeyframes().forEach(function (f) { Object.keys(f).forEach(function (k) { if (["offset", "computedOffset", "easing", "composite"].indexOf(k) === -1) props[k] = 1; }); });
+          return { state: a.playState, dur: a.effect.getTiming().duration, props: Object.keys(props) };
+        }), links: links };
+    },
+    sparkNear: function (link) {
+      var sp = document.querySelector(".orbit-link-spark");
+      if (!sp) return null;
+      var r = sp.querySelector(".orbit-link-spark-dot").getBoundingClientRect(), x0 = (r.left + r.right) / 2, y0 = (r.top + r.bottom) / 2;
+      var p = document.querySelector(".orbit-link[data-link=\"" + link + "\"]"), best = null;
+      if (p) { best = 1e9; var L = p.getTotalLength(), mm = p.getScreenCTM(); for (var i = 0; i <= 400; i++) { var q = p.getPointAtLength(L * i / 400); best = Math.min(best, Math.hypot(mm.a * q.x + mm.c * q.y + mm.e - x0, mm.b * q.x + mm.d * q.y + mm.f - y0)); } }
+      return { link: sp.getAttribute("data-link"), from: sp.getAttribute("data-from"), to: sp.getAttribute("data-to"), t: Number(sp.getAttribute("data-t")),
+        d: best === null ? null : +best.toFixed(2), style: sp.getAttribute("style") || "", transform: sp.getAttribute("transform") || "" };
+    },
+    phone: function () {
+      var core = document.getElementById("orbitCore").getBoundingClientRect(), bar = document.querySelector(".orbit-goal-bar"), br = bar.getBoundingClientRect(), fr = bar.firstChild.getBoundingClientRect();
+      var cnt = document.getElementById("orbitSatCount"), cr = cnt.getBoundingClientRect(), ag = document.querySelector(".orbit-portal[data-portal=\"agents\"] .orbit-disc").getBoundingClientRect();
+      return { bar: { shown: vis(bar), h: br.height, frac: br.width ? +(fr.width / br.width).toFixed(3) : 0, inCore: br.left >= core.left && br.right <= core.right && br.top >= core.top && br.bottom <= core.bottom },
+        count: { shown: vis(cnt), text: cnt.textContent, onAgents: cr.left < ag.right + 8 && cr.right > ag.left - 8 && cr.top < ag.bottom + 8 && cr.bottom > ag.top - 8 },
+        pulsed: [].slice.call(document.querySelectorAll(".orbit-portal.is-pulse")).map(function (p) { return p.getAttribute("data-portal"); }),
+        sparks: document.querySelectorAll(".orbit-link-spark").length };
+    },
+    overflow: function () {
+      var c = document.getElementById("orbitCore"), cr = c.getBoundingClientRect(), b = document.getElementById("orbitGoalSet");
+      var lines = [].slice.call(c.children).filter(vis).filter(function (n) { var r = n.getBoundingClientRect(); return r.height > 0 && (r.top < cr.top - 1 || r.bottom > cr.bottom + 1 || r.left < cr.left - 1 || r.right > cr.right + 1); }).map(function (n) { return n.className; });
+      var back = document.getElementById("orbitGoalDialog"), dbox = back && !back.hidden ? back.querySelector("[role=\"dialog\"]").getBoundingClientRect() : null;
+      return { page: document.documentElement.scrollWidth <= window.innerWidth, coreLines: lines, button: b.scrollWidth <= b.clientWidth + 1,
+        dialogFits: !dbox || (dbox.left >= 0 && dbox.right <= window.innerWidth && dbox.top >= 0 && dbox.bottom <= window.innerHeight) };
+    }
+  };
+  return true;
+}
+
 /* Page-side helpers, installed once per page. */
 const HELPERS = `
 window.__bf = {
@@ -352,7 +477,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
         if (u.origin === origin) await cdp.send("Fetch.continueRequest", { requestId });
         else if (u.hostname === API_HOST) {
           apiCalls.push(request.method + " " + u.pathname);
-          const body = request.method === "OPTIONS" ? "" : JSON.stringify(apiAnswer(u.pathname, admin));
+          const body = request.method === "OPTIONS" ? "" : JSON.stringify(apiAnswer(u.pathname, admin, request));
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,DELETE,OPTIONS" }] });
@@ -468,8 +593,9 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     console.log("    requests on load: before (" + BEFORE_ORBIT + ") " + gets(before).length + " GET, " + before.length + " with preflights [" + gets(before).join(", ") + "]");
     console.log("    requests on load: now " + gets(after).length + " GET, " + after.length + " with preflights [" + gets(after).join(", ") + "]");
     fs.writeFileSync(path.join(TOP_OUT, "requests.json"), JSON.stringify({ before: before, now: after }, null, 2));
-    check("the top half adds exactly one read on load, GET /api/dashboard/top (" + gets(before).length + " GETs before, " + gets(after).length + " now)",
-      gets(after).length === gets(before).length + 1 && extra.length === 1 && extra[0] === "GET /api/dashboard/top", extra.join(", "));
+    // NAMED (Nov 11 2026, orbit stage 2): BEFORE exactly one read more than before the orbit (/top). AFTER two: /top and the first pulse.
+    check("the top half adds exactly two reads on load, GET /api/dashboard/top and GET /api/dashboard/pulse (" + gets(before).length + " GETs before, " + gets(after).length + " now)",
+      gets(after).length === gets(before).length + 2 && extra.length === 2 && extra.slice().sort().join() === "GET /api/dashboard/pulse,GET /api/dashboard/top", extra.join(", "));
     check("no script error from bf-orbit.js", !exceptions.some(e => /bf-orbit/.test(e)), exceptions.filter(e => /bf-orbit/.test(e)).join(" | "));
 
     const PORTAL_KEYS = ["grow", "sell", "connect", "agents", "oracle"];
@@ -495,7 +621,9 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       "portals:[].filter.call(document.querySelectorAll('.orbit-portal'),function(p){return b.shown(p)}).length, rings:document.querySelectorAll('#orbitSvg ellipse').length," +
       "main:[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),function(x){return x.getAttribute('data-card')}), core_text:document.getElementById('orbitCore').textContent};})()");
     check("the orbit renders: the ring, the core and five portals displayed", renders.svg && renders.core && renders.portals === 5 && renders.rings >= 2, JSON.stringify(renders));
-    const coreParts = await evaluate(cdp, "[].map.call(document.querySelectorAll('#orbitCore > span, #orbitCore > strong'),function(x){return x.textContent})");
+    // NAMED (Nov 11 2026, orbit stage 2): BEFORE every span and strong of the core. AFTER only those displayed: the goal's
+    // "Goal met", "As of" and phone bar are in the core too, hidden with no goal.
+    const coreParts = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitCore > span, #orbitCore > strong'),function(x){return window.__bf.shown(x)}).map(function(x){return x.textContent})");
     check("the core reads This week, 29, tracked visits, All tools, and no \"%\"", JSON.stringify(coreParts) === JSON.stringify(["This week", "29", "tracked visits", "All tools"]) && renders.core_text.indexOf("%") === -1, JSON.stringify(coreParts));
     const panel = await evaluate(cdp, "(function(){var p=document.getElementById('orbitPanel'),cs=getComputedStyle(p),s=document.querySelector('.orbit-search');" +
       "return {radius:cs.borderTopLeftRadius, stars:document.querySelectorAll('#orbitStars .orbit-star').length, pw:p.getBoundingClientRect().width, ph:p.getBoundingClientRect().height, holds:p.contains(document.getElementById('orbitStage'))&&p.contains(s)," +
@@ -819,6 +947,264 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await shot(cdp, path.join(TOP_OUT, "member-no-store.png"), "#orbitTop");
     topMode = "store";
 
+    /* ── NAMED (Nov 11 2026, orbit stage 2): THE GOAL RING, THE SETTER, SATELLITES, LINKS AND SPARKS ── Fixtures: a goal of
+       12 of 50 tracked visits; 840 of 2000 USD in store sales with 1 EUR order not counted; a goal met at 120%; no goal; 3
+       agents running; pulse events after the page loaded. In America/Los_Angeles (Emulation.setTimezoneOverride). Screenshots
+       to <stage2>. */
+    console.log("\n══ orbit stage 2 ══");
+    fs.mkdirSync(STAGE2_OUT, { recursive: true });
+    await cdp.send("Emulation.setTimezoneOverride", { timezoneId: "America/Los_Angeles" });
+    const s2Size = W => cdp.send("Emulation.setDeviceMetricsOverride", W === 390 ? { width: 390, height: 844, deviceScaleFactor: 1, mobile: true } : { width: W, height: 1000, deviceScaleFactor: 1, mobile: false });
+    const s2Load = async mode => {
+      goalMode = mode; pulseRunning = []; pulseEvents = [];
+      await openPage(cdp, origin, "dashboard.html", {});
+      await orbitReady();
+      await evaluate(cdp, "(" + s2Helpers.toString() + ")()");
+      await evaluate(cdp, "(document.getElementById('orbitTop').scrollIntoView({block:'start'}),true)");
+      await sleep(300);
+      await steady("stage 2 load " + mode);
+    };
+    const s2Key = async (key, code, vk, shift) => {
+      const mods = shift ? 8 : 0;
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, modifiers: mods });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk, modifiers: mods });
+      await sleep(60);
+    };
+    const s2Pulse = async () => { await evaluate(cdp, "window.BFOrbit.pulse()"); };
+    const nowIso = () => new Date().toISOString();
+    const core2 = () => evaluate(cdp, "window.__s2.core()");
+    const THREE = [{ agent: "seo", started_at: ago(0.2), portal: "grow" }, { agent: "sales", started_at: ago(0.1), portal: "sell" }, { agent: "social", started_at: ago(0.05), portal: "connect" }];
+
+    await s2Size(1440);
+    await s2Load("visits");
+    let c2 = await core2();
+    check("stage 2: a goal of 12 of 50 tracked visits: the core reads 12 and \"of 50 tracked visits\"", c2.figure === "12" && c2.unit === "of 50 tracked visits", JSON.stringify(c2));
+    check("stage 2: its arc is 24% of the core's ring (" + c2.arcFrac + " of the circumference), the fixed arc gone, no \"Goal met\", no \"As of\"",
+      c2.arcShown && c2.arcPct === 24 && Math.abs(c2.arcFrac - 0.24) < 0.005 && c2.arcR > 10 && !c2.decoShown && !c2.met && !c2.asof, JSON.stringify(c2));
+    check("stage 2: the button under the core reads \"Edit weekly goal\"", c2.btnShown && c2.btn === "Edit weekly goal", c2.btn);
+    await shot(cdp, path.join(STAGE2_OUT, "goal-visits.png"), "#orbitTop");
+
+    await s2Load("sales");
+    c2 = await core2();
+    const store2 = await evaluate(cdp, "window.__s2.store()");
+    check("stage 2: 840 of 2000 USD in store sales: 840, \"of 2000 USD\", 42% of the ring", c2.figure === "840" && c2.unit === "of 2000 USD" && c2.arcShown && c2.arcPct === 42 && Math.abs(c2.arcFrac - 0.42) < 0.005, JSON.stringify(c2));
+    check("stage 2: the EUR order is not counted and the page says so, never converted: \"Other currencies not counted: 1 order in EUR (45.00)\" on the core and in the Store box",
+      c2.title === "Other currencies not counted: 1 order in EUR (45.00)" && store2.notCounted === c2.title, JSON.stringify([c2.title, store2]));
+    check("stage 2: a store goal: \"As of <time>\" in the core and the Store box, and Sync now", /^As of \S/.test(c2.asof) && /^As of \S/.test(store2.asof) && store2.sync === "Sync now", JSON.stringify([c2.asof, store2]));
+    await shot(cdp, path.join(STAGE2_OUT, "goal-sales-not-counted.png"), "#orbitTop");
+    apiCalls = [];
+    await evaluate(cdp, "document.querySelector('#orbitMain .orbit-sync').click(), true");
+    await settleCalls();
+    check("stage 2: Sync now posts the store's own sync route, then reads the figures again", apiCalls.indexOf("POST /api/store/connections/" + uid(9001) + "/sync") !== -1 &&
+      apiCalls.filter(x => x === "GET /api/dashboard/top").length === 1 && apiCalls.indexOf("POST /api/store/connections/" + uid(9001) + "/sync") < apiCalls.indexOf("GET /api/dashboard/top"), apiCalls.join(", "));
+
+    await s2Load("met");
+    c2 = await core2();
+    check("stage 2: a goal met at 120% (60 of 50): the arc is the whole ring (100 of 100) and \"Goal met\" shows", c2.figure === "60" && c2.unit === "of 50 tracked visits" && c2.arcShown && c2.arcPct === 100 && Math.abs(c2.arcFrac - 1) < 0.005 && c2.met, JSON.stringify(c2));
+    await shot(cdp, path.join(STAGE2_OUT, "goal-met.png"), "#orbitTop");
+
+    await s2Load("unread");
+    c2 = await core2();
+    check("stage 2: a goal whose value could not be read shows \"Unavailable\", no number and no arc (never 0)", c2.figure === "" && c2.unit === "Unavailable" && !c2.arcShown && !c2.decoShown && !c2.met, JSON.stringify(c2));
+
+    await s2Load("none");
+    c2 = await core2();
+    check("stage 2: no goal: the core as before (29 tracked visits), the fixed three-quarter arc, no goal arc, and \"Set a weekly goal\" under the core",
+      c2.figure === "29" && c2.unit === "tracked visits" && c2.decoShown && !c2.arcShown && c2.btnShown && c2.btn === "Set a weekly goal" && !c2.met && !c2.asof, JSON.stringify(c2));
+    await shot(cdp, path.join(STAGE2_OUT, "no-goal.png"), "#orbitTop");
+
+    // The setter.
+    await evaluate(cdp, "document.getElementById('orbitGoalSet').focus(), document.getElementById('orbitGoalSet').click(), true");
+    await sleep(250);
+    let dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: Set a weekly goal opens the dialog: role dialog, aria-modal, labelled \"Weekly goal\", focus inside, the suggested metric (store sales, a store connected) chosen",
+      dlg.open && dlg.role === "dialog" && dlg.modal === "true" && dlg.label === "Weekly goal" && dlg.focusInside && dlg.checked === "store_sales", JSON.stringify(dlg));
+    check("stage 2: five metrics by plain name, none disabled with a store; a currency choice (USD) for sales; \"Week resets Monday 00:00, America/Los_Angeles\"",
+      dlg.names.join() === "Tracked visits,Store orders,Store sales,Card visits,Marketplace orders" && dlg.disabled.length === 0 && dlg.currencyShown && dlg.currencies.join() === "USD" &&
+      dlg.week === "Week resets Monday 00:00, America/Los_Angeles", JSON.stringify(dlg));
+    await shotNow(cdp, path.join(STAGE2_OUT, "goal-dialog.png"));
+    let trapped = true;
+    for (let i = 0; i < 9; i++) { await s2Key("Tab", "Tab", 9, i % 3 === 2); trapped = trapped && await evaluate(cdp, "window.__s2.dialog().focusInside"); }
+    check("stage 2: Tab and Shift+Tab stay inside the dialog", trapped);
+    await s2Key("Escape", "Escape", 27);
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: Escape closes it and gives focus back to the button", !dlg.open && dlg.active === "orbitGoalSet", JSON.stringify(dlg));
+    await evaluate(cdp, "document.getElementById('orbitGoalSet').click(), true");
+    await sleep(200);
+    putBodies = [];
+    await evaluate(cdp, "(function(){document.getElementById('orbitGoalMetric-tracked_visits').click();var t=document.getElementById('orbitGoalTarget');t.value='2.5';t.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('orbitGoalSave').click();return true})()");
+    await sleep(300);
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: a count goal must be a whole number: 2.5 is refused on the page, nothing sent", dlg.open && /whole number/.test(dlg.error) && putBodies.length === 0, JSON.stringify([dlg.error, putBodies]));
+    apiCalls = [];
+    await evaluate(cdp, "(function(){var t=document.getElementById('orbitGoalTarget');t.value='50';t.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('orbitGoalSave').click();return true})()");
+    await settleCalls();
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: Save sends PUT /api/user/preferences weekly_goal { tracked_visits, 50, America/Los_Angeles }, closes, and reads the figures again",
+      putBodies.length === 1 && JSON.stringify(putBodies[0]) === JSON.stringify({ weekly_goal: { metric: "tracked_visits", weekly_target: 50, time_zone: "America/Los_Angeles" } }) &&
+      !dlg.open && apiCalls.indexOf("GET /api/dashboard/top") > apiCalls.indexOf("PUT /api/user/preferences"), JSON.stringify([putBodies, apiCalls]));
+    await s2Load("visits");
+    await evaluate(cdp, "document.getElementById('orbitGoalSet').click(), true");
+    await sleep(200);
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: with a goal set the dialog opens on it (tracked visits, 50), Clear goal enabled", dlg.open && dlg.checked === "tracked_visits" && dlg.target === "50" && !dlg.clearDisabled, JSON.stringify(dlg));
+    putBodies = [];
+    await evaluate(cdp, "document.getElementById('orbitGoalClear').click(), true");
+    await settleCalls();
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: Clear goal sends weekly_goal null and closes", putBodies.length === 1 && JSON.stringify(putBodies[0]) === JSON.stringify({ weekly_goal: null }) && !dlg.open, JSON.stringify(putBodies));
+    topMode = "nostore";
+    await s2Load("none");
+    await evaluate(cdp, "document.getElementById('orbitGoalSet').click(), true");
+    await sleep(200);
+    dlg = await evaluate(cdp, "window.__s2.dialog()");
+    check("stage 2: with no store the store metrics are disabled with \"Connect a store first\", and tracked visits is chosen",
+      dlg.disabled.join() === "store_orders,store_sales" && dlg.hints.join() === "Connect a store first,Connect a store first" && dlg.checked === "tracked_visits" && !dlg.currencyShown, JSON.stringify(dlg));
+    await s2Key("Escape", "Escape", 27);
+    topMode = "store";
+
+    // Satellites, links and sparks.
+    await s2Load("none");
+    pulseRunning = THREE.slice();
+    await s2Pulse();
+    await sleep(800);
+    let sats = await evaluate(cdp, "window.__s2.sats()");
+    check("stage 2: 3 agents running: 3 satellites on r 58 round the core, coloured by portal (grow, sell, connect: three colours), each titled",
+      sats.dots.length === 3 && sats.dots.map(d => d.portal).sort().join() === "connect,grow,sell" && sats.dots.every(d => Math.abs(d.r - 58) < 2 && d.opacity > 0.95 && /agent, running since/.test(d.title)) &&
+      new Set(sats.dots.map(d => d.fill)).size === 3 && sats.more === "", JSON.stringify(sats));
+    check("stage 2: they turn slowly (one running CSS animation, on transform, 90 s), and the 6 links the pulse names are drawn, none within the core's r 66",
+      sats.spin.length === 1 && sats.spin[0].state === "running" && sats.spin[0].props.join() === "transform" && sats.spin[0].dur === 90000 && sats.links.length === 6 && sats.links.every(l => l.minR > 66), JSON.stringify([sats.spin, sats.links]));
+    await shot(cdp, path.join(STAGE2_OUT, "satellites.png"), "#orbitTop");
+    pulseRunning = THREE.slice(0, 2);
+    await s2Pulse();
+    await sleep(200);
+    const fading = await evaluate(cdp, "window.__s2.sats()");
+    await sleep(800);
+    sats = await evaluate(cdp, "window.__s2.sats()");
+    check("stage 2: one stops: its satellite fades out (opacity on its way down) and is gone; 2 remain", fading.leaving.length === 1 && fading.leaving[0].agent === "social" && fading.leaving[0].opacity < 0.95 &&
+      sats.dots.length === 2 && sats.leaving.length === 0, JSON.stringify([fading.leaving, sats.dots.length, sats.leaving.length]));
+    pulseRunning = ["seo", "sales", "social", "content", "ads", "email", "store", "broker", "rd", "analytics", "community"].map((a, i) => ({ agent: a, started_at: ago(0.01 * (i + 1)), portal: "agents" }));
+    await s2Pulse();
+    await sleep(800);
+    sats = await evaluate(cdp, "window.__s2.sats()");
+    check("stage 2: 11 running: 8 satellites, then \"+3\"", sats.dots.length === 8 && sats.more === "+3", JSON.stringify([sats.dots.length, sats.more]));
+    pulseRunning = THREE.slice();
+    await s2Pulse();
+    await sleep(800);
+
+    pulseEvents = [{ type: "card_lead", agent: null, portal_from: "core", portal_to: "connect", at: ago(1) }];
+    await s2Pulse();
+    await sleep(150);
+    check("stage 2: an event from before the page loaded sends no spark", await evaluate(cdp, "document.querySelectorAll('.orbit-link-spark').length") === 0);
+    pulseEvents = [{ type: "proposal_executed", agent: "seo", portal_from: "grow", portal_to: "connect", at: nowIso() }];
+    await s2Pulse();
+    await sleep(520);
+    const sp = await evaluate(cdp, "window.__s2.sparkNear('grow|connect')");
+    await shotNow(cdp, path.join(STAGE2_OUT, "spark-mid-travel.png"));
+    check("stage 2: an executed proposal (SEO to a post) sends a spark from Grow to Connect along their link, mid-travel and within 3 px of the line",
+      !!sp && sp.link === "grow|connect" && sp.from === "grow" && sp.to === "connect" && sp.t > 0.15 && sp.t < 0.85 && sp.d < 3, JSON.stringify(sp));
+    check("stage 2: the spark writes only a transform and its opacity", !!sp && /^opacity: [\d.]+;?$/.test(sp.style) && /^translate\([\d. -]+\)$/.test(sp.transform), JSON.stringify(sp));
+    await sleep(1100);
+    check("stage 2: about 1.2 s later the spark is gone", await evaluate(cdp, "document.querySelectorAll('.orbit-link-spark').length") === 0);
+    const turnTest = await evaluate(cdp, "(function(){var O=window.BFOrbit,k=['grow','sell','connect','agents','oracle'].filter(function(x){return x!==O.state.open})[1];O.open(k);var turning=!!O.state.turn;" +
+      "var t0=Date.now();var evs=[0,1,2,3,4].map(function(i){return {type:'store_change',agent:null,portal_from:'agents',portal_to:'sell',at:new Date(t0+i).toISOString()}});evs.forEach(O.sparkFor);" +
+      "return {turning:turning,sparks:document.querySelectorAll('.orbit-link-spark').length,queue:O.pulseState.queue.map(function(e){return e.at}),newest:evs.slice(2).map(function(e){return e.at})}})()");
+    await steady("stage 2 turn");
+    const afterTurn = await evaluate(cdp, "document.querySelectorAll('.orbit-link-spark').length");
+    check("stage 2: never during a turn: 5 events in a turn send nothing, the newest 3 wait (the older dropped), and fly once it settles",
+      turnTest.turning && turnTest.sparks === 0 && turnTest.queue.join() === turnTest.newest.join() && afterTurn === 3, JSON.stringify([turnTest, afterTurn]));
+    await sleep(1400);
+
+    // Stars: unchanged by hover and click, satellites and sparks, at 1440 and 390.
+    for (const W of [1440, 390]) {
+      await s2Size(W);
+      await s2Load("visits");
+      await evaluate(cdp, "(document.querySelector('#orbitStars g.orbit-star').__bfMark=1,true)");
+      const sky0 = await evaluate(cdp, SKY_NOW), skyLog = [];
+      const skyAfter = async name => { const now = await evaluate(cdp, SKY_NOW); skyLog.push([name, sameSky(sky0, now) && now.same && now.h === sky0.h]); };
+      const centre = sel => evaluate(cdp, "(function(){var x=document.querySelector(" + JSON.stringify(sel) + ").getBoundingClientRect();return [x.left+x.width/2,x.top+x.height/2]})()");
+      for (const sel of ["#orbitCore", "#orbitGoalSet"]) {
+        const [x, y] = await centre(sel);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+        await sleep(400);
+        await skyAfter("hover " + sel);
+      }
+      const [gx, gy] = await centre("#orbitGoalSet");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: gx, y: gy, button: "left", clickCount: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: gx, y: gy, button: "left", clickCount: 1 });
+      await sleep(300);
+      await skyAfter("the goal dialog open");
+      await s2Key("Escape", "Escape", 27);
+      await skyAfter("the goal dialog closed");
+      pulseRunning = THREE.slice();
+      pulseEvents = [{ type: "proposal_executed", agent: "seo", portal_from: "grow", portal_to: "connect", at: nowIso() }];
+      await s2Pulse();
+      await sleep(600);
+      await skyAfter("satellites and a spark");
+      const [px, py] = await centre(".orbit-portal[data-portal=\"sell\"] .orbit-disc");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: px, y: py, button: "left", clickCount: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: px, y: py, button: "left", clickCount: 1 });
+      await sleep(900);
+      await steady("stage 2 sky click");
+      await skyAfter("a portal clicked and its turn");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 4, y: 4 });
+      const moved2 = skyLog.filter(s => !s[1]).map(s => s[0]);
+      check("stage 2: " + W + " px: every star stays where it is (0.5 px, the same nodes, the panel's height) through hovering the core and the goal button, the dialog, satellites, a spark and a portal's turn",
+        sky0.c.length > 0 && skyLog.length === 6 && moved2.length === 0, moved2.join(", "));
+    }
+
+    // Reduced motion: highlights only.
+    await s2Size(1440);
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await s2Load("visits");
+    pulseRunning = THREE.slice();
+    await s2Pulse();
+    await sleep(300);
+    pulseEvents = [{ type: "proposal_executed", agent: "seo", portal_from: "grow", portal_to: "connect", at: nowIso() }];
+    await s2Pulse();
+    await sleep(200);
+    const rm = await evaluate(cdp, "(function(){var s=window.__s2.sats();return {spin:s.spin.length,dots:s.dots.length,sparks:document.querySelectorAll('.orbit-link-spark').length," +
+      "link:document.querySelector('.orbit-link[data-link=\"grow|connect\"]').classList.contains('is-lit'),portal:document.querySelector('.orbit-portal[data-portal=\"connect\"]').classList.contains('is-lit')}})()");
+    check("stage 2: reduced motion: the satellites stand still (no animation), and an event lights its link and portal with no moving spark",
+      rm.spin === 0 && rm.dots === 3 && rm.sparks === 0 && rm.link && rm.portal, JSON.stringify(rm));
+    await cdp.send("Emulation.setEmulatedMedia", { features: [] });
+
+    // A phone: the slim bar, the count on the Agents disc, a pulse on the portal an event reaches.
+    await s2Size(390);
+    await s2Load("visits");
+    pulseRunning = THREE.slice();
+    await s2Pulse();
+    await sleep(300);
+    pulseEvents = [{ type: "card_lead", agent: null, portal_from: "core", portal_to: "connect", at: nowIso() }];
+    await s2Pulse();
+    await sleep(250);
+    const ph = await evaluate(cdp, "window.__s2.phone()");
+    await shot(cdp, path.join(STAGE2_OUT, "phone-390.png"), "#orbitTop");
+    check("stage 2: at 390 px a slim bar in the core box, 24% filled", ph.bar.shown && ph.bar.h > 0 && ph.bar.h <= 4 && Math.abs(ph.bar.frac - 0.24) < 0.01 && ph.bar.inCore, JSON.stringify(ph.bar));
+    check("stage 2: at 390 px the Agents disc counts 3 agents running", ph.count.shown && ph.count.text === "3" && ph.count.onAgents, JSON.stringify(ph.count));
+    check("stage 2: at 390 px a card lead pulses the Connect portal (no spark, the ring hidden)", ph.pulsed.join() === "connect" && ph.sparks === 0, JSON.stringify(ph));
+
+    // No overflow at 1440, 1024 and 390, with the longest figures (store sales, 11 running) and the dialog open.
+    const flows = [];
+    for (const W of [1440, 1024, 390]) {
+      await s2Size(W);
+      await s2Load("sales");
+      pulseRunning = ["seo", "sales", "social", "content", "ads", "email", "store", "broker", "rd", "analytics", "community"].map((a, i) => ({ agent: a, started_at: ago(0.01 * (i + 1)), portal: "agents" }));
+      await s2Pulse();
+      await sleep(300);
+      const a = await evaluate(cdp, "window.__s2.overflow()");
+      await evaluate(cdp, "document.getElementById('orbitGoalSet').click(), true");
+      await sleep(200);
+      const b = await evaluate(cdp, "window.__s2.overflow()");
+      await s2Key("Escape", "Escape", 27);
+      flows.push(Object.assign({ W }, a, { dialogFits: b.dialogFits, pageAfter: b.page }));
+    }
+    check("stage 2: no overflow at 1440, 1024 and 390 px: the page no wider than the screen, the core's lines inside the core, the goal button's text whole, the dialog inside the screen",
+      flows.every(f => f.page && f.pageAfter && f.coreLines.length === 0 && f.button && f.dialogFits), JSON.stringify(flows));
+    await cdp.send("Emulation.setTimezoneOverride", { timezoneId: "" }).catch(() => {});
+    await s2Size(1280);
+    goalMode = "none"; pulseRunning = []; pulseEvents = [];
+
     /* ── NAMED (Nov 11 2026, polish): THE MIST CLEAR OF THE ORBIT ── At 1440, 1280, 1024 and 390 px, at the top of the page,
        scrolled to the orbit and part of the way, the Termaximus mist's box meets no portal disc, label, core or search;
        its decorative parts take no pointer (pointer-events none on the root, the core and the soul). */
@@ -870,7 +1256,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT + " and " + TOP_OUT);
+  console.log("\nScreenshots: " + OUT + ", " + TOP_OUT + " and " + STAGE2_OUT);
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);

@@ -322,6 +322,8 @@ function makeDb() {
     if (name === "store_order_summaries") {
       if (PLATFORMS4.indexOf(row.platform) === -1) return "store_order_summaries_platform_check";
       if (!Array.isArray(row.line_items)) return "store_order_summaries_line_items_check";
+      // NAMED (Nov 11 2026, orbit stage 2, migration 183): an order's status is active, cancelled or refunded (absent: the default, active).
+      if (name === "store_order_summaries" && row.status !== undefined && ["active", "cancelled", "refunded"].indexOf(row.status) === -1) return "store_order_summaries_status_check";
     }
     if (name === "store_change_log") {
       if (row.currency != null && !/^[A-Z]{3}$/.test(row.currency)) return "store_change_log_currency_check";
@@ -1069,8 +1071,9 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
     ShippingAddress: { Name: "Jane Buyer", AddressLine1: "1 Main Street", City: "Leeds", Phone: "07700900000" } };
   const os = AAPI.orderSummary(rawOrder);
   const ol = AAPI.orderLine({ SellerSKU: "A", QuantityOrdered: 1, Title: "t", BuyerInfo: { GiftMessageText: "Happy birthday Jane" } });
-  check("C7. orderSummary keeps exactly id, created_at, total, currency and line_items; orderLine exactly sku and quantity; neither carries a buyer field",
-    J(Object.keys(os).sort()) === J(["created_at", "currency", "id", "line_items", "total"]) && J(Object.keys(ol).sort()) === J(["quantity", "sku"]) &&
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE five keys. AFTER order_status too (OrderStatus), for the order's status; still no buyer field.
+  check("C7. orderSummary keeps exactly id, created_at, total, currency, order_status and line_items; orderLine exactly sku and quantity; neither carries a buyer field",
+    J(Object.keys(os).sort()) === J(["created_at", "currency", "id", "line_items", "order_status", "total"]) && J(Object.keys(ol).sort()) === J(["quantity", "sku"]) &&
     os.total === 9.5 && os.currency === "USD" && os.created_at === "2026-11-01T10:00:00.000Z" && noSecretIn(J([os, ol])), J([os, ol]));
   const ordersAsked = s.amazon.api("GET", /^\/orders\/v0\/orders$/);
   check("C8. orders asked for the marketplace over the last 60 days, 100 a page", ordersAsked.length === 1 && ordersAsked[0].query.get("MarketplaceIds") === US &&
@@ -1483,7 +1486,10 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
     SQL_LINES.every(function (l) { return FILES.migration.indexOf(l) !== -1; }), SQL_LINES.filter(function (l) { return FILES.migration.indexOf(l) === -1; })[0]);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
-  check("R1. 182_amazon_store.sql is the highest migration, and the only 182", highest === 182 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql", highest);
+  // NAMED (Nov 11 2026, orbit stage 2), migration 183): BEFORE 182_amazon_store.sql was the highest. AFTER it is the only 182 and only
+  // 183_weekly_goal_and_order_status.sql is above it, by name; "the highest" is checkOrbitStage2 R1's.
+  check("R1. 182_amazon_store.sql is the only 182, and only 183_weekly_goal_and_order_status.sql is above it (checkOrbitStage2 R1)", highest === 183 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 182; }).join() === "183_weekly_goal_and_order_status.sql", highest);
   check("G8. the four approved env vars and no other: lib/amazonAuth.js reads only AMAZON_SPAPI_APP_ID, AMAZON_LWA_CLIENT_ID, AMAZON_LWA_CLIENT_SECRET and AMAZON_SPAPI_DRAFT; lib/amazonApi.js reads none",
     J((stripComments(FILES.auth).match(/"AMAZON_[A-Z_]+"/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; }).sort()) ===
       J(["\"AMAZON_LWA_CLIENT_ID\"", "\"AMAZON_LWA_CLIENT_SECRET\"", "\"AMAZON_SPAPI_APP_ID\"", "\"AMAZON_SPAPI_DRAFT\""]) &&

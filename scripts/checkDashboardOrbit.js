@@ -215,8 +215,9 @@ const MUTATIONS = {
   // something below the top half changed (O1)
   "below-top-half-changed": [[DASH, "<section id=\"businessProfileSection\" class=\"bf-section\">", "<p>A new line.</p>\n<section id=\"businessProfileSection\" class=\"bf-section\">"]],
   // NAMED (Nov 11 2026, polish): the retired card order read again by GET /api/user/preferences (O1b)
-  "order-setting-read": [[SERVER, ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order\")",
-    ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, dashboard_card_order, dashboard_card_custom\")"]],
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE the select ended at agent_card_order. AFTER the five goal columns follow it.
+  "order-setting-read": [[SERVER, ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at\")",
+    ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, dashboard_card_order, dashboard_card_custom\")"]],
   // ... and written again by PUT /api/user/preferences (O1b)
   "order-setting-written": [[SERVER, "    if (req.body.notifications_enabled !== undefined) {\n",
     "    if (req.body.dashboard_card_order !== undefined) updates.dashboard_card_order = req.body.dashboard_card_order;\n    if (req.body.notifications_enabled !== undefined) {\n"]]
@@ -349,7 +350,8 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const prefGet = (/app\.get\("\/api\/user\/preferences"[\s\S]*?\n\}\);\n/.exec(SV_CODE) || [""])[0], prefPut = (/app\.put\("\/api\/user\/preferences"[\s\S]*?\n\}\);\n/.exec(SV_CODE) || [""])[0];
   check("O1b GET /api/user/preferences neither reads nor answers dashboard_card_order or dashboard_card_custom (its select names the five settings it serves)",
     prefGet.length > 200 && !/dashboard_card/.test(prefGet) &&
-    prefGet.indexOf(".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order\")") !== -1, prefGet.slice(0, 300));
+    // NAMED (Nov 11 2026, orbit stage 2): BEFORE the five settings. AFTER the weekly goal's five columns too (migration 183), after them.
+    prefGet.indexOf(".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at\")") !== -1, prefGet.slice(0, 300));
   check("O1b PUT /api/user/preferences never writes them (an old page sending them is ignored), and no server code names them", prefPut.length > 200 && !/dashboard_card/.test(prefPut) &&
     !/dashboard_card_order|dashboard_card_custom|DASHBOARD_CARD|dashboardCardCustomProblem/.test(SV_CODE), (SV_CODE.match(/[^\n]*dashboard_card[^\n]*/g) || []).slice(0, 3).join(" | "));
   const ydEntry = (() => { try { const m = { exports: {} }; new Function("module", "exports", "require", FILES[YOURDATA])(m, m.exports, n => require(n.charAt(0) === "." ? path.join(REPO, "lib", n) : n)); return (m.exports.DATA || []).filter(e => e.table === "user_preferences")[0]; } catch (e) { return { err: e.message }; } })();
@@ -667,8 +669,9 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("every transition moves only opacity or transform", transitions.length > 0 && transitions.every(t => t.replace(/^transition:/, "").split(",").every(part => /^\s*(opacity|transform|none)\b/.test(part))), transitions.join(" | "));
   const frames = (CSS.match(/@keyframes [a-zA-Z]+\{[\s\S]*?\}\}/g) || []);
   // NAMED (Nov 11 2026, one living sky): one keyframe (the beam's dot) became four: the dot and the stars' twinkle, flare and glint.
-  check("every keyframe sets only transform and opacity (the beam's dot, and the stars' twinkle, flare and glint)", frames.length === 4 &&
-    frames.map(k => /@keyframes ([a-zA-Z]+)/.exec(k)[1]).sort().join() === "orbitDot,orbitFlare,orbitGlint,orbitTwinkle" && frames.every(k => (k.replace(/@keyframes [a-zA-Z]+\{/, "").match(/[a-z-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity")), frames.join(" | "));
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE four. AFTER six: the satellites' slow turn (orbitSatSpin) and a phone portal's pulse (orbitPulse) too.
+  check("every keyframe sets only transform and opacity (the beam's dot, the stars' twinkle, flare and glint, the satellites' turn and the portal pulse)", frames.length === 6 &&
+    frames.map(k => /@keyframes ([a-zA-Z]+)/.exec(k)[1]).sort().join() === "orbitDot,orbitFlare,orbitGlint,orbitPulse,orbitSatSpin,orbitTwinkle" && frames.every(k => (k.replace(/@keyframes [a-zA-Z]+\{/, "").match(/[a-z-]+(?=:)/g) || []).every(p => p === "transform" || p === "opacity")), frames.join(" | "));
   const placeFn = s.definitionOf ? (FILES[ORBIT].match(/  function place\(\) \{[\s\S]*?\n  \}\n/) || [""])[0] : "";
   check("each frame writes only transforms (place: style.transform and a transform attribute)", placeFn.length > 100 && !/\.style\.(?!transform)[a-zA-Z]+\s*=|setAttribute\("(?!transform)/.test(placeFn), placeFn.slice(0, 200));
 
@@ -697,15 +700,18 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   console.log("\n══ O13. one read on load and per Refresh, none per portal ══");
   const C = page();
   await settle();
-  check("one GET /api/dashboard/top on load, and no other request", C.fetches.length === 1 && C.fetches[0] === "https://api.test/api/dashboard/top", C.fetches.join(","));
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE one request on load. AFTER two: /top and the first pulse (no since, so no old event); the pulse is
+  // read again only on its own timer (checkOrbitStage2), never by a portal, All tools, Swap or Refresh.
+  check("one GET /api/dashboard/top and one GET /api/dashboard/pulse on load, and no other request", C.fetches.length === 2 &&
+    C.fetches.slice().sort().join() === "https://api.test/api/dashboard/pulse,https://api.test/api/dashboard/top", C.fetches.join(","));
   ["grow", "sell", "connect", "agents", "oracle"].forEach(k => C.d.querySelector(".orbit-portal[data-portal=\"" + k + "\"]").click());
   C.d.getElementById("orbitCore").click();
   C.d.querySelectorAll("#orbitMain .orbit-swap")[0].click();
   await settle();
-  check("opening every portal, All tools and Swap reads nothing more", C.fetches.length === 1, C.fetches.length);
+  check("opening every portal, All tools and Swap reads nothing more", C.fetches.length === 2, C.fetches.length);
   C.d.getElementById("orbitRefresh").click();
   await settle();
-  check("Refresh reads the route once more", C.fetches.length === 2, C.fetches.length);
+  check("Refresh reads the route once more", C.fetches.length === 3 && C.fetches[2] === "https://api.test/api/dashboard/top", C.fetches.length);
   check("the page loads bf-orbit.js once, right after the template", FILES[DASH].split("<script src=\"/scripts/bf-orbit.js\"></script>").length === 2 &&
     FILES[DASH].indexOf("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>") !== -1);
 

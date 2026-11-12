@@ -291,6 +291,8 @@ function makeDb() {
     if (name === "store_order_summaries") {
       if (["shopify", "woocommerce", "etsy"].indexOf(row.platform) === -1) return "store_order_summaries_platform_check";
       if (!Array.isArray(row.line_items)) return "store_order_summaries_line_items_check";
+      // NAMED (Nov 11 2026, orbit stage 2, migration 183): an order's status is active, cancelled or refunded (absent: the default, active).
+      if (name === "store_order_summaries" && row.status !== undefined && ["active", "cancelled", "refunded"].indexOf(row.status) === -1) return "store_order_summaries_status_check";
     }
     if (name === "store_change_log" && row.currency != null && !/^[A-Z]{3}$/.test(row.currency)) return "store_change_log_currency_check";
     if (name === "oauth_states") {
@@ -924,8 +926,9 @@ function allText(n) { return n ? n.textContent : ""; }
     J(sum.line_items) === J([{ sku: "HAT-S-RED", quantity: 2 }, { sku: "MUG-1", quantity: 1 }]) && !/Jane|Main Street|gift wrap|example\.com|Leeds/.test(J(s.db.t)), J(sum));
   const rs = EAPI.receiptSummary({ receipt_id: 5, created_timestamp: 1, name: "Jane Buyer", buyer_email: BUYER_EMAIL, first_line: "x",
     grandtotal: { amount: 100, divisor: 100, currency_code: "USD" }, transactions: [{ sku: "A", quantity: 1, title: "t", buyer_user_id: 1 }] });
-  check("C6. receiptSummary keeps exactly id, created_at, total, currency and line_items of sku and quantity, before anything else touches the receipt",
-    J(Object.keys(rs).sort()) === J(["created_at", "currency", "id", "line_items", "total"]) && J(rs.line_items) === J([{ sku: "A", quantity: 1 }]) && noSecretIn(J(rs)), J(rs));
+  // NAMED (Nov 11 2026, orbit stage 2): BEFORE five keys. AFTER the receipt's status too, for the order's status; still no buyer field.
+  check("C6. receiptSummary keeps exactly id, created_at, total, currency, status and line_items of sku and quantity, before anything else touches the receipt",
+    J(Object.keys(rs).sort()) === J(["created_at", "currency", "id", "line_items", "status", "total"]) && J(rs.line_items) === J([{ sku: "A", quantity: 1 }]) && noSecretIn(J(rs)), J(rs));
   check("C7. receipts asked for the last 60 days (min_created), 100 a page", s.etsy.api("GET", /\/receipts$/).length === 1 &&
     Number(s.etsy.api("GET", /\/receipts$/)[0].query.get("min_created")) === Math.floor((NOW - 60 * 86400000) / 1000) && s.etsy.api("GET", /\/receipts$/)[0].query.get("limit") === "100");
   check("C8. the shop's currency is stored; every read was a GET with x-api-key and the Bearer token; no PUT",
@@ -1232,9 +1235,10 @@ function allText(n) { return n ? n.textContent : ""; }
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
   // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181_etsy_store.sql was the highest. AFTER it is the only
   // 181 and only 182_amazon_store.sql is above it, by name; "the highest" is checkAmazonConnect R1's.
-  check("R1. 181_etsy_store.sql is the only 181, and only 182_amazon_store.sql is above it (checkAmazonConnect R1)", highest === 182 &&
+  // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
+  check("R1. 181_etsy_store.sql is the only 181, and only 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 183 &&
     migFiles.filter(function (x) { return /^181_/.test(x); }).join() === "181_etsy_store.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 181; }).join() === "182_amazon_store.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 181; }).join() === "182_amazon_store.sql,183_weekly_goal_and_order_status.sql", highest);
   check("G8. no other new env var: lib/etsyAuth.js reads only ETSY_KEYSTRING and ETSY_SHARED_SECRET, lib/etsyApi.js reads none",
     (stripComments(FILES.auth).match(/env\.[A-Z_]+/g) || []).sort().join() === "env.ETSY_KEYSTRING,env.ETSY_KEYSTRING,env.ETSY_SHARED_SECRET,env.ETSY_SHARED_SECRET" &&
     !/process\.env|env\.[A-Z]/.test(stripComments(FILES.api)));
