@@ -37,6 +37,23 @@
          hidden truly hides; the row scrolls sideways; the pills are smaller;
      T4  the preview keeps updating whichever tab is open.
 
+   NAMED (Nov 11 2026, card exports and phone layout): frontend "Card exports match
+   the preview (border without CSS mask); public card centred on phones; card
+   maker fits on phones; QR wording" added:
+     X1  all three exports render with cardExportOptions(): scale 3, useCORS, no
+         taint, and onclone = unmaskBrandBorder;
+     X2  that onclone, on html2canvas's copy only: the masked layer loses its mask
+         and paint, a canvas.card-brand-ring is put in front of it, and the live
+         preview keeps its mask; gradient text gets a solid fill in the copy;
+     X3  each border style (Glow, None, Neon Pulse, Gold, Holo Rainbow) reaches the
+         ring with its own computed gradient, which parseCssGradient reads;
+     X4  the public card is a column (card, then footer), centred across;
+     X5  the card maker's upload rows wrap;
+     X6  the wording word for word: the short-link note, the privacy note, the
+         card-view guide tip, and card-view's descriptions (no "scan the QR code").
+   The pixels themselves are compared in a real browser by
+   scripts/browserCheckCardMaker.js.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check.
    BIZFORCE_FRONTEND_DIR overrides the frontend location.
@@ -54,6 +71,7 @@ const MUTATE = process.env.MUTATE || "";
 const PRE = "080740d";
 
 const DC = "digital-cards.html", CV = "card-view.html", TABS_JS = "scripts/bf-tabs.js", BFCARD = "scripts/bf-card.js";
+const GUIDE = "scripts/termaximus-guide.js"; // NAMED (Nov 11 2026, card exports and phone layout): the card-view tip's wording
 const CPL_PATH = path.join(REPO, "lib", "cardPage.js");
 
 const MUTATIONS = {
@@ -64,8 +82,9 @@ const MUTATIONS = {
   // the public card draws its QR whatever the owner chose (S3)
   "qr-on-public-when-off": [[CV, "  var on = ml.show_qr === true;\n", "  var on = true;\n"]],
   // the PNG taken with the QR shown though it is off (S3)
-  "qr-in-png-when-off": [[DC, "    var canvas = await html2canvas(el, { scale: 3, useCORS: true, allowTaint: false });\n    var link = document.createElement(\"a\");\n",
-    "    el.classList.remove(\"qr-off\");\n    var canvas = await html2canvas(el, { scale: 3, useCORS: true, allowTaint: false });\n    var link = document.createElement(\"a\");\n"]],
+  // NAMED (Nov 11 2026, card exports and phone layout): re-anchored on the call's new options, cardExportOptions().
+  "qr-in-png-when-off": [[DC, "    var canvas = await html2canvas(el, cardExportOptions());\n    var link = document.createElement(\"a\");\n",
+    "    el.classList.remove(\"qr-off\");\n    var canvas = await html2canvas(el, cardExportOptions());\n    var link = document.createElement(\"a\");\n"]],
   // the print file taken with the QR shown though it is off (S3)
   "qr-in-print-when-off": [[DC, "    /* Render at 3x (", "    el.classList.remove(\"qr-off\");\n    /* Render at 3x ("]],
   // the "Scan to connect" label left on the card when the QR is off (S3)
@@ -88,7 +107,21 @@ const MUTATIONS = {
   // a page rule that shows every panel whatever hidden says (T3)
   "hidden-overridden": [[DC, "    #cardEdTabs .ed-panel[hidden]{display:none!important}\n", "    #cardEdTabs .ed-panel{display:flex!important}\n"]],
   // the tab not remembered (T3)
-  "tab-not-remembered": [[DC, "    storage: { kind: \"session\", key: \"bf_card_ed_tab\" },\n", "    storage: { kind: \"session\", key: \"bf_card_ed_tab_\" + Math.random() },\n"]]
+  "tab-not-remembered": [[DC, "    storage: { kind: \"session\", key: \"bf_card_ed_tab\" },\n", "    storage: { kind: \"session\", key: \"bf_card_ed_tab_\" + Math.random() },\n"]],
+  // NAMED (Nov 11 2026, card exports and phone layout):
+  // the export's copy keeps the CSS mask html2canvas cannot draw (X2)
+  "mask-back-in-export": [[DC, "  copy.style.setProperty(\"-webkit-mask\", \"none\", \"important\");\n  copy.style.setProperty(\"mask\", \"none\", \"important\");\n  copy.style.setProperty(\"background\", \"none\", \"important\");\n", ""]],
+  // the export drops the border altogether: no ring drawn (X2, X3)
+  "border-dropped-from-export": [[DC, "  copy.parentNode.insertBefore(brandRingCanvas(live, doc, CARD_EXPORT_SCALE), copy);\n", ""]],
+  // the public card back in a row, the footer beside it (X4)
+  "footer-beside-card": [[CV, "    body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start}\n", "    body{display:flex;align-items:center;justify-content:center}\n"]],
+  // the upload rows kept on one line (X5)
+  "upload-row-nowrap": [[DC, "    .vid-upload-row{flex-wrap:wrap}\n", "    .vid-upload-row{flex-wrap:nowrap}\n"]],
+  // the short-link note says the QR is always there (X6)
+  "qr-always-wording": [[DC, "This is your card's link; if you show a QR code, it opens this link once the card is saved.", "Your QR code opens this link once the card is saved."]],
+  // card-view's description tells people to scan a QR code that may not be shown (X6)
+  "scan-qr-description": [[CV, "<meta name=\"description\" content=\"A digital business card made with BizForce AI. Open the card to see contact details and save the contact.\"/>",
+    "<meta name=\"description\" content=\"A digital business card made with BizForce AI. Tap to call or email, scan the QR code to open the card, and save the contact to your phone in one tap.\"/>"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -104,7 +137,7 @@ function file(f) {
   }
   return FILES[f];
 }
-[DC, CV, TABS_JS, BFCARD].forEach(file);
+[DC, CV, TABS_JS, BFCARD, GUIDE].forEach(file);
 if (MUTATE) {
   for (const [f, from, to] of MUTATIONS[MUTATE]) FILES[f] = s.replaceOnce(file(f), from, to, MUTATE + " in " + f);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
@@ -165,9 +198,9 @@ async function mount(page, o) {
     toDataURL(text, opts, cb) { log.dataUrls.push({ text: String(text), width: opts && opts.width }); cb(null, "data:image/png;base64,QUJD"); },
     toString(text, opts, cb) { log.svgs.push({ text: String(text), type: opts && opts.type }); cb(null, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"); }
   };
-  w.html2canvas = async el => {
+  w.html2canvas = async (el, opts) => {
     const d = w.document;
-    log.snaps.push({ el: el && el.id, qrShown: visible(w, d.getElementById("cardQrBlock")), labelShown: visible(w, d.querySelector("#cardPreview .card-qr-label")),
+    log.snaps.push({ opts, el: el && el.id, qrShown: visible(w, d.getElementById("cardQrBlock")), labelShown: visible(w, d.querySelector("#cardPreview .card-qr-label")),
       videoQrShown: visible(w, d.getElementById("cardVideoQR")), qrDrawn: !!(d.getElementById("qrCanvas") || { getAttribute() { return null; } }).getAttribute("data-drawn") });
     throw new Error("check: snapshot recorded");
   };
@@ -367,6 +400,102 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
     FILES[CV].indexOf("#cardPreview.qr-bottom-left .card-video-qr-ov,#cardPreview.qr-top-left .card-video-qr-ov{right:auto;left:16px}") !== -1 && /<div class="cv-qr-block" id="cvQrBlock" hidden>/.test(FILES[CV]));
   const shellOk = (() => { try { return fs.readFileSync(path.join(REPO, "lib", "cardShell.generated.js"), "utf8").indexOf("cvQrBlock") !== -1; } catch (e) { return false; } })();
   check("S3 the server's card shell (lib/cardShell.generated.js) is built from this card-view.html", shellOk);
+
+  /* ── X1-X6. card exports and phone layout (NAMED Nov 11 2026, card exports and phone layout) ── */
+  console.log("\n══ X1-X3. the exports: no CSS mask in html2canvas's copy, the border drawn as a ring ══");
+  const X = await mount(DC);
+  const xd = X.d, xw = X.w;
+  check("X the card maker's scripts run without an error", X.errors.length === 0, X.errors.join(" | "));
+  await xw.downloadCard(); await xw.exportPrintFile(); await xw.shareCardImage();
+  const optsOk = X.log.snaps.map(x => !!x.opts && x.opts.scale === 3 && x.opts.useCORS === true && x.opts.allowTaint === false && x.opts.onclone === xw.unmaskBrandBorder);
+  check("X1 Download PNG, Export Print File and Share as Image all render with cardExportOptions(): scale 3, useCORS, no taint, onclone unmaskBrandBorder",
+    X.log.snaps.length === 3 && optsOk.every(Boolean) && (FILES[DC].match(/html2canvas\(el, cardExportOptions\(\)\)/g) || []).length === 3 &&
+    (FILES[DC].match(/html2canvas\(/g) || []).length === 3, J(optsOk));
+  // html2canvas's copy of the page: the same markup and styles, no scripts; its canvases record what is drawn.
+  function exportCopy() {
+    const C = new JSDOM(xd.documentElement.outerHTML);
+    const calls = [];
+    const grad = () => ({ addColorStop: (at, c) => calls.push(["addColorStop", at, c]) });
+    const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (k === "createLinearGradient" ? (...a) => { calls.push([k].concat(a)); return grad(); } : (...a) => { calls.push([k].concat(a)); })), set: (t, k, v) => { t[k] = v; return true; } });
+    C.window.HTMLCanvasElement.prototype.getContext = function () { return ctx; };
+    xw.unmaskBrandBorder(C.window.document);
+    const copy = C.window.document.querySelector("#cardPreview .card-brand-border");
+    const ring = copy && copy.previousElementSibling;
+    const isRing = !!(ring && ring.tagName === "CANVAS" && ring.classList.contains("card-brand-ring"));
+    return { C, copy, ring: isRing ? ring : null, data: isRing ? JSON.parse(ring.getAttribute("data-ring") || "{}") : null, calls, style: copy ? copy.getAttribute("style") || "" : "" };
+  }
+  const liveLayer = xd.querySelector("#cardPreview .card-brand-border");
+  // jsdom lays nothing out: the layer is given a card's size. And its style cascade lets a 'background' shorthand
+  // undo a later background-clip:text, so the name's gradient text is set inline here, as a browser computes it.
+  Object.defineProperty(liveLayer, "offsetWidth", { configurable: true, value: 340 });
+  Object.defineProperty(liveLayer, "offsetHeight", { configurable: true, value: 200 });
+  const NAME_FX = "background-image: linear-gradient(135deg, rgb(34, 211, 238), rgb(168, 85, 247)); -webkit-background-clip: text; background-clip: text; color: transparent;";
+  xd.getElementById("pName").setAttribute("style", NAME_FX);
+  const ex = exportCopy();
+  const prop = (st, p) => [st.getPropertyValue(p), st.getPropertyPriority(p)];
+  check("X2 in the copy, the masked layer loses its mask and its paint (mask, -webkit-mask and background none, !important), keeping its stamps",
+    !!ex.copy && J(prop(ex.copy.style, "mask")) === J(["none", "important"]) && /-webkit-mask:\s*none\s*!important/.test(ex.style) &&
+    J(prop(ex.copy.style, "background")) === J(["none", "important"]) && J(prop(ex.copy.style, "animation")) === J(["none", "important"]) && ex.copy.className === "card-brand-border", ex.style);
+  check("X2 in the copy, a canvas.card-brand-ring is put in front of the layer, over the card (z-index 30), clipped to the ring (evenodd) and painted",
+    !!ex.ring && /z-index:\s*30/.test(ex.ring.getAttribute("style")) && ex.calls.some(c => c[0] === "clip" && c[1] === "evenodd") &&
+    ex.calls.filter(c => c[0] === "fillRect").length >= 3, J(ex.calls.slice(0, 8)));
+  check("X2 the live preview is not touched: its layer keeps no inline style and no ring is added to the page",
+    !!liveLayer && liveLayer.getAttribute("style") === null && xd.querySelectorAll(".card-brand-ring").length === 0 && /mask:linear-gradient\(#fff 0 0\) content-box,linear-gradient\(#fff 0 0\);mask-composite:exclude/.test(FILES[DC]));
+  const textLive = Array.prototype.filter.call(xd.querySelectorAll("#cardPreview *"), n => { const c = xw.getComputedStyle(n); return (c.webkitBackgroundClip || c.backgroundClip) === "text"; });
+  const pName = ex.C.window.document.getElementById("pName");
+  check("X2 gradient text (the name) is filled with its gradient's first colour in the copy, not painted as a bar, and stays a gradient on the page",
+    textLive.some(n => n.id === "pName") && !!pName && J(prop(pName.style, "background")) === J(["none", "important"]) && J(prop(pName.style, "color")) === J(["rgb(34, 211, 238)", "important"]) &&
+    xd.getElementById("pName").getAttribute("style") === NAME_FX && /linear-gradient/.test(xw.getComputedStyle(xd.getElementById("pName")).backgroundImage) &&
+    /\.card-preview\[data-theme="dark"\] \.card-name\{background:linear-gradient\(135deg,#22d3ee,#a855f7\);-webkit-background-clip:text;background-clip:text;color:transparent\}/.test(css),
+    J([textLive.map(n => n.id || n.className), pName && pName.getAttribute("style")]));
+  const BASE = 5, STOPS = { glow: BASE, none: BASE, "neon-pulse": BASE, gold: 4, "holo-rainbow": 7 };
+  const FIRST = { glow: "rgb(26, 58, 92)", none: "rgb(26, 58, 92)", "neon-pulse": "rgb(26, 58, 92)", gold: "rgb(255, 215, 0)", "holo-rainbow": "rgb(255, 0, 128)" };
+  const styleSeen = Object.keys(STOPS).map(st => {
+    xd.querySelector("[data-border='" + st + "']").click();
+    const e = exportCopy(), live = xw.getComputedStyle(xd.querySelector("#cardPreview .card-brand-border")).backgroundImage;
+    const g = e.data && xw.parseCssGradient(e.data.image);
+    const stops = e.calls.filter(c => c[0] === "addColorStop").map(c => c[2]);
+    // the ring's own stops, then 4 for its two inset shades
+    return [st, !!e.ring && e.data.image === live && !!g && g.stops.length === STOPS[st] && g.stops[0].color === FIRST[st] && stops.length === STOPS[st] + 4 && stops[0] === FIRST[st] &&
+      xd.getElementById("cardPreview").classList.contains("border-" + st), g ? g.stops.length : null, stops.length];
+  });
+  check("X3 each border style (Glow, None, Neon Pulse, Gold, Holo Rainbow) reaches the export's ring with its own gradient, read by parseCssGradient and drawn stop for stop",
+    styleSeen.every(x => x[1]), J(styleSeen));
+  const parsed = [xw.parseCssGradient("linear-gradient(135deg, rgb(255, 215, 0), rgb(255, 140, 0) 40%, rgba(0, 0, 0, 0.5))"), xw.parseCssGradient("linear-gradient(to right, red, blue)"), xw.parseCssGradient("none")];
+  check("X3 parseCssGradient reads angles, 'to' directions, rgb()/rgba() colours and stop positions, and nothing from 'none'",
+    J(parsed[0]) === J({ angle: 135, stops: [{ color: "rgb(255, 215, 0)", at: 0 }, { color: "rgb(255, 140, 0)", at: 0.4 }, { color: "rgba(0, 0, 0, 0.5)", at: 1 }] }) &&
+    J(parsed[1]) === J({ angle: 90, stops: [{ color: "red", at: 0 }, { color: "blue", at: 1 }] }) && parsed[2] === null, J(parsed));
+  check("X3 the print file's page takes the card's orientation (landscape for a horizontal card)",
+    FILES[DC].indexOf("var doc = new JsPDF({ unit: \"in\", format: [W, H], orientation: W > H ? \"landscape\" : \"portrait\" });") !== -1);
+
+  console.log("\n══ X4-X5. phones: the public card in a column, the maker's upload rows wrap ══");
+  const rows = Array.prototype.slice.call(xd.querySelectorAll(".vid-upload-row"));
+  check("X5 the card maker's upload rows (" + rows.length + ") wrap rather than widen the column, the file name taking what is left",
+    rows.length === 4 && rows.every(r => xw.getComputedStyle(r).flexWrap === "wrap") && css.indexOf(".vid-upload-row .vid-upload-name{flex:1 1 120px}") !== -1, J(rows.map(r => xw.getComputedStyle(r).flexWrap)));
+  xw.close();
+  const V = await mount(CV, { path: "c/jane-doe", card: CARD, wait: 120 });
+  const vb = V.w.getComputedStyle(V.d.body), vh = V.w.getComputedStyle(V.d.documentElement);
+  check("X4 the public card's page is a column (the card, then the footer below it), centred across, scrolling down and never sideways",
+    V.errors.length === 0 && vb.display === "flex" && vb.flexDirection === "column" && vb.alignItems === "center" && vb.overflowX === "hidden" && vh.overflowX === "hidden" &&
+    vb.overflow !== "hidden" && !/html,body\{[^}]*overflow:hidden/.test(FILES[CV]) && !/html,body\{[^}]*height:100%/.test(FILES[CV].replace(/min-height:100%/g, "")),
+    J([vb.display, vb.flexDirection, vb.alignItems, vb.overflowX, vh.overflowX]));
+  V.w.close();
+
+  console.log("\n══ X6. the wording: a QR code only when shown ══");
+  check("X6 the short-link note, word for word",
+    FILES[DC].indexOf(">3 to 40 lowercase letters, numbers and hyphens. This is your card's link; if you show a QR code, it opens this link once the card is saved.</p>") !== -1 &&
+    FILES[DC].indexOf("Your QR code opens this link") === -1);
+  check("X6 the privacy note, word for word",
+    FILES[DC].indexOf(">A field you untick is not sent to anyone who opens your card, scans its QR code (when shown) or saves the contact.</p>") !== -1);
+  const cvDesc = "A digital business card made with BizForce AI. Open the card to see contact details and save the contact.";
+  check("X6 card-view's description and og:description, word for word, and no \"scan the QR code\" anywhere in card-view.html",
+    FILES[CV].indexOf("<meta name=\"description\" content=\"" + cvDesc + "\"/>") !== -1 && FILES[CV].indexOf("<meta property=\"og:description\" content=\"" + cvDesc + "\"/>") !== -1 &&
+    !/scan the qr code/i.test(FILES[CV]));
+  const shell = (() => { try { return fs.readFileSync(path.join(REPO, "lib", "cardShell.generated.js"), "utf8"); } catch (e) { return ""; } })();
+  check("X6 the server's card shell carries the same description and no \"scan the QR code\"", shell.indexOf(cvDesc) !== -1 && !/scan the qr code/i.test(shell));
+  const tip = "The card's short link, and its QR code when the owner shows one, open this same page, so anyone you share it with sees what you see.";
+  check("X6 the card-view guide tip, word for word, at most 160 characters", FILES[GUIDE].indexOf("\"" + tip + "\"") !== -1 && tip.length <= 160 &&
+    FILES[GUIDE].indexOf("its QR codes open this same page") === -1);
 
   /* ── T1-T4. the tabs ── */
   console.log("\n══ T1-T2. every control in exactly one tab; the rest outside ══");

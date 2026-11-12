@@ -38,11 +38,25 @@
    tab-text.png, tab-frame.png, tab-background.png, tab-motion.png,
    tab-qr.png, maker-390.png, public-no-qr.png and public-qr.png (both at 768 px, see
    below), and public-390.png.
-   At 390 px the public card starts about 150 px left of the screen, with or
-   without a QR: body is a centred flex row and scripts/bf-legal-footer.js adds
-   its footer beside the card. That was so at 080740d too; the harness prints
-   it as a note, checks the card at 390 px, and takes the two public
-   screenshots at 768 px, where both fit.
+
+   NAMED (Nov 11 2026, card exports and phone layout): the exports, against the
+   preview. The PNG, print file and shared image used to be covered by a solid
+   slab (html2canvas 1.4.1 cannot draw the border's CSS mask); they now render
+   with cardExportOptions(), whose onclone draws the ring on a canvas. With
+   every animation frozen, for each border style (Glow, None, Neon Pulse, Gold,
+   Holo Rainbow), horizontal and upright, QR off and on (bottom-right), a
+   screenshot of the preview is compared with the real Download PNG: the mean
+   absolute pixel difference under MAD, the name's contrast at least NAME in
+   both, and the export's leading colour family the preview's, within SLAB
+   points (no slab). A control renders without the onclone and must fail.
+   Share as Image once (its 1200 x 630 frame), Export Print File once (the
+   PDF's page decoded to an image, a 3.5 x 2 in page for a horizontal card).
+   The two notes this harness used to print are now checks: the public card
+   at 390, 768 and 1440 px is a centred column (centre within 2 px, the
+   footer below, no sideways scroll), and the maker at 390 px has nothing past
+   the edge, its upload rows wrapped. More screenshots: export-glow-h.png,
+   export-gold-v.png, export-holo-h-qr.png, share-image.png, print-page.png,
+   public-390-centred.png, maker-390-fixed.png.
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
@@ -190,18 +204,86 @@ true`;
 const CAPTURE = `(function(){
   window.__snaps = []; window.__saves = [];
   var h2c = window.html2canvas;
-  // html2canvas 1.4.1 has no CSS mask, so it paints the card's border layer (.card-brand-border, a masked ring) as a solid slab over
-  // the whole card, in every PNG, print file and shared image (a fault older than this change, reported). These copies leave that one
-  // layer out so the QR's corner can be read; the page's own call, and its file, are as they were.
-  window.html2canvas = function (el, o) { var mine = Object.assign({}, o, { ignoreElements: function (n) { return !!(n.classList && n.classList.contains("card-brand-border")); } });
-    return h2c(el, mine).then(function (cv) { window.__snaps.push(cv); return cv; }); };
+  // NAMED (Nov 11 2026, card exports and phone layout): the border layer is no longer left out. The page's exports now swap
+  // its CSS mask (which html2canvas 1.4.1 cannot draw) for a mask-free ring themselves, so every snapshot is taken whole,
+  // with the page's own options, exactly as the file is made.
+  window.html2canvas = function (el, o) { return h2c(el, o).then(function (cv) { window.__snaps.push(cv); return cv; }); };
   HTMLAnchorElement.prototype.click = function () { if (this.download) window.__saves.push({ name: this.download, href: this.href }); };
+  // The print file's PDF, as jsPDF would save it.
+  window.__pdfs = [];
+  try { var J = window.jspdf && window.jspdf.jsPDF; if (J) { var keep = function (n) { window.__pdfs.push({ name: n, uri: this.output("datauristring") }); return this; }; J.API.save = keep; if (J.prototype) J.prototype.save = keep; } } catch (e) {}
   try { Object.defineProperty(navigator, "share", { value: undefined, configurable: true }); Object.defineProperty(navigator, "canShare", { value: undefined, configurable: true }); } catch (e) {}
   return typeof h2c === "function";
 })()`;
 // Where the QR box sits, relative to the card, in snapshot pixels (before the snapshot moves anything).
 const QR_BOX = `(function(){ var c = document.getElementById("cardPreview").getBoundingClientRect(), q = document.querySelector("#cardQrBlock .card-qr-wrap").getBoundingClientRect();
   return { x: q.left - c.left, y: q.top - c.top, w: q.width, h: q.height }; })()`;
+
+/* NAMED (Nov 11 2026, card exports and phone layout): an export against the preview, in the page. Both images are drawn at
+   the card's own size; inside the card's rounded edge (html2canvas fills the corners white, the screen shows the page):
+   mad, the mean absolute difference per colour channel (0 to 255); the name's contrast in each (the spread of brightness,
+   5th to 95th percentile, over .card-name's box); and how much of each one colour holds (the largest share of pixels in
+  the same colour family: dark, grey or one of twelve 30-degree hues). src, when given, is the card's place in the export (the shared image letterboxes it). */
+const FREEZE = `(function(){ var s = document.getElementById("__freeze") || document.createElement("style"); s.id = "__freeze";
+  s.textContent = "*,*::before,*::after{animation:none !important;transition:none !important}"; document.head.appendChild(s); return true; })()`;
+const COMPARE = `window.__cmp = function (prevUrl, expUrl, src) {
+  var load = function (u) { return new Promise(function (ok, no) { var i = new Image(); i.onload = function () { ok(i); }; i.onerror = no; i.src = u; }); };
+  var card = document.getElementById("cardPreview"), w = card.offsetWidth, h = card.offsetHeight, cr = card.getBoundingClientRect();
+  var nb = document.querySelector("#cardPreview .card-name").getBoundingClientRect(), box = { x: Math.round(nb.left - cr.left), y: Math.round(nb.top - cr.top), w: Math.round(nb.width), h: Math.round(nb.height) };
+  var rad = parseFloat(getComputedStyle(card).borderTopLeftRadius) || 0;
+  var inside = function (x, y) { var cx = Math.min(Math.max(x, rad), w - rad), cy = Math.min(Math.max(y, rad), h - rad); return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= (rad - 1.5) * (rad - 1.5) || (x >= rad && x <= w - rad) || (y >= rad && y <= h - rad); };
+  // a pixel's colour family: dark, grey, or one of twelve 30-degree hues
+  var family = function (r, g, b) { var mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx < 60) return "dark"; if ((mx - mn) / mx < 0.25) return "grey";
+    var d = mx - mn, h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return "hue" + Math.floor(((h * 60 + 360) % 360) / 30) * 30; };
+  return Promise.all([load(prevUrl), load(expUrl)]).then(function (ims) {
+    var px = ims.map(function (im, k) { var cv = document.createElement("canvas"); cv.width = w; cv.height = h; var x = cv.getContext("2d"); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+      if (k === 1 && src) x.drawImage(im, src.x, src.y, src.w, src.h, 0, 0, w, h); else x.drawImage(im, 0, 0, w, h); return x.getImageData(0, 0, w, h).data; });
+    var diff = 0, n = 0, bins = [{}, {}], top = [0, 0];
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) { if (!inside(x + 0.5, y + 0.5)) continue; var i = (y * w + x) * 4; n++;
+      diff += Math.abs(px[0][i] - px[1][i]) + Math.abs(px[0][i + 1] - px[1][i + 1]) + Math.abs(px[0][i + 2] - px[1][i + 2]);
+      for (var k = 0; k < 2; k++) { var b = family(px[k][i], px[k][i + 1], px[k][i + 2]); bins[k][b] = (bins[k][b] || 0) + 1; } }
+    var topOf = function (bn) { var best = null; Object.keys(bn).forEach(function (f) { if (!best || bn[f] > bn[best]) best = f; }); return best; };
+    var fam = [topOf(bins[0]), topOf(bins[1])]; top = [bins[0][fam[0]], bins[1][fam[1]]];
+    var contrast = function (d) { var v = []; for (var y = box.y; y < box.y + box.h; y++) for (var x = box.x; x < box.x + box.w; x++) { var i = (y * w + x) * 4; v.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]); }
+      v.sort(function (a, b) { return a - b; }); return v.length ? Math.round(v[Math.floor(v.length * 0.95)] - v[Math.floor(v.length * 0.05)]) : 0; };
+    return { mad: Math.round(diff / Math.max(1, n * 3) * 100) / 100, namePrev: contrast(px[0]), nameExp: contrast(px[1]), topPrev: Math.round(top[0] / n * 1000) / 10, topExp: Math.round(top[1] / n * 1000) / 10, famPrev: fam[0], famExp: fam[1], w: w, h: h };
+  });
+}; true`;
+// The print file's PDF: its page box and its one page-filling image, decoded (FlateDecode, PNG predictors) and written as a PNG.
+const zlib = require("zlib");
+function pdfPage(uri) {
+  const pdf = Buffer.from(uri.slice(uri.indexOf(",") + 1), "base64"), text = pdf.toString("latin1");
+  const media = (/\/MediaBox \[([^\]]+)\]/.exec(text) || ["", ""])[1].trim().split(/\s+/).map(Number);
+  let img = null;
+  for (let at = text.indexOf("/Subtype /Image"); at !== -1 && !img; at = text.indexOf("/Subtype /Image", at + 1)) {
+    const objStart = text.lastIndexOf(" obj", at), sPos = text.indexOf("stream", at), d = text.slice(objStart, sPos);
+    if (!/\/ColorSpace \/DeviceRGB/.test(d)) continue;
+    let start = sPos + 6; if (text[start] === "\r") start++; if (text[start] === "\n") start++;
+    const len = (/\/Length (\d+)/.exec(d) || [])[1], end = len ? start + Number(len) : text.indexOf("endstream", start);
+    img = { w: +/\/Width (\d+)/.exec(d)[1], h: +/\/Height (\d+)/.exec(d)[1], pred: +((/\/Predictor (\d+)/.exec(d) || [0, 0])[1]),
+      data: /\/FlateDecode/.test(d) ? zlib.inflateSync(pdf.subarray(start, end)) : Buffer.from(pdf.subarray(start, end)) };   // jsPDF may store the pixels raw
+  }
+  if (!img) { const at = text.indexOf("/Subtype /Image"); return { media, png: null, dict: at === -1 ? "no image" : text.slice(Math.max(0, at - 200), at + 300).replace(/[^\x20-\x7e]/g, ".") }; }
+  const bpp = 3, stride = img.w * bpp, raw = Buffer.alloc(stride * img.h);
+  if (img.pred >= 10) {
+    let prev = Buffer.alloc(stride);
+    for (let y = 0; y < img.h; y++) {
+      const f = img.data[y * (stride + 1)], row = img.data.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), out = raw.subarray(y * stride, (y + 1) * stride);
+      for (let x = 0; x < stride; x++) {
+        const a = x >= bpp ? out[x - bpp] : 0, b = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c), paeth = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+        out[x] = (row[x] + (f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : paeth)) & 255;
+      }
+      prev = out;
+    }
+  } else img.data.copy(raw);
+  const lines = Buffer.alloc((stride + 1) * img.h);
+  for (let y = 0; y < img.h; y++) { lines[y * (stride + 1)] = 0; raw.copy(lines, y * (stride + 1) + 1, y * stride, (y + 1) * stride); }
+  const chunk = (type, body) => { const len = Buffer.alloc(4); len.writeUInt32BE(body.length); const tb = Buffer.concat([Buffer.from(type), body]); const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(tb) >>> 0); return Buffer.concat([len, tb, crc]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(img.w, 0); ihdr.writeUInt32BE(img.h, 4); ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(lines)), chunk("IEND", Buffer.alloc(0))]);
+  return { media, w: img.w, h: img.h, png };
+}
 
 (async () => {
   const version = execFileSync(process.platform === "win32" ? "powershell.exe" : CHROME,
@@ -345,6 +427,78 @@ const QR_BOX = `(function(){ var c = document.getElementById("cardPreview").getB
     check("the downloads made no request", made.length === 0, made.join(" | "));
     await typed("");
 
+    /* ── NAMED (Nov 11 2026, card exports and phone layout): the exports match the preview ── */
+    console.log("\n══ the exports match the preview: every border style, both orientations, QR off and on ══");
+    await evaluate(cdp, FREEZE);
+    await evaluate(cdp, COMPARE);
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
+    // The preview card on the screen, at the exports' 3x, as a PNG data URL.
+    const previewShot = async () => {
+      await evaluate(cdp, "document.getElementById('cardPreview').scrollIntoView({block:'center'}), true");
+      await sleep(250);
+      const r = await evaluate(cdp, "(function(){var b=document.getElementById('cardPreview').getBoundingClientRect();return {x:b.left+scrollX,y:b.top+scrollY,w:b.width,h:b.height};})()");
+      const res = await cdp.send("Page.captureScreenshot", { format: "png", clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: 3 }, captureBeyondViewport: true });
+      return "data:image/png;base64," + res.data;
+    };
+    const MAD = 14, NAME = 60, SLAB = 10;   // the thresholds: mean difference under 14 of 255; name contrast over 60 in both; no more than 10 points more one-colour than the preview
+    // not the old slab: the export's largest colour family is the preview's own, holding within 10 points of the same share
+    const oneColourOk = r => !!r.famPrev && r.famExp === r.famPrev && Math.abs(r.topExp - r.topPrev) <= SLAB;
+    const cmpRows = [];
+    const named = { "glow|horizontal|off": "export-glow-h.png", "gold|vertical|off": "export-gold-v.png", "holo-rainbow|horizontal|on": "export-holo-h-qr.png" };
+    for (const style of ["glow", "none", "neon-pulse", "gold", "holo-rainbow"]) for (const orient of ["horizontal", "vertical"]) for (const qr of ["off", "on"]) {
+      await evaluate(cdp, "applyBorderStyle(" + JSON.stringify(style) + "); applyCardOrientation(" + JSON.stringify(orient) + "); setShowQr(" + (qr === "on") + "); " + (qr === "on" ? "setQrCorner('bottom-right'); " : "") + "true");
+      await sleep(450);
+      const prev = await previewShot();
+      await evaluate(cdp, "window.__saves.length = 0, window.__snaps.length = 0, true");
+      await evaluate(cdp, "downloadCard().then(function(){return true;})");
+      const file = await evaluate(cdp, "(window.__saves.filter(function(s){return s.name==='bizforce-card.png';})[0]||{}).href||''");
+      const r = file ? await evaluate(cdp, "window.__cmp(" + JSON.stringify(prev) + ", " + JSON.stringify(file) + ")") : { mad: 999 };
+      const key = style + "|" + orient + "|" + qr;
+      cmpRows.push(Object.assign({ key }, r));
+      if (named[key]) fs.writeFileSync(path.join(OUT, named[key]), Buffer.from(file.slice(file.indexOf(",") + 1), "base64"));
+      console.log("    " + key.padEnd(30) + " mad " + String(r.mad).padStart(6) + "  name " + r.namePrev + "/" + r.nameExp + "  one colour " + r.famPrev + " " + r.topPrev + "%/" + r.famExp + " " + r.topExp + "%");
+    }
+    const badRows = cmpRows.filter(r => !(r.mad < MAD && r.namePrev > NAME && r.nameExp > NAME && oneColourOk(r)));
+    check("Download PNG matches the preview for Glow, None, Neon Pulse, Gold and Holo Rainbow, horizontal and vertical, QR off and on (20): mean difference under " + MAD + "/255 (worst " +
+      Math.max(...cmpRows.map(r => r.mad)) + "), the name's contrast over " + NAME + " in both, and not one colour like the old slab (its largest colour family the preview's own, within " + SLAB + " points)", cmpRows.length === 20 && badRows.length === 0, JSON.stringify(badRows));
+    // The old slab, for the record: html2canvas with no onclone, on the same card.
+    await evaluate(cdp, "applyBorderStyle('glow'); applyCardOrientation('horizontal'); setShowQr(false); true"); await sleep(300);
+    const prevG = await previewShot();
+    const slabUrl = await evaluate(cdp, "html2canvas(document.getElementById('cardPreview'), { scale: 3, useCORS: true, allowTaint: false }).then(function (cv) { return cv.toDataURL('image/png'); })");
+    const slab = await evaluate(cdp, "window.__cmp(" + JSON.stringify(prevG) + ", " + JSON.stringify(slabUrl) + ")");
+    console.log("    control: html2canvas without the ring swap (the old exports): mad " + slab.mad + ", name " + slab.namePrev + "/" + slab.nameExp + ", one colour " + slab.famPrev + " " + slab.topPrev + "%/" + slab.famExp + " " + slab.topExp + "%");
+    check("the control fails the same test: without the ring swap html2canvas paints the old slab (so the test can see it)", !(slab.mad < MAD && slab.nameExp > NAME && oneColourOk(slab)), JSON.stringify(slab));
+    // Share as Image: the 1200 x 630 frame, the card letterboxed in it as shareCardImage draws it.
+    await evaluate(cdp, "applyBorderStyle('gold'); applyCardOrientation('horizontal'); setShowQr(true); setQrCorner('bottom-right'); true"); await sleep(450);
+    const prevS = await previewShot();
+    await evaluate(cdp, "window.__saves.length = 0, true");
+    await evaluate(cdp, "shareCardImage().then(function(){return true;})");
+    const share = await evaluate(cdp, "(window.__saves.filter(function(s){return s.name==='bizforce-card-share.png';})[0]||{}).href||''");
+    const shareDims = share ? await evaluate(cdp, "new Promise(function(ok){var i=new Image();i.onload=function(){ok([i.width,i.height]);};i.src=" + JSON.stringify(share) + ";})") : [0, 0];
+    const src = await evaluate(cdp, "(function(){var c=document.getElementById('cardPreview'),cw=Math.round(c.getBoundingClientRect().width*3),ch=Math.round(c.getBoundingClientRect().height*3),s=Math.min((1200-96)/cw,(630-96)/ch),w=Math.round(cw*s),h=Math.round(ch*s);return {x:Math.round((1200-w)/2),y:Math.round((630-h)/2),w:w,h:h};})()");
+    const rs = share ? await evaluate(cdp, "window.__cmp(" + JSON.stringify(prevS) + ", " + JSON.stringify(share) + ", " + JSON.stringify(src) + ")") : { mad: 999 };
+    if (share) fs.writeFileSync(path.join(OUT, "share-image.png"), Buffer.from(share.slice(share.indexOf(",") + 1), "base64"));
+    console.log("    share (gold, QR on)            mad " + rs.mad + "  name " + rs.namePrev + "/" + rs.nameExp + "  one colour " + rs.topPrev + "%/" + rs.topExp + "%  frame " + shareDims.join(" x "));
+    check("Share as Image: a 1200 x 630 frame whose card matches the preview (mean difference " + rs.mad + ", under " + MAD + "; name contrast over " + NAME + "; not one-colour)",
+      shareDims[0] === 1200 && shareDims[1] === 630 && rs.mad < MAD && rs.nameExp > NAME && oneColourOk(rs), JSON.stringify({ rs, shareDims }));
+    // Export Print File: the PNG it saves and the PDF's page, decoded to an image.
+    await evaluate(cdp, "applyBorderStyle('holo-rainbow'); applyCardOrientation('horizontal'); setShowQr(false); document.getElementById('bleedCheck').checked = false; true"); await sleep(450);
+    const prevP = await previewShot();
+    await evaluate(cdp, "window.__saves.length = 0, window.__pdfs.length = 0, true");
+    await evaluate(cdp, "exportPrintFile().then(function(){return true;})");
+    const pdf = await evaluate(cdp, "(window.__pdfs[0]||{}).uri||''");
+    const page = pdf ? pdfPage(pdf) : { media: [], png: null };
+    let rp = { mad: 999 };
+    if (page.png) {
+      fs.writeFileSync(path.join(OUT, "print-page.png"), page.png);
+      rp = await evaluate(cdp, "window.__cmp(" + JSON.stringify(prevP) + ", " + JSON.stringify("data:image/png;base64," + page.png.toString("base64")) + ")");
+    }
+    console.log("    print page (holo, PDF)         mad " + rp.mad + "  name " + rp.namePrev + "/" + rp.nameExp + "  one colour " + rp.topPrev + "%/" + rp.topExp + "%  page " + page.media.join(" ") + " pt, image " + page.w + " x " + page.h + (page.dict ? " | " + page.dict : ""));
+    check("Export Print File: the PDF's page is 3.5 x 2 in (252 x 144 pt) and, rendered to an image, matches the preview (mean difference " + rp.mad + ", under " + MAD + "; name contrast over " + NAME + "; not one-colour)",
+      page.media.join() === "0,0,252,144" && rp.mad < MAD && rp.nameExp > NAME && oneColourOk(rp), JSON.stringify({ rp, media: page.media }));
+    await evaluate(cdp, "document.getElementById('__freeze').remove(), applyBorderStyle('glow'), applyCardOrientation('horizontal'), setShowQr(false), true");
+    await sleep(300);
+
     /* ── no overflow; 390 px ── */
     console.log("\n══ no sideways overflow at 1440 and 390 px ══");
     check("1440 px: the page does not scroll sideways", (await evaluate(cdp, "__bf.overflow()")) <= 0, String(await evaluate(cdp, "__bf.overflow()")));
@@ -353,10 +507,23 @@ const QR_BOX = `(function(){ var c = document.getElementById("cardPreview").getB
     const narrow = await evaluate(cdp, "({ over: __bf.overflow(), col: Math.round(document.querySelector('.preview-panel').getBoundingClientRect().right), list: (function(){ var l = document.getElementById('cardEdTablist'), cs = getComputedStyle(l); return { sw: l.scrollWidth, cw: l.clientWidth, ox: cs.overflowX, wrap: cs.flexWrap, right: Math.round(l.getBoundingClientRect().right) }; })() })");
     check("390 px: the page does not scroll sideways, and the tab row stays on one line within its column, scrolling sideways itself",
       narrow.over <= 0 && narrow.list.ox === "auto" && narrow.list.wrap === "nowrap" && narrow.list.right <= narrow.col && narrow.list.sw > narrow.list.cw - 1, JSON.stringify(narrow));
-    const formMin = await evaluate(cdp, "Math.max.apply(null, [].map.call(document.querySelectorAll('.form-panel .vid-upload-row'), function (n) { return Math.round(n.scrollWidth); }))");
-    if (narrow.col > 390 - 24) console.log("    note  at 390 px the column is " + (narrow.col - 24) + " px wide, wider than the 342 px screen space: the left panel's upload rows (.vid-upload-row, " + formMin + " px of buttons on one line) set it, as before this change; body overflow:hidden clips the right " + (narrow.col - 390) + " px");
+    // NAMED (Nov 11 2026, card exports and phone layout): the note (a 434 px column, its right 68 px clipped) became checks.
+    const fit = await evaluate(cdp, `(function(){ var W = window.innerWidth, out = [];
+      var clipped = function (n) { for (var a = n.parentElement; a && a !== document.body; a = a.parentElement) { var ox = getComputedStyle(a).overflowX; if (ox !== "visible" && a.getBoundingClientRect().right <= W + 1) return true; } return false; };
+      [].forEach.call(document.querySelectorAll("body *"), function (n) { var r = n.getBoundingClientRect(); if (r.width > 0 && r.height > 0 && r.right > W + 1 && getComputedStyle(n).position !== "fixed" && !clipped(n)) out.push((n.id || n.className || n.tagName) + " " + Math.round(r.right)); });
+      var rows = [].map.call(document.querySelectorAll(".form-panel .vid-upload-row"), function (row) { var tops = [].filter.call(row.children, function (c) { return c.getBoundingClientRect().height > 0; }).map(function (c) { return Math.round(c.getBoundingClientRect().top); });
+        return { wrap: getComputedStyle(row).flexWrap, lines: new Set(tops).size, fits: row.scrollWidth <= row.clientWidth + 1, right: Math.round(row.getBoundingClientRect().right) }; });
+      var body = document.body, keep = body.style.overflowX; body.style.overflowX = "visible"; var bare = document.documentElement.scrollWidth - W; body.style.overflowX = keep;
+      return { past: out.slice(0, 8), rows: rows, col: Math.round(document.querySelector(".form-panel").getBoundingClientRect().width), bare: bare }; })()`);
+    console.log("    390 px: the left column " + fit.col + " px; upload rows " + fit.rows.map(r => r.lines + " line" + (r.lines > 1 ? "s" : "")).join(", ") + "; without body's overflow-x the page would be " + fit.bare + " px too wide");
+    check("390 px: nothing in the card maker passes the screen's edge (the column " + fit.col + " px), and nothing is clipped by body's overflow-x either (" + fit.bare + " px)", fit.past.length === 0 && fit.bare <= 0 && fit.col <= 390 - 24, JSON.stringify(fit));
+    check("390 px: the upload rows wrap (flex-wrap: wrap), at least one onto a second line, each within the column", fit.rows.length >= 3 && fit.rows.every(r => r.wrap === "wrap" && r.fits && r.right <= 390) && fit.rows.some(r => r.lines >= 2), JSON.stringify(fit.rows));
     await evaluate(cdp, "document.getElementById('edTab-text').click(), true");
     await shot(cdp, "maker-390.png", "#cardPreview");
+    await evaluate(cdp, "document.querySelector('.form-panel .vid-upload-row').scrollIntoView({block:'center'}), true");
+    await sleep(250);
+    const mres = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT, "maker-390-fixed.png"), Buffer.from(mres.data, "base64"));
 
     /* ── the public card ── */
     console.log("\n══ the public card, 390 px ══");
@@ -366,9 +533,26 @@ const QR_BOX = `(function(){ var c = document.getElementById("cardPreview").getB
       var labels = [].filter.call(p.querySelectorAll("*"), function (n) { return n.children.length === 0 && /scan to connect/i.test(n.textContent) && __bf.shown(n); }).length;
       return { block: __bf.shown(document.getElementById("cvQrBlock")), labels: labels, drawn: __bf.drawn(document.getElementById("qrCanvas")), over: __bf.overflow() }; })()`);
     check("public card, show_qr missing: no QR, no \"Scan to connect\", nothing drawn, no sideways scroll", !pubOff.block && pubOff.labels === 0 && !pubOff.drawn && pubOff.over <= 0, JSON.stringify(pubOff));
-    const shift = await evaluate(cdp, "Math.round(document.getElementById('cardViewport').getBoundingClientRect().left)");
-    if (shift < 0) console.log("    note  at 390 px the public card starts " + (-shift) + " px left of the screen: body is a centred flex row and bf-legal-footer.js adds its footer beside the card (as at 080740d, before this change); saved as public-390.png");
+    // NAMED (Nov 11 2026, card exports and phone layout): the note (the card about 150 px left of the screen) became checks, at three widths.
+    const CENTRED = `(function(){ var v = document.getElementById("cardViewport").getBoundingClientRect(), f = document.querySelector(".bf-legal-footer"), fr = f ? f.getBoundingClientRect() : null;
+      return { mid: Math.round((v.left + v.width / 2) * 10) / 10, half: document.documentElement.clientWidth / 2, left: Math.round(v.left), footerTop: fr ? Math.round(fr.top) : null, cardBottom: Math.round(v.bottom),
+        footerText: f ? f.textContent.trim().slice(0, 20) : "", over: __bf.overflow(), dir: getComputedStyle(document.body).flexDirection }; })()`;
+    const centred = {};
+    centred[390] = await evaluate(cdp, CENTRED);
     await shot(cdp, "public-390.png", "body");
+    await evaluate(cdp, "window.scrollTo(0,0), true");
+    const cres = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT, "public-390-centred.png"), Buffer.from(cres.data, "base64"));
+    for (const [W, H] of [[768, 1024], [1440, 1000]]) {
+      await viewport(cdp, W, H, false);
+      await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
+      centred[W] = await evaluate(cdp, CENTRED);
+    }
+    await viewport(cdp, 390, 844, true);
+    console.log("    public card centre against the screen's: " + Object.keys(centred).map(W => W + " px " + centred[W].mid + "/" + centred[W].half + " (footer at " + centred[W].footerTop + ", card ends " + centred[W].cardBottom + ")").join("; "));
+    check("public card at 390, 768 and 1440 px: a column, the card centred (its centre within 2 px of the screen's), the legal footer below it, no sideways scroll",
+      Object.keys(centred).length === 3 && Object.values(centred).every(c => c.dir === "column" && Math.abs(c.mid - c.half) <= 2 && c.footerTop !== null && c.footerTop >= c.cardBottom && c.footerText.length > 0 && c.over <= 0), JSON.stringify(centred));
+    await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
     cardLayout = { show_qr: true, qr_corner: "bottom-right" };
     await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
     const pubOn = await evaluate(cdp, `({ block: __bf.shown(document.getElementById("cvQrBlock")), drawn: __bf.drawn(document.getElementById("qrCanvas")),

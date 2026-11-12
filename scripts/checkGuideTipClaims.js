@@ -459,7 +459,10 @@ const MUTATIONS = {
   "shared-filter-by-extension": [[SERVER, "  fileFilter: function (req, file, cb) {\n    if (ORACLE_UPLOAD_ALLOWED_MIME[file.mimetype]) {\n", "  fileFilter: function (req, file, cb) {\n    if (oracleUploadType(file)) {\n"]],
   // the vertical marketing comment says the three types do not exist again
   "vertical-comment-false-again": [["vertical-marketing-agent.html", "     allowedTaskTypes also lists vertical_positioning, channel_research and\n",
-    "     Three task types this agent genuinely wants do NOT exist server-side:\n     vertical_positioning, channel_research and\n"]]
+    "     Three task types this agent genuinely wants do NOT exist server-side:\n     vertical_positioning, channel_research and\n"]],
+  // NAMED (Nov 11 2026, card exports and phone layout): the card-view tip says the card always shows QR codes again
+  "restore-cv-98-qr-always": [[GUIDE, "\"The card's short link, and its QR code when the owner shows one, open this same page, so anyone you share it with sees what you see.\"",
+    "\"The card's short link and its QR codes open this same page, so anyone you share it with sees what you see.\""]]
 };
 
 // One rule for every mutation runner (scripts/_shared.js): an unmatched search text is an ERROR, never a catch.
@@ -815,6 +818,7 @@ const REFRESH_FN = (/function refreshPage\(\) \{([\s\S]*?)\n    \}/.exec(FILES[S
      C 11 business-chat 92  "each answer is written from the last 20 messages of it" → "Each answer is written from the last 20 messages only"
      C 11 business-chat 95  "There is one thread, not a list of past threads"    → "kept in one thread, not a list of past threads"
      C 11 card-view 98      "the card's QR codes open this page"                 → "its QR codes open this same page"
+                             → (Nov 11 2026) "and its QR code when the owner shows one, open this same page"
      C 11 sales 118         "its tasks read none of the leads or pipeline on this page" → "read none of the leads or pipeline on this page"
      C 11 sales 122         "a task's prompt carries no pipeline data"           → "so say in your request what has changed in your deals"
      C 11 content 129       "its saved articles and SMS campaigns"               → '"Content Library" keeps saved articles and SMS campaigns'
@@ -1252,8 +1256,11 @@ const C = [
   // ?token= link), card-view opens from either, and the vCard is the Save Contact download (scripts/bf-card.js).
   // NAMED (Nov 6 2026, card upgrades C1): BEFORE both card-view QR codes passed cardUrl. AFTER they pass qrUrl, the same
   // public URL with via=qr (bf-card.js qrUrl), which still opens this same page; the canonical stays cardUrl.
-  ["11 card-view 98", cvTips, "its QR codes open this same page", /via a shared link or QR code/,
-    () => /var qrUrl = window\.bfCard\.qrUrl\(cardUrl\);/.test(FILES[CARDVIEW]) &&
+  // NAMED (Nov 11 2026, card exports and phone layout): BEFORE "its QR codes open this same page", as if a card always
+  // shows one. AFTER "and its QR code when the owner shows one, open this same page": the QR is drawn only when the card's
+  // media_layout.show_qr is true (card-view's `var on = ml.show_qr === true;`), and still opens this page when it is.
+  ["11 card-view 98", cvTips, "The card's short link, and its QR code when the owner shows one, open this same page", /via a shared link or QR code/,
+    () => /var on = ml\.show_qr === true;/.test(FILES[CARDVIEW]) && /var qrUrl = window\.bfCard\.qrUrl\(cardUrl\);/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(document\.getElementById\("qrCanvas"\), qrUrl,/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(document\.getElementById\("qrVideoCanvas"\), qrUrl,/.test(FILES[CARDVIEW]) &&
       /QRCode\.toCanvas\(qr, url,/.test(FILES[CARDS]) && /QRCode\.toCanvas\(qrVideo, url,/.test(FILES[CARDS]) &&
