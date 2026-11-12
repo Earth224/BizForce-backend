@@ -95,6 +95,8 @@ const MUTATE = process.env.MUTATE || "";
 const BASELINE = "889cb13";
 
 const DASH = "dashboard.html", ORBIT = "scripts/bf-orbit.js", GUIDE = "scripts/termaximus-guide.js", PRESENCE = "scripts/termaximus-presence.js";
+// NAMED (Nov 11 2026, polish): the backend's own server.js and lib/yourData.js, for the retired card order (O1b).
+const SERVER = "B:server.js", YOURDATA = "B:lib/yourData.js";
 
 const MUTATIONS = {
   // a tile left out of every portal (O1)
@@ -211,7 +213,13 @@ const MUTATIONS = {
   // the music button's anchor moved out of the top bar (O1)
   "music-button-moved": [[DASH, "<div class=\"topbar-brand\" data-bf-boombox-anchor>", "<div class=\"topbar-brand\">"]],
   // something below the top half changed (O1)
-  "below-top-half-changed": [[DASH, "<section id=\"businessProfileSection\" class=\"bf-section\">", "<p>A new line.</p>\n<section id=\"businessProfileSection\" class=\"bf-section\">"]]
+  "below-top-half-changed": [[DASH, "<section id=\"businessProfileSection\" class=\"bf-section\">", "<p>A new line.</p>\n<section id=\"businessProfileSection\" class=\"bf-section\">"]],
+  // NAMED (Nov 11 2026, polish): the retired card order read again by GET /api/user/preferences (O1b)
+  "order-setting-read": [[SERVER, ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order\")",
+    ".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, dashboard_card_order, dashboard_card_custom\")"]],
+  // ... and written again by PUT /api/user/preferences (O1b)
+  "order-setting-written": [[SERVER, "    if (req.body.notifications_enabled !== undefined) {\n",
+    "    if (req.body.dashboard_card_order !== undefined) updates.dashboard_card_order = req.body.dashboard_card_order;\n    if (req.body.notifications_enabled !== undefined) {\n"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -224,6 +232,7 @@ const FILES = {};
   if (!fs.existsSync(p)) { console.error("Frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }
   FILES[f] = lf(fs.readFileSync(p, "utf8"));
 });
+[SERVER, YOURDATA].forEach(f => { FILES[f] = lf(fs.readFileSync(path.join(REPO, f.slice(2)), "utf8")); });
 if (MUTATE) {
   for (const [file, from, to] of MUTATIONS[MUTATE]) FILES[file] = s.replaceOnce(FILES[file], from, to, MUTATE + " in " + file);
   console.log("\n!! MUTATION: " + MUTATE + " (in memory)");
@@ -332,7 +341,22 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("the AI Agent Directory card is in the template once, with BASELINE's \"Agent Hub\" and \"Full Directory\" buttons byte for byte", BASE_DIR.length > 1000 &&
     FILES[DASH].split("id=\"agentDirectoryLanding\"").length === 2 && tplDir.indexOf(baseBtn("openAgentHubBtn")) !== -1 && tplDir.indexOf(baseBtn("openAgentDirectoryBtn")) !== -1 &&
     /id="openAgentHubBtn"[^>]*onclick="window\.location\.href='agents-hub\.html';">Agent Hub</.test(tplDir) && /id="openAgentDirectoryBtn"[^>]*onclick="window\.location\.href='ai-agents\.html';">Full Directory</.test(tplDir));
-  check("the feature grid, its ordering module and its two keys are gone from the page", FILES[DASH].indexOf("bf-dashboard-order.js") === -1 && !/bf_dashboard_order|bf_dashboard_custom/.test(FILES[DASH] + FILES[ORBIT]) &&
+  /* NAMED (Nov 11 2026, polish) O1b: the retired card order is gone from the server too. user_preferences keeps its two
+     columns (dropping them is a migration, left to the owner), but no code reads, writes, answers or exports them: the
+     code is read without its comments, and the Your data entry is required and read as the server runs it. */
+  const noComments = t => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'\\])\/\/[^\n]*/g, "$1");
+  const SV_CODE = noComments(FILES[SERVER]);
+  const prefGet = (/app\.get\("\/api\/user\/preferences"[\s\S]*?\n\}\);\n/.exec(SV_CODE) || [""])[0], prefPut = (/app\.put\("\/api\/user\/preferences"[\s\S]*?\n\}\);\n/.exec(SV_CODE) || [""])[0];
+  check("O1b GET /api/user/preferences neither reads nor answers dashboard_card_order or dashboard_card_custom (its select names the five settings it serves)",
+    prefGet.length > 200 && !/dashboard_card/.test(prefGet) &&
+    prefGet.indexOf(".select(\"termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order\")") !== -1, prefGet.slice(0, 300));
+  check("O1b PUT /api/user/preferences never writes them (an old page sending them is ignored), and no server code names them", prefPut.length > 200 && !/dashboard_card/.test(prefPut) &&
+    !/dashboard_card_order|dashboard_card_custom|DASHBOARD_CARD|dashboardCardCustomProblem/.test(SV_CODE), (SV_CODE.match(/[^\n]*dashboard_card[^\n]*/g) || []).slice(0, 3).join(" | "));
+  const ydEntry = (() => { try { const m = { exports: {} }; new Function("module", "exports", "require", FILES[YOURDATA])(m, m.exports, n => require(n.charAt(0) === "." ? path.join(REPO, "lib", n) : n)); return (m.exports.DATA || []).filter(e => e.table === "user_preferences")[0]; } catch (e) { return { err: e.message }; } })();
+  check("O1b Your data exports user_preferences without them: its entry reads named columns, the retired two left out",
+    !!ydEntry && typeof ydEntry.select === "string" && !/dashboard_card/.test(ydEntry.select) && ["user_id", "preferred_language", "agent_card_order", "page_themes", "music_player"].every(c => ydEntry.select.split(/\s*,\s*/).indexOf(c) !== -1),
+    JSON.stringify(ydEntry && (ydEntry.select || ydEntry.err)));
+  check("the feature grid, its ordering module and its two keys are gone from the page",FILES[DASH].indexOf("bf-dashboard-order.js") === -1 && !/bf_dashboard_order|bf_dashboard_custom/.test(FILES[DASH] + FILES[ORBIT]) &&
     FILES[DASH].indexOf("<div class=\"bf-feature-grid cards\">") === -1);
   const P = page();
   check("bf-orbit.js runs", !P.err, P.err && P.err.message);
@@ -380,8 +404,24 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("the hero, the status and the paid banner are BASELINE's byte for byte", hero(BASE).length > 300 && hero(FILES[DASH]) === hero(BASE));
   // from the comment that closes the top half (in both versions), so nothing slips in above Business Profile either
   const below = t => { const i = t.indexOf("<!-- Recent Activity was removed here."); return i < 0 ? "" : t.slice(i); };
-  check("everything after the top half, Business Profile down, is BASELINE's byte for byte", below(BASE).length > 10000 && below(FILES[DASH]) === below(BASE) &&
-    below(FILES[DASH]).indexOf("<section id=\"businessProfileSection\"") !== -1);
+  /* NAMED (Nov 11 2026, polish): BEFORE below the top half was BASELINE's byte for byte. AFTER it is BASELINE's with two
+     edits and nothing else: #taskPrompt spans both columns by class (bf-span-2) instead of an inline grid-column:1/3 (which
+     made a second column on a phone), and the Command Center's style gains the phone-fit rules. */
+  const POLISH_BELOW = [
+    ["<textarea\nid=\"taskPrompt\"\nplaceholder=\"Tell your AI agent what to do...\"\nstyle=\"\npadding:18px;\nfont-size:16px;\nborder-radius:12px;\nborder:none;\nmin-height:180px;\ngrid-column:1/3;\n\"></textarea>",
+      "<textarea\nid=\"taskPrompt\"\nclass=\"bf-span-2\"\nplaceholder=\"Tell your AI agent what to do...\"\nstyle=\"\npadding:18px;\nfont-size:16px;\nborder-radius:12px;\nborder:none;\nmin-height:180px;\n\"></textarea>"],
+    [".cc-deck #agentMemorySection{margin:0}\n</style>",
+      ".cc-deck #agentMemorySection{margin:0}\n" +
+      "/* NAMED (Nov 11 2026, polish): nothing wider than a phone. The AI Agent Tasks form's controls keep to their column\n" +
+      "   (#taskPrompt spans both columns by .bf-span-2, which the phone rule folds to one; its old inline grid-column:1/3 made\n" +
+      "   a second column there, 400 px wide on a 390 px screen); the Command Center's tab row scrolls inside itself; and the\n" +
+      "   top bar's actions wrap rather than push past the edge at 360 px. */\n" +
+      ".bf-form-grid input,.bf-form-grid select,.bf-form-grid textarea{box-sizing:border-box;max-width:100%;min-width:0}\n" +
+      ".cc-deck .deck-tabs{max-width:100%;min-width:0}\n" +
+      "@media (max-width:640px){\n  .bf-form-grid{grid-template-columns:minmax(0,1fr)}\n  .topbar{flex-wrap:wrap}\n  .topbar-actions{min-width:0;flex:1 1 auto}\n}\n</style>"]];
+  const basePolished = (() => { try { return POLISH_BELOW.reduce((t, e) => s.replaceOnce(t, e[0], e[1], "polish edit"), below(BASE)); } catch (e) { return "polish edit did not apply: " + e.message; } })();
+  check("everything after the top half, Business Profile down, is BASELINE's byte for byte, but for the two named phone-fit edits", below(BASE).length > 10000 && below(FILES[DASH]) === basePolished &&
+    below(FILES[DASH]).indexOf("<section id=\"businessProfileSection\"") !== -1, basePolished.slice(0, 80));
 
   /* ── O2. badges and beams ── */
   console.log("\n══ O2. badges where something needs the member, and beams only from them ══");
@@ -781,11 +821,14 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       disc: [[88.3, 152.2, 74.8, 74.8], [222.6, 318.4, 83.1, 83.1], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
       name: [[107.6, 241.5, 36.1, 12.6], [230.6, 411.8, 67.1, 12.6], [684.3, 411.8, 55.2, 12.6], [827.4, 241.5, 45.7, 12.6], [465.7, 136.2, 44.6, 12.6]],
       title: [[107.6, 240.5, 36.1, 14], [230.6, 410.8, 25.6, 14], [684.3, 410.8, 55.2, 14], [827.4, 240.5, 45.7, 14], [465.7, 135.2, 44.6, 14]] },
-    390: { narrow: true, panel: [0, 0, 342, 300.6], stage: [11, 29, 320, 154], say: [11, 187, 320, 41.6], search: [11, 238.6, 320, 45], core: [11, 33, 320, 64],
-      btn: [[11, 105, 57.6, 72], [76.6, 105, 57.6, 72], [142.2, 105, 57.6, 72], [207.8, 105, 57.6, 72], [273.4, 105, 57.6, 72]],
-      disc: [[16.8, 109, 46, 46], [82.4, 109, 46, 46], [148, 109, 46, 46], [213.6, 109, 46, 46], [279.2, 109, 46, 46]],
-      name: [[23.8, 161, 32, 12], [76.8, 161, 57.3, 12], [146.8, 161, 48.3, 12], [216.6, 161, 39.9, 12], [282.8, 161, 38.9, 12]],
-      title: [[23.8, 160, 32, 14], [76.8, 160, 22, 14], [146.8, 160, 48.3, 14], [216.6, 160, 39.9, 14], [282.8, 160, 38.9, 14]] }
+    /* NAMED (Nov 11 2026, polish): BEFORE the phone panel was 342 x 300.6 (padding 28 / 14, the stage's 6 px below), with
+       no room for a large rayed star. AFTER more open sky, re-measured in Chrome 156: padding 104 above and 56 below, 32 px
+       under the portal row; 342 x 444.6, everything 76 px lower. Sell's label keeps its " (open)" width. */
+    390: { narrow: true, panel: [0, 0, 342, 444.6], stage: [11, 105, 320, 180], say: [11, 289, 320, 41.6], search: [11, 340.6, 320, 45], core: [11, 109, 320, 64],
+      btn: [[11, 181, 57.6, 72], [76.6, 181, 57.6, 72], [142.2, 181, 57.6, 72], [207.8, 181, 57.6, 72], [273.4, 181, 57.6, 72]],
+      disc: [[16.8, 185, 46, 46], [82.4, 185, 46, 46], [148, 185, 46, 46], [213.6, 185, 46, 46], [279.2, 185, 46, 46]],
+      name: [[23.8, 237, 32, 12], [76.8, 237, 57.3, 12], [146.8, 237, 48.3, 12], [216.6, 237, 39.9, 12], [282.8, 237, 38.9, 12]],
+      title: [[23.8, 236, 32, 14], [76.8, 236, 22, 14], [146.8, 236, 48.3, 14], [216.6, 236, 39.9, 14], [282.8, 236, 38.9, 14]] }
   };
   const KEYS = ["grow", "sell", "connect", "agents", "oracle"];
   function rectsFor(G) {
@@ -938,7 +981,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   // NAMED (Nov 11 2026, one living sky): the preview and status lines share one row above the search, always there at a
   // fixed height, each line laid over it (absolutely) and cut at two lines, so showing or hiding either never changes the
   // panel's height (the browser harness measures it).
-  const sayRow = (/<div class="orbit-say" id="orbitSay">\n\s*<p class="orbit-preview" id="orbitPreview" role="status" hidden><\/p>\n\s*<p class="orbit-status" id="orbitStatus" role="status"><\/p>\n\s*<\/div>\n\s*<div class="orbit-search">/.exec(ORBIT_MARKUP) || [""])[0];
+  const sayRow = (/<div class="orbit-say" id="orbitSay">\n\s*<p class="orbit-preview" id="orbitPreview" role="status" hidden><\/p>\n\s*<p class="orbit-status" id="orbitStatus" role="status"><\/p>\n\s*<\/div>\n\s*<div class="orbit-search" data-tmx-avoid>/.exec(ORBIT_MARKUP) || [""])[0];   // NAMED (Nov 11 2026, polish): the search is marked for the mist to keep clear of
   check("O15 a reserved row above the search holds the preview and status lines at a fixed height (2.6rem, each line over it and cut at two lines), the status stepping back while a preview shows",
     !!sayRow && ORBIT_MARKUP.split("id=\"orbitStatus\"").length === 2 && ORBIT_MARKUP.split("id=\"orbitPreview\"").length === 2 &&
     starRules.length > 0 && /\n  \.orbit-say\{height:2\.6rem;margin:4px auto 0;max-width:640px;line-height:1\.4\}/.test(CSS) &&
@@ -965,6 +1008,9 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     const cellsSeen = list.map(cellOf);
     check("O15 " + W0 + " px: one star at most in each cell of the " + cols + " x " + rows + " grid (an even grid, so each quadrant is whole cells), each where it says",
       cols >= 2 && rows >= 2 && cols % 2 === 0 && rows % 2 === 0 && new Set(cellsSeen).size === n && list.every((st, k) => st.cell === cellsSeen[k]), cellsSeen.join(" "));
+    // NAMED (Nov 11 2026, polish): more open sky on a phone, so large rayed stars fit there too.
+    if (W0 === 390) check("O15 390 px: at least 2 large rayed stars fit in the phone panel's sky (" + list.filter(st => st.size === "large" && st.spiked).length + "), none turned into a medium one",
+      list.filter(st => st.size === "large" && st.spiked).length >= 2 && sky[5] === 0, JSON.stringify(skyReport[W0]));
     const larges = list.filter(st => st.size === "large").map(cellOf).map(c => c.split(",").map(Number));
     check("O15 " + W0 + " px: no two large bright stars in neighbouring cells", larges.every((a, i) => larges.every((b, j) => j <= i || Math.abs(a[0] - b[0]) > 1 || Math.abs(a[1] - b[1]) > 1)), JSON.stringify(larges));
     let md = Infinity; list.forEach((a, i) => list.forEach((b, j) => { if (j > i) md = Math.min(md, Math.hypot(a.x - b.x, a.y - b.y)); }));

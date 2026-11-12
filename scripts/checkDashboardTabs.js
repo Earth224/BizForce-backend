@@ -304,9 +304,15 @@ async function mountExec(o) {
     cur.split(ORBIT_STYLE).length === 2 && cur.split("\n<section id=\"orbitTop\" class=\"bf-orbit\"").length === 2 && cur.split(ORBIT_TPL).length === 2 &&
     cur.split("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>\n" + TOP_END).length === 2 && cur.indexOf(GRID_OPEN) === -1 &&
     (cur.slice(cur.indexOf(ORBIT_TPL), cur.indexOf("</template>")).match(/ data-card="/g) || []).length === 37);
-  const baseMid = BASE_DASH.slice(BASE_DASH.indexOf(TOP_END), BASE_DASH.indexOf(CC_COMMENT));
+  /* NAMED (Nov 11 2026, polish): BEFORE this stretch was BASELINE's byte for byte. AFTER it is BASELINE's with one edit and
+     nothing else: #taskPrompt spans both columns by class (bf-span-2) instead of an inline grid-column:1/3, which made a
+     second column, 400 px wide, on a 390 px phone (checkDashboardOrbit holds the same edit). */
+  const POLISH_TASK = ["<textarea\nid=\"taskPrompt\"\nplaceholder=\"Tell your AI agent what to do...\"\nstyle=\"\npadding:18px;\nfont-size:16px;\nborder-radius:12px;\nborder:none;\nmin-height:180px;\ngrid-column:1/3;\n\"></textarea>",
+    "<textarea\nid=\"taskPrompt\"\nclass=\"bf-span-2\"\nplaceholder=\"Tell your AI agent what to do...\"\nstyle=\"\npadding:18px;\nfont-size:16px;\nborder-radius:12px;\nborder:none;\nmin-height:180px;\n\"></textarea>"];
+  const baseMidRaw = BASE_DASH.slice(BASE_DASH.indexOf(TOP_END), BASE_DASH.indexOf(CC_COMMENT));
+  const baseMid = (() => { try { return s.replaceOnce(baseMidRaw, POLISH_TASK[0], POLISH_TASK[1], "polish edit"); } catch (e) { return "polish edit did not apply: " + e.message; } })();
   const curMid = cur.slice(cur.indexOf(TOP_END), cur.indexOf(CC_COMMENT));
-  check("from the end of the top half (Business Profile down) to the Command Center, byte for byte " + BASELINE + "'s (" + baseMid.length + " characters)",
+  check("from the end of the top half (Business Profile down) to the Command Center, byte for byte " + BASELINE + "'s but for the one named #taskPrompt edit (" + baseMid.length + " characters)",
     baseMid.length > 1000 && baseMid.indexOf("<section id=\"businessProfileSection\"") !== -1 && curMid === baseMid, curMid.length + " vs " + baseMid.length);
   const memA = BASE_DASH.indexOf("<section id=\"agentMemorySection\""), memB = BASE_DASH.indexOf("</section>", memA) + "</section>".length;
   const baseMemory = BASE_DASH.slice(memA, memB), baseRest = BASE_DASH.slice(memB);

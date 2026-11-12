@@ -57,6 +57,14 @@
    the edge, its upload rows wrapped. More screenshots: export-glow-h.png,
    export-gold-v.png, export-holo-h-qr.png, share-image.png, print-page.png,
    public-390-centred.png, maker-390-fixed.png.
+   NAMED (Nov 11 2026, polish): gradient names in the exports. The onclone
+   swaps each background-clip:text element for a canvas drawing the same text
+   with the same gradient. For the dark, midnight, forest and ember themes and
+   the Gradient text effect, both orientations, over the name region: MAD
+   under 14, the export's hue spread within 15% of the preview's, and the mean
+   per-pixel hue difference under 3 degrees. A control drawing the old
+   first-colour fill must fail. Screenshots export-name-gradient-h.png and
+   export-name-gradient-v.png to Downloads\polish.
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
@@ -247,6 +255,30 @@ const COMPARE = `window.__cmp = function (prevUrl, expUrl, src) {
     var contrast = function (d) { var v = []; for (var y = box.y; y < box.y + box.h; y++) for (var x = box.x; x < box.x + box.w; x++) { var i = (y * w + x) * 4; v.push(0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]); }
       v.sort(function (a, b) { return a - b; }); return v.length ? Math.round(v[Math.floor(v.length * 0.95)] - v[Math.floor(v.length * 0.05)]) : 0; };
     return { mad: Math.round(diff / Math.max(1, n * 3) * 100) / 100, namePrev: contrast(px[0]), nameExp: contrast(px[1]), topPrev: Math.round(top[0] / n * 1000) / 10, topExp: Math.round(top[1] / n * 1000) / 10, famPrev: fam[0], famExp: fam[1], w: w, h: h };
+  });
+};
+/* NAMED (Nov 11 2026, polish): the gradient text, region by region. Over the box of the elements sel names (the name, or
+   the Gradient Text effect's lines), padded 2 px: the mean absolute difference, and the hue spread (the 5th to 95th
+   percentile of the hue of the text's coloured pixels, saturation over .35 and brightness over 90) in each image. */
+window.__cmpText = function (prevUrl, expUrl, sel) {
+  var load = function (u) { return new Promise(function (ok, no) { var i = new Image(); i.onload = function () { ok(i); }; i.onerror = no; i.src = u; }); };
+  var card = document.getElementById("cardPreview"), w = card.offsetWidth, h = card.offsetHeight, cr = card.getBoundingClientRect();
+  var u = null; document.querySelectorAll(sel).forEach(function (n) { var b = n.getBoundingClientRect(); if (!b.width) return;
+    u = u ? { l: Math.min(u.l, b.left), t: Math.min(u.t, b.top), r: Math.max(u.r, b.right), b: Math.max(u.b, b.bottom) } : { l: b.left, t: b.top, r: b.right, b: b.bottom }; });
+  if (!u) return Promise.resolve(null);
+  var S = 3, x0 = Math.max(0, Math.floor((u.l - cr.left - 2) * S)), y0 = Math.max(0, Math.floor((u.t - cr.top - 2) * S)), x1 = Math.min(w * S, Math.ceil((u.r - cr.left + 2) * S)), y1 = Math.min(h * S, Math.ceil((u.b - cr.top + 2) * S));
+  return Promise.all([load(prevUrl), load(expUrl)]).then(function (ims) {
+    var px = ims.map(function (im) { var cv = document.createElement("canvas"); cv.width = w * S; cv.height = h * S; var x = cv.getContext("2d"); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+      x.drawImage(im, 0, 0, w * S, h * S); return x.getImageData(x0, y0, x1 - x0, y1 - y0).data; });
+    var diff = 0, n = px[0].length / 4, hues = [[], []], hd = 0, hn = 0;
+    for (var i = 0; i < px[0].length; i += 4) {
+      diff += Math.abs(px[0][i] - px[1][i]) + Math.abs(px[0][i + 1] - px[1][i + 1]) + Math.abs(px[0][i + 2] - px[1][i + 2]);
+      for (var k = 0; k < 2; k++) { var r = px[k][i], g = px[k][i + 1], b = px[k][i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+        if (mx < 90 || d / mx < 0.35) continue;
+        var hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; hues[k].push((hh * 60 + 360) % 360); if (k === 1 && hues[0].length && hues[0].__at === i) { var dh = Math.abs(hues[0][hues[0].length - 1] - hues[1][hues[1].length - 1]); hd += Math.min(dh, 360 - dh); hn++; } if (k === 0) hues[0].__at = i; }
+    }
+    var spread = function (v) { if (v.length < 20) return 0; v.sort(function (a, b) { return a - b; }); return Math.round(v[Math.floor(v.length * 0.95)] - v[Math.floor(v.length * 0.05)]); };
+    return { mad: Math.round(diff / Math.max(1, n * 3) * 100) / 100, spreadPrev: spread(hues[0]), spreadExp: spread(hues[1]), hueDiff: hn ? Math.round(hd / hn * 10) / 10 : 999, coloured: [hues[0].length, hues[1].length], box: [x0, y0, x1 - x0, y1 - y0] };
   });
 }; true`;
 // The print file's PDF: its page box and its one page-filling image, decoded (FlateDecode, PNG predictors) and written as a PNG.
@@ -461,6 +493,55 @@ function pdfPage(uri) {
     const badRows = cmpRows.filter(r => !(r.mad < MAD && r.namePrev > NAME && r.nameExp > NAME && oneColourOk(r)));
     check("Download PNG matches the preview for Glow, None, Neon Pulse, Gold and Holo Rainbow, horizontal and vertical, QR off and on (20): mean difference under " + MAD + "/255 (worst " +
       Math.max(...cmpRows.map(r => r.mad)) + "), the name's contrast over " + NAME + " in both, and not one colour like the old slab (its largest colour family the preview's own, within " + SLAB + " points)", cmpRows.length === 20 && badRows.length === 0, JSON.stringify(badRows));
+    /* NAMED (Nov 11 2026, polish): the gradient name. Every theme's name, and the Gradient Text effect's lines, exported in
+       their gradient: over that text's own region, a mean difference under 14 and a hue spread within 15% of the preview's. */
+    console.log("\n══ gradient text in the exports: every theme's name, and the Gradient Text effect ══");
+    const SPREAD = 0.15, textRows = [];
+    const POLISH = path.join(os.homedir(), "Downloads", "polish");
+    fs.mkdirSync(POLISH, { recursive: true });
+    await evaluate(cdp, "applyBorderStyle('glow'); setShowQr(false); true");
+    for (const orient of ["horizontal", "vertical"]) for (const look of ["dark", "midnight", "forest", "ember", "gradient-effect"]) {
+      const fx = look === "gradient-effect";
+      await evaluate(cdp, "setTheme(" + JSON.stringify(fx ? "dark" : look) + "); applyTextEffect(" + JSON.stringify(fx ? "gradient" : "none") + "); applyCardOrientation(" + JSON.stringify(orient) + "); true");
+      await sleep(450);
+      const prev = await previewShot();
+      await evaluate(cdp, "window.__saves.length = 0, window.__snaps.length = 0, true");
+      await evaluate(cdp, "downloadCard().then(function(){return true;})");
+      const file = await evaluate(cdp, "(window.__saves.filter(function(s){return s.name==='bizforce-card.png';})[0]||{}).href||''");
+      const sel = fx ? "#cardPreview .card-company, #cardPreview .card-job" : "#cardPreview .card-name";
+      const r = file ? await evaluate(cdp, "window.__cmpText(" + JSON.stringify(prev) + ", " + JSON.stringify(file) + ", " + JSON.stringify(sel) + ")") : null;
+      const key = look + "|" + orient;
+      textRows.push(Object.assign({ key }, r || { mad: 999, spreadPrev: 0, spreadExp: 0 }));
+      if (look === "dark") fs.writeFileSync(path.join(POLISH, orient === "horizontal" ? "export-name-gradient-h.png" : "export-name-gradient-v.png"), Buffer.from(file.slice(file.indexOf(",") + 1), "base64"));
+      console.log("    " + key.padEnd(28) + " mad " + String(r && r.mad).padStart(6) + "  hue spread " + (r && r.spreadPrev) + "/" + (r && r.spreadExp) + "  hue difference " + (r && r.hueDiff) + "  coloured px " + (r && r.coloured.join("/")));
+    }
+    // within 15% of the preview's spread, the spreads being whole degrees (so never closer than 1 degree can be asked of a 3 degree spread)
+    const HUE = 3;   // and, pixel by pixel where both are coloured, a mean hue difference under 3 degrees (measured: 0.1 to 1.3; the old first-colour fill 4.5 and 10.3)
+    const spreadOk = r => r.spreadPrev > 0 && Math.abs(r.spreadExp - r.spreadPrev) <= Math.max(SPREAD * r.spreadPrev, 1) && r.hueDiff < HUE;
+    const badText = textRows.filter(r => !(r.mad < MAD && spreadOk(r)));
+    check("gradient text: each theme's name (dark, midnight, forest, ember) and the Gradient Text effect, horizontal and vertical (10), exported in its gradient: over its region, mean difference under " + MAD +
+      " (worst " + Math.max(...textRows.map(r => r.mad)) + ") and a hue spread within 15% of the preview's, and a mean hue difference under " + HUE + " degrees (polish\\export-name-gradient-h.png, -v.png)", textRows.length === 10 && badText.length === 0, JSON.stringify(badText));
+    // The control: the copy as it was (gradient text filled with its first colour) must fail the same test.
+    const OLD_FILL = "(function(){var el=document.getElementById('cardPreview');return html2canvas(el,{scale:3,useCORS:true,allowTaint:false,onclone:function(doc){" +
+      "var L=document.querySelectorAll('#cardPreview *'),C=[].filter.call(doc.querySelectorAll('#cardPreview *'),function(n){return !/pseudoelement/i.test(n.tagName)});" +
+      "for(var i=0;i<L.length&&L.length===C.length;i++){var s=getComputedStyle(L[i]);if((s.webkitBackgroundClip||s.backgroundClip)!=='text')continue;var g=parseCssGradient(cssBackgroundLayer(s.backgroundImage)),f=g?g.stops[0].color:'#fff';" +
+      "C[i].style.setProperty('background','none','important');C[i].style.setProperty('-webkit-background-clip','border-box','important');C[i].style.setProperty('background-clip','border-box','important');" +
+      "C[i].style.setProperty('-webkit-text-fill-color',f,'important');C[i].style.setProperty('color',f,'important')}" +
+      "var live=document.querySelector('#cardPreview .card-brand-border'),copy=doc.querySelector('#cardPreview .card-brand-border');if(live&&copy){copy.parentNode.insertBefore(brandRingCanvas(live,doc,3),copy);" +
+      "['-webkit-mask','mask','background','box-shadow','animation'].forEach(function(p){copy.style.setProperty(p,'none','important')})}}}).then(function(c){return c.toDataURL('image/png')})})()";
+    const ctlRows = [];
+    for (const [look, orient] of [["gradient-effect", "horizontal"], ["midnight", "vertical"]]) {
+      const fx = look === "gradient-effect";
+      await evaluate(cdp, "setTheme(" + JSON.stringify(fx ? "dark" : look) + "); applyTextEffect(" + JSON.stringify(fx ? "gradient" : "none") + "); applyCardOrientation(" + JSON.stringify(orient) + "); true");
+      await sleep(450);
+      const prev = await previewShot(), old = await evaluate(cdp, OLD_FILL);
+      const sel = fx ? "#cardPreview .card-company, #cardPreview .card-job" : "#cardPreview .card-name";
+      ctlRows.push(Object.assign({ key: look + "|" + orient }, await evaluate(cdp, "window.__cmpText(" + JSON.stringify(prev) + ", " + JSON.stringify(old) + ", " + JSON.stringify(sel) + ")")));
+    }
+    console.log("    control (the old first-colour fill): " + ctlRows.map(r => r.key + " mad " + r.mad + " hue spread " + r.spreadPrev + "/" + r.spreadExp + " hue difference " + r.hueDiff).join("; "));
+    check("the control fails the same test: the old first-colour fill loses the gradient (so the test can see it)", ctlRows.every(r => !(r.mad < MAD && spreadOk(r))), JSON.stringify(ctlRows));
+    await evaluate(cdp, "setTheme('dark'); applyTextEffect('none'); applyCardOrientation('horizontal'); true"); await sleep(300);
+
     // The old slab, for the record: html2canvas with no onclone, on the same card.
     await evaluate(cdp, "applyBorderStyle('glow'); applyCardOrientation('horizontal'); setShowQr(false); true"); await sleep(300);
     const prevG = await previewShot();

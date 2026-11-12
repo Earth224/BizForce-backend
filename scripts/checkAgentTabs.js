@@ -309,7 +309,14 @@ const agentTypeOf = raw => (/agentType:\s*"([a-z_]+)"/.exec(raw) || [])[1];
   /* ── T9. the Executive page, untouched ── */
   console.log("\n══ T9. the Executive page untouched ══");
   check("T9 executive-agent.html, bf-exec-deck.js and bf-tabs.js are PRE_TABS's byte for byte", FILES[EXEC] === gitShow(EXEC) && FILES[DECK] === gitShow(DECK) && FILES[TABS_JS] === gitShow(TABS_JS));
-  const before = await mount(EXEC, { files: { [AP]: gitShow(AP) }, wait: 120 });
+  // NAMED (Nov 11 2026, polish): BEFORE the deck was drawn by PRE_TABS's agent-profile.js as it stood. AFTER the same file
+  // with the one rule the polish added (the live status line wraps below 560 px) placed after its 560 px grid rule, exactly
+  // as the page has it; everything else drawn must still be PRE_TABS's, output for output.
+  const POLISH_GRID = "        '@media (max-width:560px){.ap-live-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}' +\n";
+  const POLISH_WRAP = "        '@media (max-width:560px){.ap-live-status{white-space:normal;overflow-wrap:anywhere;min-width:0}}' +\n";
+  const preAp = gitShow(AP);
+  const beforeAp = preAp.split(POLISH_GRID).length === 2 ? preAp.split(POLISH_GRID).join(POLISH_GRID + POLISH_WRAP) : "/* the PRE_TABS 560 px grid rule moved */";
+  const before = await mount(EXEC, { files: { [AP]: beforeAp }, wait: 120 });
   const after = await mount(EXEC, { wait: 120 });
   const norm = d0 => d0.body.innerHTML.replace(/\d{1,2}:\d{2}:\d{2}(\s?[AP]M)?/g, "T");
   check("T9 the command deck as drawn: the page agent-profile.js and the deck draw is PRE_TABS's, output for output (no tabs of ours, no Live Status, its launcher-less card)",

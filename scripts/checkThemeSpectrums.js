@@ -318,8 +318,20 @@ function withoutAgentTabs(text) {
     "");
   return ok ? t : null;
 }
-const profileNow = withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(FILES[PROFILE_JS])))));
-check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile and the agent tabs set aside)",
+/* NAMED BEFORE → AFTER (Nov 11 2026, polish). BEFORE the file was compared with the changes above set aside. AFTER the live
+   status line also wraps below 560 px (browserCheckAgents pins it in a browser): its comment and its one rule, three lines
+   placed right after the 560 px grid rule, are taken out, exactly once, so S2 means what it meant. */
+function withoutPolishWrap(text) {
+  if (text === null) return null;
+  const add = "        // NAMED (Nov 11 2026, polish): on a phone the status line wraps (\"Retrying in 120s - the request did not complete\" ran\n" +
+    "        // past the edge at 390 px on every agent page); wider screens keep it on one line.\n" +
+    "        '@media (max-width:560px){.ap-live-status{white-space:normal;overflow-wrap:anywhere;min-width:0}}' +\n";
+  const grid = "        '@media (max-width:560px){.ap-live-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}' +\n";
+  return text.split(grid + add).length === 2 ? text.split(grid + add).join(grid) : null;
+}
+const profilePolish = withoutPolishWrap(FILES[PROFILE_JS]);
+const profileNow = profilePolish === null ? null : withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(profilePolish)))));
+check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile, the agent tabs and the polish's status-line wrap set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
 const OLD = (() => { const t = gitShow(BEFORE, THEME); try { return t ? loadEngine(t) : null; } catch (e) { return null; } })();
 const sameJson = (x, y) => JSON.stringify(x) === JSON.stringify(y);

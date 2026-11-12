@@ -113,6 +113,9 @@ const MUTATIONS = {
   "mask-back-in-export": [[DC, "  copy.style.setProperty(\"-webkit-mask\", \"none\", \"important\");\n  copy.style.setProperty(\"mask\", \"none\", \"important\");\n  copy.style.setProperty(\"background\", \"none\", \"important\");\n", ""]],
   // the export drops the border altogether: no ring drawn (X2, X3)
   "border-dropped-from-export": [[DC, "  copy.parentNode.insertBefore(brandRingCanvas(live, doc, CARD_EXPORT_SCALE), copy);\n", ""]],
+  // NAMED (Nov 11 2026, polish): the export's gradient name drawn in a flat colour, and left out of the export (X2)
+  "gradient-name-flat": [[DC, "    ctx.fillStyle = paint || c.color;\n", "    ctx.fillStyle = c.color;\n"]],
+  "gradient-name-dropped": [[DC, "      copyEl.appendChild(words);\n", ""]],
   // the public card back in a row, the footer beside it (X4)
   "footer-beside-card": [[CV, "    body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start}\n", "    body{display:flex;align-items:center;justify-content:center}\n"]],
   // the upload rows kept on one line (X5)
@@ -414,15 +417,26 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   // html2canvas's copy of the page: the same markup and styles, no scripts; its canvases record what is drawn.
   function exportCopy() {
     const C = new JSDOM(xd.documentElement.outerHTML);
-    const calls = [];
-    const grad = () => ({ addColorStop: (at, c) => calls.push(["addColorStop", at, c]) });
-    const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (k === "createLinearGradient" ? (...a) => { calls.push([k].concat(a)); return grad(); } : (...a) => { calls.push([k].concat(a)); })), set: (t, k, v) => { t[k] = v; return true; } });
-    C.window.HTMLCanvasElement.prototype.getContext = function () { return ctx; };
+    // NAMED (Nov 11 2026, polish): each canvas gets its own context and its own record (the ring's calls, then the
+    // gradient name's), the stub also answers measureText (the gradient text's baseline), and fillText records the
+    // fillStyle it was given, so the gradient name's canvas is seen as drawn.
+    const byCanvas = new Map();
+    const makeCtx = calls => {
+      const grad = () => ({ addColorStop: (at, c) => calls.push(["addColorStop", at, c]) });
+      return new Proxy({}, { get: (t, k) => (k in t ? t[k] : (k === "createLinearGradient" || k === "createRadialGradient" ? (...a) => { calls.push([k].concat(a)); const g = grad(); g.isGradient = true; return g; } :
+        k === "measureText" ? (txt) => ({ width: String(txt).length * 8, fontBoundingBoxAscent: 16, fontBoundingBoxDescent: 4 }) :
+        k === "fillText" ? (...a) => { calls.push([k].concat(a, [t.fillStyle && t.fillStyle.isGradient ? "gradient" : String(t.fillStyle)])); } :
+        (...a) => { calls.push([k].concat(a)); })), set: (t, k, v) => { t[k] = v; return true; } });
+    };
+    C.window.HTMLCanvasElement.prototype.getContext = function () { if (!byCanvas.has(this)) byCanvas.set(this, { calls: [], ctx: null }); const e = byCanvas.get(this); if (!e.ctx) e.ctx = makeCtx(e.calls); return e.ctx; };
     xw.unmaskBrandBorder(C.window.document);
     const copy = C.window.document.querySelector("#cardPreview .card-brand-border");
     const ring = copy && copy.previousElementSibling;
     const isRing = !!(ring && ring.tagName === "CANVAS" && ring.classList.contains("card-brand-ring"));
-    return { C, copy, ring: isRing ? ring : null, data: isRing ? JSON.parse(ring.getAttribute("data-ring") || "{}") : null, calls, style: copy ? copy.getAttribute("style") || "" : "" };
+    const calls = isRing && byCanvas.has(ring) ? byCanvas.get(ring).calls : [];
+    const nameCanvas = C.window.document.querySelector("#pName canvas.card-gradient-text");
+    const nameCalls = nameCanvas && byCanvas.has(nameCanvas) ? byCanvas.get(nameCanvas).calls : [];
+    return { C, copy, ring: isRing ? ring : null, data: isRing ? JSON.parse(ring.getAttribute("data-ring") || "{}") : null, calls, nameCalls, style: copy ? copy.getAttribute("style") || "" : "" };
   }
   const liveLayer = xd.querySelector("#cardPreview .card-brand-border");
   // jsdom lays nothing out: the layer is given a card's size. And its style cascade lets a 'background' shorthand
@@ -431,6 +445,15 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   Object.defineProperty(liveLayer, "offsetHeight", { configurable: true, value: 200 });
   const NAME_FX = "background-image: linear-gradient(135deg, rgb(34, 211, 238), rgb(168, 85, 247)); -webkit-background-clip: text; background-clip: text; color: transparent;";
   xd.getElementById("pName").setAttribute("style", NAME_FX);
+  // NAMED (Nov 11 2026, polish): the name is given a size, and each word range a box, as a browser lays them out, so the
+  // export's gradient-text pass (gradientTextCanvas) has something to draw.
+  const nameLive = xd.getElementById("pName");
+  Object.defineProperty(nameLive, "offsetWidth", { configurable: true, value: 240 });
+  Object.defineProperty(nameLive, "offsetHeight", { configurable: true, value: 30 });
+  nameLive.getBoundingClientRect = () => ({ left: 20, top: 40, right: 260, bottom: 70, width: 240, height: 30 });
+  const wordBox = { left: 24, top: 44, right: 84, bottom: 66, width: 60, height: 22 };
+  xw.Range.prototype.getClientRects = function () { return [wordBox]; };
+  xw.Range.prototype.getBoundingClientRect = function () { return wordBox; };
   const ex = exportCopy();
   const prop = (st, p) => [st.getPropertyValue(p), st.getPropertyPriority(p)];
   check("X2 in the copy, the masked layer loses its mask and its paint (mask, -webkit-mask and background none, !important), keeping its stamps",
@@ -443,11 +466,21 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
     !!liveLayer && liveLayer.getAttribute("style") === null && xd.querySelectorAll(".card-brand-ring").length === 0 && /mask:linear-gradient\(#fff 0 0\) content-box,linear-gradient\(#fff 0 0\);mask-composite:exclude/.test(FILES[DC]));
   const textLive = Array.prototype.filter.call(xd.querySelectorAll("#cardPreview *"), n => { const c = xw.getComputedStyle(n); return (c.webkitBackgroundClip || c.backgroundClip) === "text"; });
   const pName = ex.C.window.document.getElementById("pName");
-  check("X2 gradient text (the name) is filled with its gradient's first colour in the copy, not painted as a bar, and stays a gradient on the page",
-    textLive.some(n => n.id === "pName") && !!pName && J(prop(pName.style, "background")) === J(["none", "important"]) && J(prop(pName.style, "color")) === J(["rgb(34, 211, 238)", "important"]) &&
+  /* NAMED (Nov 11 2026, polish): BEFORE the copy filled the gradient name with its gradient's first colour. AFTER its own
+     text is transparent (no bar, no flat fill) and a canvas.card-gradient-text inside it draws every word of the name with
+     the name's own gradient (both stops, filled as a gradient, never a flat colour); the page keeps its gradient text. */
+  const nameCv = pName && pName.querySelector("canvas.card-gradient-text");
+  const nameWords = xd.getElementById("pName").textContent.trim().split(/\s+/).filter(Boolean);
+  const drawn = ex.nameCalls.filter(c => c[0] === "fillText");
+  check("X2 gradient text (the name): in the copy its own text is transparent and a canvas.card-gradient-text draws each word with the name's gradient; the page keeps its gradient",
+    textLive.some(n => n.id === "pName") && !!pName && J(prop(pName.style, "background")) === J(["none", "important"]) && J(prop(pName.style, "color")) === J(["transparent", "important"]) &&
+    J(prop(pName.style, "-webkit-text-fill-color")) === J(["transparent", "important"]) && !!nameCv && nameWords.length > 0 &&
+    J(JSON.parse(nameCv.getAttribute("data-words") || "[]").map(w => w.toLowerCase())) === J(nameWords.map(w => w.toLowerCase())) &&
+    drawn.length === nameWords.length && drawn.every(c => c[c.length - 1] === "gradient") &&
+    J(ex.nameCalls.filter(c => c[0] === "addColorStop").map(c => c[2])) === J(["rgb(34, 211, 238)", "rgb(168, 85, 247)"]) &&
     xd.getElementById("pName").getAttribute("style") === NAME_FX && /linear-gradient/.test(xw.getComputedStyle(xd.getElementById("pName")).backgroundImage) &&
     /\.card-preview\[data-theme="dark"\] \.card-name\{background:linear-gradient\(135deg,#22d3ee,#a855f7\);-webkit-background-clip:text;background-clip:text;color:transparent\}/.test(css),
-    J([textLive.map(n => n.id || n.className), pName && pName.getAttribute("style")]));
+    J([textLive.map(n => n.id || n.className), pName && pName.getAttribute("style"), nameCv && nameCv.getAttribute("data-words"), nameWords, drawn.slice(0, 4)]));
   const BASE = 5, STOPS = { glow: BASE, none: BASE, "neon-pulse": BASE, gold: 4, "holo-rainbow": 7 };
   const FIRST = { glow: "rgb(26, 58, 92)", none: "rgb(26, 58, 92)", "neon-pulse": "rgb(26, 58, 92)", gold: "rgb(255, 215, 0)", "holo-rainbow": "rgb(255, 0, 128)" };
   const styleSeen = Object.keys(STOPS).map(st => {

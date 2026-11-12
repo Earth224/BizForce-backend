@@ -58,6 +58,19 @@
    least three distinct halo hues are sampled from the stars as drawn.
    Screenshots one-sky-sell.png, one-sky-oracle.png, sparkle-a.png and
    sparkle-b.png (1.5 s apart).
+   NAMED (Nov 11 2026, polish): DETERMINISTIC WAITS. Every page load, turn,
+   open and fold also waits until the fonts are in, no turn is running and
+   the orbit panel's box is the same over two animation frames (5 s cap,
+   checked). The drift is measured inside the page on its own clock (degrees
+   per second, 1.5 to 4.5), not across two DevTools round trips a wall-clock
+   second apart, which failed on a busy machine. At 390 px at least 2 large
+   rayed stars (stars-390-more-sky.png to <polish>). At 390 and 360 px the
+   page is exactly as wide as the screen, nothing past the edge, the Command
+   Center's tab row scrolling inside itself. The Termaximus mist meets no
+   portal, label, core or search at 1440, 1280, 1024 and 390 px, at the top,
+   scrolled to the orbit and part way, its decorative parts taking no pointer
+   (mist-1280.png and mist-1024.png to <polish>).
+     POLISH_OUT             that folder (default Downloadspolish)
      TOP_HALF_OUT           that folder (default Downloads\top-half)
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
@@ -79,6 +92,8 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.CC_TABS_OUT || path.join(os.homedir(), "Downloads", "cc-tabs");
 const TOP_OUT = process.env.TOP_HALF_OUT || path.join(os.homedir(), "Downloads", "top-half");
+// NAMED (Nov 11 2026, polish): mist-1280.png, mist-1024.png and stars-390-more-sky.png
+const POLISH_OUT = process.env.POLISH_OUT || path.join(os.homedir(), "Downloads", "polish");
 // The frontend commit before the orbit, served from git once to count the dashboard's requests before.
 const BEFORE_ORBIT = "889cb13";
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
@@ -245,6 +260,11 @@ async function shot(cdp, file, selector) {
   fs.writeFileSync(file, Buffer.from(r.data, "base64"));
 }
 
+async function shotNow(cdp, file) {
+  const r = await cdp.send("Page.captureScreenshot", { format: "png" });
+  fs.writeFileSync(file, Buffer.from(r.data, "base64"));
+}
+
 /* Page-side helpers, installed once per page. */
 const HELPERS = `
 window.__bf = {
@@ -292,8 +312,11 @@ async function starsAt(W, file) {
   let md = Infinity; a.pts.forEach((p1, i) => a.pts.forEach((p2, j) => { if (j > i) md = Math.min(md, Math.hypot(p1[0] - p2[0], p1[1] - p2[1])); }));
   const cell = Math.min(a.w / a.cols, a.h / a.rows);
   console.log("    " + W + " px sky: panel " + Math.round(a.w) + " x " + Math.round(a.h) + ", " + n + " stars, grid " + a.cols + " x " + a.rows + ", quadrants " + q.join("/") + ", closest " + md.toFixed(1) + " px");
-  check(W + " px: the density rule's " + skyCount(a.w, a.h) + " still Oracle stars for a " + Math.round(a.w) + " x " + Math.round(a.h) + " panel" + (W === 390 ? "" : ", rays on the large bright ones"),
-    n === skyCount(a.w, a.h) && (W === 390 || a.spiked >= 2), JSON.stringify(Object.assign({}, a, { pts: undefined })));
+  check(W + " px: the density rule's " + skyCount(a.w, a.h) + " still Oracle stars for a " + Math.round(a.w) + " x " + Math.round(a.h) + " panel, rays on the large bright ones",
+    n === skyCount(a.w, a.h) && a.spiked >= 2 && a.large >= 2, JSON.stringify(Object.assign({}, a, { pts: undefined })));
+  // NAMED (Nov 11 2026, polish): BEFORE 390 px was let off the rays (no large rayed star fitted the phone panel). AFTER more
+  // open sky on a phone: at least 2 large rayed stars at every size, 390 px included.
+  if (W === 390) check("390 px: at least 2 large rayed stars in the phone panel's sky (" + a.spiked + " rayed, " + a.large + " large)", a.spiked >= 2 && a.large >= 2, JSON.stringify({ spiked: a.spiked, large: a.large }));
   check(W + " px: each quadrant holds 20% to 30% of the stars and each half 40% to 60% (" + q.join(", ") + ")",
     n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
   check(W + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * cell).toFixed(1) + " px; closest " + md.toFixed(1) + ")", a.cols >= 2 && md >= 0.6 * cell - 0.5, md);
@@ -312,6 +335,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     process.platform === "win32" ? ["-NoProfile", "-Command", "(Get-Item '" + CHROME + "').VersionInfo.ProductVersion"] : ["--version"]).toString().trim();
   console.log("Chrome: " + CHROME + "  (" + version + ")");
   fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(POLISH_OUT, { recursive: true });
   const server = await serve();
   const origin = "http://127.0.0.1:" + server.address().port;
   const chrome = await launch();
@@ -411,9 +435,20 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     console.log("\n══ the top half: the orbit ══");
     fs.mkdirSync(TOP_OUT, { recursive: true });
     admin = true; topMode = "store";
+    /* NAMED (Nov 11 2026, polish): DETERMINISTIC WAITS. steady() resolves once the fonts are in (document.fonts.ready), no
+       turn is running (BFOrbit.state.turn), and the orbit panel's box is the same over two animation frames; it gives up
+       after 5 s and says so (false). Every turn, open, fold and page load waits on it, after its old sleep, never instead
+       of a check. */
+    const STEADY = "document.fonts.ready.then(function(){return new Promise(function(done){var t0=performance.now(),last=null;(function step(){" +
+      "var o=window.BFOrbit&&window.BFOrbit.state,p=document.getElementById('orbitPanel'),r=p?p.getBoundingClientRect():null,k=r?[r.left,r.top,r.width,r.height].join():'';" +
+      "var busy=!!(o&&o.turn);if(!busy&&k===last)return done(true);if(performance.now()-t0>5000)return done(false);last=busy?null:k;" +
+      "requestAnimationFrame(function(){requestAnimationFrame(step)})})()})})";
+    const steadyLog = [];
+    const steady = async what => { const ok = await evaluate(cdp, STEADY); if (!ok) steadyLog.push(what); return ok; };
     const orbitReady = async () => {
       for (let i = 0; i < 80; i++) { if (await evaluate(cdp, "!!(window.BFOrbit && window.BFOrbit.state && window.BFOrbit.state.top)")) break; await sleep(100); }
       await evaluate(cdp, HELPERS); await sleep(300);
+      await steady("page load");
     };
     const settleCalls = async () => { let n = -1; for (let i = 0; i < 20 && n !== apiCalls.length; i++) { n = apiCalls.length; await sleep(400); } return apiCalls.slice(); };
     // The requests on load, before the orbit (frontend BEFORE_ORBIT's dashboard and its ordering module, from git) and now.
@@ -499,7 +534,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       st0 = st;
     }
     // The AI Agent Directory box in the Agents grid (Nov 10 2026, visual match).
-    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"agents\"]').click(), true"); await sleep(900);
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"agents\"]').click(), true"); await sleep(900); await steady("open agents");
     const dir = await evaluate(cdp, "(function(){var box=document.querySelector('#orbitGrid #agentDirectoryLanding');if(!box) return null;var R=function(n){var r=n.getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom,w:r.width,h:r.height}};" +
       "var lis=[].slice.call(box.querySelectorAll('.orbit-dir-agent'));var icons=lis.map(function(li){return R(li.querySelector('.orbit-dir-icon'))});" +
       "var names=lis.map(function(li){var n=li.querySelector('.orbit-dir-name');return {text:n.textContent,box:R(n),li:R(li),lh:parseFloat(getComputedStyle(n).lineHeight)||14}});" +
@@ -541,15 +576,21 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       !!mbS.second && mbS.second[0] === "14 orders this week" && mbS.second[1] === "rgb(124, 240, 201)", JSON.stringify(mbS));
     check("main boxes: the sparkline above the Open button, which sits at the bottom left", mb.every(x => x.spark && x.open && x.open.t >= x.spark.b - 1 && Math.abs(x.open.l - x.head[2].l) <= 2), JSON.stringify(mb.map(x => [x.spark, x.open, x.head[2]])));
     await shot(cdp, path.join(TOP_OUT, "main-boxes.png"), "#orbitMain");
-    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(900);
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(900); await steady("open oracle");
 
-    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(300);
+    await evaluate(cdp, "document.querySelector('.orbit-portal[data-portal=\"oracle\"]').click(), true"); await sleep(300); await steady("fold");
     const folded = await orbitState();
     check("pressing the open portal again folds its grid", folded.open === null && !folded.gridShown && folded.pressed.length === 0, JSON.stringify(folded));
     const moon = await evaluate(cdp, "(function(){var m=document.querySelector('.orbit-portal[data-portal=\"oracle\"] .orbit-moon');return m ? [m.getAttribute('data-moon'), m.querySelector('title').textContent, window.BFOrbit.moonPhase(Date.now()).name] : null;})()");
     check("the Oracle portal shows tonight's moon, named in its title (" + (moon && moon[2]) + ")", !!moon && moon[0] === moon[2] && moon[1] === moon[2], JSON.stringify(moon));
-    const d0 = await evaluate(cdp, "window.BFOrbit.state.base"); await sleep(1000); const d1 = await evaluate(cdp, "window.BFOrbit.state.base");
-    check("folded, the orbit drifts (about 3 degrees a second)", d1 - d0 > 1.5 && d1 - d0 < 4.5, (d1 - d0).toFixed(2));
+    /* NAMED (Nov 11 2026, polish): BEFORE the drift was the angle read in two DevTools round trips 1 s apart, so a slow
+       round trip (a busy machine) stretched the second and failed the run (5.45 degrees in a "second"). AFTER the page
+       reads the angle and performance.now() together at the start and again after at least 1 s of frames, once nothing
+       is turning: the same 1.5 to 4.5 degrees, per second of the page's own clock. */
+    await steady("before the drift");
+    const drift = await evaluate(cdp, "new Promise(function(done){var s=window.BFOrbit.state,a0=s.base,t0=performance.now();(function f(){var t=performance.now();if(t-t0>=1000)return done({deg:s.base-a0,ms:t-t0});requestAnimationFrame(f)})()})");
+    const perSecond = drift.deg / drift.ms * 1000;
+    check("folded, the orbit drifts (about 3 degrees a second): " + perSecond.toFixed(2) + " degrees a second over " + Math.round(drift.ms) + " ms of the page's clock", perSecond > 1.5 && perSecond < 4.5, JSON.stringify(drift));
 
     // The core opens All tools.
     await evaluate(cdp, "document.getElementById('orbitCore').click(), true"); await sleep(300);
@@ -629,6 +670,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await shot(cdp, path.join(TOP_OUT, "mobile.png"), "#orbitTop");
     await shot(cdp, path.join(TOP_OUT, "orbit-390.png"), "#orbitTop");
     await starsAt(390, path.join(TOP_OUT, "stars-390.png"));
+    await shot(cdp, path.join(POLISH_OUT, "stars-390-more-sky.png"), "#orbitTop");
     OVERRIDE["/dashboard.html"] = execFileSync("git", ["show", BEFORE_ORBIT + ":dashboard.html"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     OVERRIDE["/scripts/bf-dashboard-order.js"] = execFileSync("git", ["show", BEFORE_ORBIT + ":scripts/bf-dashboard-order.js"], { cwd: FRONTEND, maxBuffer: 1 << 27 });
     await openPage(cdp, origin, "dashboard.html", {});
@@ -637,6 +679,20 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     delete OVERRIDE["/dashboard.html"]; delete OVERRIDE["/scripts/bf-dashboard-order.js"];
     console.log("    390 px page width: before (" + BEFORE_ORBIT + ") " + beforeW[0] + " [" + beforeW[1].join(", ") + "], now " + nowW[0] + " [" + nowW[1].join(", ") + "]");
     check("390 px: the page is no wider than before the orbit (" + beforeW[0] + " before, " + nowW[0] + " now)", nowW[0] <= Math.max(390, beforeW[0]), JSON.stringify({ beforeW, nowW }));
+    /* NAMED (Nov 11 2026, polish): the page exactly as wide as the screen on a phone, 390 and 360 px: the document's width
+       is the screen's, and no element passes the edge (an element inside a box that clips it sideways, such as the
+       Command Center's scrolling tab row, counts where it is seen; a fixed one does not move the page). */
+    for (const W of [390, 360]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: 844, deviceScaleFactor: 1, mobile: true });
+      await openPage(cdp, origin, "dashboard.html", {});
+      await orbitReady();
+      const fit = await evaluate(cdp, "(function(){var W=" + W + ",clipped=function(n){for(var e=n.parentElement;e&&e!==document.body;e=e.parentElement){var o=getComputedStyle(e).overflowX;if(o!=='visible'&&e.getBoundingClientRect().right<=W+0.5)return true}return false};" +
+        "var wide=[].filter.call(document.querySelectorAll('body *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>W+0.5&&getComputedStyle(n).position!=='fixed'&&!clipped(n)}).slice(0,6).map(function(n){return n.tagName+(n.id?'#'+n.id:'')+':'+Math.round(n.getBoundingClientRect().right)});" +
+        "var cc=document.querySelector('#ccDeck .deck-tabs'),cs=cc?getComputedStyle(cc):null;" +
+        "return {docW:document.documentElement.scrollWidth,wide:wide,ccScroll:cs?cs.overflowX:null,ccFits:cc?Math.round(cc.getBoundingClientRect().right)<=W:false}})()");
+      check(W + " px: the page is exactly as wide as the screen (" + fit.docW + " px), nothing passes the edge, and the Command Center's tab row scrolls inside itself",
+        fit.docW === W && fit.wide.length === 0 && fit.ccScroll === "auto" && fit.ccFits, JSON.stringify(fit));
+    }
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
 
     /* ── ONE LIVING SKY (Nov 11 2026, one living sky): one fixed set that twinkles in place, in the Oracle's colours ── */
@@ -681,6 +737,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
         await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
         await sleep(900);
+        await steady("click " + k);
         await after("click " + k + " and its turn");
       }
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
@@ -716,11 +773,12 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
         const on = await evaluate(cdp, ANIMS);
         check("1440 px: the twinkle pauses with the panel off the screen and runs again when it is back", off.isPaused && off.paused === off.parts && off.running === 0 && !on.isPaused && on.running === on.parts,
           JSON.stringify({ off: [off.isPaused, off.paused, off.running], on: [on.isPaused, on.paused, on.running] }));
-        if (await evaluate(cdp, "window.BFOrbit.state.open") !== "sell") { await evaluate(cdp, "window.BFOrbit.open('sell'), true"); await sleep(900); }
+        if (await evaluate(cdp, "window.BFOrbit.state.open") !== "sell") { await evaluate(cdp, "window.BFOrbit.open('sell'), true"); await sleep(900); await steady("open sell"); }
         await shot(cdp, path.join(TOP_OUT, "one-sky-sell.png"), "#orbitTop");
         const sellSky = await evaluate(cdp, SKY_NOW);
         await evaluate(cdp, "window.BFOrbit.open('oracle'), true");
         await sleep(900);
+        await steady("open oracle (sky)");
         await shot(cdp, path.join(TOP_OUT, "one-sky-oracle.png"), "#orbitTop");
         const oracleSky = await evaluate(cdp, SKY_NOW);
         check("1440 px: the same sky with Sell open and with Oracle open (one-sky-sell.png, one-sky-oracle.png)", sameSky(sellSky, oracleSky) && sameSky(base, oracleSky));
@@ -760,6 +818,33 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     check("no store: the first visit opens Agents (2 proposals waiting)", ns.open === "agents", ns.open);
     await shot(cdp, path.join(TOP_OUT, "member-no-store.png"), "#orbitTop");
     topMode = "store";
+
+    /* ── NAMED (Nov 11 2026, polish): THE MIST CLEAR OF THE ORBIT ── At 1440, 1280, 1024 and 390 px, at the top of the page,
+       scrolled to the orbit and part of the way, the Termaximus mist's box meets no portal disc, label, core or search;
+       its decorative parts take no pointer (pointer-events none on the root, the core and the soul). */
+    console.log("\n══ the Termaximus mist clear of the orbit ══");
+    const MIST = "(function(){var m=document.getElementById('tmx-presence-root');if(!m)return null;var r=m.getBoundingClientRect(),b={l:r.left,t:r.top,r:r.right,b:r.bottom};" +
+      "var hits=[];document.querySelectorAll('.orbit-portal .orbit-disc, .orbit-portal-name, #orbitCore, .orbit-search').forEach(function(n){var q=n.getBoundingClientRect();if(!q.width||getComputedStyle(n).display==='none')return;" +
+      "if(b.l<q.right&&b.r>q.left&&b.t<q.bottom&&b.b>q.top)hits.push(n.id||String(n.className))});var pe=function(id){var n=document.getElementById(id);return n?getComputedStyle(n).pointerEvents:'missing'};" +
+      "return {box:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],shift:m.style.translate||'',hits:hits,pe:[pe('tmx-presence-root'),pe('tmx-core'),pe('tmx-soul')]}})()";
+    const mistRows = [];
+    for (const W of [1440, 1280, 1024, 390]) {
+      await cdp.send("Emulation.setDeviceMetricsOverride", W === 390 ? { width: 390, height: 844, deviceScaleFactor: 1, mobile: true } : { width: W, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await openPage(cdp, origin, "dashboard.html", {});
+      await orbitReady();
+      for (const where of ["top", "orbit", "part"]) {
+        await evaluate(cdp, where === "orbit" ? "(document.getElementById('orbitTop').scrollIntoView({block:'start'}),true)" : "(window.scrollTo(0," + (where === "top" ? 0 : 150) + "),true)");
+        await evaluate(cdp, "new Promise(function(d){requestAnimationFrame(function(){requestAnimationFrame(function(){d(true)})})})");
+        const m = await evaluate(cdp, MIST);
+        mistRows.push(Object.assign({ at: W + " " + where }, m));
+        if (where === "orbit" && (W === 1280 || W === 1024)) await shotNow(cdp, path.join(POLISH_OUT, "mist-" + W + ".png"));
+      }
+    }
+    console.log("    " + mistRows.map(r => r.at + " " + (r.box || []).join(",") + (r.shift ? " shifted " + r.shift : "")).join("; "));
+    check("the mist never meets a portal, label, core or search at 1440, 1280, 1024 and 390 px (top, scrolled to the orbit, part way), its decorative parts taking no pointer",
+      mistRows.length === 12 && mistRows.every(r => r && r.box && r.hits.length === 0 && r.pe.every(p => p === "none")), JSON.stringify(mistRows.filter(r => !r || !r.box || r.hits.length || r.pe.some(p => p !== "none"))));
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 1000, deviceScaleFactor: 1, mobile: false });
+    check("every deterministic wait settled (fonts in, no turn, the panel the same over two frames)", steadyLog.length === 0, steadyLog.join(", "));
 
     /* ── the Executive page ── */
     console.log("\n══ the Executive page ══");

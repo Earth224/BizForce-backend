@@ -27,6 +27,10 @@
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
      AGENT_TABS_OUT         the screenshot folder (default Downloads\agent-tabs)
+   NAMED (Nov 11 2026, polish): the 390 px NOTE on the live status line
+   (#apLiveStatus) is a check now: below 560 px it wraps (white-space normal,
+   overflow-wrap anywhere) and with a long status nothing passes 390 px on the
+   17 tabbed pages and Executive; at 1440 px it keeps to one line.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -66,8 +70,10 @@ const agentName = page => path.basename(page, ".html");
 // runs past the edge when it reads "Retrying in 120s — the request did not complete". The pre-tabs frontend (ecfd367,
 // git archive) measures the same 163-431 px on all 17 pages; the strip stays unchanged by this work, so it is
 // printed as a NOTE and left as an open item. Any other overflow still fails.
-const KNOWN_WIDE = /^SPAN#apLiveStatus\./;
-function splitWide(list, page) { const known = list.filter(w => KNOWN_WIDE.test(w)); if (known.length) console.log("    NOTE  " + page + ": known, already in ecfd367: " + known.join(" | ")); return list.filter(w => !KNOWN_WIDE.test(w)); }
+// NAMED (Nov 11 2026, polish): BEFORE the status line was exempted here and printed as a NOTE. AFTER it wraps below 560 px
+// (scripts/agent-profile.js), so nothing is exempted: the status line is checked like everything else, and its own
+// right edge and wrapping are checked too.
+function splitWide(list) { return list; }
 
 /* ── a small static server over the frontend ── */
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json",
@@ -182,6 +188,9 @@ true`;
     await cdp.send("Page.enable");
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token','browser-check-token');localStorage.setItem('bf_user',JSON.stringify({id:'00000000-0000-4000-8000-000000000001',role:'member'}));}catch(e){}" });
 
+    const statusSeen = [];
+    // NAMED (Nov 11 2026, polish): at 1440 px the status line keeps to one line (the desktop look unchanged).
+    let deskStatus = null;
     for (const page of PAGES) {
       const name = agentName(page);
       const tabs = SHARED.concat(SPECIFIC[page] ? [SPECIFIC[page]] : []);
@@ -209,14 +218,21 @@ true`;
           await shot(cdp, path.join(OUT, name + "-" + tab + ".png"));
         }
       }
+      if (deskStatus === null) deskStatus = await evaluate(cdp, "getComputedStyle(document.getElementById('apLiveStatus')).whiteSpace");
       await evaluate(cdp, "document.getElementById('agTab-run').click(), true");
       // 390 px: the tab row scrolls inside itself; nothing on the page passes the edge.
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
       await openPage(cdp, origin, page, "#agTabs");
       const m = await evaluate(cdp, "(function(){var b=window.__bf,l=document.querySelector('#agTabs [role=tablist]'),cs=getComputedStyle(l);return {scroll:cs.overflowX,wrap:cs.flexWrap,inner:l.scrollWidth,outer:l.clientWidth,right:Math.round(l.getBoundingClientRect().right),wide:b.wide(390),strip:b.shown(document.getElementById('apLive'))};})()");
-      m.wide = splitWide(m.wide, page + " 390 px");
+      m.wide = splitWide(m.wide);
       check(page + ": at 390 px the tab row scrolls sideways inside itself, and nothing else on the page passes the screen's edge",
         m.scroll === "auto" && m.wrap === "nowrap" && m.right <= 391 && m.strip && m.wide.length === 0, JSON.stringify(m));
+      // NAMED (Nov 11 2026, polish): the status line at 390 px, with the longest thing it says.
+      const st = await evaluate(cdp, "(function(){var s=document.getElementById('apLiveStatus');s.textContent='Retrying in 120s \\u2014 the request did not complete';var r=s.getBoundingClientRect(),c=getComputedStyle(s);" +
+        "return {ws:c.whiteSpace,wrap:c.overflowWrap,right:Math.round(r.right),lines:Math.round(r.height/parseFloat(c.lineHeight==='normal'?parseFloat(c.fontSize)*1.2:c.lineHeight)),docW:document.documentElement.scrollWidth};})()");
+      statusSeen.push(name + " " + st.right + "px/" + st.lines);
+      check(page + ": at 390 px the status line wraps (white-space normal, overflow-wrap anywhere) and \"Retrying in 120s — the request did not complete\" stays inside the screen",
+        st.ws === "normal" && st.wrap === "anywhere" && st.right <= 390 && st.docW <= 390, JSON.stringify(st));
       if (name === "ads-agent") await shot(cdp, path.join(OUT, "ads-agent-390.png"));
     }
 
@@ -225,6 +241,13 @@ true`;
     await openPage(cdp, origin, "executive-agent.html", "#execDeck");
     const ex = await evaluate(cdp, "(function(){return {ours:!!document.getElementById('agTabs'),deck:document.querySelectorAll('[data-deck-tab]').length,liveStatus:!!document.getElementById('apDot')};})()");
     check("executive: its own deck tabs, none of the agent tabs, no Live Status", !ex.ours && ex.deck >= 6 && !ex.liveStatus, JSON.stringify(ex));
+    // NAMED (Nov 11 2026, polish): the Executive page at 390 px, nothing past the edge either.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await openPage(cdp, origin, "executive-agent.html", "#execDeck");
+    const ex390 = await evaluate(cdp, "(function(){return {wide:window.__bf.wide(390),docW:document.documentElement.scrollWidth};})()");
+    check("executive: at 390 px nothing on the page passes the screen's edge", ex390.wide.length === 0 && ex390.docW <= 390, JSON.stringify(ex390));
+    console.log("    status line at 390 px (right edge / lines): " + statusSeen.join(", "));
+    check("the status line at 1440 px stays on one line (white-space nowrap)", deskStatus === "nowrap", deskStatus);
   } catch (e) {
     check("the harness ran to the end", false, e && e.stack || e);
   } finally {

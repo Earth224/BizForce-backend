@@ -63,6 +63,8 @@ const MUTATIONS = {
   // the worker caches the sign-in page
   "sw-caches-login": [[SW, "var NEVER_PAGES = [\"app.html\", \"billing.html\", \"reset-password.html\", \"verify-email.html\"];",
     "var NEVER_PAGES = [\"billing.html\", \"reset-password.html\", \"verify-email.html\"];\nOFFLINE_PAGES.push(\"app.html\");"]],
+  // NAMED (Nov 11 2026, polish): a script an offline page loads is left out of STATIC_FILES
+  "static-file-missing": [[SW, "\"/scripts/bf-support.js\", \"/scripts/bf-tabs.js\", ", "\"/scripts/bf-support.js\", "]],
   // a deploy keeps the old cache
   "sw-keeps-old-cache": [[SW, "return n.indexOf(\"bf-shell-\") === 0 && n !== CACHE;", "return false;"]],
   // the copy is saved with the setting OFF
@@ -318,6 +320,35 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       STATIC.every(f => /^\/(css\/[\w.-]+\.css|scripts\/[\w.-]+\.js|icons\/[\w.-]+\.(png|svg)|manifest\.json)$/.test(f) && fs.existsSync(path.join(FRONTEND, f))),
       STATIC.filter(f => !fs.existsSync(path.join(FRONTEND, f))).join(","));
     const pageSrc = p => lf(fs.readFileSync(path.join(FRONTEND, p), "utf8"));
+    /* NAMED (Nov 11 2026, polish): every same-origin script any page loads is in STATIC_FILES, or exempt for a stated
+       reason. The one reason: no page that loads it is kept offline (none is in OFFLINE_PAGES), so it can never be
+       needed with no connection. Before, 26 scripts the offline pages load were missing, bf-tabs.js among them. */
+    const scriptUsers = {};
+    (function walkPages(dir) {
+      fs.readdirSync(dir, { withFileTypes: true }).forEach(d => {
+        const p = path.join(dir, d.name);
+        if (d.isDirectory()) { if (!/^\.|node_modules/.test(d.name)) walkPages(p); return; }
+        if (!d.name.endsWith(".html")) return;
+        const rel = path.relative(FRONTEND, p).replace(/\\/g, "/"), html = rel === SW ? "" : (FILES[rel] !== undefined ? FILES[rel] : lf(fs.readFileSync(p, "utf8")));
+        const re = /<script\b[^>]*\ssrc="([^"]+)"/g; let m;
+        while ((m = re.exec(html))) {
+          let src = m[1].split(/[?#]/)[0];
+          if (/^(https?:)?\/\//i.test(src) || /^data:/i.test(src)) continue;   // another origin
+          src = src.charAt(0) === "/" ? src : "/" + path.posix.join(path.posix.dirname(rel), src);
+          (scriptUsers[src] = scriptUsers[src] || []).push(rel);
+        }
+      });
+    })(FRONTEND);
+    const missingStatic = [], exemptStatic = [];
+    Object.keys(scriptUsers).sort().forEach(src => {
+      if (STATIC.indexOf(src) !== -1) return;
+      const offlineUsers = scriptUsers[src].filter(p => PAGES.indexOf(p) !== -1);
+      if (offlineUsers.length) missingStatic.push(src + " (" + offlineUsers.slice(0, 3).join(", ") + ")"); else exemptStatic.push(src);
+    });
+    console.log("    same-origin scripts loaded by pages: " + Object.keys(scriptUsers).length + "; in STATIC_FILES: " + Object.keys(scriptUsers).filter(s => STATIC.indexOf(s) !== -1).length +
+      "; exempt (no page that loads them is kept offline): " + exemptStatic.length);
+    check("I4b. every same-origin script any page loads is in STATIC_FILES, or exempt because no page that loads it is kept offline",
+      missingStatic.length === 0 && ["/scripts/bf-tabs.js", "/scripts/bf-orbit.js"].every(f => STATIC.indexOf(f) !== -1), missingStatic.join(", "));
     const missing = PAGES.filter(p => !fs.existsSync(path.join(FRONTEND, p)) || pageSrc(p).indexOf("<script src=\"/scripts/bf-offline.js\"></script>") === -1);
     check("I5. every listed page exists and loads bf-offline.js (so it has the banner and the locked controls offline)", missing.length === 0, missing.join(","));
     const loaders = [];
