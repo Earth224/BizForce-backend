@@ -66,6 +66,20 @@
    first-colour fill must fail. Screenshots export-name-gradient-h.png and
    export-name-gradient-v.png to Downloads\polish.
 
+   NAMED (Nov 13 2026, horizontal default): a card is horizontal unless its owner
+   saved it vertical. At 1440 px: a member's first card (no card saved) opens with
+   the Horizontal toggle alone selected, a 1.75 : 1 preview and horizontal in what
+   a save would send, and its Download PNG and print page (252 x 144 pt) are
+   horizontal; a saved card with no orientation, saved horizontal, or with an
+   unknown value opens the same; a card saved vertical reopens vertical (toggle,
+   9 : 16 preview, save) with a vertical PNG and a 144 x 252 pt page. The
+   public card at 390, 768 and 1440 px: horizontal (1.75 : 1, the buttons under
+   the card) with no orientation or saved horizontal, and the upright full-height
+   card when saved vertical. Every frame is recorded before it is painted
+   (requestAnimationFrame), and a horizontal card, in the maker or on the public
+   page, must never have had an upright one. Screenshots: default-horizontal.png,
+   saved-vertical.png and public-horizontal.png (390 px, no orientation saved).
+
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
      CHROME_PATH            the browser (default: the usual Windows paths)
@@ -104,13 +118,14 @@ function check(label, ok, detail) {
 
 /* ── the stub: one saved card ── */
 let cardLayout = {};   // the saved card's media_layout, set per step
+let noCards = false;   // NAMED (Nov 13 2026, horizontal default): true answers GET /api/digital-cards with no card (a member's first card)
 function cardRow() {
   return { id: "aaaaaaaa-0000-4000-8000-000000000001", slug: "jane-doe", share_token: null, full_name: "Jane Doe", job_title: "Founder", company: "Northwind Tea",
     email: "jane@example.test", phone: "+1 555 0100", website: "https://example.test", theme: "dark", media_layout: cardLayout,
     show_email: true, show_phone: true, show_photo: false, discoverable: false, lead_form_on: false };
 }
 function apiAnswer(pathname) {
-  if (pathname === "/api/digital-cards") return { cards: [cardRow()] };
+  if (pathname === "/api/digital-cards") return { cards: noCards ? [] : [cardRow()] };
   if (/^\/api\/cards\/slug\//.test(pathname)) return { card: cardRow(), support_links: [] };
   if (/\/stats$/.test(pathname)) return { days: [], totals: { last_7_days: { views: 0, qr_views: 0 }, last_30_days: { views: 0, qr_views: 0 } } };
   if (/^\/api\/card-leads\//.test(pathname)) return { leads: [] };
@@ -352,6 +367,12 @@ function pdfPage(uri) {
     await cdp.send("Page.enable");
     await cdp.send("Browser.setDownloadBehavior", { behavior: "deny" }).catch(() => {});
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token','browser-check-token');localStorage.setItem('bf_user',JSON.stringify({id:'aaaaaaaa-0000-4000-8000-000000000009',role:'member'}));}catch(e){}" });
+    // NAMED (Nov 13 2026, horizontal default): every frame, before it is painted, records the card's orientation whenever it
+    // changes: the maker's preview (orient-vertical) and the public card's page (#cardViewport.cv-vertical), and whether the
+    // card is displayed yet. A horizontal card must never have a vertical frame.
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "window.__orientLog=[];(function t(){try{var p=document.getElementById('cardPreview'),v=document.getElementById('cardViewport');" +
+      "if(p){var s=(p.classList.contains('orient-vertical')?'V':'H')+(v&&v.classList.contains('cv-vertical')?'v':'h')+(getComputedStyle(p).display==='none'?'-':'+'),l=window.__orientLog;" +
+      "if(!l.length||l[l.length-1]!==s)l.push(s);}}catch(e){}if(performance.now()<15000)requestAnimationFrame(t);})();" });
     check("the page's three pinned libraries are read from it (qrcode, html2canvas, jsPDF)", LIBS.length === 3 && /qrcode@1\.4\.4/.test(LIBS[0]) && /html2canvas@1\.4\.1/.test(LIBS[1]) && /jspdf\/2\.5\.1/.test(LIBS[2]), LIBS.join(" "));
 
     /* ── the maker, QR off by default ── */
@@ -654,6 +675,89 @@ function pdfPage(uri) {
       await sleep(300);
       await shot(cdp, name, "body");
     }
+
+    /* ── NAMED (Nov 13 2026, horizontal default) ── */
+    console.log("\n══ horizontal by default; a saved orientation kept (the maker, its exports, the public card) ══");
+    // The maker's state: the preview's class, the toggle, what a save would send, the preview's shape, and every frame's record.
+    const MAKER_ORIENT = `(function(){ var p = document.getElementById("cardPreview"), r = p.getBoundingClientRect(), on = document.querySelectorAll("[data-orient].active");
+      return { vertical: p.classList.contains("orient-vertical"), toggle: on.length === 1 ? on[0].getAttribute("data-orient") : on.length + " active", saved: getFields().media_layout.orientation,
+        ratio: Math.round(r.width / r.height * 100) / 100, frames: (window.__orientLog || []).map(function (s) { return s.charAt(0); }).join("") }; })()`;
+    // The exports of the card as it stands: the Download PNG's size and the print file's PDF page (points).
+    const exportsNow = async () => {
+      await evaluate(cdp, CAPTURE);
+      await evaluate(cdp, "window.__saves.length = 0, window.__pdfs.length = 0, document.getElementById('bleedCheck').checked = false, true");
+      await evaluate(cdp, "downloadCard().then(function(){return exportPrintFile();}).then(function(){return true;})");
+      await sleep(400);
+      const png = await evaluate(cdp, `new Promise(function (ok) { var s = window.__saves.filter(function (x) { return x.name === "bizforce-card.png"; })[0];
+        if (!s) return ok(null); var i = new Image(); i.onload = function () { ok([i.naturalWidth, i.naturalHeight]); }; i.onerror = function () { ok(null); }; i.src = s.href; })`);
+      const pdfUri = await evaluate(cdp, "(window.__pdfs[0]||{}).uri||''");
+      return { png, pngRatio: png ? Math.round(png[0] / png[1] * 100) / 100 : null, page: pdfUri ? pdfPage(pdfUri).media.join(" ") : null };
+    };
+    const makerReady = "typeof cardLoadState !== 'undefined' && cardLoadState === 'ready' && !!window.html2canvas && !!window.jspdf";
+    await viewport(cdp, 1440, 1000);
+
+    // A member's first card: no card saved yet.
+    noCards = true;
+    await open(cdp, origin, "digital-cards.html", makerReady);
+    const fresh = await evaluate(cdp, MAKER_ORIENT);
+    check("a new card (none saved) opens horizontal: the Horizontal toggle alone is selected, the preview is not upright (" + fresh.ratio + " : 1), and a save would send horizontal",
+      !fresh.vertical && fresh.toggle === "horizontal" && fresh.saved === "horizontal" && Math.abs(fresh.ratio - 1.75) <= 0.03, JSON.stringify(fresh));
+    check("a new card: no frame was ever painted upright (frames " + fresh.frames + ")", fresh.frames.length >= 1 && fresh.frames.indexOf("V") === -1, fresh.frames);
+    await evaluate(cdp, "window.scrollTo(0, 0), true");
+    await sleep(250);
+    const dres = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT, "default-horizontal.png"), Buffer.from(dres.data, "base64"));
+    const freshEx = await exportsNow();
+    check("a new card's exports are horizontal: the PNG wider than tall (" + (freshEx.png || []).join(" x ") + ") and the print file's page 3.5 x 2 in (252 x 144 pt)",
+      !!freshEx.png && Math.abs(freshEx.pngRatio - 1.75) <= 0.03 && freshEx.page === "0 0 252 144", JSON.stringify(freshEx));
+    noCards = false;
+
+    // A saved card with no orientation, and one saved horizontal: both horizontal, and never upright on the way.
+    const savedRows = {};
+    for (const [label, ml] of [["no orientation saved", {}], ["saved horizontal", { orientation: "horizontal" }], ["an unknown orientation", { orientation: "sideways" }]]) {
+      cardLayout = ml;
+      await open(cdp, origin, "digital-cards.html", makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')");
+      savedRows[label] = await evaluate(cdp, MAKER_ORIENT);
+    }
+    check("a saved card with no orientation, saved horizontal, or with an unknown value opens horizontal (toggle, preview, save) and is never painted upright",
+      Object.values(savedRows).every(s => !s.vertical && s.toggle === "horizontal" && s.saved === "horizontal" && Math.abs(s.ratio - 1.75) <= 0.03 && s.frames.indexOf("V") === -1), JSON.stringify(savedRows));
+
+    // A card saved vertical stays vertical.
+    cardLayout = { orientation: "vertical" };
+    await open(cdp, origin, "digital-cards.html", makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')");
+    const vert = await evaluate(cdp, MAKER_ORIENT);
+    check("a card saved vertical reopens vertical: the Vertical toggle alone selected, the preview upright (" + vert.ratio + " : 1), and a save keeps vertical",
+      vert.vertical && vert.toggle === "vertical" && vert.saved === "vertical" && Math.abs(vert.ratio - 9 / 16) <= 0.03, JSON.stringify(vert));
+    await evaluate(cdp, "window.scrollTo(0, 0), true");
+    await sleep(250);
+    const vres = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT, "saved-vertical.png"), Buffer.from(vres.data, "base64"));
+    const vertEx = await exportsNow();
+    check("a vertical card's exports are vertical: the PNG taller than wide (" + (vertEx.png || []).join(" x ") + ") and the print file's page 2 x 3.5 in (144 x 252 pt)",
+      !!vertEx.png && Math.abs(vertEx.pngRatio - 9 / 16) <= 0.03 && vertEx.page === "0 0 144 252", JSON.stringify(vertEx));
+
+    // The public card follows the saved orientation, horizontal when there is none.
+    const PUBLIC_ORIENT = `(function(){ var v = document.getElementById("cardViewport"), p = document.getElementById("cardPreview"), r = p.getBoundingClientRect(), a = document.getElementById("cardActions").getBoundingClientRect();
+      return { vertical: v.classList.contains("cv-vertical"), cardVertical: p.classList.contains("orient-vertical"), ratio: Math.round(r.width / r.height * 100) / 100, w: Math.round(r.width),
+        buttonsBelow: a.top >= r.bottom - 1, over: __bf.overflow(), frames: (window.__orientLog || []).join(" ") }; })()`;
+    const pubRows = {};
+    for (const [W, H, mobile] of [[390, 844, true], [768, 1024, false], [1440, 1000, false]]) {
+      await viewport(cdp, W, H, mobile);
+      for (const [label, ml] of [["none", {}], ["horizontal", { orientation: "horizontal" }], ["vertical", { orientation: "vertical" }]]) {
+        cardLayout = ml;
+        await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
+        pubRows[W + " " + label] = await evaluate(cdp, PUBLIC_ORIENT);
+        if (W === 390 && label === "none") { await evaluate(cdp, "window.scrollTo(0, 0), true"); await sleep(250); const pres = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(OUT, "public-horizontal.png"), Buffer.from(pres.data, "base64")); }
+      }
+    }
+    const pubH = Object.keys(pubRows).filter(k => !/vertical$/.test(k)), pubV = Object.keys(pubRows).filter(k => /vertical$/.test(k));
+    check("public card with no orientation saved, or saved horizontal, at 390, 768 and 1440 px: horizontal (1.75 : 1), the buttons under the card, no sideways scroll, and never a vertical frame",
+      pubH.length === 6 && pubH.every(k => { const r = pubRows[k]; return !r.vertical && !r.cardVertical && Math.abs(r.ratio - 1.75) <= 0.03 && r.buttonsBelow && r.over <= 0 && !/[Vv]/.test(r.frames); }),
+      JSON.stringify(pubH.map(k => [k, pubRows[k]])));
+    check("public card saved vertical, at 390, 768 and 1440 px: the upright full-height card, as before (taller than wide)",
+      pubV.length === 3 && pubV.every(k => { const r = pubRows[k]; return r.vertical && r.cardVertical && r.ratio < 1 && r.over <= 0; }), JSON.stringify(pubV.map(k => [k, pubRows[k]])));
+    await viewport(cdp, 390, 844, true);
+    cardLayout = {};
 
     const own2 = exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));
     check("no page script threw", own2.length === 0, own2.slice(0, 5).join(" | "));

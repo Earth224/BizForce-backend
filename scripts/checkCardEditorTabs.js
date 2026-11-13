@@ -54,6 +54,24 @@
    The pixels themselves are compared in a real browser by
    scripts/browserCheckCardMaker.js.
 
+   NAMED (Nov 13 2026, horizontal default): frontend "Card maker: horizontal by
+   default; saved orientation respected". A card is horizontal unless its owner
+   saved media_layout.orientation "vertical" (storage unchanged, no migration):
+     O1  a new card is horizontal (no orient-vertical, the Horizontal toggle
+         alone selected, a 1.75 preview, a save sends horizontal);
+     O2  a saved card with no orientation, or any value but "vertical", opens
+         horizontal, even after a vertical card; read only by cardOrientationOf;
+     O3  a card saved vertical reopens vertical, and a save keeps it;
+     O4  the PNG, the print file (its page 3.5 x 2 in landscape, or 2 x 3.5 in
+         portrait) and the shared image follow the card's orientation;
+     O5  the public card (and the server's /c/<slug> shell) is horizontal with
+         no orientation or saved horizontal, upright when saved vertical; the
+         audio bar sits under a horizontal card;
+     O6  no first-paint flash: both pages' markup, with no script run, is
+         already horizontal, and renderCard sets the orientation before it
+         shows the card.
+   The Google Wallet pass has no orientation (a generic pass), so none applies.
+
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check.
    BIZFORCE_FRONTEND_DIR overrides the frontend location.
@@ -124,7 +142,23 @@ const MUTATIONS = {
   "qr-always-wording": [[DC, "This is your card's link; if you show a QR code, it opens this link once the card is saved.", "Your QR code opens this link once the card is saved."]],
   // card-view's description tells people to scan a QR code that may not be shown (X6)
   "scan-qr-description": [[CV, "<meta name=\"description\" content=\"A digital business card made with BizForce AI. Open the card to see contact details and save the contact.\"/>",
-    "<meta name=\"description\" content=\"A digital business card made with BizForce AI. Tap to call or email, scan the QR code to open the card, and save the contact to your phone in one tap.\"/>"]]
+    "<meta name=\"description\" content=\"A digital business card made with BizForce AI. Tap to call or email, scan the QR code to open the card, and save the contact to your phone in one tap.\"/>"]],
+  // NAMED (Nov 13 2026, horizontal default):
+  // the maker back to vertical for a new card or one with no orientation saved (O1, O2)
+  "default-vertical-back": [[DC, "  return ml && ml.orientation === \"vertical\" ? \"vertical\" : \"horizontal\";\n", "  return ml && ml.orientation === \"horizontal\" ? \"horizontal\" : \"vertical\";\n"],
+    [DC, "var cardOrientation = \"horizontal\";\n", "var cardOrientation = \"vertical\";\n"]],
+  // a card saved vertical reopened horizontal (O3)
+  "saved-vertical-ignored": [[DC, "  applyCardOrientation(cardOrientationOf(card.media_layout));\n", "  applyCardOrientation(\"horizontal\");\n"]],
+  // the public card drawn horizontal whatever was saved (O5)
+  "public-ignores-orientation": [[CV, "  var vertical = cvOrientationOf(c.media_layout) === \"vertical\";\n", "  var vertical = false;\n"]],
+  // the print file's page horizontal whatever the card (O4)
+  "export-ignores-orientation": [[DC, "  var isVertical = cardOrientation === \"vertical\";\n", "  var isVertical = false;\n"]],
+  // the public card upright when nothing was saved (O5)
+  "public-default-vertical": [[CV, "  return ml && ml.orientation === \"vertical\" ? \"vertical\" : \"horizontal\";\n", "  return ml && ml.orientation === \"horizontal\" ? \"horizontal\" : \"vertical\";\n"]],
+  // the maker's markup painted upright before any script runs (O6)
+  "first-paint-vertical": [[DC, "<div class=\"card-preview border-glow qr-off qr-bottom-right\" id=\"cardPreview\"", "<div class=\"card-preview border-glow qr-off qr-bottom-right orient-vertical\" id=\"cardPreview\""]],
+  // the public page's horizontal layout made to wait for a class a script adds (O6)
+  "public-horizontal-needs-script": [[CV, "    #cardViewport:not(.cv-vertical) #cardPreview{", "    #cardViewport.cv-horizontal #cardPreview{"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -636,6 +670,101 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   }
   check("T4 with each tab open, typing a name updates the preview, and that tab's controls still work", results.every(r => r[1] && r[2]), J(results));
   U.w.close();
+
+  /* ── O1-O6. NAMED (Nov 13 2026, horizontal default) ── */
+  console.log("\n══ O1-O6. horizontal by default; a saved orientation kept ══");
+  const O = await mount(DC);
+  const od = O.d, ow = O.w, ocp = od.getElementById("cardPreview");
+  const orientNow = () => ({ vertical: ocp.classList.contains("orient-vertical"), toggle: Array.prototype.filter.call(od.querySelectorAll("[data-orient]"), b => b.classList.contains("active")).map(b => b.getAttribute("data-orient")).join(),
+    saved: ow.getFields().media_layout.orientation, aspect: ow.getComputedStyle(ocp).aspectRatio });
+  // jsdom gives the computed aspect-ratio as written: "1.75 / 1" for the card, "9/16" for the upright one.
+  const H_STATE = J({ vertical: false, toggle: "horizontal", saved: "horizontal", aspect: "1.75 / 1" });
+  const V_STATE = J({ vertical: true, toggle: "vertical", saved: "vertical", aspect: "9/16" });
+  check("the card maker's scripts run without an error", O.errors.length === 0, O.errors.join(" | "));
+  check("O1 a new card (nothing loaded) is horizontal: no orient-vertical, the Horizontal toggle alone selected, a 1.75 preview, and a save sends horizontal",
+    J(orientNow()) === H_STATE, J(orientNow()));
+  // Each case after a vertical card, so a value carried over from the card before cannot pass for the default.
+  const unsaved = [undefined, null, {}, { orientation: null }, { orientation: "" }, { orientation: "sideways" }, { orientation: "Vertical" }, { orientation: "horizontal" }].map(ml => {
+    ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: { orientation: "vertical" } });
+    ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: ml });
+    return [ml === undefined ? "no media_layout" : J(ml), J(orientNow()) === H_STATE];
+  });
+  check("O2 a saved card with no orientation (no media_layout, null, {}, null, \"\", an unknown value) opens horizontal, and saved horizontal stays horizontal",
+    unsaved.every(x => x[1]), J(unsaved.filter(x => !x[1])));
+  ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: { orientation: "vertical" } });
+  check("O3 a card saved vertical reopens vertical: orient-vertical, the Vertical toggle alone selected, a 9 / 16 preview, and a save keeps vertical",
+    J(orientNow()) === V_STATE, J(orientNow()));
+  check("O2 the orientation is read only through cardOrientationOf, which gives vertical for \"vertical\" alone",
+    ow.cardOrientationOf({ orientation: "vertical" }) === "vertical" && [undefined, null, {}, { orientation: "x" }, { orientation: "horizontal" }].every(m => ow.cardOrientationOf(m) === "horizontal") &&
+    (FILES[DC].match(/applyCardOrientation\(/g) || []).length === 4 && (FILES[DC].match(/ml\.orientation/g) || []).length === 1 &&
+    FILES[DC].indexOf("  return ml && ml.orientation === \"vertical\" ? \"vertical\" : \"horizontal\";\n") !== -1);
+  // The exports: html2canvas records the element it is given and hands back a canvas; jsPDF records its page.
+  const shots = [], pages = [];
+  ow.html2canvas = async el => { shots.push(el && el.id + (el.classList.contains("orient-vertical") ? " vertical" : " horizontal")); return { width: 1050, height: 600, toDataURL: () => "data:image/png;base64,QUJD", getContext: () => null }; };
+  ow.jspdf = { jsPDF: function (o) { pages.push(o); this.addImage = () => {}; this.save = () => {}; this.setDrawColor = () => {}; this.setLineWidth = () => {}; this.rect = () => {}; } };
+  od.getElementById("bleedCheck").checked = false;
+  const exportsOf = async orient => {
+    ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: orient ? { orientation: orient } : {} });
+    shots.length = 0; pages.length = 0;
+    await ow.downloadCard(); await ow.exportPrintFile();
+    return { shots: shots.slice(), page: pages.length === 1 ? J(pages[0]) : pages.length + " pages" };
+  };
+  const exH = await exportsOf(null), exV = await exportsOf("vertical"), exH2 = await exportsOf("horizontal");
+  const PAGE_H = J({ unit: "in", format: [3.5, 2], orientation: "landscape" }), PAGE_V = J({ unit: "in", format: [2, 3.5], orientation: "portrait" });
+  check("O4 the exports follow the card: with no orientation saved the PNG and print file are taken of the horizontal preview, on a 3.5 x 2 in landscape page",
+    J(exH.shots) === J(["cardPreview horizontal", "cardPreview horizontal"]) && exH.page === PAGE_H, J(exH));
+  check("O4 saved vertical: taken of the upright preview, on a 2 x 3.5 in portrait page; saved horizontal: as with none",
+    J(exV.shots) === J(["cardPreview vertical", "cardPreview vertical"]) && exV.page === PAGE_V && J(exH2) === J(exH), J([exV, exH2]));
+  ow.html2canvas = async el => { shots.push(el && el.id + (el.classList.contains("orient-vertical") ? " vertical" : " horizontal")); throw new Error("check: snapshot recorded"); };
+  const shareOf = async orient => { ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: orient ? { orientation: orient } : {} }); shots.length = 0; await ow.shareCardImage(); return shots.slice(); };
+  const shH = await shareOf(null), shV = await shareOf("vertical");
+  check("O4 Share as Image is taken of the preview as the card stands: horizontal with none saved, upright when saved vertical",
+    J(shH) === J(["cardPreview horizontal"]) && J(shV) === J(["cardPreview vertical"]), J([shH, shV]));
+  O.w.close();
+  // The public card.
+  async function pubOrient(ml, extra) {
+    const P = await mount(CV, { path: "c/jane-doe", card: Object.assign({}, CARD, ml === undefined ? {} : { media_layout: ml }, extra || {}), wait: 120 });
+    const pd = P.d, pv = pd.getElementById("cardViewport"), pc = pd.getElementById("cardPreview"), bar = pd.getElementById("cvAudioBar");
+    const r = { errors: P.errors.length, viewport: pv.classList.contains("cv-vertical"), card: pc.classList.contains("orient-vertical"), position: P.w.getComputedStyle(pc).position,
+      aspect: P.w.getComputedStyle(pc).aspectRatio, actions: P.w.getComputedStyle(pd.getElementById("cardActions")).position, shown: P.w.getComputedStyle(pc).display !== "none",
+      bar: bar ? (bar.parentNode === pc ? "in the card" : bar.parentNode === pv ? "under the card" : "elsewhere") : null };
+    P.w.close();
+    return r;
+  }
+  const PUB_H = { errors: 0, viewport: false, card: false, position: "relative", aspect: "1.75 / 1", actions: "relative", shown: true };
+  const PUB_V = { errors: 0, viewport: true, card: true, position: "absolute", aspect: "auto", actions: "absolute", shown: true };
+  const pubCases = [[undefined, "none"], [null, "null"], [{}, "{}"], [{ orientation: "sideways" }, "unknown"], [{ orientation: "horizontal" }, "horizontal"]];
+  const pubH = [];
+  for (const [ml, label] of pubCases) { const r = await pubOrient(ml); const { bar, ...rest } = r; pubH.push([label, J(rest) === J(PUB_H), r]); }
+  check("O5 the public card with no orientation (no media_layout, null, {}, an unknown value) or saved horizontal is horizontal: a 1.75 : 1 card in the flow, the buttons under it",
+    pubH.every(x => x[1]), J(pubH.filter(x => !x[1])));
+  const pv1 = await pubOrient({ orientation: "vertical" });
+  const { bar: pvBar, ...pvRest } = pv1;
+  check("O5 the public card saved vertical: cv-vertical and orient-vertical, the full-height upright card with the buttons over its foot, as before",
+    J(pvRest) === J(PUB_V) && pvBar === "in the card", J(pv1));
+  const audioH = await pubOrient({}, { audio_url: "https://example.com/a.mp3" }), audioV = await pubOrient({ orientation: "vertical" }, { audio_url: "https://example.com/a.mp3" });
+  check("O5 the audio bar: under a horizontal card (above the buttons), inside an upright one as before",
+    audioH.bar === "under the card" && audioV.bar === "in the card" && audioH.errors === 0 && audioV.errors === 0, J([audioH.bar, audioV.bar]));
+  // O6 first paint: the markup alone, before any script, is horizontal.
+  const bareDoc = html => new JSDOM(html.replace(/<script[\s\S]*?<\/script>/g, ""), { pretendToBeVisual: true }).window;
+  const BM = bareDoc(FILES[DC]), bmp = BM.document.getElementById("cardPreview");
+  const bmToggle = Array.prototype.filter.call(BM.document.querySelectorAll("[data-orient]"), b => b.classList.contains("active")).map(b => b.getAttribute("data-orient")).join();
+  check("O6 the maker's markup, before any script runs, paints horizontal: the preview without orient-vertical at 1.75, the Horizontal toggle alone selected",
+    !bmp.classList.contains("orient-vertical") && BM.getComputedStyle(bmp).aspectRatio === "1.75 / 1" && bmToggle === "horizontal", J([bmp.className, BM.getComputedStyle(bmp).aspectRatio, bmToggle]));
+  BM.close();
+  const BC = bareDoc(FILES[CV]), bcp = BC.document.getElementById("cardPreview"), bcv = BC.document.getElementById("cardViewport");
+  check("O6 the public page's markup, before any script runs, is laid out horizontal (no class needed): the card relative at 1.75 : 1, the buttons in the flow, no cv-vertical",
+    !bcv.classList.contains("cv-vertical") && BC.getComputedStyle(bcp).position === "relative" && BC.getComputedStyle(bcp).aspectRatio === "1.75 / 1" &&
+    BC.getComputedStyle(BC.document.getElementById("cardActions")).position === "relative" && /<div id="cardViewport">/.test(FILES[CV]),
+    J([bcv.className, BC.getComputedStyle(bcp).position, BC.getComputedStyle(bcp).aspectRatio]));
+  BC.close();
+  check("O6 renderCard sets the orientation before it shows the card (cv-vertical toggled before card.style.display = \"block\")",
+    (() => { const rc = FILES[CV].slice(FILES[CV].indexOf("function renderCard(c) {")); const a = rc.indexOf("classList.toggle(\"cv-vertical\", vertical)"), b = rc.indexOf("card.style.display = \"block\";"); return a !== -1 && b !== -1 && a < b; })());
+  const shellNow = (() => { try { return fs.readFileSync(path.join(REPO, "lib", "cardShell.generated.js"), "utf8"); } catch (e) { return ""; } })();
+  check("O5 the server's card shell (/c/<slug>) carries the same horizontal default", shellNow.indexOf("#cardViewport:not(.cv-vertical) #cardPreview{position:relative;") !== -1 && shellNow.indexOf("function cvOrientationOf(ml)") !== -1);
+  check("O1 storage is unchanged: orientation is one of horizontal or vertical in media_layout (lib/cardPage.js), anything else dropped, and a new card starts with media_layout {}",
+    J(CPL.MEDIA_LAYOUT_ALLOWLIST.orientation) === J({ type: "enum", values: ["horizontal", "vertical"] }) && J(CPL.sanitizeMediaLayout({ orientation: "sideways" }).value) === "{}" &&
+    J(CPL.sanitizeMediaLayout({ orientation: "vertical" }).value) === J({ orientation: "vertical" }) && /\n        media_layout: \{\},\n/.test(SERVER));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
