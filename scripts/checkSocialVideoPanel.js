@@ -234,9 +234,12 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   // all four connected
   r = await runPage(FILES, ON_ALL);
   doc = r.doc;
+  // NAMED (Nov 13 2026, S2): Instagram's and Facebook's chips now say what the platform has of the video (these fixtures
+  // carry no instagram_status or facebook_status: not sent), not what the file allows; the file rule is the disabled
+  // button's reason (V4c). Every status is held by scripts/checkSocialFinishes.js.
   check("V3c. all four connected: one chip per platform, in order, in each platform's words",
-    J(chipsOf(rowOf(doc, V_NEW.id))) === J([["youtube", "YouTube: not sent"], ["tiktok", "TikTok: not sent"], ["instagram", "Instagram: can post as a Reel"], ["facebook", "Facebook: can post as a video"]]) &&
-    J(chipsOf(rowOf(doc, V_SENT.id))) === J([["youtube", "YouTube: uploaded"], ["tiktok", "TikTok: posted"], ["instagram", "Instagram: needs MP4 or MOV"], ["facebook", "Facebook: needs MP4 or MOV"]]),
+    J(chipsOf(rowOf(doc, V_NEW.id))) === J([["youtube", "YouTube: not sent"], ["tiktok", "TikTok: not sent"], ["instagram", "Instagram: not sent"], ["facebook", "Facebook: not sent"]]) &&
+    J(chipsOf(rowOf(doc, V_SENT.id))) === J([["youtube", "YouTube: uploaded"], ["tiktok", "TikTok: posted"], ["instagram", "Instagram: not sent"], ["facebook", "Facebook: not sent"]]),
     J([chipsOf(rowOf(doc, V_NEW.id)), chipsOf(rowOf(doc, V_SENT.id))]));
   check("V3d. chip colours come from classes whose rules use the theme tokens", /var\(--bf-accent-a, #22d3ee\)/.test(rule(".sf-chip")) &&
     /var\(--bf-success, #34d399\)/.test(rule(".sf-chip--ok")) && /var\(--bf-warning, #fbbf24\)/.test(rule(".sf-chip--wait")) &&

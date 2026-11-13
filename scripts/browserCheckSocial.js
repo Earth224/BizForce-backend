@@ -26,11 +26,27 @@
    Screenshots to <out>: videos-card.png, youtube-form.png, tiktok-form.png,
    instagram-form.png, facebook-form.png, videos-390.png.
 
+   NAMED (Nov 13 2026, S2):
+     4. Instagram and Facebook chips from GET /api/videos' status: posted with
+        a link to the post, waiting for approval, not sent; drawn like the
+        YouTube and TikTok chips.
+     5. proposals.html with one card of each main kind: every value is in the
+        page's own font; the View payload block is monospace; values stay
+        readable (4.5:1) on every theme preset.
+     6. 390 px: the Guide button is a 44 px or larger round button named
+        "Guide", bottom-right inside the screen, and at rest and at the scroll
+        end it covers no header, tab, heading, form field, button or the Your
+        videos card, on the Social page, the dashboard, an agent page (SEO),
+        the card maker, proposals and the public card page.
+   S2 screenshots to <s2>: proposals-card.png, videos-chips-ig-fb.png,
+   guide-390-social.png, guide-390-dashboard.png, guide-390-proposals.png.
+
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
      SOCIAL_CLEAN_OUT       the screenshot folder (default Downloads\social-clean)
+     SOCIAL_S2_OUT          the S2 screenshot folder (default Downloads\s2)
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -42,6 +58,7 @@ const { spawn, execFileSync } = require("child_process");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.SOCIAL_CLEAN_OUT || path.join(os.homedir(), "Downloads", "social-clean");
+const OUT2 = process.env.SOCIAL_S2_OUT || path.join(os.homedir(), "Downloads", "s2");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const PAGE = "agents/social.html";
 
@@ -71,6 +88,32 @@ const V_SENT = Object.assign({}, V_NEW, { id: "33333333-3333-4333-8333-333333333
 const CREATOR = { creator_nickname: "Maple Street Bakery", privacy_level_options: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"],
   comment_disabled: false, duet_disabled: true, stitch_disabled: false,
   privacy_words: { PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", SELF_ONLY: "Only you" } };
+// NAMED (Nov 13 2026, S2): Instagram's and Facebook's status, as GET /api/videos now carries it.
+const IG_URL = "https://www.instagram.com/reel/AbCdEf123/", FB_URL = "https://www.facebook.com/100000000000001/videos/300000000000003/";
+const NONE = { instagram_status: "not_sent", instagram_post_url: null, instagram_error: null, facebook_status: "not_sent", facebook_post_url: null, facebook_error: null };
+Object.assign(V_NEW, NONE); Object.assign(V_SENT, NONE);
+const V_IG = Object.assign({}, V_NEW, { id: "44444444-4444-4444-8444-444444444444", label: "Bread day", instagram_status: "posted", instagram_post_url: IG_URL, facebook_status: "pending" });
+const V_FB = Object.assign({}, V_NEW, { id: "55555555-5555-4555-8555-555555555555", label: "Pie week", instagram_status: "pending", facebook_status: "posted", facebook_post_url: FB_URL });
+let VIDEOS = [V_NEW, V_SENT];
+// One card of each main kind (proposals.html), pending unless said.
+let pn = 0;
+const prop = (action_type, title, payload, extra) => Object.assign({ id: "p" + (++pn), agent_type: "social", status: "pending", title: title, reasoning: "Suggested from this week's orders.",
+  created_at: "2026-11-13T09:00:00Z", execution_result: null, execution_error: null, action_type: action_type, payload: payload }, extra || {});
+const REEL = { id: V_NEW.id, bytes: 3145728 };
+const PROPOSALS = [
+  prop("publish_instagram_post", "Post the Spring cakes Reel to Instagram", { ig_user_id: "17841400000000000", kind: "reel", caption: "Spring cakes, fresh today. Come early!", video: REEL }),
+  prop("publish_facebook_post", "Post the Spring cakes video to Facebook", { page_id: "100000000000001", kind: "video", message: "Spring cakes, fresh today.", video: REEL }),
+  prop("publish_youtube_video", "Upload Spring cakes to YouTube", { channel_id: "UC123", title: "Spring cakes", description: "How we bake them, start to finish.", privacy: "private", made_for_kids: false, tags: ["cake", "bakery"], video: REEL }),
+  prop("publish_tiktok_post", "Post Spring cakes to TikTok", { title: "Spring cakes", privacy_level: "SELF_ONLY", allow_comment: true, allow_duet: false, allow_stitch: false, video: REEL }),
+  prop("publish_social_post", "Post about spring cakes on Bluesky", { platform: "bluesky", posts_as: "maplestreet.bsky.social", text: "Fresh spring cakes today at https://maplestreet.example/cakes" }),
+  prop("publish_mastodon_post", "Post about spring cakes on Mastodon", { posts_as: "@maple@mastodon.social", text: "Spring cakes are here." }),
+  prop("publish_blog_post", "Publish Spring cakes on the blog", { slug: "spring-cakes", meta_description: "Spring cakes at Maple Street.", body: "<p>Hello <a href='/menu'>menu</a></p>", internal_links: ["/menu", "/about"] }, { agent_type: "seo" }),
+  prop("create_calendar_event", "Add the tasting to the calendar", { title: "Tasting", event_type: "meeting", notes: "Bring samples", jdn: 2461358, local_year: 2026, local_month: 11, local_day: 20 }, { agent_type: "executive" }),
+  prop("update_store_item", "Raise the Spring cake price", { platform: "shopify", item_name: "Spring cake", field: "price", currency: "USD", measured: { from: 20, to: 22 } }, { agent_type: "store" }),
+  prop("send_mailbox_reply", "Reply to Pat about the order", { to: "pat@example.com", from: "hello@maplestreet.example", subject: "Re: order", text: "Your order is ready." }, { agent_type: "mailbox" }),
+  prop("publish_instagram_post", "Posted: the Bread day Reel", { ig_user_id: "17841400000000000", kind: "reel", caption: "Bread day.", video: REEL },
+    { status: "executed", execution_result: { published: true, permalink: IG_URL } })
+];
 let ON = {};
 function answer(method, p) {
   const st = c => (c ? "connected" : "not_connected");
@@ -79,7 +122,9 @@ function answer(method, p) {
   if (p === "/api/tiktok/status") return { tiktok_available: true, connected: !!ON.tiktok, status: st(ON.tiktok), display_name: "Maple Street", since };
   if (p === "/api/instagram/status") return { instagram_available: true, connected: !!ON.instagram, status: st(ON.instagram), username: "maplestreet", since };
   if (p === "/api/facebook/status") return { facebook_available: true, connected: !!ON.facebook, status: st(ON.facebook), page_name: "Maple Street", since };
-  if (p === "/api/videos" && method === "GET") return { videos: [V_NEW, V_SENT], max_bytes: 52428800, ready_max: 2 };
+  if (p === "/api/videos" && method === "GET") return { videos: VIDEOS, max_bytes: 52428800, ready_max: 2 };
+  if (p === "/api/proposals") return { proposals: PROPOSALS };
+  if (p === "/api/media") return { media: [] };
   if (p === "/api/instagram/posts" || p === "/api/facebook/posts") return { posts: [] };
   if (p === "/api/tiktok/creator-info") return CREATOR;
   return {};
@@ -142,7 +187,7 @@ async function openPage(cdp, origin, on, width) {
   await sleep(150);
   await cdp.send("Page.navigate", { url: origin + "/" + PAGE });
   for (let i = 0; i < 100; i++) {
-    if (await evaluate(cdp, "document.readyState === 'complete' && !!document.getElementById('agTab-accounts') && document.querySelectorAll('#ytVideoList li[data-video-id]').length === 2")) break;
+    if (await evaluate(cdp, "document.readyState === 'complete' && !!document.getElementById('agTab-accounts') && document.querySelectorAll('#ytVideoList li[data-video-id]').length === " + VIDEOS.length)) break;
     await sleep(100);
   }
   await sleep(400);
@@ -211,6 +256,54 @@ async function helperGeometry(cdp, rootExpr, name) {
     g.btnL === g.taL && /^Draft/.test(g.btn) && g.rows === 3 && !/monospace/i.test(g.font) && g.ph === "For example: a 30-second clip showing our herbal oil and how to use it", J(g));
 }
 
+/* NAMED (Nov 13 2026, S2): any page, waiting until the Guide button is on it. */
+async function openAny(cdp, origin, page, width) {
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: width < 600 ? 844 : 1000, deviceScaleFactor: 1, mobile: width < 600 });
+  await cdp.send("Page.navigate", { url: "about:blank" });
+  await sleep(150);
+  await cdp.send("Page.navigate", { url: origin + "/" + page });
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate(cdp, "document.readyState === 'complete' && !!document.getElementById('tmx-guide-fab')")) break;
+    await sleep(100);
+  }
+  await sleep(1300);   // past the Guide's own settle (load + 800 ms)
+  await evaluate(cdp, HELPERS);
+}
+// The Guide button against what it must never cover, at the current scroll.
+const GUIDE_PROBE = "(function(){var fab=document.getElementById('tmx-guide-fab');if(!fab)return {none:true};var f=fab.getBoundingClientRect(),c=getComputedStyle(fab);" +
+  "var sel='header,nav,[role=tablist],[role=tab],h1,h2,h3,input:not([type=hidden]),textarea,select,button,a[href],.btn,#videosCard,.tabs,.tab-row';" +
+  "var hits=[].filter.call(document.querySelectorAll(sel),function(n){if(n===fab||fab.contains(n)||n.closest('[id^=tmx-guide]'))return false;" +
+  "if(!window.__sc.shown(n))return false;var cs=getComputedStyle(n);if(cs.visibility==='hidden'||cs.opacity==='0')return false;var r=n.getBoundingClientRect();if(!(r.width>0&&r.height>0))return false;" +
+  "return r.left<f.right-0.5&&r.right>f.left+0.5&&r.top<f.bottom-0.5&&r.bottom>f.top+0.5;}).slice(0,6).map(function(n){var r=n.getBoundingClientRect();return n.tagName+'#'+n.id+'.'+String(n.className).slice(0,30)+' '+Math.round(r.top)+'-'+Math.round(r.bottom)+' '+Math.round(r.left)+'-'+Math.round(r.right);});" +
+  "return {at:Math.round(f.left)+','+Math.round(f.top),w:Math.round(f.width),h:Math.round(f.height),right:Math.round(innerWidth-f.right),bottom:Math.round(innerHeight-f.bottom),left:Math.round(f.left),radius:c.borderTopLeftRadius,z:c.zIndex,pos:c.position," +
+  "name:fab.getAttribute('aria-label'),shown:window.__sc.shown(fab),hits:hits,scrollY:Math.round(scrollY),end:Math.round(document.documentElement.scrollHeight-innerHeight)};})()";
+async function guideAt390(cdp, origin, page, name, shotFile, prepare) {
+  await openAny(cdp, origin, page, 390);
+  if (prepare) await prepare();
+  const top = await evaluate(cdp, "scrollTo(0,0)," + GUIDE_PROBE);
+  check("390 px, " + name + ": the Guide button is a round " + top.w + "x" + top.h + " px button named \"Guide\", bottom-right inside the screen, over the page (z-index 40)",
+    !top.none && top.shown && top.w >= 44 && top.h >= 44 && top.radius === "50%" && top.name === "Guide" && top.right >= 16 && top.bottom >= 16 && top.left > 195 &&
+    top.pos === "fixed" && top.z === "40", J(top));
+  check("390 px, " + name + ": at rest (button at " + top.at + ") it covers no header, tab, heading, form field, button or link" + (page === PAGE ? " and not the Your videos card" : ""), !top.none && top.hits.length === 0, J(top.hits));
+  if (shotFile) {
+    const r = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT2, shotFile), Buffer.from(r.data, "base64"));
+  }
+  await evaluate(cdp, "scrollTo(0,document.documentElement.scrollHeight),true");
+  await sleep(300);
+  const end = await evaluate(cdp, GUIDE_PROBE);
+  check("390 px, " + name + ": at the scroll end (" + end.scrollY + " px, button at " + end.at + ") it covers none of them either", !end.none && end.hits.length === 0 && end.scrollY >= end.end - 1, J(end));
+}
+// WCAG contrast of two "rgb(a)" strings, the first laid over the second.
+function contrast(fg, bg) {
+  const p = s => (String(s).match(/[\d.]+/g) || [0, 0, 0, 1]).map(Number);
+  const b = p(bg), f0 = p(fg), a = f0.length > 3 ? f0[3] : 1;
+  const f = [0, 1, 2].map(i => f0[i] * a + b[i] * (1 - a));
+  const L = c => { const v = c.map(x => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+  const l1 = L(f), l2 = L(b.slice(0, 3));
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
 (async () => {
   const version = execFileSync(process.platform === "win32" ? "powershell.exe" : CHROME,
     process.platform === "win32" ? ["-NoProfile", "-Command", "(Get-Item '" + CHROME + "').VersionInfo.ProductVersion"] : ["--version"]).toString().trim();
@@ -277,7 +370,8 @@ async function helperGeometry(cdp, rootExpr, name) {
     console.log("\n══ 2. TikTok, Instagram and Facebook connected (1440 px) ══");
     await openPage(cdp, origin, { youtube: true, tiktok: true, instagram: true, facebook: true }, 1440);
     const c2 = await evaluate(cdp, "[].map.call(document.querySelectorAll('#ytVideoList li[data-video-id=\"" + V_NEW.id + "\"] .sf-chip'),function(c){return c.textContent})");
-    check("all four connected: four chips on the new video", J(c2) === J(["YouTube: not sent", "TikTok: not sent", "Instagram: can post as a Reel", "Facebook: can post as a video"]), J(c2));
+    // NAMED (Nov 13 2026, S2): Instagram and Facebook say what they have of the video (not sent here), not what the file allows.
+    check("all four connected: four chips on the new video", J(c2) === J(["YouTube: not sent", "TikTok: not sent", "Instagram: not sent", "Facebook: not sent"]), J(c2));
     const dim = await evaluate(cdp, "(function(){var row=window.__sc.row('" + V_SENT.id + "');var bs=[].filter.call(row.querySelectorAll('button[data-prepare]'),function(b){return b.disabled});" +
       "var on=[].filter.call(window.__sc.row('" + V_NEW.id + "').querySelectorAll('button[data-prepare]'),function(b){return !b.disabled})[0];" +
       "var fb=getComputedStyle(document.getElementById('ytFile'),'::file-selector-button');" +
@@ -312,6 +406,82 @@ async function helperGeometry(cdp, rootExpr, name) {
       if (btn === "Prepare for YouTube") await shotOf(cdp, "document.getElementById('videosCard')", path.join(OUT, "videos-390.png"));
     }
     check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+
+    /* ── 4. Instagram and Facebook chips (NAMED Nov 13 2026, S2) ── */
+    console.log("\n══ 4. Instagram and Facebook chips: posted with a link, waiting for approval, not sent (1440 px) ══");
+    fs.mkdirSync(OUT2, { recursive: true });
+    VIDEOS = [V_IG, V_FB, V_NEW];
+    await openPage(cdp, origin, { youtube: true, tiktok: true, instagram: true, facebook: true }, 1440);
+    const c4 = await evaluate(cdp, "(function(){var b=window.__sc;function info(id){var row=b.row(id);return {chips:[].map.call(row.querySelectorAll('.sf-chip'),function(c){var s=getComputedStyle(c);" +
+      "return c.textContent+'|'+s.borderTopLeftRadius+'|'+s.fontFamily+'|'+s.fontSize+'|'+s.paddingLeft})," +
+      "links:[].map.call(row.querySelectorAll('a'),function(a){return a.href})};}return {a:info('" + V_IG.id + "'),b:info('" + V_FB.id + "'),c:info('" + V_NEW.id + "')};})()");
+    const words = r => r.chips.map(x => x.split("|")[0]);
+    check("posted on Instagram, waiting on Facebook: \"Instagram: posted\" and \"Facebook: waiting for your approval\", with a link to the Instagram post only",
+      J(words(c4.a)) === J(["YouTube: not sent", "TikTok: not sent", "Instagram: posted", "Facebook: waiting for your approval"]) &&
+      c4.a.links.indexOf(IG_URL) !== -1 && !c4.a.links.some(h => /facebook\.com/.test(h)), J(c4.a));
+    check("waiting on Instagram, posted on Facebook: the other way round, with a link to the Facebook post only",
+      J(words(c4.b)) === J(["YouTube: not sent", "TikTok: not sent", "Instagram: waiting for your approval", "Facebook: posted"]) &&
+      c4.b.links.indexOf(FB_URL) !== -1 && !c4.b.links.some(h => /instagram\.com/.test(h)), J(c4.b));
+    check("sent nowhere: \"Instagram: not sent\" and \"Facebook: not sent\", no link", J(words(c4.c)) === J(["YouTube: not sent", "TikTok: not sent", "Instagram: not sent", "Facebook: not sent"]) && c4.c.links.length === 0, J(c4.c));
+    const looks = [].concat(c4.a.chips, c4.b.chips, c4.c.chips).map(x => x.split("|").slice(1).join("|"));
+    check("every Instagram and Facebook chip is drawn exactly like the YouTube and TikTok chips (pill, font, size, padding)", new Set(looks).size === 1 && /^999px\|/.test(looks[0]), J(Array.from(new Set(looks))));
+    await shotOf(cdp, "document.getElementById('videosCard')", path.join(OUT2, "videos-chips-ig-fb.png"));
+    VIDEOS = [V_NEW, V_SENT];
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+
+    /* ── 5. proposal cards (NAMED Nov 13 2026, S2) ── */
+    console.log("\n══ 5. proposals.html: one card of each main kind, the site font (1440 px) ══");
+    await openAny(cdp, origin, "proposals.html", 1440);
+    for (let i = 0; i < 50 && (await evaluate(cdp, "document.querySelectorAll('.proposal-card').length")) !== PROPOSALS.length; i++) await sleep(100);
+    const f5 = await evaluate(cdp, "(function(){var body=getComputedStyle(document.body).fontFamily;var cards=document.querySelectorAll('.proposal-card');var off=[],n=0;" +
+      "[].forEach.call(cards,function(card){[].forEach.call(card.querySelectorAll('*'),function(el){var own=[].some.call(el.childNodes,function(c){return c.nodeType===3&&c.textContent.trim()});" +
+      "if(!own||el.closest('details.payload-toggle > pre'))return;n++;var ff=getComputedStyle(el).fontFamily;if(ff!==body)off.push(el.tagName+'.'+el.className+' '+ff);});});" +
+      "[].forEach.call(document.querySelectorAll('details.payload-toggle'),function(d){d.open=true});" +
+      "var raw=[].map.call(document.querySelectorAll('details.payload-toggle > pre'),function(p){return getComputedStyle(p).fontFamily});" +
+      "var links=[].map.call(document.querySelectorAll('.proposal-card a.pf-value'),function(a){var r=a.getBoundingClientRect(),p=a.closest('.proposal-card').getBoundingClientRect();return {href:a.href,ff:getComputedStyle(a).fontFamily,inside:r.right<=p.right+0.5}});" +
+      "return {cards:cards.length,body:body,n:n,off:off.slice(0,8),raw:raw,links:links};})()");
+    check("all " + PROPOSALS.length + " cards drawn (Instagram, Facebook, YouTube, TikTok, Bluesky, Mastodon, blog, calendar, store, mailbox, a posted one)", f5.cards === PROPOSALS.length, J(f5.cards));
+    check("every one of the " + f5.n + " text-bearing elements on the cards is in the page's own font (" + f5.body.slice(0, 40) + "...), the raw payload aside",
+      f5.n > 60 && f5.off.length === 0 && !/monospace/i.test(f5.body), J(f5.off));
+    check("each View payload block (" + f5.raw.length + ") is monospace", f5.raw.length === PROPOSALS.length && f5.raw.every(x => /monospace/i.test(x)), J(f5.raw.slice(0, 2)));
+    check("the posted Instagram address is a link in the page's font that wraps inside its card", f5.links.some(l => l.href === IG_URL) && f5.links.every(l => l.ff === f5.body && l.inside), J(f5.links));
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+    await evaluate(cdp, "[].forEach.call(document.querySelectorAll('details.payload-toggle'),function(d,i){d.open=(i===0)}),true");
+    await shotOf(cdp, "document.querySelector('.proposal-card')", path.join(OUT2, "proposals-card.png"));
+    const presets = await evaluate(cdp, "window.BFTheme?window.BFTheme.PRESETS.map(function(p){return p.id}):[]");
+    const lows = [];
+    for (const id of presets) {
+      const m = await evaluate(cdp, "(function(){var B=window.BFTheme,p=B.PRESETS.filter(function(x){return x.id==='" + id + "'})[0];var t=B.tokensFor(p.theme,null,window);" +
+        "for(var k in t)document.documentElement.style.setProperty(k,t[k]);var probe=document.createElement('div');probe.style.background='var(--bf-bg, #000)';document.body.appendChild(probe);" +
+        "var bg=getComputedStyle(probe).backgroundColor;probe.remove();var card=getComputedStyle(document.querySelector('.proposal-card')).backgroundColor;" +
+        "var els=document.querySelectorAll('.proposal-card .pf-value, .proposal-card .payload-fields li, .proposal-card pre.exec-block');" +
+        "return {bg:bg,card:card,colors:[].map.call(els,function(e){return e.className+'|'+getComputedStyle(e).color})};})()");
+      const back = (() => { const pc = (String(m.card).match(/[\d.]+/g) || []).map(Number), pb = (String(m.bg).match(/[\d.]+/g) || [0, 0, 0]).map(Number), a = pc.length > 3 ? pc[3] : 1;
+        return "rgb(" + [0, 1, 2].map(i => pc[i] * a + pb[i] * (1 - a)).join(",") + ")"; })();
+      m.colors.forEach(x => { const [cls, col] = x.split("|"); const r = contrast(col, back); if (r < 4.5) lows.push(id + " ." + cls + " " + col + " " + r.toFixed(2)); });
+    }
+    check("on every theme preset (" + presets.length + "), every value, list item and text block reads at 4.5:1 or better on its card", presets.length >= 10 && lows.length === 0, J(lows.slice(0, 8)));
+
+    /* ── 6. the Guide button at 390 px (NAMED Nov 13 2026, S2) ── */
+    console.log("\n══ 6. the Guide button at 390 px: compact, named, covering nothing ══");
+    ON = { youtube: true, tiktok: true, instagram: true, facebook: true };
+    await guideAt390(cdp, origin, PAGE, "the Social page (Accounts, Your videos)", "guide-390-social.png", async () => {
+      for (let i = 0; i < 50 && !(await evaluate(cdp, "document.querySelectorAll('#ytVideoList li[data-video-id]').length === 2")); i++) await sleep(100);
+      // a tap: the click, then the pointerup the Guide settles on
+      await evaluate(cdp, "document.getElementById('agTab-accounts').click(), document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })), true");
+      await sleep(400);
+    });
+    await guideAt390(cdp, origin, "dashboard.html", "the dashboard", "guide-390-dashboard.png");
+    await guideAt390(cdp, origin, "agents/seo.html", "an agent page (SEO)");
+    await guideAt390(cdp, origin, "digital-cards.html", "the card maker");
+    await guideAt390(cdp, origin, "proposals.html", "proposals", "guide-390-proposals.png");
+    await guideAt390(cdp, origin, "card-view.html?slug=maple-street", "the public card page");
+    await openAny(cdp, origin, "proposals.html", 1440);
+    const desk = await evaluate(cdp, GUIDE_PROBE + "");
+    const deskText = await evaluate(cdp, "(function(){var t=document.querySelector('#tmx-guide-fab .tmx-guide-fab-text');var i=document.querySelector('#tmx-guide-fab .tmx-guide-fab-icon');" +
+      "return {text:t?getComputedStyle(t).position+'|'+Math.round(t.getBoundingClientRect().width):null,icon:i?getComputedStyle(i).display:null,spacer:getComputedStyle(document.getElementById('tmx-guide-fab-spacer')).display};})()");
+    check("1440 px: the desktop Guide button is unchanged (its word shown, no icon, no spacer)",
+      !!deskText.text && !/^absolute/.test(deskText.text) && deskText.icon === "none" && deskText.spacer === "none", J([deskText, desk.w, desk.h]));
   } catch (e) {
     check("the harness ran to the end", false, e && e.stack || e);
   } finally {
@@ -321,7 +491,7 @@ async function helperGeometry(cdp, rootExpr, name) {
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT);
+  console.log("\nScreenshots: " + OUT + " and " + OUT2);
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);

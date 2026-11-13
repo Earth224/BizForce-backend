@@ -119,7 +119,8 @@ const MUTATIONS = {
   // the button shows on desktops too (S8)
   "fab-on-desktop": [[GUIDE, '    "#tmx-guide-fab {",\n    "  display: none;",', '    "#tmx-guide-fab {",\n    "  display: inline-flex;",']],
   // a dragged mist no longer moves the button aside (S9)
-  "fab-never-moves": [[GUIDE, "    if (touching) fab.classList.add(\"tmx-guide-fab--right\");\n", ""]]
+  // NAMED (Nov 13 2026, S2): re-anchored on the class's new name, tmx-guide-fab--moved (the corner it moves to depends on the width)
+  "fab-never-moves": [[GUIDE, "    if (touching) fab.classList.add(\"tmx-guide-fab--moved\");\n", ""]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -357,12 +358,18 @@ const media = (() => { const i = CSS.indexOf("@media (max-width: 860px) {"); ret
 check("S8. the CSS was read", CSS.length > 2000 && !!rule("#tmx-guide-fab"), CSS.length);
 check("S8. the button is hidden by default and shown only at 860px and less, where the panel is hidden",
   /\n  display: none;/.test(rule("#tmx-guide-fab")) && /#tmx-guide-root \{ display: none; \}/.test(media) && /#tmx-guide-fab \{ display: inline-flex; \}/.test(media) &&
-  (CSS.match(/#tmx-guide-fab \{ display: inline-flex; \}/g) || []).length === 1 && (CSS.match(/@media/g) || []).length === 1, media);
+  // NAMED (Nov 13 2026, S2): a second @media, (max-width: 639px), sizes and places the button on phones; it never shows it
+  // (display stays with the 860px rule above, the only one that shows it)
+  (CSS.match(/#tmx-guide-fab \{ display: inline-flex; \}/g) || []).length === 1 && (CSS.match(/@media/g) || []).length === 2 &&
+  (CSS.match(/@media \(max-width: 639px\) \{/g) || []).length === 1 && !/@media \(max-width: 639px\) \{[^@]*#tmx-guide-fab \{[^}]*display/.test(CSS), media);
 const D = RENDERED["dashboard.html"];
 const dd = D.doc, fab = dd.getElementById("tmx-guide-fab"), sheet = dd.getElementById("tmx-guide-sheet"), backdrop = dd.getElementById("tmx-guide-sheet-backdrop");
 const closeBtn = dd.getElementById("tmx-guide-sheet-close");
 check("S8. the button exists: a <button type=button> reading \"Guide\", with aria-label, aria-haspopup=dialog, aria-controls=tmx-guide-sheet and aria-expanded=false",
-  !!fab && fab.tagName === "BUTTON" && fab.type === "button" && fab.textContent === "Guide" && /Termaximus Guide/.test(fab.getAttribute("aria-label") || "") &&
+  // NAMED (Nov 13 2026, S2): its accessible name is now the word it shows, "Guide" (an icon below 640px); the longer
+  // description moved to its title
+  !!fab && fab.tagName === "BUTTON" && fab.type === "button" && fab.textContent === "Guide" && fab.getAttribute("aria-label") === "Guide" &&
+  /Termaximus Guide/.test(fab.getAttribute("title") || "") &&
   fab.getAttribute("aria-haspopup") === "dialog" && fab.getAttribute("aria-controls") === "tmx-guide-sheet" && fab.getAttribute("aria-expanded") === "false");
 check("S8. the sheet exists, closed: role=dialog, aria-modal=true, aria-labelledby naming its title, hidden with its backdrop",
   !!sheet && sheet.getAttribute("role") === "dialog" && sheet.getAttribute("aria-modal") === "true" &&
@@ -477,9 +484,12 @@ function placed(mistBox) {
 }
 const onIt = placed({ left: 30, right: 140, top: 580, bottom: 690, width: 110, height: 110 });
 const away = placed({ left: 85, right: 195, top: 200, bottom: 310, width: 110, height: 110 });
+// NAMED (Nov 13 2026, S2): the class is tmx-guide-fab--moved (bottom-right from 640px, bottom-left below it, where the
+// button starts bottom-right); its meaning, "moved off the mist", is unchanged.
 check("S9. a mist dragged onto the button moves it to the bottom-right; one elsewhere leaves it bottom-left",
-  onIt === "tmx-guide-fab--right" && away === "", JSON.stringify([onIt, away]));
-check("S9. the bottom-right placement keeps the same 16px inset", /#tmx-guide-fab\.tmx-guide-fab--right \{\n  left: auto;\n  right: 16px;/.test(CSS));
+  onIt === "tmx-guide-fab--moved" && away === "", JSON.stringify([onIt, away]));
+check("S9. the bottom-right placement keeps the same 16px inset", /#tmx-guide-fab\.tmx-guide-fab--moved \{\n  left: auto;\n  right: 16px;/.test(CSS) &&
+  /#tmx-guide-fab\.tmx-guide-fab--moved \{ right: auto; left: calc\(16px \+ env\(safe-area-inset-left, 0px\)\); \}/.test(CSS));
 
 console.log("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (passes + failures) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));
 process.exit(failures ? 1 : 0);

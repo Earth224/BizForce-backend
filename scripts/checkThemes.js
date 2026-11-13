@@ -1218,6 +1218,39 @@ function withoutOwnScrollbars(text) {
   }
   return out.join("\n");
 }
+/* NAMED BEFORE → AFTER (Nov 13 2026, S2: a compact Guide button on phones). BEFORE: the guide's CSS as it stood.
+   AFTER: three additions that carry no theme token and no colour, read away here word for word, so every other
+   line, every token and every colour is still held exactly: the moved button's class is "--moved" (it was
+   "--right"; on a phone it moves left), the icon and the spacer are hidden by default, one comment line names
+   the phone rule, and the "@media (max-width: 639px)" block at the end (size, corner, safe-area insets, the
+   icon, the spacer). Any other change, or any of these not word for word, leaves the text unequal. */
+const S2_GUIDE_PHONE_TAIL = [
+  "\",",
+  "",
+  "    /* NAMED (Nov 13 2026, S2): below 640px the button is a round 48px icon button (its name stays \"Guide\"),",
+  "       bottom-right inside the safe-area insets, z-index 40 as above (over the page, under every dialog). A spacer",
+  "       as tall as the button and its insets ends the page, so the last content scrolls clear of it; a mist on it",
+  "       moves it to the bottom-left. 640px and up is unchanged. */",
+  "    \"@media (max-width: 639px) {\",",
+  "    \"  #tmx-guide-fab { left: auto; right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); width: 48px; height: 48px; padding: 0; gap: 0; border-radius: 50%; }\",",
+  "    \"  #tmx-guide-fab.tmx-guide-fab--moved { right: auto; left: calc(16px + env(safe-area-inset-left, 0px)); }\",",
+  "    \"  #tmx-guide-fab .tmx-guide-fab-icon { display: block; }\",",
+  "    \"  #tmx-guide-fab .tmx-guide-fab-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }\",",
+  "    \"  #tmx-guide-fab-spacer { display: block; height: calc(80px + env(safe-area-inset-bottom, 0px)); }\",",
+  "    \"}\"",
+  ""
+].join("\n");
+function withoutPhoneGuideButton(text) {
+  if (text === null || text === undefined) return text;
+  let t = String(text);
+  const swap = (from, to) => { if (t.split(from).length !== 2) return false; t = t.replace(from, () => to); return true; };
+  const ok = t.endsWith(S2_GUIDE_PHONE_TAIL) &&
+    swap("       same tips there. From 640px to 860px (below 640px see the NAMED Nov 13 2026 rule at the end):\n       BOTTOM-LEFT, 16px in:", "       same tips there. BOTTOM-LEFT, 16px in:") &&
+    swap("    \"#tmx-guide-fab.tmx-guide-fab--moved {\",", "    \"#tmx-guide-fab.tmx-guide-fab--right {\",") &&
+    swap("    \"#tmx-guide-fab .tmx-guide-fab-icon, #tmx-guide-fab-spacer {\",\n    \"  display: none;\",\n    \"}\",\n", "");
+  if (!ok) return null;
+  return t.slice(0, t.length - S2_GUIDE_PHONE_TAIL.length) + "\"\n";
+}
 function withoutScrollbarBlock(text) {
   if (text === null || text === undefined) return text;
   return String(text).replace(/<style id="bf-scrollbars">\n\/\* BF-SCROLLBARS:BEGIN[\s\S]*?\/\* BF-SCROLLBARS:END \*\/\n<\/style>\n/g, "");
@@ -1348,7 +1381,7 @@ async function elements() {
     pick(setWas, /^\.btn$/).length > 0);
   const oldMist = gitShow(ELEMENTS_BEFORE, PRESENCE) || "", oldGuide = gitShow(ELEMENTS_BEFORE, GUIDE) || "";
   check("H3. the mist's and the chat glow's CSS, resolved, is exactly today's (scripts/termaximus-presence.js)", !!styleArray(oldMist) && resolved4d(styleArray(FILES[PRESENCE]) || "") === withoutOwnScrollbars(styleArray(oldMist)));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
-  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && resolved4d(styleArray(FILES[GUIDE]) || "") === withoutOwnScrollbars(styleArray(oldGuide)));   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
+  check("H3. the guide's CSS, resolved, is exactly today's (scripts/termaximus-guide.js)", !!styleArray(oldGuide) && resolved4d(withoutPhoneGuideButton(styleArray(FILES[GUIDE])) || "") === withoutOwnScrollbars(styleArray(oldGuide)));   // NAMED (Nov 13 2026, S2): the NEW text without its phone button rules (withoutPhoneGuideButton)   // NAMED (Block 4d): BEFORE unthemed(), AFTER resolved4d(); NAMED (boombox-mixer): the old text without its own scrollbars
   const oldStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(oldMist); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const newStars = (() => { const m = /var STARS = (\[[\s\S]*?\n  \]);/.exec(FILES[PRESENCE]); try { return vm.runInNewContext(m[1]); } catch (e) { return null; } })();
   const tones = (() => { const m = /var STAR_TONES = (\{[\s\S]*?\});/.exec(FILES[PRESENCE]); try { return vm.runInNewContext("(" + m[1] + ")"); } catch (e) { return null; } })();
