@@ -1684,11 +1684,19 @@ function pageAnswers(over) {
   await flush();
   check("P11. over 50 MB, or not MP4, WebM or MOV: refused on the page, nothing sent", dom.fetches.length === before && dom.xhr.length === 1);
   const list = dom.get("ytVideoList");
+  /* NAMED (Nov 12 2026, Social page clean-up): BEFORE the form was built hidden under every ready row ("Prepare upload"), and
+     "Made for kids?" was a fieldset LEGEND. AFTER it opens under the row on "Prepare for YouTube" (YouTube connected), and
+     "Made for kids?" labels a role="radiogroup" of the same two required radios (checkSocialVideoPanel holds its keys). */
+  const ytPrep = findAll(list, function (n) { return n.tagName === "BUTTON" && n.textContent === "Prepare for YouTube"; });
+  if (ytPrep[0]) ytPrep[0].click();
   const selects = findAll(list, function (n) { return n.tagName === "SELECT"; });
   const radios = findAll(list, function (n) { return n.tagName === "INPUT" && n.type === "radio"; });
+  const kidsGroup = findAll(list, function (n) { return n.attrs && n.attrs.role === "radiogroup"; });
+  const kidsLabel = kidsGroup[0] ? findAll(list, function (n) { return n.id === kidsGroup[0].attrs["aria-labelledby"]; })[0] : null;
   check("P12. the prepare form: privacy Private first and selected; \"Made for kids?\" two required radios, neither checked",
-    selects.length === 1 && selects[0].children[0].value === "private" && selects[0].children[0].selected === true && selects[0].value === "private" &&
-    radios.length === 2 && radios.every(function (x) { return x.required === true && x.checked === false; }) && findAll(list, function (n) { return n.tagName === "LEGEND" && n.textContent === "Made for kids?"; }).length === 1);
+    ytPrep.length === 1 && selects.length === 1 && selects[0].children[0].value === "private" && selects[0].children[0].selected === true && selects[0].value === "private" &&
+    radios.length === 2 && radios.every(function (x) { return x.required === true && x.checked === false; }) && kidsGroup.length === 1 &&
+    findAll(kidsGroup[0], function (n) { return n.tagName === "INPUT" && n.type === "radio"; }).length === 2 && !!kidsLabel && kidsLabel.textContent === "Made for kids?");
   const fileBtn = findAll(list, function (n) { return n.tagName === "BUTTON" && n.textContent === "File for approval"; })[0];
   const n0 = dom.fetches.length;
   fileBtn.click();

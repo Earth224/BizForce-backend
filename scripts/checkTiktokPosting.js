@@ -1416,8 +1416,9 @@ function pageAnswers(over) {
   await flush();
   check("P10. TikTok set up, YouTube not: the file input is on (a video can go to either)", dom.get("ytFile").disabled === false);
   const list = dom.get("ytVideoList");
-  const prepBtn = findAll(list, function (n) { return n.tagName === "BUTTON" && n.textContent === "Prepare TikTok post"; });
-  check("P11. a ready video not on TikTok gets \"Prepare TikTok post\"; a posted one gets its tiktok.com link, the remove line and no remove button",
+  // NAMED (Nov 12 2026, Social page clean-up): BEFORE "Prepare TikTok post"; AFTER "Prepare for TikTok" (shown while TikTok is connected).
+  const prepBtn = findAll(list, function (n) { return n.tagName === "BUTTON" && n.textContent === "Prepare for TikTok"; });
+  check("P11. a ready video not on TikTok gets \"Prepare for TikTok\"; a posted one gets its tiktok.com link, the remove line and no remove button",
     prepBtn.length === 1 && findAll(list, function (n) { return n.tagName === "A" && n.href === "https://www.tiktok.com/player/v1/" + POST_ID && n.rel === "noopener"; }).length === 1 &&
     findAll(list, function (n) { return n.textContent === "To remove a TikTok post, delete it in the TikTok app." && n.tagName === "P"; }).length === 1 &&
     findAll(list, function (n) { return n.tagName === "BUTTON" && /Remove from TikTok|Delete from TikTok/.test(n.textContent); }).length === 0);
@@ -1451,7 +1452,9 @@ function pageAnswers(over) {
     !!labelP() && labelP().textContent === "Your video will be labeled 'Paid partnership'." &&
     consentP().textContent === "By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation." && selfOpt.disabled === true);
   // YouTube's form has its own "File for approval": TikTok's is the one in the same box as the privacy select.
-  const ttForm = sel ? sel.parentNode.parentNode.parentNode : list;
+  // NAMED (Nov 12 2026, Social page clean-up): BEFORE sel.parentNode.parentNode.parentNode (label, fields, box). AFTER the
+  // open form's panel, data-form "<video id>:tiktok", which holds the privacy select.
+  const ttForm = findAll(list, function (n) { return n.attrs && n.attrs["data-form"] === PAGE_VIDEO.id + ":tiktok"; })[0] || list;
   const fileBtn = findAll(ttForm, function (n) { return n.tagName === "BUTTON" && n.textContent === "File for approval"; })[0];
   const n0 = dom.fetches.length;
   fileBtn.click();
@@ -1469,7 +1472,10 @@ function pageAnswers(over) {
   dis.checked = false; dis.fire("change");
   sel.value = "PUBLIC_TO_EVERYONE";
   cb.checked = true;
-  findAll(ttForm, function (n) { return n.tagName === "TEXTAREA"; })[0].value = "Spring cakes.";
+  // NAMED (Nov 12 2026, Social page clean-up): BEFORE the first textarea was the caption. AFTER the AI helper comes first,
+  // so the caption is the textarea its "Caption" label names.
+  const capLabel = findAll(ttForm, function (n) { return n.tagName === "LABEL" && n.textContent === "Caption"; })[0];
+  findAll(ttForm, function (n) { return n.tagName === "TEXTAREA" && !!capLabel && n.id === capLabel.attrs.for; })[0].value = "Spring cakes.";
   fileBtn.click();
   await flush();
   const pp = dom.fetches.filter(function (x) { return x.path === "/api/tiktok/propose-post"; })[0];

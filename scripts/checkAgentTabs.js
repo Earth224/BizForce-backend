@@ -60,7 +60,9 @@ const SPECIFIC = {
   "agents/content.html": ["Publishing", ["contentLaunchPanel", "smsLaunchPanel", "contentLibrarySection", "contentSocialAccounts"]],
   "agents/sales.html": ["Leads", ["salesTopStrip", "salesTarget", "salesModules"]],
   "agents/seo.html": ["Audits", ["seoOptimizeCard", "seoBlogCard"]],
-  "agents/social.html": ["Accounts", ["bskyConnect", "bskyMentions", "mastoConnect", "ytConnect", "ttConnect", "igConnect", "fbConnect"]]
+  // NAMED (Nov 12 2026, Social page clean-up): "Your videos" became its own card (#videosCard) directly above
+  // the YouTube card, in place of a block inside it. Still the exact list, in this exact order.
+  "agents/social.html": ["Accounts", ["bskyConnect", "bskyMentions", "mastoConnect", "videosCard", "ytConnect", "ttConnect", "igConnect", "fbConnect"]]
 };
 const SHARED = ["Run", "Schedule", "Activity", "Learning", "Business"];
 
