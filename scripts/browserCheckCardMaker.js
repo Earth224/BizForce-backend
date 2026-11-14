@@ -119,6 +119,8 @@ function check(label, ok, detail) {
 /* ── the stub: one saved card ── */
 let cardLayout = {};   // the saved card's media_layout, set per step
 let noCards = false;   // NAMED (Nov 13 2026, horizontal default): true answers GET /api/digital-cards with no card (a member's first card)
+let q5Extras = false;  // NAMED (Nov 13 2026, Q5b): every button on the public card (Wallet, lead form, Support)
+const Q5_OUT = process.env.CARD_Q5_OUT || path.join(os.homedir(), "Downloads", "q5");
 function cardRow() {
   return { id: "aaaaaaaa-0000-4000-8000-000000000001", slug: "jane-doe", share_token: null, full_name: "Jane Doe", job_title: "Founder", company: "Northwind Tea",
     email: "jane@example.test", phone: "+1 555 0100", website: "https://example.test", theme: "dark", media_layout: cardLayout,
@@ -126,7 +128,11 @@ function cardRow() {
 }
 function apiAnswer(pathname) {
   if (pathname === "/api/digital-cards") return { cards: noCards ? [] : [cardRow()] };
-  if (/^\/api\/cards\/slug\//.test(pathname)) return { card: cardRow(), support_links: [] };
+  // NAMED (Nov 13 2026, Q5b): q5Extras turns on the Wallet button, the lead form and a support link, so every button shows.
+  if (/^\/api\/cards\/slug\//.test(pathname)) return q5Extras
+    ? { card: Object.assign(cardRow(), { google_wallet: true, lead_form: true, form_token: "check-form-token", form_issued_at: "2026-11-13T00:00:00Z" }),
+        support_links: [{ kind: "paypal", url: "https://paypal.me/janedoe", label: "PayPal" }] }
+    : { card: cardRow(), support_links: [] };
   if (/\/stats$/.test(pathname)) return { days: [], totals: { last_7_days: { views: 0, qr_views: 0 }, last_30_days: { views: 0, qr_views: 0 } } };
   if (/^\/api\/card-leads\//.test(pathname)) return { leads: [] };
   if (pathname === "/api/auth/me") return { user: { id: "aaaaaaaa-0000-4000-8000-000000000009", email: "owner@example.test", role: "member" }, access: { active: true } };
@@ -727,14 +733,14 @@ function pdfPage(uri) {
     await open(cdp, origin, "digital-cards.html", makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')");
     const vert = await evaluate(cdp, MAKER_ORIENT);
     check("a card saved vertical reopens vertical: the Vertical toggle alone selected, the preview upright (" + vert.ratio + " : 1), and a save keeps vertical",
-      vert.vertical && vert.toggle === "vertical" && vert.saved === "vertical" && Math.abs(vert.ratio - 9 / 16) <= 0.03, JSON.stringify(vert));
+      vert.vertical && vert.toggle === "vertical" && vert.saved === "vertical" && Math.abs(vert.ratio - 1 / 1.75) <= 0.01, JSON.stringify(vert));
     await evaluate(cdp, "window.scrollTo(0, 0), true");
     await sleep(250);
     const vres = await cdp.send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(path.join(OUT, "saved-vertical.png"), Buffer.from(vres.data, "base64"));
     const vertEx = await exportsNow();
     check("a vertical card's exports are vertical: the PNG taller than wide (" + (vertEx.png || []).join(" x ") + ") and the print file's page 2 x 3.5 in (144 x 252 pt)",
-      !!vertEx.png && Math.abs(vertEx.pngRatio - 9 / 16) <= 0.03 && vertEx.page === "0 0 144 252", JSON.stringify(vertEx));
+      !!vertEx.png && Math.abs(vertEx.pngRatio - 1 / 1.75) <= 0.02 && vertEx.page === "0 0 144 252", JSON.stringify(vertEx));
 
     // The public card follows the saved orientation, horizontal when there is none.
     const PUBLIC_ORIENT = `(function(){ var v = document.getElementById("cardViewport"), p = document.getElementById("cardPreview"), r = p.getBoundingClientRect(), a = document.getElementById("cardActions").getBoundingClientRect();
@@ -754,9 +760,92 @@ function pdfPage(uri) {
     check("public card with no orientation saved, or saved horizontal, at 390, 768 and 1440 px: horizontal (1.75 : 1), the buttons under the card, no sideways scroll, and never a vertical frame",
       pubH.length === 6 && pubH.every(k => { const r = pubRows[k]; return !r.vertical && !r.cardVertical && Math.abs(r.ratio - 1.75) <= 0.03 && r.buttonsBelow && r.over <= 0 && !/[Vv]/.test(r.frames); }),
       JSON.stringify(pubH.map(k => [k, pubRows[k]])));
-    check("public card saved vertical, at 390, 768 and 1440 px: the upright full-height card, as before (taller than wide)",
-      pubV.length === 3 && pubV.every(k => { const r = pubRows[k]; return r.vertical && r.cardVertical && r.ratio < 1 && r.over <= 0; }), JSON.stringify(pubV.map(k => [k, pubRows[k]])));
+    check("public card saved vertical, at 390, 768 and 1440 px: an upright business card, 1 : 1.75 (NAMED Nov 13 2026, Q5b: no longer the full-height card)",
+      pubV.length === 3 && pubV.every(k => { const r = pubRows[k]; return r.vertical && r.cardVertical && Math.abs(r.ratio - 1 / 1.75) <= 0.01 && r.buttonsBelow && r.over <= 0; }), JSON.stringify(pubV.map(k => [k, pubRows[k]])));
     await viewport(cdp, 390, 844, true);
+    cardLayout = {};
+
+    /* ── NAMED (Nov 13 2026, Q5b): business-card sizing with no scroll, at six screen sizes, both orientations ── */
+    console.log("\n══ Q5b. the public card fits the screen: card, buttons and footer, no scrollbar (a visitor, every button shown) ══");
+    fs.mkdirSync(Q5_OUT, { recursive: true });
+    // A visitor has no session: on ?visitor=1 the check's sign-in (registered first) is undone before the page runs.
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(/[?&]visitor=1/.test(location.search)){localStorage.removeItem('bf_token');localStorage.removeItem('bf_user');}}catch(e){}" });
+    q5Extras = true;
+    const FIT = `(function(){ var c = document.getElementById("cardPreview").getBoundingClientRect(), a = document.getElementById("cardActions").getBoundingClientRect(),
+      f = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect(), de = document.documentElement;
+      var btns = [].filter.call(document.querySelectorAll("#cardActions .cv-btn"), function (b) { return !b.hidden && getComputedStyle(b).display !== "none"; });
+      return { w: Math.round(c.width), h: Math.round(c.height), ratio: c.width / c.height, cardTop: Math.round(c.top), cardBottom: Math.round(c.bottom), actTop: Math.round(a.top),
+        footBottom: Math.round(f.bottom), docH: de.scrollHeight, docW: de.scrollWidth, vh: innerHeight, vw: innerWidth, nBtns: btns.length,
+        btnsIn: btns.every(function (b) { var r = b.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; }),
+        btnsUnder: btns.every(function (b) { return b.getBoundingClientRect().top >= c.bottom - 0.5; }) }; })()`;
+    const SIZES = [[1440, 900], [1366, 768], [1280, 720], [768, 1024], [390, 844], [360, 740]];
+    const fits = {};
+    for (const [W, Hh] of SIZES) {
+      await viewport(cdp, W, Hh, W < 600);
+      for (const o of ["horizontal", "vertical"]) {
+        cardLayout = { orientation: o };
+        await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && !document.getElementById('cvSupportBtn').hidden");
+        await sleep(300);
+        const r = await evaluate(cdp, FIT);
+        fits[W + "x" + Hh + " " + o] = r;
+        const shotName = { "1440x900 horizontal": "card-h-1440.png", "1440x900 vertical": "card-v-1440.png", "1366x768 vertical": "card-v-1366x768.png",
+          "390x844 vertical": "card-v-390.png", "390x844 horizontal": "card-h-390.png" }[W + "x" + Hh + " " + o];
+        if (shotName) { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(Q5_OUT, shotName), Buffer.from(s.data, "base64")); }
+      }
+    }
+    const fitRows = Object.keys(fits).map(k => [k, fits[k]]);
+    console.log("    note  card sizes: " + fitRows.map(([k, r]) => k + " " + r.w + "x" + r.h).join("; "));
+    check("no scrollbar at 1440x900, 1366x768, 1280x720, 768x1024, 390x844 and 360x740, both orientations: the page is no taller and no wider than the screen",
+      fitRows.length === 12 && fitRows.every(([, r]) => r.docH <= r.vh && r.docW <= r.vw), JSON.stringify(fitRows.filter(([, r]) => !(r.docH <= r.vh && r.docW <= r.vw))));
+    check("the card is a business card at every size: 1.75 : 1 lying down, 1 : 1.75 standing up, within 1%",
+      fitRows.every(([k, r]) => Math.abs(r.ratio - (/vertical$/.test(k) ? 1 / 1.75 : 1.75)) / (/vertical$/.test(k) ? 1 / 1.75 : 1.75) <= 0.01),
+      JSON.stringify(fitRows.map(([k, r]) => [k, r.ratio.toFixed(4)])));
+    check("...within its caps: lying down at most 560 px wide and 92% of the screen; standing up at most 560 px tall",
+      fitRows.every(([k, r]) => /vertical$/.test(k) ? r.h <= 560 && r.w <= r.vw * 0.92 + 1 : r.w <= 560 && r.w <= r.vw * 0.92 + 1), JSON.stringify(fitRows.map(([k, r]) => [k, r.w, r.h])));
+    check("all five buttons (Support, Leave your details, Save Contact, Add to Google Wallet, Create Your Own) inside the screen, under the card, and the footer too",
+      fitRows.every(([, r]) => r.nBtns === 5 && r.btnsIn && r.btnsUnder && r.footBottom <= r.vh), JSON.stringify(fitRows.filter(([, r]) => !(r.nBtns === 5 && r.btnsIn && r.btnsUnder && r.footBottom <= r.vh))));
+    // Support and the lead form open inline under the buttons (1440 x 900, horizontal); the page may scroll only then.
+    await viewport(cdp, 1440, 900, false);
+    cardLayout = {};
+    await open(cdp, origin, "c/jane-doe?visitor=1", "!document.getElementById('cvSupportBtn').hidden");
+    const cardW0 = await evaluate(cdp, "Math.round(document.getElementById('cardPreview').getBoundingClientRect().width)");
+    const opened = await evaluate(cdp, `(function(){ var R = function (id) { return document.getElementById(id).getBoundingClientRect(); };
+      document.getElementById("cvSupportBtn").click();
+      var p = document.getElementById("cvSupport"), a = R("cardActions"), r = R("cvSupport"), f = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect();
+      var out = { shown: !p.hidden, pos: getComputedStyle(p).position, gap: Math.round(r.top - a.bottom), footBelow: f.top >= r.bottom - 0.5 };
+      document.getElementById("cvLeadBtn").click(); var l = document.getElementById("cvLead"), lr = R("cvLead"), r2 = R("cvSupport"),
+        f2 = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect();
+      out.lead = { shown: !l.hidden, pos: getComputedStyle(l).position, belowSupport: lr.top >= r2.bottom - 0.5, footBelow: f2.top >= lr.bottom - 0.5 }; return out; })()`);
+    // A resize with both panels open refits, and the card keeps its size: an open panel lets the page scroll instead.
+    await viewport(cdp, 1440, 901, false); await sleep(200); await viewport(cdp, 1440, 900, false); await sleep(200);
+    const cardW1 = await evaluate(cdp, "Math.round(document.getElementById('cardPreview').getBoundingClientRect().width)");
+    check("with Support and the lead form open, a resize leaves the card its size (" + cardW0 + " -> " + cardW1 + " px)", cardW0 === cardW1 && cardW0 === 560, cardW0 + " " + cardW1);
+    check("Support opens inline directly under the button row (static, 0-16 px below it), the footer pushed down below it",
+      opened.shown && opened.pos === "static" && opened.gap >= 0 && opened.gap <= 16 && opened.footBelow, JSON.stringify(opened));
+    check("the lead form opens inline under it too, the footer below both", opened.lead.shown && opened.lead.pos === "static" && opened.lead.belowSupport && opened.lead.footBelow, JSON.stringify(opened.lead));
+    await evaluate(cdp, "document.getElementById('cvLeadBtn').click(), true");
+    await sleep(250);
+    { const s = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true }); fs.writeFileSync(path.join(Q5_OUT, "card-support-open.png"), Buffer.from(s.data, "base64")); }
+    // The owner, signed in, on a phone: the Guide's spacer may sit below the fold, but the card, its buttons and the footer are all in view.
+    await viewport(cdp, 390, 844, true);
+    cardLayout = { orientation: "vertical" };
+    await open(cdp, origin, "c/jane-doe", "!document.getElementById('cvSupportBtn').hidden && !!document.getElementById('tmx-guide-fab')");
+    await sleep(400);
+    const ownPhone = await evaluate(cdp, FIT);
+    check("signed in at 390 px (the Guide's spacer on the page): the card, every button and the footer are fully in view without scrolling",
+      ownPhone.btnsIn && ownPhone.footBottom <= ownPhone.vh && ownPhone.cardTop >= 0 && ownPhone.cardBottom <= ownPhone.vh, JSON.stringify(ownPhone));
+    // The maker's preview has the same ratios.
+    await viewport(cdp, 1440, 1000, false);
+    const prevRatio = {};
+    for (const o of ["horizontal", "vertical"]) {
+      cardLayout = { orientation: o };
+      await open(cdp, origin, "digital-cards.html", makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')");
+      prevRatio[o] = await evaluate(cdp, "(function(){var r=document.getElementById('cardPreview').getBoundingClientRect();return {w:Math.round(r.width),h:Math.round(r.height),ratio:r.width/r.height};})()");
+    }
+    check("the maker's preview matches the public card: 1.75 : 1 (at most 560 px wide) and 1 : 1.75 (at most 320 x 560), within 1%",
+      Math.abs(prevRatio.horizontal.ratio - 1.75) / 1.75 <= 0.01 && prevRatio.horizontal.w <= 560 && Math.abs(prevRatio.vertical.ratio - 1 / 1.75) * 1.75 <= 0.01 && prevRatio.vertical.h <= 561,
+      JSON.stringify(prevRatio));
+    q5Extras = false;
     cardLayout = {};
 
     const own2 = exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));

@@ -24,7 +24,8 @@
         in bf-public, the logo otherwise, the theme colour, the QR value and the
         mailto and tel links equal to bf-card.js, the length caps.
      E. counting: tap kind wallet, and the stats with wallet_taps.
-     F. the page: the button only with google_wallet on Android, its click
+     F. the page: the button only with google_wallet, on every device but an
+        iPhone or iPad (Android only until Nov 13 2026, Q5b), its click
         sending the beacon then going to the route, textContent only; the
         shell in sync; the editor's totals.
      G. legal, THIRD_PARTIES, README, the migration as run, R1.
@@ -50,7 +51,10 @@ const MUTATE = process.env.MUTATE || "";
 const BS = String.fromCharCode(92);
 
 const MUTATIONS = {
-  "shown-on-iphone": [["FE:card-view.html", "!/Android/i.test(navigator.userAgent || \"\")", "!/Android|iPhone/i.test(navigator.userAgent || \"\")"]],
+  // NAMED (Nov 13 2026, Q5b): the button shows on every device but an iPhone or iPad (it was Android only); the mutation
+  // lets an iPhone through.
+  "shown-on-iphone": [["FE:card-view.html", "return /iPhone|iPad|iPod/i.test(ua) ||", "return /iPad|iPod/i.test(ua) ||"]],
+  "hidden-on-desktop": [["FE:card-view.html", "c.google_wallet !== true || cvAppleMobile() || !cardRef()", "c.google_wallet !== true || !/Android/i.test(navigator.userAgent || \"\") || !cardRef()"]],
   "shown-when-unconfigured": [["SRC", "  if (card && googleWallet.config()) card.google_wallet = true;\n", "  if (card) card.google_wallet = true;\n"]],
   "lapsed-pass-issued": [["SRC", "    if (!(await ownerPagePublic(walletRow.user_id))) return res.status(404).json({ error: googleWallet.MESSAGES.notFound });\n", ""]],
   "lookup-throw-issued": [["SRC", "    if (!(await ownerPagePublic(walletRow.user_id))) return",
@@ -580,8 +584,15 @@ function verified(token) {
     const vNo = view({ ua: ANDROID, card: Object.assign({}, shareOff.body.card) }); await settle();
     const vIph = view({ ua: IPHONE, card: shown }); await settle();
     const vDesk = view({ ua: DESKTOP, card: shown }); await settle();
-    check("F5. hidden without google_wallet, on an iPhone and on a desktop", [vNo, vIph, vDesk].every(v => v.doc.getElementById("cvWalletBtn").hidden === true && v.log.errors.length === 0),
-      J([vNo, vIph, vDesk].map(v => [v.doc.getElementById("cvWalletBtn").hidden, v.log.errors])));
+    const IPAD = "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+    const vIpad = view({ ua: IPAD, card: shown }); await settle();
+    // NAMED (Nov 13 2026, Q5b): BEFORE, hidden on a desktop too (Android only), so the owner never saw it on bizforceai.net/c/earthrose
+    // from a computer although the server had Wallet set up. AFTER: hidden without google_wallet and on an iPhone or iPad
+    // (Google Wallet does not run there); shown on a desktop, whose browser opens Google's save page.
+    check("F5. hidden without google_wallet, on an iPhone and on an iPad", [vNo, vIph, vIpad].every(v => v.doc.getElementById("cvWalletBtn").hidden === true && v.log.errors.length === 0),
+      J([vNo, vIph, vIpad].map(v => [v.doc.getElementById("cvWalletBtn").hidden, v.log.errors])));
+    check("F5b. shown on a desktop when google_wallet is true (Q5b)", vDesk.doc.getElementById("cvWalletBtn").hidden === false && vDesk.log.errors.length === 0,
+      J([vDesk.doc.getElementById("cvWalletBtn").hidden, vDesk.log.errors]));
     const vAnd = view({ ua: ANDROID, card: shown }); await settle();
     const btn = vAnd.doc.getElementById("cvWalletBtn");
     check("F6. shown on Android when google_wallet is true, labelled \"Add to Google Wallet\"", btn.hidden === false && btn.textContent === "Add to Google Wallet" && vAnd.log.errors.length === 0, J(vAnd.log.errors));

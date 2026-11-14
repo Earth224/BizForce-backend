@@ -135,7 +135,8 @@ const MUTATIONS = {
   "gradient-name-flat": [[DC, "    ctx.fillStyle = paint || c.color;\n", "    ctx.fillStyle = c.color;\n"]],
   "gradient-name-dropped": [[DC, "      copyEl.appendChild(words);\n", ""]],
   // the public card back in a row, the footer beside it (X4)
-  "footer-beside-card": [[CV, "    body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start}\n", "    body{display:flex;align-items:center;justify-content:center}\n"]],
+  // NAMED (Nov 13 2026, Q5b): re-anchored; body's rule now also holds the screen's height (min-height 100svh)
+  "footer-beside-card": [[CV, "    body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:100vh;min-height:100svh}\n", "    body{display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100svh}\n"]],
   // the upload rows kept on one line (X5)
   "upload-row-nowrap": [[DC, "    .vid-upload-row{flex-wrap:wrap}\n", "    .vid-upload-row{flex-wrap:nowrap}\n"]],
   // the short-link note says the QR is always there (X6)
@@ -677,9 +678,10 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   const od = O.d, ow = O.w, ocp = od.getElementById("cardPreview");
   const orientNow = () => ({ vertical: ocp.classList.contains("orient-vertical"), toggle: Array.prototype.filter.call(od.querySelectorAll("[data-orient]"), b => b.classList.contains("active")).map(b => b.getAttribute("data-orient")).join(),
     saved: ow.getFields().media_layout.orientation, aspect: ow.getComputedStyle(ocp).aspectRatio });
-  // jsdom gives the computed aspect-ratio as written: "1.75 / 1" for the card, "9/16" for the upright one.
+  // jsdom gives the computed aspect-ratio as written: "1.75 / 1" for the card, "1/1.75" for the upright one.
+  // NAMED (Nov 13 2026, Q5b): the upright preview was 9 / 16; it is 1 : 1.75 now, the public card's and the print page's shape.
   const H_STATE = J({ vertical: false, toggle: "horizontal", saved: "horizontal", aspect: "1.75 / 1" });
-  const V_STATE = J({ vertical: true, toggle: "vertical", saved: "vertical", aspect: "9/16" });
+  const V_STATE = J({ vertical: true, toggle: "vertical", saved: "vertical", aspect: "1/1.75" });
   check("the card maker's scripts run without an error", O.errors.length === 0, O.errors.join(" | "));
   check("O1 a new card (nothing loaded) is horizontal: no orient-vertical, the Horizontal toggle alone selected, a 1.75 preview, and a save sends horizontal",
     J(orientNow()) === H_STATE, J(orientNow()));
@@ -692,7 +694,7 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   check("O2 a saved card with no orientation (no media_layout, null, {}, null, \"\", an unknown value) opens horizontal, and saved horizontal stays horizontal",
     unsaved.every(x => x[1]), J(unsaved.filter(x => !x[1])));
   ow.fillForm({ full_name: "Jane", theme: "dark", media_layout: { orientation: "vertical" } });
-  check("O3 a card saved vertical reopens vertical: orient-vertical, the Vertical toggle alone selected, a 9 / 16 preview, and a save keeps vertical",
+  check("O3 a card saved vertical reopens vertical: orient-vertical, the Vertical toggle alone selected, a 1 : 1.75 preview, and a save keeps vertical",
     J(orientNow()) === V_STATE, J(orientNow()));
   check("O2 the orientation is read only through cardOrientationOf, which gives vertical for \"vertical\" alone",
     ow.cardOrientationOf({ orientation: "vertical" }) === "vertical" && [undefined, null, {}, { orientation: "x" }, { orientation: "horizontal" }].every(m => ow.cardOrientationOf(m) === "horizontal") &&
@@ -732,7 +734,9 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
     return r;
   }
   const PUB_H = { errors: 0, viewport: false, card: false, position: "relative", aspect: "1.75 / 1", actions: "relative", shown: true };
-  const PUB_V = { errors: 0, viewport: true, card: true, position: "absolute", aspect: "auto", actions: "absolute", shown: true };
+  // NAMED (Nov 13 2026, Q5b): BEFORE, the full-height upright card (absolute, no ratio, the buttons over its foot). AFTER: a
+  // business card standing up, 1 : 1.75, in the flow, the buttons under it (scripts/checkCardSizing.js holds the sizes).
+  const PUB_V = { errors: 0, viewport: true, card: true, position: "relative", aspect: "1 / 1.75", actions: "relative", shown: true };
   const pubCases = [[undefined, "none"], [null, "null"], [{}, "{}"], [{ orientation: "sideways" }, "unknown"], [{ orientation: "horizontal" }, "horizontal"]];
   const pubH = [];
   for (const [ml, label] of pubCases) { const r = await pubOrient(ml); const { bar, ...rest } = r; pubH.push([label, J(rest) === J(PUB_H), r]); }
@@ -740,11 +744,11 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
     pubH.every(x => x[1]), J(pubH.filter(x => !x[1])));
   const pv1 = await pubOrient({ orientation: "vertical" });
   const { bar: pvBar, ...pvRest } = pv1;
-  check("O5 the public card saved vertical: cv-vertical and orient-vertical, the full-height upright card with the buttons over its foot, as before",
-    J(pvRest) === J(PUB_V) && pvBar === "in the card", J(pv1));
+  check("O5 the public card saved vertical: cv-vertical and orient-vertical, an upright 1 : 1.75 business card in the flow with the buttons under it (Q5b)",
+    J(pvRest) === J(PUB_V) && pvBar === "under the card", J(pv1));
   const audioH = await pubOrient({}, { audio_url: "https://example.com/a.mp3" }), audioV = await pubOrient({ orientation: "vertical" }, { audio_url: "https://example.com/a.mp3" });
-  check("O5 the audio bar: under a horizontal card (above the buttons), inside an upright one as before",
-    audioH.bar === "under the card" && audioV.bar === "in the card" && audioH.errors === 0 && audioV.errors === 0, J([audioH.bar, audioV.bar]));
+  check("O5 the audio bar: under the card (above the buttons), horizontal and, since Q5b, upright too",
+    audioH.bar === "under the card" && audioV.bar === "under the card" && audioH.errors === 0 && audioV.errors === 0, J([audioH.bar, audioV.bar]));
   // O6 first paint: the markup alone, before any script, is horizontal.
   const bareDoc = html => new JSDOM(html.replace(/<script[\s\S]*?<\/script>/g, ""), { pretendToBeVisual: true }).window;
   const BM = bareDoc(FILES[DC]), bmp = BM.document.getElementById("cardPreview");
