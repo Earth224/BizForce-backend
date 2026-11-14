@@ -147,7 +147,26 @@ function q6Answer(pathname, request) {
   if (pathname === "/api/bfp/upload-url") return { signedUrl: "https://" + API_HOST + "/check-storage/bg.png", publicUrl: "https://" + API_HOST + "/check-storage/bg.png" };
   return null;
 }
+/* NAMED (Nov 13 2026, S3): s3Cards is a member's three stored cards, newest first as GET /api/digital-cards orders them.
+   PUT /api/digital-cards/<id> changes that card only; s3Saves records each save's id and body. */
+let s3Cards = null;
+const s3Saves = [];
+function s3Answer(pathname, request) {
+  const m = request && request.method;
+  const put = /^\/api\/digital-cards\/([^/]+)$/.exec(pathname);
+  if (put && m === "PUT") {
+    const body = JSON.parse((request && request.postData) || "{}");
+    s3Saves.push({ id: put[1], body });
+    const row = s3Cards.filter(c => c.id === put[1])[0];
+    if (!row) return { error: "no such card" };
+    Object.assign(row, body);
+    return { card: row };
+  }
+  if (pathname === "/api/digital-cards" && m !== "POST") return { cards: s3Cards };
+  return null;
+}
 function apiAnswer(pathname, request) {
+  if (s3Cards) { const a = s3Answer(pathname, request); if (a) return a; }
   if (q6Store) { const a = q6Answer(pathname, request); if (a) return a; }
   if (pathname === "/api/digital-cards") return { cards: noCards ? [] : [cardRow()] };
   // NAMED (Nov 13 2026, Q5b): q5Extras turns on the Wallet button, the lead form and a support link, so every button shows.
@@ -876,7 +895,9 @@ function pdfPage(uri) {
     fs.mkdirSync(Q6_OUT, { recursive: true });
     q6Store = Object.assign(cardRow(), { media_layout: {} });
     const q6_MAKER_STATE = "(function(){var c=document.getElementById('cardPreview'),r=c.getBoundingClientRect();return {vertical:c.classList.contains('orient-vertical'),toggle:[].filter.call(document.querySelectorAll('[data-orient]'),function(b){return b.classList.contains('active')}).map(function(b){return b.getAttribute('data-orient')}).join(),ratio:r.width/r.height,sends:getFields().media_layout.orientation};})()";
-    const q6_loaded = makerReady + " && /Card q6_loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')";
+    // NAMED (Nov 13 2026, S3): BEFORE this waited for "Card q6_loaded" (a rename slip no page ever shows), so each open ran
+    // its full 15 s; NOW it waits for the maker's real "Card loaded." status, as every other open here does.
+    const q6_loaded = makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')";
     const q6_saveNow = async () => {
       const n = q6Saves.length;
       await evaluate(cdp, "document.getElementById('saveBtn').click(), true");
@@ -942,7 +963,88 @@ function pdfPage(uri) {
     q6Store = null;
     cardLayout = {};
 
-    const own2 = exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));
+    /* ── NAMED (Nov 13 2026, S3): the card picker, three cards ── */
+    console.log("\n══ S3. three cards: the picker, switching to a vertical card, saving to it, the unsaved prompt ══");
+    const S3_OUT = process.env.CARD_S3_OUT || path.join(os.homedir(), "Downloads", "s3");
+    fs.mkdirSync(S3_OUT, { recursive: true });
+    const S3A = "bbbbbbbb-0000-4000-8000-00000000000a", S3B = "bbbbbbbb-0000-4000-8000-00000000000b", S3C = "bbbbbbbb-0000-4000-8000-00000000000c";
+    const s3Row = (id, extra) => Object.assign(cardRow(), { id, share_token: null }, extra);
+    s3Cards = [s3Row(S3A, { full_name: "Jane Doe", slug: "jane-doe", job_title: "Founder", media_layout: { orientation: "horizontal" } }),
+      s3Row(S3B, { full_name: "Northwind Tea", slug: "northwind-tea", job_title: "Tea shop", company: "Northwind", media_layout: { orientation: "vertical" } }),
+      s3Row(S3C, { full_name: "", slug: null, job_title: "", company: "", media_layout: {} })];
+    const s3Before = JSON.stringify(s3Cards);
+    const S3_STATE = "(function(){var w=document.getElementById('cardPickerWrap'),s=document.getElementById('cardPicker'),c=document.getElementById('cardPreview');" +
+      "var first=document.querySelector('.form-panel .form-group');var dlg=document.querySelector('.card-switch-back [role=dialog]');" +
+      "return {shown:!w.hidden&&getComputedStyle(w).display!=='none',first:first===w,label:(document.querySelector('label[for=cardPicker]')||{}).textContent," +
+      "options:[].map.call(s.options,function(o){return o.value+'|'+o.textContent}),value:s.value,name:document.getElementById('fName').value,title:document.getElementById('fTitle').value," +
+      "active:String(activeCardId),vertical:c.classList.contains('orient-vertical'),pick:(function(){try{return sessionStorage.getItem('bf_card_pick')}catch(e){return 'x'}})()," +
+      "dialog:dlg?{label:(document.getElementById(dlg.getAttribute('aria-labelledby'))||{}).textContent,modal:dlg.getAttribute('aria-modal'),focus:document.activeElement.textContent," +
+      "buttons:[].map.call(dlg.querySelectorAll('button'),function(b){return b.textContent}),pos:getComputedStyle(dlg.parentNode).position}:null};})()";
+    const s3Ready = name => makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'') && document.getElementById('fName').value === " + JSON.stringify(name);
+    const s3Wait = async (cond) => { for (let i = 0; i < 150; i++) { if (await evaluate(cdp, "document.readyState === 'complete' && (" + cond + ")").catch(() => false)) break; await sleep(100); } await sleep(400); await evaluate(cdp, HELPERS); };
+    const s3Pick = id => evaluate(cdp, "(function(){var s=document.getElementById('cardPicker');s.value=" + JSON.stringify(id) + ";s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()");
+    const s3Key = async k => { const code = { Escape: 27, Tab: 9 }[k]; await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k, windowsVirtualKeyCode: code });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, windowsVirtualKeyCode: code }); await sleep(200); };
+    await viewport(cdp, 1440, 1000, false);
+    await open(cdp, origin, "digital-cards.html", s3Ready("Jane Doe"));
+    const s3a = await evaluate(cdp, S3_STATE);
+    check("S3 three cards: \"Your cards\" is the first thing in Card Details, listing each card's name, short link or \"no short link\", and Horizontal or Vertical; the newest is open",
+      s3a.shown && s3a.first && s3a.label === "Your cards" && JSON.stringify(s3a.options) === JSON.stringify([S3A + "|Jane Doe · bizforceai.net/c/jane-doe · Horizontal",
+        S3B + "|Northwind Tea · bizforceai.net/c/northwind-tea · Vertical", S3C + "|Untitled card · no short link · Horizontal"]) && s3a.value === S3A && s3a.active === S3A && !s3a.vertical,
+      JSON.stringify(s3a));
+    // Nothing changed: switching opens the vertical card straight away, as loadCard opens any card.
+    await s3Pick(S3B);
+    await sleep(300);
+    const s3asked = await evaluate(cdp, "!!document.querySelector('.card-switch-back')");
+    await s3Wait(s3Ready("Northwind Tea"));
+    const s3b = await evaluate(cdp, S3_STATE);
+    check("S3 with nothing changed, choosing Northwind Tea asks nothing and opens it as loadCard does: its fields, Vertical, the picker on it, the choice remembered for the session",
+      !s3asked && s3b.name === "Northwind Tea" && s3b.title === "Tea shop" && s3b.vertical && s3b.value === S3B && s3b.active === S3B && s3b.pick === S3B && s3b.shown, JSON.stringify([s3asked, s3b]));
+    await evaluate(cdp, "(function(){var t=document.getElementById('fTitle');t.value='Tea shop and cafe';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    const s3n = s3Saves.length;
+    await evaluate(cdp, "document.getElementById('saveBtn').click(), true");
+    for (let i = 0; i < 80 && s3Saves.length === s3n; i++) await sleep(100);
+    await sleep(400);
+    const s3save = s3Saves[s3Saves.length - 1] || {};
+    const s3after = JSON.parse(s3Before);
+    s3after[1].job_title = "Tea shop and cafe";
+    check("S3 Save Card writes to the chosen card only: one PUT /api/digital-cards/<Northwind Tea's id>, still vertical; Jane Doe and the untitled card untouched",
+      s3Saves.length === s3n + 1 && s3save.id === S3B && s3save.body.job_title === "Tea shop and cafe" && (s3save.body.media_layout || {}).orientation === "vertical" &&
+      JSON.stringify(s3Cards[0]) === JSON.stringify(s3after[0]) && JSON.stringify(s3Cards[2]) === JSON.stringify(s3after[2]) && s3Cards[1].job_title === "Tea shop and cafe",
+      JSON.stringify([s3Saves.length - s3n, s3save.id, s3save.body && s3save.body.job_title]));
+    await evaluate(cdp, "window.scrollTo(0,0),true");
+    await sleep(250);
+    { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(S3_OUT, "maker-card-picker.png"), Buffer.from(s.data, "base64")); }
+    await cdp.send("Page.reload", {});
+    await s3Wait(s3Ready("Northwind Tea"));
+    const s3r = await evaluate(cdp, S3_STATE);
+    check("S3 a reload in the same session reopens Northwind Tea (sessionStorage bf_card_pick), with the saved change", s3r.active === S3B && s3r.value === S3B && s3r.title === "Tea shop and cafe" && s3r.vertical, JSON.stringify(s3r));
+    // An unsaved change: the switch asks first.
+    await evaluate(cdp, "(function(){var t=document.getElementById('fName');t.value='Northwind Tea Co';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await s3Pick(S3A);
+    await sleep(300);
+    const s3d = await evaluate(cdp, S3_STATE);
+    check("S3 with an unsaved change, choosing Jane Doe asks first: a modal dialog \"You have unsaved changes. Switch cards anyway?\", Switch cards and Cancel, focus on Cancel",
+      !!s3d.dialog && s3d.dialog.label === "You have unsaved changes. Switch cards anyway?" && s3d.dialog.modal === "true" && s3d.dialog.focus === "Cancel" &&
+      JSON.stringify(s3d.dialog.buttons) === JSON.stringify(["Switch cards", "Cancel"]) && s3d.dialog.pos === "fixed" && s3d.name === "Northwind Tea Co", JSON.stringify(s3d));
+    await s3Key("Escape");
+    const s3e = await evaluate(cdp, S3_STATE);
+    check("S3 Escape keeps Northwind Tea open with the unsaved change, the picker back on it, nothing saved", !s3e.dialog && s3e.active === S3B && s3e.value === S3B && s3e.name === "Northwind Tea Co" &&
+      s3e.pick === S3B && s3Saves.length === s3n + 1, JSON.stringify(s3e));
+    await s3Pick(S3A);
+    await sleep(300);
+    await evaluate(cdp, "[].filter.call(document.querySelectorAll('.card-switch-back button'),function(b){return b.textContent==='Switch cards'})[0].click(),true");
+    await s3Wait(s3Ready("Jane Doe"));
+    const s3j = await evaluate(cdp, S3_STATE);
+    check("S3 Switch cards opens Jane Doe (horizontal), remembered; the unsaved change was not saved", s3j.active === S3A && s3j.value === S3A && !s3j.vertical && s3j.pick === S3A &&
+      s3Saves.length === s3n + 1 && s3Cards[1].full_name === "Northwind Tea", JSON.stringify(s3j));
+    s3Cards = [s3Cards[0]];
+    await open(cdp, origin, "digital-cards.html", s3Ready("Jane Doe"));
+    const s3one = await evaluate(cdp, S3_STATE);
+    check("S3 one card: no picker", !s3one.shown && s3one.options.length === 0, JSON.stringify(s3one));
+    s3Cards = null;
+
+    const own2 =exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));
     check("no page script threw", own2.length === 0, own2.slice(0, 5).join(" | "));
     console.log("    note  refused outside requests: " + refused.length + (refused.length ? " (" + [...new Set(refused.map(u => new URL(u).hostname))].join(", ") + ")" : ""));
   } catch (e) {

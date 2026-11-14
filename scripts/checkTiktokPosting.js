@@ -72,8 +72,10 @@ const MUTATIONS = {
     "  if (!checked.ok) throw fail(checked.error + \" Nothing was sent.\");\n"],
   "upload-unsealed": ["api",
     "  var s = sealed(deps.crypt, uploadUrl);", "  var s = { ciphertext: Buffer.from(uploadUrl).toString(\"hex\"), iv: \"0\".repeat(24), authTag: \"0\".repeat(32) };"],
+  // NAMED (Nov 13 2026, S3): the stored-publish branch now also steps aside for a filed repost of a posted video; the
+  // mutation still turns the whole branch off.
   "second-init-while-valid": ["api",
-    "  if (video.tiktok_publish_id) {\n    // A stored publish: ask TikTok first.", "  if (false) {\n    // A stored publish: ask TikTok first."],
+    "  if (video.tiktok_publish_id && !reposting) {\n    // A stored publish: ask TikTok first.", "  if (false) {\n    // A stored publish: ask TikTok first."],
   "multi-chunk-sent": ["api",
     "chunk_size: Number(video.bytes), total_chunk_count: 1 }", "chunk_size: Math.ceil(Number(video.bytes) / 2), total_chunk_count: 2 }"],
   "content-range-wrong": ["api",
@@ -139,7 +141,21 @@ const MUTATIONS = {
     "function putComplete(answer) { return !!answer && answer.status === 201; }", "function putComplete(answer) { return !!answer && (answer.status === 201 || answer.status === 206); }"],
   // NAMED, item 8 part 3a: the marker is read once in scripts/oauth-return.js; the mutation now lets the first registered script (YouTube) take TikTok's answer.
   "youtube-marker-ignored": ["oauth",
-    "    if (!pending || pending.name !== name) return false;\n", "    if (!pending) return false;\n"]
+    "    if (!pending || pending.name !== name) return false;\n", "    if (!pending) return false;\n"],
+  // NAMED (Nov 13 2026, S3, "Post again"): the repost flag (section RP).
+  // a video already on TikTok is filed again without the flag
+  "unflagged-duplicate-allowed": ["api",
+    "  var repost = b.repost === true && video.tiktok_status === \"posted\";\n", "  var repost = video.tiktok_status === \"posted\";\n"],
+  // the flag is ignored: a confirmed Post again is still refused
+  "repost-flag-ignored": ["api",
+    "  var repost = b.repost === true && video.tiktok_status === \"posted\";\n", "  var repost = false;\n"],
+  // a repost inside 24 hours of the last post: the daily cap could miss a post
+  "repost-gap-ignored": ["api",
+    "    if (isFinite(lastAt) && deps.now() - lastAt < REPOST_GAP_MS) {", "    if (false) {"],
+  // the new publish may overwrite any slot, not only the posted publish the repost was filed against
+  "repost-slot-unchecked": ["api",
+    "  if (reposting && p.repost_of) storing = storing.eq(\"tiktok_publish_id\", p.repost_of).eq(\"tiktok_status\", \"posted\");\n",
+    "  if (reposting && p.repost_of) storing = storing;\n"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -538,6 +554,8 @@ function makeTiktok(opts) {
       let b = null;
       try { b = JSON.parse(body.toString("utf8")); } catch (e) { b = null; }
       g.inits.push(b);
+      // NAMED (Nov 13 2026, S3): a test may change the stored row while TikTok answers the init (RP11).
+      if (typeof g.onInit === "function") g.onInit();
       if (o.initError) return reply(o.initStatus || 403, { error: { code: "spam_risk_too_many_posts", message: o.initError, log_id: "x" } });
       g.n++;
       const publishId = PUBLISH_BASE + "." + g.n;
@@ -1133,6 +1151,79 @@ function pageAnswers(over) {
     r.status === 200 && r.body.draft.caption === "Spring cakes, baked fresh every morning. #bakery #cakes" && r.body.within_limits === true &&
     pr.indexOf("how we bake spring cakes") !== -1 && pr.indexOf("Maple Street Bakery") !== -1 && pr.indexOf("secret-label-xyz") === -1 && pr.indexOf(video.path) === -1 &&
     pr.indexOf(OPEN_ID) === -1 && pr.indexOf("2200") !== -1 && m.db.t.agent_proposals.length === 0 && m.tiktok.requests.length === 0, J([r.status, r.body.error]));
+
+  /* ── RP ── NAMED (Nov 13 2026, S3, "Post again"): a video already on TikTok is filed again only with repost: true. */
+  OUT("\n══ RP. posting a video again ══");
+  const OLD_PUB = "v_pub_old.1";
+  const postedOver = function (hoursAgo) {
+    return { tiktok_status: "posted", tiktok_publish_id: OLD_PUB, tiktok_post_id: POST_ID, tiktok_posted_at: iso(Date.now() - hoursAgo * 3600000) };
+  };
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  buf = mp4(300000, 31);
+  video = seedVideo(m.db, buf, postedOver(48));
+  r = await file(m, video);
+  check("RP1. without the flag a video already on TikTok is refused as before: 409 already_posted, nothing filed",
+    r.status === 409 && r.body.code === "already_posted" && m.db.t.agent_proposals.length === 0, J([r.status, r.body.code]));
+  const loose = [];
+  for (const flag of ["true", 1, "yes", {}]) loose.push((await file(m, video, { repost: flag })).body.code);
+  check("RP2. only exactly true is the flag: \"true\", 1, \"yes\" and {} are refused the same way",
+    J(loose) === J(["already_posted", "already_posted", "already_posted", "already_posted"]) && m.db.t.agent_proposals.length === 0, J(loose));
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  check("RP3. with repost: true it is filed: one pending post naming the publish it was filed against, titled \"again\", nothing sent but creator_info",
+    r.status === 201 && !!prop && prop.status === "pending" && prop.payload.repost === true && prop.payload.repost_of === OLD_PUB &&
+    /^Post to TikTok again as Maple Street Bakery \(Friends\)/.test(prop.title) && m.tiktok.initCalls().length === 0 && m.tiktok.puts().length === 0, J([r.status, r.body.code]));
+  r = await file(m, video, { repost: true });
+  check("RP4. the one-pending guard stands: a second flagged filing while the first waits is 409 pending", r.status === 409 && r.body.code === "pending" && m.db.t.agent_proposals.length === 1);
+  a = await approve(m, prop);
+  const rpRow = rowOf(m, video.id);
+  check("RP5. approved: ONE new init and ONE PUT; the new publish replaces the old one and is recorded posted",
+    a.ok && m.tiktok.inits.length === 1 && m.tiktok.puts().length === 1 && rpRow.tiktok_publish_id === PUBLISH_BASE + ".1" && rpRow.tiktok_status === "posted" &&
+    Date.parse(rpRow.tiktok_posted_at) > Date.now() - 60000, a.ok ? J(a.v) : a.msg);
+  a = await approve(m, prop);
+  check("RP6. approving the same repost again sends nothing: already posted", a.ok && a.v.already_posted === true && m.tiktok.inits.length === 1 && m.tiktok.puts().length === 1, a.ok ? J(a.v) : a.msg);
+  // the 24-hour gap
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 32), postedOver(3));
+  r = await file(m, video, { repost: true });
+  check("RP7. a repost within 24 hours of its last post: 409 repost_too_soon with the time, nothing filed",
+    r.status === 409 && r.body.code === "repost_too_soon" && /less than 24 hours ago\. You can post it again after \d{4}-\d\d-\d\d \d\d:\d\d UTC\.$/.test(r.body.error || "") &&
+    m.db.t.agent_proposals.length === 0, J([r.status, r.body.error]));
+  // the daily cap stands
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  for (let i = 0; i < 5; i++) seedVideo(m.db, mp4(1000, 300 + i), { status: "uploaded", path: null, tiktok_status: "posted", tiktok_posted_at: iso(Date.now() - 3600000), tiktok_post_id: POST_ID });
+  video = seedVideo(m.db, mp4(4000, 33), postedOver(48));
+  r = await file(m, video, { repost: true });
+  check("RP8. the daily cap stands for a repost: five posts in 24 hours, 409 daily_cap", r.status === 409 && r.body.code === "daily_cap" && m.db.t.agent_proposals.length === 0, J([r.status, r.body.code]));
+  // a forged payload against another publish
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 34), postedOver(48));
+  a = await approve(m, Object.assign(proposalOf(video), { payload: Object.assign(payloadOf(video), { repost: true, repost_of: "v_pub_other.2" }) }));
+  check("RP9. a repost filed against another publish is already posted, nothing sent", a.ok && a.v.already_posted === true && m.tiktok.inits.length === 0, a.ok ? J(a.v) : a.msg);
+  // the posted publish changes while TikTok starts the repost (another run got there first)
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 36), postedOver(48));
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  m.tiktok.onInit = function () { const row = rowOf(m, video.id); row.tiktok_publish_id = "v_pub_raced.9"; };
+  a = await approve(m, prop);
+  m.tiktok.onInit = null;
+  check("RP11. the store replaces only the publish the repost was filed against: changed meanwhile, nothing is recorded and nothing uploaded",
+    r.status === 201 && !a.ok && /couldn't be recorded before sending/.test(a.msg || "") && m.tiktok.puts().length === 0 && rowOf(m, video.id).tiktok_publish_id === "v_pub_raced.9" &&
+    rowOf(m, video.id).tiktok_status === "posted", a.ok ? J(a.v) : a.msg);
+  // the flag on a video TikTok doesn't have
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 35));
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  check("RP10. the flag on a video TikTok doesn't have files a plain post: no repost key, the plain title",
+    r.status === 201 && !!prop && !("repost" in prop.payload) && !("repost_of" in prop.payload) && /^Post to TikTok as /.test(prop.title));
 
   /* ── U ── */
   OUT("\n══ U. the post ══");

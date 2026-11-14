@@ -900,8 +900,10 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
     ed.indexOf("</section>\n      <section id=\"cardLeads\"") !== -1 && section.indexOf(">Leads</h2>") !== -1 &&
     /<input type="checkbox" id="fLeadForm"> Let visitors leave their details<\/label>/.test(section) &&
     section.indexOf(">Leads are kept for 12 months, then deleted. Contact people only about what they asked.</p>") !== -1);
+  // NAMED (Nov 13 2026, S3, card picker): loadCard fills from the card it opens (`card`: the one picked this session, else
+  // the newest), no longer from data.cards[0] by name; the same switch, the same rule.
   check("E2. the switch is sent with the save and filled from the card", /body\.lead_form_on = document\.getElementById\("fLeadForm"\)\.checked;/.test(ed) &&
-    /document\.getElementById\("fLeadForm"\)\.checked = data\.cards\[0\]\.lead_form_on === true;/.test(ed) && /document\.getElementById\("fLeadForm"\)\.checked = saved\.lead_form_on === true;/.test(ed));
+    /document\.getElementById\("fLeadForm"\)\.checked = card\.lead_form_on === true;/.test(ed) && /document\.getElementById\("fLeadForm"\)\.checked = saved\.lead_form_on === true;/.test(ed));
   const edCode = ["cardLeadButton", "cardLeadLink", "renderCardLead", "loadCardLeads", "setCardLeadStatus", "deleteCardLead"].map(n => fnOf(ed, n)).join("\n");
   check("E3. the list's code writes with textContent and createElement only", edCode.length > 2000 && !/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(edCode));
   if (JSDOM) {

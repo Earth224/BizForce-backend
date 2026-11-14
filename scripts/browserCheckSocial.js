@@ -41,12 +41,25 @@
    S2 screenshots to <s2>: proposals-card.png, videos-chips-ig-fb.png,
    guide-390-social.png, guide-390-dashboard.png, guide-390-proposals.png.
 
+   NAMED (Nov 13 2026, S3):
+     7. All four connected, one video in each status: not sent "Prepare for
+        <Platform>"; waiting and publishing disabled with the reason beside it
+        (and a Proposals link when waiting); posted "Post again on <Platform>";
+        failed "Try again on <Platform>". "Post again on YouTube" opens the
+        styled confirm dialog over the page (fixed, centered, focus on Cancel,
+        Escape closes it); "Post again" opens the form.
+     8. proposals.html: the date line reads at 4.5:1 or better on its card on 3
+        theme presets, at its old size and place.
+   S3 screenshots to <s3>: videos-post-again.png, post-again-confirm.png,
+   proposals-date.png.
+
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
      SOCIAL_CLEAN_OUT       the screenshot folder (default Downloads\social-clean)
      SOCIAL_S2_OUT          the S2 screenshot folder (default Downloads\s2)
+     SOCIAL_S3_OUT          the S3 screenshot folder (default Downloads\s3)
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -59,6 +72,7 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.SOCIAL_CLEAN_OUT || path.join(os.homedir(), "Downloads", "social-clean");
 const OUT2 = process.env.SOCIAL_S2_OUT || path.join(os.homedir(), "Downloads", "s2");
+const OUT3 = process.env.SOCIAL_S3_OUT || path.join(os.homedir(), "Downloads", "s3");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const PAGE = "agents/social.html";
 
@@ -95,6 +109,20 @@ Object.assign(V_NEW, NONE); Object.assign(V_SENT, NONE);
 const V_IG = Object.assign({}, V_NEW, { id: "44444444-4444-4444-8444-444444444444", label: "Bread day", instagram_status: "posted", instagram_post_url: IG_URL, facebook_status: "pending" });
 const V_FB = Object.assign({}, V_NEW, { id: "55555555-5555-4555-8555-555555555555", label: "Pie week", instagram_status: "pending", facebook_status: "posted", facebook_post_url: FB_URL });
 let VIDEOS = [V_NEW, V_SENT];
+// NAMED (Nov 13 2026, S3): one MP4 in each status, every platform; <platform>_proposal as GET /api/videos now carries it.
+const P0 = { youtube_proposal: null, tiktok_proposal: null, instagram_proposal: null, facebook_proposal: null };
+const S3_NOT = Object.assign({}, V_NEW, P0, { id: "61111111-1111-4111-8111-111111111111", label: "Not sent yet" });
+const S3_POSTED = Object.assign({}, V_NEW, P0, { id: "62222222-2222-4222-8222-222222222222", label: "Posted everywhere",
+  youtube_video_id: "dQw4w9WgXcQ", youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", uploaded_at: "2026-11-07T11:00:00Z",
+  tiktok_status: "posted", tiktok_posted_at: "2026-11-07T11:00:00Z", tiktok_post_url: "https://www.tiktok.com/player/v1/7300000000000000001",
+  instagram_status: "posted", instagram_post_url: IG_URL, facebook_status: "posted", facebook_post_url: FB_URL });
+const S3_WAIT = Object.assign({}, V_NEW, P0, { id: "63333333-3333-4333-8333-333333333333", label: "Waiting for approval",
+  youtube_proposal: "pending", tiktok_proposal: "pending", instagram_status: "pending", instagram_proposal: "pending", facebook_status: "pending", facebook_proposal: "pending" });
+const S3_PUB = Object.assign({}, V_NEW, P0, { id: "64444444-4444-4444-8444-444444444444", label: "Publishing now",
+  youtube_proposal: "publishing", tiktok_status: "processing", instagram_status: "publishing", instagram_proposal: "publishing", facebook_status: "publishing" });
+const S3_FAIL = Object.assign({}, V_NEW, P0, { id: "65555555-5555-4555-8555-555555555555", label: "Failed last time",
+  tiktok_status: "failed", instagram_status: "failed", instagram_error: "The video is too short for a Reel.", facebook_status: "failed", facebook_error: "The Page token expired." });
+const S3_VIDEOS = [S3_NOT, S3_POSTED, S3_WAIT, S3_PUB, S3_FAIL];
 // One card of each main kind (proposals.html), pending unless said.
 let pn = 0;
 const prop = (action_type, title, payload, extra) => Object.assign({ id: "p" + (++pn), agent_type: "social", status: "pending", title: title, reasoning: "Suggested from this week's orders.",
@@ -344,8 +372,10 @@ function contrast(fg, bg) {
       "chips:[].map.call(document.querySelectorAll('#ytVideoList .sf-chip'),function(c){var s=getComputedStyle(c);return c.textContent+'|'+s.color+'|'+s.borderTopLeftRadius})," +
       "prepares:[].map.call(document.querySelectorAll('#ytVideoList button[data-prepare]'),function(x){return x.textContent})};})()");
     check("Your videos is its own displayed card, directly above the YouTube card, not inside it", c1.shown && c1.next === "ytConnect" && !c1.inYt && c1.above, J(c1));
-    check("each row has the YouTube chip only, drawn as a pill in a theme colour; no TikTok chip",
-      c1.chips.length === 2 && c1.chips.every(x => /^YouTube: (not sent|uploaded)\|rgb\(/.test(x) && /\|999px$/.test(x)) && c1.prepares.join() === "Prepare for YouTube", J(c1));
+    // NAMED (Nov 13 2026, S3): BEFORE the uploaded video had no YouTube button (prepares was "Prepare for YouTube" alone); NOW it
+    // offers "Post again on YouTube" (asked first, section 7). The new video's "Prepare for YouTube" is unchanged.
+    check("each row has the YouTube chip only, drawn as a pill in a theme colour; no TikTok chip; \"Prepare for YouTube\" on the new video, \"Post again on YouTube\" on the uploaded one",
+      c1.chips.length === 2 && c1.chips.every(x => /^YouTube: (not sent|uploaded)\|rgb\(/.test(x) && /\|999px$/.test(x)) && c1.prepares.join() === "Prepare for YouTube,Post again on YouTube", J(c1));
     check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
     await shotOf(cdp, "document.getElementById('videosCard')", path.join(OUT, "videos-card.png"));
     await evaluate(cdp, "window.__sc.prepare('" + V_NEW.id + "','Prepare for YouTube')");
@@ -482,6 +512,90 @@ function contrast(fg, bg) {
       "return {text:t?getComputedStyle(t).position+'|'+Math.round(t.getBoundingClientRect().width):null,icon:i?getComputedStyle(i).display:null,spacer:getComputedStyle(document.getElementById('tmx-guide-fab-spacer')).display};})()");
     check("1440 px: the desktop Guide button is unchanged (its word shown, no icon, no spacer)",
       !!deskText.text && !/^absolute/.test(deskText.text) && deskText.icon === "none" && deskText.spacer === "none", J([deskText, desk.w, desk.h]));
+
+    /* ── 7. Post again, Try again, waiting and publishing (NAMED Nov 13 2026, S3) ── */
+    console.log("\n══ 7. one video in each status, all four connected: the buttons and the Post again dialog (1440 px) ══");
+    fs.mkdirSync(OUT3, { recursive: true });
+    VIDEOS = S3_VIDEOS;
+    await openPage(cdp, origin, { youtube: true, tiktok: true, instagram: true, facebook: true }, 1440);
+    const b7 = await evaluate(cdp, "(function(){var b=window.__sc,out={};" + J(S3_VIDEOS.map(v => v.id)) + ".forEach(function(id){var row=b.row(id);" +
+      "out[id]=[].map.call(row.querySelectorAll('button[data-prepare]'),function(x){var why=x.getAttribute('aria-describedby')?document.getElementById(x.getAttribute('aria-describedby')):null;" +
+      "var link=why&&why.nextElementSibling&&why.nextElementSibling.tagName==='A'?why.nextElementSibling:null;var r=x.getBoundingClientRect(),w=why?why.getBoundingClientRect():null;" +
+      "return {t:x.textContent,off:x.disabled,op:getComputedStyle(x).opacity,why:why?why.textContent:null,whyShown:why?b.shown(why)&&w.width>0:null,beside:why?(w.left>=r.right-1&&Math.abs((w.top+w.bottom)/2-(r.top+r.bottom)/2)<=12):null," +
+      "link:link?link.textContent+'|'+link.getAttribute('href'):null}})});return out;})()");
+    const texts = id => b7[id].map(x => x.t + (x.off ? " (off)" : ""));
+    const WORDS = ["YouTube", "TikTok", "Instagram", "Facebook"];
+    check("not sent: \"Prepare for YouTube\", \"Prepare for TikTok\", \"Prepare for Instagram\", \"Prepare for Facebook\", each enabled",
+      J(texts(S3_NOT.id)) === J(WORDS.map(w => "Prepare for " + w)), J(b7[S3_NOT.id]));
+    check("posted: \"Post again on YouTube\", \"Post again on TikTok\", \"Post again on Instagram\", \"Post again on Facebook\", each enabled",
+      J(texts(S3_POSTED.id)) === J(WORDS.map(w => "Post again on " + w)), J(b7[S3_POSTED.id]));
+    check("failed: \"Try again on TikTok\", \"Try again on Instagram\", \"Try again on Facebook\" (YouTube has no failed state: \"Prepare for YouTube\")",
+      J(texts(S3_FAIL.id)) === J(["Prepare for YouTube", "Try again on TikTok", "Try again on Instagram", "Try again on Facebook"]), J(b7[S3_FAIL.id]));
+    check("waiting: every button disabled and dimmed, \"Waiting for your approval\" drawn beside it, with \"Open Proposals\" to /proposals.html",
+      b7[S3_WAIT.id].length === 4 && b7[S3_WAIT.id].every(x => x.off && x.op === "0.45" && x.why === "Waiting for your approval" && x.whyShown && x.beside && x.link === "Open Proposals|/proposals.html"), J(b7[S3_WAIT.id]));
+    check("publishing: every button disabled, \"Publishing\" drawn beside it, no Proposals link",
+      b7[S3_PUB.id].length === 4 && b7[S3_PUB.id].every(x => x.off && x.why === "Publishing" && x.whyShown && x.beside && x.link === null), J(b7[S3_PUB.id]));
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+    await shotOf(cdp, "document.getElementById('videosCard')", path.join(OUT3, "videos-post-again.png"));
+    const key = async (k, shift) => {
+      const code = { Escape: 27, Tab: 9 }[k];
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k, windowsVirtualKeyCode: code, modifiers: shift ? 8 : 0 });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, windowsVirtualKeyCode: code, modifiers: shift ? 8 : 0 });
+      await sleep(150);
+    };
+    await evaluate(cdp, "window.__sc.prepare('" + S3_POSTED.id + "','Post again on YouTube')");
+    await sleep(300);
+    const DLG = "(function(){var back=document.querySelector('.sf-dialog-back');if(!back)return null;var d=back.querySelector('[role=dialog]');var r=d.getBoundingClientRect(),cb=getComputedStyle(back),cd=getComputedStyle(d);" +
+      "var lab=document.getElementById(d.getAttribute('aria-labelledby'));return {pos:cb.position,z:cb.zIndex,cover:Math.round(back.getBoundingClientRect().width)+'x'+Math.round(back.getBoundingClientRect().height)," +
+      "cx:Math.round((r.left+r.right)/2),cy:Math.round((r.top+r.bottom)/2),w:Math.round(r.width),modal:d.getAttribute('aria-modal'),label:lab?lab.textContent:null,font:cd.fontFamily,body:getComputedStyle(document.body).fontFamily," +
+      "buttons:[].map.call(d.querySelectorAll('button'),function(x){return x.textContent+'|'+x.className}),focus:document.activeElement?document.activeElement.textContent:null,panels:document.querySelectorAll('#ytVideoList .sf-panel').length};})()";
+    const d7 = await evaluate(cdp, DLG);
+    check("\"Post again on YouTube\" opens the confirm dialog over the whole page (fixed, z-index 1000), centred, in the page's font, labelled \"This video is already on YouTube. Post it again?\", focus on Cancel, no form yet",
+      !!d7 && d7.pos === "fixed" && d7.z === "1000" && d7.cover === "1440x1000" && Math.abs(d7.cx - 720) <= 2 && Math.abs(d7.cy - 500) <= 2 && d7.modal === "true" &&
+      d7.label === "This video is already on YouTube. Post it again?" && d7.font === d7.body && J(d7.buttons) === J(["Post again|action-btn", "Cancel|action-btn action-btn--ghost"]) &&
+      d7.focus === "Cancel" && d7.panels === 0, J(d7));
+    const s7 = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT3, "post-again-confirm.png"), Buffer.from(s7.data, "base64"));
+    const trail7 = [];
+    for (const sh of [false, false, true]) { await key("Tab", sh); trail7.push(await evaluate(cdp, "document.activeElement.textContent")); }
+    check("real Tab and Shift+Tab keys stay on the dialog's two buttons", J(trail7) === J(["Post again", "Cancel", "Post again"]), J(trail7));
+    await key("Escape");
+    const e7 = await evaluate(cdp, "({open:!!document.querySelector('.sf-dialog-back'),panels:document.querySelectorAll('#ytVideoList .sf-panel').length,focus:document.activeElement.textContent})");
+    check("a real Escape closes it: no form, focus back on \"Post again on YouTube\"", !e7.open && e7.panels === 0 && e7.focus === "Post again on YouTube", J(e7));
+    await evaluate(cdp, "window.__sc.prepare('" + S3_POSTED.id + "','Post again on YouTube')");
+    await sleep(300);
+    await evaluate(cdp, "[].filter.call(document.querySelectorAll('.sf-dialog-back button'),function(x){return x.textContent==='Post again'})[0].click(),true");
+    await sleep(500);
+    const o7 = await evaluate(cdp, "(function(){var p=document.querySelectorAll('#ytVideoList .sf-panel');return {open:!!document.querySelector('.sf-dialog-back'),n:p.length,head:p[0]?p[0].querySelector('.sf-panel-head').textContent:null};})()");
+    check("\"Post again\" closes the dialog and opens the YouTube upload form", !o7.open && o7.n === 1 && o7.head === "YouTube upload", J(o7));
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+    VIDEOS = [V_NEW, V_SENT];
+
+    /* ── 8. the proposal date line (NAMED Nov 13 2026, S3) ── */
+    console.log("\n══ 8. proposals.html: the date line on 3 themes (1440 px) ══");
+    await openAny(cdp, origin, "proposals.html", 1440);
+    for (let i = 0; i < 50 && (await evaluate(cdp, "document.querySelectorAll('.proposal-card').length")) !== PROPOSALS.length; i++) await sleep(100);
+    // Chrome computes color-mix() as color(srgb r g b) with 0..1 channels.
+    const rgbOf = s => { const m = /^color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)$/.exec(String(s));
+      return m ? "rgba(" + [m[1], m[2], m[3]].map(x => Math.round(Number(x) * 255)).join(",") + "," + (m[4] === undefined ? 1 : m[4]) + ")" : String(s); };
+    const dates = [];
+    for (const id of ["original", "arctic", "nebula"]) {
+      const m = await evaluate(cdp, "(function(){var B=window.BFTheme,p=B.PRESETS.filter(function(x){return x.id==='" + id + "'})[0];var t=B.tokensFor(p.theme,null,window);" +
+        "for(var k in t)document.documentElement.style.setProperty(k,t[k]);var probe=document.createElement('div');probe.style.background='var(--bf-bg, #000)';document.body.appendChild(probe);" +
+        "var bg=getComputedStyle(probe).backgroundColor;probe.remove();var c=document.querySelector('.proposal-card');var d=c.querySelector('.proposal-date');var cs=getComputedStyle(d);" +
+        "var dr=d.getBoundingClientRect(),pr=d.parentElement.getBoundingClientRect();" +
+        "return {bg:bg,card:getComputedStyle(c).backgroundColor,color:cs.color,size:cs.fontSize,root:getComputedStyle(document.documentElement).fontSize,right:Math.round(pr.right-dr.right),text:d.textContent};})()");
+      const pc = (String(m.card).match(/[\d.]+/g) || []).map(Number), pb = (String(m.bg).match(/[\d.]+/g) || [0, 0, 0]).map(Number), a = pc.length > 3 ? pc[3] : 1;
+      const back = "rgb(" + [0, 1, 2].map(i => pc[i] * a + pb[i] * (1 - a)).join(",") + ")";
+      dates.push({ id, color: m.color, ratio: Math.round(contrast(rgbOf(m.color), back) * 100) / 100, size: m.size, root: m.root, right: m.right, text: m.text });
+    }
+    console.log("      date line contrast: " + dates.map(d => d.id + " " + d.ratio.toFixed(2)).join(", "));
+    check("the date line reads at 4.5:1 or better on its card on original, arctic and nebula, each a different colour from its theme's accent",
+      dates.length === 3 && dates.every(d => d.ratio >= 4.5) && new Set(dates.map(d => d.color)).size === 3, J(dates));
+    check("...at its old size (.72rem) and place (pushed to the header's right end), with a date in it",
+      dates.every(d => Math.abs(parseFloat(d.size) - 0.72 * parseFloat(d.root)) < 0.05 && d.right <= 1 && /\d/.test(d.text)), J(dates));
+    await shotOf(cdp, "document.querySelector('.proposal-card')", path.join(OUT3, "proposals-date.png"));
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
   } catch (e) {
     check("the harness ran to the end", false, e && e.stack || e);
   } finally {
@@ -491,7 +605,7 @@ function contrast(fg, bg) {
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT + " and " + OUT2);
+  console.log("\nScreenshots: " + OUT + ", " + OUT2 + " and " + OUT3);
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);

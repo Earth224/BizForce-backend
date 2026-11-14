@@ -224,8 +224,11 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
     J([chipsOf(rowOf(doc, V_NEW.id)), chipsOf(rowOf(doc, V_SENT.id))]));
   check("V3b. ...and nothing about TikTok, Instagram or Facebook anywhere in Your videos (the photo's \"TikTok: not sent\")",
     !/TikTok|Instagram|Facebook/.test(doc.getElementById("ytVideoList").textContent), text(doc.getElementById("ytVideoList")));
-  check("V4a. ...only \"Prepare for YouTube\", on the video YouTube doesn't have; Delete on both",
-    J(preparesOf(rowOf(doc, V_NEW.id))) === J(["Prepare for YouTube"]) && J(preparesOf(rowOf(doc, V_SENT.id))) === J([]) &&
+  /* NAMED (Nov 13 2026, S3, "Post again"): BEFORE the video YouTube has showed no YouTube button. AFTER it shows
+     "Post again on YouTube" (asked first, scripts/checkRepostAndDates.js holds the dialog and the flag); the video
+     YouTube doesn't have keeps "Prepare for YouTube". Still YouTube's button alone while only YouTube is connected. */
+  check("V4a. ...only YouTube's button: \"Prepare for YouTube\" on the video YouTube doesn't have, \"Post again on YouTube\" on the one it has; Delete on both",
+    J(preparesOf(rowOf(doc, V_NEW.id))) === J(["Prepare for YouTube"]) && J(preparesOf(rowOf(doc, V_SENT.id))) === J(["Post again on YouTube"]) &&
     !!buttonIn(rowOf(doc, V_NEW.id), "Delete") && !!buttonIn(rowOf(doc, V_SENT.id), "Delete"));
   check("V4b. ...and the uploaded one keeps its youtube.com link, Check status and Remove from YouTube",
     $(rowOf(doc, V_SENT.id), "a").map(a => a.href).join() === V_SENT.youtube_url && !!buttonIn(rowOf(doc, V_SENT.id), "Check status") &&
@@ -245,10 +248,14 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
     /var\(--bf-success, #34d399\)/.test(rule(".sf-chip--ok")) && /var\(--bf-warning, #fbbf24\)/.test(rule(".sf-chip--wait")) &&
     /var\(--bf-text-muted, #8892b8\)/.test(rule(".sf-chip--off")) &&
     $(doc, "#ytVideoList .sf-chip").every(c => /^sf-chip sf-chip--(ok|wait|bad|off|ready)$/.test(c.className)));
-  check("V4c. ...all four Prepare buttons on the new video; the sent one only Instagram and Facebook, disabled with the reason (WebM)",
+  // NAMED (Nov 13 2026, S3): the sent one now has "Post again" for YouTube and TikTok (both have it), enabled; Instagram's
+  // and Facebook's buttons stay disabled with the file reason (WebM): the file rule still wins.
+  const sentBtns = $(rowOf(doc, V_SENT.id), "button[data-prepare]");
+  check("V4c. ...all four Prepare buttons on the new video; the sent one: Post again on YouTube and TikTok, Instagram and Facebook disabled with the reason (WebM)",
     J(preparesOf(rowOf(doc, V_NEW.id))) === J(["Prepare for YouTube", "Prepare for TikTok", "Prepare for Instagram", "Prepare for Facebook"]) &&
-    J(preparesOf(rowOf(doc, V_SENT.id))) === J(["Prepare for Instagram", "Prepare for Facebook"]) &&
-    $(rowOf(doc, V_SENT.id), "button[data-prepare]").every(b => b.disabled === true && /MP4 or MOV/.test(b.title)),
+    J(preparesOf(rowOf(doc, V_SENT.id))) === J(["Post again on YouTube", "Post again on TikTok", "Prepare for Instagram", "Prepare for Facebook"]) &&
+    sentBtns.slice(0, 2).every(b => b.disabled === false) &&
+    sentBtns.slice(2).every(b => b.disabled === true && /MP4 or MOV/.test(b.title)),
     J([preparesOf(rowOf(doc, V_NEW.id)), preparesOf(rowOf(doc, V_SENT.id))]));
   check("V4d. ...and the posted TikTok video keeps its player link, the remove line and Check TikTok status",
     $(rowOf(doc, V_SENT.id), "a").some(a => a.href === V_SENT.tiktok_post_url && a.rel === "noopener") &&

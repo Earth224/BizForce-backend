@@ -153,7 +153,8 @@ const MUTATIONS = {
   // the public card drawn horizontal whatever was saved (O5)
   "public-ignores-orientation": [[CV, "  var vertical = cvOrientationOf(c.media_layout) === \"vertical\";\n", "  var vertical = false;\n"]],
   // NAMED (Nov 13 2026, Q6): the maker puts the new default over a loaded card's saved orientation, so the next save writes horizontal (Q6-1, Q6-3)
-  "maker-forces-horizontal": [[DC, "      fillForm(data.cards[0]);\n", "      fillForm(data.cards[0]);\n      applyCardOrientation(\"horizontal\");\n"]],
+  // NAMED (Nov 13 2026, S3): re-anchored; loadCard fills the card it opens (`card`), no longer data.cards[0] by name.
+  "maker-forces-horizontal": [[DC, "      fillForm(card);\n", "      fillForm(card);\n      applyCardOrientation(\"horizontal\");\n"]],
   // NAMED (Nov 13 2026, Q6): Save Card leaves the orientation out of media_layout (Q6-1, Q6-2, Q6-3)
   "save-drops-orientation": [[DC, "      border_weight: borderWeight, audio_track_name: audioTrackName, orientation: cardOrientation,\n", "      border_weight: borderWeight, audio_track_name: audioTrackName,\n"]],
   // NAMED (Nov 13 2026, Q6): the public card reads a saved "vertical" as horizontal (Q6-5, O5)
@@ -165,7 +166,21 @@ const MUTATIONS = {
   // the maker's markup painted upright before any script runs (O6)
   "first-paint-vertical": [[DC, "<div class=\"card-preview border-glow qr-off qr-bottom-right\" id=\"cardPreview\"", "<div class=\"card-preview border-glow qr-off qr-bottom-right orient-vertical\" id=\"cardPreview\""]],
   // the public page's horizontal layout made to wait for a class a script adds (O6)
-  "public-horizontal-needs-script": [[CV, "    #cardViewport:not(.cv-vertical) #cardPreview{", "    #cardViewport.cv-horizontal #cardPreview{"]]
+  "public-horizontal-needs-script": [[CV, "    #cardViewport:not(.cv-vertical) #cardPreview{", "    #cardViewport.cv-horizontal #cardPreview{"]],
+  // NAMED (Nov 13 2026, S3 polish, card picker; checks PK-n):
+  // the picker shown to a member with one card (PK-1)
+  "picker-with-one-card": [[DC, "  if (memberCards.length < 2) { wrap.hidden = true; return; }\n", "  if (memberCards.length < 1) { wrap.hidden = true; return; }\n"]],
+  // the maker opens the newest card whatever was picked (PK-3b, PK-4)
+  "switch-loads-wrong-card": [[DC, "  return hit || cards[0];\n", "  return cards[0];\n"]],
+  // Save writes to the newest card, not the one open (PK-5)
+  "save-to-wrong-card": [[DC, "      url = API_URL + \"/api/digital-cards/\" + activeCardId;\n", "      url = API_URL + \"/api/digital-cards/\" + memberCards[0].id;\n"]],
+  // switching with unsaved changes asks nothing (PK-6)
+  "unsaved-switch-silent": [[DC, "  if (!cardHasUnsavedChanges()) { go(); return; }\n", "  go(); return;\n"]],
+  // the pick is not remembered for the session (PK-3, PK-7)
+  "pick-not-remembered": [[DC, "function rememberCardPick(id) { try { sessionStorage.setItem(CARD_PICK_KEY, String(id)); }", "function rememberCardPick(id) { try { void id; }"]],
+  // the question's Escape does nothing (PK-6b)
+  "switch-dialog-no-escape": [[DC, "      if (e.key === \"Escape\") { e.preventDefault(); done(false); return; }\n      if (e.key !== \"Tab\") return;\n      e.preventDefault();\n      var at = trap.indexOf(document.activeElement);\n      var next = e.shiftKey ? (at <= 0 ? trap.length - 1 : at - 1) : (at === -1 || at === trap.length - 1 ? 0 : at + 1);\n      trap[next].focus();\n    }\n    document.addEventListener(\"keydown\", onKey, true);\n    yes.addEventListener(\"click\", function () { done(true); });\n    no.addEventListener(\"click\", function () { done(false); });\n    back.addEventListener(\"click\", function (e) { if (e.target === back) done(false); });\n    no.focus();\n  });\n}\n\nasync function loadCard",
+    "      if (e.key !== \"Tab\") return;\n      e.preventDefault();\n      var at = trap.indexOf(document.activeElement);\n      var next = e.shiftKey ? (at <= 0 ? trap.length - 1 : at - 1) : (at === -1 || at === trap.length - 1 ? 0 : at + 1);\n      trap[next].focus();\n    }\n    document.addEventListener(\"keydown\", onKey, true);\n    yes.addEventListener(\"click\", function () { done(true); });\n    no.addEventListener(\"click\", function () { done(false); });\n    back.addEventListener(\"click\", function (e) { if (e.target === back) done(false); });\n    no.focus();\n  });\n}\n\nasync function loadCard"]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -235,9 +250,13 @@ async function mount(page, o) {
       if (/\/api\/digital-cards$/.test(us) && m === "GET") r = { ok: true, status: 200, json: () => Promise.resolve({ cards: JSON.parse(JSON.stringify(o.api.cards)) }) };
       if (/\/api\/digital-cards(\/[^/]+)?$/.test(us) && (m === "PUT" || m === "POST")) {
         const body = JSON.parse(init.body);
-        o.api.saves.push({ method: m, body });
-        const row = Object.assign({ id: "c0000000-0000-4000-8000-0000000000aa" }, o.api.cards[0] || {}, body);
-        o.api.cards = [row];
+        // NAMED (Nov 13 2026, S3): a PUT names its card; with several stored cards only that one changes.
+        const idm = /\/api\/digital-cards\/([^/]+)$/.exec(us);
+        const at = idm && m === "PUT" ? o.api.cards.findIndex(c => c.id === decodeURIComponent(idm[1])) : -1;
+        o.api.saves.push({ method: m, body, id: idm ? decodeURIComponent(idm[1]) : null });
+        let row;
+        if (o.api.cards.length > 1 && at !== -1) { row = Object.assign({}, o.api.cards[at], body); o.api.cards[at] = row; }
+        else { row = Object.assign({ id: "c0000000-0000-4000-8000-0000000000aa" }, o.api.cards[0] || {}, body); o.api.cards = [row]; }
         r = { ok: true, status: 200, json: () => Promise.resolve({ card: JSON.parse(JSON.stringify(row)) }) };
       }
       if (/\/api\/bfp\/upload-url$/.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({ signedUrl: "https://storage.example.com/put/bg.png", publicUrl: "https://cdn.example.com/card/bg.png" }) };
@@ -845,6 +864,101 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   const q6V = await shareOrient({ orientation: "vertical" }), q6H = await shareOrient({ orientation: "horizontal" }), q6N = await shareOrient(undefined);
   check("Q6-5 the share link (/card/<token>, its own API answer): saved vertical is an upright 1 : 1.75 card, saved horizontal and none a 1.75 : 1 card",
     q6V.asked && q6V.viewport && q6V.card && q6V.aspect === "1 / 1.75" && q6V.errors === 0 && [q6H, q6N].every(x => x.asked && !x.viewport && !x.card && x.aspect === "1.75 / 1" && x.errors === 0), J([q6V, q6H, q6N]));
+
+  /* ── NAMED (Nov 13 2026, S3): the card picker ── */
+  // The check labels are PK-n (this file's S3 is the earlier public-card QR section).
+  console.log("\n══ PK. the card picker (S3 polish): two or more cards, switching, unsaved changes, saving, the session ══");
+  const PA = { id: "c0000000-0000-4000-8000-00000000000a", full_name: "Jane Smith", slug: "jane", theme: "dark", share_token: "a".repeat(32),
+    video_url: "https://cdn.example.com/card/a.mp4", media_layout: { orientation: "horizontal", show_qr: false } };
+  const PB = { id: "c0000000-0000-4000-8000-00000000000b", full_name: "Earth Rose", slug: "earthrose", theme: "midnight", share_token: "b".repeat(32),
+    bg_image_url: "https://cdn.example.com/card/b.png", media_layout: { orientation: "vertical", show_qr: true, qr_corner: "top-left" } };
+  const PC = { id: "c0000000-0000-4000-8000-00000000000c", full_name: "", slug: null, theme: "dark", share_token: "c".repeat(32), media_layout: {} };
+  async function picker(cards, session) {
+    const api = { cards: JSON.parse(JSON.stringify(cards)), saves: [] };
+    const M = await mount(DC, { api, wait: 150, session: session || {} });
+    const reloads = [];
+    M.w.reloadMaker = function () { reloads.push(M.w.sessionStorage.getItem("bf_card_pick")); };
+    const wrap = M.d.getElementById("cardPickerWrap"), sel = M.d.getElementById("cardPicker");
+    const pick = async id => { sel.value = id; sel.dispatchEvent(new M.w.Event("change", { bubbles: true })); await settle(20); };
+    const dialog = () => M.d.querySelector(".card-switch-back [role='dialog']");
+    const key = async (k, shift) => { M.d.dispatchEvent(new M.w.KeyboardEvent("keydown", { key: k, shiftKey: !!shift, bubbles: true, cancelable: true })); await settle(5); };
+    const vstate = () => J({ vertical: M.d.getElementById("cardPreview").classList.contains("orient-vertical"),
+      toggle: Array.prototype.filter.call(M.d.querySelectorAll("[data-orient]"), b => b.classList.contains("active")).map(b => b.getAttribute("data-orient")).join(),
+      saved: M.w.getFields().media_layout.orientation, aspect: M.w.getComputedStyle(M.d.getElementById("cardPreview")).aspectRatio });
+    return { M, api, wrap, sel, pick, dialog, key, reloads, vstate };
+  }
+  const p1 = await picker([PB]), p0 = await picker([]);
+  check("PK-1 one card: no picker (hidden), the card loaded as before; no card: no picker, a new card",
+    !!p1.wrap && p1.wrap.hidden === true && !visible(p1.M.w, p1.wrap) && p1.sel.options.length === 0 && p1.M.w.activeCardId === PB.id && p1.M.w.cardLoadState === "ready" &&
+    p0.wrap.hidden === true && p0.M.w.activeCardId === null && p0.M.w.cardLoadState === "ready", J([p1.wrap.hidden, p1.sel.options.length, p0.wrap.hidden, p0.M.w.activeCardId]));
+  p1.M.w.close(); p0.M.w.close();
+  const p3 = await picker([PA, PB, PC]);
+  const title = p3.M.d.querySelector(".form-panel .form-panel-title");
+  const optsOf = s => Array.prototype.map.call(s.options, o => [o.value, o.textContent, o.selected]);
+  check("PK-2 three cards: the picker shows at the top of Card Details (right under its title), labelled, one option per card: its name, its short link or \"no short link\", its shape; the newest selected",
+    visible(p3.M.w, p3.wrap) && !!title && title.nextElementSibling === p3.wrap && p3.M.d.querySelector("label[for='cardPicker']").textContent === "Your cards" &&
+    J(optsOf(p3.sel)) === J([[PA.id, "Jane Smith · bizforceai.net/c/jane · Horizontal", true], [PB.id, "Earth Rose · bizforceai.net/c/earthrose · Vertical", false],
+      [PC.id, "Untitled card · no short link · Horizontal", false]]) && p3.sel.className === "cust-select" && p3.M.w.activeCardId === PA.id, J(optsOf(p3.sel)));
+  // switching with nothing changed: remembered, the maker opened again; no question
+  await p3.pick(PB.id);
+  check("PK-3a choosing another card with nothing unsaved asks nothing, remembers its id for the session (bf_card_pick) and opens the maker again",
+    !p3.dialog() && J(p3.reloads) === J([PB.id]) && p3.M.w.sessionStorage.getItem("bf_card_pick") === PB.id, J([p3.reloads, !!p3.dialog()]));
+  const pb = await picker([PA, PB, PC], { bf_card_pick: PB.id });
+  check("PK-3b ...and the maker opens that card exactly as loadCard opens the newest: its fields, its media, its QR settings, its orientation (vertical), nothing left from the last card",
+    pb.M.w.activeCardId === PB.id && pb.M.d.getElementById("fName").value === "Earth Rose" && pb.M.w.activeTheme === "midnight" && pb.M.w.bgImageUrl === PB.bg_image_url &&
+    !pb.M.w.videoUrl && pb.M.w.showQr === true && pb.M.w.qrCorner === "top-left" && pb.vstate() === V_STATE && pb.sel.value === PB.id && optsOf(pb.sel)[1][2] === true,
+    J([pb.M.w.activeCardId, pb.M.d.getElementById("fName").value, pb.M.w.activeTheme, pb.M.w.videoUrl, pb.M.w.showQr, pb.M.w.qrCorner, pb.vstate()]));
+  const pz = await picker([PA, PB, PC], { bf_card_pick: "c0000000-0000-4000-8000-0000000000ff" });
+  check("PK-4 a remembered card that is no longer there: the newest opens", pz.M.w.activeCardId === PA.id && pz.sel.value === PA.id);
+  pz.M.w.close();
+  // saving writes to the open card only
+  pb.M.d.getElementById("fName").value = "Earth Rose Studio";
+  await pb.M.w.saveCard(); await settle(40);
+  const lastSave = pb.api.saves[pb.api.saves.length - 1] || {};
+  const storedOf = id => pb.api.cards.filter(c => c.id === id)[0] || {};
+  check("PK-5 Save Card writes to the open card only: PUT /api/digital-cards/<its id>, the others untouched; still vertical (Q6); the picker shows the saved name",
+    pb.api.saves.length === 1 && lastSave.method === "PUT" && lastSave.id === PB.id && storedOf(PB.id).full_name === "Earth Rose Studio" &&
+    storedOf(PA.id).full_name === "Jane Smith" && storedOf(PC.id).full_name === "" && lastSave.body.media_layout.orientation === "vertical" &&
+    optsOf(pb.sel)[1][1] === "Earth Rose Studio · bizforceai.net/c/earthrose · Vertical", J([pb.api.saves.map(x => x.method + " " + x.id), optsOf(pb.sel)[1]]));
+  // saved: switching asks nothing
+  await pb.pick(PC.id);
+  const savedQuiet = !pb.dialog() && J(pb.reloads) === J([PC.id]);
+  pb.M.w.sessionStorage.setItem("bf_card_pick", PB.id);
+  pb.reloads.length = 0;
+  // an unsaved change: the question first
+  pb.M.d.getElementById("fTitle").value = "Founder";
+  await pb.pick(PA.id);
+  const dlg = pb.dialog();
+  const labelledBy = dlg ? pb.M.d.getElementById(dlg.getAttribute("aria-labelledby")) : null;
+  const btnNames = dlg ? Array.prototype.map.call(dlg.querySelectorAll("button"), b => b.textContent) : [];
+  check("PK-6a with an unsaved change, switching asks first in a styled dialog: role dialog, aria-modal, labelled \"You have unsaved changes. Switch cards anyway?\", Switch cards and Cancel, focus on Cancel; nothing switched yet",
+    savedQuiet && !!dlg && dlg.getAttribute("aria-modal") === "true" && !!labelledBy && labelledBy.textContent === "You have unsaved changes. Switch cards anyway?" &&
+    J(btnNames) === J(["Switch cards", "Cancel"]) && pb.M.d.activeElement && pb.M.d.activeElement.textContent === "Cancel" && pb.reloads.length === 0 &&
+    pb.M.w.sessionStorage.getItem("bf_card_pick") === PB.id, J([savedQuiet, !!dlg, btnNames, pb.reloads]));
+  const focusTrail = [];
+  await pb.key("Tab"); focusTrail.push(pb.M.d.activeElement.textContent);
+  await pb.key("Tab"); focusTrail.push(pb.M.d.activeElement.textContent);
+  await pb.key("Tab", true); focusTrail.push(pb.M.d.activeElement.textContent);
+  await pb.key("Escape");
+  check("PK-6b Tab stays on its two buttons; Escape cancels: the dialog closes, nothing switched, the picker back on the open card and focused",
+    J(focusTrail) === J(["Switch cards", "Cancel", "Switch cards"]) && !pb.dialog() && pb.reloads.length === 0 && pb.sel.value === PB.id && pb.M.d.activeElement === pb.sel,
+    J([focusTrail, !!pb.dialog(), pb.reloads, pb.sel.value]));
+  await pb.pick(PA.id);
+  const d2 = pb.dialog();
+  Array.prototype.filter.call(d2 ? d2.querySelectorAll("button") : [], b => b.textContent === "Cancel").forEach(b => b.click());
+  await settle(10);
+  const afterCancel = [!pb.dialog(), pb.reloads.length, pb.sel.value];
+  await pb.pick(PA.id);
+  const d3 = pb.dialog();
+  Array.prototype.filter.call(d3 ? d3.querySelectorAll("button") : [], b => b.textContent === "Switch cards").forEach(b => b.click());
+  await settle(10);
+  check("PK-6c Cancel keeps the card; \"Switch cards\" switches: remembered and the maker opened on it",
+    J(afterCancel) === J([true, 0, PB.id]) && !pb.dialog() && J(pb.reloads) === J([PA.id]) && pb.M.w.sessionStorage.getItem("bf_card_pick") === PA.id, J([afterCancel, pb.reloads]));
+  pb.M.w.close(); p3.M.w.close();
+  const fresh = await picker([PA, PB, PC]);
+  check("PK-7 the choice lives in this session only: a new session (no bf_card_pick) opens the newest", fresh.M.w.activeCardId === PA.id && fresh.sel.value === PA.id &&
+    /sessionStorage\.setItem\(CARD_PICK_KEY, String\(id\)\)/.test(FILES[DC]) && !/localStorage\.setItem\(CARD_PICK_KEY/.test(FILES[DC]));
+  fresh.M.w.close();
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

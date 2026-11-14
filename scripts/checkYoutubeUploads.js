@@ -173,7 +173,17 @@ const MUTATIONS = {
     "  var running = refreshesInFlight.get(key);\n", "  var running = null;\n"],
   "refresh-rotation-ignored": ["api",
     "  if (grant.refreshToken) {\n    var refresh = sealed(deps.crypt, grant.refreshToken);\n",
-    "  if (false) {\n    var refresh = sealed(deps.crypt, grant.refreshToken);\n"]
+    "  if (false) {\n    var refresh = sealed(deps.crypt, grant.refreshToken);\n"],
+  // NAMED (Nov 13 2026, S3, "Post again"): the repost flag (section RP).
+  // a video already on YouTube is filed again without the flag
+  "unflagged-duplicate-allowed": ["api",
+    "  var repost = b.repost === true && !!video.youtube_video_id;\n", "  var repost = !!video.youtube_video_id;\n"],
+  // the flag is ignored: a confirmed Post again is still refused
+  "repost-flag-ignored": ["api",
+    "  var repost = b.repost === true && !!video.youtube_video_id;\n", "  var repost = false;\n"],
+  // approving a repost again uploads a second time
+  "repost-replays-upload": ["api",
+    "typeof p.repost_of === \"string\" && video.youtube_video_id === p.repost_of;", "typeof p.repost_of === \"string\";"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -1467,6 +1477,52 @@ function pageAnswers(over) {
   check("U30. lib/youtubeApi.js and lib/memberVideos.js log nothing but counts (no console call names a token, a session or a path)",
     !/console\.(log|warn|error)\([^;]*(token|session|location|path|signed)/i.test(stripComments(FILES.api).replace(/the reconnect notice could not be saved/, "")) &&
     !/console\.(log|warn|error)\([^;]*(token|session|location|signedUrl)/i.test(stripComments(FILES.videos)));
+
+  /* ── RP ── NAMED (Nov 13 2026, S3, "Post again"): a video already on YouTube is filed again only with repost: true. */
+  OUT("\n══ RP. posting a video again ══");
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  const OLD_ID = "Old_Video-1";
+  buf = mp4("isom", 300000);
+  video = seedVideo(m.db, buf, { youtube_video_id: OLD_ID, uploaded_at: "2026-11-07T11:00:00.000Z" });
+  r = await file(m, video);
+  check("RP1. without the flag a video already on YouTube is refused as before: 409 already_uploaded, nothing filed",
+    r.status === 409 && r.body.code === "already_uploaded" && m.db.t.agent_proposals.length === 0, J([r.status, r.body.code]));
+  const loose = [];
+  for (const flag of ["true", 1, "yes", {}]) loose.push((await file(m, video, { repost: flag })).status);
+  check("RP2. only exactly true is the flag: \"true\", 1, \"yes\" and {} are refused the same way", J(loose) === J([409, 409, 409, 409]) && m.db.t.agent_proposals.length === 0, J(loose));
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  check("RP3. with repost: true it is filed: one pending upload naming the id it was filed against, titled \"again\", nothing sent",
+    r.status === 201 && !!prop && prop.status === "pending" && prop.payload.repost === true && prop.payload.repost_of === OLD_ID &&
+    /^Upload to YouTube again \(private\): /.test(prop.title) && r.body.note.indexOf("uploads this video again to") !== -1 && m.google.requests.length === 0, J([r.status, r.body.code]));
+  r = await file(m, video, { repost: true });
+  check("RP4. the one-pending guard stands: a second flagged filing while the first waits is 409 pending", r.status === 409 && r.body.code === "pending" && m.db.t.agent_proposals.length === 1);
+  m.db.t.agent_proposals = [];
+  const rBad = await file(m, video, { repost: true, title: "" });
+  check("RP5. the metadata rules stand for a repost: no title is 400 title, nothing filed", rBad.status === 400 && rBad.body.field === "title" && m.db.t.agent_proposals.length === 0);
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  a = await approve(m, prop);
+  check("RP6. approved: the file goes to YouTube once more, through one new session, and the new id is recorded",
+    a.ok && !a.v.already_uploaded && m.google.starts().length === 1 && m.google.puts().length === 1 && rowOf(m, video.id).youtube_video_id === YT_ID, a.ok ? J(a.v) : a.msg);
+  a = await approve(m, prop);
+  check("RP7. approving the same repost again sends nothing: already uploaded (the id is no longer the one it was filed against)",
+    a.ok && a.v.already_uploaded === true && m.google.starts().length === 1, a.ok ? J(a.v) : a.msg);
+  // a forged payload: repost against an id that isn't the stored one
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4("isom", 300000), { youtube_video_id: OLD_ID, uploaded_at: "2026-11-07T11:00:00.000Z" });
+  a = await approve(m, { id: uuid(), user_id: USER, payload: { video_id: video.id, sha256: video.sha256, bytes: video.bytes, mime: video.mime, title: "x", description: "",
+    tags: [], privacy: "private", made_for_kids: false, category_id: "22", channel_id: CHANNEL, repost: true, repost_of: "Other_Video" } });
+  check("RP8. a repost filed against another id is already uploaded, nothing sent", a.ok && a.v.already_uploaded === true && m.google.requests.length === 0, a.ok ? J(a.v) : a.msg);
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4("isom", 300000));
+  r = await file(m, video, { repost: true });
+  prop = m.db.t.agent_proposals[0];
+  check("RP9. the flag on a video YouTube doesn't have files a plain upload: no repost key, the plain title",
+    r.status === 201 && !!prop && !("repost" in prop.payload) && !("repost_of" in prop.payload) && /^Upload to YouTube \(private\): /.test(prop.title));
 
   /* ── R ── */
   OUT("\n══ R. removal and status ══");

@@ -997,8 +997,10 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   check("E1. under the card: \"Visits to your card\", the switch \"Let search engines find this card\", and the line word for word",
     section.indexOf(">Visits to your card</h2>") !== -1 && /<input type="checkbox" id="fDiscoverable"> Let search engines find this card<\/label>/.test(section) &&
     section.indexOf(">" + LINE + "</p>") !== -1 && lib.indexOf('<div class="save-status info" id="saveStatus"></div>\n      <section id="cardStats"') !== -1);
+  // NAMED (Nov 13 2026, S3): BEFORE filled from data.cards[0]; NOW from `card`, the card loadCard opens (the one picked this
+  // session, else the newest, as checkCardEditorTabs PK-n holds); the same switch, the same rule.
   check("E2. the switch is sent with the save and filled from the card", /body\.discoverable = document\.getElementById\("fDiscoverable"\)\.checked;/.test(lib) &&
-    /document\.getElementById\("fDiscoverable"\)\.checked = data\.cards\[0\]\.discoverable === true;/.test(lib) && /document\.getElementById\("fDiscoverable"\)\.checked = saved\.discoverable === true;/.test(lib));
+    /document\.getElementById\("fDiscoverable"\)\.checked = card\.discoverable === true;/.test(lib) && /document\.getElementById\("fDiscoverable"\)\.checked = saved\.discoverable === true;/.test(lib));
   const fnOf = (text, nm) => { const a = text.indexOf("function " + nm + "("); if (a < 0) return ""; return text.slice(text.lastIndexOf("\n", a) + 1, s.braceMatch(text, text.indexOf("{", a))); };
   const statsCode = fnOf(lib, "loadCardStats") + "\n" + fnOf(lib, "cardCountLine");
   check("E3. the panel's code writes with textContent only", statsCode.length > 200 && !/innerHTML|insertAdjacentHTML|outerHTML|document\.write/.test(statsCode) && /li\.textContent = /.test(statsCode));

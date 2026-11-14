@@ -87,12 +87,16 @@ const MUTATIONS = {
   "signout-leaves-mailbox": [[SESSION, "    \"bizforce_ai_mailbox\", \"bf_agent_memories\",\n", "    \"bf_agent_memories\",\n"]],
   /* NAMED BEFORE → AFTER (Oct 31 2026, the music player's three stages). BEFORE: the two anchors below were
      [\"bf_tmx_insight:\", \"bf_tmx_trail\"]. AFTER: the list ends with \"bf_music_live\", and each mutation keeps it. */
+  /* NAMED BEFORE → AFTER (Nov 13 2026, S3). BEFORE: the anchors below ended with \"bf_music_live\". AFTER: the list ends with
+     \"bf_card_pick\" (the card maker's picked card in this tab), and each mutation keeps it; card-pick-kept-at-signout drops it. */
   // the Termaximus insights cached for the tab survive sign-out
-  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_trail\", \"bf_music_live\"];"]],
+  "insight-cache-kept": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\", \"bf_card_pick\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_trail\", \"bf_music_live\", \"bf_card_pick\"];"]],
   // the Guide mode page trail survives sign-out
-  "trail-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_music_live\"];"]],
+  "trail-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\", \"bf_card_pick\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_music_live\", \"bf_card_pick\"];"]],
   // the music player's session flag left at sign-out (Oct 31 2026)
-  "music-live-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\"];"]],
+  "music-live-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\", \"bf_card_pick\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_card_pick\"];"]],
+  // the card maker's picked card left at sign-out (Nov 13 2026, S3)
+  "card-pick-kept-at-signout": [[SESSION, "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\", \"bf_card_pick\"];", "  var PER_USER_SESSION_PREFIXES = [\"bf_tmx_insight:\", \"bf_tmx_trail\", \"bf_music_live\"];"]],
   // data-clear-only still runs the session guard (app.html would redirect to itself)
   "clear-only-runs-guard": [[SESSION, "  if (thisScript && thisScript.hasAttribute && thisScript.hasAttribute(\"data-clear-only\")) return;\n", ""]],
   // a write button left enabled offline
@@ -594,7 +598,9 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        in this tab (scripts/termaximus-presence.js), a per-member session key, so IV0 lists it and sign-out clears it. */
     /* NAMED BEFORE → AFTER (Oct 31 2026, the music player's three stages). BEFORE: ["bf_tmx_trail"]. AFTER: and bf_music_live, the
        music player's "music has played in this tab and was not stopped" (scripts/bf-music.js LIVE_KEY), per member, cleared at sign-out. */
-    const SESSION_KEYS = ["bf_tmx_trail", "bf_music_live"];
+    /* NAMED BEFORE → AFTER (Nov 13 2026, S3). BEFORE: ["bf_tmx_trail", "bf_music_live"]. AFTER: and bf_card_pick, the card the
+       card maker's picker last opened in this tab (one of the member's card ids), per member, cleared at sign-out. */
+    const SESSION_KEYS = ["bf_tmx_trail", "bf_music_live", "bf_card_pick"];
     /* NAMED BEFORE → AFTER (Oct 29 2026, "Termaximus chat box can be moved like the mist"). BEFORE: KEPT had 14 keys.
        AFTER: 15; tmx_chat_pos is where the Termaximus chat box was dragged (scripts/termaximus-presence.js), a device
        preference like tmx_presence_pos, so sign-out leaves it and bf-session.js's LEFT ON PURPOSE list names it.
