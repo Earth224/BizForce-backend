@@ -152,6 +152,12 @@ const MUTATIONS = {
   "saved-vertical-ignored": [[DC, "  applyCardOrientation(cardOrientationOf(card.media_layout));\n", "  applyCardOrientation(\"horizontal\");\n"]],
   // the public card drawn horizontal whatever was saved (O5)
   "public-ignores-orientation": [[CV, "  var vertical = cvOrientationOf(c.media_layout) === \"vertical\";\n", "  var vertical = false;\n"]],
+  // NAMED (Nov 13 2026, Q6): the maker puts the new default over a loaded card's saved orientation, so the next save writes horizontal (Q6-1, Q6-3)
+  "maker-forces-horizontal": [[DC, "      fillForm(data.cards[0]);\n", "      fillForm(data.cards[0]);\n      applyCardOrientation(\"horizontal\");\n"]],
+  // NAMED (Nov 13 2026, Q6): Save Card leaves the orientation out of media_layout (Q6-1, Q6-2, Q6-3)
+  "save-drops-orientation": [[DC, "      border_weight: borderWeight, audio_track_name: audioTrackName, orientation: cardOrientation,\n", "      border_weight: borderWeight, audio_track_name: audioTrackName,\n"]],
+  // NAMED (Nov 13 2026, Q6): the public card reads a saved "vertical" as horizontal (Q6-5, O5)
+  "public-ignores-saved-vertical": [[CV, "function cvOrientationOf(ml) {\n  return ml && ml.orientation === \"vertical\" ? \"vertical\" : \"horizontal\";\n", "function cvOrientationOf(ml) {\n  return \"horizontal\";\n"]],
   // the print file's page horizontal whatever the card (O4)
   "export-ignores-orientation": [[DC, "  var isVertical = cardOrientation === \"vertical\";\n", "  var isVertical = false;\n"]],
   // the public card upright when nothing was saved (O5)
@@ -222,6 +228,21 @@ async function mount(page, o) {
     log.fetches.push(String(u));
     let r = null;
     if (o.card && /\/api\/cards\/(slug|share)\//.test(String(u))) r = { ok: true, status: 200, json: () => Promise.resolve({ card: o.card, support_links: [] }) };
+    // NAMED (Nov 13 2026, Q6): o.api is a member's own card store. GET /api/digital-cards lists o.api.cards; a POST or PUT
+    // is recorded in o.api.saves and becomes the stored card (as the server keeps it); an upload is answered as stored.
+    if (o.api) {
+      const us = String(u), m = (init && init.method) || "GET";
+      if (/\/api\/digital-cards$/.test(us) && m === "GET") r = { ok: true, status: 200, json: () => Promise.resolve({ cards: JSON.parse(JSON.stringify(o.api.cards)) }) };
+      if (/\/api\/digital-cards(\/[^/]+)?$/.test(us) && (m === "PUT" || m === "POST")) {
+        const body = JSON.parse(init.body);
+        o.api.saves.push({ method: m, body });
+        const row = Object.assign({ id: "c0000000-0000-4000-8000-0000000000aa" }, o.api.cards[0] || {}, body);
+        o.api.cards = [row];
+        r = { ok: true, status: 200, json: () => Promise.resolve({ card: JSON.parse(JSON.stringify(row)) }) };
+      }
+      if (/\/api\/bfp\/upload-url$/.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({ signedUrl: "https://storage.example.com/put/bg.png", publicUrl: "https://cdn.example.com/card/bg.png" }) };
+      if (/^https:\/\/storage\.example\.com\//.test(us)) r = { ok: true, status: 200, json: () => Promise.resolve({}) };
+    }
     const p = Promise.resolve(r || { ok: false, status: 500, json: () => Promise.resolve({ error: "check" }), blob: () => Promise.resolve({ type: "", size: 0 }) });
     p.catch(() => {});
     return p;
@@ -769,6 +790,61 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
   check("O1 storage is unchanged: orientation is one of horizontal or vertical in media_layout (lib/cardPage.js), anything else dropped, and a new card starts with media_layout {}",
     J(CPL.MEDIA_LAYOUT_ALLOWLIST.orientation) === J({ type: "enum", values: ["horizontal", "vertical"] }) && J(CPL.sanitizeMediaLayout({ orientation: "sideways" }).value) === "{}" &&
     J(CPL.sanitizeMediaLayout({ orientation: "vertical" }).value) === J({ orientation: "vertical" }) && /\n        media_layout: \{\},\n/.test(SERVER));
+
+  /* ── NAMED (Nov 13 2026, Q6): the saved orientation is how the card is shared ── */
+  console.log("\n══ Q6. the saved orientation: the maker opens it, every save carries it, the shared card shows it ══");
+  // The maker opened on a member's stored card, through its own loadCard (GET /api/digital-cards), as a member opens it.
+  async function makerOn(stored) {
+    const api = { cards: stored ? [Object.assign({ id: "c0000000-0000-4000-8000-0000000000aa", full_name: "Jane", theme: "dark", share_token: "a".repeat(32) }, stored)] : [], saves: [] };
+    const M = await mount(DC, { api, wait: 150 });
+    const mcp = M.d.getElementById("cardPreview");
+    const state = () => J({ vertical: mcp.classList.contains("orient-vertical"), toggle: Array.prototype.filter.call(M.d.querySelectorAll("[data-orient]"), b => b.classList.contains("active")).map(b => b.getAttribute("data-orient")).join(),
+      saved: M.w.getFields().media_layout.orientation, aspect: M.w.getComputedStyle(mcp).aspectRatio });
+    const save = async () => { await M.w.saveCard(); await settle(40); const last = api.saves[api.saves.length - 1]; return last ? last.body.media_layout.orientation : "no save"; };
+    return { M, api, state, save, loaded: () => M.w.cardLoadState };
+  }
+  const mv = await makerOn({ media_layout: { orientation: "vertical", show_qr: false } });
+  const mvOpen = mv.state(), mvSave1 = await mv.save();
+  check("Q6-1 a card saved vertical opens vertical in the maker from GET /api/digital-cards (the preview upright, the Vertical toggle alone selected), and Save Card sends vertical",
+    mv.loaded() === "ready" && mvOpen === V_STATE && mvSave1 === "vertical", J([mv.loaded(), mvOpen, mvSave1]));
+  // After choosing nothing new: a theme change, the QR switch, a background upload, the holographic switch; each then saved.
+  const after = [];
+  mv.M.w.setTheme("midnight"); after.push(["a theme change", mv.state() === V_STATE, await mv.save()]);
+  mv.M.w.setShowQr(true); mv.M.w.setQrCorner && mv.M.w.setQrCorner("top-left"); after.push(["the QR switch and corner", mv.state() === V_STATE, await mv.save()]);
+  await mv.M.w.uploadBgImage({ name: "bg.png", type: "image/png" }); await settle(40);
+  after.push(["a background upload (" + (mv.M.w.bgImageUrl || "none") + ")", mv.state() === V_STATE && mv.M.w.bgImageUrl === "https://cdn.example.com/card/bg.png", await mv.save()]);
+  mv.M.w.setHoloStyle(true); after.push(["the holographic switch", mv.state() === V_STATE, await mv.save()]);
+  check("Q6-2 after a theme change, the QR switch, a background upload and the holographic switch the maker is still vertical, and every save sends vertical",
+    after.every(x => x[1] && x[2] === "vertical"), J(after));
+  // The member's own choice is what changes it, and what is reloaded.
+  mv.M.d.querySelector("[data-orient='horizontal']").click();
+  const toH = await mv.save();
+  const reH = await makerOn(mv.api.cards[0]);
+  const reHState = reH.state();
+  reH.M.d.querySelector("[data-orient='vertical']").click();
+  const toV = await reH.save();
+  const reV = await makerOn(reH.api.cards[0]);
+  const reVState = reV.state();
+  check("Q6-3 the toggle is the only thing that changes it: Horizontal and Save sends horizontal and reopens horizontal; Vertical and Save sends vertical and reopens vertical",
+    toH === "horizontal" && reHState === H_STATE && toV === "vertical" && reVState === V_STATE, J([toH, reHState, toV, reVState]));
+  mv.M.w.close(); reH.M.w.close(); reV.M.w.close();
+  const mh = await makerOn({ media_layout: { orientation: "horizontal" } }), mhState = mh.state(), mhSave = await mh.save();
+  const mn = await makerOn({ media_layout: {} }), mnState = mn.state(), mnSave = await mn.save();
+  const m0 = await makerOn(null), m0State = m0.state();
+  check("Q6-4 saved horizontal opens and saves horizontal; none saved (an old card) and a new card start horizontal, the maker's default only",
+    mhState === H_STATE && mhSave === "horizontal" && mnState === H_STATE && mnSave === "horizontal" && m0State === H_STATE, J([mhState, mhSave, mnState, mnSave, m0State]));
+  mh.M.w.close(); mn.M.w.close(); m0.M.w.close();
+  // The public card by its share link (/card/<token>), as by its short link (O5): what was saved, exactly.
+  async function shareOrient(ml) {
+    const P = await mount(CV, { path: "card/" + "a".repeat(32), card: Object.assign({}, CARD, ml === undefined ? {} : { media_layout: ml }), wait: 120 });
+    const r = { asked: P.log.fetches.some(f => /\/api\/cards\/share\/a{32}$/.test(f)), viewport: P.d.getElementById("cardViewport").classList.contains("cv-vertical"),
+      card: P.d.getElementById("cardPreview").classList.contains("orient-vertical"), aspect: P.w.getComputedStyle(P.d.getElementById("cardPreview")).aspectRatio, errors: P.errors.length };
+    P.w.close();
+    return r;
+  }
+  const q6V = await shareOrient({ orientation: "vertical" }), q6H = await shareOrient({ orientation: "horizontal" }), q6N = await shareOrient(undefined);
+  check("Q6-5 the share link (/card/<token>, its own API answer): saved vertical is an upright 1 : 1.75 card, saved horizontal and none a 1.75 : 1 card",
+    q6V.asked && q6V.viewport && q6V.card && q6V.aspect === "1 / 1.75" && q6V.errors === 0 && [q6H, q6N].every(x => x.asked && !x.viewport && !x.card && x.aspect === "1.75 / 1" && x.errors === 0), J([q6V, q6H, q6N]));
 
   console.log("");
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }

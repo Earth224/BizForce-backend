@@ -126,7 +126,29 @@ function cardRow() {
     email: "jane@example.test", phone: "+1 555 0100", website: "https://example.test", theme: "dark", media_layout: cardLayout,
     show_email: true, show_phone: true, show_photo: false, discoverable: false, lead_form_on: false };
 }
-function apiAnswer(pathname) {
+/* NAMED (Nov 13 2026, Q6): q6Store is one stored card row. A PUT or POST keeps its body as the server does (lib/cardPage.js's
+   own sanitizeMediaLayout and keepOrientation: media_layout replaced, the stored orientation kept when one is left out), and
+   the maker's GET /api/digital-cards and the public card's answer read the row back. q6Saves records each body sent. */
+const CPAGE = require(path.join(__dirname, "..", "lib", "cardPage.js"));
+let q6Store = null;
+const q6Saves = [];
+function q6Answer(pathname, request) {
+  const m = request && request.method;
+  if (/^\/api\/digital-cards(\/[^/]+)?$/.test(pathname) && (m === "PUT" || m === "POST")) {
+    const body = JSON.parse((request && request.postData) || "{}");
+    q6Saves.push(body);
+    const next = Object.assign({}, body);
+    if (body.media_layout !== undefined) next.media_layout = CPAGE.keepOrientation(CPAGE.sanitizeMediaLayout(body.media_layout).value, q6Store.media_layout);
+    Object.assign(q6Store, next);
+    return { card: q6Store };
+  }
+  if (pathname === "/api/digital-cards") return { cards: [q6Store] };
+  if (/^\/api\/cards\/(slug|share)\//.test(pathname)) return { card: q6Store, support_links: [] };
+  if (pathname === "/api/bfp/upload-url") return { signedUrl: "https://" + API_HOST + "/check-storage/bg.png", publicUrl: "https://" + API_HOST + "/check-storage/bg.png" };
+  return null;
+}
+function apiAnswer(pathname, request) {
+  if (q6Store) { const a = q6Answer(pathname, request); if (a) return a; }
   if (pathname === "/api/digital-cards") return { cards: noCards ? [] : [cardRow()] };
   // NAMED (Nov 13 2026, Q5b): q5Extras turns on the Wallet button, the lead form and a support link, so every button shows.
   if (/^\/api\/cards\/slug\//.test(pathname)) return q5Extras
@@ -359,7 +381,7 @@ function pdfPage(uri) {
         if (u.origin === origin || u.protocol === "data:" || u.protocol === "blob:") await cdp.send("Fetch.continueRequest", { requestId });
         else if (LIBS.indexOf(request.url) !== -1) await cdp.send("Fetch.continueRequest", { requestId });
         else if (u.hostname === API_HOST) {
-          const body = request.method === "OPTIONS" ? "" : JSON.stringify(apiAnswer(u.pathname));
+          const body = request.method === "OPTIONS" ? "" : JSON.stringify(apiAnswer(u.pathname, request));
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,DELETE,OPTIONS" }] });
@@ -846,6 +868,78 @@ function pdfPage(uri) {
       Math.abs(prevRatio.horizontal.ratio - 1.75) / 1.75 <= 0.01 && prevRatio.horizontal.w <= 560 && Math.abs(prevRatio.vertical.ratio - 1 / 1.75) * 1.75 <= 0.01 && prevRatio.vertical.h <= 561,
       JSON.stringify(prevRatio));
     q5Extras = false;
+    cardLayout = {};
+
+    /* ── NAMED (Nov 13 2026, Q6): the saved orientation is how the card is shared ── */
+    console.log("\n══ Q6. save Vertical, reload: the maker and the public card are vertical; Horizontal the same; nothing else changes it ══");
+    const Q6_OUT = process.env.CARD_Q6_OUT || path.join(os.homedir(), "Downloads", "q6");
+    fs.mkdirSync(Q6_OUT, { recursive: true });
+    q6Store = Object.assign(cardRow(), { media_layout: {} });
+    const q6_MAKER_STATE = "(function(){var c=document.getElementById('cardPreview'),r=c.getBoundingClientRect();return {vertical:c.classList.contains('orient-vertical'),toggle:[].filter.call(document.querySelectorAll('[data-orient]'),function(b){return b.classList.contains('active')}).map(function(b){return b.getAttribute('data-orient')}).join(),ratio:r.width/r.height,sends:getFields().media_layout.orientation};})()";
+    const q6_loaded = makerReady + " && /Card q6_loaded/.test((document.getElementById('saveStatus')||{}).textContent||'')";
+    const q6_saveNow = async () => {
+      const n = q6Saves.length;
+      await evaluate(cdp, "document.getElementById('saveBtn').click(), true");
+      for (let i = 0; i < 80 && q6Saves.length === n; i++) await sleep(100);
+      await sleep(300);
+      return q6Saves.length > n ? (q6Saves[q6Saves.length - 1].media_layout || {}).orientation : "no save";
+    };
+    const q6_vertOK = st => st.vertical && st.toggle === "vertical" && Math.abs(st.ratio - 1 / 1.75) <= 0.01 && st.sends === "vertical";
+    const q6_horiOK = st => !st.vertical && st.toggle === "horizontal" && Math.abs(st.ratio - 1.75) <= 0.01 && st.sends === "horizontal";
+    await viewport(cdp, 1440, 1000, false);
+    await open(cdp, origin, "digital-cards.html", q6_loaded);
+    const q6_q6Start = await evaluate(cdp, q6_MAKER_STATE);
+    await evaluate(cdp, "document.querySelector(\"[data-orient='vertical']\").click(), true");
+    const q6_sentV = await q6_saveNow();
+    await open(cdp, origin, "digital-cards.html", q6_loaded);
+    const q6_reV = await evaluate(cdp, q6_MAKER_STATE);
+    check("Q6 a card with nothing saved opens horizontal; Vertical and Save Card sends vertical, the server keeps it, and the reloaded maker is vertical (1 : 1.75, the Vertical toggle selected)",
+      q6_horiOK(q6_q6Start) && q6_sentV === "vertical" && q6Store.media_layout.orientation === "vertical" && q6_vertOK(q6_reV), JSON.stringify([q6_q6Start, q6_sentV, q6Store.media_layout.orientation, q6_reV]));
+    { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(Q6_OUT, "maker-saved-vertical.png"), Buffer.from(s.data, "base64")); }
+    // A theme change, a background upload, the QR switch: each saved, nothing chosen about orientation.
+    const q6_steps = [];
+    await evaluate(cdp, "(function(){var b=[].filter.call(document.querySelectorAll('[onclick]'),function(e){return /setTheme\\('midnight'\\)/.test(e.getAttribute('onclick'))})[0]; if(b) b.click(); else setTheme('midnight'); return true;})()");
+    q6_steps.push(["a theme change (midnight)", await evaluate(cdp, q6_MAKER_STATE), await q6_saveNow()]);
+    await evaluate(cdp, "uploadBgImage(new File([new Uint8Array([137,80,78,71])], 'bg.png', { type: 'image/png' })), true");
+    for (let i = 0; i < 50 && !(await evaluate(cdp, "!!bgImageUrl")); i++) await sleep(100);
+    q6_steps.push(["a background upload", await evaluate(cdp, q6_MAKER_STATE), await q6_saveNow()]);
+    await evaluate(cdp, "(function(){var t=document.getElementById('qrShowToggle'); t.checked=true; t.dispatchEvent(new Event('change',{bubbles:true})); return true;})()");
+    q6_steps.push(["the QR switch on", await evaluate(cdp, q6_MAKER_STATE), await q6_saveNow()]);
+    await open(cdp, origin, "digital-cards.html", q6_loaded);
+    const q6_reV2 = await evaluate(cdp, q6_MAKER_STATE);
+    check("Q6 after a theme change, a background upload and the QR switch (each saved) the card is still vertical: in the maker, in every save, on the server and after a reload",
+      q6_steps.every(x => q6_vertOK(x[1]) && x[2] === "vertical") && q6Store.media_layout.orientation === "vertical" && q6Store.theme === "midnight" && !!q6Store.bg_image_url && q6Store.media_layout.show_qr === true && q6_vertOK(q6_reV2),
+      JSON.stringify([q6_steps, q6Store.theme, q6Store.bg_image_url, q6Store.media_layout.show_qr, q6_reV2]));
+    // The public card, saved vertical: 1440 and 390, the Q5b sizes, no scroll.
+    const q6_pubV = {};
+    for (const [W, Hh] of [[1440, 900], [390, 844]]) {
+      await viewport(cdp, W, Hh, W < 600);
+      await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && document.getElementById('cardPreview').style.display === 'block'");
+      await sleep(300);
+      q6_pubV[W] = Object.assign(await evaluate(cdp, FIT), await evaluate(cdp, "({cv:document.getElementById('cardViewport').classList.contains('cv-vertical'),ov:document.getElementById('cardPreview').classList.contains('orient-vertical')})"));
+      const s = await cdp.send("Page.captureScreenshot", { format: "png" });
+      fs.writeFileSync(path.join(Q6_OUT, "public-saved-vertical-" + W + ".png"), Buffer.from(s.data, "base64"));
+    }
+    console.log("    note  public card saved vertical: 1440 x 900 " + q6_pubV[1440].w + "x" + q6_pubV[1440].h + "; 390 x 844 " + q6_pubV[390].w + "x" + q6_pubV[390].h);
+    check("Q6 the public card for the card saved vertical is upright at 1440 and 390 (1 : 1.75, 320 x 560 as Q5b sizes it), with no scroll and its buttons and footer in view",
+      [1440, 390].every(W => { const r = q6_pubV[W]; return r.cv && r.ov && Math.abs(r.ratio - 1 / 1.75) <= 0.01 && r.h <= 560 && r.docH <= r.vh && r.docW <= r.vw && r.btnsIn && r.btnsUnder && r.footBottom <= r.vh; }) &&
+      q6_pubV[1440].w === 320 && q6_pubV[1440].h === 560, JSON.stringify(q6_pubV));
+    // Back to Horizontal: saved, reloaded, shared.
+    await viewport(cdp, 1440, 1000, false);
+    await open(cdp, origin, "digital-cards.html", q6_loaded);
+    await evaluate(cdp, "document.querySelector(\"[data-orient='horizontal']\").click(), true");
+    const q6_sentH = await q6_saveNow();
+    await open(cdp, origin, "digital-cards.html", q6_loaded);
+    const q6_reH = await evaluate(cdp, q6_MAKER_STATE);
+    await viewport(cdp, 1440, 900, false);
+    await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && document.getElementById('cardPreview').style.display === 'block'");
+    await sleep(300);
+    const q6_pubH = Object.assign(await evaluate(cdp, FIT), await evaluate(cdp, "({cv:document.getElementById('cardViewport').classList.contains('cv-vertical'),ov:document.getElementById('cardPreview').classList.contains('orient-vertical')})"));
+    { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(Q6_OUT, "public-saved-horizontal-1440.png"), Buffer.from(s.data, "base64")); }
+    check("Q6 Horizontal and Save: sent and kept horizontal; the reloaded maker and the public card (560 x 320 at 1440, no scroll) are horizontal",
+      q6_sentH === "horizontal" && q6Store.media_layout.orientation === "horizontal" && q6_horiOK(q6_reH) && !q6_pubH.cv && !q6_pubH.ov && Math.abs(q6_pubH.ratio - 1.75) <= 0.01 && q6_pubH.w === 560 && q6_pubH.docH <= q6_pubH.vh,
+      JSON.stringify([q6_sentH, q6_reH, q6_pubH]));
+    q6Store = null;
     cardLayout = {};
 
     const own2 = exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));

@@ -36,6 +36,13 @@
      S. The generated shell is in sync with card-view.html.
      G. The legal sentences in source and in the built pages.
      R. The migration as run, its patterns, and the registries.
+     Q. NAMED (Nov 13 2026, Q6): the saved orientation. A card PUT whose
+        media_layout carries no valid orientation (a QR change, a partial
+        layout, {} or null, "sideways") keeps the stored one; a PUT without
+        media_layout (a theme, a media upload, holographic) leaves the layout
+        alone; choosing horizontal or vertical writes it; absent stays absent;
+        a stored layout that cannot be read saves nothing; the /c/<slug> and
+        share-link answers carry exactly what is stored.
      Z. Zero network.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
@@ -160,7 +167,12 @@ const MUTATIONS = {
   // the card page shows the form when it is off
   "page-form-when-off": [[CV, "  if (!c || c.lead_form !== true || !c.form_token || !c.form_issued_at) return;", "  if (!c) return;"]],
   // the card page never sends the honeypot
-  "honeypot-not-sent": [[CV, "      website: document.getElementById(\"cvLeadWebsite\").value", "      website: \"\""]]
+  "honeypot-not-sent": [[CV, "      website: document.getElementById(\"cvLeadWebsite\").value", "      website: \"\""]],
+  // NAMED (Nov 13 2026, Q6): a card PUT's media_layout replaces the stored one whole, so one without an orientation loses it (Q1, Q4)
+  "merge-replaces-media-layout": [[SV, "      updates.media_layout = cardPage.keepOrientation(updates.media_layout, layoutRow && layoutRow.media_layout);\n", ""]],
+  // NAMED (Nov 13 2026, Q6): the share link's answer drops the saved layout, so /card/<token> is always horizontal (Q8)
+  "share-link-ignores-orientation": [[SV, "    // never returned.\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(data, ",
+    "    // never returned.\n    if (!(await ownerPagePublic(data.user_id))) return res.status(404).json({ error: \"Card not found\" });\n\n    noStoreIfLeadForm(res, data);\n    return res.json({ card: withGoogleWalletFlag(publicCardFrom(Object.assign({}, data, { media_layout: {} }), "]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -216,6 +228,9 @@ try {
   CLL = loadLib(CL); loadLib(CP); LP = loadLib(LP_FILE); YD = loadLib("lib/yourData.js"); BK = loadLib("lib/backup.js");
   SCH = loadLib("lib/schemaCheck.js"); BUILD = loadLib("scripts/buildCardShell.js");
 } catch (e) { LIB_ERROR = e; }
+// NAMED (Nov 13 2026, Q6): lib/cardPage.js as compiled above (possibly mutated), for section Q.
+const CPL_KEEP = () => loadLib(CP).keepOrientation;
+const CPL_FONTS = () => loadLib(CP).FONTS;
 
 /* ── the clock and the secret ────────────────────────────────────────────── */
 const T0 = Date.parse("2026-11-06T15:00:00.000Z");
@@ -972,6 +987,83 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   check("R6. Your data: one entry in contacts, \"Leads from your digital cards\", owned by user_id, deleted, and in DELETE_ORDER before digital_cards",
     yd.length === 1 && yd[0].group === "contacts" && /^Leads from your digital cards/.test(yd[0].what) && J(yd[0].owner) === J(["user_id"]) && yd[0].onDelete === "delete" &&
     YD.DELETE_ORDER.filter(t => t === "card_leads").length === 1 && YD.DELETE_ORDER.indexOf("card_leads") < YD.DELETE_ORDER.indexOf("digital_cards"), J(yd));
+
+  /* ════ Q. the saved orientation (NAMED Nov 13 2026, Q6) ════ */
+  console.log("\n══ Q. the saved orientation: kept by every card write, shared exactly as stored ══");
+  CUR = makeDb(seed()); CLOCK.now = T0;
+  const qRow = id => CUR.t.digital_cards.find(r => r.id === id);
+  const STORED_V = { orientation: "vertical", show_qr: true, qr_corner: "bottom-left", tagline: "Teas", card_font: CPL_FONTS()[0] };
+  const SAVES = [
+    ["a theme change (no media_layout)", { theme: "midnight" }, null],
+    ["a media upload (video_url, no media_layout)", { video_url: "https://cdn.example.com/card/pitch.mp4" }, null],
+    ["the holographic switch (no media_layout)", { holographic_style: true }, null],
+    ["a QR change (a media_layout of show_qr and qr_corner only)", { media_layout: { show_qr: false, qr_corner: "top-left" } }, { show_qr: false, qr_corner: "top-left", orientation: "vertical" }],
+    ["a partial media_layout (a tagline only)", { media_layout: { tagline: "Hello" } }, { tagline: "Hello", orientation: "vertical" }],
+    ["an empty media_layout", { media_layout: {} }, { orientation: "vertical" }],
+    ["media_layout null", { media_layout: null }, { orientation: "vertical" }],
+    ["an orientation the server does not accept (\"sideways\")", { media_layout: { orientation: "sideways", show_qr: true } }, { show_qr: true, orientation: "vertical" }]
+  ];
+  const qSaves = [];
+  for (const [label, body, want] of SAVES) {
+    qRow(CID.jane).media_layout = JSON.parse(J(STORED_V));
+    const r = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body });
+    const now = qRow(CID.jane).media_layout;
+    const ok = r.status === 200 && now.orientation === "vertical" && J(now) === J(want || STORED_V) && r.body.card.media_layout.orientation === "vertical";
+    qSaves.push([label, ok, r.status, now]);
+  }
+  check("Q1. a card saved vertical stays vertical through every write that does not choose an orientation: " + SAVES.map(x => x[0]).join("; "),
+    qSaves.every(x => x[1]), J(qSaves.filter(x => !x[1])));
+  check("Q2. a media_layout sent without an orientation still replaces the other keys (a key left out is its default; only the orientation is kept)",
+    J(qSaves[3][3]) === J({ show_qr: false, qr_corner: "top-left", orientation: "vertical" }) && !("tagline" in qSaves[3][3]), J(qSaves[3][3]));
+  qRow(CID.jane).media_layout = JSON.parse(J(STORED_V));
+  const toH = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body: { media_layout: { orientation: "horizontal", show_qr: true } } });
+  const afterH = J(qRow(CID.jane).media_layout);
+  const toV = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body: { media_layout: { orientation: "vertical" } } });
+  const afterV = J(qRow(CID.jane).media_layout);
+  const keepH = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body: { media_layout: {} } });
+  check("Q3. choosing changes it: saved horizontal is written horizontal, saved vertical vertical, and a later write without one keeps the new choice",
+    toH.status === 200 && afterH === J({ orientation: "horizontal", show_qr: true }) && toV.status === 200 && afterV === J({ orientation: "vertical" }) &&
+    keepH.status === 200 && J(qRow(CID.jane).media_layout) === J({ orientation: "vertical" }), J([afterH, afterV, qRow(CID.jane).media_layout]));
+  qRow(CID.jane).media_layout = { orientation: "horizontal" };
+  await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body: { media_layout: { show_qr: true } } });
+  const keptH = J(qRow(CID.jane).media_layout);
+  qRow(CID.token).media_layout = {};
+  await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.token }, body: { media_layout: { show_qr: true } } });
+  check("Q4. saved horizontal is kept the same way, and a card with none saved gets none (nothing invented: absent stays absent)",
+    keptH === J({ show_qr: true, orientation: "horizontal" }) && J(qRow(CID.token).media_layout) === J({ show_qr: true }), J([keptH, qRow(CID.token).media_layout]));
+  // Another member's card is never read or written through this.
+  qRow(CID.other).media_layout = { orientation: "vertical" };
+  const foreignQ = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.other }, body: { media_layout: { show_qr: true } } });
+  check("Q5. the stored layout is read with the owner's id: another member's card is neither changed nor kept from", J(qRow(CID.other).media_layout) === J({ orientation: "vertical" }) && foreignQ.status !== 200,
+    J([foreignQ.status, qRow(CID.other).media_layout]));
+  // A stored layout that cannot be read: nothing is saved.
+  qRow(CID.jane).media_layout = JSON.parse(J(STORED_V));
+  const realFrom = CUR.from;
+  CUR.from = function (table) {
+    const q = realFrom(table), sel = q.select;
+    q.select = function (c) { if (c === "media_layout") { const fail = { eq() { return fail; }, maybeSingle: () => Promise.resolve({ data: null, error: { message: "check: read failed" } }) }; return fail; } return sel(c); };
+    return q;
+  };
+  const writesBefore = CUR.writes.length;
+  const failedRead = await hit("put /api/digital-cards/:id", { user: OWNER, params: { id: CID.jane }, body: { media_layout: { show_qr: false } } });
+  CUR.from = realFrom;
+  check("Q6. if the stored layout cannot be read, the save is refused (500 \"Save failed\") and nothing is written, so the orientation is never lost",
+    failedRead.status === 500 && (failedRead.body || {}).error === "Save failed" && CUR.writes.length === writesBefore && J(qRow(CID.jane).media_layout) === J(STORED_V),
+    J([failedRead.status, failedRead.body, CUR.writes.length - writesBefore]));
+  // The public answers: by slug and by share token, exactly what is stored.
+  const shared = [];
+  for (const ml of [{ orientation: "vertical", show_qr: true }, { orientation: "horizontal" }, { show_qr: true }, {}]) {
+    qRow(CID.jane).media_layout = JSON.parse(J(ml));
+    const bySlug = await hit("get /api/cards/slug/:slug", { params: { slug: "jane-doe" } });
+    const byTok = await hit("get /api/cards/share/:token", { params: { token: TOK.jane } });
+    shared.push([J(ml), J(bySlug.body.card.media_layout) === J(ml), J(byTok.body.card.media_layout) === J(ml), bySlug.body.card.media_layout, byTok.body.card.media_layout]);
+  }
+  check("Q7. the /c/<slug> answer carries the stored media_layout exactly: vertical, horizontal and none", shared.every(x => x[1]), J(shared.filter(x => !x[1])));
+  check("Q8. the share-link answer (/card/<token>) carries it exactly too", shared.every(x => x[2]), J(shared.filter(x => !x[2])));
+  check("Q9. keepOrientation (lib/cardPage.js): only horizontal or vertical is kept or written",
+    J(CPL_KEEP()({ show_qr: true }, { orientation: "vertical" })) === J({ show_qr: true, orientation: "vertical" }) &&
+    J(CPL_KEEP()({ orientation: "horizontal" }, { orientation: "vertical" })) === J({ orientation: "horizontal" }) &&
+    J(CPL_KEEP()({}, { orientation: "sideways" })) === "{}" && J(CPL_KEEP()({}, null)) === "{}" && J(CPL_KEEP()({}, "vertical")) === "{}");
 
   console.log("\n══ Z. zero network ══");
   check("Z1. no socket was opened and no name was looked up", NETWORK.length === 0, NETWORK.join(","));

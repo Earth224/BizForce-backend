@@ -52075,6 +52075,22 @@ app.put("/api/digital-cards/:id", requireAuth, async function (req, res, next) {
     if (privacy.error) return res.status(400).json({ error: privacy.error });
     Object.assign(updates, privacy.updates);
 
+    // NAMED (Nov 13 2026, Q6): a media_layout with no orientation keeps the stored one (lib/cardPage.js
+    // keepOrientation). If the stored one cannot be read, nothing is saved rather than risk losing it.
+    if (updates.media_layout && updates.media_layout.orientation === undefined) {
+      const { data: layoutRow, error: layoutError } = await supabase
+        .from("digital_cards")
+        .select("media_layout")
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+      if (layoutError) {
+        console.error("[digital-cards PUT] Could not read the stored layout:", layoutError.message || layoutError);
+        return res.status(500).json({ error: "Save failed" });
+      }
+      updates.media_layout = cardPage.keepOrientation(updates.media_layout, layoutRow && layoutRow.media_layout);
+    }
+
     // Capture the media URLs this update is about to overwrite, so the displaced objects
     // can be removed afterwards instead of being orphaned in bf-public forever.
     const touchesMedia = CARD_MEDIA_COLUMNS.some(function (column) {
