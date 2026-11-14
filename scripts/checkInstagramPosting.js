@@ -1031,14 +1031,17 @@ function pageAnswers(over) {
     cardLeads: { cardLeadsPurgeTick: async function () { orderRun.push("leads"); }, PURGE_JOB_NAME: "card_leads_purge" },
     supabase: {}, videoRetentionTick: async function () { orderRun.push("videos"); }, instagramRefreshTick: async function () { orderRun.push("instagram"); },
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebookChoosingPurgeTick follows instagramRefreshTick.
-    facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console
+    facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console,
+    // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
+    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
   try { vm.runInContext(CRON_SECTION + "\n  }\n", cctx, { filename: "server.js (04:45 chain)" }); } catch (e) { cronOk = false; }
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
-  check("T11. the 04:45 UTC chain runs instagramRefreshTick after the video retention, then Facebook's cleanup (NAMED, item 8 part 3b)", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook"]), J(orderRun));
+  // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
+  check("T11. the 04:45 UTC chain runs instagramRefreshTick after the video retention, then Facebook's cleanup (NAMED, item 8 part 3b), then L1's two ticks", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal"]), J(orderRun));
   m = mountRoutes({ env: CONFIGURED });
   const rt = await attempt(m.ctx.instagramRefreshTick());
   check("T12. instagramRefreshTick runs lib/instagramApi.js refreshTick on instagramDeps() and never rejects", rt.ok && rt.v && rt.v.claimed === true &&
@@ -1553,7 +1556,8 @@ function pageAnswers(over) {
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
-  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
   const YD_IG = (compile(FILES.yourData, "lib/yourData.js", {}).DATA || []).filter(function (e) { return e.table === "instagram_posts"; })[0];
   check("G5. yourData: the connection exported as its username and date only, the posts without ids; Instagram (Meta) a third party; the never-exported lines; the delete order",
     FILES.yourData.indexOf("{ table: \"member_instagram_connections\", group: \"account\",") !== -1 && /table: "member_instagram_connections"[\s\S]*?select: "username, created_at"/.test(FILES.yourData) &&

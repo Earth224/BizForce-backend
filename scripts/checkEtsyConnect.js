@@ -1215,7 +1215,8 @@ function allText(n) { return n ? n.textContent : ""; }
     FILES.yourData.indexOf("Changes BizForce made to your store with your approval, on Shopify, WooCommerce, Etsy or Amazon:") !== -1 &&
     FILES.backup.indexOf("member_store_connections: \"members' WooCommerce store keys and Shopify, Etsy and Amazon access (encrypted); members connect again\",") !== -1);
   const LEGAL = realRequire("./lib/legal");
-  check("G4. TERMS_VERSION and TERMS_UPDATED are Nov 8 2026", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
   const ets = (FILES.readme.split("## Etsy app setup")[1] || "").split("\n## ")[0];
   check("G5. README: the two env var rows, and the Etsy app setup (the keystring and shared secret on Railway, the redirect exactly, the four scopes, the access tiers, x-api-key)",
     /\n\| `ETSY_KEYSTRING` \| none \| /.test(FILES.readme) && /\n\| `ETSY_SHARED_SECRET` \| none \| [^\n]*A secret; set it on Railway/.test(FILES.readme) &&

@@ -4423,6 +4423,38 @@ async function refuseMarketplaceUsdEvent(event, session, meta) {
   return { refused: true };
 }
 
+/* ── Renewal and terms emails (L1, Nov 14 2026; lib/renewalEmails.js) ────────
+   Transactional account mail, through sendEmail with skipConsentCheck, so each
+   ends with lib/legal.js contactFooter (the contact and the postal address).
+   At most one per member per occasion: the email_sends ledger row is the record.
+     - the confirmation, from handleStripeEvent's checkout.session.completed branch;
+     - the yearly reminder and the terms-change email, renewalEmailsTick, the last
+       step of the 04:45 UTC chain, each claimed through its own job_runs row
+       (renewal_yearly_reminder, terms_change_email);
+     - the price-change notice, POST /api/admin/price-change-notice (owner only),
+       which never changes a Stripe price. */
+function renewalEmailDeps() {
+  return {
+    supabase: supabase,
+    sendEmail: sendEmail,
+    contactFor: findOrCreateUserContact,
+    facts: require("./lib/renewalEmails").factsFrom(PLAN_CONFIG.all_access, FRONTEND_URL),
+    now: function () { return Date.now(); }
+  };
+}
+
+async function renewalEmailsTick() {
+  try {
+    var mailer = require("./lib/renewalEmails");
+    var yearly = await mailer.yearlyReminderTick(renewalEmailDeps());
+    var termsMail = await mailer.termsChangeTick(renewalEmailDeps());
+    return { yearly: yearly, terms: termsMail };
+  } catch (err) {
+    console.error("[RenewalEmail] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
 async function handleStripeEvent(event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object;
@@ -4542,6 +4574,15 @@ async function handleStripeEvent(event) {
         console.error("[welcome-bonus] NOT GRANTED for user " + userId + " — " +
           ((bonusErr && bonusErr.message) || String(bonusErr)) + ", event " + event.id +
           ". The subscription landed; the bonus can be granted by hand.");
+      }
+
+      /* L1 (Nov 14 2026, California's Automatic Renewal Law): the confirmation email, once per Stripe subscription
+         (lib/renewalEmails.js sendConfirmation; a redelivery finds it in the email_sends ledger and sends nothing).
+         Logged by code, never thrown: the subscription has landed either way. */
+      try {
+        await require("./lib/renewalEmails").sendConfirmation(renewalEmailDeps(), userId, session.subscription || null);
+      } catch (confirmErr) {
+        console.error("[RenewalEmail] confirmation for user " + userId + " not sent: " + ((confirmErr && confirmErr.code) || "error"));
       }
     }
 
@@ -34958,6 +34999,19 @@ async function videoRetentionTick() {
   }
 }
 
+/* L1 (Nov 14 2026): a step of the 04:45 UTC chain after the video retention pass. Google's user data rules for
+   YouTube (lib/youtubeApi.js youtubeDataTick), claimed through job_runs youtube_data_check: a grant Google refuses
+   is deleted with its data (one notice), the channel name is read again, and what has gone 30 days without a
+   refresh is deleted. Never rejects. */
+async function youtubeDataCheckTick() {
+  try {
+    return await require("./lib/youtubeApi").youtubeDataTick(youtubeDeps());
+  } catch (err) {
+    console.error("[YoutubeDataCheck] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
 /* Any platform a video can go to is set up. NAMED (Nov 7 2026, Instagram
    posting): Instagram Reels come from these videos too. NAMED (Nov 7 2026,
    Facebook Pages posting): and Facebook video posts. */
@@ -35172,9 +35226,14 @@ app.post("/api/youtube/disconnect", requireAuth, async function (req, res, next)
     // Only this sign-in's states: a Connect Shopify or Microsoft sign-in in progress keeps its own.
     var statesDropped = await supabase.from("oauth_states").delete().eq("user_id", req.user.id).eq("purpose", ga.PURPOSE);
     if (statesDropped.error) throw statesDropped.error;
+    /* L1 (Nov 14 2026, Google's user data rules): everything else BizForce kept from Google for this channel goes now,
+       in the same request: the videos' YouTube ids and sessions, the YouTube proposals (except one executing) and the
+       reconnect notices (lib/youtubeApi.js purgeYoutubeData; the quota ledger, which holds no channel data, stays). */
+    var purgedNow = await ya.purgeYoutubeData(youtubeDeps(), req.user.id, { notices: true });
     return res.json(Object.assign(ya.statusOf(null, ga.configured(process.env) !== null), {
       removed: (dropped.data || []).length > 0,
       revoked: revoked,
+      youtube_data_deleted: { videos: purgedNow.videos, proposals: purgedNow.proposals, notices: purgedNow.notices },
       note: row ? ga.MESSAGES.disconnected : "No YouTube channel was connected."
     }));
   } catch (error) {
@@ -47020,6 +47079,21 @@ app.get("/api/billing/consent", function (req, res) {
   const consent = autoRenewConsent(req.query && req.query.product ? String(req.query.product) : "all_access");
   if (!consent) return res.status(400).json({ error: "unknown_product" });
   return res.json(consent);
+});
+
+/* The price-change notice (L1, Nov 14 2026; lib/renewalEmails.js priceChangeNotice). Owner only: requireAuth and
+   requireAdmin. Body { new_price, effective_date }: the new monthly price in dollars and the date it applies
+   (YYYY-MM-DD), which must be 7 to 30 days from today, or nothing is sent. Every subscriber who is billed (active,
+   trialing or past due) gets one email with the old and new price, the date and how to cancel; sending again sends
+   only to those not yet emailed. IT NEVER CHANGES A STRIPE PRICE: change the price in Stripe yourself, to apply on
+   that date (README, "Changing the price"). */
+app.post("/api/admin/price-change-notice", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    const out = await require("./lib/renewalEmails").priceChangeNotice(renewalEmailDeps(), req.body || {}, Date.now());
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/stripe/checkout", requireAuth, async function (req, res) {
@@ -60952,7 +61026,11 @@ shutdownControl.setServer(app.listen(PORT, function () {
      post of it is pending, creating or publishing. The same purge deletes the
      facebook_login states. Then unfinished Facebook Page choices older than an
      hour are deleted (lib/facebookApi.js choosingPurgeTick), claimed through
-     their OWN job_runs row, facebook_choosing_purge. */
+     their OWN job_runs row, facebook_choosing_purge.
+     NAMED (Nov 14 2026, L1): then Google's user data rules for YouTube
+     (youtubeDataCheckTick, job_runs youtube_data_check), and last the yearly
+     renewal reminders and the terms-change emails (renewalEmailsTick, job_runs
+     renewal_yearly_reminder and terms_change_email). */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -60965,7 +61043,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
-      }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick);
+      }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick);
     }, {
       timezone: "UTC"
     });
@@ -60974,6 +61052,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] Videos for YouTube are cleaned in the same 04:45 UTC run, claimed through job_runs.member_videos_retention: unsent after 14 days, leftovers at once, unrecorded files after a day.");
     console.log("[startup] Instagram tokens expiring within 10 days are refreshed in the same 04:45 UTC run, claimed through job_runs.instagram_token_refresh.");
     console.log("[startup] Facebook Page choices left unfinished for an hour are deleted in the same 04:45 UTC run, claimed through job_runs.facebook_choosing_purge.");
+    console.log("[startup] YouTube data is checked in the same 04:45 UTC run, claimed through job_runs.youtube_data_check: a grant Google refuses is deleted with its data, and data 30 days without a refresh is deleted.");
+    console.log("[startup] Yearly renewal reminders and terms-change emails go out in the same 04:45 UTC run, claimed through job_runs.renewal_yearly_reminder and job_runs.terms_change_email.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

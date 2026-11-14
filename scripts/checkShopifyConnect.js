@@ -1385,7 +1385,8 @@ function listAnswers(over) {
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026. AFTER the privacy sentence changed again (Etsy), so
   // the terms date is Nov 8 2026 by the rule in lib/legal.js.
-  check("G6. TERMS_VERSION and TERMS_UPDATED are Nov 8 2026", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G6. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
   // NAMED (Nov 7 2026, YouTube uploads, migration 177): the sign-in states line now also names Connect YouTube;
   // Connect Shopify is still required in it.
   // NAMED (Nov 7 2026, TikTok posting, migration 178): BEFORE "..., Connect Shopify and Connect YouTube". AFTER the line

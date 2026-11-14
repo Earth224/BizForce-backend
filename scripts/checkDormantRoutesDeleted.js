@@ -364,7 +364,9 @@ const ADDED = [
   // NAMED (Nov 10 2026, orbit top half): BEFORE 489 routes; AFTER 490, the dashboard's live figures in one read-only answer (checkDashboardTop)
   ["get", "/api/dashboard/top"],                             // login-only, read-only: the caller's own figures, null with a reason when unreadable; 60 s per-member cache (489 -> 490)
   // NAMED (Nov 11 2026, orbit stage 2): BEFORE 490 routes; AFTER 491, the orbit's satellites and sparks between reads of /top (checkOrbitStage2)
-  ["get", "/api/dashboard/pulse"]                            // login-only, read-only: agents running now and events since ?since=, 15 s per-member cache, 6 a minute (490 -> 491)
+  ["get", "/api/dashboard/pulse"],                           // login-only, read-only: agents running now and events since ?since=, 15 s per-member cache, 6 a minute (490 -> 491)
+  // NAMED (Nov 14 2026, L1): BEFORE 491 routes; AFTER 492, the owner's price-change notice to subscribers (checkLegalL1)
+  ["post", "/api/admin/price-change-notice"]                 // admin only: emails each billed subscriber once, 7 to 30 days ahead; never changes a Stripe price (491 -> 492)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

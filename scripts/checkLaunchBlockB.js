@@ -688,7 +688,9 @@ function fakeDb(tables, fail) {
       }));
       for (const m of t.matchAll(/["'`](https:\/\/[a-z0-9.-]+\.up\.railway\.app)[^"'`]*["'`]/g)) need("connect-src", m[1], f);
       for (const m of t.matchAll(/fetch\(\s*["'`](https:\/\/[^"'`]+)/g)) need("connect-src", m[1], f);
-      for (const m of t.matchAll(/["'`](https:\/\/(?:www\.youtube\.com\/embed|player\.vimeo\.com\/video)[^"'`]*)/g)) need("frame-src", m[1], f);
+      // NAMED (Nov 14 2026, L1): BEFORE only www.youtube.com/embed and player.vimeo.com/video were read from scripts. AFTER the
+      // no-cookie player too, so profile.html's script-built player address stays under this rule.
+      for (const m of t.matchAll(/["'`](https:\/\/(?:www\.youtube\.com\/embed|www\.youtube-nocookie\.com\/embed|player\.vimeo\.com\/video)[^"'`]*)/g)) need("frame-src", m[1], f);
       for (const m of t.matchAll(/["'`](https:\/\/[a-z0-9.-]+\/[^"'`\s]*\.(?:png|jpe?g|gif|webp|svg))["'`]/gi)) need("img-src", m[1], f);
       for (const m of t.matchAll(/["'`](https:\/\/img\.youtube\.com\/)/g)) need("img-src", m[1], f);
     });

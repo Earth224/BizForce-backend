@@ -1036,7 +1036,8 @@ const HEADER = "-- Applied by the owner by hand in the Supabase SQL editor on No
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06", this change's date. AFTER "2026-11-07", the
   // version the Shopify privacy sentence set; the pin follows the latest change.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
-  check("G3. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 8 2026 (Etsy; this change set Nov 6)", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G3. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 6)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
   const guide = fe("scripts/termaximus-guide.js") || "";
   // NAMED BEFORE → AFTER (Nov 6 2026, card upgrades C2): BEFORE the editor tip named the search switch and the card-view
   // tip said the owner never learns who you are. AFTER both still tell of the counts, and say truthfully that the owner

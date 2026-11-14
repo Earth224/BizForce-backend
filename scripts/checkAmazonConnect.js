@@ -1454,7 +1454,8 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
     FILES.yourData.indexOf("select: \"item_name, field, old_value, new_value, currency, location_name, executed_at, confirmation\"") !== -1 &&
     FILES.backup.indexOf("member_store_connections: \"members' WooCommerce store keys and Shopify, Etsy and Amazon access (encrypted); members connect again\",") !== -1);
   const LEGAL = realRequire("./lib/legal");
-  check("G4. TERMS_VERSION and TERMS_UPDATED are Nov 8 2026", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G4. TERMS_VERSION and TERMS_UPDATED are the latest change's, Nov 14 2026 (L1; this change set Nov 8)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
   const amz = (FILES.readme.split("## Amazon app setup")[1] || "").split("\n## ")[0];
   check("G5. README: the four env var rows, and the Amazon app setup (registration, the draft app and its four roles, the LWA client id and secret and the app id on Railway, the redirect exactly, draft mode, the Data Protection Policy, the fees)",
     /\n\| `AMAZON_SPAPI_APP_ID` \| none \| /.test(FILES.readme) && /\n\| `AMAZON_LWA_CLIENT_ID` \| none \| /.test(FILES.readme) &&

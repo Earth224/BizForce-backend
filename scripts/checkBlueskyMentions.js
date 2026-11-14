@@ -1041,7 +1041,8 @@ function reset() { BSKY.reset(); MODEL.calls = []; MODEL.next = "REPLY: Yes, com
   // card visits privacy sentence set.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
-  check("K6. the terms version is the latest change's, Nov 8 2026 (Etsy; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026");
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("K6. the terms version is the latest change's, Nov 14 2026 (L1; this change set Nov 3)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026");
   check("K7. the model message matches the privacy sentence: post text, own post text, business details and guidance; never the author's name, handle or account id",
     prompt.indexOf("kids classes") !== -1 && ownPrompt.indexOf("Saturday wheel class") !== -1 && prompt.indexOf(BUSINESS) !== -1 && prompt.indexOf(GUIDANCE) !== -1 &&
     [CAROL.displayName, CAROL.handle, CAROL.did].every(v => prompt.indexOf(v) === -1));

@@ -1614,7 +1614,8 @@ function pageAnswers(over) {
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
-  check("G5. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G5. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
   const YD = realRequire("./lib/yourData");
   const ttEntry = (YD.DATA || []).filter(function (e) { return e.table === "member_tiktok_connections"; })[0] ||
     (FILES.yourData.indexOf("{ table: \"member_tiktok_connections\", group: \"account\"") !== -1 ? { select: (/table: "member_tiktok_connections"[\s\S]*?select: "([^"]*)"/.exec(FILES.yourData) || [])[1], onDelete: "delete" } : null);

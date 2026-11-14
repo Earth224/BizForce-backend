@@ -301,7 +301,10 @@ const EXPECTED_ADMIN = [
   "post /api/admin/verify/:userId", "post /api/admin/flag/:userId", "post /api/admin/store-proposals/run",
   // NAMED (Nov 3 2026, the schema check; admin 6 -> 7): BEFORE no admin health route. AFTER /health's admin detail,
   // requireAuth and requireAdmin, which reads only the last schema check's result and writes nothing (checkSchemaCheck H2).
-  "get /api/admin/health"
+  "get /api/admin/health",
+  // NAMED (Nov 14 2026, L1; admin 7 -> 8): BEFORE no price-change route. AFTER the owner's price-change notice, requireAuth and
+  // requireAdmin; it emails billed subscribers once each, 7 to 30 days ahead, and never changes a Stripe price (checkLegalL1 D12-D15).
+  "post /api/admin/price-change-notice"
 ];
 
 /* Login-only routes that write something a stranger is served. */

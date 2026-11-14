@@ -1182,7 +1182,8 @@ const settle = async (n) => { for (let i = 0; i < (n || 20); i++) await new Prom
   // card visits privacy sentence set; this change's own sentence is still checked in L1-L2.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
-  check("L3. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 5)", LEGAL.TERMS_VERSION === "2026-11-08" && LEGAL.TERMS_UPDATED === "Last updated November 8, 2026", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("L3. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 5)", LEGAL.TERMS_VERSION === "2026-11-14" && LEGAL.TERMS_UPDATED === "Last updated November 14, 2026", LEGAL.TERMS_VERSION);
   const SQL_AS_RUN = "ALTER TABLE public.social_post_drafts\n  ADD COLUMN IF NOT EXISTS media_ids uuid[] NOT NULL DEFAULT '{}'::uuid[];\n\n" +
     "ALTER TABLE public.social_post_drafts\n  ADD CONSTRAINT social_post_drafts_media_ids_check CHECK (cardinality(media_ids) <= 4);\n\n" +
     "CREATE INDEX IF NOT EXISTS social_post_drafts_media_ids_idx\n  ON public.social_post_drafts USING gin (media_ids);\n\n" +

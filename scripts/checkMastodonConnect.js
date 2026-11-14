@@ -1360,7 +1360,8 @@ const masked = row => row && Object.assign({}, row, { token_ciphertext: "…", t
   // card visits privacy sentence set.
   // NAMED (Nov 7 2026, Shopify on OAuth, migration 176): BEFORE "2026-11-06" (card visits). AFTER "2026-11-07", the version the Shopify privacy sentence set.
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "2026-11-07". AFTER "2026-11-08", the version the Etsy privacy sentence set.
-  check("L6. TERMS_VERSION is the latest change's, 2026-11-08 (Etsy; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("L6. TERMS_VERSION is the latest change's, 2026-11-14 (L1; this change set 2026-11-03)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
 
   /* ── G. the guide tip ───────────────────────────────────────────────────── */
   console.log("\n══ G. the guide ══");

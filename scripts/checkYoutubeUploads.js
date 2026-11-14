@@ -1106,7 +1106,10 @@ function pageAnswers(over) {
   check("T6. invalid_grant: the connection is needs_reconnect, with ONE in-app notice; the next call asks Google nothing",
     !got.ok && got.kind === "auth" && db.t.member_youtube_connections[0].status === "needs_reconnect" &&
     db.t.notifications.filter(function (n) { return n.type === "youtube_reconnect" && n.user_id === USER; }).length === 1 && !got2.ok && g.tokenCalls.length === 1, J([got.kind, db.t.notifications.length]));
-  check("T7. the notice names the channel and no token", db.t.notifications.length === 1 && db.t.notifications[0].message.indexOf(CHANNEL_TITLE) !== -1 && noSecretIn(J(db.t.notifications)));
+  // NAMED (Nov 14 2026, L1): BEFORE the notice named the channel. AFTER it says "your YouTube channel" and names none: the notice outlives the
+  // daily pass's deletion of a refused connection's data, so it must hold no data from Google (checkLegalL1 C10). Still no token.
+  check("T7. the notice names no channel and no token", db.t.notifications.length === 1 && db.t.notifications[0].message.indexOf(CHANNEL_TITLE) === -1 &&
+    db.t.notifications[0].message.indexOf("your YouTube channel") !== -1 && noSecretIn(J(db.t.notifications)));
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db, { status: "needs_reconnect" });
   r = await hit(m, "get /api/youtube/status", {});
@@ -1646,14 +1649,17 @@ function pageAnswers(over) {
     // NAMED, item 8 part 3a (Instagram posting): instagramRefreshTick now follows videoRetentionTick in the chain.
     supabase: {}, videoRetentionTick: async function () { order.push("videos"); }, instagramRefreshTick: async function () { order.push("instagram"); },
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebookChoosingPurgeTick follows instagramRefreshTick.
-    facebookChoosingPurgeTick: async function () { order.push("facebook"); }, console: console
+    facebookChoosingPurgeTick: async function () { order.push("facebook"); }, console: console,
+    // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
+    youtubeDataCheckTick: async function () { order.push("youtubedata"); }, renewalEmailsTick: async function () { order.push("renewal"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
   try { vm.runInContext(CRON_SECTION + "\n  }\n", cctx, { filename: "server.js (04:45 chain)" }); } catch (e) { cronOk = false; }
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
-  check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick, then facebookChoosingPurgeTick (NAMED, item 8 parts 3a and 3b)", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
-    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook"]), J(order));
+  // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
+  check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick, then facebookChoosingPurgeTick (NAMED, item 8 parts 3a and 3b), then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
+    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal"]), J(order));
   m = mountRoutes({ env: CONFIGURED });
   const vr = await attempt(m.ctx.videoRetentionTick());
   check("J6. videoRetentionTick runs lib/memberVideos.js retentionTick on youtubeDeps() (its job_runs row claimed)", vr.ok && vr.v && vr.v.claimed === true &&
@@ -1802,7 +1808,8 @@ function pageAnswers(over) {
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
-  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
   const GR = realRequire("./lib/gateRules");
   check("G5. gateRules: both actions known, channel youtube", GR.ACTION_TYPES.indexOf("publish_youtube_video") !== -1 && GR.ACTION_TYPES.indexOf("delete_youtube_video") !== -1 &&
     GR.CHANNELS.indexOf("youtube") !== -1 && GR.channelFor("publish_youtube_video") === "youtube" && GR.channelFor("delete_youtube_video") === "youtube");

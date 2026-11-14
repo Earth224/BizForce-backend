@@ -55,7 +55,9 @@ const MUTATIONS = {
   "foreign-page-chosen": [["api", "  var page = postablePages(got.pages).filter(function (p) { return p.page_id === pageId; })[0];", "  var page = postablePages(got.pages)[0];"]],
   "token-in-pages-list": [["api", "return { page_id: p.page_id, name: p.name }; }); }", "return { page_id: p.page_id, name: p.name, token: p.token }; }); }"]],
   "choice-expiry-ignored": [["api", "  if (FA.choosingExpired(row, deps.now())) {", "  if (false) {"]],
-  "choosing-never-cleaned": [["server", ".then(instagramRefreshTick).then(facebookChoosingPurgeTick);", ".then(instagramRefreshTick);"]],
+  // NAMED (Nov 14 2026, L1): BEFORE the anchor ended "...facebookChoosingPurgeTick);". AFTER the chain continues with youtubeDataCheckTick, so the
+  // anchor ends there; the mutation still takes Facebook's cleanup out of the chain.
+  "choosing-never-cleaned": [["server", ".then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick)", ".then(instagramRefreshTick).then(youtubeDataCheckTick)"]],
   "choosing-purge-wrong-rows": [["api", ".delete().eq(\"status\", \"choosing\").lt(\"created_at\", cutoff)", ".delete().lt(\"created_at\", cutoff)"]],
   "long-lived-400-refused": [["auth", "if (refusedGrant(j) || status === 401 || (badRequestRefuses && status === 400)) throw", "if (refusedGrant(j) || status === 401 || status === 400) throw"]],
   "disconnect-deletes-all-states": [["server", "var statesDropped = await supabase.from(\"oauth_states\").delete().eq(\"user_id\", req.user.id).eq(\"purpose\", fa.PURPOSE);",
@@ -1032,14 +1034,18 @@ function pageAnswers(over) {
     cron: { schedule: function (spec, fn, o) { scheduled.push({ spec: spec, fn: fn, tz: o && o.timezone }); } },
     cardLeads: { cardLeadsPurgeTick: async function () { orderRun.push("leads"); }, PURGE_JOB_NAME: "card_leads_purge" },
     supabase: {}, videoRetentionTick: async function () { orderRun.push("videos"); }, instagramRefreshTick: async function () { orderRun.push("instagram"); },
-    facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console
+    facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console,
+    // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
+    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
   try { vm.runInContext(CRON_SECTION + "\n  }\n", cctx, { filename: "server.js (04:45 chain)" }); } catch (e) { cronOk = false; }
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
-  check("O23. the 04:45 UTC chain runs facebookChoosingPurgeTick last, after Instagram's refresh", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook"]), J(orderRun));
+  // NAMED (Nov 14 2026, L1): BEFORE "runs facebookChoosingPurgeTick last" and the order ended "facebook". AFTER it runs after Instagram's refresh and
+  // before L1's two ticks, and the order ends "facebook", "youtubedata", "renewal".
+  check("O23. the 04:45 UTC chain runs facebookChoosingPurgeTick after Instagram's refresh, then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal"]), J(orderRun));
   const ms0 = mountRoutes({ env: CONFIGURED });
   check("O24. the server's tick runs lib/facebookApi.js choosingPurgeTick on facebookDeps() and never rejects", typeof ms0.ctx.facebookChoosingPurgeTick === "function" &&
     /async function facebookChoosingPurgeTick\(\) \{\n  try \{\n    return await require\("\.\/lib\/facebookApi"\)\.choosingPurgeTick\(facebookDeps\(\)\);/.test(FB_SECTION) &&
@@ -1606,7 +1612,8 @@ function pageAnswers(over) {
   const LEGAL = realRequire("./lib/legal");
   // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE Nov 7 2026, this change's date. AFTER Nov 8 2026, the version
   // the Etsy privacy sentence set (this change still set Nov 7).
-  check("G4. TERMS_VERSION is the latest change's, Nov 8 2026 (Etsy; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-08", LEGAL.TERMS_VERSION);
+  // NAMED (Nov 14 2026, L1): BEFORE "2026-11-08". AFTER "2026-11-14", the version L1's Google and YouTube, renewal-email and Do Not Track text set.
+  check("G4. TERMS_VERSION is the latest change's, Nov 14 2026 (L1; this change set Nov 7)", LEGAL.TERMS_VERSION === "2026-11-14", LEGAL.TERMS_VERSION);
   const YD = compile(FILES.yourData, "lib/yourData.js", {});
   const ydOf = function (t) { return (YD.DATA || []).filter(function (e) { return e.table === t; })[0] || {}; };
   check("G5. yourData: the Page exported as its name and date only, the posts without ids (keyed by created_at); Facebook (Meta) a third party; the never-exported lines; the delete order; the sign-in states",
