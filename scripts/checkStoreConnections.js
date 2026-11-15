@@ -1179,7 +1179,8 @@ function shopifyConn(db, userId) {
   // NAMED (Nov 7 2026, migration 176): shopify_webhook_events joins them: excluded from backups, and in the schema list tagged 176.
   check("D6. in the backup lists (the key excluded, the summaries skipped, the webhook receipts excluded) and the schema list, tagged 163 and 176",
     !!BK.EXCLUDED_TABLES.member_store_connections && !!BK.SKIPPED_TABLES.store_order_summaries &&
-    BK.EXCLUDED_TABLES.shopify_webhook_events === "Shopify notification receipts, kept 30 days" &&
+    // NAMED (Nov 15 2026, W3): BEFORE "Shopify notification receipts, kept 30 days". AFTER the W2 purge rule.
+    BK.EXCLUDED_TABLES.shopify_webhook_events === "Shopify notification receipts: kept 30 days, a customer data request until 30 days after it is answered, one not yet processed until it is processed" &&
     SC.migrationFor("member_store_connections") === "supabase/migrations/163_store_connections.sql" && SC.migrationFor("store_order_summaries") === "supabase/migrations/163_store_connections.sql" &&
     SC.migrationFor("shopify_webhook_events") === "supabase/migrations/176_shopify_oauth.sql");
 

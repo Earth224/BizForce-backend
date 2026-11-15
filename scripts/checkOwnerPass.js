@@ -479,14 +479,31 @@ const LIVE = userId => row(userId, "past_due", { current_period_start: "2026-09-
     // daily ceiling leaves out test accounts but COUNTS the owner, whose model calls are real spend. That one function
     // is the only exception; any other file, or any other call in server.js, still fails.
     const PLATFORM_SPEND_FN = (/^async function platformSpendTestAccounts\(userIds\) \{[\s\S]*?\n\}\n/m.exec(SERVER) || [""])[0];
-    const testCallsOutside = (f) => (f === "server.js" ? files[f].replace(PLATFORM_SPEND_FN, "") : files[f]);
+    // NAMED (Nov 15 2026, W3): BEFORE the only exception was server.js's platform spend, and D failed since L1 (Nov 14,
+    // lib/renewalEmails.js). AFTER lib/renewalEmails.js is held to its own two shapes, and nothing else changes:
+    //   - its subscriber counts (the yearly and price-change reminders) ask isUncountedAccount, inline:
+    //     `var uncounted = require("./testAccounts").isUncountedAccount;` (test accounts AND the owner are not subscribers);
+    //   - termsChangeTick, and only it, asks isTestAccount, on purpose: a test account's address cannot receive mail,
+    //     while the owner is a real person who is sent the terms-change email like any member who has not accepted.
+    // Any other call in it, or a requirer in any other shape, still fails.
+    const RENEWAL = files["lib/renewalEmails.js"] || "";
+    const TERMS_CHANGE_FN = (/^async function termsChangeTick\(deps, nowMs\) \{[\s\S]*?\n\}\n/m.exec(RENEWAL) || [""])[0];
+    const TERMS_CHANGE_TEST_LINE = "        if (u.role === \"deleted\" || require(\"./testAccounts\").isTestAccount(u)) continue;\n";
+    const renewalRequires = RENEWAL.match(/require\("\.\/testAccounts"\)\.[A-Za-z]+/g) || [];
+    const renewalShape = TERMS_CHANGE_FN.split(TERMS_CHANGE_TEST_LINE).length === 2 &&
+      renewalRequires.length >= 2 && renewalRequires.filter(r => r === "require(\"./testAccounts\").isTestAccount").length === 1 &&
+      renewalRequires.every(r => r === "require(\"./testAccounts\").isUncountedAccount" || r === "require(\"./testAccounts\").isTestAccount") &&
+      (RENEWAL.match(/var uncounted = require\("\.\/testAccounts"\)\.isUncountedAccount;/g) || []).length === renewalRequires.length - 1;
+    const testCallsOutside = (f) => (f === "server.js" ? files[f].replace(PLATFORM_SPEND_FN, "") :
+      f === "lib/renewalEmails.js" && renewalShape ? files[f].replace(TERMS_CHANGE_FN, TERMS_CHANGE_FN.replace(TERMS_CHANGE_TEST_LINE, "")) : files[f]);
     const requirers = Object.keys(files).filter(f => /require\("\.\/(lib\/)?testAccounts"\)/.test(files[f]));
     const testOnly = Object.keys(files).filter(f => f !== "lib/testAccounts.js" && /isTestAccount\s*\(/.test(testCallsOutside(f)));
-    check("D. every file that requires lib/testAccounts.js counts through isUncountedAccount, except server.js's platform spend (" + requirers.join(", ") + ")",
+    check("D. every file that requires lib/testAccounts.js counts through isUncountedAccount, except server.js's platform spend and lib/renewalEmails.js's terms-change email (" + requirers.join(", ") + ")",
       requirers.length > 0 && requirers.every(f => /\{ isUncountedAccount \} = require\("\.\/(lib\/)?testAccounts"\)/.test(files[f]) ||
-        (f === "server.js" && /^const \{ isTestAccount \} = require\("\.\/lib\/testAccounts"\);$/m.test(files[f]) && PLATFORM_SPEND_FN.length > 0)), requirers.join(", "));
-    check("D. no file outside lib/testAccounts.js asks the test-only question, but for the platform spend's own function",
-      testOnly.length === 0 && /isTestAccount\(\{ id: id \}\)/.test(PLATFORM_SPEND_FN), testOnly.join(", "));
+        (f === "server.js" && /^const \{ isTestAccount \} = require\("\.\/lib\/testAccounts"\);$/m.test(files[f]) && PLATFORM_SPEND_FN.length > 0) ||
+        (f === "lib/renewalEmails.js" && renewalShape)), requirers.join(", "));
+    check("D. no file outside lib/testAccounts.js asks the test-only question, but for the platform spend's own function and the terms-change email's one line",
+      testOnly.length === 0 && /isTestAccount\(\{ id: id \}\)/.test(PLATFORM_SPEND_FN) && renewalShape, testOnly.join(", "));
   }
 
   /* ── E ─────────────────────────────────────────────────────────────────── */

@@ -30,6 +30,8 @@
      K. THE ADMIN ROUTES: admin only; the list with deadlines; marking answered for data requests only.
      L. THE WIRING: the sweep every 5 minutes only when server.js is the program; the reminder in the 04:45 chain;
         lib/jobSchedules.js lists both.
+     P. THE WORDS (W3): privacy.html's Shopify notice sentence is what lib/legalPages.js builds, its days are the purge's own,
+        and it, lib/yourData.js and lib/backup.js state the purge rule and what a data request record holds.
 
    MUTATIONS: MUTATE=<name> applies one in memory; MUTATE=all runs each in its own process. */
 "use strict";
@@ -63,13 +65,29 @@ const MUTATIONS = {
     "return { customer_id: numericIdOf(customer.id, \"Customer\"), orders_requested:", "return { email: customer.email, phone: customer.phone, customer_id: numericIdOf(customer.id, \"Customer\"), orders_requested:"],
   "order-gid-ignored": ["hooks",
     "  var m = new RegExp(\"^gid://shopify/\" + type + \"/([0-9]{1,30})$\").exec(s);\n  return m ? m[1] : null;\n", "  return null;\n"],
-  "email-resent-when-notified": ["hooks",
-    "    if (row.owner_notified_at) return { ok: true, notified: false };\n", ""],
+  // NAMED (Nov 15 2026, W3): BEFORE "email-resent-when-notified" removed processData's `if (row.owner_notified_at) return` and D14 caught
+  // it. AFTER retired: the claim below (update ... is("owner_notified_at", null)) refuses an already-notified row by itself, so
+  // without the early return the outcome is the same (no email, processed_at set); D14 and D16 hold that, and
+  // email-sent-twice-on-race is the mutation that removes the guard that matters.
+  // NAMED (Nov 15 2026, W3): the first email now CLAIMS owner_notified_at before sending, so these two moved to the claim.
   "notified-not-recorded": ["hooks",
-    "    var mark = await deps.supabase.from(TABLE).update({ owner_notified_at: iso(nowOf(deps)) }).eq(\"id\", row.id).is(\"owner_notified_at\", null);\n",
-    "    var mark = { error: null };\n"],
-  "notified-on-failed-send": ["hooks",
-    "  if (!sent || sent.ok !== true) return { sent: false, reason: \"send_failed\" };\n", ""],
+    "  var claim = await deps.supabase.from(TABLE).update({ owner_notified_at: claimedAt }).eq(\"id\", row.id).is(\"owner_notified_at\", null).select(\"id\");\n",
+    "  var claim = { error: null, data: [{ id: row.id }] };\n"],
+  "claim-not-released-on-failure": ["hooks",
+    "      var released = await deps.supabase.from(TABLE).update({ owner_notified_at: null }).eq(\"id\", row.id).eq(\"owner_notified_at\", claimedAt);\n",
+    "      var released = { error: null };\n"],
+  "email-sent-twice-on-race": ["hooks",
+    "update({ owner_notified_at: claimedAt }).eq(\"id\", row.id).is(\"owner_notified_at\", null).select(\"id\");", "update({ owner_notified_at: claimedAt }).eq(\"id\", row.id).select(\"id\");"],
+  "reminded-at-on-failure": ["hooks",
+    "    if (!(await sendRequestEmail(deps, to, row, true))) return { sent: false, reason: \"send_failed\" };\n", "    await sendRequestEmail(deps, to, row, true);\n"],
+  "reminder-not-retried": ["hooks",
+    "      .is(\"request_details->>reminded_at\", null).lte(\"received_at\", to)",
+    "      .is(\"request_details->>reminded_at\", null).gte(\"received_at\", iso(startMs - (REMINDER_AFTER_DAYS + 1) * DAY_MS)).lte(\"received_at\", to)"],
+  "unreadable-redact-not-alerted": ["hooks", "    await alertRedactUnreadable(deps, row);\n", ""],
+  "alert-carries-details": ["hooks",
+    "      error: \"Shop \" + row.shop_domain + \", receipt \" + row.id + \": no order ids", "      error: \"Shop \" + row.shop_domain + \", receipt \" + row.id + \" \" + JSON.stringify(row) + \": no order ids"],
+  "email-without-page-link": ["hooks",
+    "  lines.push(\"\", \"Open requests, and the button to mark this one answered: \" + REQUESTS_PAGE_URL,", "  lines.push(\"\", \"Open requests: the admin routes\","],
   "sweep-skips-unsent-email": ["hooks",
     "    if (ownerAddress(deps.env)) {\n", "    if (false) {\n"],
   "redact-every-shop": ["hooks",
@@ -105,10 +123,11 @@ const MUTATIONS = {
     "      .lt(\"answered_at\", cutoff).not(\"processed_at\", \"is\", null).select(\"id\");", "      .not(\"answered_at\", \"is\", null).not(\"processed_at\", \"is\", null).select(\"id\");"],
   "duplicate-reprocessed": ["server",
     "        if (before.data && before.data.processed_at) return res.status(200).json({ received: true, duplicate: true });\n", ""],
+  // NAMED (Nov 15 2026, W3): the reminder now reads every unanswered, unreminded request 23 or more days old.
   "reminder-every-day": ["hooks",
-    "    var from = iso(lastMs - REMINDER_AFTER_DAYS * DAY_MS)", "    var from = iso(0)"],
+    "      .is(\"request_details->>reminded_at\", null).lte(\"received_at\", to)", "      .lte(\"received_at\", to)"],
   "reminder-answered-too": ["hooks",
-    ".eq(\"topic\", DATA_REQUEST).is(\"answered_at\", null)\n      .gte(", ".eq(\"topic\", DATA_REQUEST)\n      .gte("],
+    ".eq(\"topic\", DATA_REQUEST).is(\"answered_at\", null)\n      .is(\"request_details->>reminded_at\", null)", ".eq(\"topic\", DATA_REQUEST)\n      .is(\"request_details->>reminded_at\", null)"],
   "admin-list-not-admin": ["server",
     "app.get(\"/api/admin/shopify-data-requests\", requireAuth, requireAdmin, ", "app.get(\"/api/admin/shopify-data-requests\", requireAuth, "],
   "answered-any-topic": ["hooks",
@@ -116,7 +135,16 @@ const MUTATIONS = {
   "sweep-every-50-minutes": ["server",
     "shutdownControl.trackInterval(\"shopifyWebhookSweepTick\", setInterval(shopifyWebhookSweepTick, 300000));", "shutdownControl.trackInterval(\"shopifyWebhookSweepTick\", setInterval(shopifyWebhookSweepTick, 3000000));"],
   "reminder-off-chain": ["server",
-    "        .then(shopifyDataRequestReminderTick);\n", ";\n"]
+    "        .then(shopifyDataRequestReminderTick);\n", ";\n"],
+  // P (W3): the privacy sentence and the yourData / backup wording.
+  "privacy-fields-dropped": ["legal",
+    "\"the order ids it names and the request id, never the customer's name, email or phone number.\"", "\"the request id, never the customer's name, email or phone number.\""],
+  "privacy-days-typed": ["legal",
+    "Each notice is kept \" + days(noticeDays) + \"; a customer", "Each notice is kept 30 days; a customer"],
+  "your-data-old-rule": ["yourData",
+    "Each is kept 30 days; a customer data request is kept until 30 days \" +\n    \"after it is answered, and a notification not yet processed is kept until it is processed. A data", "Each is kept 30 days. \" +\n    \"A data"],
+  "backup-old-rule": ["backup",
+    "kept 30 days, a customer data request until 30 days after it is answered, one not yet processed until it is processed\"", "kept 30 days\""]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -136,7 +164,10 @@ const FILES = {
   hooks: read("lib/shopifyWebhooks.js"),
   auth: read("lib/shopifyAuth.js"),
   jobs: read("lib/jobSchedules.js"),
-  ops: read("lib/opsAlert.js")
+  ops: read("lib/opsAlert.js"),
+  legal: read("lib/legalPages.js"),
+  yourData: read("lib/yourData.js"),
+  backup: read("lib/backup.js")
 };
 if (MUTATE && MUTATE !== "all") {
   const m = MUTATIONS[MUTATE];
@@ -222,6 +253,7 @@ function makeDb() {
       is: function (c, v) { q.filters.push(["is", c, v]); return api; },
       not: function (c, op, v) { q.filters.push(["not_" + op, c, v]); return api; },
       lt: function (c, v) { q.filters.push(["lt", c, v]); return api; },
+      lte: function (c, v) { q.filters.push(["lte", c, v]); return api; },
       gte: function (c, v) { q.filters.push(["gte", c, v]); return api; },
       or: function (s) { q.or = s; return api; },
       order: function (c, o) { q.order = [c, !(o && o.ascending === false)]; return api; },
@@ -239,6 +271,7 @@ function makeDb() {
         if (f[0] === "is") return f[2] === null ? v == null : v === f[2];
         if (f[0] === "not_is") return f[2] === null ? v != null : v !== f[2];
         if (f[0] === "lt") return v != null && String(v) < String(f[2]);
+        if (f[0] === "lte") return v != null && String(v) <= String(f[2]);
         if (f[0] === "gte") return v != null && String(v) >= String(f[2]);
         throw new Error("fake db: filter " + f[0]);
       });
@@ -334,6 +367,8 @@ function mount(opts) {
     console: { log: function () { logs.push([].slice.call(arguments).join(" ")); }, error: function () { logs.push([].slice.call(arguments).join(" ")); } },
     express: { raw: function (o) { return { raw: o }; }, json: function (o) { return { json: o }; } },
     requireAuth: requireAuth, requireAdmin: requireAdmin,
+    // W3: lib/opsAlert.js's raise, recording instead of emailing (server.js shopifyWebhookDeps hands it to the work).
+    opsAlerts: { raise: async function (key, info) { ALERTS.push({ key: key, info: JSON.parse(J(info)) }); return { sent: true, reason: "sent" }; } },
     setImmediate: setImmediate, Date: Date, Buffer: Buffer, Promise: Promise, JSON: JSON, String: String, Object: Object, Array: Array, Number: Number,
     require: function (r) {
       if (r === "./lib/storeSync") return storeSync;
@@ -381,8 +416,10 @@ function order(db, c, externalId, extra) {
     total: 42.5, currency: "USD", status: "active", line_items: [{ sku: "HAT-1", quantity: 2 }] }, extra || {});
   db.t.store_order_summaries.push(o); return o;
 }
+const ALERTS = [];
 function sweepDeps(m, nowMs) {
-  return { supabase: m.db, env: m.ctx.process.env, now: function () { return nowMs; }, removeShopifyShop: m.ctx.removeShopifyShop, console: { error: function (l) { m.logs.push(l); } } };
+  return { supabase: m.db, env: m.ctx.process.env, now: function () { return nowMs; }, removeShopifyShop: m.ctx.removeShopifyShop, console: { error: function (l) { m.logs.push(l); } },
+    raiseAlert: m.ctx.shopifyWebhookDeps().raiseAlert };
 }
 function resetMail() { MAIL.sent = []; MAIL.fail = 0; MAIL.calls = 0; }
 
@@ -555,6 +592,22 @@ async function limiterProbe() {
   await SW.sweepTick(sweepDeps(m, later));
   check("D15. no owner address (neither OPS_ALERT_EMAIL nor BACKUP_EMAIL_TO): 200, recorded and processed, no email, owner_notified_at null, nothing fails",
     d15.status === 200 && MAIL.calls === 0 && typeof receipt(m.db, NOADDR).processed_at === "string" && receipt(m.db, NOADDR).owner_notified_at === null);
+  // NAMED (Nov 15 2026, W3): the claim. Two processes (two loaded copies of lib/shopifyWebhooks.js, each with its own
+  // in-process guard) take the same unsent request at once: exactly one email.
+  resetMail();
+  m = mount({});
+  conn(m.db, U1, SHOP);
+  const RACE = { id: uuid(), webhook_id: "race", topic: "customers/data_request", shop_domain: SHOP, received_at: iso(Date.now() - 10 * 60000), processed_at: null,
+    request_details: { customer_id: "5", orders_requested: [], data_request_id: "79" }, answered_at: null, owner_notified_at: null };
+  m.db.t.shopify_webhook_events.push(RACE);
+  const other = loadHooks();
+  const raced = await Promise.all([SW.processReceipt(sweepDeps(m, Date.now()), JSON.parse(J(RACE))), other.processReceipt(sweepDeps(m, Date.now()), JSON.parse(J(RACE)))]);
+  check("D16. two runs take the same unsent request at once: ONE email (the claim), owner_notified_at set, both runs succeed",
+    MAIL.sent.length === 1 && MAIL.calls === 1 && typeof RACE.owner_notified_at === "string" && raced.every(function (r) { return r.ok === true; }) &&
+    raced.some(function (r) { return r.reason === "already_claimed"; }), J([MAIL.calls, raced]));
+  check("D17. the email names the owner's page, https://bizforceai.net/shopify-requests.html, on its own line",
+    (MAIL.sent[0] || { text: "" }).text.split("\n").indexOf("Open requests, and the button to mark this one answered: https://bizforceai.net/shopify-requests.html") !== -1,
+    (MAIL.sent[0] || { text: "" }).text);
 
   /* ── E ── */
   console.log("\n== E. customers/redact ==");
@@ -573,6 +626,22 @@ async function limiterProbe() {
     typeof receipt(m.db, RED).processed_at === "string", J(m.db.t.store_order_summaries.map(function (o) { return o.external_id; })));
   const again = await SW.processReceipt(sweepDeps(m, Date.now()), receipt(m.db, RED));
   check("E3. idempotent: run again, it deletes nothing more", again.ok === true && again.deleted === 0 && m.db.t.store_order_summaries.length === 2, J(again));
+  // NAMED (Nov 15 2026, W3): an unreadable customers/redact reaches the owner as ONE ops alert, by shop and receipt id only.
+  check("E4. a readable customers/redact raises no alert", ALERTS.length === 0, J(ALERTS));
+  const UNR1 = "ru-" + uuid(), UNR2 = "rv-" + uuid();
+  await webhook(m, "customers/redact", "{not json", { id: UNR1 });
+  await webhook(m, "customers/redact", J({ shop_domain: SHOP, customer: { id: 1, email: EMAIL, phone: PHONE }, orders_to_redact: ["nonsense"] }), { id: UNR2 });
+  await settle();
+  const u1 = receipt(m.db, UNR1), u2 = receipt(m.db, UNR2);
+  check("E5. a body that is not JSON, and one whose order ids cannot be read: one shopify_redact_unreadable alert each (fingerprint = receipt id), nothing deleted, both processed",
+    ALERTS.length === 2 && ALERTS.every(function (a) { return a.key === "shopify_redact_unreadable"; }) && ALERTS[0].info.fingerprint === u1.id && ALERTS[1].info.fingerprint === u2.id &&
+    m.db.t.store_order_summaries.length === 2 && typeof u1.processed_at === "string" && typeof u2.processed_at === "string", J(ALERTS));
+  const alertText = J(ALERTS);
+  check("E6. the alert names the shop and the receipt id, and nothing from the request (no email, phone or customer id)",
+    ALERTS.every(function (a, i) { return a.info.error.indexOf("Shop " + SHOP + ", receipt " + [u1, u2][i].id + ":") === 0; }) &&
+    alertText.indexOf(EMAIL) === -1 && alertText.indexOf(PHONE) === -1 && alertText.indexOf("customer_id") === -1 && alertText.indexOf("nonsense") === -1, alertText);
+  check("E7. server.js hands lib/opsAlert.js's raise to the work (shopifyWebhookDeps().raiseAlert)",
+    /raiseAlert: function \(key, info\) \{ return opsAlerts\.raise\(key, info\); \}/.test(FILES.server) && typeof m.ctx.shopifyWebhookDeps().raiseAlert === "function");
   check("E4. nothing but store_order_summaries was deleted", m.db.log.filter(function (l) { return l.op === "delete"; }).every(function (l) { return l.table === "store_order_summaries"; }));
 
   /* ── F ── */
@@ -709,24 +778,40 @@ async function limiterProbe() {
     m.db.t.shopify_webhook_events.push({ id: uuid(), webhook_id: id, topic: "customers/data_request", shop_domain: SHOP, received_at: iso(receivedMs), processed_at: iso(receivedMs),
       request_details: { customer_id: "1", orders_requested: [], data_request_id: "5" }, answered_at: answered ? iso(receivedMs + DAY) : null, owner_notified_at: iso(receivedMs) });
   }
+  // NAMED (Nov 15 2026, W3): BEFORE a run reminded only the requests that turned 23 days old since the last run, so a
+  // failed send was never tried again. AFTER every unanswered request 23 or more days old with no
+  // request_details.reminded_at is due, and reminded_at is set only after a send that succeeded.
+  function jrow(id) { return m.db.t.shopify_webhook_events.filter(function (e) { return e.webhook_id === id; })[0]; }
   dr("due", R0 - 23 * DAY - 3600000, false);
   dr("due-but-answered", R0 - 23 * DAY - 7200000, true);
   dr("too-young", R0 - 22 * DAY, false);
   dr("long-past", R0 - 40 * DAY, false);
   const j1 = await SW.reminderTick(sweepDeps(m, R0), R0);
-  check("J1. one reminder, for the unanswered request that turned 23 days old since the last run; none for an answered, a younger or a long-past one",
-    j1.claimed === true && j1.sent === 1 && MAIL.sent.length === 1 && MAIL.sent[0].subject.indexOf("Reminder: ") === 0 && MAIL.sent[0].text.indexOf("Data request id: 5") !== -1, J(j1));
+  check("J1. a reminder for each unanswered request 23 or more days old with no reminder yet (23 days and 40 days); none for an answered or a younger one",
+    j1.claimed === true && j1.sent === 2 && MAIL.sent.length === 2 && MAIL.sent.every(function (x) { return x.subject.indexOf("Reminder: ") === 0 && x.text.indexOf("Data request id: 5") !== -1; }) &&
+    !jrow("due-but-answered").request_details.reminded_at && !jrow("too-young").request_details.reminded_at, J(j1));
+  check("J1b. reminded_at is set on each reminded request, as the run's time, and the ids in request_details are kept",
+    jrow("due").request_details.reminded_at === iso(R0) && jrow("long-past").request_details.reminded_at === iso(R0) &&
+    J(Object.keys(jrow("due").request_details).sort()) === J(["customer_id", "data_request_id", "orders_requested", "reminded_at"]) && jrow("due").request_details.data_request_id === "5",
+    J(jrow("due").request_details));
   const j2 = await SW.reminderTick(sweepDeps(m, R0 + 3600000), R0 + 3600000);
-  check("J2. a second run the same day is not claimed and sends nothing", j2.claimed === false && MAIL.sent.length === 1, J(j2));
+  check("J2. a second run the same day is not claimed and sends nothing", j2.claimed === false && MAIL.sent.length === 2, J(j2));
   const j3 = await SW.reminderTick(sweepDeps(m, R0 + DAY), R0 + DAY);
-  check("J3. the next day's run does not remind the same request again", j3.claimed === true && MAIL.sent.length === 1, J([j3, MAIL.sent.length]));
+  check("J3. the next day: the request that is now exactly 23 days old is reminded; the two already reminded are not",
+    j3.claimed === true && j3.sent === 1 && MAIL.sent.length === 3 && jrow("too-young").request_details.reminded_at === iso(R0 + DAY), J([j3, MAIL.sent.length]));
   const jr = m.db.t.job_runs.filter(function (r) { return r.job_name === "shopify_data_request_reminder"; });
   check("J4. recorded in job_runs as shopify_data_request_reminder, finished, no error", jr.length === 1 && !!jr[0].finished_at && jr[0].last_error == null, J(jr));
-  dr("between", R0 + 2 * DAY - 23 * DAY - 7200000, false);
+  dr("retry", R0 + 2 * DAY - 24 * DAY, false);
+  MAIL.fail = 1;
   const j5 = await SW.reminderTick(sweepDeps(m, R0 + 2 * DAY), R0 + 2 * DAY);
-  // "too-young" turned 23 days old exactly at J3's run (its window ends before that instant) and "between" two hours before this run.
-  check("J5. requests that turned 23 days old since the previous run are reminded once by the next run, the boundary one included",
-    j5.claimed === true && j5.due === 2 && j5.sent === 2 && MAIL.sent.length === 3, J(j5));
+  check("J5. a reminder that fails to send: reminded_at stays unset, and the run records the error in job_runs (the ops alert scan reads it)",
+    j5.claimed === true && j5.due === 1 && j5.failed === 1 && MAIL.sent.length === 3 && !jrow("retry").request_details.reminded_at && /1 Shopify data request reminder\(s\) not sent/.test(jr[0].last_error || ""),
+    J([j5, jr[0].last_error]));
+  const j6 = await SW.reminderTick(sweepDeps(m, R0 + 3 * DAY), R0 + 3 * DAY);
+  check("J6. the next day's run sends it again, then sets reminded_at; the error clears",
+    j6.claimed === true && j6.sent === 1 && MAIL.sent.length === 4 && jrow("retry").request_details.reminded_at === iso(R0 + 3 * DAY) && jr[0].last_error == null, J([j6, jr[0].last_error]));
+  const j7 = await SW.reminderTick(sweepDeps(m, R0 + 4 * DAY), R0 + 4 * DAY);
+  check("J7. and never a third time", j7.claimed === true && j7.due === 0 && MAIL.sent.length === 4, J(j7));
 
   /* ── K ── */
   console.log("\n== K. the admin routes ==");
@@ -779,6 +864,30 @@ async function limiterProbe() {
     /ADD COLUMN IF NOT EXISTS owner_notified_at timestamptz NULL/.test(mig) && /ON public\.shopify_webhook_events \(received_at\)\n  WHERE processed_at IS NULL;/.test(mig) &&
     /\nBEGIN;\n/.test(mig) && /\nCOMMIT;\n?$/.test(mig) && !/\bDROP\b/i.test(mig.replace(/^--.*$/gm, "")));
   check("L6. no emoji in any file this change touches", [FILES.server, FILES.hooks, FILES.auth, FILES.jobs, fs.readFileSync(__filename, "utf8")].every(function (s) { return !EMOJI.test(s); }));
+
+  /* ── P. THE WORDS (W3) ─────────────────────────────────────────────────────
+     The Privacy Policy, Your Data and the backup list say what the purge does and what a request holds. */
+  const LEGAL = compile(FILES.legal, "lib/legalPages.js", {});
+  const noticeDays = Math.round(SA.WEBHOOK_RETENTION_MS / (24 * 60 * 60 * 1000));
+  const sentence = LEGAL.shopifyNoticesPrivacySentence(noticeDays);
+  const FE_PRIVACY = fs.readFileSync(path.join(REPO, "..", "BizForce-fronyend", "privacy.html"), "utf8").replace(/\r\n/g, "\n");
+  const decode = function (h) { return h.replace(/&#39;/g, "'").replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"); };
+  const privacyText = decode(FE_PRIVACY.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ");
+  check("P1. the frontend's privacy.html states the Shopify notice sentence, as lib/legalPages.js builds it, exactly once",
+    privacyText.split(sentence).length === 2, privacyText.split(sentence).length - 1);
+  check("P2. its days are the purge's own (lib/shopifyAuth.js WEBHOOK_RETENTION_MS), never typed in: built for 17 days it says 17 and not " + noticeDays,
+    noticeDays === 30 && LEGAL.shopifyNoticesPrivacySentence(17).indexOf("Each notice is kept 17 days; a customer data request is kept until 17 days after it is answered") !== -1 &&
+    LEGAL.shopifyNoticesPrivacySentence(17).indexOf(noticeDays + " days") === -1, noticeDays);
+  check("P3. it says a notice not yet processed is kept until it is processed (the purge skips processed_at null)",
+    sentence.indexOf("a notice not yet processed is kept until it is processed") !== -1 && FILES.auth.indexOf(".not(\"processed_at\", \"is\", null)") !== -1);
+  const drDetails = SW.requestDetailsOf("customers/data_request", JSON.stringify({ customer: { id: 7, email: "c@example.test", phone: "555", first_name: "N" }, orders_requested: [11, 12], data_request_id: 1, data_request: { id: 99 } }));
+  check("P4. a data request record holds exactly what the sentence names: the customer id, the order ids and the request id",
+    J(Object.keys(drDetails || {}).sort()) === J(["customer_id", "data_request_id", "orders_requested"]) &&
+    sentence.indexOf("holds only the Shopify customer id, the order ids it names and the request id, never the customer's name, email or phone number") !== -1, J(drDetails));
+  check("P5. lib/yourData.js says the same rule and fields for shopify_webhook_events",
+    FILES.yourData.indexOf("Each is kept 30 days; a customer data request is kept until 30 days \" +\n    \"after it is answered, and a notification not yet processed is kept until it is processed. A data request record holds only the Shopify customer id, \" +\n    \"the order ids it names and the request id, never a name, email or phone number\"") !== -1);
+  check("P6. lib/backup.js's excluded-table reason says the same rule",
+    FILES.backup.indexOf("shopify_webhook_events: \"Shopify notification receipts: kept 30 days, a customer data request until 30 days after it is answered, one not yet processed until it is processed\"") !== -1);
 
   await settle();
   check("no unhandled rejection", UNHANDLED.length === 0, UNHANDLED.map(String).join("; "));

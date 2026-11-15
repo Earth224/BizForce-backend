@@ -1412,7 +1412,9 @@ async function removeShopifyShop(shop, receiptId) {
 }
 
 function shopifyWebhookDeps() {
-  return { supabase: supabase, env: process.env, now: function () { return Date.now(); }, removeShopifyShop: removeShopifyShop };
+  return { supabase: supabase, env: process.env, now: function () { return Date.now(); }, removeShopifyShop: removeShopifyShop,
+    // W3: an unreadable customers/redact reaches the owner through the ops alerts (lib/opsAlert.js raise).
+    raiseAlert: function (key, info) { return opsAlerts.raise(key, info); } };
 }
 
 /* One receipt's topic work (lib/shopifyWebhooks.js processReceipt). Never rejects. */

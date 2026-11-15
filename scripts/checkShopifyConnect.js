@@ -1424,7 +1424,8 @@ function listAnswers(over) {
   // names Connect Amazon last (all eight sign-ins); Connect Shopify is still required in it.
   check("G7. yourData: the sign-in states name Connect Shopify (and Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon), the receipts are not member data, and Shopify is a third party",
     FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon") !== -1 &&
-    FILES.yourData.indexOf("shopify_webhook_events: \"Shopify's notifications about app installs and privacy requests, kept 30 days\"") !== -1 &&
+    // NAMED (Nov 15 2026, W3): BEFORE "..., kept 30 days". AFTER the W2 purge rule and what a data request holds (checkShopifyWebhooks P).
+    FILES.yourData.indexOf("shopify_webhook_events: \"Shopify's notifications about app installs and privacy requests. Each is kept 30 days; a customer data request is kept until 30 days \" +") !== -1 &&
     FILES.yourData.indexOf("{ name: \"Shopify\", for: \"connecting your Shopify store, reading it and making the changes you approve, when you connect one\" }") !== -1);
   check("G8. README: the two env vars, the Shopify app setup section and the webhook address",
     /\|\s*`?SHOPIFY_CLIENT_ID`?\s*\|/.test(FILES.readme) && /\|\s*`?SHOPIFY_CLIENT_SECRET`?\s*\|/.test(FILES.readme) && FILES.readme.indexOf("## Shopify app setup") !== -1 &&
@@ -1432,7 +1433,8 @@ function listAnswers(over) {
   const SC = realRequire("./lib/schemaCheck");
   check("G9. the registries: SCHEMA_TABLES has shopify_webhook_events at 176, the backup leaves it out as receipts kept 30 days",
     SC.SCHEMA_TABLES.some(function (e) { return e[0] === "shopify_webhook_events" && e[1] === "176_shopify_oauth.sql"; }) &&
-    FILES.backup.indexOf("shopify_webhook_events: \"Shopify notification receipts, kept 30 days\"") !== -1);
+    // NAMED (Nov 15 2026, W3): BEFORE "Shopify notification receipts, kept 30 days". AFTER the W2 purge rule.
+    FILES.backup.indexOf("shopify_webhook_events: \"Shopify notification receipts: kept 30 days, a customer data request until 30 days after it is answered, one not yet processed until it is processed\"") !== -1);
   check("G10. the receipts table has RLS on and nothing granted to anon or authenticated",
     FILES.migration176.indexOf("ALTER TABLE public.shopify_webhook_events ENABLE ROW LEVEL SECURITY;") !== -1 &&
     FILES.migration176.indexOf("REVOKE ALL ON public.shopify_webhook_events FROM anon, authenticated;") !== -1);

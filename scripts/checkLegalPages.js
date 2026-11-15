@@ -232,13 +232,16 @@ const fmt = n => Number(n).toLocaleString("en-US");
       transferMax: 4321, transferDailyCap: 8765, transferHoldDays: 9, youtubeRetentionDays: 21,
       // NAMED (Nov 14 2026, L1): BEFORE the facts above only. AFTER also L1's YouTube data figures (lib/youtubeApi.js) and the price-notice
       // window (lib/renewalEmails.js), each expected and today's each refused, so none of them is typed in either.
-      youtubeDataDays: 23, youtubeChannelDays: 5, youtubeDisconnectDays: 6, priceNoticeMinDays: 8, priceNoticeMaxDays: 29 });
+      youtubeDataDays: 23, youtubeChannelDays: 5, youtubeDisconnectDays: 6, priceNoticeMinDays: 8, priceNoticeMaxDays: 29,
+      // NAMED (Nov 15 2026, W3): BEFORE no Shopify figure. AFTER the Shopify notice retention (lib/shopifyAuth.js WEBHOOK_RETENTION_MS).
+      shopifyNoticeDays: 17 });
     const b2 = LP.buildLegalPages(other), t2 = textOf(b2["terms.html"]), r2 = textOf(b2["refund.html"]), p2 = textOf(b2["privacy.html"]);
     const expect = [["$249 per year", t2], ["charged $249 at the start of each new year", t2], ["up to 11 days", t2], ["welcome bonus of 1,234 BFC", t2],
       ["77 BFC for each certification", t2], ["there are 9", t2], ["at most 4,321 BFC", t2], ["at most 8,765 BFC in any rolling 24 hours", t2],
       ["until 9 days after", t2], ["$249 per year", r2], ["at most 21 days", p2],
       ["every 5 days, and deletes the connection if it cannot be refreshed for 23 days", p2],
-      ["within 6 days; after a removal on Google's side, within 23 days", p2], ["email you 8 to 29 days before the new price applies", t2]];
+      ["within 6 days; after a removal on Google's side, within 23 days", p2], ["email you 8 to 29 days before the new price applies", t2],
+      ["Each notice is kept 17 days; a customer data request is kept until 17 days after it is answered", p2]];
     const missing = expect.filter(([needle, hay]) => hay.indexOf(needle) === -1).map(([n]) => n);
     const stale = [["$199", t2], ["$199", r2], ["1,000 BFC", t2], ["2,000 BFC", t2], ["100 BFC", t2], ["14 days", t2], ["30 days", p2],
       ["every 7 days", p2], ["within 7 days", p2], ["7 to 30 days", t2]]
