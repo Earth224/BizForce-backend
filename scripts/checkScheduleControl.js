@@ -640,7 +640,11 @@ const deletesIn = db => db.log.filter(l => l.op === "delete");
                               libGate: /if \(!plan \|\| plan\.error \|\| !plan\.plan \|\| plan\.plan\.active !== true\) \{ summary\.skipped_not_entitled\+\+; continue; \}/ },
       // NAMED (Nov 6 2026, card upgrades C2): BEFORE 15 jobs; AFTER 16, with the daily 12-month purge of card leads, a
       // retention rule that deletes only rows older than the cutoff and acts for no member (checkCardLeads U).
-      "cardLeads.cardLeadsPurgeTick": { platform: "deletes card leads older than 12 months, a retention rule; it acts for no member" }
+      "cardLeads.cardLeadsPurgeTick": { platform: "deletes card leads older than 12 months, a retention rule; it acts for no member" },
+      // NAMED (Nov 15 2026, W2): BEFORE 16 jobs; AFTER 17, with the Shopify webhook retry sweep every 5 minutes. It finishes
+      // what Shopify itself asked for (an uninstall, a redaction, a data request) and emails the owner; it acts for no member's
+      // subscription (checkShopifyWebhooks G, L).
+      shopifyWebhookSweepTick: { platform: "retries Shopify webhook work Shopify asked for (uninstall, redaction, data request) and emails the owner; it acts for no member" }
     };
     const extra = [...scheduled].filter(n => !KNOWN[n]), missing = Object.keys(KNOWN).filter(n => !scheduled.has(n));
     check("S1. the scheduled jobs in server.js are exactly the " + Object.keys(KNOWN).length + " accounted for here (a new one must be classified)",

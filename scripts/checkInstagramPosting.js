@@ -1033,7 +1033,9 @@ function pageAnswers(over) {
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebookChoosingPurgeTick follows instagramRefreshTick.
     facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console,
     // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
-    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); }
+    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); },
+    // NAMED (Nov 15 2026, W2): the chain then ends with the Shopify data request reminder (checkShopifyWebhooks J, L2).
+    shopifyDataRequestReminderTick: async function () { orderRun.push("shopifyreminder"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1041,7 +1043,7 @@ function pageAnswers(over) {
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
   // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
   check("T11. the 04:45 UTC chain runs instagramRefreshTick after the video retention, then Facebook's cleanup (NAMED, item 8 part 3b), then L1's two ticks", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal"]), J(orderRun));
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder"]), J(orderRun));
   m = mountRoutes({ env: CONFIGURED });
   const rt = await attempt(m.ctx.instagramRefreshTick());
   check("T12. instagramRefreshTick runs lib/instagramApi.js refreshTick on instagramDeps() and never rejects", rt.ok && rt.v && rt.v.claimed === true &&
@@ -1602,9 +1604,10 @@ function pageAnswers(over) {
   // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE 181 the highest. AFTER 182_amazon_store.sql is above it
   // too, by name; "the highest" is checkAmazonConnect R1's.
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
-  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 183 &&
+  // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 184 &&
     migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

@@ -123,12 +123,15 @@ const MUTATIONS = {
     "    var raw = Buffer.isBuffer(req.body) ? Buffer.from(JSON.stringify(JSON.parse(req.body.toString(\"utf8\"))), \"utf8\") : null;\n"],
   "webhook-dedupe-missing": ["server",
     "        if (before.data && before.data.processed_at) return res.status(200).json({ received: true, duplicate: true });\n", ""],
-  "uninstall-ignored": ["server",
-    "      if (topic === \"app/uninstalled\" || topic === \"shop/redact\") await removeShopifyShop(shop);\n",
-    "      if (topic === \"shop/redact\") await removeShopifyShop(shop);\n"],
-  "shop-redact-ignored": ["server",
-    "      if (topic === \"app/uninstalled\" || topic === \"shop/redact\") await removeShopifyShop(shop);\n",
-    "      if (topic === \"app/uninstalled\") await removeShopifyShop(shop);\n"],
+  // NAMED (W2, Nov 15 2026): BEFORE these two anchored on the route's `if (topic === "app/uninstalled" || topic ===
+  // "shop/redact") await removeShopifyShop(shop);`. AFTER the topic work runs after the answer, in lib/shopifyWebhooks.js
+  // topicWork, so they anchor on its line; the broken behaviour is the same.
+  "uninstall-ignored": ["hooks",
+    "  if (row.topic === APP_UNINSTALLED || row.topic === SHOP_REDACT) {\n",
+    "  if (row.topic === SHOP_REDACT) {\n"],
+  "shop-redact-ignored": ["hooks",
+    "  if (row.topic === APP_UNINSTALLED || row.topic === SHOP_REDACT) {\n",
+    "  if (row.topic === APP_UNINSTALLED) {\n"],
   "second-member-same-shop": ["server",
     "      if ((held.data || []).some(function (r) { return r.user_id !== req.user.id; })) {\n", "      if (false) {\n"],
   "paste-token-accepted": ["server",
@@ -157,15 +160,19 @@ const MUTATIONS = {
     "    if (!(err instanceof SS.StoreAuthError) || s.refreshed) throw err;\n", "    if (!(err instanceof SS.StoreAuthError)) throw err;\n"],
   "refresh-not-single-flight": ["api",
     "  var running = refreshesInFlight.get(key);\n", "  var running = null;\n"],
-  "processed-not-marked": ["server",
-    "      var processed = await supabase.from(\"shopify_webhook_events\").update({ processed_at: new Date().toISOString() }).eq(\"webhook_id\", webhookId);\n",
-    "      var processed = { error: null };\n"],
+  // NAMED (W2, Nov 15 2026): BEFORE anchored on the route's processed_at update. AFTER processed_at is set in
+  // lib/shopifyWebhooks.js processReceipt once the work succeeded; the same skip, there.
+  "processed-not-marked": ["hooks",
+    "      var done = await deps.supabase.from(TABLE).update({ processed_at: iso(nowOf(deps)) }).eq(\"id\", row.id);\n",
+    "      var done = { error: null };\n"],
   "foreign-location-accepted": ["server",
     "    if (!found) return res.status(400).json({ error: \"That location is not one of your store's active locations.\", code: \"location_unknown\", field: \"location_id\" });\n",
     "    if (!found) found = { id: wanted, name: \"Location\" };\n"],
+  // NAMED (W2, Nov 15 2026): BEFORE the purge was one delete on received_at. AFTER it also skips unprocessed receipts and
+  // unanswered data requests, over two lines; the anchor is its first line, the same cutoff swapped for 1970.
   "webhook-receipts-kept": ["auth",
-    "    var removed = await supabase.from(\"shopify_webhook_events\").delete().lt(\"received_at\", cutoff).select(\"id\");\n",
-    "    var removed = await supabase.from(\"shopify_webhook_events\").delete().lt(\"received_at\", \"1970-01-01T00:00:00.000Z\").select(\"id\");\n"]
+    "    var removed = await supabase.from(\"shopify_webhook_events\").delete().lt(\"received_at\", cutoff).not(\"processed_at\", \"is\", null)\n",
+    "    var removed = await supabase.from(\"shopify_webhook_events\").delete().lt(\"received_at\", \"1970-01-01T00:00:00.000Z\").not(\"processed_at\", \"is\", null)\n"]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -183,6 +190,8 @@ process.on("unhandledRejection", function (e) { UNHANDLED.push(e); });
 const FILES = {
   server: read("server.js"),
   auth: read("lib/shopifyAuth.js"),
+  // NAMED (W2, Nov 15 2026): the webhook topics' work moved from the route into lib/shopifyWebhooks.js.
+  hooks: read("lib/shopifyWebhooks.js"),
   api: read("lib/shopifyApi.js"),
   sync: read("lib/storeSync.js"),
   write: read("lib/storeWrite.js"),
@@ -217,6 +226,7 @@ function compile(src, file, map) {
 }
 const SS = compile(FILES.sync, "lib/storeSync.js", {});
 const SA = compile(FILES.auth, "lib/shopifyAuth.js", {});
+const SWH = compile(FILES.hooks, "lib/shopifyWebhooks.js", {});
 const SAPI = compile(FILES.api, "lib/shopifyApi.js", { "./storeSync": SS, "./shopifyAuth": SA });
 const SW = compile(FILES.write, "lib/storeWrite.js", { "./storeSync": SS, "./shopifyApi": SAPI });
 const LP = compile(FILES.legal, "lib/legalPages.js", {});
@@ -346,6 +356,9 @@ function makeDb() {
       gt: function (c, v) { q.filters.push(["gt", c, v]); return api; },
       gte: function (c, v) { q.filters.push(["gte", c, v]); return api; },
       lt: function (c, v) { q.filters.push(["lt", c, v]); return api; },
+      // NAMED (W2, Nov 15 2026): the receipts purge now filters with neq and not(..., "is", null).
+      neq: function (c, v) { q.filters.push(["neq", c, v]); return api; },
+      not: function (c, op, v) { q.filters.push(["not_" + op, c, v]); return api; },
       or: function (s) { q.or = s; return api; },
       order: function () { return api; }, limit: function () { return api; },
       range: function (a, b) { q.range = [a, b]; return api; },
@@ -361,6 +374,8 @@ function makeDb() {
         if (f[0] === "gt") return r[f[1]] != null && String(r[f[1]]) > String(f[2]);
         if (f[0] === "gte") return r[f[1]] != null && String(r[f[1]]) >= String(f[2]);
         if (f[0] === "lt") return r[f[1]] != null && String(r[f[1]]) < String(f[2]);
+        if (f[0] === "neq") return r[f[1]] != null && String(r[f[1]]) !== String(f[2]);
+        if (f[0] === "not_is") return f[2] === null ? r[f[1]] != null : r[f[1]] !== f[2];
         return true;
       })) return false;
       if (q.or) { const d = /neq\.(\d{4}-\d{2}-\d{2})/.exec(q.or)[1]; return r.last_run_on == null || r.last_run_on !== d; }
@@ -634,6 +649,7 @@ function mountRoutes(env) {
     FRONTEND_URL: "https://bizforceai.net",
     fetch: globalThis.fetch,
     setTimeout: function (fn) { fn(); return 0; },
+    setImmediate: setImmediate,
     Promise: Promise, Buffer: Buffer, URL: URL, Date: Date, JSON: JSON, Object: Object, Array: Array, String: String, Number: Number, Math: Math,
     require: function (r) {
       if (r === "./lib/storeSync") return SS;
@@ -641,6 +657,7 @@ function mountRoutes(env) {
       if (r === "./lib/guardedFetch") return Object.assign({}, GF, { guardedJsonRequest: shop.jsonRequest });
       if (r === "./lib/shopifyApi") return SAPI;
       if (r === "./lib/shopifyAuth") return SA;
+      if (r === "./lib/shopifyWebhooks") return SWH;
       if (r === "./lib/storeWrite") return SW;
       return realRequire(r);
     },
@@ -679,7 +696,7 @@ function callback(state, over, secret) {
   return p;
 }
 function finish(m, params) { return hit(m, "post /api/store/shopify/finish", { body: { params: params } }); }
-function webhook(m, topic, body, opts) {
+async function webhook(m, topic, body, opts) {
   opts = opts || {};
   const raw = Buffer.from(body, "utf8");
   const h = {
@@ -687,7 +704,11 @@ function webhook(m, topic, body, opts) {
     "X-Shopify-Hmac-Sha256": opts.hmac !== undefined ? opts.hmac : crypto.createHmac("sha256", opts.secret || SHOPIFY_CONFIG.clientSecret).update(opts.signed ? Buffer.from(opts.signed, "utf8") : raw).digest("base64")
   };
   if (opts.hmac === null) delete h["X-Shopify-Hmac-Sha256"];
-  return hit(m, "post /api/webhooks/shopify", { body: raw, get: function (n) { return headerOf(h, n); } });
+  // NAMED (W2, Nov 15 2026): BEFORE the route did the topic's work and then answered. AFTER it answers first and runs
+  // the work on the next turn (setImmediate), so this helper waits for that work before the H checks read the tables.
+  const answered = await hit(m, "post /api/webhooks/shopify", { body: raw, get: function (n) { return headerOf(h, n); } });
+  for (let i = 0; i < 6; i++) await new Promise(function (r) { setImmediate(r); });
+  return answered;
 }
 const INVALID = { error: "That Shopify connection link has expired or was already used. Start again.", code: "state_invalid", saved: false };
 
@@ -1269,8 +1290,10 @@ function listAnswers(over) {
     m.db.t.shopify_webhook_events.filter(function (e) { return e.webhook_id === "retry-1"; })[0].processed_at !== null);
   check("H11. no webhook body in any log line", m.logs.join("\n").indexOf("690933842") === -1);
   db = makeDb();
-  db.t.shopify_webhook_events.push({ id: uuid(), webhook_id: "old", topic: "app/uninstalled", shop_domain: SHOP, received_at: new Date(NOW - 31 * 86400000).toISOString(), processed_at: null });
-  db.t.shopify_webhook_events.push({ id: uuid(), webhook_id: "new", topic: "app/uninstalled", shop_domain: SHOP, received_at: new Date(NOW - 29 * 86400000).toISOString(), processed_at: null });
+  // NAMED (W2, Nov 15 2026): BEFORE both fixtures had processed_at null. AFTER a receipt with processed_at null is never
+  // purged (checkShopifyWebhooks H3), so these two are processed; the 30-day rule they test is unchanged.
+  db.t.shopify_webhook_events.push({ id: uuid(), webhook_id: "old", topic: "app/uninstalled", shop_domain: SHOP, received_at: new Date(NOW - 31 * 86400000).toISOString(), processed_at: new Date(NOW - 31 * 86400000).toISOString() });
+  db.t.shopify_webhook_events.push({ id: uuid(), webhook_id: "new", topic: "app/uninstalled", shop_domain: SHOP, received_at: new Date(NOW - 29 * 86400000).toISOString(), processed_at: new Date(NOW - 29 * 86400000).toISOString() });
   const pg = await SA.webhookEventsPurgeTick(db, NOW);
   const pg2 = await SA.webhookEventsPurgeTick(db, NOW + 3600000);
   check("H12. the purge deletes receipts older than 30 days and keeps the rest, claimed once a day through job_runs",
@@ -1430,15 +1453,16 @@ function listAnswers(over) {
   /* NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE the highest was 181. AFTER the highest is 182 and
      182_amazon_store.sql is above 176 too, by name; "the highest" is checkAmazonConnect R1's, for 182. */
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
+  // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql is 176 or lower (checkOrbitStage2 R1)",
-    highest === 183 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+    highest === 184 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
     migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
     migFiles.filter(function (f) { return /^181_/.test(f); }).join() === "181_etsy_store.sql" &&
     migFiles.filter(function (f) { return /^182_/.test(f); }).join() === "182_amazon_store.sql" &&
     migFiles.filter(function (f) { return /^183_/.test(f); }).join() === "183_weekly_goal_and_order_status.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql" && f !== "184_shopify_webhook_requests.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

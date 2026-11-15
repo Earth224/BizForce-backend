@@ -304,7 +304,10 @@ const EXPECTED_ADMIN = [
   "get /api/admin/health",
   // NAMED (Nov 14 2026, L1; admin 7 -> 8): BEFORE no price-change route. AFTER the owner's price-change notice, requireAuth and
   // requireAdmin; it emails billed subscribers once each, 7 to 30 days ahead, and never changes a Stripe price (checkLegalL1 D12-D15).
-  "post /api/admin/price-change-notice"
+  "post /api/admin/price-change-notice",
+  // NAMED (Nov 15 2026, W2; admin 8 -> 10): BEFORE no Shopify data-request routes. AFTER the owner's list of Shopify data
+  // requests (read-only) and marking one answered (sets answered_at only), both requireAuth and requireAdmin (checkShopifyWebhooks K).
+  "get /api/admin/shopify-data-requests", "post /api/admin/shopify-data-requests/:id/answered"
 ];
 
 /* Login-only routes that write something a stranger is served. */

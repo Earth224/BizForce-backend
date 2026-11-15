@@ -490,8 +490,10 @@ async function main() {
     check("C15. a YouTube proposal is deleted " + YA.AUTHORIZED_DATA_DAYS + " days after it was filed, never while executing", J(db.t.agent_proposals.map((p) => p.id).sort()) === J(["pnew", "prun"]),
       J(db.t.agent_proposals.map((p) => p.id)));
   }
-  const chain = /cron\.schedule\("45 4 \* \* \*"[\s\S]*?\.then\(facebookChoosingPurgeTick\)\.then\(youtubeDataCheckTick\)\.then\(renewalEmailsTick\);/.test(FILES.server);
-  check("C16. the 04:45 UTC chain runs youtubeDataCheckTick after Facebook's cleanup, then renewalEmailsTick, last", chain &&
+  // NAMED (Nov 15 2026, W2): BEFORE renewalEmailsTick was last ("...then(renewalEmailsTick);"). AFTER the Shopify data request
+  // reminder follows it on the next line, so the chain is pinned up to it; the order before it is unchanged.
+  const chain = /cron\.schedule\("45 4 \* \* \*"[\s\S]*?\.then\(facebookChoosingPurgeTick\)\.then\(youtubeDataCheckTick\)\.then\(renewalEmailsTick\)\n        \.then\(shopifyDataRequestReminderTick\);/.test(FILES.server);
+  check("C16. the 04:45 UTC chain runs youtubeDataCheckTick after Facebook's cleanup, then renewalEmailsTick, then the Shopify data request reminder last", chain &&
     /async function youtubeDataCheckTick\(\) \{\n  try \{\n    return await require\("\.\/lib\/youtubeApi"\)\.youtubeDataTick\(youtubeDeps\(\)\);/.test(FILES.server));
 
   /* ══ D. the emails ══ */

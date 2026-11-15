@@ -1489,8 +1489,9 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
   const highest = migFiles.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): BEFORE 182_amazon_store.sql was the highest. AFTER it is the only 182 and only
   // 183_weekly_goal_and_order_status.sql is above it, by name; "the highest" is checkOrbitStage2 R1's.
-  check("R1. 182_amazon_store.sql is the only 182, and only 183_weekly_goal_and_order_status.sql is above it (checkOrbitStage2 R1)", highest === 183 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 182; }).join() === "183_weekly_goal_and_order_status.sql", highest);
+  // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
+  check("R1. 182_amazon_store.sql is the only 182, and only 183_weekly_goal_and_order_status.sql is above it (checkOrbitStage2 R1)", highest === 184 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 182; }).join() === "183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql", highest);
   check("G8. the four approved env vars and no other: lib/amazonAuth.js reads only AMAZON_SPAPI_APP_ID, AMAZON_LWA_CLIENT_ID, AMAZON_LWA_CLIENT_SECRET and AMAZON_SPAPI_DRAFT; lib/amazonApi.js reads none",
     J((stripComments(FILES.auth).match(/"AMAZON_[A-Z_]+"/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; }).sort()) ===
       J(["\"AMAZON_LWA_CLIENT_ID\"", "\"AMAZON_LWA_CLIENT_SECRET\"", "\"AMAZON_SPAPI_APP_ID\"", "\"AMAZON_SPAPI_DRAFT\""]) &&

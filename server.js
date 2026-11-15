@@ -954,7 +954,10 @@ const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  // W2 (Nov 15 2026): Shopify's webhook deliveries are exempt. Shopify sends them in bursts from shared addresses, and a
+  // 429 makes it retry and, in the end, drop the subscription. The HMAC check over the raw body is that route's guard.
+  skip: function (req) { return req.method === "POST" && req.path === "/api/webhooks/shopify"; }
 });
 
 const authLimiter = rateLimit({
@@ -1368,31 +1371,86 @@ app.post(
    parsed body can never reach the check.
 
    503 when the app is not configured; 401 for a missing or wrong HMAC
-   (compared in constant time); then every answer is 200, quickly, with no
-   slow work. Each delivery's X-Shopify-Webhook-Id is inserted into
-   shopify_webhook_events first: a delivery already processed (processed_at
-   set) is a duplicate and does nothing; one recorded but not processed (a
-   failure last time) is processed again, which is safe because each action
-   is idempotent.
+   (compared in constant time). Each delivery's X-Shopify-Webhook-Id is
+   inserted into shopify_webhook_events first: a delivery already processed
+   (processed_at set) is a duplicate and does nothing; one recorded but not
+   processed (a failure last time) is processed again, which is safe because
+   each action is idempotent. A receipt that cannot be written is a 500, so
+   Shopify delivers it again.
+   NAMED (W2, Nov 15 2026, migration 184): ANSWER FIRST, WORK AFTER. The
+   receipt is written (with request_details for the two customer topics: ids
+   only, never an email, phone or name; lib/shopifyWebhooks.js
+   requestDetailsOf), the 200 is sent, and the topic's work runs on the next
+   turn (scheduleShopifyWebhookWork). processed_at is set only when the work
+   succeeded; shopifyWebhookSweepTick, every 5 minutes, takes what failed.
      app/uninstalled, shop/redact  the shop's connection is removed exactly as
                                    the disconnect route removes it (lib/storeSync.js
-                                   deleteConnectionData): its synced items, order
-                                   summaries and change record, then the row.
-     customers/data_request,       recorded only. BizForce reads no customer
-     customers/redact              from a shop (order summaries hold no name,
-                                   email, address or phone; lib/storeSync.js
-                                   summaryOf), so there is nothing to send or erase.
-   The body is never logged or stored. Receipts are deleted after 30 days
-   (lib/shopifyAuth.js webhookEventsPurgeTick, the 04:45 UTC chain). */
-async function removeShopifyShop(shop) {
+                                   deleteConnectionData), after its id is recorded
+                                   in the receipt; shop/redact then anonymises the
+                                   shop's store-change proposals and deletes its
+                                   sign-in states (lib/shopifyWebhooks.js redactShop).
+     customers/redact              the named orders' summaries in that shop are deleted.
+     customers/data_request        the owner is emailed once, with what BizForce
+                                   holds for the named orders (order summaries hold
+                                   no name, email, address or phone; lib/storeSync.js
+                                   summaryOf), and reminded at 23 days while unanswered.
+   The body is never logged or stored. Receipts are deleted 30 days after
+   receipt once processed; a data request is kept until 30 days after it was
+   marked answered (lib/shopifyAuth.js webhookEventsPurgeTick, the 04:45 UTC chain). */
+async function removeShopifyShop(shop, receiptId) {
   var rows = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "shopify").eq("store_url", shop);
   if (rows.error) throw rows.error;
+  var connectionIds = (rows.data || []).map(function (r) { return r.id; });
+  // W2: the ids are kept in the receipt BEFORE anything is removed, so a later shop/redact can still find the shop's proposals.
+  if (receiptId && connectionIds.length) await require("./lib/shopifyWebhooks").recordConnectionIds(supabase, receiptId, connectionIds);
   var removed = 0;
   for (var i = 0; i < (rows.data || []).length; i++) {
     var gone = await require("./lib/storeSync").deleteConnectionData(supabase, rows.data[i].user_id, rows.data[i].id);
     if (gone.removed) removed++;
   }
-  return removed;
+  return { removed: removed, connection_ids: connectionIds };
+}
+
+function shopifyWebhookDeps() {
+  return { supabase: supabase, env: process.env, now: function () { return Date.now(); }, removeShopifyShop: removeShopifyShop };
+}
+
+/* One receipt's topic work (lib/shopifyWebhooks.js processReceipt). Never rejects. */
+async function shopifyWebhookWork(row) {
+  try {
+    return await require("./lib/shopifyWebhooks").processReceipt(shopifyWebhookDeps(), row);
+  } catch (err) {
+    console.error("[webhooks/shopify] Work error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
+/* The work runs after the answer has gone: on the next turn of the event loop. */
+function scheduleShopifyWebhookWork(row) {
+  setImmediate(function () { shopifyWebhookWork(row); });
+}
+
+/* Every 5 minutes (the require.main block below): receipts left unprocessed,
+   and data requests whose owner email has not gone. Single flight. Never rejects. */
+async function shopifyWebhookSweepTick() {
+  try {
+    return await require("./lib/shopifyWebhooks").sweepTick(shopifyWebhookDeps());
+  } catch (err) {
+    console.error("[ShopifyWebhookSweep] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+
+/* A step of the 04:45 UTC chain, after the renewal emails: one reminder to the
+   owner for each Shopify data request still unanswered 23 days after it
+   arrived, claimed through job_runs shopify_data_request_reminder. Never rejects. */
+async function shopifyDataRequestReminderTick() {
+  try {
+    return await require("./lib/shopifyWebhooks").reminderTick(shopifyWebhookDeps());
+  } catch (err) {
+    console.error("[ShopifyDataRequestReminder] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
 }
 
 app.post(
@@ -1413,19 +1471,23 @@ app.post(
       if (sa.WEBHOOK_TOPICS.indexOf(topic) === -1 || !shop || webhookId.length < 1 || webhookId.length > 200) {
         return res.status(200).json({ received: true, ignored: true });
       }
-      var recorded = await supabase.from("shopify_webhook_events").insert({ webhook_id: webhookId, topic: topic, shop_domain: shop }).select("id");
+      var sw = require("./lib/shopifyWebhooks");
+      var details = sw.requestDetailsOf(topic, raw);
+      var recorded = await supabase.from("shopify_webhook_events").insert({ webhook_id: webhookId, topic: topic, shop_domain: shop, request_details: details }).select(sw.ROW_COLUMNS);
+      var receipt = recorded.data && recorded.data[0];
       if (recorded.error) {
         if (recorded.error.code !== "23505") throw recorded.error;
-        var before = await supabase.from("shopify_webhook_events").select("processed_at").eq("webhook_id", webhookId).maybeSingle();
+        var before = await supabase.from("shopify_webhook_events").select(sw.ROW_COLUMNS).eq("webhook_id", webhookId).maybeSingle();
         if (before.error) throw before.error;
         if (before.data && before.data.processed_at) return res.status(200).json({ received: true, duplicate: true });
+        receipt = before.data;
       }
-      if (topic === "app/uninstalled" || topic === "shop/redact") await removeShopifyShop(shop);
-      var processed = await supabase.from("shopify_webhook_events").update({ processed_at: new Date().toISOString() }).eq("webhook_id", webhookId);
-      if (processed.error) throw processed.error;
-      return res.status(200).json({ received: true });
+      // Answered first; the work (removals, redactions, the owner's email) runs after, and sets processed_at when it succeeds.
+      res.status(200).json({ received: true });
+      if (receipt) scheduleShopifyWebhookWork(receipt);
+      return;
     } catch (error) {
-      // 500, so Shopify delivers it again; the receipt has no processed_at, so the redelivery is processed.
+      // 500, so Shopify delivers it again: the receipt could not be written or read.
       console.error("[webhooks/shopify] Error:", (error && error.code) || "error");
       return res.status(500).json({ error: "Webhook handler failed" });
     }
@@ -47308,6 +47370,32 @@ app.post("/api/billing/portal", requireAuth, async function (req, res) {
    table is missing and the migration file to run. It reads only what the last
    schema check found in this process, so it makes no database call of its own
    beyond the shared health probe. */
+/* ── Shopify data requests, for the owner (W2, Nov 15 2026, migration 184) ──
+   Admin only. The list holds open requests and those answered in the last 30
+   days, each with its deadline (received + 30 days); marking one answered
+   sets answered_at, which stops the 23-day reminder and starts its 30 days to
+   deletion (lib/shopifyAuth.js webhookEventsPurgeTick). Customer topics only:
+   any other receipt is a 404. */
+app.get("/api/admin/shopify-data-requests", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    return res.json(await require("./lib/shopifyWebhooks").listDataRequests(supabase, Date.now()));
+  } catch (error) {
+    console.error("[admin/shopify-data-requests] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+
+app.post("/api/admin/shopify-data-requests/:id/answered", requireAuth, requireAdmin, async function (req, res, next) {
+  try {
+    var out = await require("./lib/shopifyWebhooks").markAnswered(supabase, req.params.id, Date.now());
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    console.error("[admin/shopify-data-requests/answered] Error:", (error && error.code) || "error");
+    next(error);
+  }
+});
+/* ── end of Shopify data requests ── */
+
 app.get("/api/admin/health", requireAuth, requireAdmin, async function (req, res) {
   const probe = await opsAlerts.probeDatabase();
   const schemaCheck = require("./lib/schemaCheck");
@@ -61043,7 +61131,8 @@ shutdownControl.setServer(app.listen(PORT, function () {
         return require("./lib/shopifyAuth").webhookEventsPurgeTick(supabase);
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
-      }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick);
+      }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick)
+        .then(shopifyDataRequestReminderTick);
     }, {
       timezone: "UTC"
     });
@@ -61054,6 +61143,17 @@ shutdownControl.setServer(app.listen(PORT, function () {
     console.log("[startup] Facebook Page choices left unfinished for an hour are deleted in the same 04:45 UTC run, claimed through job_runs.facebook_choosing_purge.");
     console.log("[startup] YouTube data is checked in the same 04:45 UTC run, claimed through job_runs.youtube_data_check: a grant Google refuses is deleted with its data, and data 30 days without a refresh is deleted.");
     console.log("[startup] Yearly renewal reminders and terms-change emails go out in the same 04:45 UTC run, claimed through job_runs.renewal_yearly_reminder and job_runs.terms_change_email.");
+    console.log("[startup] Shopify data requests still unanswered 23 days after they arrived are reminded to the owner once, in the same 04:45 UTC run, claimed through job_runs.shopify_data_request_reminder.");
+  }
+
+  /* W2 (Nov 15 2026): the Shopify webhook retry sweep (lib/shopifyWebhooks.js
+     sweepTick), every 5 minutes: up to 50 receipts with no processed_at older
+     than 2 minutes, oldest first, and data requests whose owner email has not
+     gone. Single flight inside the lib. Only when this file is the program, so
+     a check that loads server.js never runs it; a check calls sweepTick itself. */
+  if (require.main === module) {
+    shutdownControl.trackInterval("shopifyWebhookSweepTick", setInterval(shopifyWebhookSweepTick, 300000));
+    console.log("[startup] Shopify webhook retry sweep scheduled — every 5 minutes, up to 50 unprocessed receipts older than 2 minutes.");
   }
 
   /* The schema check (lib/schemaCheck.js): read-only head counts confirm every

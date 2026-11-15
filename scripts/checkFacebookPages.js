@@ -1036,7 +1036,9 @@ function pageAnswers(over) {
     supabase: {}, videoRetentionTick: async function () { orderRun.push("videos"); }, instagramRefreshTick: async function () { orderRun.push("instagram"); },
     facebookChoosingPurgeTick: async function () { orderRun.push("facebook"); }, console: console,
     // NAMED (Nov 14 2026, L1): YouTube's daily data check and the renewal and terms emails follow Facebook's cleanup.
-    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); }
+    youtubeDataCheckTick: async function () { orderRun.push("youtubedata"); }, renewalEmailsTick: async function () { orderRun.push("renewal"); },
+    // NAMED (Nov 15 2026, W2): the chain then ends with the Shopify data request reminder (checkShopifyWebhooks J, L2).
+    shopifyDataRequestReminderTick: async function () { orderRun.push("shopifyreminder"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1045,7 +1047,7 @@ function pageAnswers(over) {
   // NAMED (Nov 14 2026, L1): BEFORE "runs facebookChoosingPurgeTick last" and the order ended "facebook". AFTER it runs after Instagram's refresh and
   // before L1's two ticks, and the order ends "facebook", "youtubedata", "renewal".
   check("O23. the 04:45 UTC chain runs facebookChoosingPurgeTick after Instagram's refresh, then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal"]), J(orderRun));
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder"]), J(orderRun));
   const ms0 = mountRoutes({ env: CONFIGURED });
   check("O24. the server's tick runs lib/facebookApi.js choosingPurgeTick on facebookDeps() and never rejects", typeof ms0.ctx.facebookChoosingPurgeTick === "function" &&
     /async function facebookChoosingPurgeTick\(\) \{\n  try \{\n    return await require\("\.\/lib\/facebookApi"\)\.choosingPurgeTick\(facebookDeps\(\)\);/.test(FB_SECTION) &&
@@ -1662,9 +1664,10 @@ function pageAnswers(over) {
      NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE only 181_etsy_store.sql was above it and 181 the highest.
      AFTER 181_etsy_store.sql and 182_amazon_store.sql are above it, by name; "the highest" is checkAmazonConnect R1's. */
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 183 &&
+  // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 184 &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
