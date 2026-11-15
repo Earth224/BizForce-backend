@@ -1454,15 +1454,16 @@ function listAnswers(over) {
      182_amazon_store.sql is above 176 too, by name; "the highest" is checkAmazonConnect R1's, for 182. */
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
+  // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   check("G11. R1. 176_shopify_oauth.sql is the only 176, and every migration but 177_youtube_uploads.sql, 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql is 176 or lower (checkOrbitStage2 R1)",
-    highest === 184 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
+    highest === 185 && migFiles.filter(function (f) { return /^177_/.test(f); }).join() === "177_youtube_uploads.sql" &&
     migFiles.filter(function (f) { return /^178_/.test(f); }).join() === "178_tiktok_posting.sql" &&
     migFiles.filter(function (f) { return /^179_/.test(f); }).join() === "179_instagram_posting.sql" &&
     migFiles.filter(function (f) { return /^180_/.test(f); }).join() === "180_facebook_pages.sql" &&
     migFiles.filter(function (f) { return /^181_/.test(f); }).join() === "181_etsy_store.sql" &&
     migFiles.filter(function (f) { return /^182_/.test(f); }).join() === "182_amazon_store.sql" &&
     migFiles.filter(function (f) { return /^183_/.test(f); }).join() === "183_weekly_goal_and_order_status.sql" &&
-    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql" && f !== "184_shopify_webhook_requests.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
+    migFiles.filter(function (f) { return f !== "177_youtube_uploads.sql" && f !== "178_tiktok_posting.sql" && f !== "179_instagram_posting.sql" && f !== "180_facebook_pages.sql" && f !== "181_etsy_store.sql" && f !== "182_amazon_store.sql" && f !== "183_weekly_goal_and_order_status.sql" && f !== "184_shopify_webhook_requests.sql" && f !== "185_shopify_uninstall_hook.sql"; }).every(function (f) { return Number(f.slice(0, 3)) <= 176; }) &&
     migFiles.filter(function (f) { return /^176_/.test(f); }).join() === "176_shopify_oauth.sql",
     highest);
   const fresh = { "lib/shopifyAuth.js": FILES.auth, "lib/shopifyApi.js": FILES.api, "176_shopify_oauth.sql": FILES.migration176, "scripts/store-connect.js": FILES.ui,

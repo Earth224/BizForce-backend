@@ -13571,6 +13571,20 @@ app.post("/api/agents/store/stock-margin", requireAuth, requireActiveSubscriptio
 const STORE_API_BASE = process.env.RAILWAY_PUBLIC_DOMAIN
   ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN
   : "https://dynamic-prosperity-production-5382.up.railway.app";
+/* W-T4 (Nov 15 2026, migration 185): where each connected shop's APP_UNINSTALLED
+   subscription points (lib/shopifyUninstallHook.js); the route below receives it. */
+const SHOPIFY_WEBHOOK_ADDRESS = STORE_API_BASE + "/api/webhooks/shopify";
+
+/* After a Shopify connect is answered: subscribe the shop to app/uninstalled and
+   stamp uninstall_hook_at. Never touches the connect's answer; a failure leaves
+   the stamp null and the next sync asks again. */
+function scheduleShopifyUninstallHook(row) {
+  setImmediate(function () {
+    require("./lib/shopifyUninstallHook").recordUninstallWebhook(storeSyncDeps(), row, SHOPIFY_WEBHOOK_ADDRESS).catch(function () {
+      console.warn("[ShopifyHook] connection " + (row && row.id) + ": the subscription step failed (the next sync tries again)");
+    });
+  });
+}
 
 function storeSyncDeps() {
   var crypt = require("./lib/apiKeyCrypto");
@@ -13586,6 +13600,9 @@ function storeSyncDeps() {
     // Shopify (migration 176): the GraphQL reader the sync calls, and the app's client id and secret for a token refresh.
     shopifyReader: require("./lib/shopifyApi"),
     shopifyConfig: function () { return require("./lib/shopifyAuth").configured(process.env); },
+    // W-T4 (migration 185): the per-shop app/uninstalled subscription a sync asks for while uninstall_hook_at is null.
+    shopifyHook: require("./lib/shopifyUninstallHook"),
+    shopifyWebhookAddress: SHOPIFY_WEBHOOK_ADDRESS,
     // Etsy (Nov 8 2026, migration 181): the GET reader the sync calls, and the keystring and shared secret every Etsy request carries.
     etsyReader: require("./lib/etsyApi"),
     etsyConfig: function () { return require("./lib/etsyAuth").configured(process.env); },
@@ -13890,8 +13907,11 @@ app.post("/api/store/shopify/finish", requireAuth, requireActiveSubscription, sh
         if (saved.error.code === "23505") return res.status(409).json({ error: sa.MESSAGES.takenByOther, code: "shop_taken", saved: false });
         throw saved.error;
       }
-      return res.json({ saved: true, connection: ss.statusOf(saved.data), locations: info.locations.length,
+      res.json({ saved: true, connection: ss.statusOf(saved.data), locations: info.locations.length,
         note: permission === "read_write" ? ss.MESSAGES.readWrite : ss.MESSAGES.readOnly });
+      // W-T4 (migration 185): after the answer, app/uninstalled for this shop; it never changes the connect's result.
+      scheduleShopifyUninstallHook(Object.assign({}, row, { id: saved.data.id }));
+      return;
     } catch (error) {
       console.error("[store/shopify/finish] Error:", (error && error.code) || "unknown");
       next(error);
@@ -61187,9 +61207,11 @@ shutdownControl.setServer(app.listen(PORT, function () {
      claimed through job_runs.store_sync. OFF unless ENABLE_STORE_SYNC is
      exactly "true", read here and again at the top of every tick. Each store is
      read only while its member's subscription is active. The sync itself
-     never writes to a store; the only writes are price and stock changes a
-     member approved (lib/storeWrite.js, migrations 175 and 176), never from
-     this job. No boot-time run, for the reason the retention job above gives. */
+     never writes to a store's products, stock or orders; the only writes to
+     those are price and stock changes a member approved (lib/storeWrite.js,
+     migrations 175 and 176), never from this job. Its one other write is a
+     Shopify shop's app/uninstalled webhook subscription, made once while
+     uninstall_hook_at is null (W-T4, migration 185, lib/shopifyUninstallHook.js). No boot-time run, for the reason the retention job above gives. */
   if (require("./lib/storeSync").storeSyncEnabled(process.env)) {
     cron.schedule("0 5 * * *", function () {
       require("./lib/storeSync").storeSyncTick(storeSyncDeps()).catch(function (err) {
@@ -61198,7 +61220,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
     }, {
       timezone: "UTC"
     });
-    console.log("[startup] storeSyncTick scheduled — 05:00 UTC daily, claimed through job_runs.store_sync; the sync reads stores and never writes to them.");
+    console.log("[startup] storeSyncTick scheduled — 05:00 UTC daily, claimed through job_runs.store_sync; the sync reads stores and never changes their products, stock or orders.");
   } else {
     console.log("[startup] storeSyncTick disabled (ENABLE_STORE_SYNC not exactly \"true\")");
   }
