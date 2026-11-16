@@ -96,6 +96,8 @@ const { spawn, execFileSync } = require("child_process");
 const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.CARD_MAKER_OUT || path.join(os.homedir(), "Downloads", "card-maker");
+// NAMED (Nov 15 2026, S5): the long-name screenshots (the maker, the public card, the export) go here.
+const OUT5 = process.env.CARD_MAKER_S5_OUT || path.join(os.homedir(), "Downloads", "s5");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 // The page's own pinned library addresses, read from the page: only these go out, and the browser checks their SRI.
 const MAKER_HTML = fs.readFileSync(path.join(FRONTEND, "digital-cards.html"), "utf8");
@@ -165,7 +167,14 @@ function s3Answer(pathname, request) {
   if (pathname === "/api/digital-cards" && m !== "POST") return { cards: s3Cards };
   return null;
 }
+/* NAMED (Nov 15 2026, S5): s5Card is one stored card with a 60-character name and long title, company, email and
+   website; the maker's list and the public card's answer both read it. */
+let s5Card = null;
 function apiAnswer(pathname, request) {
+  if (s5Card) {
+    if (pathname === "/api/digital-cards" && (!request || request.method !== "POST")) return { cards: [s5Card] };
+    if (/^\/api\/cards\/slug\//.test(pathname)) return { card: s5Card, support_links: [] };
+  }
   if (s3Cards) { const a = s3Answer(pathname, request); if (a) return a; }
   if (q6Store) { const a = q6Answer(pathname, request); if (a) return a; }
   if (pathname === "/api/digital-cards") return { cards: noCards ? [] : [cardRow()] };
@@ -1129,6 +1138,84 @@ function pdfPage(uri) {
     check("S4 picker: the real select still takes the clicks and the keys: it lies exactly over the label, invisible (opacity 0)",
       [p375, p1440].every(r => r.covers && r.selOpacity === "0"), JSON.stringify([p375.covers, p375.selOpacity, p1440.covers, p1440.selOpacity]));
     s3Cards = null;
+
+    /* ── NAMED (Nov 15 2026, S5): a 60-character name, and every other field long, on phones and desktops ── */
+    console.log("\n══ S5. a 60-character name and long fields: the card keeps its size, the text fits inside it (shrink, two lines, an ellipsis), no sideways scroll; the export matches ══");
+    fs.mkdirSync(OUT5, { recursive: true });
+    const NAME60 = "Alexandrina Maximiliana Konstantinopoulou-Vanderbiltsworth I";
+    const S5_LONG = { full_name: NAME60, job_title: "Senior Vice President of International Business Development",
+      company: "Northwind Tea and Coffee Roasters of the Pacific Northwest", email: "alexandrina.konstantinopoulou@northwind-tea-and-coffee.example.test",
+      website: "https://www.northwind-tea-and-coffee-roasters-of-the-pacific-northwest.example.test" };
+    const s5Row = orient => Object.assign(cardRow(), S5_LONG, { slug: "jane-doe", media_layout: { orientation: orient } });
+    const FIT_STATE = "(function(){var c=document.getElementById('cardPreview'),cr=c.getBoundingClientRect();" +
+      "var f=['pCompany','pName','pTitle','pTagline','pEmail','pPhone','pWebsite'].map(function(id){var e=document.getElementById(id);if(!e)return {id:id,missing:true};" +
+      "var r=e.getBoundingClientRect(),cs=getComputedStyle(e),lh=parseFloat(cs.lineHeight)||parseFloat(cs.fontSize)*1.2,ph=(parseFloat(cs.paddingTop)||0)+(parseFloat(cs.paddingBottom)||0);" +
+      "return {id:id,text:e.textContent,title:e.getAttribute('title'),h:Math.round(r.height)," +
+      "inside:!r.height||(r.left>=cr.left-0.5&&r.right<=cr.right+0.5&&r.top>=cr.top-0.5&&r.bottom<=cr.bottom+0.5)," +
+      "noClip:e.scrollWidth<=e.clientWidth+1,lines:r.height?Math.round((e.clientHeight-ph)/lh):0,size:parseFloat(cs.fontSize)};});" +
+      "return {docW:document.documentElement.scrollWidth,vw:innerWidth,cw:Math.round(cr.width*10)/10,ch:Math.round(cr.height*10)/10,vertical:c.classList.contains('orient-vertical'),f:f};})()";
+    const sizeOk = r => r.vertical ? (r.cw <= 320.5 && r.ch <= 560.5 && Math.abs(r.ch / r.cw - 1.75) < 0.02) : (r.cw <= 560.5 && r.ch <= 320.5 && Math.abs(r.cw / r.ch - 1.75) < 0.02);
+    const nameOf = r => (r.f || []).filter(x => x.id === "pName")[0] || {};
+    const nameOk = r => { const n = nameOf(r); return n.title === NAME60 && n.inside && n.noClip && n.lines >= 1 && n.lines <= 2 && n.size >= 11 && n.h > 0; };
+    const fieldsOk = r => (r.f || []).every(x => !x.missing && x.inside && x.noClip && x.lines <= 2 && (!x.h || x.size >= 7));
+    const s5Rows = [];
+    const s5Grab = async (where, W, orient) => {
+      const r = Object.assign({ where, W, orient }, await evaluate(cdp, FIT_STATE));
+      s5Rows.push(r);
+      await evaluate(cdp, "document.getElementById('cardPreview').scrollIntoView({block:'center'}), true");
+      await settle(cdp, "s5 shot " + where);
+      const res = await cdp.send("Page.captureScreenshot", { format: "png" });
+      fs.writeFileSync(path.join(OUT5, where + "-" + W + "-" + orient + ".png"), Buffer.from(res.data, "base64"));
+      return r;
+    };
+    const s5Exports = [];
+    for (const orient of ["horizontal", "vertical"]) {
+      s5Card = s5Row(orient);
+      for (const [W, Hh, mob] of [[375, 812, true], [390, 844, true], [1440, 1000, false]]) {
+        await viewport(cdp, W, Hh, mob);
+        await open(cdp, origin, "digital-cards.html", "(document.getElementById('pName')||{}).title === " + JSON.stringify(NAME60) +
+          " && document.getElementById('cardPreview').classList.contains('orient-vertical') === " + (orient === "vertical"));
+        await s5Grab("maker", W, orient);
+        if (W === 1440) {
+          // The export: html2canvas's copy of the card carries the fitted text and sizes, and its image matches the preview.
+          await evaluate(cdp, FREEZE); await evaluate(cdp, COMPARE); await settle(cdp, "s5 export " + orient);
+          const prev = await previewShot();
+          const ex = await evaluate(cdp, "(function(){var ids=['pCompany','pName','pTitle','pEmail','pWebsite'],rec=function(d){var o={};ids.forEach(function(id){var e=d.getElementById(id);o[id]=[[].filter.call(e.childNodes,function(n){return n.nodeType===3;}).map(function(n){return n.nodeValue;}).join(''),e.style.getPropertyValue('font-size'),e.style.getPropertyValue('white-space')].join('|');});return o;};" +
+            "var copy=null,o=cardExportOptions(),orig=o.onclone;o.onclone=function(doc){copy=rec(doc);return orig(doc);};" +
+            "return html2canvas(document.getElementById('cardPreview'),o).then(function(cv){return {live:rec(document),copy:copy,url:cv.toDataURL('image/png')};});})()");
+          const cmp = await evaluate(cdp, "window.__cmp(" + JSON.stringify(prev) + ", " + JSON.stringify(ex.url) + ")");
+          fs.writeFileSync(path.join(OUT5, "export-" + orient + ".png"), Buffer.from(ex.url.slice(ex.url.indexOf(",") + 1), "base64"));
+          s5Exports.push({ orient, same: JSON.stringify(ex.live) === JSON.stringify(ex.copy), live: ex.live, copy: ex.copy, mad: cmp.mad });
+        }
+      }
+      for (const [W, Hh] of [[375, 812], [390, 844], [1440, 1000]]) {
+        await viewport(cdp, W, Hh, W < 1000);
+        await open(cdp, origin, "c/jane-doe", "(document.getElementById('pName')||{}).title === " + JSON.stringify(NAME60) + " && document.getElementById('cardPreview').style.display === 'block'");
+        await s5Grab("public", W, orient);
+      }
+    }
+    s5Card = null;
+    const brief = r => r.where + " " + r.W + " " + r.orient + ": page " + r.docW + "/" + r.vw + ", card " + r.cw + "x" + r.ch + ", name " + nameOf(r).lines + " line(s) at " + nameOf(r).size + "px " + JSON.stringify(nameOf(r).text);
+    s5Rows.forEach(r => console.log("    " + brief(r)));
+    check("S5 a 60-character name (" + NAME60.length + " characters): no sideways page scroll (scrollWidth <= innerWidth) on the maker and the public card, at 375, 390 and 1440 px, horizontal and vertical",
+      NAME60.length === 60 && s5Rows.length === 12 && s5Rows.every(r => r.docW <= r.vw), JSON.stringify(s5Rows.map(r => [r.where, r.W, r.orient, r.docW, r.vw])));
+    check("S5 the card keeps its size: horizontal at most 560 x 320, vertical at most 320 x 560, the ratio 1.75",
+      s5Rows.every(r => sizeOk(r) && r.vertical === (r.orient === "vertical")), JSON.stringify(s5Rows.map(r => [r.where, r.W, r.orient, r.cw, r.ch])));
+    check("S5 the name stays inside the card: at most two lines, nothing clipped sideways, never under 11 px, the whole name its title",
+      s5Rows.every(nameOk), JSON.stringify(s5Rows.filter(r => !nameOk(r)).map(r => [r.where, r.W, r.orient, nameOf(r)])));
+    const shownOk = t => t === NAME60 || (/…$/.test(t) && t.length > 1 && NAME60.indexOf(t.slice(0, -1).replace(/s+$/, "")) === 0);
+    check("S5 the shown name is the whole name, or its beginning and an ellipsis (never a clipped half letter), and the maker and the public card agree on the phone",
+      s5Rows.every(r => shownOk(nameOf(r).text)), JSON.stringify(s5Rows.map(r => [r.where, r.W, r.orient, nameOf(r).text])));
+    check("S5 every other field (company, title, tagline, email, phone, website) stays inside the card, at most two lines, never under 7 px",
+      s5Rows.every(fieldsOk), JSON.stringify(s5Rows.filter(r => !fieldsOk(r)).map(r => [r.where, r.W, r.orient, r.f.filter(x => !(x.inside && x.noClip && x.lines <= 2))])));
+    // A field is cut only once it uses both its lines (BEFORE a guessed 1.2 em line cut .card-company and .card-job, whose
+    // line-height is "normal", to one line and an ellipsis).
+    const cutEarly = s5Rows.flatMap(r => (r.f || []).filter(x => /\u2026$/.test(x.text || "") && x.lines !== 2).map(x => [r.where, r.W, r.orient, x.id, x.lines, x.text]));
+    check("S5 no field is cut with an ellipsis before it has used its second line (the company and the job title too, whose line-height is the font's own)",
+      cutEarly.length === 0, JSON.stringify(cutEarly));
+    check("S5 the export draws what the maker shows: html2canvas's copy has the same fitted text, sizes and wrapping, and its image matches the preview (mean difference under " + MAD + ")",
+      s5Exports.length === 2 && s5Exports.every(x => x.same && x.mad < MAD),
+      JSON.stringify(s5Exports.map(x => ({ orient: x.orient, mad: x.mad, differ: Object.keys(x.live).filter(k => !x.copy || x.live[k] !== x.copy[k]).map(k => [k, x.live[k], x.copy && x.copy[k]]) }))));
 
     // NAMED (Nov 15 2026, S4): every wait reached the page's ready condition (none ran out its 10 s).
     check("every step waited for the page's ready condition, never a fixed time, and each one came (no settle ran out)", settleTimeouts === 0, settleMisses.slice(0, 8).join(" | "));

@@ -18,6 +18,11 @@
       Create your account. W. the Wallet button: google_wallet true, and not an iPhone or iPad.
    C13 (NAMED Nov 15 2026, S4): the card's answer can arrive before the support script has run; the Support button is
       then drawn once the page has loaded (BEFORE it never showed: the flake browserCheckCardMaker hit 3 runs in 5).
+   F (NAMED Nov 15 2026, S5): the card's text fits the card (scripts/bf-card.js fitText): one line at the page's size,
+      shrunk toward a minimum (the name 60%, never under 11 px; other fields 75%, never under 7 px), two lines at the
+      minimum, then an ellipsis written into the text; the whole text its title and fullText's answer. A fake layout
+      (a fixed width, 0.6 em a character) drives it here; the real geometry at 375, 390 and 1440 px is in
+      scripts/browserCheckCardMaker.js (S5). The maker and the public card call it on every field.
 
    No network, no database. BIZFORCE_FRONTEND_DIR overrides the frontend. MUTATE=<name> | all. */
 const fs = require("fs");
@@ -29,8 +34,22 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 const MUTATE = process.env.MUTATE || "";
 const CV = "card-view.html", DC = "digital-cards.html", APP = "app.html", IDX = "index.html", SUP = "suppressed.html", RC = "scripts/bf-renew-consent.js";
 const SHELL = "lib/cardShell.generated.js";
+const BFC = "scripts/bf-card.js";   // NAMED (Nov 15 2026, S5): loaded into FILES, so the F mutations reach it
 
 const MUTATIONS = {
+  // NAMED (Nov 15 2026, S5): the card's text fitting (F)
+  "fit-no-shrink": [[BFC, "    el.style.setProperty(\"font-size\", min + \"px\", \"important\");\n    if (fitsLine()) {", "    el.style.setProperty(\"font-size\", min + \"px\", \"important\");\n    if (false) {"]],
+  "fit-no-ellipsis": [[BFC, "    if (fitsTwo()) return out;\n", "    return out;\n"]],
+  "fit-no-two-lines": [[BFC, "    out.stage = \"two-lines\";\n    if (fitsTwo()) return out;\n", "    out.stage = \"two-lines\";\n    if (false) return out;\n"]],
+  "fit-no-title": [[BFC, "    if (full) el.setAttribute(\"title\", full); else el.removeAttribute(\"title\");\n", ""]],
+  "fit-name-floor-gone": [[BFC, "var NAME_MIN = { ratio: 0.6, px: 11 }", "var NAME_MIN = { ratio: 0.3, px: 1 }"]],
+  "fit-full-text-lost": [[BFC, "    return shown !== null && el.textContent === shown ? (el.getAttribute(\"data-fit-full\") || \"\") : el.textContent;\n", "    return el.textContent;\n"]],
+  "fit-ellipsis-not-recorded": [[BFC, "    el.setAttribute(\"data-fit-shown\", el.textContent);\n", ""]],
+  "fit-line-height-guessed": [[BFC, "    var lh = el.clientHeight - pad;\n    if (!(lh > 0)) lh = parseFloat(cs.lineHeight) || min * 1.2;\n", "    var lh = parseFloat(cs.lineHeight) || min * 1.2;\n"]],
+  "view-not-fitted": [[CV, "  window.bfCard.fitCardText(document);\n  window.bfCard.watchCardText(card);\n", ""]],
+  "maker-not-fitted": [[DC, "  window.bfCard.fitCardText(document);\n  window.bfCard.watchCardText(document.getElementById(\"cardPreview\"));\n", ""]],
+  "maker-card-widens": [[DC, "--border-weight:16px;contain:inline-size}", "--border-weight:16px}"]],
+  "maker-fp-reads-cut-name": [[DC, "    name:    window.bfCard.fullText(document.getElementById('pName')),", "    name:    document.getElementById('pName').textContent,"]],
   // NAMED (Nov 15 2026, S4): Support is dropped again when its script loads after the card's answer (C13)
   "support-lost-when-late": [[CV, "  if (!links.length) return;\n", "  if (!window.BFSupport || !links.length) return;\n"]],
   "support-late-not-retried": [[CV, "window.addEventListener(\"load\", function () { if (window.BFSupport) renderCardSupport(links); }, { once: true });", "void 0;"]],
@@ -70,7 +89,7 @@ if (MUTATE && !MUTATIONS[MUTATE]) { console.error("Unknown MUTATE=" + MUTATE + "
 
 const lf = t => t.replace(/\r\n/g, "\n");
 const FILES = {};
-[CV, DC, APP, IDX, SUP, RC].forEach(f => {
+[CV, DC, APP, IDX, SUP, RC, BFC].forEach(f => {
   const p = path.join(FRONTEND, f);
   if (!fs.existsSync(p)) { console.error("Frontend file not found: " + p + " (set BIZFORCE_FRONTEND_DIR)."); process.exit(2); }
   FILES[f] = lf(fs.readFileSync(p, "utf8"));
@@ -123,7 +142,7 @@ async function runCard(ml, ua) {
   w.navigator.sendBeacon = () => true;
   w.HTMLMediaElement.prototype.load = function () {};
   w.HTMLCanvasElement.prototype.getContext = function () { return null; };
-  try { w.eval(fs.readFileSync(path.join(FRONTEND, "scripts/bf-card.js"), "utf8")); } catch (e) { errors.push("bf-card: " + e.message); }
+  try { w.eval(FILES[BFC]); } catch (e) { errors.push("bf-card: " + e.message); }
   for (const code of inlineScripts(FILES[CV])) { try { w.eval(code); } catch (e) { errors.push(e.message); } }
   await flush(30);
   return { w, d: w.document, errors };
@@ -197,7 +216,7 @@ async function runCard(ml, ua) {
     w.HTMLMediaElement.prototype.load = function () {};
     w.HTMLCanvasElement.prototype.getContext = function () { return null; };
     const errs = [];
-    try { w.eval(fs.readFileSync(path.join(FRONTEND, "scripts/bf-card.js"), "utf8")); } catch (e) { errs.push("bf-card: " + e.message); }
+    try { w.eval(FILES[BFC]); } catch (e) { errs.push("bf-card: " + e.message); }
     for (const code of inlineScripts(FILES[CV])) { try { w.eval(code); } catch (e) { errs.push(e.message); } }
     await flush(30);
     const early = w.document.getElementById("cvSupportBtn").hidden;
@@ -296,6 +315,74 @@ async function runCard(ml, ua) {
   check("A11. the login page keeps its theme (bf-theme.js first in head) and no mist (app is in termaximus-presence.js's TMX_NO_MIST_PAGES)",
     /^<!DOCTYPE html>\n<html lang="en">\n<head>\n<script src="\/scripts\/bf-theme\.js"><\/script>/.test(app) &&
     /var TMX_NO_MIST_PAGES = \[[^\]]*"app"[^\]]*\];/.test(presence));
+
+  /* ── F (NAMED Nov 15 2026, S5): the card's text fits the card ── */
+  console.log("\n══ F. the card's text fits the card: shrink, two lines, an ellipsis; the whole text its title ══");
+  {
+    const dom = new JSDOM("<!doctype html><body><div id=t></div><div id=u></div></body>", { runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window; windows.push(w);
+    const errs = [];
+    try { w.eval(FILES[BFC]); } catch (e) { errs.push(e.message); }
+    // The fake layout: a box BOX px wide; each character 0.6 em; white-space: nowrap keeps one line. A line is 1.2 em
+    // for t (line-height 1.2em) and 1.36 em for u, whose line-height is "normal" (the font's own, as .card-job's is).
+    const BOX = 200, BASE = { t: 20, u: 10 }, LINE = { t: 1.2, u: 1.36 };
+    const fsOf = el => parseFloat(el.style.getPropertyValue("font-size")) || BASE[el.id];
+    const textW = el => Array.from(el.textContent).length * fsOf(el) * 0.6;
+    const wraps = el => el.style.getPropertyValue("white-space") === "normal";
+    for (const id of ["t", "u"]) {
+      const el = w.document.getElementById(id);
+      Object.defineProperty(el, "clientWidth", { get: () => BOX });
+      Object.defineProperty(el, "scrollWidth", { get: () => wraps(el) ? BOX : Math.ceil(textW(el)) });
+      Object.defineProperty(el, "clientHeight", { get: () => (wraps(el) ? Math.max(1, Math.ceil(textW(el) / BOX)) : 1) * fsOf(el) * LINE[el.id] });
+    }
+    const realCs = w.getComputedStyle.bind(w);
+    w.getComputedStyle = el => (el.id === "t" || el.id === "u") ? { fontSize: fsOf(el) + "px", lineHeight: el.id === "u" ? "normal" : fsOf(el) * 1.2 + "px", paddingTop: "0px", paddingBottom: "0px" } : realCs(el);
+    const bc = w.bfCard, t = w.document.getElementById("t"), u = w.document.getElementById("u");
+    const fit = (el, text, field) => { if (text !== undefined) el.textContent = text; const r = bc.fitText(el, field);
+      return { stage: r && r.stage, size: fsOf(el), text: el.textContent, title: el.getAttribute("title"), full: bc.fullText(el), ws: el.style.getPropertyValue("white-space"),
+        imp: el.style.getPropertyPriority("font-size"), lines: Math.round(el.clientHeight / (fsOf(el) * LINE[el.id])), fits: el.scrollWidth <= el.clientWidth + 0.5 }; };
+    const N8 = "Jane Doe", N20 = "Jane Doe-Northwinder", N40 = "Alexandrina Maximiliana Konstantinopoulo", N60 = "Alexandrina Maximiliana Konstantinopoulou-Vanderbiltsworth I";
+    const a = fit(t, N8, "name"), b = fit(t, N20, "name"), c = fit(t, N40, "name"), d = fit(t, N60, "name");
+    check("F1. bf-card.js loads and exposes fitText, fitCardText, fullText and watchCardText, with the seven card fields",
+      errs.length === 0 && ["fitText", "fitCardText", "fullText", "watchCardText"].every(k => typeof bc[k] === "function") &&
+      J(bc.CARD_TEXT_IDS) === J(["pCompany", "pName", "pTitle", "pTagline", "pEmail", "pPhone", "pWebsite"]), J([errs, Object.keys(bc || {})]));
+    check("F2. a short name stays on one line at the page's own size", a.stage === "one-line" && a.size === 20 && a.text === N8 && a.title === N8 && a.lines === 1, J(a));
+    check("F3. a longer name shrinks until it fits one line (16.6 px here), above the minimum, the size set !important (the maker's vertical and minimal layouts set theirs !important)",
+      b.stage === "shrunk" && b.size > 12 && b.size < 20 && b.fits && b.lines === 1 && b.text === N20 && b.imp === "important", J(b));
+    check("F4. a name too long for one line at the minimum (12 px: 60% of 20) wraps to two lines there, whole",
+      c.stage === "two-lines" && c.size === 12 && c.lines === 2 && c.ws === "normal" && c.text === N40 && c.title === N40, J(c));
+    check("F5. a 60-character name too long for two lines is cut with an ellipsis, two lines exactly; the title and fullText keep the whole name",
+      d.stage === "ellipsis" && /\u2026$/.test(d.text) && N60.indexOf(d.text.slice(0, -1)) === 0 && d.lines === 2 && d.title === N60 && d.full === N60, J(d));
+    const d2 = fit(t, undefined, "name");
+    check("F6. fitting again (a resize, a theme or a font) starts from the whole name, not the cut one: the same answer", J(d2) === J(d), J([d, d2]));
+    const e = fit(t, N8, "name");
+    check("F7. a new name written over a cut one is fitted afresh: whole, one line, its own title, no size left over", e.stage === "one-line" && e.text === N8 && e.title === N8 && e.size === 20 && e.full === N8, J(e));
+    const f = fit(u, "alexandrina.konstantinopoulou@northwind-tea.example.test", "field");
+    check("F8. another field (the email) shrinks only to 75% (7.5 px of 10), then takes two whole lines: its line-height \"normal\" measured, not guessed (BEFORE a 1.2 em guess cut it to one line and an ellipsis)",
+      f.size === 7.5 && f.stage === "two-lines" && f.lines === 2 && f.text === "alexandrina.konstantinopoulou@northwind-tea.example.test" && f.title === f.text, J(f));
+    const f2 = fit(u, "alexandrina.konstantinopoulou@northwind-tea-and-coffee-roasters-of-the-pacific-northwest.example.test", "field");
+    check("F8b. a field too long for two lines at its minimum ends in an ellipsis on the second line", f2.stage === "ellipsis" && f2.lines === 2 && /\u2026$/.test(f2.text), J(f2));
+    BASE.t = 14; const g = fit(t, N60, "name");
+    check("F9. the name never goes under 11 px, even where 60% of its size is less (14 px here)", g.size === 11 && g.lines <= 2, J(g));
+    const h = fit(t, "", "name");
+    check("F10. an empty field has no title and no sizes", h.title === null && h.text === "" && h.imp === "", J(h));
+  }
+  {
+    const LONGN = "Alexandrina Maximiliana Konstantinopoulou-Vanderbiltsworth I";
+    const keep = CARD.full_name; CARD.full_name = LONGN;
+    const V = await runCard({});
+    CARD.full_name = keep;
+    const pn = V.d.getElementById("pName");
+    check("F11. the public card fits its fields (bf-card.js fitCardText): the long name is pName's title, and the card is watched for resizes",
+      V.errors.length === 0 && pn.getAttribute("title") === LONGN && pn.getAttribute("data-fit-full") === LONGN && V.d.getElementById("cardPreview").getAttribute("data-fit-watched") === "1",
+      J([V.errors, pn.getAttribute("title"), V.d.getElementById("cardPreview").getAttribute("data-fit-watched")]));
+    const up = /function updatePreview\(\) \{[\s\S]*?\n\}\n/.exec(FILES[DC]), fp = /function syncFpOverlay\(\) \{[\s\S]*?\n\}\n/.exec(FILES[DC]);
+    check("F12. the maker fits every field after each preview update and watches the card; free positioning reads the whole text (fullText), not the cut one",
+      !!up && /window\.bfCard\.fitCardText\(document\);\n  window\.bfCard\.watchCardText\(document\.getElementById\("cardPreview"\)\);\n\}\n$/.test(up[0]) &&
+      !!fp && ["pCompany", "pName", "pTitle", "pTagline"].every(id => fp[0].indexOf("window.bfCard.fullText(document.getElementById('" + id + "'))") !== -1), J([!!up, !!fp]));
+    const cardRule = (/\n    \.card-preview\{[^}]*\}/.exec(FILES[DC]) || [""])[0];
+    check("F13. the maker's card is contain: inline-size (its rule, read from the source: jsdom drops the property), so no text can widen the column or the page", /;contain:inline-size\}$/.test(cardRule), cardRule);
+  }
 
   /* ── L, W ── */
   console.log("\n══ L. links to Create Account; W. the Wallet button ══");

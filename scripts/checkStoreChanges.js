@@ -31,7 +31,8 @@
         route lists, and 175 the highest migration (R1).
      L. THE WORDS AND THE PAGES. The privacy and terms sentences as built, the Store page's line, checkbox, labels and
         Store changes section, the page script's textContent-only rendering with a confirmed Undo, the inventory
-        controls, and the escaped Approvals card.
+        controls, and the escaped Approvals card. NAMED (Nov 15 2026, S5): L10, the platform's stock line (Shopify's
+        location, Etsy's 0 to 999, Amazon's FBA) shows only while "New stock level" is chosen, following the picker live.
 
    MUTATIONS: MUTATE=<name> applies one in memory; MUTATE=all runs each in its own process (see MUTATIONS below).
 */
@@ -141,6 +142,18 @@ const MUTATIONS = {
   // the price with the store's currency and name a Shopify location.
   "readonly-row-offered": ["changesUi",
     "    if (writable(conn)) return proposeControl(conn, itemId, prefill);\n", "    return proposeControl(conn, itemId, prefill);\n"],
+  // NAMED (Nov 15 2026, S5): the stock line only for a stock change (L10)
+  "stock-line-always": ["changesUi",
+    "      if (stockNote) stockNote.hidden = pick.value !== \"stock\";\n", ""],
+  "stock-line-not-live": ["changesUi",
+    "    pick.addEventListener(\"change\", syncField);\n", "    pick.addEventListener(\"change\", function () { input.step = pick.value === \"stock\" ? \"1\" : \"0.01\"; });\n"],
+  "etsy-line-not-held": ["changesUi",
+    "    if (conn && conn.platform === \"etsy\") stockNote = el(\"p\", \"store-quiet store-change-where\", \"Etsy allows a stock level from 0 to 999.\");\n",
+    "    if (conn && conn.platform === \"etsy\") form.appendChild(el(\"p\", \"store-quiet store-change-where\", \"Etsy allows a stock level from 0 to 999.\"));\n"],
+  "stock-line-hidden-for-stock": ["changesUi",
+    "      if (stockNote) stockNote.hidden = pick.value !== \"stock\";\n", "      if (stockNote) stockNote.hidden = true;\n"],
+  "stock-line-css-gone": ["inventory",
+    "    .iv-store-slot .store-change-where[hidden]{display:none}\n", ""],
   "undo-unconfirmed": ["changesUi",
     "          undo.hidden = true; sure.hidden = false; cancel.hidden = false;\n", "          undo.hidden = true; sure.hidden = false; cancel.hidden = false; sure.click();\n"]
 };
@@ -1221,6 +1234,39 @@ function loadPageScript(answers) {
       FILES.inventory.indexOf("<div class=\"iv-store-slot\" data-store-item=\"' + id + '\" data-store-conn=\"' + escapeHtml(it.store_connection_id || \"\") +") !== -1 &&
       FILES.inventory.indexOf("<script src=\"/scripts/store-changes.js\"></script>") !== -1 &&
       FILES.inventory.indexOf("input.title = on ? \"This comes from your store. Change it in your store, or propose a change.\" : \"\";") !== -1);
+
+    // NAMED (Nov 15 2026, S5): the platform's stock line shows only while a stock change is chosen, and follows the picker live.
+    {
+      const SH = "conn-shopify", SN = "conn-shopify-noloc", ET = "conn-etsy", AM = "conn-amazon";
+      const pg = loadPageScript(function (method, p) {
+        if (method === "GET" && p === "/api/store/connections") return { status: 200, data: { connections: [
+          { id: SH, platform: "shopify", permission: "read_write", status: "connected", currency: "USD", location_name: "Main Warehouse" },
+          { id: SN, platform: "shopify", permission: "read_write", status: "connected", currency: "USD" },
+          { id: ET, platform: "etsy", permission: "read_write", status: "connected", currency: "USD" },
+          { id: AM, platform: "amazon", permission: "read_write", status: "connected", currency: "USD" }] } };
+        return null;
+      });
+      const lst = new El("div"), slots = {};
+      [SH, SN, ET, AM].forEach(function (id) { const sl = lst.appendChild(new El("div")); sl.setAttribute("data-store-item", "item-" + id); sl.setAttribute("data-store-conn", id); sl.setAttribute("data-store-price", "12"); slots[id] = sl; });
+      pg.win.bfStoreChanges.decorateInventory(lst);
+      await flush();
+      const WORDS = { [SH]: "Stock changes apply at Main Warehouse.", [SN]: "Choose a location for stock changes on the Store Agent page before proposing a stock change.",
+        [ET]: "Etsy allows a stock level from 0 to 999.", [AM]: "Stock changes apply to items you ship yourself; Amazon keeps the stock of items it ships for you (FBA)." };
+      const rows = {};
+      Object.keys(slots).forEach(function (id) {
+        const sl = slots[id], notes = find(sl, function (e) { return /store-change-where/.test(e.className); }), pick = find(sl, function (e) { return e.tagName === "SELECT"; })[0];
+        const r = { notes: notes.length, text: notes[0] && notes[0].textContent, price: notes[0] && notes[0].hidden };
+        if (pick && pick.listeners.change) { pick.value = "stock"; pick.listeners.change({ target: pick }); r.stock = notes[0] && notes[0].hidden;
+          pick.value = "price"; pick.listeners.change({ target: pick }); r.back = notes[0] && notes[0].hidden; }
+        rows[id] = r;
+      });
+      check("L10. Shopify (with and without a location), Etsy and Amazon: one stock line each, with its words, hidden while \"New price\" is chosen",
+        Object.keys(rows).every(function (id) { return rows[id].notes === 1 && rows[id].text === WORDS[id] && rows[id].price === true; }), J(rows));
+      check("L10. choosing \"New stock level\" shows the line at once, and choosing \"New price\" again hides it (the picker's change, live)",
+        Object.keys(rows).every(function (id) { return rows[id].stock === false && rows[id].back === true; }), J(rows));
+      check("L10. a hidden line stays hidden on both pages: [hidden] is display: none for it on inventory.html and store-agent.html",
+        FILES.inventory.indexOf("    .iv-store-slot .store-change-where[hidden]{display:none}\n") !== -1 && FILES.page.indexOf("    .store-change-where[hidden] { display: none; }") !== -1);
+    }
 
     // the Approvals card, run from proposals.html's own functions
     const fns = ["escapeHtml", "storeChangeText", "storeChangePayloadFields"].map(function (n) { return fnSource(FILES.proposals, n); });

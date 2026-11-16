@@ -82,6 +82,16 @@ const OUT2 = process.env.SOCIAL_S2_OUT || path.join(os.homedir(), "Downloads", "
 const OUT3 = process.env.SOCIAL_S3_OUT || path.join(os.homedir(), "Downloads", "s3");
 // NAMED (Nov 15 2026, S4): section 9's screenshots.
 const OUT4 = process.env.SOCIAL_S4_OUT || path.join(os.homedir(), "Downloads", "s4");
+/* NAMED (Nov 15 2026, S5): the closing "Screenshots:" line is the folders the run actually wrote an image to. BEFORE it
+   named OUT, OUT2 and OUT3 by hand and missed OUT4 (s4). AFTER every fs.writeFileSync of an image, wherever it is
+   called, records its folder here, so a new folder can never be left out. */
+const SHOT_DIRS = new Set();
+const writeFileSyncOf = fs.writeFileSync;
+fs.writeFileSync = function (file) {
+  const out = writeFileSyncOf.apply(fs, arguments);
+  if (typeof file === "string" && /\.(png|jpe?g|gif|webp)$/i.test(file)) SHOT_DIRS.add(path.dirname(path.resolve(file)));
+  return out;
+};
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const PAGE = "agents/social.html";
 
@@ -635,7 +645,8 @@ function contrast(fg, bg) {
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT + ", " + OUT2 + " and " + OUT3);
+  const shotDirs = [...SHOT_DIRS];
+  console.log("\nScreenshots: " + (shotDirs.length ? shotDirs.join(", ") : "none written"));
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);

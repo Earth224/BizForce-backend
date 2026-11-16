@@ -22,6 +22,10 @@
      C. THE BUTTONS. "Propose a change" and "Propose" carry the site's button classes for both pages:
         action-btn (defined by store-agent.html) and bf-btn (css/bizforce-ui.css, which inventory.html
         loads). Each page defines exactly one of the two, so nothing is styled twice and nothing is bare.
+        NAMED (Nov 15 2026, S5): C5 and C6, the propose form's stock line (Shopify's "Stock changes apply at
+        <location>.", Etsy's "Etsy allows a stock level from 0 to 999.") shows only while "New stock level" is
+        chosen, and follows the field picker live (a real change event); inventory.html's side is in
+        scripts/checkStoreChanges.js (L10).
      R. THE ROUTE. GET /api/inventory/items?store_connection_id= narrows to that store's rows, after the
         caller's own (user_id first), and refuses anything but a UUID with a 400; without it, the list
         is as before.
@@ -71,6 +75,10 @@ const MUTATIONS = {
   "pager-size-ignored": [[CONNECT, "page.limit = Number(size.value) || 25; page.offset = 0;", "page.offset = 0;"]],
   // C: the buttons are bare on inventory.html again
   "propose-bare-on-inventory": [[CHANGES, "\"action-btn action-btn--ghost bf-btn bf-btn-ghost store-change-open\"", "\"action-btn action-btn--ghost store-change-open\""]],
+  // NAMED (Nov 15 2026, S5): the stock line only while a stock change is chosen (C5, C6)
+  "tab-stock-line-always": [[CHANGES, "      if (stockNote) stockNote.hidden = pick.value !== \"stock\";\n", ""]],
+  "tab-stock-line-not-live": [[CHANGES, "    pick.addEventListener(\"change\", syncField);\n", ""]],
+  "tab-stock-line-css-gone": [[PAGE, "    .store-change-where[hidden] { display: none; }", ""]],
   "propose-send-bare-on-inventory": [[CHANGES, "\"action-btn bf-btn store-change-send\"", "\"action-btn store-change-send\""]],
   // R: the route ignores the store
   "route-unfiltered": [[SERVER, "    if (storeConnectionId !== undefined) itemQuery = itemQuery.eq(\"store_connection_id\", storeConnectionId);\n", ""]],
@@ -110,6 +118,7 @@ const flush = async n => { for (let i = 0; i < (n || 20); i++) await new Promise
 
 /* ── fixtures ── */
 const C_SHOP = "a1111111-1111-4111-8111-111111111111", C_WOO = "a2222222-2222-4222-8222-222222222222";
+const C_ETSY = "a3333333-3333-4333-8333-333333333333";   // NAMED (Nov 15 2026, S5)
 const conn = (id, extra) => Object.assign({ id: id, platform: "shopify", store: "maple.myshopify.com", status: "connected", permission: "read_write",
   currency: "USD", connected_since: "2026-11-01T00:00:00Z", last_sync_at: "2026-11-14T00:00:00Z", stock_scope: "location", location_name: "Main warehouse", location_id: "gid://shopify/Location/1" }, extra || {});
 const item = (i, connId, extra) => Object.assign({ id: "b0000000-0000-4000-8000-" + String(i).padStart(12, "0"), name: "Product " + i, sku: "SKU-" + i,
@@ -248,6 +257,28 @@ const shown = (w, n) => { for (let e = n; e && e.nodeType === 1; e = e.parentEle
     /\n\s*\.action-btn \{/.test(page) && /\n\s*\.action-btn--ghost \{/.test(page) && !linksUi(page) && !/\.bf-btn/.test(page));
   check("C3. inventory.html loads css/bizforce-ui.css, whose .bf-btn and .bf-btn.bf-btn-ghost rules style the buttons, and defines no action-btn",
     linksUi(inv) && /(^|\n)\.bf-btn,/.test(css) && /(^|\n)\.bf-btn\.bf-btn-ghost,/.test(css) && !/\.action-btn/.test(inv));
+  // NAMED (Nov 15 2026, S5): the stock line under the form only while "New stock level" is chosen, live.
+  p = runPage(answers([conn(C_SHOP), conn(C_ETSY, { platform: "etsy", store: "maple-goods", stock_scope: null, location_name: null, location_id: null })],
+    id => (id === C_SHOP ? SHOP_ITEMS.slice(0, 1) : id === C_ETSY ? [item(70, C_ETSY, { source: "etsy" })] : [])));
+  await flush(30);
+  const lineRows = {};
+  for (const [key, id] of [["shopify", C_SHOP], ["etsy", C_ETSY]]) {
+    const b = p.doc.getElementById("storeProducts-" + id), r = {};
+    const notes = b ? b.querySelectorAll(".store-change-where") : [], pick = b && b.querySelector(".store-change-field");
+    if (b) b.querySelector(".store-change-open").click();
+    r.count = notes.length; r.text = notes[0] && notes[0].textContent; r.pick = pick && pick.value; r.price = notes[0] ? shown(p.w, notes[0]) : null;
+    if (pick) {
+      pick.value = "stock"; pick.dispatchEvent(new p.w.Event("change", { bubbles: true })); r.stock = shown(p.w, notes[0]);
+      pick.value = "price"; pick.dispatchEvent(new p.w.Event("change", { bubbles: true })); r.back = shown(p.w, notes[0]);
+    }
+    lineRows[key] = r;
+  }
+  check("C5. the Store tab's propose form, opened on \"New price\": no stock line showing (Shopify's \"Stock changes apply at Main warehouse.\", Etsy's \"Etsy allows a stock level from 0 to 999.\")",
+    lineRows.shopify.count === 1 && lineRows.shopify.text === "Stock changes apply at Main warehouse." && lineRows.etsy.count === 1 && lineRows.etsy.text === "Etsy allows a stock level from 0 to 999." &&
+    lineRows.shopify.pick === "price" && lineRows.shopify.price === false && lineRows.etsy.price === false, J(lineRows));
+  check("C6. choosing \"New stock level\" shows the line at once; \"New price\" again hides it (a change event on the real select)",
+    lineRows.shopify.stock === true && lineRows.shopify.back === false && lineRows.etsy.stock === true && lineRows.etsy.back === false, J(lineRows));
+  check("C6. store-agent.html keeps a hidden stock line hidden: .store-change-where[hidden] is display: none", /\n    \.store-change-where\[hidden\] \{ display: none; \}/.test(FILES[PAGE]));
   check("C4. inventory.html still loads scripts/store-changes.js and leaves each synced row its slot", /<script src="\/scripts\/store-changes\.js"><\/script>/.test(inv) && /data-store-item=/.test(inv));
 
   /* ── R ── */
