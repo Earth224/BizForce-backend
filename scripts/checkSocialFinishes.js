@@ -13,6 +13,8 @@
    C. agents/social.html Your videos: Instagram's and Facebook's chips say that status, a posted
       one links to the post, a failed one says why; chips for connected platforms only; the
       file-type rule stays as the disabled Prepare button's reason.
+   F8-F10 (NAMED Nov 15 2026, S4): an empty, blank or missing description on a proposal card reads "None" in the
+      site's muted text colour (.exec-block.pf-none); a real one is unchanged, and no other field changes.
    G. scripts/termaximus-guide.js: below 640 px the Guide button is a 48 px round icon button,
       named "Guide", bottom-right inside the safe-area insets, z-index 40 (over the page, under
       every dialog), and a spacer pads the page's end (kept last, after a footer appended later)
@@ -38,6 +40,18 @@ const FRONT_FILES = [PROPOSALS, PAGE, OAUTH, YT, TT, IG, FB, GUIDE];
 const BACK_FILES = [MV, SERVER];
 
 const MUTATIONS = {
+  // NAMED (Nov 15 2026, S4): an empty description draws an empty box again (F8)
+  "description-empty-box": [[PROPOSALS, "(empty ? \"None\" : escapeHtml(t))", "escapeHtml(t)"]],
+  // F8: "None" is not muted
+  "description-none-not-muted": [[PROPOSALS, "(empty ? \" pf-none\" : \"\")", "\"\""]],
+  // F8: the muted rule is gone
+  "description-none-rule-gone": [[PROPOSALS, "    .exec-block.pf-none{color:var(--bf-text-muted, #8892b8)}\n", ""]],
+  // F8: spaces only count as a description
+  "description-blank-counts": [[PROPOSALS, "  var empty = t.trim() === \"\";", "  var empty = t === \"\";"]],
+  // F9: the Bluesky profile card keeps the old empty box
+  "bsky-description-old": [[PROPOSALS, "description</span></div>' + descriptionBlock(payload.description, \"\"));", "description</span></div><pre class=\"exec-block\">' + escapeHtml(payload.description) + '</pre>');"]],
+  // F10: "None" leaks into another field (the title)
+  "none-in-title": [[PROPOSALS, "escapeHtml(String(payload.title == null ? \"\" : payload.title)) + '</span></div>' +\n      '<div><span class=\"pf-label\">privacy", "escapeHtml(String(payload.title || \"None\")) + '</span></div>' +\n      '<div><span class=\"pf-label\">privacy"]],
   // F: a detail value is in the typewriter font again
   "proposal-mono-back": [[PROPOSALS, ".pf-value{color:#e6edf3;font-family:inherit;",
     ".pf-value{color:#e6edf3;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"]],
@@ -151,7 +165,8 @@ const PROPOSAL_FIXTURES = [
   prop("publish_mastodon_post", { posts_as: "@maple@mastodon.social", text: "x" }, { status: "failed", execution_error: "The server refused the post." })
 ];
 
-async function runProposals() {
+async function runProposals(fixtures) {
+  const LIST = fixtures || PROPOSAL_FIXTURES;
   const html = FILES[PROPOSALS];
   const inline = /<script>\n([\s\S]*?)<\/script>/.exec(html);
   if (!inline) return null;
@@ -162,7 +177,7 @@ async function runProposals() {
   w.fetch = function (url) {
     const p = String(url).replace(API, "");
     let body = { error: "not in this fixture" }, status = 404;
-    if (/^\/api\/proposals(\?|$)/.test(p)) { status = 200; body = { proposals: PROPOSAL_FIXTURES }; }
+    if (/^\/api\/proposals(\?|$)/.test(p)) { status = 200; body = { proposals: LIST }; }
     else if (/^\/api\/media/.test(p)) { status = 200; body = { media: [] }; }
     else if (p === "/api/videos") { status = 200; body = { videos: [{ id: VID, label: "Spring cakes", bytes: 3145728, mime: "video/mp4", status: "ready" }] }; }
     const pr = Promise.resolve({ ok: status < 300, status: status, json: function () { return Promise.resolve(body); } });
@@ -308,6 +323,32 @@ const leadPx = v => { const m = /calc\((\d+(?:\.\d+)?)px \+ env\(safe-area-inset
   const page = FILES[PROPOSALS];
   check("F7. the stylesheet names a monospace family once: the payload-raw rule", (page.match(/font-family:[^;}]*monospace/g) || []).length === 1 &&
     /\.exec-block\.payload-raw\{[^}]*font-family:ui-monospace[^}]*\}/.test(page), (page.match(/[^\n]*monospace[^\n]*/g) || []).join(" | "));
+
+  // NAMED (Nov 15 2026, S4): "None", muted, for an empty, blank or missing description; nothing else changes.
+  const YT_P = { channel_id: "UC123", title: "", privacy: "private", made_for_kids: false, video: { id: VID, bytes: 3145728 } };
+  const ytWith = d => Object.assign({}, YT_P, d === undefined ? {} : { description: d });
+  const NONE_FIX = [prop("publish_youtube_video", ytWith("")), prop("publish_youtube_video", ytWith(undefined)), prop("publish_youtube_video", ytWith("  \n ")),
+    prop("publish_youtube_video", ytWith(null)), prop("publish_youtube_video", ytWith("How we bake them.")),
+    prop("update_bluesky_profile", { posts_as: "maplestreet.bsky.social", display_name: "Maple Street", description: "" }),
+    prop("update_bluesky_profile", { posts_as: "maplestreet.bsky.social", display_name: "Maple Street", description: "Cakes and bread." })];
+  const np = await runProposals(NONE_FIX);
+  const nCards = np ? $(np.doc, ".proposal-card") : [];
+  const descOf = card => { const lab = $(card, ".payload-fields .pf-label").filter(l => l.textContent === "description")[0]; const pre = lab && lab.parentNode.nextElementSibling;
+    return pre ? { text: pre.textContent, cls: pre.className } : null; };
+  const nd = nCards.map(descOf);
+  check("F8. an empty, missing, blank (spaces and line breaks) or null YouTube description reads \"None\", muted (.exec-block.pf-none, the site's --bf-text-muted)",
+    nCards.length === 7 && [0, 1, 2, 3].every(i => nd[i] && nd[i].text === "None" && nd[i].cls === "exec-block yt-description pf-none") &&
+    /\.exec-block\.pf-none\{color:var\(--bf-text-muted, #8892b8\)\}/.test(FILES[PROPOSALS]), J(nd));
+  check("F9. a real description is drawn as before (its text, not muted); a Bluesky profile's empty description reads \"None\" too, a real one its text",
+    !!nd[4] && nd[4].text === "How we bake them." && nd[4].cls === "exec-block yt-description" && !!nd[5] && nd[5].text === "None" && nd[5].cls === "exec-block pf-none" &&
+    !!nd[6] && nd[6].text === "Cakes and bread." && nd[6].cls === "exec-block", J(nd.slice(4)));
+  // every other row of the card is the same whether the description is there or not (the empty title stays empty)
+  const others = card => { const f = card.querySelector(".payload-fields"); if (!f) return null; const c = f.cloneNode(true);
+    Array.prototype.forEach.call(c.querySelectorAll("pre.yt-description"), n => n.remove()); return c.innerHTML; };
+  const titleVal = card => { const v = card.querySelector(".yt-title"); return v ? v.textContent : null; };
+  check("F10. no other field changes: the YouTube card's other rows are identical with and without a description, and an empty title stays empty (no \"None\")",
+    nCards.length === 7 && [0, 1, 2, 3].every(i => others(nCards[i]) === others(nCards[4])) && [0, 1, 2, 3, 4].every(i => titleVal(nCards[i]) === ""),
+    J([0, 1, 2, 3, 4].map(i => titleVal(nCards[i]))));
 
   /* ── S ── */
   console.log("\n══ S. Instagram and Facebook status per video (lib/memberVideos.js) ══");

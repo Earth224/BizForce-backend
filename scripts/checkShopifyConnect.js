@@ -129,6 +129,8 @@ const MUTATIONS = {
   "uninstall-ignored": ["hooks",
     "  if (row.topic === APP_UNINSTALLED || row.topic === SHOP_REDACT) {\n",
     "  if (row.topic === SHOP_REDACT) {\n"],
+  // NAMED (Nov 15 2026, S4): the unreadable customers/redact raises no alert (H8b)
+  "redact-alert-not-raised": ["hooks", "    await deps.raiseAlert(REDACT_UNREADABLE_ALERT, {", "    if (false) await deps.raiseAlert(REDACT_UNREADABLE_ALERT, {"],
   "shop-redact-ignored": ["hooks",
     "  if (row.topic === APP_UNINSTALLED || row.topic === SHOP_REDACT) {\n",
     "  if (row.topic === APP_UNINSTALLED) {\n"],
@@ -629,6 +631,10 @@ function mountRoutes(env) {
   const shop = makeShop(env.shop, events);
   const logs = [];
   const routes = {};
+  // NAMED (Nov 15 2026, S4): server.js wires raiseAlert to opsAlerts.raise; BEFORE the harness had no opsAlerts, so
+  // the call threw and the run logged "[ShopifyWebhooks] the customers/redact alert failed". AFTER a stub records each
+  // alert (nothing is sent) and H8b checks it.
+  const alerts = [];
   const crypt = {
     encrypt: function (p) {
       events.push(p === TOKEN ? "encrypt:access" : (String(p).indexOf(REFRESH) !== -1 ? "encrypt:refresh" : "encrypt:other"));
@@ -647,6 +653,7 @@ function mountRoutes(env) {
     isValidUuid: function (v) { return /^[0-9a-f-]{36}$/.test(String(v)); },
     getUserPlan: async function () { return { active: true }; },
     FRONTEND_URL: "https://bizforceai.net",
+    opsAlerts: { raise: function (key, info) { alerts.push({ key: key, info: info }); return Promise.resolve({ sent: false, recorded: true }); } },
     fetch: globalThis.fetch,
     setTimeout: function (fn) { fn(); return 0; },
     setImmediate: setImmediate,
@@ -670,7 +677,7 @@ function mountRoutes(env) {
   vm.createContext(ctx);
   vm.runInContext(WEBHOOK_SECTION, ctx, { filename: "server.js (Shopify webhooks)" });
   vm.runInContext(STORE_SECTION, ctx, { filename: "server.js (store section)" });
-  return { db: db, shop: shop, logs: logs, routes: routes, events: events, ctx: ctx };
+  return { db: db, shop: shop, logs: logs, routes: routes, events: events, ctx: ctx, alerts: alerts };
 }
 async function hit(m, key, req) {
   const r = m.routes[key];
@@ -1280,6 +1287,12 @@ function listAnswers(over) {
   check("H8. customers/redact and customers/data_request: 200, recorded and processed, and nothing else touched",
     rr.status === 200 && rd.status === 200 && m.db.t.member_store_connections.indexOf(c3) !== -1 && m.db.t.inventory_items.some(function (i) { return i.store_connection_id === c3.id; }) &&
     m.db.t.shopify_webhook_events.filter(function (e) { return /^customers\//.test(e.topic) && e.processed_at; }).length === 2);
+  // NAMED (Nov 15 2026, S4): that customers/redact named no orders, so one ops alert is raised for its receipt, and no alert fails.
+  const redactRow = m.db.t.shopify_webhook_events.filter(function (e) { return e.topic === "customers/redact"; })[0];
+  const redactAlerts = m.alerts.filter(function (a) { return a.key === "shopify_redact_unreadable"; });
+  check("H8b. the customers/redact with no readable order ids raises one ops alert (shopify_redact_unreadable) fingerprinted by its receipt, and no alert is logged as failed",
+    !!redactRow && redactAlerts.length === 1 && redactAlerts[0].info.fingerprint === redactRow.id && !m.logs.some(function (l) { return /alert failed|no ops alert is wired/.test(l); }),
+    JSON.stringify([redactAlerts.map(function (a) { return a.info && a.info.fingerprint; }), m.logs.filter(function (l) { return /alert/.test(l); })]));
   const n = m.db.t.shopify_webhook_events.length;
   rw = await webhook(m, "orders/create", "{}");
   check("H9. a topic BizForce did not subscribe to: 200 ignored, nothing recorded", rw.status === 200 && rw.body.ignored === true && m.db.t.shopify_webhook_events.length === n);

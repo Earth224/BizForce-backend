@@ -16,6 +16,8 @@
       ?tab=create open Create Account, anything else Sign In. Geometry in scripts/browserCheckSignIn.js.
    L. "Create Your Own" goes to app.html#create, as do the home page's Get Started and suppressed.html's
       Create your account. W. the Wallet button: google_wallet true, and not an iPhone or iPad.
+   C13 (NAMED Nov 15 2026, S4): the card's answer can arrive before the support script has run; the Support button is
+      then drawn once the page has loaded (BEFORE it never showed: the flake browserCheckCardMaker hit 3 runs in 5).
 
    No network, no database. BIZFORCE_FRONTEND_DIR overrides the frontend. MUTATE=<name> | all. */
 const fs = require("fs");
@@ -29,6 +31,9 @@ const CV = "card-view.html", DC = "digital-cards.html", APP = "app.html", IDX = 
 const SHELL = "lib/cardShell.generated.js";
 
 const MUTATIONS = {
+  // NAMED (Nov 15 2026, S4): Support is dropped again when its script loads after the card's answer (C13)
+  "support-lost-when-late": [[CV, "  if (!links.length) return;\n", "  if (!window.BFSupport || !links.length) return;\n"]],
+  "support-late-not-retried": [[CV, "window.addEventListener(\"load\", function () { if (window.BFSupport) renderCardSupport(links); }, { once: true });", "void 0;"]],
   // the upright card fills the screen again
   "vertical-full-height-back": [[CV, "    #cardViewport.cv-vertical #cardPreview{position:relative;inset:auto;aspect-ratio:1 / 1.75;flex:none}",
     "    #cardViewport.cv-vertical #cardPreview{position:absolute;inset:0;width:100%;height:100%;flex:none}"]],
@@ -176,6 +181,37 @@ async function runCard(ml, ua) {
   check("C12. the server's card shell (/c/<slug>) is built from this page and carries the same rules",
     FILES[SHELL].indexOf("--cv-w:min(560px, 92vw, calc(var(--cv-avail) * 1.75))") !== -1 && FILES[SHELL].indexOf("function fitCard()") !== -1 &&
     FILES[SHELL].indexOf("app.html#create") !== -1);
+
+  // NAMED (Nov 15 2026, S4): the support script arrives after the card's answer (the page still loading).
+  {
+    const dom = new JSDOM(strip(FILES[CV]), { url: "https://bizforceai.net/c/jane-doe", runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window; windows.push(w);
+    let state = "interactive";
+    Object.defineProperty(w.document, "readyState", { get: () => state, configurable: true });
+    w.fetch = function (u) {
+      const pth = String(u).replace(API, "");
+      const body = /^\/api\/cards\/slug\//.test(pth) ? { card: Object.assign({}, CARD), support_links: [{ kind: "link", label: "Tip jar", url: "https://example.test/tip" }] } : {};
+      const pr = Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body), blob: () => Promise.resolve({ type: "", size: 0 }) }); pr.catch(() => {}); return pr;
+    };
+    w.navigator.sendBeacon = () => true;
+    w.HTMLMediaElement.prototype.load = function () {};
+    w.HTMLCanvasElement.prototype.getContext = function () { return null; };
+    const errs = [];
+    try { w.eval(fs.readFileSync(path.join(FRONTEND, "scripts/bf-card.js"), "utf8")); } catch (e) { errs.push("bf-card: " + e.message); }
+    for (const code of inlineScripts(FILES[CV])) { try { w.eval(code); } catch (e) { errs.push(e.message); } }
+    await flush(30);
+    const early = w.document.getElementById("cvSupportBtn").hidden;
+    let mounted = 0;
+    w.BFSupport = { mountPublic: function () { mounted++; } };
+    state = "complete";
+    w.dispatchEvent(new w.Event("load"));
+    await flush(10);
+    const late = { hidden: w.document.getElementById("cvSupportBtn").hidden, mounted: mounted, panel: w.document.getElementById("cvSupport").hidden };
+    w.document.getElementById("cvSupportBtn").click();
+    check("C13. the card's answer before the support script: no Support yet; once the page has loaded, Support is drawn once (mounted once, its panel closed) and opens",
+      errs.length === 0 && early === true && late.hidden === false && late.mounted === 1 && late.panel === true && w.document.getElementById("cvSupport").hidden === false,
+      J([errs, early, late]));
+  }
 
   /* ── P ── */
   console.log("\n══ P. the maker's preview: the public card's ratios and caps ══");

@@ -10296,14 +10296,23 @@ app.get("/api/inventory/items", requireAuth, async function (req, res, next) {
       return res.status(400).json({ error: range.field + " " + range.reason, field: range.field });
     }
 
+    /* NAMED (Nov 15 2026, S4): ?store_connection_id=<uuid> narrows the list to the items synced from that one store
+       (the Store tab's product list). Still the caller's own rows only (user_id first); anything but a UUID is a 400. */
+    var storeConnectionId = req.query.store_connection_id;
+    if (storeConnectionId !== undefined && !(typeof storeConnectionId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(storeConnectionId))) {
+      return res.status(400).json({ error: "store_connection_id must be a store connection id", field: "store_connection_id" });
+    }
+
     /* One row past the limit, discarded before responding — the same trick the
        prospects list uses. It answers has_more without a second count query and
        without count: "exact", which makes the database walk the whole table to
        describe one page. */
-    const { data, error } = await supabase
+    var itemQuery = supabase
       .from("inventory_items")
       .select("*")
-      .eq("user_id", req.user.id)
+      .eq("user_id", req.user.id);
+    if (storeConnectionId !== undefined) itemQuery = itemQuery.eq("store_connection_id", storeConnectionId);
+    const { data, error } = await itemQuery
       .order("created_at", { ascending: false })
       .range(range.offset, range.offset + range.limit);
 
@@ -26895,11 +26904,6 @@ app.post("/api/agents/seo/audit", requireAuth, requireActiveSubscription, aiLimi
 // Note that robots.txt does NOT forbid this: /listing/<id> and /shop/<name> are
 // allowed for User-agent: *, with only sub-paths (/stubs/, /favoriters, /sold)
 // disallowed. Permission is not the obstacle; the enforcement layer is.
-//
-// The real route to those three tools is the Etsy Open API v3, which needs a
-// registered app and a key. This project has neither — there is no ETSY_* value
-// in the environment and nothing here calls api.etsy.com — so wiring that up is
-// a credentials-and-onboarding change, not something to fake in the meantime.
 
 // No platform's listing limits are built in. The keyword tool used to measure
 // against Etsy's (140-character titles, 13 tags, 20-character tags); it now

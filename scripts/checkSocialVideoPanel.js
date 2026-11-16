@@ -85,6 +85,10 @@ const MUTATIONS = {
   // TikTok's privacy gets a default (V10)
   "tiktok-privacy-default-added": [[TT, "      var opt = make(\"option\", typeof words[o] === \"string\" ? words[o] : o);\n      opt.value = o;\n",
     "      var opt = make(\"option\", typeof words[o] === \"string\" ? words[o] : o);\n      opt.value = o;\n      if (o === \"PUBLIC_TO_EVERYONE\") opt.selected = true;\n"]],
+  // NAMED (Nov 15 2026, S4): the posted links run together again (V4f)
+  "links-no-gap": [[PAGE, "flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 8px;", "flex-wrap: wrap; align-items: baseline; margin-top: 8px;"]],
+  "links-not-flex": [[PAGE, "    .sf-links { display: flex; flex-wrap: wrap;", "    .sf-links { display: block; flex-wrap: wrap;"]],
+  "links-old-margin": [[PAGE, "    .sf-videos .masto-post-link { display: inline-block; min-width: 0; overflow-wrap: anywhere; }", "    .sf-videos .masto-post-link { display: inline-block; margin-top: 8px; overflow-wrap: anywhere; }"]],
   // the moved Google line is lost (V2)
   "note-lost": [[PAGE, "      <p class=\"bsky-quiet\">Until Google approves BizForce, YouTube keeps uploads from BizForce private.</p>\n", ""]]
 };
@@ -260,6 +264,15 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   check("V4d. ...and the posted TikTok video keeps its player link, the remove line and Check TikTok status",
     $(rowOf(doc, V_SENT.id), "a").some(a => a.href === V_SENT.tiktok_post_url && a.rel === "noopener") &&
     pIn(rowOf(doc, V_SENT.id), "To remove a TikTok post, delete it in the TikTok app.") && !!buttonIn(rowOf(doc, V_SENT.id), "Check TikTok status"));
+  // NAMED (Nov 15 2026, S4): BEFORE each posted link was inline-block with only margin-top: 8px, so two sat on one line
+  // with no space between them. AFTER they sit in the row's .sf-links, a wrapping flex row with a 6px line gap (as
+  // .sf-chips) and 14px between links (the .sf-form rhythm); the site has no spacing tokens, so the values are those.
+  const sentLinks = $(rowOf(doc, V_SENT.id), "a.masto-post-link");
+  check("V4f. the posted links (youtube.com and TikTok's player) sit in one .sf-links row: flex, wrapping, 6px between lines and 14px between links, no margin of their own",
+    sentLinks.length === 2 && sentLinks.every(a => a.parentNode.className === "sf-links" && a.parentNode === sentLinks[0].parentNode) &&
+    /display: flex;/.test(rule(".sf-links")) && /flex-wrap: wrap;/.test(rule(".sf-links")) && /gap: 6px 14px;/.test(rule(".sf-links")) &&
+    !/margin/.test(rule(".sf-videos .masto-post-link")) && /:empty { display: none; }/.test(styleText),
+    J([sentLinks.map(a => a.parentNode.className), rule(".sf-links"), rule(".sf-videos .masto-post-link")]));
   const r0 = await runPage(FILES, {});
   const none = r0.doc;
   check("V4e. nothing connected: no chip, no Prepare button, \"Connect a platform below to send this video.\" on each row, Delete kept",

@@ -176,6 +176,13 @@ const MUTATIONS = {
   "save-to-wrong-card": [[DC, "      url = API_URL + \"/api/digital-cards/\" + activeCardId;\n", "      url = API_URL + \"/api/digital-cards/\" + memberCards[0].id;\n"]],
   // switching with unsaved changes asks nothing (PK-6)
   "unsaved-switch-silent": [[DC, "  if (!cardHasUnsavedChanges()) { go(); return; }\n", "  go(); return;\n"]],
+  // NAMED (Nov 15 2026, S4): the whole label, clamped to two lines, and as a title (PK-2b)
+  "picker-option-no-title": [[DC, "    o.title = o.textContent;\n", ""]],
+  "picker-shown-no-title": [[DC, "textContent = openLabel; shown.title = openLabel; }", "textContent = openLabel; }"]],
+  "picker-select-no-title": [[DC, "  sel.title = openLabel;\n", ""]],
+  "picker-shown-empty": [[DC, "(document.getElementById(\"cardPickerText\") || shown).textContent = openLabel;", "void 0;"]],
+  "picker-not-clamped": [[DC, "-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}", "overflow-wrap:anywhere}"]],
+  "picker-select-shown": [[DC, ".card-pick-box .cust-select{position:absolute;inset:0;width:100%;height:100%;opacity:0;margin:0}", ".card-pick-box .cust-select{margin:0}"]],
   // the pick is not remembered for the session (PK-3, PK-7)
   "pick-not-remembered": [[DC, "function rememberCardPick(id) { try { sessionStorage.setItem(CARD_PICK_KEY, String(id)); }", "function rememberCardPick(id) { try { void id; }"]],
   // the question's Escape does nothing (PK-6b)
@@ -899,6 +906,17 @@ const OUTSIDE = ["fName", "fTitle", "fCompany", "fEmail", "fPhone", "fWebsite", 
     visible(p3.M.w, p3.wrap) && !!title && title.nextElementSibling === p3.wrap && p3.M.d.querySelector("label[for='cardPicker']").textContent === "Your cards" &&
     J(optsOf(p3.sel)) === J([[PA.id, "Jane Smith · bizforceai.net/c/jane · Horizontal", true], [PB.id, "Earth Rose · bizforceai.net/c/earthrose · Vertical", false],
       [PC.id, "Untitled card · no short link · Horizontal", false]]) && p3.sel.className === "cust-select" && p3.M.w.activeCardId === PA.id, J(optsOf(p3.sel)));
+  // NAMED (Nov 15 2026, S4): the open card's whole label shown on up to two lines (the real select lies over it, invisible), and as a title.
+  const pkText = p3.M.d.getElementById("cardPickerText"), pkShown = p3.M.d.getElementById("cardPickerShown");
+  const pkCss = Array.prototype.map.call(p3.M.d.querySelectorAll("style"), n => n.textContent).join("\n");
+  const pkRule = sel => { const i = pkCss.indexOf(sel + "{"); return i < 0 ? "" : pkCss.slice(i + sel.length + 1, pkCss.indexOf("}", i)); };
+  const pk2b = { text: pkText && pkText.textContent, shownTitle: pkShown && pkShown.title, selTitle: p3.sel.title, optTitles: Array.prototype.map.call(p3.sel.options, o => o.title === o.textContent),
+    inBox: !!pkShown && pkShown.parentNode === p3.sel.parentNode && pkShown.getAttribute("aria-hidden") === "true",
+    clamp: /-webkit-line-clamp:2/.test(pkRule(".card-pick-text")) && /overflow:hidden/.test(pkRule(".card-pick-text")) && /-webkit-box/.test(pkRule(".card-pick-text")),
+    over: /position:absolute/.test(pkRule(".card-pick-box .cust-select")) && /inset:0/.test(pkRule(".card-pick-box .cust-select")) && /opacity:0/.test(pkRule(".card-pick-box .cust-select")) };
+  check("PK-2b the open card's whole label is shown (clamped to two lines, an ellipsis after) and is the title of the label, the select and every option; the select lies invisible over it, the label hidden from screen readers",
+    pk2b.text === "Jane Smith · bizforceai.net/c/jane · Horizontal" && pk2b.shownTitle === pk2b.text && pk2b.selTitle === pk2b.text && pk2b.optTitles.length === 3 && pk2b.optTitles.every(Boolean) &&
+    pk2b.inBox && pk2b.clamp && pk2b.over, J(pk2b));
   // switching with nothing changed: remembered, the maker opened again; no question
   await p3.pick(PB.id);
   check("PK-3a choosing another card with nothing unsaved asks nothing, remembers its id for the session (bf_card_pick) and opens the maker again",

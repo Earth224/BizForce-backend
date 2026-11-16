@@ -31,6 +31,18 @@
    (#apLiveStatus) is a check now: below 560 px it wraps (white-space normal,
    overflow-wrap anywhere) and with a long status nothing passes 390 px on the
    17 tabbed pages and Executive; at 1440 px it keeps to one line.
+   NAMED (Nov 15 2026, S4): the Store tab with a store connected, and the
+   "Propose a change" buttons on store-agent.html and inventory.html. The API
+   answers from STORE_API (a connected Shopify store, read_write, USD, its
+   location; 30 synced products). At 1440 px: the connect form is folded (not
+   displayed) behind a displayed "Connect another store", which opens it; the
+   store's products (name, SKU, stock at the location, price in USD) with the
+   pager; "Propose a change" opens its form; both buttons are drawn by the
+   page's button rule (the gradient or the ghost border, a radius, padding),
+   never the browser's grey button. inventory.html: the same two buttons drawn
+   by css/bizforce-ui.css's .bf-btn (a 44 px pill). At 390 px: nothing on the
+   Store tab passes the screen's edge. Screenshots to <s4>: store-tab-1440.png,
+   store-tab-390.png, inventory-propose.png.
    ══════════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
@@ -43,6 +55,22 @@ const REPO = path.join(__dirname, "..");
 const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "BizForce-fronyend");
 const OUT = process.env.AGENT_TABS_OUT || path.join(os.homedir(), "Downloads", "agent-tabs");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
+// NAMED (Nov 15 2026, S4): the S4 section's answers; null everywhere else (every API request an empty 200, as before).
+const OUT4 = process.env.SOCIAL_S4_OUT || path.join(os.homedir(), "Downloads", "s4");
+let STORE_API = null;
+const S4_CONN = { id: "a1111111-1111-4111-8111-111111111111", platform: "shopify", store: "maple.myshopify.com", status: "connected", permission: "read_write", currency: "USD",
+  connected_since: "2026-11-01T00:00:00Z", last_sync_at: "2026-11-14T00:00:00Z", stock_scope: "location", location_name: "Main warehouse", location_id: "gid://shopify/Location/1" };
+const S4_ITEMS = Array.from({ length: 30 }, (_, k) => ({ id: "b0000000-0000-4000-8000-" + String(k + 1).padStart(12, "0"), name: "Spring cake " + (k + 1), sku: "CAKE-" + (k + 1),
+  quantity_on_hand: k + 3, unit_price: (20 + k) + ".00", source: "shopify", store_connection_id: S4_CONN.id, status: "active", unit: "unit", created_at: "2026-11-10T00:00:00Z" }));
+function storeAnswer(u, method) {
+  if (u.pathname === "/api/store/connections" && method === "GET") return { connections: [S4_CONN], shopify_available: true, etsy_available: true, amazon_available: true, amazon_draft: false };
+  if (u.pathname === "/api/store/changes") return { changes: [] };
+  if (u.pathname === "/api/inventory/items" && method === "GET") {
+    const limit = Number(u.searchParams.get("limit") || 25), offset = Number(u.searchParams.get("offset") || 0);
+    return { items: S4_ITEMS.slice(offset, offset + limit), limit: limit, offset: offset, has_more: offset + limit < S4_ITEMS.length };
+  }
+  return {};
+}
 
 const CANDIDATES = [process.env.CHROME_PATH,
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
@@ -175,7 +203,8 @@ true`;
       try {
         if (u.origin === origin) await cdp.send("Fetch.continueRequest", { requestId });
         else if (u.hostname === API_HOST) {
-          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(request.method === "OPTIONS" ? "" : "{}").toString("base64"),
+          const answer = request.method === "OPTIONS" ? "" : STORE_API ? JSON.stringify(STORE_API(u, request.method)) : "{}";
+          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(answer).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,DELETE,OPTIONS" }] });
         } else await cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" });
@@ -248,6 +277,68 @@ true`;
     check("executive: at 390 px nothing on the page passes the screen's edge", ex390.wide.length === 0 && ex390.docW <= 390, JSON.stringify(ex390));
     console.log("    status line at 390 px (right edge / lines): " + statusSeen.join(", "));
     check("the status line at 1440 px stays on one line (white-space nowrap)", deskStatus === "nowrap", deskStatus);
+
+    /* ── NAMED (Nov 15 2026, S4): the Store tab with a store connected; the Propose buttons on both pages ── */
+    console.log("\n══ S4. store-agent.html Store tab, one Shopify store connected; inventory.html's Propose buttons ══");
+    fs.mkdirSync(OUT4, { recursive: true });
+    STORE_API = storeAnswer;
+    exceptions.length = 0;
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    const storeReady = "#storeProducts-" + S4_CONN.id + " .store-pager:not([hidden])";
+    await openPage(cdp, origin, "store-agent.html#ag-store", storeReady);
+    await evaluate(cdp, "document.getElementById('agTab-store').click(), true");
+    const BTN = "function(n){if(!n)return null;var c=getComputedStyle(n);return {bg:c.backgroundImage.slice(0,15),bgc:c.backgroundColor,border:c.borderTopWidth+' '+c.borderTopStyle,radius:c.borderTopLeftRadius,pad:c.paddingLeft,h:Math.round(n.getBoundingClientRect().height),font:c.fontFamily,shown:window.__bf.shown(n)};}";
+    const st4 = await evaluate(cdp, "(function(){var b=window.__bf,B=" + BTN + ";var box=document.getElementById('storeProducts-" + S4_CONN.id + "');var rows=box?box.querySelectorAll('.store-prod'):[];" +
+      "var r0=rows[0];return {form:b.shown(document.getElementById('storeConnectForm')),another:b.shown(document.getElementById('storeConnectAnother')),rows:rows.length," +
+      "first:r0?[r0.querySelector('.store-prod-name').textContent,r0.querySelector('.store-prod-sku').textContent,r0.querySelector('.store-prod-stock').textContent,r0.querySelector('.store-prod-price').textContent]:null," +
+      "info:box?box.querySelector('.store-pager-info').textContent:null,open:B(r0&&r0.querySelector('.store-change-open'))};})()");
+    check("S4 Store tab, a store connected: the connect form is folded (not displayed) and \"Connect another store\" is displayed", !st4.form && st4.another, JSON.stringify(st4));
+    check("S4 ...the store's products under it: 25 rows, name, SKU, stock at Main warehouse, price in USD, and the pager",
+      st4.rows === 25 && JSON.stringify(st4.first) === JSON.stringify(["Spring cake 1", "SKU CAKE-1", "3Stock at Main warehouse", "20.00 USDStore price"]) && st4.info === "Showing 1\u201325, and there are more.", JSON.stringify(st4));
+    await evaluate(cdp, "(function(){document.querySelector('#storeProducts-" + S4_CONN.id + " .store-change-open').click();return true;})()");
+    await sleep(200);
+    const st4b = await evaluate(cdp, "(function(){var B=" + BTN + ";var send=document.querySelector('#storeProducts-" + S4_CONN.id + " .store-change-send');var row=document.querySelector('#storeConnections .store-conn .store-row');var sync=[].filter.call(row.querySelectorAll('button'),function(x){return x.textContent==='Sync now'})[0],off=[].filter.call(row.querySelectorAll('button'),function(x){return x.textContent==='Disconnect'})[0];" +
+      "return {send:B(send),open:B(document.querySelector('#storeProducts-" + S4_CONN.id + " .store-change-open')),sync:B(sync),off:B(off)};})()");
+    // drawn as the page's own action buttons: the same radius, padding and font as its Sync now and Disconnect
+    const drawnBtn = (x, ghost) => !!x && !!st4b.sync && x.shown && x.font === st4b.sync.font && x.radius === st4b.sync.radius && x.pad === st4b.sync.pad && parseFloat(x.radius) >= 10 &&
+      (ghost ? x.border === "1px solid" && x.bg === "none" && x.bgc === st4b.off.bgc : /^linear-gradient/.test(x.bg));
+    check("S4 Store tab: \"Propose a change\" is drawn as the page's ghost button and \"Propose\" as its gradient button (the radius, padding and font of its Sync now and Disconnect), not the browser's",
+      drawnBtn(st4b.open, true) && drawnBtn(st4b.send, false), JSON.stringify(st4b));
+    await evaluate(cdp, "document.getElementById('storeConnectAnother').click(), true");
+    await sleep(200);
+    const st4c = await evaluate(cdp, "({form:window.__bf.shown(document.getElementById('storeConnectForm')),exp:document.getElementById('storeConnectAnother').getAttribute('aria-expanded'),connect:window.__bf.shown(document.getElementById('storeShopifyBtn'))})");
+    check("S4 Store tab: \"Connect another store\" opens the connect form (picker, store field, box, Connect Shopify)", st4c.form && st4c.exp === "true" && st4c.connect, JSON.stringify(st4c));
+    await evaluate(cdp, "document.getElementById('storeConnectAnother').click(), true");
+    await sleep(150);
+    await evaluate(cdp, "(function(){var n=document.getElementById('storeConnect');n.scrollIntoView({block:'start'});return true;})()");
+    await sleep(200);
+    let shot4 = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT4, "store-tab-1440.png"), Buffer.from(shot4.data, "base64"));
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    await openPage(cdp, origin, "store-agent.html#ag-store", storeReady);
+    await evaluate(cdp, "document.getElementById('agTab-store').click(), true");
+    await sleep(200);
+    const st390 = await evaluate(cdp, "({wide:window.__bf.wide(390),docW:document.documentElement.scrollWidth})");
+    check("S4 Store tab at 390 px: the products and pager stay inside the screen (nothing passes the edge)", st390.wide.length === 0 && st390.docW <= 390, JSON.stringify(st390));
+    await evaluate(cdp, "(function(){var n=document.getElementById('storeProducts-" + S4_CONN.id + "');n.scrollIntoView({block:'start'});window.scrollBy(0,-120);return true;})()");
+    await sleep(200);
+    shot4 = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT4, "store-tab-390.png"), Buffer.from(shot4.data, "base64"));
+    // inventory.html: the same two buttons, drawn by css/bizforce-ui.css's .bf-btn.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await openPage(cdp, origin, "inventory.html", "#itemList .store-change-open");
+    await evaluate(cdp, "document.querySelector('#itemList .store-change-open').click(), true");
+    await sleep(200);
+    const inv4 = await evaluate(cdp, "(function(){var B=" + BTN + ";return {open:B(document.querySelector('#itemList .store-change-open')),send:B(document.querySelector('#itemList .store-change-send'))};})()");
+    const pill = (x, ghost) => !!x && x.shown && x.h >= 44 && parseFloat(x.radius) >= 22 && parseFloat(x.pad) >= 20 && (ghost ? x.border === "1px solid" && x.bg === "none" : /^linear-gradient/.test(x.bg));
+    check("S4 inventory.html: \"Propose a change\" is the site's ghost .bf-btn and \"Propose\" its gradient .bf-btn (44 px pills), not the browser's grey buttons",
+      pill(inv4.open, true) && pill(inv4.send, false), JSON.stringify(inv4));
+    await evaluate(cdp, "(function(){var n=document.querySelector('#itemList .store-change');n.scrollIntoView({block:'center'});return true;})()");
+    await sleep(200);
+    shot4 = await cdp.send("Page.captureScreenshot", { format: "png" });
+    fs.writeFileSync(path.join(OUT4, "inventory-propose.png"), Buffer.from(shot4.data, "base64"));
+    check("S4 no script error on the Store tab or inventory.html", exceptions.length === 0, exceptions.slice(0, 4).join(" | "));
+    STORE_API = null;
   } catch (e) {
     check("the harness ran to the end", false, e && e.stack || e);
   } finally {

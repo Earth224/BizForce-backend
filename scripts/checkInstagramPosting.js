@@ -42,6 +42,9 @@ const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g,
 
 /* Each mutation is a list of edits: [file, search, replacement]. */
 const MUTATIONS = {
+  // NAMED (Nov 15 2026, S4): a Reel of a video already on Instagram needs repost: true (F9b).
+  "reel-repost-unflagged": [["api", "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
+  "reel-repost-unnamed": [["api", "    if (livePost) { payload.repost = true; payload.repost_of = livePost.id; }\n", ""]],
   // sign-in and tokens
   "state-reusable": [["server", ".eq(\"purpose\", ia.PURPOSE)\n        .is(\"consumed_at\", null).gt(\"expires_at\", consumedAt)", ".eq(\"purpose\", ia.PURPOSE)\n        .gt(\"expires_at\", consumedAt)"]],
   "short-token-stored": [["server", "        grant = await ia.longLived(config, short.shortToken);\n", "        grant = { accessToken: short.shortToken, expiresIn: 3600 };\n"]],
@@ -1110,6 +1113,20 @@ function pageAnswers(over) {
     r.status === 201 && J(reelProp.payload) === J({ kind: "reel", video: { id: vMp4.id, sha256: vMp4.sha256, bytes: vMp4.bytes, mime: "video/mp4" }, caption: CAPTION, ig_user_id: IG_ID }) &&
     rMov.status === 201 && rWebm.status === 400 && rWebm.body.code === "reel_type" && rWebm.body.error === "Instagram Reels need an MP4 or MOV video. Nothing was filed." &&
     rAgain.status === 409 && rAgain.body.code === "pending", J([r.status, rMov.status, rWebm.status, rWebm.body.code, rAgain.status]));
+  // NAMED (Nov 15 2026, S4): a video already on Instagram is filed again only with repost: true, naming the live post.
+  const vLive = seedVideo(m.db, mp4(5000, 11));
+  const liveAt = iso(Date.now() - 3 * 86400000);
+  const livePost = { id: uuid(), user_id: USER, proposal_id: uuid(), kind: "reel", container_id: null, status: "published", media_id: "17900000000000077", permalink: null,
+    video_id: vLive.id, error: null, created_at: liveAt, updated_at: liveAt, published_at: liveAt };
+  m.db.t.instagram_posts.push(livePost);
+  const rPlainAgain = await hit(m, "post /api/instagram/propose-post", { body: { kind: "reel", video_id: vLive.id, caption: CAPTION } });
+  const filedBefore = m.db.t.agent_proposals.length;
+  const rFlagged = await hit(m, "post /api/instagram/propose-post", { body: { kind: "reel", video_id: vLive.id, caption: CAPTION, repost: true } });
+  const repostProp = m.db.t.agent_proposals[m.db.t.agent_proposals.length - 1];
+  check("F9b. a Reel of a video already on Instagram: 409 already_posted without repost: true; with it, filed naming the live post and titled \"again\"",
+    rPlainAgain.status === 409 && rPlainAgain.body.code === "already_posted" && rPlainAgain.body.error === "That video is already on Instagram." &&
+    rFlagged.status === 201 && m.db.t.agent_proposals.length === filedBefore + 1 && repostProp.payload.repost === true && repostProp.payload.repost_of === livePost.id &&
+    /^Post to Instagram again as @/.test(repostProp.title), J([rPlainAgain.status, rPlainAgain.body, rFlagged.status, repostProp && repostProp.payload]));
   const cap = function (caption) { return hit(m, "post /api/instagram/propose-post", { body: { kind: "photos", media_ids: [p1.id], caption: caption } }); };
   const tags = function (n) { return Array.from({ length: n }, function (_, i) { return "#tag" + i; }).join(" "); };
   const ats = function (n) { return Array.from({ length: n }, function (_, i) { return "@friend" + i; }).join(" "); };

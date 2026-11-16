@@ -199,6 +199,52 @@ function serve() {
 
 /* ── Chrome and one page over the DevTools Protocol ── */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* NAMED (Nov 15 2026, S4, timing): BEFORE every step waited a fixed time (55 sleeps of 150 to 800 ms) and the public
+   card's measurement read the buttons as soon as Support showed, so "Leave your details" or "Add to Google Wallet"
+   was sometimes not drawn yet (3 of 5 runs failed on Nov 15 2026). AFTER a step waits for the page's real ready
+   condition, settle(): no request in flight (Network events, data: and blob: aside), no short timer queued by the page
+   (setTimeout of 1 s or less, counted by TIMERS below; the QR's 400 ms redraw and the public card's refit are such
+   timers), no finite CSS animation or transition still running, every image and the fonts loaded, then two painted
+   frames, all at once. The 100 ms polls that wait for a stated condition (Chrome's port, a save arriving) stay.
+   A settle that never comes is counted (settleTimeouts) and fails a check at the end, so nothing waits silently. */
+const NET = { inflight: new Set() };
+function trackNetwork(msg) {
+  const q = msg.params || {};
+  if (msg.method === "Network.requestWillBeSent") { if (!/^(data|blob):/.test((q.request && q.request.url) || "")) NET.inflight.add(q.requestId); }
+  else if (msg.method === "Network.loadingFinished" || msg.method === "Network.loadingFailed") NET.inflight.delete(q.requestId);
+}
+const TIMERS = "(function(){if(window.__bfPending)return;var st=window.setTimeout,ct=window.clearTimeout,pend=new Set();" +
+  "window.__bfPending=function(){return pend.size;};" +
+  "window.setTimeout=function(fn,ms){var args=[].slice.call(arguments,2),id;var short=!(Number(ms)>1000);" +
+  "id=st(function(){pend.delete(id);if(typeof fn==='function')return fn.apply(this,args);(0,eval)(String(fn));},ms);if(short)pend.add(id);return id;};" +
+  "window.clearTimeout=function(id){pend.delete(id);return ct(id);};})();";
+const SETTLED = "new Promise(function(done){" +
+  "var running=function(){return (document.getAnimations?document.getAnimations():[]).filter(function(a){if(a.playState!=='running')return false;" +
+  "var t=a.effect&&a.effect.getComputedTiming?a.effect.getComputedTiming():null;return !!t&&isFinite(t.endTime);}).length;};" +
+  "var loading=function(){return [].filter.call(document.images,function(i){return !i.complete;}).length;};" +
+  "var timers=function(){return window.__bfPending?window.__bfPending():0;};" +
+  "(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){requestAnimationFrame(function(){requestAnimationFrame(function(){" +
+  "done(document.readyState==='complete'&&running()===0&&loading()===0&&timers()===0);});});});})";
+let settleTimeouts = 0;
+const settleMisses = [];
+async function settle(cdp, where) {
+  const until = Date.now() + 10000;
+  while (Date.now() < until) {
+    if (NET.inflight.size === 0 && await evaluate(cdp, SETTLED).catch(() => false) && NET.inflight.size === 0) return true;
+    await sleep(25);   // the poll's interval: the condition above is what is waited for
+  }
+  settleTimeouts++;
+  settleMisses.push(where || "a step");
+  return false;
+}
+// Until the condition holds (a poll on the page), then settled.
+async function waitFor(cdp, cond, where) {
+  const until = Date.now() + 15000;
+  let met = false;
+  while (Date.now() < until && !met) { met = await evaluate(cdp, "!!(" + cond + ")").catch(() => false); if (!met) await sleep(25); }
+  if (!met) { settleTimeouts++; settleMisses.push((where || "a step") + ": never " + cond); }
+  return settle(cdp, where);
+}
 async function launch() {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "bf-card-maker-"));
   const proc = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profile, "--no-first-run", "--no-default-browser-check",
@@ -231,20 +277,20 @@ async function evaluate(cdp, expr) {
   if (r.exceptionDetails) throw new Error("page threw: " + (r.exceptionDetails.exception && r.exceptionDetails.exception.description || r.exceptionDetails.text));
   return r.result.value;
 }
-async function viewport(cdp, w, h, mobile) { await cdp.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: !!mobile }); await sleep(250); }
+async function viewport(cdp, w, h, mobile) { await cdp.send("Emulation.setDeviceMetricsOverride", { width: w, height: h, screenWidth: w, screenHeight: h, deviceScaleFactor: 1, mobile: !!mobile }); await waitFor(cdp, "screen.width === " + w + " && screen.height === " + h, "viewport " + w + "x" + h); }
 async function open(cdp, origin, page, ready) {
   await cdp.send("Page.navigate", { url: "about:blank" });
-  await sleep(150);
+  for (let i = 0; i < 100 && !(await evaluate(cdp, "location.href === 'about:blank'").catch(() => false)); i++) await sleep(25);
   await cdp.send("Storage.clearDataForOrigin", { origin, storageTypes: "session_storage" }).catch(() => {});
   await cdp.send("Page.navigate", { url: origin + "/" + page });
   for (let i = 0; i < 150; i++) { if (await evaluate(cdp, "document.readyState === 'complete' && (" + ready + ")").catch(() => false)) break; await sleep(100); }
-  await sleep(500);
+  await settle(cdp, "open " + page);
   await evaluate(cdp, HELPERS);
 }
 // A screenshot of the viewport after scrolling a node to the top, or of a node's own box (clip).
 async function shot(cdp, file, selector, clip) {
   await evaluate(cdp, "(function(){var n=document.querySelector(" + JSON.stringify(selector) + "); if(n) n.scrollIntoView({block:'start'}); window.scrollBy(0,-16); return true;})()");
-  await sleep(250);
+  await settle(cdp, "shot " + file);
   const params = { format: "png" };
   if (clip) {
     const r = await evaluate(cdp, "(function(){var b=document.querySelector(" + JSON.stringify(selector) + ").getBoundingClientRect();return {x:b.left+scrollX,y:b.top+scrollY,w:b.width,h:b.height};})()");
@@ -412,6 +458,10 @@ function pdfPage(uri) {
     await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
     await cdp.send("Runtime.enable");
     await cdp.send("Page.enable");
+    // NAMED (Nov 15 2026, S4): what settle() waits on: requests in flight, and the page's short timers.
+    cdp.on(trackNetwork);
+    await cdp.send("Network.enable");
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: TIMERS });
     await cdp.send("Browser.setDownloadBehavior", { behavior: "deny" }).catch(() => {});
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{localStorage.setItem('bf_token','browser-check-token');localStorage.setItem('bf_user',JSON.stringify({id:'aaaaaaaa-0000-4000-8000-000000000009',role:'member'}));}catch(e){}" });
     // NAMED (Nov 13 2026, horizontal default): every frame, before it is painted, records the card's orientation whenever it
@@ -432,7 +482,7 @@ function pdfPage(uri) {
     check("the saved card has no show_qr: the switch is off, and the generator is not opened", await evaluate(cdp, "document.getElementById('qrShowToggle').checked === false && document.getElementById('cardPreview').classList.contains('qr-off')"));
     for (const orient of ["horizontal", "vertical"]) {
       await evaluate(cdp, "applyCardOrientation(" + JSON.stringify(orient) + "), true");
-      await sleep(300);
+      await settle(cdp);
       const st = await evaluate(cdp, `(function(){ var p = document.getElementById("cardPreview"), inner = p.querySelector(".card-inner"), left = p.querySelector(".card-left");
         var cs = getComputedStyle(inner), room = inner.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
         var labels = [].filter.call(p.querySelectorAll("*"), function (n) { return n.children.length === 0 && /scan to connect/i.test(n.textContent) && __bf.shown(n); }).length;
@@ -443,17 +493,17 @@ function pdfPage(uri) {
       await shot(cdp, "no-qr-" + orient + ".png", "#cardPreview", true);
     }
     await evaluate(cdp, "applyCardOrientation('horizontal'), true");
-    await sleep(200);
+    await settle(cdp);
 
     /* ── the exports, off ── */
     console.log("\n══ the PNG, print file and shared image: none when off ══");
     check("html2canvas is captured before a file is made", await evaluate(cdp, CAPTURE));
     await evaluate(cdp, "downloadCard().then(function(){return exportPrintFile();}).then(function(){return shareCardImage();}).then(function(){return true;})");
-    await sleep(500);
+    await settle(cdp);
     // the box where the QR would be when on: switch it on to measure, then off again
-    await evaluate(cdp, "setShowQr(true), true"); await sleep(200);
+    await evaluate(cdp, "setShowQr(true), true"); await settle(cdp);
     const box = await evaluate(cdp, QR_BOX);
-    await evaluate(cdp, "setShowQr(false), true"); await sleep(200);
+    await evaluate(cdp, "setShowQr(false), true"); await settle(cdp);
     const offShares = await evaluate(cdp, "window.__snaps.map(function (cv) { return Math.round(__bf.bright(cv, " + JSON.stringify(box) + ", 3) * 1000) / 1000; })");
     const offSaves = await evaluate(cdp, "window.__saves.map(function (s) { return s.name; })");
     check("off: the PNG, the print file and the shared image are each taken of the card with the QR's corner empty (under 2% bright pixels there)",
@@ -462,7 +512,7 @@ function pdfPage(uri) {
     /* ── on, each corner ── */
     console.log("\n══ the switch on: drawn, in each corner ══");
     await evaluate(cdp, "document.getElementById('edTab-qr').click(), document.getElementById('qrShowToggle').click(), true");
-    await sleep(500);
+    await settle(cdp);
     const on = await evaluate(cdp, "({ checked: document.getElementById('qrShowToggle').checked, block: __bf.shown(document.getElementById('cardQrBlock')), drawn: __bf.drawn(document.getElementById('qrCanvas')), label: __bf.shown(document.querySelector('#cardQrBlock .card-qr-label')) })");
     check("on: the QR is drawn with its \"Scan to connect\" label", on.checked && on.block && on.drawn && on.label, JSON.stringify(on));
     const corners = {};
@@ -470,23 +520,23 @@ function pdfPage(uri) {
       await evaluate(cdp, "applyCardOrientation(" + JSON.stringify(orient) + "), true");
       for (const c of ["top-left", "top-right", "bottom-left", "bottom-right"]) {
         await evaluate(cdp, "document.querySelector(\"[data-qr-corner='" + c + "']\").click(), true");
-        await sleep(200);
+        await settle(cdp);
         corners[orient + " " + c] = await evaluate(cdp, "__bf.corner(document.querySelector('#cardQrBlock .card-qr-wrap'), document.getElementById('cardPreview'))");
       }
     }
     check("each corner button puts the QR in that corner of the card, horizontal and upright", Object.keys(corners).every(k => k.split(" ")[1] === corners[k]), JSON.stringify(corners));
     await evaluate(cdp, "applyCardOrientation('horizontal'), true");
     await evaluate(cdp, "document.querySelector(\"[data-qr-corner='bottom-right']\").click(), true");
-    await sleep(300);
+    await settle(cdp);
     await shot(cdp, "qr-on-bottom-right.png", "#cardPreview", true);
     await evaluate(cdp, "window.__snaps.length = 0, true");
     await evaluate(cdp, "downloadCard().then(function(){return exportPrintFile();}).then(function(){return shareCardImage();}).then(function(){return true;})");
-    await sleep(500);
+    await settle(cdp);
     const box2 = await evaluate(cdp, QR_BOX);
     const onShares = await evaluate(cdp, "window.__snaps.map(function (cv) { return Math.round(__bf.bright(cv, " + JSON.stringify(box2) + ", 3) * 1000) / 1000; })");
     check("on: the PNG, the print file and the shared image each hold the QR in its corner (over 15% bright pixels there)", onShares.length === 3 && onShares.every(v => v > 0.15), JSON.stringify(onShares));
     await evaluate(cdp, "document.getElementById('qrShowToggle').click(), true");
-    await sleep(200);
+    await settle(cdp);
     check("the switch off again: the QR goes", await evaluate(cdp, "!__bf.shown(document.getElementById('cardQrBlock')) && document.getElementById('cardPreview').classList.contains('qr-off')"));
 
     /* ── the tabs ── */
@@ -494,7 +544,7 @@ function pdfPage(uri) {
     const TABS = ["text", "frame", "background", "motion", "qr"];
     for (const t of TABS) {
       await evaluate(cdp, "document.getElementById('edTab-" + t + "').click(), true");
-      await sleep(250);
+      await settle(cdp);
       const st = await evaluate(cdp, "({ shown: " + JSON.stringify(TABS) + ".filter(function (n) { return __bf.shown(document.getElementById('edPanel-' + n)); }), hash: location.hash," +
         " stay: ['fName', 'cardPreview', 'saveBtn', 'printExportBtn', 'shareImageBtn', 'bleedCheck', 'cardStats', 'cardLeads'].filter(function (id) { return !__bf.shown(document.getElementById(id)); })" +
         ".concat(__bf.shown(document.querySelector('.theme-selector')) ? [] : ['themes']).concat(__bf.shown(document.querySelector('.action-row')) ? [] : ['actions']) })");
@@ -506,7 +556,7 @@ function pdfPage(uri) {
     /* ── the generator ── */
     console.log("\n══ the QR Code tab's generator ══");
     await evaluate(cdp, "document.getElementById('edTab-qr').click(), true");
-    const typed = async v => { await evaluate(cdp, "(function(){var i=document.getElementById('qrGenUrl'); i.value=" + JSON.stringify(v) + "; i.dispatchEvent(new Event('input',{bubbles:true})); return true;})()"); await sleep(250);
+    const typed = async v => { await evaluate(cdp, "(function(){var i=document.getElementById('qrGenUrl'); i.value=" + JSON.stringify(v) + "; i.dispatchEvent(new Event('input',{bubbles:true})); return true;})()"); await settle(cdp);
       return evaluate(cdp, "({ drawn: __bf.drawn(document.getElementById('qrGenCanvas')), off: document.getElementById('qrGenPngBtn').disabled, note: document.getElementById('qrGenNote').textContent })"); };
     const bad = await typed("javascript:alert(1)");
     check("javascript: is refused: nothing drawn, the downloads off, the note says to type an http or https link", !bad.drawn && bad.off && /https:\/\//.test(bad.note), JSON.stringify(bad));
@@ -516,7 +566,7 @@ function pdfPage(uri) {
     check("a typed https link is drawn", good.drawn && !good.off, JSON.stringify(good));
     const before = requests.length;
     await evaluate(cdp, "window.__saves.length = 0, document.getElementById('qrGenPngBtn').click(), document.getElementById('qrGenSvgBtn').click(), true");
-    await sleep(800);
+    await settle(cdp);
     const files = await evaluate(cdp, `Promise.all(window.__saves.map(function (s) {
       if (s.name === "qr-code.png") return new Promise(function (res) { var im = new Image(); im.onload = function () { res({ name: s.name, w: im.naturalWidth, h: im.naturalHeight, data: s.href.indexOf("data:image/png") === 0 }); }; im.onerror = function () { res({ name: s.name, bad: true }); }; im.src = s.href; });
       return fetch(s.href).then(function (r) { return r.text(); }).then(function (t) { return { name: s.name, blob: s.href.indexOf("blob:") === 0, svg: /^<svg[^>]*xmlns="http:\\/\\/www\\.w3\\.org\\/2000\\/svg"/.test(t) && /<path/.test(t), len: t.length }; });
@@ -535,7 +585,7 @@ function pdfPage(uri) {
     // The preview card on the screen, at the exports' 3x, as a PNG data URL.
     const previewShot = async () => {
       await evaluate(cdp, "document.getElementById('cardPreview').scrollIntoView({block:'center'}), true");
-      await sleep(250);
+      await settle(cdp);
       const r = await evaluate(cdp, "(function(){var b=document.getElementById('cardPreview').getBoundingClientRect();return {x:b.left+scrollX,y:b.top+scrollY,w:b.width,h:b.height};})()");
       const res = await cdp.send("Page.captureScreenshot", { format: "png", clip: { x: r.x, y: r.y, width: r.w, height: r.h, scale: 3 }, captureBeyondViewport: true });
       return "data:image/png;base64," + res.data;
@@ -547,7 +597,7 @@ function pdfPage(uri) {
     const named = { "glow|horizontal|off": "export-glow-h.png", "gold|vertical|off": "export-gold-v.png", "holo-rainbow|horizontal|on": "export-holo-h-qr.png" };
     for (const style of ["glow", "none", "neon-pulse", "gold", "holo-rainbow"]) for (const orient of ["horizontal", "vertical"]) for (const qr of ["off", "on"]) {
       await evaluate(cdp, "applyBorderStyle(" + JSON.stringify(style) + "); applyCardOrientation(" + JSON.stringify(orient) + "); setShowQr(" + (qr === "on") + "); " + (qr === "on" ? "setQrCorner('bottom-right'); " : "") + "true");
-      await sleep(450);
+      await settle(cdp);
       const prev = await previewShot();
       await evaluate(cdp, "window.__saves.length = 0, window.__snaps.length = 0, true");
       await evaluate(cdp, "downloadCard().then(function(){return true;})");
@@ -571,7 +621,7 @@ function pdfPage(uri) {
     for (const orient of ["horizontal", "vertical"]) for (const look of ["dark", "midnight", "forest", "ember", "gradient-effect"]) {
       const fx = look === "gradient-effect";
       await evaluate(cdp, "setTheme(" + JSON.stringify(fx ? "dark" : look) + "); applyTextEffect(" + JSON.stringify(fx ? "gradient" : "none") + "); applyCardOrientation(" + JSON.stringify(orient) + "); true");
-      await sleep(450);
+      await settle(cdp);
       const prev = await previewShot();
       await evaluate(cdp, "window.__saves.length = 0, window.__snaps.length = 0, true");
       await evaluate(cdp, "downloadCard().then(function(){return true;})");
@@ -601,24 +651,24 @@ function pdfPage(uri) {
     for (const [look, orient] of [["gradient-effect", "horizontal"], ["midnight", "vertical"]]) {
       const fx = look === "gradient-effect";
       await evaluate(cdp, "setTheme(" + JSON.stringify(fx ? "dark" : look) + "); applyTextEffect(" + JSON.stringify(fx ? "gradient" : "none") + "); applyCardOrientation(" + JSON.stringify(orient) + "); true");
-      await sleep(450);
+      await settle(cdp);
       const prev = await previewShot(), old = await evaluate(cdp, OLD_FILL);
       const sel = fx ? "#cardPreview .card-company, #cardPreview .card-job" : "#cardPreview .card-name";
       ctlRows.push(Object.assign({ key: look + "|" + orient }, await evaluate(cdp, "window.__cmpText(" + JSON.stringify(prev) + ", " + JSON.stringify(old) + ", " + JSON.stringify(sel) + ")")));
     }
     console.log("    control (the old first-colour fill): " + ctlRows.map(r => r.key + " mad " + r.mad + " hue spread " + r.spreadPrev + "/" + r.spreadExp + " hue difference " + r.hueDiff).join("; "));
     check("the control fails the same test: the old first-colour fill loses the gradient (so the test can see it)", ctlRows.every(r => !(r.mad < MAD && spreadOk(r))), JSON.stringify(ctlRows));
-    await evaluate(cdp, "setTheme('dark'); applyTextEffect('none'); applyCardOrientation('horizontal'); true"); await sleep(300);
+    await evaluate(cdp, "setTheme('dark'); applyTextEffect('none'); applyCardOrientation('horizontal'); true"); await settle(cdp);
 
     // The old slab, for the record: html2canvas with no onclone, on the same card.
-    await evaluate(cdp, "applyBorderStyle('glow'); applyCardOrientation('horizontal'); setShowQr(false); true"); await sleep(300);
+    await evaluate(cdp, "applyBorderStyle('glow'); applyCardOrientation('horizontal'); setShowQr(false); true"); await settle(cdp);
     const prevG = await previewShot();
     const slabUrl = await evaluate(cdp, "html2canvas(document.getElementById('cardPreview'), { scale: 3, useCORS: true, allowTaint: false }).then(function (cv) { return cv.toDataURL('image/png'); })");
     const slab = await evaluate(cdp, "window.__cmp(" + JSON.stringify(prevG) + ", " + JSON.stringify(slabUrl) + ")");
     console.log("    control: html2canvas without the ring swap (the old exports): mad " + slab.mad + ", name " + slab.namePrev + "/" + slab.nameExp + ", one colour " + slab.famPrev + " " + slab.topPrev + "%/" + slab.famExp + " " + slab.topExp + "%");
     check("the control fails the same test: without the ring swap html2canvas paints the old slab (so the test can see it)", !(slab.mad < MAD && slab.nameExp > NAME && oneColourOk(slab)), JSON.stringify(slab));
     // Share as Image: the 1200 x 630 frame, the card letterboxed in it as shareCardImage draws it.
-    await evaluate(cdp, "applyBorderStyle('gold'); applyCardOrientation('horizontal'); setShowQr(true); setQrCorner('bottom-right'); true"); await sleep(450);
+    await evaluate(cdp, "applyBorderStyle('gold'); applyCardOrientation('horizontal'); setShowQr(true); setQrCorner('bottom-right'); true"); await settle(cdp);
     const prevS = await previewShot();
     await evaluate(cdp, "window.__saves.length = 0, true");
     await evaluate(cdp, "shareCardImage().then(function(){return true;})");
@@ -631,7 +681,7 @@ function pdfPage(uri) {
     check("Share as Image: a 1200 x 630 frame whose card matches the preview (mean difference " + rs.mad + ", under " + MAD + "; name contrast over " + NAME + "; not one-colour)",
       shareDims[0] === 1200 && shareDims[1] === 630 && rs.mad < MAD && rs.nameExp > NAME && oneColourOk(rs), JSON.stringify({ rs, shareDims }));
     // Export Print File: the PNG it saves and the PDF's page, decoded to an image.
-    await evaluate(cdp, "applyBorderStyle('holo-rainbow'); applyCardOrientation('horizontal'); setShowQr(false); document.getElementById('bleedCheck').checked = false; true"); await sleep(450);
+    await evaluate(cdp, "applyBorderStyle('holo-rainbow'); applyCardOrientation('horizontal'); setShowQr(false); document.getElementById('bleedCheck').checked = false; true"); await settle(cdp);
     const prevP = await previewShot();
     await evaluate(cdp, "window.__saves.length = 0, window.__pdfs.length = 0, true");
     await evaluate(cdp, "exportPrintFile().then(function(){return true;})");
@@ -646,13 +696,13 @@ function pdfPage(uri) {
     check("Export Print File: the PDF's page is 3.5 x 2 in (252 x 144 pt) and, rendered to an image, matches the preview (mean difference " + rp.mad + ", under " + MAD + "; name contrast over " + NAME + "; not one-colour)",
       page.media.join() === "0,0,252,144" && rp.mad < MAD && rp.nameExp > NAME && oneColourOk(rp), JSON.stringify({ rp, media: page.media }));
     await evaluate(cdp, "document.getElementById('__freeze').remove(), applyBorderStyle('glow'), applyCardOrientation('horizontal'), setShowQr(false), true");
-    await sleep(300);
+    await settle(cdp);
 
     /* ── no overflow; 390 px ── */
     console.log("\n══ no sideways overflow at 1440 and 390 px ══");
     check("1440 px: the page does not scroll sideways", (await evaluate(cdp, "__bf.overflow()")) <= 0, String(await evaluate(cdp, "__bf.overflow()")));
     await viewport(cdp, 390, 844, true);
-    await sleep(400);
+    await settle(cdp);
     const narrow = await evaluate(cdp, "({ over: __bf.overflow(), col: Math.round(document.querySelector('.preview-panel').getBoundingClientRect().right), list: (function(){ var l = document.getElementById('cardEdTablist'), cs = getComputedStyle(l); return { sw: l.scrollWidth, cw: l.clientWidth, ox: cs.overflowX, wrap: cs.flexWrap, right: Math.round(l.getBoundingClientRect().right) }; })() })");
     check("390 px: the page does not scroll sideways, and the tab row stays on one line within its column, scrolling sideways itself",
       narrow.over <= 0 && narrow.list.ox === "auto" && narrow.list.wrap === "nowrap" && narrow.list.right <= narrow.col && narrow.list.sw > narrow.list.cw - 1, JSON.stringify(narrow));
@@ -670,7 +720,7 @@ function pdfPage(uri) {
     await evaluate(cdp, "document.getElementById('edTab-text').click(), true");
     await shot(cdp, "maker-390.png", "#cardPreview");
     await evaluate(cdp, "document.querySelector('.form-panel .vid-upload-row').scrollIntoView({block:'center'}), true");
-    await sleep(250);
+    await settle(cdp);
     const mres = await cdp.send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(path.join(OUT, "maker-390-fixed.png"), Buffer.from(mres.data, "base64"));
 
@@ -719,7 +769,7 @@ function pdfPage(uri) {
     for (const [name, ml] of [["public-no-qr.png", {}], ["public-qr.png", { show_qr: true, qr_corner: "bottom-right" }]]) {
       cardLayout = ml;
       await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
-      await sleep(300);
+      await settle(cdp);
       await shot(cdp, name, "body");
     }
 
@@ -734,7 +784,7 @@ function pdfPage(uri) {
       await evaluate(cdp, CAPTURE);
       await evaluate(cdp, "window.__saves.length = 0, window.__pdfs.length = 0, document.getElementById('bleedCheck').checked = false, true");
       await evaluate(cdp, "downloadCard().then(function(){return exportPrintFile();}).then(function(){return true;})");
-      await sleep(400);
+      await settle(cdp);
       const png = await evaluate(cdp, `new Promise(function (ok) { var s = window.__saves.filter(function (x) { return x.name === "bizforce-card.png"; })[0];
         if (!s) return ok(null); var i = new Image(); i.onload = function () { ok([i.naturalWidth, i.naturalHeight]); }; i.onerror = function () { ok(null); }; i.src = s.href; })`);
       const pdfUri = await evaluate(cdp, "(window.__pdfs[0]||{}).uri||''");
@@ -751,7 +801,7 @@ function pdfPage(uri) {
       !fresh.vertical && fresh.toggle === "horizontal" && fresh.saved === "horizontal" && Math.abs(fresh.ratio - 1.75) <= 0.03, JSON.stringify(fresh));
     check("a new card: no frame was ever painted upright (frames " + fresh.frames + ")", fresh.frames.length >= 1 && fresh.frames.indexOf("V") === -1, fresh.frames);
     await evaluate(cdp, "window.scrollTo(0, 0), true");
-    await sleep(250);
+    await settle(cdp);
     const dres = await cdp.send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(path.join(OUT, "default-horizontal.png"), Buffer.from(dres.data, "base64"));
     const freshEx = await exportsNow();
@@ -776,7 +826,7 @@ function pdfPage(uri) {
     check("a card saved vertical reopens vertical: the Vertical toggle alone selected, the preview upright (" + vert.ratio + " : 1), and a save keeps vertical",
       vert.vertical && vert.toggle === "vertical" && vert.saved === "vertical" && Math.abs(vert.ratio - 1 / 1.75) <= 0.01, JSON.stringify(vert));
     await evaluate(cdp, "window.scrollTo(0, 0), true");
-    await sleep(250);
+    await settle(cdp);
     const vres = await cdp.send("Page.captureScreenshot", { format: "png" });
     fs.writeFileSync(path.join(OUT, "saved-vertical.png"), Buffer.from(vres.data, "base64"));
     const vertEx = await exportsNow();
@@ -794,7 +844,7 @@ function pdfPage(uri) {
         cardLayout = ml;
         await open(cdp, origin, "c/jane-doe", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'')");
         pubRows[W + " " + label] = await evaluate(cdp, PUBLIC_ORIENT);
-        if (W === 390 && label === "none") { await evaluate(cdp, "window.scrollTo(0, 0), true"); await sleep(250); const pres = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(OUT, "public-horizontal.png"), Buffer.from(pres.data, "base64")); }
+        if (W === 390 && label === "none") { await evaluate(cdp, "window.scrollTo(0, 0), true"); await settle(cdp); const pres = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(OUT, "public-horizontal.png"), Buffer.from(pres.data, "base64")); }
       }
     }
     const pubH = Object.keys(pubRows).filter(k => !/vertical$/.test(k)), pubV = Object.keys(pubRows).filter(k => /vertical$/.test(k));
@@ -816,7 +866,7 @@ function pdfPage(uri) {
       f = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect(), de = document.documentElement;
       var btns = [].filter.call(document.querySelectorAll("#cardActions .cv-btn"), function (b) { return !b.hidden && getComputedStyle(b).display !== "none"; });
       return { w: Math.round(c.width), h: Math.round(c.height), ratio: c.width / c.height, cardTop: Math.round(c.top), cardBottom: Math.round(c.bottom), actTop: Math.round(a.top),
-        footBottom: Math.round(f.bottom), docH: de.scrollHeight, docW: de.scrollWidth, vh: innerHeight, vw: innerWidth, nBtns: btns.length,
+        footBottom: Math.round(f.bottom), docH: de.scrollHeight, docW: de.scrollWidth, vh: innerHeight, vw: innerWidth, nBtns: btns.length, which: btns.map(function (b) { return b.id || b.className; }).join(","),
         btnsIn: btns.every(function (b) { var r = b.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth; }),
         btnsUnder: btns.every(function (b) { return b.getBoundingClientRect().top >= c.bottom - 0.5; }) }; })()`;
     const SIZES = [[1440, 900], [1366, 768], [1280, 720], [768, 1024], [390, 844], [360, 740]];
@@ -825,8 +875,10 @@ function pdfPage(uri) {
       await viewport(cdp, W, Hh, W < 600);
       for (const o of ["horizontal", "vertical"]) {
         cardLayout = { orientation: o };
-        await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && !document.getElementById('cvSupportBtn').hidden");
-        await sleep(300);
+        // NAMED (Nov 15 2026, S4): BEFORE ready when Support showed; AFTER when every button the check counts has been drawn.
+        await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && !document.getElementById('cvSupportBtn').hidden && " +
+          "!document.getElementById('cvLeadBtn').hidden && !document.getElementById('cvWalletBtn').hidden");
+        await settle(cdp);
         const r = await evaluate(cdp, FIT);
         fits[W + "x" + Hh + " " + o] = r;
         const shotName = { "1440x900 horizontal": "card-h-1440.png", "1440x900 vertical": "card-v-1440.png", "1366x768 vertical": "card-v-1366x768.png",
@@ -851,27 +903,28 @@ function pdfPage(uri) {
     await open(cdp, origin, "c/jane-doe?visitor=1", "!document.getElementById('cvSupportBtn').hidden");
     const cardW0 = await evaluate(cdp, "Math.round(document.getElementById('cardPreview').getBoundingClientRect().width)");
     const opened = await evaluate(cdp, `(function(){ var R = function (id) { return document.getElementById(id).getBoundingClientRect(); };
+      var wasHidden = document.getElementById("cvSupport").hidden;
       document.getElementById("cvSupportBtn").click();
       var p = document.getElementById("cvSupport"), a = R("cardActions"), r = R("cvSupport"), f = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect();
-      var out = { shown: !p.hidden, pos: getComputedStyle(p).position, gap: Math.round(r.top - a.bottom), footBelow: f.top >= r.bottom - 0.5 };
+      var out = { wasHidden: wasHidden, shown: !p.hidden, pos: getComputedStyle(p).position, gap: Math.round(r.top - a.bottom), footBelow: f.top >= r.bottom - 0.5 };
       document.getElementById("cvLeadBtn").click(); var l = document.getElementById("cvLead"), lr = R("cvLead"), r2 = R("cvSupport"),
         f2 = document.querySelector("body > footer.bf-legal-footer").getBoundingClientRect();
       out.lead = { shown: !l.hidden, pos: getComputedStyle(l).position, belowSupport: lr.top >= r2.bottom - 0.5, footBelow: f2.top >= lr.bottom - 0.5 }; return out; })()`);
     // A resize with both panels open refits, and the card keeps its size: an open panel lets the page scroll instead.
-    await viewport(cdp, 1440, 901, false); await sleep(200); await viewport(cdp, 1440, 900, false); await sleep(200);
+    await viewport(cdp, 1440, 901, false); await settle(cdp); await viewport(cdp, 1440, 900, false); await settle(cdp);
     const cardW1 = await evaluate(cdp, "Math.round(document.getElementById('cardPreview').getBoundingClientRect().width)");
     check("with Support and the lead form open, a resize leaves the card its size (" + cardW0 + " -> " + cardW1 + " px)", cardW0 === cardW1 && cardW0 === 560, cardW0 + " " + cardW1);
     check("Support opens inline directly under the button row (static, 0-16 px below it), the footer pushed down below it",
       opened.shown && opened.pos === "static" && opened.gap >= 0 && opened.gap <= 16 && opened.footBelow, JSON.stringify(opened));
     check("the lead form opens inline under it too, the footer below both", opened.lead.shown && opened.lead.pos === "static" && opened.lead.belowSupport && opened.lead.footBelow, JSON.stringify(opened.lead));
     await evaluate(cdp, "document.getElementById('cvLeadBtn').click(), true");
-    await sleep(250);
+    await settle(cdp);
     { const s = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true }); fs.writeFileSync(path.join(Q5_OUT, "card-support-open.png"), Buffer.from(s.data, "base64")); }
     // The owner, signed in, on a phone: the Guide's spacer may sit below the fold, but the card, its buttons and the footer are all in view.
     await viewport(cdp, 390, 844, true);
     cardLayout = { orientation: "vertical" };
     await open(cdp, origin, "c/jane-doe", "!document.getElementById('cvSupportBtn').hidden && !!document.getElementById('tmx-guide-fab')");
-    await sleep(400);
+    await settle(cdp);
     const ownPhone = await evaluate(cdp, FIT);
     check("signed in at 390 px (the Guide's spacer on the page): the card, every button and the footer are fully in view without scrolling",
       ownPhone.btnsIn && ownPhone.footBottom <= ownPhone.vh && ownPhone.cardTop >= 0 && ownPhone.cardBottom <= ownPhone.vh, JSON.stringify(ownPhone));
@@ -902,7 +955,7 @@ function pdfPage(uri) {
       const n = q6Saves.length;
       await evaluate(cdp, "document.getElementById('saveBtn').click(), true");
       for (let i = 0; i < 80 && q6Saves.length === n; i++) await sleep(100);
-      await sleep(300);
+      await settle(cdp);
       return q6Saves.length > n ? (q6Saves[q6Saves.length - 1].media_layout || {}).orientation : "no save";
     };
     const q6_vertOK = st => st.vertical && st.toggle === "vertical" && Math.abs(st.ratio - 1 / 1.75) <= 0.01 && st.sends === "vertical";
@@ -936,7 +989,7 @@ function pdfPage(uri) {
     for (const [W, Hh] of [[1440, 900], [390, 844]]) {
       await viewport(cdp, W, Hh, W < 600);
       await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && document.getElementById('cardPreview').style.display === 'block'");
-      await sleep(300);
+      await settle(cdp);
       q6_pubV[W] = Object.assign(await evaluate(cdp, FIT), await evaluate(cdp, "({cv:document.getElementById('cardViewport').classList.contains('cv-vertical'),ov:document.getElementById('cardPreview').classList.contains('orient-vertical')})"));
       const s = await cdp.send("Page.captureScreenshot", { format: "png" });
       fs.writeFileSync(path.join(Q6_OUT, "public-saved-vertical-" + W + ".png"), Buffer.from(s.data, "base64"));
@@ -954,7 +1007,7 @@ function pdfPage(uri) {
     const q6_reH = await evaluate(cdp, q6_MAKER_STATE);
     await viewport(cdp, 1440, 900, false);
     await open(cdp, origin, "c/jane-doe?visitor=1", "/Jane Doe/.test((document.getElementById('pName')||{}).textContent||'') && document.getElementById('cardPreview').style.display === 'block'");
-    await sleep(300);
+    await settle(cdp);
     const q6_pubH = Object.assign(await evaluate(cdp, FIT), await evaluate(cdp, "({cv:document.getElementById('cardViewport').classList.contains('cv-vertical'),ov:document.getElementById('cardPreview').classList.contains('orient-vertical')})"));
     { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(Q6_OUT, "public-saved-horizontal-1440.png"), Buffer.from(s.data, "base64")); }
     check("Q6 Horizontal and Save: sent and kept horizontal; the reloaded maker and the public card (560 x 320 at 1440, no scroll) are horizontal",
@@ -981,10 +1034,10 @@ function pdfPage(uri) {
       "dialog:dlg?{label:(document.getElementById(dlg.getAttribute('aria-labelledby'))||{}).textContent,modal:dlg.getAttribute('aria-modal'),focus:document.activeElement.textContent," +
       "buttons:[].map.call(dlg.querySelectorAll('button'),function(b){return b.textContent}),pos:getComputedStyle(dlg.parentNode).position}:null};})()";
     const s3Ready = name => makerReady + " && /Card loaded/.test((document.getElementById('saveStatus')||{}).textContent||'') && document.getElementById('fName').value === " + JSON.stringify(name);
-    const s3Wait = async (cond) => { for (let i = 0; i < 150; i++) { if (await evaluate(cdp, "document.readyState === 'complete' && (" + cond + ")").catch(() => false)) break; await sleep(100); } await sleep(400); await evaluate(cdp, HELPERS); };
+    const s3Wait = async (cond) => { for (let i = 0; i < 150; i++) { if (await evaluate(cdp, "document.readyState === 'complete' && (" + cond + ")").catch(() => false)) break; await sleep(100); } await settle(cdp, "s3Wait"); await evaluate(cdp, HELPERS); };
     const s3Pick = id => evaluate(cdp, "(function(){var s=document.getElementById('cardPicker');s.value=" + JSON.stringify(id) + ";s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()");
     const s3Key = async k => { const code = { Escape: 27, Tab: 9 }[k]; await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: k, code: k, windowsVirtualKeyCode: code });
-      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, windowsVirtualKeyCode: code }); await sleep(200); };
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, windowsVirtualKeyCode: code }); await settle(cdp); };
     await viewport(cdp, 1440, 1000, false);
     await open(cdp, origin, "digital-cards.html", s3Ready("Jane Doe"));
     const s3a = await evaluate(cdp, S3_STATE);
@@ -994,7 +1047,7 @@ function pdfPage(uri) {
       JSON.stringify(s3a));
     // Nothing changed: switching opens the vertical card straight away, as loadCard opens any card.
     await s3Pick(S3B);
-    await sleep(300);
+    await settle(cdp);
     const s3asked = await evaluate(cdp, "!!document.querySelector('.card-switch-back')");
     await s3Wait(s3Ready("Northwind Tea"));
     const s3b = await evaluate(cdp, S3_STATE);
@@ -1004,7 +1057,7 @@ function pdfPage(uri) {
     const s3n = s3Saves.length;
     await evaluate(cdp, "document.getElementById('saveBtn').click(), true");
     for (let i = 0; i < 80 && s3Saves.length === s3n; i++) await sleep(100);
-    await sleep(400);
+    await settle(cdp);
     const s3save = s3Saves[s3Saves.length - 1] || {};
     const s3after = JSON.parse(s3Before);
     s3after[1].job_title = "Tea shop and cafe";
@@ -1013,7 +1066,7 @@ function pdfPage(uri) {
       JSON.stringify(s3Cards[0]) === JSON.stringify(s3after[0]) && JSON.stringify(s3Cards[2]) === JSON.stringify(s3after[2]) && s3Cards[1].job_title === "Tea shop and cafe",
       JSON.stringify([s3Saves.length - s3n, s3save.id, s3save.body && s3save.body.job_title]));
     await evaluate(cdp, "window.scrollTo(0,0),true");
-    await sleep(250);
+    await settle(cdp);
     { const s = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(S3_OUT, "maker-card-picker.png"), Buffer.from(s.data, "base64")); }
     await cdp.send("Page.reload", {});
     await s3Wait(s3Ready("Northwind Tea"));
@@ -1022,7 +1075,7 @@ function pdfPage(uri) {
     // An unsaved change: the switch asks first.
     await evaluate(cdp, "(function(){var t=document.getElementById('fName');t.value='Northwind Tea Co';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
     await s3Pick(S3A);
-    await sleep(300);
+    await settle(cdp);
     const s3d = await evaluate(cdp, S3_STATE);
     check("S3 with an unsaved change, choosing Jane Doe asks first: a modal dialog \"You have unsaved changes. Switch cards anyway?\", Switch cards and Cancel, focus on Cancel",
       !!s3d.dialog && s3d.dialog.label === "You have unsaved changes. Switch cards anyway?" && s3d.dialog.modal === "true" && s3d.dialog.focus === "Cancel" &&
@@ -1032,7 +1085,7 @@ function pdfPage(uri) {
     check("S3 Escape keeps Northwind Tea open with the unsaved change, the picker back on it, nothing saved", !s3e.dialog && s3e.active === S3B && s3e.value === S3B && s3e.name === "Northwind Tea Co" &&
       s3e.pick === S3B && s3Saves.length === s3n + 1, JSON.stringify(s3e));
     await s3Pick(S3A);
-    await sleep(300);
+    await settle(cdp);
     await evaluate(cdp, "[].filter.call(document.querySelectorAll('.card-switch-back button'),function(b){return b.textContent==='Switch cards'})[0].click(),true");
     await s3Wait(s3Ready("Jane Doe"));
     const s3j = await evaluate(cdp, S3_STATE);
@@ -1042,8 +1095,43 @@ function pdfPage(uri) {
     await open(cdp, origin, "digital-cards.html", s3Ready("Jane Doe"));
     const s3one = await evaluate(cdp, S3_STATE);
     check("S3 one card: no picker", !s3one.shown && s3one.options.length === 0, JSON.stringify(s3one));
+
+    /* ── NAMED (Nov 15 2026, S4): a long card name in the picker ── */
+    console.log("\n══ S4. the card picker with a long name: the whole label on up to two lines, then an ellipsis; the title holds it all ══");
+    // The label's length comes from the short link: a long full_name would also widen the preview card's one-line name
+    // (#pName) past a phone's width, which is the preview's own matter (S4 report, open), not the picker's.
+    const LONG = "Northwind Tea", LONG_SLUG = "northwind-tea-and-coffee-roasters-of-the-pacific-northwest-cooperative";
+    const LONG_LABEL = LONG + " · bizforceai.net/c/" + LONG_SLUG + " · Horizontal";
+    s3Cards = [s3Row(S3A, { full_name: LONG, slug: LONG_SLUG, job_title: "Founder", media_layout: { orientation: "horizontal" } }),
+      s3Row(S3C, { full_name: "Jane Doe", slug: "jane-doe", job_title: "", company: "", media_layout: {} })];
+    const PICK_STATE = "(function(){var b=document.getElementById('cardPickerShown'),s=document.getElementById('cardPicker'),w=document.getElementById('cardPickerWrap');" +
+      "var t=document.getElementById('cardPickerText');if(!b||!s||!t)return null;var bs=getComputedStyle(b),cs=getComputedStyle(t),lh=parseFloat(cs.lineHeight),tr=t.getBoundingClientRect();" +
+      "var inner=b.getBoundingClientRect().bottom-parseFloat(bs.paddingBottom)-parseFloat(bs.borderBottomWidth);" +
+      "var br=b.getBoundingClientRect(),sr=s.getBoundingClientRect();" +
+      "return {wide:[].filter.call(document.querySelectorAll('body *'),function(n){return n.getBoundingClientRect().right>screen.width+1;}).slice(0,4).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className).slice(0,30)+':'+Math.round(n.getBoundingClientRect().right);}),text:b.textContent,title:b.title,selTitle:s.title,optTitle:s.options[s.selectedIndex]?s.options[s.selectedIndex].title:null," +
+      "lines:Math.round(tr.height/lh),clipped:t.scrollHeight>t.clientHeight+1,textInside:tr.bottom<=inner+0.5,clamp:String(cs.webkitLineClamp||cs.getPropertyValue('-webkit-line-clamp'))," +
+      "covers:Math.abs(sr.left-br.left)<1&&Math.abs(sr.top-br.top)<1&&Math.abs(sr.width-br.width)<1&&Math.abs(sr.height-br.height)<1," +
+      "selOpacity:getComputedStyle(s).opacity,docW:document.documentElement.scrollWidth,vw:innerWidth,sw:screen.width,boxRight:Math.round(br.right),shown:!w.hidden&&getComputedStyle(w).display!=='none'};})()";
+    const pickRows = {};
+    for (const [W, Hh, mob] of [[375, 812, true], [1440, 1000, false]]) {
+      await viewport(cdp, W, Hh, mob);
+      await open(cdp, origin, "digital-cards.html", s3Ready(LONG));
+      pickRows[W] = await evaluate(cdp, PICK_STATE);
+      await shot(cdp, "picker-" + W + ".png", "#cardPickerWrap", true);
+    }
+    const p375 = pickRows[375] || {}, p1440 = pickRows[1440] || {};
+    check("S4 picker: the open card's whole label is the shown text and the title of the label, the select and its option, at 375 px and 1440 px",
+      [p375, p1440].every(r => r.shown && r.text === LONG_LABEL && r.title === LONG_LABEL && r.selTitle === LONG_LABEL && r.optTitle === LONG_LABEL), JSON.stringify(pickRows));
+    check("S4 picker at 375 px: two lines, then cut with an ellipsis (-webkit-line-clamp: 2), no third line showing in the box's padding, nothing past the screen's edge",
+      p375.lines === 2 && p375.clipped === true && p375.textInside === true && p375.clamp === "2" && p375.vw === 375 && p375.boxRight <= 375 && p375.docW <= 375, JSON.stringify(p375));
+    check("S4 picker at 1440 px: at most two lines, nothing past the edge",
+      p1440.lines >= 1 && p1440.lines <= 2 && p1440.textInside === true && p1440.clamp === "2" && p1440.boxRight <= p1440.vw && p1440.docW <= p1440.vw, JSON.stringify(p1440));
+    check("S4 picker: the real select still takes the clicks and the keys: it lies exactly over the label, invisible (opacity 0)",
+      [p375, p1440].every(r => r.covers && r.selOpacity === "0"), JSON.stringify([p375.covers, p375.selOpacity, p1440.covers, p1440.selOpacity]));
     s3Cards = null;
 
+    // NAMED (Nov 15 2026, S4): every wait reached the page's ready condition (none ran out its 10 s).
+    check("every step waited for the page's ready condition, never a fixed time, and each one came (no settle ran out)", settleTimeouts === 0, settleMisses.slice(0, 8).join(" | "));
     const own2 =exceptions.filter(x => !/Failed to fetch|BlockedByClient|NetworkError|Load failed|check:/.test(x));
     check("no page script threw", own2.length === 0, own2.slice(0, 5).join(" | "));
     console.log("    note  refused outside requests: " + refused.length + (refused.length ? " (" + [...new Set(refused.map(u => new URL(u).hostname))].join(", ") + ")" : ""));

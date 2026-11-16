@@ -44,6 +44,9 @@ const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g,
 
 /* Each mutation is a list of edits: [file, search, replacement]. */
 const MUTATIONS = {
+  // NAMED (Nov 15 2026, S4): a video post of a video already on the Page needs repost: true (F9b).
+  "video-repost-unflagged": [["api", "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
+  "video-repost-unnamed": [["api", "    if (livePost) { payload.repost = true; payload.repost_of = livePost.id; }\n", ""]],
   // sign-in, permissions, Pages
   "state-reusable": [["server", ".eq(\"purpose\", fa.PURPOSE)\n        .is(\"consumed_at\", null).gt(\"expires_at\", consumedAt)", ".eq(\"purpose\", fa.PURPOSE)\n        .gt(\"expires_at\", consumedAt)"]],
   "short-token-stored": [["server", "        grant = await fa.longLived(config, short.accessToken);\n", "        grant = { accessToken: short.accessToken, expiresIn: 3600 };\n"]],
@@ -1108,6 +1111,20 @@ function pageAnswers(over) {
     r.status === 201 && J(vidProp.payload) === J({ kind: "video", video: { id: vMp4.id, sha256: vMp4.sha256, bytes: vMp4.bytes, mime: "video/mp4" }, message: MESSAGE, page_id: PAGE_A }) &&
     rMov.status === 201 && rWebm.status === 400 && rWebm.body.code === "video_type" && rWebm.body.error === "Facebook videos must be MP4 or MOV. Nothing was filed." &&
     rAgain.status === 409 && rAgain.body.code === "pending", J([r.status, rMov.status, rWebm.status, rWebm.body.code, rAgain.status]));
+  // NAMED (Nov 15 2026, S4): a video already on the Page is filed again only with repost: true, naming the live post.
+  const vLive = seedVideo(m.db, mp4(5000, 11));
+  const liveAt = iso(Date.now() - 3 * 86400000);
+  const livePost = { id: uuid(), user_id: USER, proposal_id: uuid(), kind: "video", status: "published", post_id: "2000000000000077", permalink: null,
+    video_id: vLive.id, error: null, removed_at: null, created_at: liveAt, updated_at: liveAt, published_at: liveAt };
+  m.db.t.facebook_posts.push(livePost);
+  const rPlainAgain = await hit(m, "post /api/facebook/propose-post", { body: { kind: "video", video_id: vLive.id, message: MESSAGE } });
+  const filedBefore = m.db.t.agent_proposals.length;
+  const rFlagged = await hit(m, "post /api/facebook/propose-post", { body: { kind: "video", video_id: vLive.id, message: MESSAGE, repost: true } });
+  const repostProp = m.db.t.agent_proposals[m.db.t.agent_proposals.length - 1];
+  check("F9b. a video already on the Page: 409 already_posted without repost: true; with it, filed naming the live post and titled \"again\"",
+    rPlainAgain.status === 409 && rPlainAgain.body.code === "already_posted" && rPlainAgain.body.error === "That video is already on Facebook." &&
+    rFlagged.status === 201 && m.db.t.agent_proposals.length === filedBefore + 1 && repostProp.payload.repost === true && repostProp.payload.repost_of === livePost.id &&
+    /^Post again to the Facebook Page /.test(repostProp.title), J([rPlainAgain.status, rPlainAgain.body, rFlagged.status, repostProp && repostProp.payload]));
   const msg = function (text, kind) { return hit(m, "post /api/facebook/propose-post", { body: { kind: kind || "text", message: text, media_ids: [pj.id] } }); };
   const tooLong = await msg("a".repeat(63207)), atMax = await msg("a".repeat(63206)), empty = await msg("   "), claims = await msg("Guaranteed fresh.");
   check("F10. the message: at most 63206 characters (on the field, the plain words); a text post must say something; the claims screen (422)",

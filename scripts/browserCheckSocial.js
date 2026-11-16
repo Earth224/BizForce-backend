@@ -53,6 +53,13 @@
    S3 screenshots to <s3>: videos-post-again.png, post-again-confirm.png,
    proposals-date.png.
 
+   NAMED (Nov 15 2026, S4):
+     9. A video posted on all four: its four post links (youtube.com, TikTok,
+        Instagram, Facebook) at 1440 and 390 px. No two touch: side by side at
+        least 14 px apart, on separate lines at least 6 px apart; all inside the
+        row, nothing past the screen's edge.
+   S4 screenshots to <s4>: videos-links-1440.png, videos-links-390.png.
+
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
      CHROME_PATH            the browser (default: the usual Windows paths)
@@ -73,6 +80,8 @@ const FRONTEND = process.env.BIZFORCE_FRONTEND_DIR || path.join(REPO, "..", "Biz
 const OUT = process.env.SOCIAL_CLEAN_OUT || path.join(os.homedir(), "Downloads", "social-clean");
 const OUT2 = process.env.SOCIAL_S2_OUT || path.join(os.homedir(), "Downloads", "s2");
 const OUT3 = process.env.SOCIAL_S3_OUT || path.join(os.homedir(), "Downloads", "s3");
+// NAMED (Nov 15 2026, S4): section 9's screenshots.
+const OUT4 = process.env.SOCIAL_S4_OUT || path.join(os.homedir(), "Downloads", "s4");
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 const PAGE = "agents/social.html";
 
@@ -568,6 +577,27 @@ function contrast(fg, bg) {
     await sleep(500);
     const o7 = await evaluate(cdp, "(function(){var p=document.querySelectorAll('#ytVideoList .sf-panel');return {open:!!document.querySelector('.sf-dialog-back'),n:p.length,head:p[0]?p[0].querySelector('.sf-panel-head').textContent:null};})()");
     check("\"Post again\" closes the dialog and opens the YouTube upload form", !o7.open && o7.n === 1 && o7.head === "YouTube upload", J(o7));
+    check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
+    /* ── 9. the posted links' spacing (NAMED Nov 15 2026, S4) ── */
+    console.log("\n══ 9. a video posted everywhere: its four post links, spaced (1440 and 390 px) ══");
+    fs.mkdirSync(OUT4, { recursive: true });
+    const LINKS = "(function(){var row=window.__sc.row(" + J(S3_POSTED.id) + ");var box=row.querySelector('.sf-links');var as=[].slice.call(row.querySelectorAll('a.masto-post-link'));" +
+      "var rr=row.getBoundingClientRect(),rs=as.map(function(a){var r=a.getBoundingClientRect();return {l:r.left,r:r.right,t:r.top,b:r.bottom};});var gaps=[];" +
+      "for(var i=0;i<rs.length;i++)for(var j=i+1;j<rs.length;j++){var a=rs[i],b=rs[j];var hOver=a.l<b.r&&b.l<a.r,vOver=a.t<b.b&&b.t<a.b;" +
+      "gaps.push(vOver?Math.round(Math.max(b.l-a.r,a.l-b.r)):hOver?Math.round(Math.max(b.t-a.b,a.t-b.b)):99);}" +
+      "var sameLine=[];for(var k=0;k+1<rs.length;k++){if(rs[k].t<rs[k+1].b&&rs[k+1].t<rs[k].b)sameLine.push(Math.round(rs[k+1].l-rs[k].r));else sameLine.push('v'+Math.round(rs[k+1].t-rs[k].b));}" +
+      "return {n:as.length,inBox:as.every(function(a){return a.parentNode===box;}),display:getComputedStyle(box).display,gap:getComputedStyle(box).gap,minGap:Math.min.apply(null,gaps)," +
+      "steps:sameLine,inside:rs.every(function(r){return r.l>=rr.left-0.5&&r.r<=rr.right+0.5;}),over:document.documentElement.scrollWidth-innerWidth};})()";
+    const l9 = {};
+    for (const W of [1440, 390]) {
+      await openPage(cdp, origin, { youtube: true, tiktok: true, instagram: true, facebook: true }, W);
+      l9[W] = await evaluate(cdp, LINKS);
+      await shotOf(cdp, "window.__sc.row(" + J(S3_POSTED.id) + ")", path.join(OUT4, "videos-links-" + W + ".png"));
+    }
+    const stepOk = st => st.every(x => typeof x === "number" ? x >= 14 - 0.5 : Number(String(x).slice(1)) >= 6 - 0.5);
+    check("1440 and 390 px: the four post links sit in the row's .sf-links (flex, gap 6px 14px), side by side 14 px or more apart, on separate lines 6 px or more apart, none touching",
+      [1440, 390].every(W => l9[W].n === 4 && l9[W].inBox && l9[W].display === "flex" && l9[W].gap === "6px 14px" && l9[W].minGap >= 6 && stepOk(l9[W].steps)), J(l9));
+    check("...all inside their row, and the page does not scroll sideways", [1440, 390].every(W => l9[W].inside && l9[W].over <= 0), J(l9));
     check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));
     VIDEOS = [V_NEW, V_SENT];
 

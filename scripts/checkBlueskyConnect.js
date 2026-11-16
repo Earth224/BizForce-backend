@@ -958,9 +958,10 @@ const everything = b => JSON.stringify(b.db.tables);
   // proposals.html's "Posts as".
   const PROP = FE("proposals.html");
   const fnSrc = name => { const i = PROP.indexOf("function " + name + "("); return i < 0 ? "" : PROP.slice(i, s.braceMatch(PROP, PROP.indexOf("{", i)) + 1); };
+  // NAMED (Nov 15 2026, S4): blueskyProfilePayloadFields draws its description with proposals.html descriptionBlock ("None" when empty).
   const pctx = { Intl }; vm.createContext(pctx);
   // NAMED (Nov 5 2026, images in social posts): the lift adds postImagesFields, which the card now calls (it draws nothing without images).
-  vm.runInContext(["escapeHtml", "graphemeCountText", "postsAsText", "postImagesFields", "socialPostPayloadFields", "blueskyProfilePayloadFields"].map(fnSrc).join("\n"), pctx);
+  vm.runInContext(["escapeHtml", "graphemeCountText", "postsAsText", "postImagesFields", "socialPostPayloadFields", "descriptionBlock", "blueskyProfilePayloadFields"].map(fnSrc).join("\n"), pctx);
   const memberCard = pctx.socialPostPayloadFields({ text: POST, posts_as: { account: "member", handle: "alice.bsky.social", automatic: false } });
   const platformCard = pctx.socialPostPayloadFields({ text: POST });
   const evilCard = pctx.socialPostPayloadFields({ text: POST, posts_as: { account: "member", handle: "<b>x</b>" } });

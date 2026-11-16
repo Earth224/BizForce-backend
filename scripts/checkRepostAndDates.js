@@ -18,9 +18,13 @@
    F. THE FLAG. repost: true is in the filing only after "Post again" was confirmed, on all four
       platforms; never from Prepare or Try again.
    S. THE SERVER'S SIDE. GET /api/videos <platform>_proposal ("pending", "publishing" or null) from the
-      same one bounded read of agent_proposals (lib/memberVideos.js); Instagram and Facebook take a
-      flagged repost of a posted video, as they took an unflagged one before (they never refused a
-      second post), and keep one pending proposal per video.
+      same one bounded read of agent_proposals (lib/memberVideos.js); one pending proposal per video.
+      NAMED (Nov 15 2026, S4): BEFORE Instagram and Facebook took an unflagged second post of a video (they
+      never refused one). AFTER they refuse it as YouTube and TikTok do: a video with a live post (Instagram:
+      published; Facebook: published and not removed) is filed again only with repost: true, 409
+      already_posted otherwise; the filing names the live post (repost_of) and says "again"; on approval a
+      Reel or video post goes on only when it was filed as a repost of the post live now, else it answers
+      already_posted and writes nothing. A video whose Facebook post was removed files as before.
    C. THE DATES. proposals.html .proposal-date: the theme's accent mixed into the muted text colour, at
       least 4.5:1 against the card on all 11 theme presets (the card over the page's black and over
       each glow), from the theme tokens (scripts/bf-theme.js tokensFor); size and placement unchanged.
@@ -71,7 +75,16 @@ const MUTATIONS = {
   // (extra) the waiting reason is not beside the button (B2)
   "reason-not-shown": [[YT, "          actions.appendChild(why);\n", ""]],
   // (extra) the date line moves (C3)
-  "date-moved": [[PROPOSALS, "40%,#8892b8);margin-left:auto}", "40%,#8892b8)}"]]
+  "date-moved": [[PROPOSALS, "40%,#8892b8);margin-left:auto}", "40%,#8892b8)}"]],
+  // NAMED (Nov 15 2026, S4): Instagram and Facebook refuse an unflagged second post (S5-S7).
+  "ig-unflagged-repost": [[IGAPI, "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
+  "fb-unflagged-repost": [[FBAPI, "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
+  "ig-execute-unguarded": [[IGAPI, "    if (liveNow && !(p.repost === true && liveNow.id === p.repost_of)) {", "    if (false) {"]],
+  "fb-execute-unguarded": [[FBAPI, "    if (liveNow && !(p.repost === true && liveNow.id === p.repost_of)) {", "    if (false) {"]],
+  "ig-repost-of-ignored": [[IGAPI, "    if (liveNow && !(p.repost === true && liveNow.id === p.repost_of)) {", "    if (liveNow && !(p.repost === true)) {"]],
+  "fb-removed-counts-live": [[FBAPI, "    .eq(\"status\", \"published\").is(\"removed_at\", null).order(", "    .eq(\"status\", \"published\").order("]],
+  "ig-repost-not-named": [[IGAPI, "    if (livePost) { payload.repost = true; payload.repost_of = livePost.id; }\n", ""]],
+  "fb-title-not-again": [[FBAPI, "(payload.repost ? \"Post again to the Facebook Page \" : \"Post to the Facebook Page \")", "\"Post to the Facebook Page \""]]
 };
 
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
@@ -202,6 +215,8 @@ function fakeDb(tables) {
         if (c[0] === "neq") rows = rows.filter(r => r[c[1]] !== c[2]);
         if (c[0] === "in") rows = rows.filter(r => c[2].indexOf(r[c[1]]) !== -1);
         if (c[0] === "gte") rows = rows.filter(r => String(r[c[1]]) >= String(c[2]));
+        // NAMED (Nov 15 2026, S4): is(col, null), for Facebook's live-post read (removed_at null).
+        if (c[0] === "is" && c[2] === null) rows = rows.filter(r => r[c[1]] == null);
         if (c[0] === "limit") rows = rows.slice(0, c[1]);
       }
       if (q.head) return Promise.resolve({ data: null, count: rows.length, error: null }).then(res, rej);
@@ -398,36 +413,77 @@ function fakeDb(tables) {
       Array.isArray(l2) && l2.length === 3 && l2.every(v => J(pick(v)) === J([null, null, null, null])));
     check("S4. a video just added (no read yet): all four null", J(pick(mv.publicView({ id: A, status: "ready" }))) === J([null, null, null, null]));
   }
-  // Instagram and Facebook: never refused a second post; a flagged repost is filed the same, and one pending stays
+  // NAMED (Nov 15 2026, S4): BEFORE Instagram and Facebook never refused a second post. AFTER the S3 rule: repost: true or 409.
   const U2 = "22222222-2222-4222-8222-222222222222", VID = "b1111111-1111-4111-8111-111111111111";
+  const IGP = "c1111111-1111-4111-8111-111111111111", FBP = "d1111111-1111-4111-8111-111111111111", OLDP = "e1111111-1111-4111-8111-111111111111";
   const SHA = "a".repeat(64);
-  const base = () => ({
-    member_instagram_connections: [{ user_id: U2, status: "connected", ig_user_id: "17841400000000000", username: "maplestreet" }],
+  const base = (opts) => ({
+    member_instagram_connections: [{ user_id: U2, status: "connected", ig_user_id: "17841400000000000", username: "maplestreet", access_expires_at: "2027-12-01T00:00:00Z" }],
     member_facebook_pages: [{ user_id: U2, status: "connected", page_id: "100000000000001", page_name: "Maple Street" }],
     member_videos: [{ id: VID, user_id: U2, path: "video/" + U2 + "/x.mp4", mime: "video/mp4", bytes: 1000, sha256: SHA, label: "L", status: "ready", created_at: "2026-11-10" }],
-    instagram_posts: [{ user_id: U2, video_id: VID, status: "published", permalink: IG_URL, created_at: "2026-11-01T00:00:00Z" }],
-    facebook_posts: [{ user_id: U2, video_id: VID, status: "published", permalink: FB_URL, created_at: "2026-11-01T00:00:00Z" }],
+    instagram_posts: opts && opts.none ? [] : [{ id: IGP, user_id: U2, video_id: VID, status: "published", permalink: IG_URL, created_at: "2026-11-01T00:00:00Z" }],
+    facebook_posts: opts && opts.none ? [] : [{ id: FBP, user_id: U2, video_id: VID, status: "published", permalink: FB_URL, created_at: "2026-11-01T00:00:00Z",
+      removed_at: opts && opts.removed ? "2026-11-05T00:00:00Z" : null }],
     agent_proposals: []
   });
-  const deps = db => ({ supabase: db, now: () => Date.parse("2026-11-13T12:00:00Z"), limits: { max: 2200 }, claims: () => null });
+  const deps = db => ({ supabase: db, now: () => Date.parse("2026-11-13T12:00:00Z"), limits: { max: 2200 }, claims: () => null,
+    crypt: { decrypt: () => "tok", encrypt: () => ({ ciphertext: "c", iv: "i", authTag: "t" }) } });
   let ig = null, fb = null;
   try { ig = loadLib(IGAPI); fb = loadLib(FBAPI); } catch (e) { check("S5. lib/instagramApi.js and lib/facebookApi.js load", false, e.message); }
   if (ig && fb) {
+    const PL = [["instagram", ig, r => ({ kind: "reel", caption: "Spring cakes.", video_id: VID, repost: r }), IGP, "instagram_posts", "Post to Instagram again as @maplestreet"],
+      ["facebook", fb, r => ({ kind: "video", message: "Spring cakes.", video_id: VID, repost: r }), FBP, "facebook_posts", "Post again to the Facebook Page Maple Street"]];
     const out = {};
-    for (const [name, lib, bodyOf] of [["instagram", ig, r => ({ kind: "reel", caption: "Spring cakes.", video_id: VID, repost: r })],
-      ["facebook", fb, r => ({ kind: "video", message: "Spring cakes.", video_id: VID, repost: r })]]) {
+    for (const [name, lib, bodyOf, live, table, again] of PL) {
       const t1 = base(), d1 = fakeDb(t1);
-      const plainR = await lib.proposePost(deps(d1), U2, Object.assign(bodyOf(undefined)));
-      delete (plainR.body || {}).proposal;
+      const plainR = await lib.proposePost(deps(d1), U2, bodyOf(undefined));
       const t2 = base(), d2 = fakeDb(t2);
       const flagged = await lib.proposePost(deps(d2), U2, bodyOf(true));
-      const again = await lib.proposePost(deps(d2), U2, bodyOf(true));
-      out[name] = { plain: plainR.status, flagged: flagged.status, again: [again.status, again.body && again.body.code], filed: t2.agent_proposals.length,
-        payloadKeys: t2.agent_proposals[0] ? Object.keys(t2.agent_proposals[0].payload).sort() : [] };
+      const twice = await lib.proposePost(deps(d2), U2, bodyOf(true));
+      const filed = t2.agent_proposals[0] || null;
+      const t3 = base({ none: true }), d3 = fakeDb(t3);
+      const fresh = await lib.proposePost(deps(d3), U2, bodyOf(undefined));
+      const fresh2 = await lib.proposePost(deps(fakeDb(base({ none: true }))), U2, bodyOf(true));
+      const t4 = base({ removed: true }), d4 = fakeDb(t4);
+      const removed = await lib.proposePost(deps(d4), U2, bodyOf(undefined));
+      out[name] = { plain: [plainR.status, plainR.body && plainR.body.code, plainR.body && plainR.body.error, t1.agent_proposals.length],
+        flagged: flagged.status, twice: [twice.status, twice.body && twice.body.code], filed: t2.agent_proposals.length,
+        repost: filed ? [filed.payload.repost, filed.payload.repost_of] : null, title: filed ? filed.title : null, note: flagged.body && flagged.body.note,
+        fresh: [fresh.status, t3.agent_proposals[0] ? Object.keys(t3.agent_proposals[0].payload).indexOf("repost") : null, t3.agent_proposals[0] && t3.agent_proposals[0].title],
+        fresh2: [fresh2.status, fresh2.body && fresh2.body.proposal && fresh2.body.proposal.payload.repost],
+        removed: [removed.status, t4.agent_proposals[0] ? t4.agent_proposals[0].payload.repost : null] };
     }
-    check("S5. Instagram and Facebook, a video they already have: filed with or without the flag, as before (201); one pending per video stays (409 pending); the payload is the same shape",
-      ["instagram", "facebook"].every(n => out[n].plain === 201 && out[n].flagged === 201 && out[n].again[0] === 409 && out[n].again[1] === "pending" && out[n].filed === 1 &&
-        out[n].payloadKeys.indexOf("repost") === -1), J(out));
+    const word = { instagram: "Instagram", facebook: "Facebook" };
+    check("S5. Instagram and Facebook: a second post of a video without repost: true is refused, 409 already_posted (\"That video is already on <Platform>.\"), nothing filed",
+      ["instagram", "facebook"].every(n => J(out[n].plain) === J([409, "already_posted", "That video is already on " + word[n] + ".", 0])), J([out.instagram.plain, out.facebook.plain]));
+    check("S6. ...with repost: true it is filed (201) naming the live post (repost: true, repost_of), titled and noted \"again\"; one pending per video stays (409 pending)",
+      PL.every(([n, , , live, , again]) => out[n].flagged === 201 && J(out[n].repost) === J([true, live]) && String(out[n].title).indexOf(again) === 0 &&
+        / publishes this post again to /.test(out[n].note || "") && out[n].twice[0] === 409 && out[n].twice[1] === "pending" && out[n].filed === 1),
+      J(PL.map(([n]) => [out[n].flagged, out[n].repost, out[n].title, out[n].twice, out[n].filed])));
+    check("S7. a video not yet on the platform files as before, with or without the flag, and says nothing of a repost; a removed Facebook post is not live, so it files as before",
+      ["instagram", "facebook"].every(n => out[n].fresh[0] === 201 && out[n].fresh[1] === -1 && !/ again /.test(String(out[n].fresh[2])) && out[n].fresh2[0] === 201 && out[n].fresh2[1] === undefined) &&
+      J(out.facebook.removed) === J([201, null]), J(["instagram", "facebook"].map(n => [out[n].fresh, out[n].fresh2])) + " " + J(out.facebook.removed));
+
+    // On approval: the guard in executePublish, before anything is recorded or sent.
+    const exec = {};
+    for (const [name, lib, , live, table] of PL) {
+      const payloadOf = extra => Object.assign(name === "instagram"
+        ? { kind: "reel", video: { id: VID, sha256: SHA, bytes: 1000, mime: "video/mp4" }, caption: "Spring cakes.", ig_user_id: "17841400000000000" }
+        : { kind: "video", video: { id: VID, sha256: SHA, bytes: 1000, mime: "video/mp4" }, message: "Spring cakes.", page_id: "100000000000001" }, extra);
+      const run = async (extra) => {
+        const t = base(), d = fakeDb(t);
+        const before = (t[table] || []).length;
+        let r = null, err = null;
+        try { r = await lib.executePublish(deps(d), { id: "f1111111-1111-4111-8111-111111111111", user_id: U2, payload: payloadOf(extra) }); } catch (e) { err = String(e && e.message || e); }
+        return { already: !!(r && r.already_posted), permalink: r && r.permalink, note: r && r.note, wrote: (t[table] || []).length - before, err: err };
+      };
+      exec[name] = { plain: await run({}), stale: await run({ repost: true, repost_of: OLDP }), matching: await run({ repost: true, repost_of: live }) };
+    }
+    check("S8. approving an unflagged post of a video already there sends nothing and records nothing: it answers already_posted with the live post's link",
+      PL.every(([n]) => exec[n].plain.already && exec[n].plain.wrote === 0 && !exec[n].plain.err && exec[n].plain.note === "That video is already on " + word[n] + "." &&
+        exec[n].plain.permalink === (n === "instagram" ? IG_URL : FB_URL)), J(exec));
+    check("S9. a repost filed against an older post (not the one live now) is answered the same way; one filed against the live post goes on (its row is recorded)",
+      PL.every(([n]) => exec[n].stale.already && exec[n].stale.wrote === 0 && !exec[n].matching.already && exec[n].matching.wrote === 1), J(exec));
   }
 
   /* ── C ── */
