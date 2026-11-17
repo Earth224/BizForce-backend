@@ -1545,7 +1545,8 @@ function pageAnswers(over) {
   check("P14. ...the result: only an www.instagram.com address drawn as a link", /href="https:\/\/www\.instagram\.com\/p\/Abc\/"/.test(goodRes) && badRes.indexOf("href=") === -1 && badRes.indexOf("javascript") === -1, badRes);
   check("P15. ...wired: the payload branch, the result branch, and fillInstagramVideos after each render (textContent)",
     FILES.proposals.indexOf("fieldsHtml = instagramPostPayloadFields(p.payload || {});") !== -1 && FILES.proposals.indexOf("execHtml = instagramResultHtml(p.execution_result);") !== -1 &&
-    FILES.proposals.indexOf("  fillMailboxReplies(container);\n  fillInstagramVideos(container);\n}") !== -1 && /spot\.textContent = /.test(fnSrc("fillInstagramVideos")));
+    // NAMED (Nov 17 2026, TK1): BEFORE fillInstagramVideos closed the render. AFTER the TikTok cards' preview and status calls follow it.
+    FILES.proposals.indexOf("  fillMailboxReplies(container);\n  fillInstagramVideos(container);\n") !== -1 && /spot\.textContent = /.test(fnSrc("fillInstagramVideos")));
   const icard = function (name) { return (new RegExp("<p class=\"int-card-name\">" + name + "</p>\\s*<p class=\"int-card-desc\">([^<]*)</p>\\s*<span class=\"int-status\">([^<]*)</span>").exec(FILES.integrations) || []); };
   // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): BEFORE Facebook was Removed. AFTER it is On the Social page (checkFacebookPages holds its words).
   check("P16. Integrations: Instagram connects on the Social page (Business or Creator, JPEG photos and Reels, approval); Facebook on the Social page too",
@@ -1623,9 +1624,10 @@ function pageAnswers(over) {
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
-  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 185 &&
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
     migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

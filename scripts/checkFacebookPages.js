@@ -1672,6 +1672,7 @@ function pageAnswers(over) {
     (stripComments(FB_SECTION).match(/process\.env\.[A-Z_]+/g) || []).every(function (x) { return x === "process.env.SUPABASE_URL"; }) &&
     (stripComments(FILES.auth).match(/env\.[A-Z_]+/g) || []).sort().join() === "env.FACEBOOK_APP_ID,env.FACEBOOK_APP_ID,env.FACEBOOK_APP_SECRET,env.FACEBOOK_APP_SECRET" &&
     !/process\.env/.test(stripComments(FILES.api)));
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
   check("G11. videoPlatformConfigured counts Facebook (Your videos opens when any video platform is set up)",
     /function videoPlatformConfigured\(\) \{[\s\S]*?require\("\.\/lib\/facebookAuth"\)\.configured\(process\.env\) !== null;\n\}/.test(FILES.server));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
@@ -1683,9 +1684,10 @@ function pageAnswers(over) {
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 185 &&
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

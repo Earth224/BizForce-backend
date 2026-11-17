@@ -35395,6 +35395,19 @@ app.get("/api/videos", requireAuth, async function (req, res, next) {
   }
 });
 
+/* NAMED (Nov 17 2026, TK1): a short-lived signed address to the member's own video file, for the preview TikTok's
+   content-sharing guidelines ask for ("API Clients should display a preview of the to-be-posted content."). Never
+   cached; 410 file_gone once the file is deleted (lib/memberVideos.js previewUrl). */
+app.get("/api/videos/:id/preview", requireAuth, async function (req, res, next) {
+  try {
+    res.set("Cache-Control", "no-store");
+    var out = await require("./lib/memberVideos").previewUrl(youtubeDeps(), req.user.id, req.params.id);
+    return res.status(out.status).json(out.body);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/videos/:id", requireAuth, async function (req, res, next) {
   try {
     var out = await require("./lib/memberVideos").deleteVideo(youtubeDeps(), req.user.id, req.params.id);

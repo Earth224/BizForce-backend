@@ -1023,9 +1023,12 @@ function pageAnswers(over) {
     cLim.keyGenerator({ user: { id: USER } }) === "youtube-connect:" + USER);
   const gated = ["post /api/youtube/start", "post /api/youtube/finish", "post /api/videos/upload-url", "post /api/videos/finalize", "post /api/youtube/propose-upload",
     "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete"];
-  const loginOnly = ["get /api/youtube/status", "post /api/youtube/disconnect", "get /api/videos", "delete /api/videos/:id", "get /api/youtube/videos/:id/status"];
-  check("O2. the twelve routes: seven behind a subscription, five login-only (status, disconnect, the list, delete, a video's status)",
-    Object.keys(m.routes).length === 12 &&
+  // NAMED (Nov 17 2026, TK1): BEFORE twelve routes, five login-only. AFTER GET /api/videos/:id/preview (TikTok's preview of the
+  // to-be-posted video) is a sixth login-only route.
+  const loginOnly = ["get /api/youtube/status", "post /api/youtube/disconnect", "get /api/videos", "delete /api/videos/:id", "get /api/youtube/videos/:id/status",
+    "get /api/videos/:id/preview"];
+  check("O2. the thirteen routes: seven behind a subscription, six login-only (status, disconnect, the list, delete, a video's status, the preview)",
+    Object.keys(m.routes).length === 13 &&
     gated.every(function (k) { return m.routes[k] && m.routes[k].middleware[0] === requireAuth && m.routes[k].middleware[1] === requireActiveSubscription; }) &&
     loginOnly.every(function (k) { return m.routes[k] && m.routes[k].middleware.length === 1 && m.routes[k].middleware[0] === requireAuth; }), Object.keys(m.routes).join(", "));
   // unconfigured
@@ -1996,9 +1999,10 @@ function pageAnswers(over) {
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 185 &&
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),

@@ -39,7 +39,12 @@
          their reason, the disclosure, the label and consent lines;
      V11 behaviour unchanged, proved against frontend BASELINE: the same
          routes in each script, the same requests on load, and the same
-         payloads filed from each form.
+         payloads filed from each form;
+     V12 NAMED (Nov 17 2026, TK1), TikTok's content-sharing guidelines: the
+         TikTok form's preview (muted, controls, no autoplay), the declaration
+         with TikTok's links directly above File for approval, the button off
+         while Disclose is on with nothing chosen, "Only you"'s hover text,
+         and the TikTok card's private-account and processing lines.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check.
@@ -89,6 +94,23 @@ const MUTATIONS = {
   "links-no-gap": [[PAGE, "flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 8px;", "flex-wrap: wrap; align-items: baseline; margin-top: 8px;"]],
   "links-not-flex": [[PAGE, "    .sf-links { display: flex; flex-wrap: wrap;", "    .sf-links { display: block; flex-wrap: wrap;"]],
   "links-old-margin": [[PAGE, "    .sf-videos .masto-post-link { display: inline-block; min-width: 0; overflow-wrap: anywhere; }", "    .sf-videos .masto-post-link { display: inline-block; margin-top: 8px; overflow-wrap: anywhere; }"]],
+  // NAMED (Nov 17 2026, TK1): V12.
+  // the TikTok preview autoplays, or plays sound
+  "tt-preview-autoplay": [[TT, "player.autoplay = false;", "player.autoplay = true;"]],
+  "tt-preview-sound": [[TT, "player.setAttribute(\"playsinline\", \"\"); player.setAttribute(\"muted\", \"\");", "player.setAttribute(\"playsinline\", \"\");"]],
+  // the declaration moves above the interactions, away from the button
+  "tt-declaration-away": [[TT, "    box.appendChild(labelLine);\n    box.appendChild(consent);\n", "    box.insertBefore(consent, box.firstChild);\n    box.appendChild(labelLine);\n"]],
+  // the declaration's music link goes to a page that is not TikTok's
+  "tt-music-link-wrong": [[TT, "  var MUSIC_URL = \"https://www.tiktok.com/legal/page/global/music-usage-confirmation/en\";", "  var MUSIC_URL = \"https://bizforceai.net/terms.html\";"]],
+  // File for approval stays on while Disclose is on with nothing chosen
+  "tt-file-on-unchosen": [[TT, "      var unchosen = disclose.input.checked && !yours.input.checked && !branded.input.checked;", "      var unchosen = false;"]],
+  // "Only you" disabled without its hover text
+  "tt-only-you-silent": [[TT, "        privacy.options[i].title = paid ? PRIVATE_HOVER : \"\";", "        privacy.options[i].title = \"\";"]],
+  // the TikTok card loses the private-account or the processing line
+  "tt-card-private-lost": [[PAGE, "your TikTok account must be set to private, and TikTok keeps", "TikTok keeps"]],
+  // the hidden disclosure options drawn anyway (display: grid beats [hidden])
+  "tt-brands-drawn-hidden": [[PAGE, "    .sf-check-group[hidden] { display: none; }\n", ""]],
+  "tt-card-processing-lost": [[PAGE, "      <p class=\"bsky-quiet\">After you approve a post, TikTok may take a few minutes to process it before it appears on your profile.</p>\n", ""]],
   // the moved Google line is lost (V2)
   "note-lost": [[PAGE, "      <p class=\"bsky-quiet\">Until Google approves BizForce, YouTube keeps uploads from BizForce private.</p>\n", ""]]
 };
@@ -125,7 +147,9 @@ const J = JSON.stringify;
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
 const V_NEW = { id: "22222222-2222-4222-8222-222222222222", label: "Spring cakes", bytes: 3 * 1048576, mime: "video/mp4", status: "ready",
   youtube_video_id: null, youtube_url: null, uploaded_at: null, created_at: "2026-11-07T10:00:00Z", upload_unfinished: false,
-  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false };
+  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false,
+  // NAMED (Nov 17 2026, TK1): the length (migration 186).
+  duration_ms: 45000 };
 const V_SENT = Object.assign({}, V_NEW, { id: "33333333-3333-4333-8333-333333333333", label: "Autumn menu", mime: "video/webm",
   youtube_video_id: "dQw4w9WgXcQ", youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", uploaded_at: "2026-11-07T11:00:00Z",
   tiktok_status: "posted", tiktok_posted_at: "2026-11-07T11:00:00Z", tiktok_post_url: "https://www.tiktok.com/player/v1/7300000000000000001" });
@@ -133,6 +157,7 @@ const CREATOR = { creator_nickname: "Maple Street Bakery", privacy_level_options
   comment_disabled: false, duet_disabled: true, stitch_disabled: false,
   privacy_words: { PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", SELF_ONLY: "Only you" } };
 const SINCE = "2026-11-07T10:00:00Z";
+const PREVIEW_URL = "https://check.supabase.co/storage/v1/object/sign/bf-video/video/x.mp4?token=sig";
 function answersFor(on) {
   const st = c => (c ? "connected" : "not_connected");
   return function (p, method) {
@@ -143,11 +168,14 @@ function answersFor(on) {
     if (p === "/api/videos" && method === "GET") return { status: 200, body: { videos: [V_NEW, V_SENT], max_bytes: 52428800, ready_max: 2 } };
     if (p === "/api/instagram/posts" || p === "/api/facebook/posts") return { status: 200, body: { posts: [] } };
     if (p === "/api/tiktok/creator-info") return { status: 200, body: CREATOR };
+    // NAMED (Nov 17 2026, TK1): the TikTok form's preview.
+    if (/^\/api\/videos\/[0-9a-f-]{36}\/preview$/.test(p)) return { status: 200, body: { url: PREVIEW_URL, mime: "video/mp4", expires_in: 600 } };
     if (/propose/.test(p)) return { status: 201, body: { note: "Filed for approval." } };
     return { status: 404, body: { error: "not in this fixture: " + method + " " + p } };
   };
 }
 
+let pIn2 = null; // NAMED (Nov 17 2026, TK1): V2's paragraph finder, reused in V12.
 const flush = async (n) => { for (let i = 0; i < (n || 12); i++) await new Promise(r => setTimeout(r, 0)); };
 const windows = [];
 function stripScripts(html) { return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, ""); }
@@ -208,8 +236,10 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   const LIMITS = "Videos up to 50 MB (MP4, WebM or MOV).";
   const KEPT = "BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.";
   const GOOGLE = "Until Google approves BizForce, YouTube keeps uploads from BizForce private.";
-  const TIKTOK = "Until TikTok reviews BizForce, TikTok keeps posts from BizForce visible only to you.";
+  // NAMED (Nov 17 2026, TK1): BEFORE "...TikTok keeps posts from BizForce visible only to you." AFTER the account must be private too.
+  const TIKTOK = "Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you.";
   const pIn = (root, t) => !!root && $(root, "p").filter(p => p.textContent === t).length === 1;
+  pIn2 = pIn;
   const once = t => page.split("<p class=\"bsky-quiet\">" + t + "</p>").length === 2;
   check("V2a. the two intro lines, word for word, in the Your videos card and nowhere else", pIn(card, LIMITS) && pIn(card, KEPT) && once(LIMITS) && once(KEPT));
   check("V2b. the Google line moved into the YouTube card, word for word, once, and not in Your videos",
@@ -463,8 +493,12 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   /* ── V11 ── */
   console.log("\n══ V11. behaviour unchanged against frontend " + BASELINE + " ══");
   const routes = src => Array.from(new Set((src.match(/"\/api\/[A-Za-z0-9_/-]*"/g) || []))).sort();
-  check("V11a. each script calls the same routes as at " + BASELINE, [YT, TT, IG, FB].every(f => J(routes(FILES[f])) === J(routes(BASE[f]))),
-    [YT, TT, IG, FB].filter(f => J(routes(FILES[f])) !== J(routes(BASE[f]))).join());
+  // NAMED (Nov 17 2026, TK1): BEFORE every script's routes equal BASELINE's. AFTER tiktok.js adds exactly one, "/api/videos/" (the
+  // preview, GET /api/videos/:id/preview); every other route is unchanged.
+  const added = { [TT]: ["\"/api/videos/\""] };
+  const expectRoutes = f => Array.from(new Set(routes(BASE[f]).concat(added[f] || []))).sort();
+  check("V11a. each script calls the same routes as at " + BASELINE + " (tiktok.js adds only the preview)", [YT, TT, IG, FB].every(f => J(routes(FILES[f])) === J(expectRoutes(f))),
+    [YT, TT, IG, FB].filter(f => J(routes(FILES[f])) !== J(expectRoutes(f))).map(f => f + " " + J(routes(FILES[f]))).join(" ;; "));
   const loadReqs = rr => rr.reqs.map(x => x.method + " " + x.path).sort();
   const nowAll = await runPage(FILES, ON_ALL), baseAll = await runPage(BASE, ON_ALL);
   const nowYt = await runPage(FILES, { youtube: true }), baseYt = await runPage(BASE, { youtube: true });
@@ -532,6 +566,46 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   await flush();
   check("V11h. Delete still calls DELETE /api/videos/:id", pDel.reqs.some(x => x.method === "DELETE" && x.path === "/api/videos/" + V_NEW.id));
   check("V11i. no innerHTML in the four scripts' code", [YT, TT, IG, FB].every(f => !/innerHTML/.test(FILES[f].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, ""))));
+
+  /* ── V12 ── NAMED (Nov 17 2026, TK1) */
+  console.log("\n══ V12. TikTok's content-sharing guidelines ══");
+  const pT = await runPage(FILES, ON_ALL);
+  const tcard = pT.doc.getElementById("ttConnect");
+  check("V12a. the TikTok card: the private-account line and the processing line, word for word",
+    pIn2(tcard, "Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you.") &&
+    pIn2(tcard, "After you approve a post, TikTok may take a few minutes to process it before it appears on your profile."));
+  buttonIn(rowOf(pT.doc, V_NEW.id), "Prepare for TikTok").click();
+  await flush();
+  const tp2 = panels(pT.doc)[0];
+  const vid = tp2 ? tp2.querySelector("video") : null;
+  check("V12b. the form's preview: a <video> from the signed address with controls, muted, never autoplay",
+    !!vid && vid.getAttribute("src") === PREVIEW_URL && vid.hasAttribute("controls") && vid.hasAttribute("muted") && vid.muted === true && !vid.hasAttribute("autoplay") &&
+    pT.reqs.some(x => x.method === "GET" && x.path === "/api/videos/" + V_NEW.id + "/preview"), vid ? vid.outerHTML : "no video");
+  const fileBtn2 = tp2 ? buttonIn(tp2, "File for approval") : null;
+  const decl = tp2 ? $(tp2, "p").filter(p => /^By posting, you agree to TikTok's/.test(p.textContent))[0] : null;
+  const dlinks = decl ? $(decl, "a").map(a => [a.textContent, a.getAttribute("href"), a.getAttribute("target"), a.getAttribute("rel")]) : [];
+  check("V12c. the declaration sits directly above File for approval, and links Music Usage Confirmation to TikTok's page",
+    !!decl && !!fileBtn2 && decl.nextElementSibling === fileBtn2.parentNode &&
+    J(dlinks) === J([["Music Usage Confirmation", "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en", "_blank", "noopener"]]), J(dlinks));
+  const boxes2 = tp2 ? $(tp2, "input[type=checkbox]") : [];
+  const named2 = n => boxes2.filter(b => b.parentNode.textContent.indexOf(n) !== -1)[0];
+  const fire2 = (n, t) => n.dispatchEvent(new pT.w.Event(t, { bubbles: true }));
+  const on0 = !!fileBtn2 && fileBtn2.disabled === false;
+  named2("Disclose video content").checked = true; fire2(named2("Disclose video content"), "change");
+  const off1 = fileBtn2.disabled === true;
+  named2("Your brand").checked = true; fire2(named2("Your brand"), "change");
+  const on2 = fileBtn2.disabled === false;
+  check("V12d. File for approval: on with Disclose off, OFF with Disclose on and nothing chosen, on again once an option is chosen", on0 && off1 && on2, J([on0, off1, on2]));
+  named2("Branded content").checked = true; fire2(named2("Branded content"), "change");
+  const selfOpt2 = Array.from(tp2.querySelector("select").options).filter(o => o.value === "SELF_ONLY")[0];
+  const blinks = $(decl, "a").map(a => [a.textContent, a.getAttribute("href")]);
+  check("V12e. Branded content: \"Only you\" disabled with the hover text \"Branded content visibility cannot be set to private.\", and both policies linked",
+    selfOpt2.disabled === true && selfOpt2.getAttribute("title") === "Branded content visibility cannot be set to private." &&
+    J(blinks) === J([["Branded Content Policy", "https://www.tiktok.com/legal/page/global/bc-policy/en"], ["Music Usage Confirmation", "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"]]), J([selfOpt2.title, blinks]));
+  // NAMED (Nov 17 2026, TK1): jsdom applies no stylesheet, so the rule itself is checked here (browserCheckSocial checks what Chrome draws).
+  check("V12f. the stylesheet keeps a hidden check group undrawn: .sf-check-group[hidden] { display: none; } after .sf-check-group's display: grid",
+    FILES[PAGE].indexOf("    .sf-check-group { display: grid; gap: 10px; }\n") !== -1 &&
+    FILES[PAGE].indexOf("    .sf-check-group[hidden] { display: none; }\n") > FILES[PAGE].indexOf("    .sf-check-group { display: grid; gap: 10px; }\n"));
 
   windows.forEach(w => { try { w.close(); } catch (e) { /* closed */ } });
   console.log("");

@@ -114,12 +114,14 @@ const J = JSON.stringify;
 /* ── fixtures (the same two videos as checkSocialVideoPanel) ── */
 const V_NEW = { id: "22222222-2222-4222-8222-222222222222", label: "Spring cakes", bytes: 3 * 1048576, mime: "video/mp4", status: "ready",
   youtube_video_id: null, youtube_url: null, uploaded_at: null, created_at: "2026-11-07T10:00:00Z", upload_unfinished: false,
-  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false };
+  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false,
+  // NAMED (Nov 17 2026, TK1): the length (migration 186).
+  duration_ms: 45000 };
 const V_SENT = Object.assign({}, V_NEW, { id: "33333333-3333-4333-8333-333333333333", label: "Autumn menu", mime: "video/webm",
   youtube_video_id: "dQw4w9WgXcQ", youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", uploaded_at: "2026-11-07T11:00:00Z",
   tiktok_status: "posted", tiktok_posted_at: "2026-11-07T11:00:00Z", tiktok_post_url: "https://www.tiktok.com/player/v1/7300000000000000001" });
 const CREATOR = { creator_nickname: "Maple Street Bakery", privacy_level_options: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"],
-  comment_disabled: false, duet_disabled: true, stitch_disabled: false,
+  comment_disabled: false, duet_disabled: true, stitch_disabled: false, max_video_post_duration_sec: 300,
   privacy_words: { PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", SELF_ONLY: "Only you" } };
 // NAMED (Nov 13 2026, S2): Instagram's and Facebook's status, as GET /api/videos now carries it.
 const IG_URL = "https://www.instagram.com/reel/AbCdEf123/", FB_URL = "https://www.facebook.com/100000000000001/videos/300000000000003/";
@@ -174,6 +176,8 @@ function answer(method, p) {
   if (p === "/api/media") return { media: [] };
   if (p === "/api/instagram/posts" || p === "/api/facebook/posts") return { posts: [] };
   if (p === "/api/tiktok/creator-info") return CREATOR;
+  // NAMED (Nov 17 2026, TK1): the TikTok preview's signed address (an outside host, so the browser is refused the file itself).
+  if (/^\/api\/videos\/[0-9a-f-]{36}\/preview$/.test(p)) return { url: "https://check.invalid/preview.mp4", mime: "video/mp4", expires_in: 600 };
   return {};
 }
 
@@ -437,6 +441,22 @@ function contrast(fg, bg) {
       check("\"" + btn + "\" opens one form, headed \"" + head + "\"", open.n === 1 && open.head === head, J(open));
       await formStyle(cdp, panelExpr, head + " form");
       await helperGeometry(cdp, panelExpr, head + " form");
+      if (btn === "Prepare for TikTok") {
+        /* NAMED (Nov 17 2026, TK1): TikTok's content-sharing guidelines, as the browser draws them. BEFORE .sf-check-group
+           (display: grid) drew "Your brand" and "Branded content" with Disclose off. */
+        const tk = await evaluate(cdp, "(function(){var p=document.querySelector('#ytVideoList .sf-panel');var bx=[].slice.call(p.querySelectorAll('input[type=checkbox]'));" +
+          "function lab(t){return bx.filter(function(b){return b.parentNode.textContent.indexOf(t)!==-1})[0];}var g=lab('Your brand').parentNode.parentNode;var dis=lab('Disclose video content');" +
+          "var file=[].filter.call(p.querySelectorAll('button'),function(b){return b.textContent==='File for approval'})[0];var before=getComputedStyle(g).display;" +
+          "dis.click();var after=getComputedStyle(g).display;var off=file.disabled;dis.click();var v=p.querySelector('video');var pr=p.getBoundingClientRect();" +
+          "var vr=v?v.getBoundingClientRect():null;var d=p.querySelector('.tt-declaration');var a=d?d.querySelector('a'):null;" +
+          "return {before:before,after:after,off:off,onAgain:!file.disabled,video:v?{w:Math.round(vr.width),h:Math.round(vr.height),inside:vr.left>=pr.left&&vr.right<=pr.right,controls:v.controls,muted:v.muted,autoplay:v.autoplay}:null," +
+          "decl:d?{next:d.nextElementSibling===file.parentNode,href:a&&a.getAttribute('href'),line:a&&getComputedStyle(a).textDecorationLine}:null};})()");
+        check("TikTok form: Your brand and Branded content are not drawn while Disclose is off, drawn once it is ticked; File for approval off until one is chosen",
+          tk.before === "none" && tk.after !== "none" && tk.off === true && tk.onAgain === true, J(tk));
+        check("TikTok form: the preview draws inside the form with controls, muted, not autoplaying; the declaration sits right above File for approval with an underlined link to TikTok",
+          !!tk.video && tk.video.w > 0 && tk.video.h > 0 && tk.video.inside && tk.video.controls && tk.video.muted && !tk.video.autoplay &&
+          !!tk.decl && tk.decl.next && tk.decl.href === "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" && /underline/.test(tk.decl.line || ""), J(tk));
+      }
       await shotOf(cdp, "document.querySelector('#ytVideoList li[data-video-id=\"" + V_NEW.id + "\"]')", path.join(OUT, file));
     }
     check("no script error on the page", exceptions.length === 0, exceptions.join(" | "));

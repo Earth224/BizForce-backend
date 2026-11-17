@@ -19,7 +19,10 @@
      S. the stream profiles: tiktok and youtube
      J. retention and deleting a video
      P. the pages: the Social page, the return marker, the posting form, proposals and integrations
-     G. legal, yourData, README, registries, the migration; R1, the highest migration.
+     K. TK1 (Nov 17 2026), TikTok's content-sharing guidelines before app review: the video's length (migration 186) read
+        from the file and checked at filing and at approval, the preview, the declaration with TikTok's links directly
+        above the publish button, the processing notice and the bounded status polling, the disclosure button, the wording
+     G. legal, yourData, README, registries, the migration; R1, the highest migration (186, verify/186_verify.sql).
 
    Run: node scripts/checkTiktokPosting.js     MUTATE=<name> for one mutation, MUTATE=all for every one. */
 "use strict";
@@ -63,8 +66,9 @@ const MUTATIONS = {
     "  if (content && b.privacy_level === SELF_ONLY) return { ok: false, error: MESSAGES.brandedPrivate, field: \"privacy_level\" };\n", ""],
   "disclosure-without-option": ["api",
     "  if (disclose && !organic && !content) return { ok: false, error: MESSAGES.disclosureOption, field: \"disclose\" };\n", ""],
+  // NAMED (Nov 17 2026, TK1): BEFORE consent.textContent = paid ? CONSENT_BRANDED : CONSENT. AFTER the line is built with its links (declaration).
   "consent-line-missing": ["ui",
-    "      consent.textContent = paid ? CONSENT_BRANDED : CONSENT;", "      consent.textContent = CONSENT;"],
+    "      declaration(consent, paid);", "      declaration(consent, false);"],
   "creator-info-not-rechecked": ["api",
     "  var checked = validatePost(postFields(p), creator, deps.limits);", "  var checked = { ok: true, value: postFields(p) };"],
   "sha-unchecked-at-send": ["api",
@@ -153,6 +157,84 @@ const MUTATIONS = {
   "repost-gap-ignored": ["api",
     "    if (isFinite(lastAt) && deps.now() - lastAt < REPOST_GAP_MS) {", "    if (false) {"],
   // the new publish may overwrite any slot, not only the posted publish the repost was filed against
+  // NAMED (Nov 17 2026, TK1): section K.
+  // the length is not checked when the post is filed
+  "duration-unchecked-at-filing": ["api",
+    "  if (tooLong) return { status: 422, body: { error: tooLong + \" Nothing was filed.\", code: video.duration_ms == null ? \"duration_unknown\" : \"too_long\", field: \"video_id\" } };\n", ""],
+  // ...nor again at approval, against TikTok's answer then
+  "duration-unchecked-at-send": ["api",
+    "  if (overLength) throw fail(overLength + \" Nothing was sent.\");\n", ""],
+  // an unknown length is let through
+  "duration-null-allowed": ["api",
+    "  if (ms === null) return MESSAGES.durationUnknown;", "  if (ms === null) return null;"],
+  // the limit (seconds) compared as minutes
+  "duration-units-wrong": ["api",
+    "  if (ms > max * 1000) return", "  if (ms > max * 60000) return"],
+  // mvhd version 0 read with timescale and duration swapped
+  "mvhd-fields-swapped": ["videos",
+    "        return d32 === 0xFFFFFFFF ? null : msOf(d32, body.readUInt32BE(p + 8));", "        return d32 === 0xFFFFFFFF ? null : msOf(body.readUInt32BE(p + 8), d32);"],
+  // a box header split across two chunks is lost
+  "mvhd-split-header-lost": ["videos",
+    "        if (buf.length - i < 8) { pending = Buffer.from(buf.subarray(i)); return; }", "        if (buf.length - i < 8) { return; }"],
+  // the file's own length never read
+  "duration-not-read": ["videos",
+    "extOf(path) === \"webm\" ? null : durationReader()", "null"],
+  // the browser's length believed as sent
+  "browser-duration-trusted": ["videos",
+    "  return perSec >= BROWSER_MIN_BYTES_PER_SEC && perSec <= BROWSER_MAX_BYTES_PER_SEC ? v : null;", "  return v;"],
+  // the browser's length preferred over the file's
+  "browser-over-file": ["videos",
+    "    duration_ms: m.durationMs !== null ? m.durationMs : browserDuration(b.duration_ms, m.bytes),", "    duration_ms: browserDuration(b.duration_ms, m.bytes) || m.durationMs,"],
+  // a deleted file still gets a preview address
+  "preview-gone-signed": ["videos",
+    "  if (video.status !== \"ready\" || !video.path) return { status: 410, body: { error: MESSAGES.previewGone, code: \"file_gone\" } };\n", ""],
+  // the preview plays on its own, or with sound
+  "preview-autoplay": ["ui", "player.autoplay = false;", "player.autoplay = true;"],
+  "preview-unmuted": ["ui", "player.controls = true; player.muted = true;", "player.controls = true; player.muted = false;"],
+  // a deleted file is not said
+  "preview-gone-unsaid": ["ui",
+    "      if (res.status === 410 || res.status === 404) { note.textContent = \"This video's file was deleted, so it can't be previewed or posted.\"; return; }\n", ""],
+  // no preview in the form
+  "preview-missing": ["ui", "    box.appendChild(preview(v));\n", ""],
+  // the declaration's names not linked, or linked elsewhere
+  "declaration-unlinked": ["ui",
+    "    node.appendChild(link(\"Music Usage Confirmation\", MUSIC_URL));", "    node.appendChild(document.createTextNode(\"Music Usage Confirmation\"));"],
+  "declaration-bc-url-wrong": ["ui",
+    "  var BC_URL = \"https://www.tiktok.com/legal/page/global/bc-policy/en\";", "  var BC_URL = \"https://www.tiktok.com/legal/page/global/music-usage-confirmation/en\";"],
+  // File for approval stays on while Disclose is on with nothing chosen
+  "disclosure-button-enabled": ["ui", "      file.disabled = unchosen || busy;", "      file.disabled = busy;"],
+  // "Only you" disabled without saying why
+  "private-hover-missing": ["ui", "        privacy.options[i].title = paid ? PRIVATE_HOVER : \"\";", "        privacy.options[i].title = \"\";"],
+  // the Social page's polling: unbounded, without backoff, or started again on every redraw
+  "poll-unbounded": ["ui", "      if (p.tries >= POLL_DELAYS.length) {", "      if (false) {"],
+  "poll-no-backoff": ["ui", "      setTimeout(ask, POLL_DELAYS[p.tries]);", "      setTimeout(ask, POLL_DELAYS[0]);"],
+  "poll-restarted": ["ui", "    if (p) { p.show = show; if (p.text) show(p.text); return; }", "    if (false) { p.show = show; if (p.text) show(p.text); return; }"],
+  "poll-missing": ["ui", "    if (v.tiktok_status === \"processing\") poll(v, function (text) { msg.textContent = text; });\n", ""],
+  // the server's status fetch not single-flight
+  "status-not-single-flight": ["api", "  var running = statusInFlight.get(video.id);", "  var running = null;"],
+  // the processing notice dropped from a sent post
+  "processing-notice-missing": ["api",
+    "  return { processing: true, status: \"processing\", note: \"TikTok has the video and is processing it. Check its status on the Social page.\", notice: MESSAGES.processingNotice };\n}",
+    "  return { processing: true, status: \"processing\", note: \"TikTok has the video and is processing it. Check its status on the Social page.\" };\n}"],
+  // creator_info's "can't post more now" treated as any other failure
+  "cannot-post-unmapped": ["api",
+    "    if (err && CANNOT_POST_CODES.indexOf(err.code) !== -1) return { status: 409, body: { error: MESSAGES.cannotPostNow + \" Nothing was filed.\", code: \"cannot_post_now\" } };\n    return { status: 502, body: { error: err && err.said ? \"TikTok said: \" + err.said + \" Nothing was filed.\"",
+    "    return { status: 502, body: { error: err && err.said ? \"TikTok said: \" + err.said + \" Nothing was filed.\""],
+  // the old daily-cap words (not named as BizForce's own limit)
+  "daily-cap-unnamed": ["api",
+    "  dailyCap: \"BizForce's own limit is 5 TikTok posts in 24 hours. Nothing was sent. Try again later.\",", "  dailyCap: \"You can post 5 videos to TikTok in 24 hours. Nothing was sent. Try again later.\","],
+  // the nickname not filed, or not shown on the card
+  "nickname-not-filed": ["api", "    creator_nickname: creator.creator_nickname\n", "    creator_nickname: null\n"],
+  "card-nickname-dropped": ["proposals", "escapeHtml(tiktokNickname(payload))", "escapeHtml(\"your connected TikTok account\")"],
+  // the card: no declaration above Approve, no preview, unbounded polling
+  "card-declaration-missing": ["proposals", "      ? (p.action_type === \"publish_tiktok_post\" ? tiktokDeclarationHtml(p.payload || {}) : '') +\n", "      ? '' +\n"],
+  "card-preview-autoplay": ["proposals", "v.controls = true; v.muted = true; v.autoplay = false;", "v.controls = true; v.muted = true; v.autoplay = true;"],
+  "card-poll-unbounded": ["proposals", "    if (p.done || p.tries >= TIKTOK_POLL_DELAYS.length) {", "    if (p.done) {"],
+  "card-notice-missing": ["proposals", "      (sent ? '<div><span class=\"pf-label\">processing</span>", "      (false ? '<div><span class=\"pf-label\">processing</span>"],
+  // the private-account line gone from the TikTok card
+  "private-account-line-missing": ["page", "your TikTok account must be set to private, and ", ""],
+  // the stale token lifetimes back in the comment
+  "token-comment-stale": ["auth", "an access token (expires_in; TikTok documents 2 hours)", "an access token (about 24 hours)"],
   "repost-slot-unchecked": ["api",
     "  if (reposting && p.repost_of) storing = storing.eq(\"tiktok_publish_id\", p.repost_of).eq(\"tiktok_status\", \"posted\");\n",
     "  if (reposting && p.repost_of) storing = storing;\n"]
@@ -309,6 +391,12 @@ function makeStorage() {
     list: async function (prefix) {
       calls.push({ op: "list", prefix: prefix });
       return { data: [], error: null };
+    },
+    // NAMED (Nov 17 2026, TK1): the preview's signed address.
+    createSignedUrl: async function (p, secs) {
+      calls.push({ op: "sign", path: p, secs: secs });
+      if (!objects[p]) return { data: null, error: { message: "Object not found" } };
+      return { data: { signedUrl: "https://check.supabase.co/storage/v1/object/sign/bf-video/" + p + "?token=sig" }, error: null };
     }
   };
   return { from: function (b) { if (b !== "bf-video") throw new Error("unexpected bucket " + b); return bucket; }, objects: objects, calls: calls };
@@ -545,6 +633,8 @@ function makeTiktok(opts) {
     }
     if (u.hostname === "open.tiktokapis.com" && u.pathname === "/v2/post/publish/creator_info/query/" && method === "POST") {
       EV.push("tt:creator");
+      // NAMED (Nov 17 2026, TK1): creatorError answers creator_info with that error code (TikTok's "can't post more now" codes).
+      if (o.creatorError) return reply(o.creatorStatus || 403, { error: { code: o.creatorError, message: "Posting is limited for this account right now.", log_id: "x" } });
       const d = Object.assign({ creator_avatar_url: "https://p16.example/a.jpg", creator_username: "maplestreet", creator_nickname: NICK,
         privacy_level_options: OPTIONS.slice(), comment_disabled: false, duet_disabled: false, stitch_disabled: false, max_video_post_duration_sec: 300 }, o.creator || {});
       return reply(200, { data: d, error: OK });
@@ -764,6 +854,8 @@ function seedVideo(db, buf, over) {
     status: "ready", youtube_video_id: null, session_ciphertext: null, session_iv: null, session_auth_tag: null, uploaded_at: null,
     tiktok_publish_id: null, tiktok_status: null, tiktok_posted_at: null, tiktok_post_id: null,
     tiktok_upload_ciphertext: null, tiktok_upload_iv: null, tiktok_upload_auth_tag: null, tiktok_upload_expires_at: null,
+    // NAMED (Nov 17 2026, TK1): migration 186's length, 45 s unless a test says otherwise.
+    duration_ms: 45000,
     created_at: new Date().toISOString() }, over || {});
   db.t.member_videos.push(row);
   if (row.path) db.storage.objects[row.path] = { buf: buf, created_at: new Date(Date.now() - 3 * 86400000).toISOString() };
@@ -799,7 +891,7 @@ function proposalOf(video, over) {
 /* ── the Social page's video list and TikTok panel in a fake DOM ─────────── */
 const API = "https://dynamic-prosperity-production-5382.up.railway.app";
 function runPage(search, answers, marker) {
-  const dom = { els: {}, fetches: [], events: [], innerHTML: [], assigned: [], session: {} };
+  const dom = { els: {}, fetches: [], events: [], innerHTML: [], assigned: [], session: {}, timers: [] };
   if (marker) dom.session.bf_oauth_return = marker;
   function node(tag) {
     const n = { tagName: String(tag).toUpperCase(), children: [], _t: "", className: "", hidden: false, disabled: false, value: "", checked: false, type: "", id: "", name: "",
@@ -842,7 +934,9 @@ function runPage(search, answers, marker) {
   const ctx = { document: document, localStorage: { getItem: function () { return "tok"; } }, sessionStorage: sessionStorage, fetch: fetch, URLSearchParams: URLSearchParams,
     XMLHttpRequest: function () { throw new Error("no upload in this run"); }, encodeURIComponent: encodeURIComponent,
     console: { log: function () {}, error: function () {}, warn: function () {} }, Promise: Promise, JSON: JSON, String: String, Array: Array, Date: Date, Math: Math,
-    Number: Number, Error: Error, Object: Object };
+    Number: Number, Error: Error, Object: Object,
+    // NAMED (Nov 17 2026, TK1): timers are kept, not run; a test runs them (dom.timers) to step the status polling.
+    setTimeout: function (fn, ms) { dom.timers.push({ fn: fn, ms: ms }); return dom.timers.length; }, clearTimeout: function () {} };
   window.document = document;
   ctx.window = window;
   vm.createContext(ctx);
@@ -859,9 +953,10 @@ function findAll(root, pred, out) {
   (root.children || []).forEach(function (c) { if (pred(c)) out.push(c); findAll(c, pred, out); });
   return out;
 }
+const PREVIEW_URL = "https://check.supabase.co/storage/v1/object/sign/bf-video/video/x.mp4?token=sig";
 const PAGE_VIDEO = { id: "22222222-2222-4222-8222-222222222222", label: "Spring cakes", bytes: 3 * 1048576, mime: "video/mp4", status: "ready",
   youtube_video_id: null, youtube_url: null, uploaded_at: null, created_at: "2026-11-07T10:00:00Z", upload_unfinished: false,
-  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false };
+  tiktok_status: null, tiktok_posted_at: null, tiktok_post_url: null, tiktok_upload_unfinished: false, duration_ms: 45000 };
 const PAGE_POSTED = Object.assign({}, PAGE_VIDEO, { id: "33333333-3333-4333-8333-333333333333", label: "Autumn menu", tiktok_status: "posted",
   tiktok_posted_at: "2026-11-07T11:00:00Z", tiktok_post_url: "https://www.tiktok.com/player/v1/" + POST_ID });
 const CREATOR = { creator_nickname: NICK, creator_username: "maplestreet", privacy_level_options: OPTIONS.slice(), comment_disabled: false, duet_disabled: true, stitch_disabled: false,
@@ -877,6 +972,9 @@ function pageAnswers(over) {
     if (p === "/api/tiktok/creator-info") return { status: 200, body: CREATOR };
     if (p === "/api/tiktok/propose-post") return { status: 201, body: { note: "Filed for approval. Nothing has been sent to TikTok." } };
     if (p === "/api/tiktok/draft-caption") return { status: 200, body: { draft: { caption: "Fresh cakes." }, within_limits: true, note: "A draft only." } };
+    // NAMED (Nov 17 2026, TK1): the preview's signed address, and a processing post's status.
+    if (/^\/api\/videos\/[0-9a-f-]{36}\/preview$/.test(p)) return { status: 200, body: { url: PREVIEW_URL, mime: "video/mp4", expires_in: 600 } };
+    if (/^\/api\/tiktok\/videos\/[0-9a-f-]{36}\/status$/.test(p)) return { status: 200, body: { tiktok_status: "processing", tiktok_says: "PROCESSING_UPLOAD", post_url: null } };
     return { status: 404, body: { error: "no answer for " + method + " " + p } };
   };
 }
@@ -1081,8 +1179,9 @@ function pageAnswers(over) {
     r.status === 201 && !!prop && prop.status === "pending" && prop.action_type === "publish_tiktok_post" && prop.agent_type === "social" && prop.target === "tiktok" &&
     prop.reversible === false && prop.cost_amount === 0 &&
     J(prop.payload) === J({ video_id: video.id, sha256: video.sha256, bytes: buf.length, mime: "video/mp4", caption: POST.caption, privacy_level: "MUTUAL_FOLLOW_FRIENDS",
-      allow_comment: true, allow_duet: false, allow_stitch: false, brand_organic: false, brand_content: false, open_id: OPEN_ID }) &&
-    m.tiktok.creatorCalls().length === 1 && m.tiktok.initCalls().length === 0 && m.tiktok.puts().length === 0, J([r.status, r.body.error]));
+      // NAMED (Nov 17 2026, TK1): the payload also names the account's nickname, for the proposal card.
+      allow_comment: true, allow_duet: false, allow_stitch: false, brand_organic: false, brand_content: false, open_id: OPEN_ID, creator_nickname: NICK }) &&
+    m.tiktok.creatorCalls().length === 1 && m.tiktok.initCalls().length === 0 && m.tiktok.puts().length === 0, J([r.status, r.body.error, prop && prop.payload]));
   check("F2. ...never automatic: the proposal stays pending, no post begun", prop.status === "pending" && m.tiktok.inits.length === 0 && rowOf(m, video.id).tiktok_status === null);
   check("F3. ...the answer names the account's nickname and the privacy in words, and the consent line", /Maple Street Bakery's TikTok account, visible to: Friends\./.test(r.body.note || "") &&
     r.body.creator_nickname === NICK && r.body.consent_line === "By posting, you agree to TikTok's Music Usage Confirmation." && /^Post to TikTok as Maple Street Bakery \(Friends\)/.test(prop.title));
@@ -1359,7 +1458,8 @@ function pageAnswers(over) {
   for (let i = 0; i < 5; i++) seedVideo(m.db, mp4(1000, 300 + i), { status: "uploaded", path: null, tiktok_status: "posted", tiktok_posted_at: iso(Date.now() - 3600000), tiktok_post_id: POST_ID });
   video = seedVideo(m.db, mp4(10000, 33));
   a = await approve(m, proposalOf(video));
-  check("U21. five TikTok posts in 24 hours: refused at execution too, no init", !a.ok && /5 videos to TikTok in 24 hours/.test(a.msg || "") && m.tiktok.inits.length === 0);
+  // NAMED (Nov 17 2026, TK1): BEFORE "You can post 5 videos to TikTok in 24 hours." AFTER named as BizForce's own limit.
+  check("U21. five TikTok posts in 24 hours: refused at execution too, no init", !a.ok && /BizForce's own limit is 5 TikTok posts in 24 hours/.test(a.msg || "") && m.tiktok.inits.length === 0);
   m = mountRoutes({ env: CONFIGURED, tiktok: { initError: "You have posted too many videos today." } });
   seedConnection(m.db);
   video = seedVideo(m.db, mp4(10000, 34));
@@ -1457,7 +1557,8 @@ function pageAnswers(over) {
   /* ── P ── */
   OUT("\n══ P. the pages ══");
   check("P1. the Social page: the TikTok panel with its three lines word for word, the not-set-up line, and tiktok.js right after youtube.js (NAMED, item 8 part 3a: oauth-return.js now before, instagram.js after)",
-    FILES.page.indexOf("<p class=\"bsky-quiet\">Until TikTok reviews BizForce, TikTok keeps posts from BizForce visible only to you.</p>") !== -1 &&
+    // NAMED (Nov 17 2026, TK1): BEFORE "...TikTok keeps posts from BizForce visible only to you." AFTER the account must be private too.
+    FILES.page.indexOf("<p class=\"bsky-quiet\">Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">To remove a TikTok post, delete it in the TikTok app.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-warn\" id=\"ttUnavailable\" hidden>TikTok connection isn't set up yet.</p>") !== -1 && FILES.page.indexOf("id=\"ttConnect\"") !== -1 &&
@@ -1522,7 +1623,8 @@ function pageAnswers(over) {
   const boxNamed = function (name) { return boxes.filter(function (bx) { return labelFor(bx).indexOf(name) !== -1; })[0]; };
   check("P12. the form names the account (\"Posting as Maple Street Bakery\") and carries the review line",
     findAll(list, function (n) { return n.textContent === "Posting as " + NICK; }).length === 1 &&
-    findAll(list, function (n) { return n.tagName === "P" && n.textContent === "Until TikTok reviews BizForce, TikTok keeps posts from BizForce visible only to you."; }).length === 1);
+    // NAMED (Nov 17 2026, TK1): the review line now says the account must be private.
+    findAll(list, function (n) { return n.tagName === "P" && n.textContent === "Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you."; }).length === 1);
   check("P13. who can see it: TikTok's options only, in words, and NOTHING chosen (no default)", !!sel && sel.value === "" &&
     J(sel.children.slice(1).map(function (o) { return o.value; })) === J(OPTIONS) && sel.children.slice(1).every(function (o) { return o.selected === false; }) &&
     J(sel.children.slice(1).map(function (o) { return o.textContent; })) === J(["Everyone", "Friends", "Only you"]), sel ? J(sel.children.map(function (o) { return [o.value, o.selected]; })) : "no select");
@@ -1578,8 +1680,9 @@ function pageAnswers(over) {
     dom.get("ytVideoList").textContent.indexOf("<img src=x onerror=alert(1)>") !== -1);
   check("P23. no innerHTML anywhere: nothing set with it in these runs, and tiktok.js never names it", dom.innerHTML.length === 0 && !/innerHTML/.test(stripComments(FILES.ui)));
   check("P24. the proposal card: publish_tiktok_post drawn from escaped fields, the privacy in words, the label line, only a tiktok.com player address as a link",
-    /function tiktokPostPayloadFields\(payload\)/.test(FILES.proposals) && /function tiktokResultHtml\(result\)/.test(FILES.proposals) &&
-    FILES.proposals.indexOf("fieldsHtml = tiktokPostPayloadFields(p.payload || {});") !== -1 && FILES.proposals.indexOf("execHtml = tiktokResultHtml(p.execution_result);") !== -1 &&
+    // NAMED (Nov 17 2026, TK1): BEFORE tiktokResultHtml(result). AFTER it also takes the video id, for the status polling.
+    /function tiktokPostPayloadFields\(payload\)/.test(FILES.proposals) && /function tiktokResultHtml\(result, videoId\)/.test(FILES.proposals) &&
+    FILES.proposals.indexOf("fieldsHtml = tiktokPostPayloadFields(p.payload || {});") !== -1 && FILES.proposals.indexOf("execHtml = tiktokResultHtml(p.execution_result, p.payload && p.payload.video_id);") !== -1 &&
     FILES.proposals.indexOf("<pre class=\"exec-block tt-caption\">' + escapeHtml(String(payload.caption == null ? \"\" : payload.caption))") !== -1 &&
     FILES.proposals.indexOf("/^https:\\/\\/www\\.tiktok\\.com\\/player\\/v1\\/[0-9]{1,64}$/.test(result.post_url)") !== -1 &&
     FILES.proposals.indexOf("To remove a TikTok post, delete it in the TikTok app.") !== -1);
@@ -1594,6 +1697,249 @@ function pageAnswers(over) {
     FILES.guide.indexOf("Bluesky, Mastodon, YouTube, TikTok, Instagram and Facebook Pages connect so far, and posts cannot be scheduled") !== -1 &&
     ((/"integrations\.html": \[([\s\S]*?)\n    \]/.exec(FILES.guide) || ["", ""])[1].match(/\n      "/g) || []).length === 4 &&
     FILES.guide.indexOf("\\\"On the Social page\\\"") !== -1);
+
+  /* ── K ── NAMED (Nov 17 2026, TK1): TikTok's content-sharing guidelines (developers.tiktok.com/docs/en/content-sharing-guidelines). */
+  OUT("\n══ K. TK1: length, preview, declaration, processing, disclosure, wording ══");
+  // K1-K4: the length, read from the file (moov > mvhd) as it streams past
+  const box = function (type, body) { const h = Buffer.alloc(8); h.writeUInt32BE(8 + body.length); h.write(type, 4, "latin1"); return Buffer.concat([h, body]); };
+  const mvhd0 = function (timescale, duration) { const b = Buffer.alloc(100); b[0] = 0; b.writeUInt32BE(timescale, 12); b.writeUInt32BE(duration, 16); return box("mvhd", b); };
+  const mvhd1 = function (timescale, duration) { const b = Buffer.alloc(112); b[0] = 1; b.writeUInt32BE(timescale, 20); b.writeBigUInt64BE(BigInt(duration), 24); return box("mvhd", b); };
+  const ftyp = box("ftyp", Buffer.from("isom\0\0\x02\0isomiso2", "latin1"));
+  const movie = function (mv, moovFirst) {
+    const moov = box("moov", Buffer.concat([mv, box("trak", filler(300, 5))]));
+    const mdat = box("mdat", filler(20000, 6));
+    return Buffer.concat(moovFirst ? [ftyp, moov, mdat] : [ftyp, mdat, moov]);
+  };
+  const readIn = function (buf, step) { const rd = MV.durationReader(); for (let i = 0; i < buf.length; i += step) rd.push(buf.subarray(i, i + step)); return rd.result(); };
+  const v0 = movie(mvhd0(600, 75300), false);
+  check("K1. mvhd version 0 (timescale 600, duration 75300 = 125.5 s) read as 125500 ms, whatever the chunk sizes (1, 7, 64 bytes, all at once)",
+    [1, 7, 64, v0.length].every(function (n) { return readIn(v0, n) === 125500; }), J([1, 7, 64].map(function (n) { return readIn(v0, n); })));
+  check("K2. version 1 (64-bit) with moov before mdat: 90 s; a file with no moov, or a broken box: null (never a guess)",
+    readIn(movie(mvhd1(90000, 8100000), true), 4096) === 90000 && readIn(Buffer.concat([ftyp, box("mdat", filler(5000, 7))]), 512) === null &&
+    readIn(Buffer.concat([ftyp, Buffer.from([0, 0, 0, 4, 0x6d, 0x6f, 0x6f, 0x76])]), 512) === null);
+  check("K3. the browser's length is believed only when the bitrate it implies is plausible (1 kB/s to 25 MB/s) and it is 1 ms to 4 hours",
+    MV.browserDuration(60000, 3000000) === 60000 && MV.browserDuration(1, 3000000) === null && MV.browserDuration(60000, 10) === null &&
+    MV.browserDuration(14400001, 52428800) === null && MV.browserDuration("60000", 3000000) === null && MV.browserDuration(60000.5, 3000000) === null);
+  // K4-K5: finalize stores it
+  let kdb = makeDb(); kdb.storage = makeStorage();
+  const kDeps = { supabase: kdb, storage: kdb.storage, now: function () { return Date.now(); } };
+  const kFile = movie(mvhd0(1000, 61000), false);
+  const kPath = videoPath(USER);
+  kdb.storage.objects[kPath] = { buf: kFile, created_at: new Date().toISOString() };
+  let fin1 = await MV.finalize(kDeps, USER, { path: kPath, label: "Clip", bytes: kFile.length, duration_ms: 5000 });
+  const kRow = kdb.t.member_videos.filter(function (x) { return x.path === kPath; })[0];
+  check("K4. adding an MP4: duration_ms is the file's own (61 s), not the browser's (5 s); the list shows it",
+    fin1.status === 201 && !!kRow && kRow.duration_ms === 61000 && fin1.body.video.duration_ms === 61000, J([fin1.status, fin1.body, kRow && kRow.duration_ms]));
+  const kNoMoov = mp4(40000, 51);
+  const kPath2 = videoPath(USER);
+  kdb.storage.objects[kPath2] = { buf: kNoMoov, created_at: new Date().toISOString() };
+  fin1 = await MV.finalize(kDeps, USER, { path: kPath2, label: "Clip 2", bytes: kNoMoov.length, duration_ms: 12000 });
+  const kRow2 = kdb.t.member_videos.filter(function (x) { return x.path === kPath2; })[0];
+  check("K5. an MP4 with no readable mvhd: the browser's plausible length (12 s) is kept", fin1.status === 201 && !!kRow2 && kRow2.duration_ms === 12000, J([fin1.status, kRow2 && kRow2.duration_ms]));
+  kdb.t.member_videos = kdb.t.member_videos.filter(function (x) { return x.path !== kPath && x.path !== kPath2; });
+  const kPath3 = videoPath(USER);
+  kdb.storage.objects[kPath3] = { buf: kNoMoov, created_at: new Date().toISOString() };
+  fin1 = await MV.finalize(kDeps, USER, { path: kPath3, label: "Clip 3", bytes: kNoMoov.length, duration_ms: 3600000 });
+  const kRow3 = kdb.t.member_videos.filter(function (x) { return x.path === kPath3; })[0];
+  check("K6. ...an implausible browser length (an hour for 40 kB) is not: duration_ms stays NULL (unknown)", fin1.status === 201 && !!kRow3 && kRow3.duration_ms === null, J([fin1.status, kRow3 && kRow3.duration_ms]));
+  // K7-K10: filing
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 52), { duration_ms: null });
+  r = await file(m, video);
+  check("K7. filing a video whose length is unknown (added before TK1): 422 duration_unknown, the member told to add it again, nothing filed",
+    r.status === 422 && r.body.code === "duration_unknown" && r.body.error === "BizForce doesn't know how long this video is, and TikTok needs that checked. Delete it from Your videos and add it again. Nothing was filed." &&
+    m.db.t.agent_proposals.length === 0 && m.tiktok.initCalls().length === 0, J(r.body));
+  video = seedVideo(m.db, mp4(4000, 53), { duration_ms: 301000 });
+  r = await file(m, video);
+  check("K8. a video longer than creator_info's max_video_post_duration_sec (301 s against 300): refused naming kBoth lengths, nothing filed",
+    r.status === 422 && r.body.code === "too_long" && r.body.error === "This video is 5 min 1 s long, and TikTok lets this account post videos up to 5 min. Nothing was filed." &&
+    m.db.t.agent_proposals.length === 0, J(r.body));
+  video = seedVideo(m.db, mp4(4000, 54), { duration_ms: 300000 });
+  r = await file(m, video);
+  check("K9. exactly the limit (300 s) is filed", r.status === 201 && m.db.t.agent_proposals.length === 1, J(r.body));
+  m = mountRoutes({ env: CONFIGURED, tiktok: { creator: { max_video_post_duration_sec: null } } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 55));
+  r = await file(m, video);
+  check("K10. creator_info naming no limit: refused (the length can't be checked), nothing filed", r.status === 422 && r.body.code === "too_long" &&
+    /TikTok didn't say how long a video this account may post/.test(r.body.error || "") && m.db.t.agent_proposals.length === 0, J(r.body));
+  // K11: approval, against TikTok's answer then
+  m = mountRoutes({ env: CONFIGURED, tiktok: { creator: { max_video_post_duration_sec: 30 } } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 56), { duration_ms: 45000 });
+  a = await approve(m, proposalOf(video));
+  check("K11. at approval the length is checked again against a fresh creator_info (now 30 s): refused naming both, no init, nothing sent",
+    !a.ok && /This video is 45 s long, and TikTok lets this account post videos up to 30 s\. Nothing was sent\./.test(a.msg || "") && m.tiktok.initCalls().length === 0 && m.tiktok.puts().length === 0, a.msg);
+  video = seedVideo(m.db, mp4(4000, 57), { duration_ms: null });
+  a = await approve(m, proposalOf(video));
+  check("K12. ...and an unknown length is refused at approval too", !a.ok && /BizForce doesn't know how long this video is/.test(a.msg || "") && m.tiktok.initCalls().length === 0, a.msg);
+  // K13-K14: creator_info saying the account can't post more now
+  m = mountRoutes({ env: CONFIGURED, tiktok: { creatorError: "spam_risk_too_many_posts" } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(4000, 58));
+  r = await file(m, video);
+  const civ = await hit(m, "get /api/tiktok/creator-info", {});
+  check("K13. creator_info answering spam_risk_too_many_posts: \"TikTok says this account can't post more right now. Try again later. Nothing was filed.\" (filing and the form)",
+    r.status === 409 && r.body.code === "cannot_post_now" && r.body.error === "TikTok says this account can't post more right now. Try again later. Nothing was filed." &&
+    civ.status === 409 && civ.body.error === r.body.error && m.db.t.agent_proposals.length === 0, J([r.body, civ.body]));
+  a = await approve(m, proposalOf(video));
+  check("K14. ...and at approval: stopped, nothing sent", !a.ok && /TikTok says this account can't post more right now\. Try again later\. Nothing was sent\./.test(a.msg || "") && m.tiktok.initCalls().length === 0, a.msg);
+  check("K15. the 5-a-day message names it as BizForce's own limit; the review line says the account must be private",
+    TK.MESSAGES.dailyCap === "BizForce's own limit is 5 TikTok posts in 24 hours. Nothing was sent. Try again later." &&
+    TK.MESSAGES.reviewed === "Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you.", TK.MESSAGES.dailyCap);
+  // K16-K18: the processing notice, and the status fetch single-flight
+  m = mountRoutes({ env: CONFIGURED, tiktok: { status: "PROCESSING_UPLOAD" } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(6000, 59));
+  a = await approve(m, proposalOf(video));
+  check("K16. a sent post TikTok is still processing carries the notice \"TikTok may take a few minutes to process this video before it appears on your profile.\"",
+    a.ok && a.v.processing === true && a.v.notice === "TikTok may take a few minutes to process this video before it appears on your profile.", a.ok ? J(a.v) : a.msg);
+  const sBefore = m.tiktok.statusCalls().length;
+  const kBoth = await Promise.all([hit(m, "get /api/tiktok/videos/:id/status", { params: { id: video.id } }), hit(m, "get /api/tiktok/videos/:id/status", { params: { id: video.id } })]);
+  check("K17. two status asks at once for one video: ONE fetch to TikTok, both answered, with the notice while processing",
+    m.tiktok.statusCalls().length - sBefore === 1 && kBoth.every(function (x) { return x.status === 200 && x.body.tiktok_status === "processing" && x.body.notice === TK.MESSAGES.processingNotice; }),
+    J([m.tiktok.statusCalls().length - sBefore, kBoth.map(function (x) { return x.body; })]));
+  r = await hit(m, "get /api/tiktok/videos/:id/status", { params: { id: video.id } });
+  check("K18. ...and a later ask fetches again (the single flight is only while one runs)", m.tiktok.statusCalls().length - sBefore === 2 && r.status === 200, m.tiktok.statusCalls().length - sBefore);
+  // K19-K20: the preview address
+  m = mountRoutes({ env: CONFIGURED });
+  video = seedVideo(m.db, mp4(3000, 60));
+  const pv = await MV.previewUrl({ supabase: m.db, storage: m.db.storage }, USER, video.id);
+  const pvOther = await MV.previewUrl({ supabase: m.db, storage: m.db.storage }, OTHER, video.id);
+  rowOf(m, video.id).status = "uploaded"; rowOf(m, video.id).path = null;
+  const pvGone = await MV.previewUrl({ supabase: m.db, storage: m.db.storage }, USER, video.id);
+  check("K19. the preview: a signed address to the member's own file for 10 minutes; another member's video is not found; a deleted file is 410 file_gone",
+    pv.status === 200 && pv.body.url.indexOf("https://check.supabase.co/") === 0 && pv.body.expires_in === 600 && pvOther.status === 404 &&
+    pvGone.status === 410 && pvGone.body.code === "file_gone" && pvGone.body.error === "This video's file was deleted, so there is nothing to preview.", J([pv, pvOther, pvGone]));
+  check("K20. server.js: GET /api/videos/:id/preview, login only, never cached, answering previewUrl",
+    /app\.get\("\/api\/videos\/:id\/preview", requireAuth, async function \(req, res, next\) \{\n  try \{\n    res\.set\("Cache-Control", "no-store"\);\n    var out = await require\("\.\/lib\/memberVideos"\)\.previewUrl\(youtubeDeps\(\), req\.user\.id, req\.params\.id\);/.test(FILES.server));
+  // K21-K27: the Social page's TikTok form
+  dom = runPage("", pageAnswers());
+  await flush();
+  let klist = dom.get("ytVideoList");
+  findAll(klist, function (n) { return n.tagName === "BUTTON" && n.textContent === "Prepare for TikTok"; })[0].click();
+  await flush();
+  const kvid = findAll(klist, function (n) { return n.tagName === "VIDEO"; })[0];
+  check("K21. the form shows a preview of the file: a video from the signed address, muted, with controls, not autoplaying",
+    !!kvid && kvid.src === PREVIEW_URL && kvid.muted === true && kvid.controls === true && kvid.autoplay === false && kvid.attrs.muted === "" &&
+    dom.fetches.some(function (x) { return x.path === "/api/videos/" + PAGE_VIDEO.id + "/preview" && x.method === "GET"; }), kvid ? J([kvid.src, kvid.muted, kvid.controls, kvid.autoplay]) : "no video");
+  check("K22. ...and the length against TikTok's limit: \"Length 45 s; TikTok allows this account up to 5 min.\"",
+    findAll(klist, function (n) { return n.tagName === "P" && n.textContent === "Length 45 s; TikTok allows this account up to 5 min."; }).length === 1);
+  const kForm = findAll(klist, function (n) { return n.attrs && n.attrs["data-form"] === PAGE_VIDEO.id + ":tiktok"; })[0] || klist;
+  const kDecl = findAll(kForm, function (n) { return n.tagName === "P" && /^By posting, you agree to TikTok's/.test(n.textContent); })[0];
+  const kRowBtn = findAll(kForm, function (n) { return n.tagName === "BUTTON" && n.textContent === "File for approval"; })[0];
+  const links = kDecl ? findAll(kDecl, function (n) { return n.tagName === "A"; }) : [];
+  check("K23. the declaration links \"Music Usage Confirmation\" to TikTok's page (new tab, noopener), directly above the File for approval row",
+    !!kDecl && links.length === 1 && links[0].textContent === "Music Usage Confirmation" && links[0].href === "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" &&
+    links[0].target === "_blank" && links[0].rel === "noopener" && !!kRowBtn &&
+    kDecl.parentNode.children.indexOf(kDecl) + 1 === kDecl.parentNode.children.indexOf(kRowBtn.parentNode), kDecl ? J(links.map(function (l) { return [l.textContent, l.href]; })) : "none");
+  const kBoxes = findAll(kForm, function (n) { return n.tagName === "INPUT" && n.type === "checkbox"; });
+  const kNamed = function (name) { return kBoxes.filter(function (bx) { return bx.parentNode && bx.parentNode.textContent.indexOf(name) !== -1; })[0]; };
+  const kDis = kNamed("Disclose video content"), kYb = kNamed("Your brand"), kBc = kNamed("Branded content");
+  check("K24. File for approval is on while Disclose is off", kRowBtn.disabled === false);
+  kDis.checked = true; kDis.fire("change");
+  check("K25. Disclose on with no option chosen: File for approval is disabled, its title saying what to choose",
+    kRowBtn.disabled === true && kRowBtn.title === "Choose Your brand, Branded content, or both.", J([kRowBtn.disabled, kRowBtn.title, kDis.checked]));
+  kBc.checked = true; kBc.fire("change");
+  const kSel = findAll(kForm, function (n) { return n.tagName === "SELECT"; })[0];
+  const kSelf = kSel.children.filter(function (o) { return o.value === "SELF_ONLY"; })[0];
+  const links2 = findAll(kDecl, function (n) { return n.tagName === "A"; });
+  check("K26. Branded content chosen: the button is on again; \"Only you\" disabled with the title \"Branded content visibility cannot be set to private.\"; the declaration links kBoth policies",
+    kRowBtn.disabled === false && kSelf.disabled === true && kSelf.title === "Branded content visibility cannot be set to private." &&
+    J(links2.map(function (l) { return [l.textContent, l.href]; })) === J([["Branded Content Policy", "https://www.tiktok.com/legal/page/global/bc-policy/en"], ["Music Usage Confirmation", "https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"]]) &&
+    kDecl.textContent === "By posting, you agree to TikTok's Branded Content Policy and Music Usage Confirmation.");
+  kBc.checked = false; kDis.checked = false; kDis.fire("change");
+  check("K27. ...Branded content off: \"Only you\" can be chosen again, its title cleared", kSelf.disabled === false && kSelf.title === "");
+  dom = runPage("", pageAnswers({ "GET /api/videos": { status: 200, body: { videos: [Object.assign({}, PAGE_VIDEO, { duration_ms: null })] } },
+    ["GET /api/videos/" + PAGE_VIDEO.id + "/preview"]: { status: 410, body: { error: "This video's file was deleted, so there is nothing to preview.", code: "file_gone" } } }));
+  await flush();
+  klist = dom.get("ytVideoList");
+  findAll(klist, function (n) { return n.tagName === "BUTTON" && n.textContent === "Prepare for TikTok"; })[0].click();
+  await flush();
+  check("K28. a deleted file: no player, \"This video's file was deleted, so it can't be previewed or posted.\"; an unknown length says to add it again",
+    findAll(klist, function (n) { return n.tagName === "VIDEO"; }).length === 0 &&
+    findAll(klist, function (n) { return n.tagName === "P" && n.textContent === "This video's file was deleted, so it can't be previewed or posted."; }).length === 1 &&
+    findAll(klist, function (n) { return n.tagName === "P" && /^BizForce doesn't know this video's length/.test(n.textContent) && /add it again\.$/.test(n.textContent); }).length === 1);
+  // K29-K31: a processing video is asked about on its own
+  const PROC = Object.assign({}, PAGE_VIDEO, { tiktok_status: "processing" });
+  let kAnswer = { status: 200, body: { tiktok_status: "processing", tiktok_says: "PROCESSING_UPLOAD", post_url: null } };
+  dom = runPage("", pageAnswers({ "GET /api/videos": { status: 200, body: { videos: [PROC] } }, ["GET /api/tiktok/videos/" + PROC.id + "/status"]: kAnswer }));
+  await flush();
+  const statusAsks = function () { return dom.fetches.filter(function (x) { return x.path === "/api/tiktok/videos/" + PROC.id + "/status"; }).length; };
+  const shown = function () { return findAll(dom.get("ytVideoList"), function () { return true; }).map(function (n) { return n._t; }); };
+  check("K29. a video TikTok is processing: the notice shown at once and ONE ask scheduled after 10 s (none yet)",
+    dom.timers.length === 1 && dom.timers[0].ms === 10000 && statusAsks() === 0 &&
+    shown().indexOf("TikTok may take a few minutes to process this video before it appears on your profile.") !== -1, J([dom.timers.map(function (t) { return t.ms; }), statusAsks()]));
+  for (let i = 0; i < 8; i++) { const t = dom.timers[i]; if (!t) break; t.fn(); await flush(); }
+  check("K30. still processing: asked 5 times, waiting 10, 20, 40, 80 and 160 s, then it stops and points to Check TikTok status (still there)",
+    statusAsks() === 5 && J(dom.timers.map(function (t) { return t.ms; })) === J([10000, 20000, 40000, 80000, 160000]) &&
+    shown().indexOf("TikTok is still processing it. Use Check TikTok status later.") !== -1 &&
+    findAll(dom.get("ytVideoList"), function (n) { return n.tagName === "BUTTON" && n.textContent === "Check TikTok status"; }).length === 1,
+    J([statusAsks(), dom.timers.map(function (t) { return t.ms; })]));
+  dom = runPage("", pageAnswers({ "GET /api/videos": { status: 200, body: { videos: [PROC] } },
+    ["GET /api/tiktok/videos/" + PROC.id + "/status"]: { status: 200, body: { tiktok_status: "posted", post_url: "https://www.tiktok.com/player/v1/" + POST_ID } } }));
+  await flush();
+  const vids0 = dom.fetches.filter(function (x) { return x.path === "/api/videos"; }).length;
+  dom.timers[0].fn(); await flush();
+  const vids1 = dom.fetches.filter(function (x) { return x.path === "/api/videos"; }).length;
+  check("K31. a final answer (posted) stops the asking and redraws the list; the redraw does not start a second poll (single flight per video)",
+    statusAsks() === 1 && vids1 === vids0 + 1 && dom.timers.length === 1, J([statusAsks(), vids0, vids1, dom.timers.length]));
+  // K32-K36: the proposal card (proposals.html's TikTok functions, run on their own)
+  const propSrc = (function () { const a0 = FILES.proposals.indexOf("var TIKTOK_PRIVACY_WORDS"); const b0 = FILES.proposals.indexOf("// A publish_instagram_post proposal"); return a0 !== -1 && b0 > a0 ? FILES.proposals.slice(a0, b0) : ""; })();
+  const pctx = { timers: [], fetched: [], answers: {}, nodes: {} };
+  const pc = { API_URL: API, token: "tok", Promise: Promise, JSON: JSON, String: String, Object: Object, Array: Array, Math: Math,
+    escapeHtml: function (t) { return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); },
+    youtubeSize: function (b) { return String(b) + " bytes"; },
+    setTimeout: function (fn, ms) { pctx.timers.push({ fn: fn, ms: ms }); },
+    fetch: function (u) { const p0 = String(u).replace(API, ""); pctx.fetched.push(p0); const ans = pctx.answers[p0] || { status: 404, body: {} };
+      return Promise.resolve({ ok: ans.status < 300, status: ans.status, json: function () { return Promise.resolve(ans.body); } }); },
+    document: { createElement: function (t) { return { tagName: t.toUpperCase(), attrs: {}, setAttribute: function (k, v) { this.attrs[k] = v; } }; },
+      querySelectorAll: function (sel) { return pctx.nodes[sel] || []; } } };
+  vm.createContext(pc);
+  let propOk = true;
+  try { vm.runInContext(propSrc + "\n;this.F = { fields: tiktokPostPayloadFields, decl: tiktokDeclarationHtml, result: tiktokResultHtml, previews: fillTiktokPreviews, poll: pollTiktokStatus };", pc); } catch (e) { propOk = false; }
+  const PF = propOk ? pc.F : null;
+  const cardHtml = PF ? PF.fields(payloadOf({ id: PAGE_VIDEO.id, sha256: "a".repeat(64), bytes: 100, mime: "video/mp4" }, { creator_nickname: "Maple <Street>" })) : "";
+  check("K32. the card's account field is the nickname filed with the post (escaped); a post filed before TK1 keeps \"your connected TikTok account\"; the private-account line",
+    cardHtml.indexOf('<span class="pf-value tt-account">Maple &lt;Street&gt;</span>') !== -1 &&
+    PF.fields({}).indexOf('<span class="pf-value tt-account">your connected TikTok account</span>') !== -1 &&
+    cardHtml.indexOf("Until TikTok reviews BizForce, your TikTok account must be set to private, and TikTok keeps posts from BizForce visible only to you.") !== -1, cardHtml.slice(0, 300));
+  check("K33. TikTok's declaration on the card, with both links, and the card puts it directly before the Approve row of a pending TikTok post only",
+    !!PF && PF.decl({}) === '<p class="tt-declaration">By posting, you agree to TikTok\'s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener">Music Usage Confirmation</a>.</p>' &&
+    PF.decl({ brand_content: true }).indexOf('<a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener">Branded Content Policy</a> and <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"') !== -1 &&
+    FILES.proposals.indexOf("    var actions = p.status === \"pending\"\n      ? (p.action_type === \"publish_tiktok_post\" ? tiktokDeclarationHtml(p.payload || {}) : '') +\n        '<div class=\"proposal-actions\">' +\n          '<button type=\"button\" class=\"btn-approve\"") !== -1);
+  // the card's preview
+  const msgNode = { textContent: "" };
+  const spot = { kids: [], getAttribute: function () { return PAGE_VIDEO.id; }, querySelector: function () { return msgNode; }, appendChild: function (c) { this.kids.push(c); } };
+  pctx.answers["/api/videos/" + PAGE_VIDEO.id + "/preview"] = { status: 200, body: { url: PREVIEW_URL } };
+  if (PF) PF.previews({ querySelectorAll: function () { return [spot]; } });
+  await flush();
+  const cv = spot.kids[0];
+  const msgGone = { textContent: "" };
+  const spotGone = { kids: [], getAttribute: function () { return "44444444-4444-4444-8444-444444444444"; }, querySelector: function () { return msgGone; }, appendChild: function (c) { this.kids.push(c); } };
+  pctx.answers["/api/videos/44444444-4444-4444-8444-444444444444/preview"] = { status: 410, body: { code: "file_gone" } };
+  if (PF) PF.previews({ querySelectorAll: function () { return [spotGone]; } });
+  await flush();
+  check("K34. the card's preview: muted, controls, no autoplay, from the signed address; a deleted file says so",
+    !!cv && cv.tagName === "VIDEO" && cv.src === PREVIEW_URL && cv.muted === true && cv.controls === true && cv.autoplay === false &&
+    spotGone.kids.length === 0 && msgGone.textContent === "The video file was deleted, so it can't be previewed or posted.", J([cv, msgGone.textContent]));
+  const resHtml = PF ? PF.result({ processing: true, status: "processing" }, PAGE_VIDEO.id) : "";
+  check("K35. an approved post still processing: the card says it may take a few minutes, and names a spot for the live status",
+    resHtml.indexOf("TikTok may take a few minutes to process this video before it appears on your profile.") !== -1 &&
+    resHtml.indexOf('data-tt-poll-id="' + PAGE_VIDEO.id + '"') !== -1 && PF.result({ posted: true, post_url: "https://www.tiktok.com/player/v1/1" }).indexOf("may take a few minutes") !== -1);
+  const live = { textContent: "", getAttribute: function () { return PAGE_VIDEO.id; } };
+  pctx.nodes['[data-tt-poll-id="' + PAGE_VIDEO.id + '"]'] = [live];
+  pctx.answers["/api/tiktok/videos/" + PAGE_VIDEO.id + "/status"] = { status: 200, body: { tiktok_status: "processing" } };
+  if (PF) { PF.poll({ querySelectorAll: function () { return [live]; } }); PF.poll({ querySelectorAll: function () { return [live]; } }); }
+  for (let i = 0; i < 8; i++) { const t = pctx.timers[i]; if (!t) break; t.fn(); await flush(); }
+  const cardAsks = pctx.fetched.filter(function (x) { return x === "/api/tiktok/videos/" + PAGE_VIDEO.id + "/status"; }).length;
+  check("K36. the card asks on its own, once per video however often it is drawn: 5 asks at 10, 20, 40, 80, 160 s, then it stops",
+    cardAsks === 5 && J(pctx.timers.map(function (t) { return t.ms; })) === J([10000, 20000, 40000, 80000, 160000]) && /^still processing; use Check TikTok status/.test(live.textContent), J([cardAsks, pctx.timers.length, live.textContent]));
+  check("K37. the wording: the Social page's TikTok card says the account must be private and that processing takes a few minutes; the token comment gives TikTok's 2 hours and 180 days",
+    FILES.page.indexOf("<p class=\"bsky-quiet\">After you approve a post, TikTok may take a few minutes to process it before it appears on your profile.</p>") !== -1 &&
+    FILES.auth.indexOf("an access token (expires_in; TikTok documents 2 hours), a refresh token\n   (refresh_expires_in; TikTok documents 180 days)") !== -1 &&
+    !/an access token \(about 24 hours\)/.test(FILES.auth));
 
   /* ── G ── */
   OUT("\n══ G. legal, yourData, README, registries, the migration ══");
@@ -1663,9 +2009,21 @@ function pageAnswers(over) {
   // NAMED (Nov 11 2026, orbit stage 2), migration 183): it adds 183_weekly_goal_and_order_status.sql above, by name; "the highest" is checkOrbitStage2 R1's.
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 185 &&
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest (checkShopifyUninstallHook R1's). AFTER
+  // 186_member_videos_duration.sql is above it too, by name, and "the highest" is this check's (G15).
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179 to 186, by name, are above it", highest === 186 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
+  /* NAMED (Nov 17 2026, TK1): R1, the highest migration. 186_member_videos_duration.sql is the only 186 and the highest; it adds
+     member_videos.duration_ms (integer, NULL) with the CHECK 1 ms to 4 hours, and its VERIFY is verify/186_verify.sql. */
+  const m186 = migFiles.filter(function (x) { return /^186_/.test(x); });
+  const sql186 = m186.length === 1 ? read("supabase/migrations/" + m186[0]) : "";
+  const verify186 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "186_verify.sql")) ? read("supabase/migrations/verify/186_verify.sql") : "";
+  check("G15. R1. 186_member_videos_duration.sql is the only 186 and the highest migration; duration_ms integer NULL, CHECK NULL or 1..14400000; VERIFY is verify/186_verify.sql",
+    highest === 186 && m186.join() === "186_member_videos_duration.sql" &&
+    sql186.indexOf("ADD COLUMN IF NOT EXISTS duration_ms integer NULL;") !== -1 &&
+    sql186.indexOf("CHECK (duration_ms IS NULL OR (duration_ms > 0 AND duration_ms <= 14400000))") !== -1 &&
+    /member_videos_duration_check/.test(verify186) && /duration_ms/.test(verify186) && !/\b(INSERT|UPDATE|DELETE|ALTER|DROP)\b/i.test(verify186.replace(/--[^\n]*/g, "")), J([highest, m186]));
   check("G14. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 
   OUT("\n" + (failures ? "CHECKS FAILED: " + failures + " of " + (failures + passes) : "ALL " + passes + " CHECKS PASSED") + (MUTATE ? "  (MUTATE=" + MUTATE + ")" : ""));

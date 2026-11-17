@@ -369,7 +369,9 @@ const ADDED = [
   ["post", "/api/admin/price-change-notice"],                // admin only: emails each billed subscriber once, 7 to 30 days ahead; never changes a Stripe price (491 -> 492)
   // NAMED (Nov 15 2026, W2): BEFORE 492 routes; AFTER 494, the owner's Shopify data requests (checkShopifyWebhooks K)
   ["get", "/api/admin/shopify-data-requests"],               // admin only, read-only: open and recently answered data requests with their deadlines (492 -> 493)
-  ["post", "/api/admin/shopify-data-requests/:id/answered"]  // admin only: sets answered_at on a customers/data_request receipt, nothing else (493 -> 494)
+  ["post", "/api/admin/shopify-data-requests/:id/answered"], // admin only: sets answered_at on a customers/data_request receipt, nothing else (493 -> 494)
+  // NAMED (Nov 17 2026, TK1): BEFORE 494 routes; AFTER 495, the preview TikTok's content-sharing guidelines ask for (checkTiktokPosting K19, K20)
+  ["get", "/api/videos/:id/preview"]                         // login-only, never cached: a 10-minute signed address to the member's own video file; 410 once deleted (494 -> 495)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

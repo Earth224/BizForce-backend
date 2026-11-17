@@ -365,6 +365,7 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
     "REVOKE ALL ON public.user_preferences FROM anon, authenticated;"
   ];
   const M = FILES[MIG];
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
   check("R. 183 as run: the owner's header first, then every statement", M.indexOf("-- Applied by the owner by hand in the Supabase SQL editor on Nov 11, 2026. This file is the text as run.\n") === 0 &&
     SQL_LINES.every(l => M.indexOf(l) !== -1) && /BEGIN;[\s\S]*COMMIT;\s*$/.test(M), SQL_LINES.filter(l => M.indexOf(l) === -1)[0]);
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(x => /^\d{3}_.*\.sql$/.test(x));
@@ -372,8 +373,9 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER it is the only 183 and only
   // 184_shopify_webhook_requests.sql is above it, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
-  check("R1. 183_weekly_goal_and_order_status.sql is the only 183, and only 184_shopify_webhook_requests.sql is above it (checkShopifyWebhooks R1)", highest === 185 &&
-    migFiles.filter(x => /^183_/.test(x)).join() === "183_weekly_goal_and_order_status.sql" && migFiles.filter(x => Number(x.slice(0, 3)) > 183).join() === "184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql", highest);
+  // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
+  check("R1. 183_weekly_goal_and_order_status.sql is the only 183, and only 184_shopify_webhook_requests.sql is above it (checkShopifyWebhooks R1)", highest === 186 &&
+    migFiles.filter(x => /^183_/.test(x)).join() === "183_weekly_goal_and_order_status.sql" && migFiles.filter(x => Number(x.slice(0, 3)) > 183).join() === "184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
   const capOf = metric => { const m = new RegExp("goal_metric = '" + metric + "'[^\\n]*?BETWEEN 1 AND (\\d+)").exec(M) || new RegExp("goal_metric = '" + metric + "'[^\\n]*?<= (\\d+)").exec(M); return m ? Number(m[1]) : null; };
   check("R2. the goal caps are migration 183's (counts 100000, marketplace 10000, sales 100000000)",
     S2.GOAL_METRIC_KEYS.every(k => S2.GOAL_METRICS[k].cap === capOf(k)) && S2.GOAL_METRICS.store_sales.cap === 100000000 && S2.GOAL_METRICS.marketplace_orders.cap === 10000,
