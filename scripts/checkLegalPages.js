@@ -132,7 +132,17 @@ const MUTATIONS = {
   // the section moved to the end of the page
   "google-section-last": [["lib/legalPages.js", "  ].concat(googleUserDataSection(f), [\n", "  ].concat([\n"], ["lib/legalPages.js", "    address()\n  ]);", "    address()\n  ], googleUserDataSection(f));"]],
   // (a) the code asks Google for more than the page says
-  "google-scope-added": [["lib/googleAuth.js", "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE;", "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE + \" openid email profile\";"]],
+  // NAMED (Nov 17 2026, P2): BEFORE anchored on the old pair. AFTER on youtube.force-ssl, the scope P2 asks for.
+  "google-scope-added": [["lib/googleAuth.js", "const SCOPE = FORCE_SSL_SCOPE;", "const SCOPE = FORCE_SSL_SCOPE + \" openid email profile\";"]],
+  // NAMED (Nov 17 2026, P2): the new scope, the backups and the account deletion revoke.
+  // (a) Google's wording for youtube.force-ssl dropped from the section
+  "google-force-ssl-wording-dropped": [["privacy.html", "which Google shows as &quot;See, edit, and permanently delete your YouTube videos, ratings, comments, and captions.&quot;", "which Google shows on its consent screen"]],
+  // (c) an upload proposal keeps the channel id again, while the page says none does
+  "google-payload-channel-back": [["lib/youtubeApi.js", "    category_id: MV.CATEGORY_ID, connection_since: c.conn.created_at\n", "    category_id: MV.CATEGORY_ID, connection_since: c.conn.created_at, channel_id: c.conn.channel_id\n"]],
+  // (c) account deletion stops revoking, while the page says it does
+  "google-deletion-revoke-dropped": [["server.js", "    beforeDelete: async function (userId) {\n", "    beforeDeleteUnused: async function (userId) {\n"]],
+  // (c) the old "disconnect before deleting" advice comes back
+  "google-deletion-sentence-stale": [["privacy.html", "BizForce AI first asks Google to revoke its access, as Disconnect does, then deletes the connection", "the connection"]],
   // (b) the approval promise dropped
   "google-approval-dropped": [["privacy.html", " Nothing is uploaded to, changed on or removed from YouTube without your approval.</li>", "</li>"]],
   // (c) the encryption at rest no longer stated
@@ -157,7 +167,8 @@ if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 /* ── the files, read once (and mutated in memory) ───────────────────────── */
 // NAMED (Nov 17 2026, P1): BEFORE server.js, lib/legalPages.js, config/brain.js and leadRadar.js. AFTER also lib/googleAuth.js and
 // lib/backup.js, which section P holds the Google user data section to (and its mutations edit).
-const BACKEND_FILES = ["server.js", "lib/legalPages.js", "config/brain.js", "leadRadar.js", "lib/googleAuth.js", "lib/backup.js"];
+// NAMED (Nov 17 2026, P2): and lib/youtubeApi.js and lib/yourData.js, for the payloads and the deletion revoke (P6, P7).
+const BACKEND_FILES = ["server.js", "lib/legalPages.js", "config/brain.js", "leadRadar.js", "lib/googleAuth.js", "lib/backup.js", "lib/youtubeApi.js", "lib/yourData.js"];
 const SRC = {};
 BACKEND_FILES.forEach(f => { SRC[f] = lf(fs.readFileSync(path.join(REPO, f), "utf8")); });
 const FE_HTML = cp.execFileSync("git", ["ls-files", "*.html"], { cwd: FRONTEND }).toString().trim().split(/\r?\n/);
@@ -782,34 +793,51 @@ const fmt = n => Number(n).toLocaleString("en-US");
       every((sec, t, h) => h.indexOf("<h2 ") === h.indexOf(START) && h.indexOf(START) > h.indexOf("<p class=\"lede\">") &&
         endOf(h) < h.length / 2 && h.indexOf("<h2 id=\"collect\">") === endOf(h)));
     check("P3. the app is named \"BizForce AI\" throughout, never \"BizForce\" alone",
-      every((sec, t) => !/BizForce(?! AI)/.test(t) && has(t, ["BizForce AI uses Google user data for one feature only: Connect YouTube", "BizForce AI requests these two permissions and no other Google permission."])));
+      every((sec, t) => !/BizForce(?! AI)/.test(t) && has(t, ["BizForce AI uses Google user data for one feature only: Connect YouTube", "BizForce AI requests no other Google permission"])));
     const ga = SRC["lib/googleAuth.js"];
     const scopes = (ga.match(/https:\/\/www\.googleapis\.com\/auth\/[A-Za-z0-9._-]+/g) || []).sort();
-    check("P4. (a) what is accessed: channel id and name (youtube.readonly), uploads you choose (youtube.upload), nothing else, no Google sign-in; " +
-      "and lib/googleAuth.js asks for exactly those two scopes, no openid, email or profile",
-      every((sec, t) => has(t, ["Your YouTube channel's id and name, through the youtube.readonly permission",
-        "The ability to upload the videos you choose to your channel, through the youtube.upload permission",
+    /* NAMED (Nov 17 2026, P2): BEFORE youtube.readonly and youtube.upload, and lib/googleAuth.js asking for exactly those two. AFTER
+       youtube.force-ssl alone, in Google's words, the four uses, what an older connection holds, and SCOPE = FORCE_SSL_SCOPE (the old
+       pair is still named in the file, to recognise an older connection, but never asked for). */
+    check("P4. (a) what is accessed: one permission, youtube.force-ssl, in Google's words; channel id and name, uploads, status and removal you approve; " +
+      "an older connection's pair; no Google sign-in; and lib/googleAuth.js asks for youtube.force-ssl alone, no openid, email or profile",
+      every((sec, t) => has(t, ["BizForce AI asks Google for one permission, youtube.force-ssl, which Google shows as \"See, edit, and permanently delete your YouTube videos, ratings, comments, and captions.\"",
+        "It never reads or changes your ratings, comments or captions.",
+        "Your YouTube channel's id and name, read when you connect", "Uploading the videos you choose to your channel, each only after you approve its upload.",
+        "Reading the processing status of a video BizForce AI uploaded for you, when you ask.", "Removing a video BizForce AI uploaded for you, only when you approve that removal.",
+        "youtube.readonly (\"View your YouTube account.\") and youtube.upload (\"Manage your YouTube videos.\")",
         "BizForce AI does not use Google to sign you in, and does not ask Google for your email address, name, profile picture or contacts."])) &&
-      same(scopes, ["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"]) &&
-      /\nconst SCOPE = UPLOAD_SCOPE \+ " " \+ READONLY_SCOPE;\n/.test(ga) && !/openid|userinfo|"email"|"profile"/.test(ga), JSON.stringify(scopes));
+      same(scopes, ["https://www.googleapis.com/auth/youtube.force-ssl", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"]) &&
+      /\nconst SCOPE = FORCE_SSL_SCOPE;\n/.test(ga) && /\nconst FORCE_SSL_SCOPE = "https:\/\/www\.googleapis\.com\/auth\/youtube\.force-ssl";\n/.test(ga) &&
+      !/openid|userinfo|"email"|"profile"/.test(ga), JSON.stringify(scopes));
     check("P5. (b) how it is used: to show the connected channel and to upload only what you approve; nothing else",
       every((sec, t) => has(t, ["are used only to show you which channel is connected",
         "A video is uploaded only after you approve it", "Nothing is uploaded to, changed on or removed from YouTube without your approval.",
         "BizForce AI uses Google user data for nothing else"])));
-    const bk = SRC["lib/backup.js"];
+    const bk = SRC["lib/backup.js"], ya = SRC["lib/youtubeApi.js"], ydSrc = SRC["lib/yourData.js"];
     const excluded = (bk.split("const EXCLUDED_TABLES = {")[1] || "").split("\n};")[0];
     const crypt = fs.readFileSync(path.join(REPO, "lib/apiKeyCrypto.js"), "utf8");
     check("P6. (c) stored and protected: tokens encrypted at rest (AES-256-GCM, lib/apiKeyCrypto.js), what is kept, the connection and video records out of " +
       "the backups (lib/backup.js EXCLUDED_TABLES) while a request may be in one",
       every((sec, t) => has(t, ["What is kept: your channel's id and name", "encrypted by BizForce AI's own code (AES-256-GCM) before they are stored, so they are encrypted at rest",
         "Your YouTube connection and your video records are never copied into BizForce AI's nightly backups.",
-        "can remain in an encrypted nightly backup made before it was deleted"])) &&
-      /const ALGORITHM = "aes-256-gcm";/.test(crypt) && /\n  member_youtube_connections: /.test(excluded) && /\n  member_videos: /.test(excluded) && !/\n  agent_proposals: /.test(excluded));
+        // NAMED (Nov 17 2026, P2): BEFORE a request "names your channel's id". AFTER it names none, and the code backs it.
+        "A YouTube upload or removal request you file names no channel", "so a nightly backup of your requests holds no channel id or name.",
+        "A request filed before November 17, 2026 named your channel's id"])) &&
+      /const ALGORITHM = "aes-256-gcm";/.test(crypt) && /\n  member_youtube_connections: /.test(excluded) && /\n  member_videos: /.test(excluded) && !/\n  agent_proposals: /.test(excluded) &&
+      ya.split("connection_since: c.conn.created_at").length === 3 && ya.indexOf("channel_id: c.conn.channel_id") === -1 &&
+      ya.indexOf("  return { youtube_video_id: id, url: MV.youtubeUrl(id), privacy: meta.privacy, uploaded_at: at };") !== -1, "connection_since x" + (ya.split("connection_since: c.conn.created_at").length - 1));
     check("P7. (c) how long and deleting: the code's " + facts.youtubeChannelDays + " and " + facts.youtubeDataDays + " day rules, on disconnect, on revoke (invalid_grant), on account deletion",
       every((sec, t) => has(t, ["reads your channel's name again from YouTube every " + facts.youtubeChannelDays + " days, and deletes the connection and its tokens if it has not been refreshed for " + facts.youtubeDataDays + " days",
         "When you disconnect (Disconnect on the Social Agent page): BizForce AI asks Google to revoke its access",
         "within " + facts.youtubeDisconnectDays + " days.", "Google refuses BizForce AI's next token refresh (invalid_grant).",
-        "When you delete your BizForce AI account: the connection, the tokens, your video records and your YouTube requests are deleted with it."])));
+        // NAMED (Nov 17 2026, P2): BEFORE deleted with it, and "choose Disconnect before deleting". AFTER deletion revokes at Google first,
+        // which the code backs: server.js passes beforeDelete with revokeForDeletion, and lib/yourData.js runs it before any deletion.
+        "When you delete your BizForce AI account: BizForce AI first asks Google to revoke its access, as Disconnect does, then deletes the connection, the tokens, your video records and your YouTube requests.",
+        "If Google cannot be reached, the deletion still goes ahead"])) &&
+      SRC["server.js"].indexOf("    beforeDelete: async function (userId) {\n      var outcome = await require(\"./lib/youtubeApi\").revokeForDeletion(") !== -1 &&
+      ydSrc.indexOf("await opts.beforeDelete(userId)") !== -1 && ydSrc.indexOf("await opts.beforeDelete(userId)") < ydSrc.indexOf("var forfeited = await forfeitWallet(") &&
+      every((sec, t) => t.indexOf("choose Disconnect before deleting your account") === -1));
     check("P8. (d) sharing: not sold, not shared or transferred except to provide the feature, for security or by law; no advertising; no AI training",
       every((sec, t) => has(t, ["BizForce AI does not sell Google user data.",
         "except as needed to provide this feature", "to keep BizForce AI and its members secure, or as required by law.",

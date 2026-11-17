@@ -152,8 +152,10 @@ const MUTATIONS = {
     "      if (seen !== total) return cb(new Error(\"fingerprint\"));\n"],
   "location-unchecked": ["api",
     " || location.indexOf(SESSION_PREFIX) !== 0) {", ") {"],
-  "readonly-scope-dropped": ["auth",
-    "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE;", "const SCOPE = UPLOAD_SCOPE;"],
+  // NAMED (Nov 17 2026, P2): BEFORE readonly-scope-dropped (SCOPE lost youtube.readonly). AFTER the scope goes back to the old pair,
+  // which cannot remove a video.
+  "scope-reverted-to-old-pair": ["auth",
+    "const SCOPE = FORCE_SSL_SCOPE;", "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE;"],
   "second-pending-upload": ["api",
     "  if ((await MV.proposalsNaming(deps.supabase, userId, video.id, [ACTION_UPLOAD])).length) {\n", "  if (false) {\n"],
   "refile-metadata-changed": ["api",
@@ -183,7 +185,52 @@ const MUTATIONS = {
     "  var repost = b.repost === true && !!video.youtube_video_id;\n", "  var repost = false;\n"],
   // approving a repost again uploads a second time
   "repost-replays-upload": ["api",
-    "typeof p.repost_of === \"string\" && video.youtube_video_id === p.repost_of;", "typeof p.repost_of === \"string\";"]
+    "typeof p.repost_of === \"string\" && video.youtube_video_id === p.repost_of;", "typeof p.repost_of === \"string\";"],
+  // NAMED (Nov 17 2026, P2): section K, F1, R1, U2 and U28.
+  // a removal is filed on a connection without youtube.force-ssl
+  "remove-scope-unchecked": ["api",
+    "  if (!GA.grantsRemoval(c.conn.granted_scopes)) return { status: 409, body: { error: MESSAGES.removeNeedsReconnect, code: \"needs_remove_scope\" } };\n", ""],
+  // ...and run on approval anyway
+  "remove-executor-scope-unchecked": ["api",
+    "  if (!GA.grantsRemoval(conn.granted_scopes)) throw fail(MESSAGES.removeNeedsReconnect + \" Nothing was removed.\");\n", ""],
+  // the status hides that an older connection cannot remove
+  "status-hides-remove-scope": ["api",
+    "    can_remove: !!r && r.status === \"connected\" && GA.grantsRemoval(r.granted_scopes),\n", "    can_remove: !!r && r.status === \"connected\",\n"],
+  // the upload payload keeps the channel id
+  "upload-payload-keeps-channel": ["api",
+    "    category_id: MV.CATEGORY_ID, connection_since: c.conn.created_at\n", "    category_id: MV.CATEGORY_ID, connection_since: c.conn.created_at, channel_id: c.conn.channel_id\n"],
+  // the removal payload keeps the channel id
+  "delete-payload-keeps-channel": ["api",
+    "payload: { video_id: video.id, youtube_video_id: video.youtube_video_id, connection_since: c.conn.created_at },",
+    "payload: { video_id: video.id, youtube_video_id: video.youtube_video_id, connection_since: c.conn.created_at, channel_id: c.conn.channel_id },"],
+  // the upload's result names the channel again
+  "result-names-channel": ["api",
+    "  return { youtube_video_id: id, url: MV.youtubeUrl(id), privacy: meta.privacy, uploaded_at: at };",
+    "  return { youtube_video_id: id, url: MV.youtubeUrl(id), privacy: meta.privacy, channel: channelTitle, uploaded_at: at };"],
+  // a proposal runs after the member connected again
+  "reconnect-unchecked": ["api",
+    "  if (typeof p.connection_since === \"string\" && p.connection_since) return conn.created_at === p.connection_since;\n",
+    "  if (typeof p.connection_since === \"string\" && p.connection_since) return true;\n"],
+  // account deletion no longer revokes
+  "deletion-skips-revoke": ["server",
+    "      var outcome = await require(\"./lib/youtubeApi\").revokeForDeletion({ supabase: supabase, crypt: require(\"./lib/apiKeyCrypto\") }, userId);\n",
+    "      var outcome = \"youtube revoke: skipped\";\n"],
+  // the hook runs after the deletion has begun
+  "revoke-hook-skipped": ["yourData",
+    "  if (typeof opts.beforeDelete === \"function\") {\n", "  if (false) {\n"],
+  // the outcome line carries the token
+  "revoke-line-leaks-token": ["api",
+    "    return \"youtube revoke: \" + (ok ? \"revoked\" : \"not confirmed by Google\");\n",
+    "    return \"youtube revoke: \" + (ok ? \"revoked \" + plain : \"not confirmed by Google\");\n"],
+  // Remove from YouTube files anyway on an older connection
+  "remove-button-files-anyway": ["ui",
+    "        if (!state.canRemove) { msg.textContent = state.removeMessage; return; }\n", ""],
+  // the reconnect notice never shows
+  "reconnect-notice-hidden": ["ui",
+    "    showIf(\"ytRemoveScope\", !state.canRemove);\n", ""],
+  // the home page loses its YouTube line
+  "home-youtube-line-missing": ["home",
+    "<li>Connect your own YouTube channel and upload your own videos to it, each one only after you approve the upload.</li>", ""]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -224,7 +271,9 @@ const FILES = {
   ui: readFe("scripts/youtube.js"),
   // NAMED, item 8 part 3a (Instagram posting): the shared sign-in return reads ?code and ?state; youtube.js registers with it.
   oauth: readFe("scripts/oauth-return.js"),
-  proposals: readFe("proposals.html")
+  proposals: readFe("proposals.html"),
+  // NAMED (Nov 17 2026, P2): the home page's YouTube line (K14).
+  home: readFe("index.html")
 };
 if (MUTATE) {
   const m = MUTATIONS[MUTATE];
@@ -274,6 +323,10 @@ const YT_ID = "Ab3_x-9Kq2Z";
 const UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
 const READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
 const BOTH_SCOPES = UPLOAD_SCOPE + " " + READONLY_SCOPE;
+/* NAMED (Nov 17 2026, P2): BEFORE Google granted (and a connection held) BOTH_SCOPES. AFTER BizForce asks for youtube.force-ssl
+   alone, which is what Google grants and a new connection holds (FORCE_SSL_SCOPE); BOTH_SCOPES is now the pair a connection
+   made before P2 holds (it can upload and read, not remove). */
+const FORCE_SSL_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl";
 const SESSION_BASE = "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status&upload_id=check-session-";
 const SIGNED_TOKEN = "signed-upload-token-" + "7a".repeat(8);
 const PAGE_PATH = "/agents/social.html";
@@ -590,12 +643,12 @@ function makeGoogle(opts) {
         if (typeof o.onRefresh === "function") o.onRefresh(call);
         if (o.refresh === "invalid_grant") return reply(400, { error: "invalid_grant", error_description: "Token has been expired or revoked." });
         if (o.refresh === "down") return reply(503, { error: "backend_error" });
-        const grant = { access_token: ACCESS2, expires_in: 3599, scope: BOTH_SCOPES, token_type: "Bearer" };
+        const grant = { access_token: ACCESS2, expires_in: 3599, scope: FORCE_SSL_SCOPE, token_type: "Bearer" };
         if (o.rotate) grant.refresh_token = REFRESH2;
         return reply(200, grant);
       }
       if (o.exchange === "invalid_grant") return reply(400, { error: "invalid_grant" });
-      const grant = { access_token: ACCESS, refresh_token: REFRESH, expires_in: 3599, scope: o.scope === undefined ? BOTH_SCOPES : o.scope, token_type: "Bearer" };
+      const grant = { access_token: ACCESS, refresh_token: REFRESH, expires_in: 3599, scope: o.scope === undefined ? FORCE_SSL_SCOPE : o.scope, token_type: "Bearer" };
       (o.grantOmit || []).forEach(function (k) { delete grant[k]; });
       return reply(200, grant);
     }
@@ -830,7 +883,7 @@ function seedConnection(db, over) {
   const row = Object.assign({ id: uuid(), user_id: USER, channel_id: CHANNEL, channel_title: CHANNEL_TITLE,
     refresh_ciphertext: r.ciphertext, refresh_iv: r.iv, refresh_auth_tag: r.authTag,
     access_ciphertext: a.ciphertext, access_iv: a.iv, access_auth_tag: a.authTag,
-    access_expires_at: new Date(Date.now() + 50 * 60 * 1000).toISOString(), token_version: 0, granted_scopes: BOTH_SCOPES,
+    access_expires_at: new Date(Date.now() + 50 * 60 * 1000).toISOString(), token_version: 0, granted_scopes: FORCE_SSL_SCOPE,
     status: "connected", last_ok_at: null, last_error_at: null, last_error_code: null, created_at: "2026-11-07T10:00:00.000Z", updated_at: "2026-11-07T10:00:00.000Z" }, over || {});
   db.t.member_youtube_connections.push(row);
   return row;
@@ -1003,9 +1056,10 @@ function pageAnswers(over) {
   let verifier = null;
   try { verifier = CRYPT.decrypt({ ciphertext: st.verifier_ciphertext, iv: st.verifier_iv, authTag: st.verifier_auth_tag }); } catch (e) { verifier = null; }
   const q = b.url ? b.url.searchParams : new URLSearchParams();
-  check("O6. the authorize URL is Google's page: client_id, the Social page as redirect_uri, response_type code, both scopes, offline, consent, the state",
+  // NAMED (Nov 17 2026, P2): BEFORE "both scopes" (youtube.upload and youtube.readonly). AFTER youtube.force-ssl alone.
+  check("O6. the authorize URL is Google's page: client_id, the Social page as redirect_uri, response_type code, youtube.force-ssl alone, offline, consent, the state",
     b.r.status === 200 && b.url && b.url.origin + b.url.pathname === "https://accounts.google.com/o/oauth2/v2/auth" && q.get("client_id") === CLIENT.id &&
-    q.get("redirect_uri") === "https://bizforceai.net" + PAGE_PATH && q.get("response_type") === "code" && q.get("scope") === BOTH_SCOPES &&
+    q.get("redirect_uri") === "https://bizforceai.net" + PAGE_PATH && q.get("response_type") === "code" && q.get("scope") === FORCE_SSL_SCOPE &&
     q.get("access_type") === "offline" && q.get("prompt") === "consent" && /^[A-Za-z0-9_-]{43}$/.test(b.state || ""), b.url && b.url.search.length);
   check("O7. PKCE S256: code_challenge is base64url(sha256(the verifier)), never the verifier itself; code_challenge_method S256",
     !!verifier && /^[A-Za-z0-9_-]{43}$/.test(verifier) && q.get("code_challenge_method") === "S256" &&
@@ -1021,9 +1075,9 @@ function pageAnswers(over) {
   check("O10. finish exchanges the code once, with the verifier whose S256 is the challenge, the client secret and the same redirect_uri",
     m.google.tokenCalls.length === 1 && ex.grant_type === "authorization_code" && ex.code === CODE && ex.code_verifier === verifier && ex.client_secret_ok &&
     ex.client_id === CLIENT.id && ex.redirect_uri === "https://bizforceai.net" + PAGE_PATH);
-  check("O11. connected: the channel stored with both tokens sealed, token_version 0, both scopes granted; the answer carries no token",
+  check("O11. connected: the channel stored with both tokens sealed, token_version 0, youtube.force-ssl granted; the answer carries no token",
     f.status === 200 && f.body.connected === true && f.body.channel_title === CHANNEL_TITLE && f.body.youtube_available === true && !!conn &&
-    conn.channel_id === CHANNEL && accessOf(conn) === ACCESS && refreshOf(conn) === REFRESH && conn.token_version === 0 && conn.granted_scopes === BOTH_SCOPES &&
+    conn.channel_id === CHANNEL && accessOf(conn) === ACCESS && refreshOf(conn) === REFRESH && conn.token_version === 0 && conn.granted_scopes === FORCE_SSL_SCOPE &&
     noSecretIn(J(f.body)) && J(conn).indexOf(ACCESS) === -1 && J(conn).indexOf(REFRESH) === -1, J([f.status, f.body.code]));
   const firstChannel = EV.indexOf("yt:channels");
   check("O12. both tokens are sealed before YouTube is asked anything (the channel read comes after both encryptions)",
@@ -1045,9 +1099,10 @@ function pageAnswers(over) {
   const bad = await hit(m, "post /api/youtube/finish", { body: { code: "a b", state: b.state } });
   check("O16. a code with a space or a malformed state is 400 bad_request before anything", bad.status === 400 && bad.body.code === "bad_request");
   // scopes
-  m = mountRoutes({ env: CONFIGURED, google: { scope: UPLOAD_SCOPE } });
+  // NAMED (Nov 17 2026, P2): BEFORE only youtube.upload granted. AFTER the old pair granted (no youtube.force-ssl) is refused the same way.
+  m = mountRoutes({ env: CONFIGURED, google: { scope: BOTH_SCOPES } });
   let c = await connect(m);
-  check("O17. only youtube.upload granted: 422 \"Google didn't grant both YouTube permissions...\", nothing stored, the channel never read",
+  check("O17. only the old pair (youtube.upload and youtube.readonly) granted: 422 \"Google didn't grant the YouTube permission BizForce asks for...\", nothing stored, the channel never read",
     c.f.status === 422 && c.f.body.code === "no_scopes" && c.f.body.error === GA.MESSAGES.noScopes && m.db.t.member_youtube_connections.length === 0 &&
     m.google.of(function (x) { return x.path === "/youtube/v3/channels"; }).length === 0, J([c.f.status, c.f.body.code]));
   m = mountRoutes({ env: CONFIGURED, google: { scope: READONLY_SCOPE } });
@@ -1062,8 +1117,9 @@ function pageAnswers(over) {
   m = mountRoutes({ env: CONFIGURED, google: { exchange: "invalid_grant" } });
   c = await connect(m);
   check("O21. a code Google refuses (invalid_grant) is 400 state_invalid, nothing stored", c.f.status === 400 && c.f.body.code === "state_invalid" && m.db.t.member_youtube_connections.length === 0);
-  check("O22. GA.grantsYoutube needs both full scope URLs", GA.grantsYoutube(BOTH_SCOPES) && GA.grantsYoutube(READONLY_SCOPE + " openid " + UPLOAD_SCOPE) &&
-    !GA.grantsYoutube(UPLOAD_SCOPE) && !GA.grantsYoutube("youtube.upload youtube.readonly") && !GA.grantsYoutube(null));
+  // NAMED (Nov 17 2026, P2): BEFORE both full scope URLs. AFTER the full youtube.force-ssl URL; the old pair is not enough.
+  check("O22. GA.grantsYoutube needs the full youtube.force-ssl URL", GA.grantsYoutube(FORCE_SSL_SCOPE) && GA.grantsYoutube(READONLY_SCOPE + " openid " + FORCE_SSL_SCOPE) &&
+    !GA.grantsYoutube(BOTH_SCOPES) && !GA.grantsYoutube("youtube.force-ssl") && !GA.grantsYoutube(null) && GA.SCOPE === FORCE_SSL_SCOPE, GA.SCOPE);
 
   /* ── T ── */
   OUT("\n══ T. tokens ══");
@@ -1240,10 +1296,12 @@ function pageAnswers(over) {
   EV.length = 0;
   r = await file(m, video, { privacy: undefined });
   let prop = m.db.t.agent_proposals[0];
-  check("F1. filed: one pending publish_youtube_video proposal with the payload the brief names, category 22, this channel",
+  // NAMED (Nov 17 2026, P2): BEFORE the payload named channel_id. AFTER connection_since (the connection's created_at), and no channel id or name.
+  check("F1. filed: one pending publish_youtube_video proposal with the payload the brief names, category 22, this connection, no channel id or name",
     r.status === 201 && !!prop && prop.status === "pending" && prop.action_type === "publish_youtube_video" && prop.user_id === USER &&
-    J(Object.keys(prop.payload).sort()) === J(["bytes", "category_id", "channel_id", "description", "made_for_kids", "mime", "privacy", "sha256", "tags", "title", "video_id"]) &&
-    prop.payload.sha256 === video.sha256 && prop.payload.bytes === video.bytes && prop.payload.category_id === "22" && prop.payload.channel_id === CHANNEL, J([r.status, r.body.code]));
+    J(Object.keys(prop.payload).sort()) === J(["bytes", "category_id", "connection_since", "description", "made_for_kids", "mime", "privacy", "sha256", "tags", "title", "video_id"]) &&
+    prop.payload.sha256 === video.sha256 && prop.payload.bytes === video.bytes && prop.payload.category_id === "22" &&
+    prop.payload.connection_since === m.db.t.member_youtube_connections[0].created_at && J(prop).indexOf(CHANNEL) === -1 && J(prop).indexOf(CHANNEL_TITLE) === -1, J([r.status, r.body.code]));
   check("F2. privacy defaults to private", !!prop && prop.payload.privacy === "private");
   check("F3. filing never sends: nothing asked of Google, no units, no session", m.google.requests.length === 0 && m.db.t.youtube_api_calls.length === 0 &&
     !rowOf(m, video.id).session_ciphertext && prop && prop.status === "pending" && r.body.note.indexOf("Nothing has been sent to YouTube.") !== -1);
@@ -1305,7 +1363,7 @@ function pageAnswers(over) {
      YouTube and TikTok both have it, or 14 days after it was added (J8, J1). */
   check("U2. recorded: the id, uploaded_at, the session cleared, the file still ready; the link https://www.youtube.com/watch?v=<id>",
     a.ok && v.status === "ready" && v.youtube_video_id === YT_ID && !!v.uploaded_at && v.session_ciphertext === null && a.v.url === "https://www.youtube.com/watch?v=" + YT_ID &&
-    a.v.privacy === "private" && a.v.channel === CHANNEL_TITLE);
+    a.v.privacy === "private" && !("channel" in a.v) && J(a.v).indexOf(CHANNEL_TITLE) === -1 && J(a.v).indexOf(CHANNEL) === -1);  // NAMED (Nov 17 2026, P2): the result names no channel
   check("U3. the file is kept after YouTube has it (path kept, the object there), for the other platform or the retention pass", v.path === video.path && !!m.storage.objects[video.path]);
   const sb = (m.google.startBodies || [])[0] || {};
   const start0 = m.google.starts()[0] || {};
@@ -1468,9 +1526,11 @@ function pageAnswers(over) {
   const cRow = seedConnection(m.db);
   video = seedVideo(m.db, mp4("isom", 3000));
   await file(m, video);
+  // NAMED (Nov 17 2026, P2): BEFORE the channel id changed. AFTER the member connected again (created_at changes with every connect).
   cRow.channel_id = "UCzzzzzzzzzzzzzzzzzzzzzz";
+  cRow.created_at = "2026-11-17T09:00:00.000Z";
   a = await approve(m, m.db.t.agent_proposals[0]);
-  check("U28. the channel connected now is not the one filed for: refused, nothing sent", !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.channelChanged && m.google.requests.length === 0);
+  check("U28. connected again since filing (any channel): refused, nothing sent", !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.channelChanged && m.google.requests.length === 0);
   // made_for_kids missing in a payload
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db);
@@ -1534,8 +1594,10 @@ function pageAnswers(over) {
   const up = seedVideo(m.db, mp4("isom", 3000), { status: "uploaded", youtube_video_id: YT_ID, path: null, uploaded_at: new Date().toISOString() });
   r = await hit(m, "post /api/youtube/videos/:id/propose-delete", { params: { id: up.id } });
   const dp = m.db.t.agent_proposals[0];
-  check("R1. removal is filed as a pending delete_youtube_video proposal with { video_id, youtube_video_id, channel_id }; nothing sent",
-    r.status === 201 && !!dp && dp.status === "pending" && dp.action_type === "delete_youtube_video" && J(dp.payload) === J({ video_id: up.id, youtube_video_id: YT_ID, channel_id: CHANNEL }) &&
+  // NAMED (Nov 17 2026, P2): BEFORE { video_id, youtube_video_id, channel_id }. AFTER connection_since in place of the channel id.
+  check("R1. removal is filed as a pending delete_youtube_video proposal with { video_id, youtube_video_id, connection_since }; nothing sent",
+    r.status === 201 && !!dp && dp.status === "pending" && dp.action_type === "delete_youtube_video" &&
+    J(dp.payload) === J({ video_id: up.id, youtube_video_id: YT_ID, connection_since: m.db.t.member_youtube_connections[0].created_at }) &&
     m.google.requests.length === 0, J([r.status, r.body.code]));
   r = await hit(m, "post /api/youtube/videos/:id/propose-delete", { params: { id: up.id } });
   check("R2. one pending removal per video", r.status === 409 && r.body.code === "pending");
@@ -1786,6 +1848,80 @@ function pageAnswers(over) {
     /function youtubeResultHtml\(result\)/.test(FILES.proposals) && FILES.proposals.indexOf("fieldsHtml = youtubeUploadPayloadFields(p.payload || {});") !== -1 &&
     FILES.proposals.indexOf("fieldsHtml = youtubeDeletePayloadFields(p.payload || {});") !== -1 &&
     FILES.proposals.indexOf("<span class=\"pf-value yt-title\">' + escapeHtml(String(payload.title == null ? \"\" : payload.title))") !== -1);
+
+  /* ── K ── NAMED (Nov 17 2026, P2): youtube.force-ssl for removal, connections made before it, revoke on account deletion,
+     no channel id or name kept on a proposal, and the home page line. */
+  OUT("\n══ K. the removal permission, older connections, revoke on account deletion ══");
+  const REMOVE_MSG = "Reconnect YouTube to allow removing videos.";
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db, { granted_scopes: BOTH_SCOPES });
+  r = await hit(m, "get /api/youtube/status", {});
+  check("K1. a connection made before P2 (youtube.upload and youtube.readonly): status says can_remove false, \"" + REMOVE_MSG + "\"",
+    r.status === 200 && r.body.connected === true && r.body.can_remove === false && r.body.remove_message === REMOVE_MSG && YA.MESSAGES.removeNeedsReconnect === REMOVE_MSG, J(r.body));
+  const oldUp = seedVideo(m.db, mp4("isom", 3000), { status: "uploaded", youtube_video_id: YT_ID, path: null, uploaded_at: new Date().toISOString() });
+  r = await hit(m, "post /api/youtube/videos/:id/propose-delete", { params: { id: oldUp.id } });
+  check("K2. ...filing a removal on it is refused: 409 needs_remove_scope with that message; nothing filed, nothing asked of Google",
+    r.status === 409 && r.body.code === "needs_remove_scope" && r.body.error === REMOVE_MSG && m.db.t.agent_proposals.length === 0 && m.google.requests.length === 0, J([r.status, r.body]));
+  a = await attempt(m.ctx.executeDeleteYoutubeVideo({ id: uuid(), user_id: USER, payload: { video_id: oldUp.id, youtube_video_id: YT_ID, connection_since: m.db.t.member_youtube_connections[0].created_at } }));
+  check("K3. ...a removal filed before is refused at approval with the same message: no videos.delete, no units",
+    !a.ok && a.msg === "delete_youtube_video: " + REMOVE_MSG + " Nothing was removed." && m.google.of(function (x) { return x.method === "DELETE"; }).length === 0 &&
+    m.db.t.youtube_api_calls.length === 0, a.msg);
+  const oldReady = seedVideo(m.db, mp4("isom", 300000));
+  r = await file(m, oldReady);
+  a = await approve(m, m.db.t.agent_proposals.filter(function (p) { return p.action_type === "publish_youtube_video"; })[0]);
+  check("K4. ...but it still uploads (its youtube.upload holds): filed, and uploaded on approval", r.status === 201 && a.ok && rowOf(m, oldReady.id).youtube_video_id === YT_ID, a.ok ? "" : a.msg);
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  r = await hit(m, "get /api/youtube/status", {});
+  check("K5. a connection holding youtube.force-ssl: can_remove true, no remove message", r.body.can_remove === true && r.body.remove_message === null, J(r.body));
+  const legacyV = seedVideo(m.db, mp4("isom", 3000), { status: "uploaded", youtube_video_id: YT_ID, path: null, uploaded_at: new Date().toISOString() });
+  a = await attempt(m.ctx.executeDeleteYoutubeVideo({ id: uuid(), user_id: USER, payload: { video_id: legacyV.id, youtube_video_id: YT_ID, channel_id: "UCzzzzzzzzzzzzzzzzzzzzzz" } }));
+  const legacyOther = !a.ok && a.msg === "delete_youtube_video: " + YA.MESSAGES.channelChanged;
+  a = await attempt(m.ctx.executeDeleteYoutubeVideo({ id: uuid(), user_id: USER, payload: { video_id: legacyV.id, youtube_video_id: YT_ID, channel_id: CHANNEL } }));
+  check("K6. a proposal filed before P2 (it names channel_id) is still held to its channel: another refused, the same one removed", legacyOther && a.ok && a.v.removed === true,
+    a.ok ? J(a.v) : a.msg);
+  const cx = { created_at: "2026-11-07T10:00:00.000Z", channel_id: CHANNEL };
+  check("K7. sameConnection: connection_since must equal the connection's created_at; a payload naming neither is refused",
+    YA.sameConnection(cx, { connection_since: cx.created_at }) && !YA.sameConnection(cx, { connection_since: "2026-11-17T09:00:00.000Z" }) &&
+    !YA.sameConnection(cx, {}) && !YA.sameConnection(cx, { connection_since: "" }));
+  // revoke on account deletion
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  let rv = await YA.revokeForDeletion({ supabase: m.db, crypt: CRYPT }, USER);
+  check("K8. account deletion's revoke: the stored refresh token is revoked at Google (a form POST); the outcome line names no token",
+    rv === "youtube revoke: revoked" && m.google.revoked === REFRESH && rv.indexOf(REFRESH) === -1 && rv.indexOf(ACCESS) === -1 && m.db.t.member_youtube_connections.length === 1, rv);
+  m = mountRoutes({ env: CONFIGURED, google: { revoke: "down" } });
+  seedConnection(m.db);
+  rv = await YA.revokeForDeletion({ supabase: m.db, crypt: CRYPT }, USER);
+  const rvNone = await YA.revokeForDeletion({ supabase: m.db, crypt: CRYPT }, OTHER);
+  const rvBroken = await YA.revokeForDeletion({ supabase: m.db, crypt: { decrypt: function () { throw new Error("no key"); } } }, USER);
+  check("K9. ...Google down: \"not confirmed\", never throws; no connection: \"none\"; an unreadable token: \"failed\"",
+    rv === "youtube revoke: not confirmed by Google" && rvNone === "youtube revoke: none" && rvBroken === "youtube revoke: failed", J([rv, rvNone, rvBroken]));
+  const delRoute = FILES.server.slice(FILES.server.indexOf("app.post(\"/api/me/delete\""), FILES.server.indexOf("const files = result.body.files;"));
+  check("K10. POST /api/me/delete passes beforeDelete, which runs the revoke and logs only its outcome line",
+    /beforeDelete: async function \(userId\) \{\n\s+var outcome = await require\("\.\/lib\/youtubeApi"\)\.revokeForDeletion\(\{ supabase: supabase, crypt: require\("\.\/lib\/apiKeyCrypto"\) \}, userId\);\n\s+console\.log\("\[your-data\] delete user=" \+ userId \+ " " \+ outcome\);\n\s+return outcome;/.test(delRoute));
+  const yd = FILES.yourData;
+  check("K11. lib/yourData.js runs beforeDelete after every refusal (the files list) and before the first deletion (the wallet), and a failure there continues",
+    yd.indexOf("  if (typeof opts.beforeDelete === \"function\") {\n    try { done.push(String(await opts.beforeDelete(userId))); } catch (err) { done.push(\"before delete: failed, deletion continued\"); }\n  }") !== -1 &&
+    yd.indexOf("await opts.beforeDelete(userId)") > yd.indexOf("reason: \"files_unreadable\"") && yd.indexOf("await opts.beforeDelete(userId)") < yd.indexOf("var forfeited = await forfeitWallet("));
+  // the Social page
+  dom = runPage("", pageAnswers({ "GET /api/youtube/status": { status: 200, body: { youtube_available: true, connected: true, status: "connected", channel_title: CHANNEL_TITLE,
+    since: "2026-11-07T10:00:00Z", reconnect_message: null, can_remove: false, remove_message: REMOVE_MSG } } }));
+  await flush();
+  const rmBtn = findAll(dom.get("ytVideoList"), function (n) { return n.tagName === "BUTTON" && n.textContent === "Remove from YouTube"; })[0];
+  if (rmBtn) rmBtn.click();
+  await flush();
+  check("K12. the Social page, an older connection: the notice shows, \"Reconnect YouTube\" shows, and Remove explains instead of filing",
+    FILES.page.indexOf("<div id=\"ytRemoveScope\" hidden><p class=\"bsky-warn\" id=\"ytRemoveScopeText\">" + REMOVE_MSG + "</p></div>") !== -1 &&
+    dom.get("ytRemoveScope").hidden === false && dom.get("ytRemoveScopeText").textContent === REMOVE_MSG && dom.get("ytConnectBtn").hidden === false &&
+    dom.get("ytConnectBtn").textContent === "Reconnect YouTube" && !!rmBtn && !dom.fetches.some(function (x) { return /propose-delete$/.test(x.path); }) &&
+    dom.get("ytVideoList").textContent.indexOf(REMOVE_MSG) !== -1, J([dom.get("ytRemoveScope").hidden, dom.get("ytConnectBtn").hidden, dom.get("ytConnectBtn").textContent, !!rmBtn]));
+  dom = runPage("", pageAnswers({ "GET /api/youtube/status": { status: 200, body: { youtube_available: true, connected: true, status: "connected", channel_title: CHANNEL_TITLE,
+    since: "2026-11-07T10:00:00Z", reconnect_message: null, can_remove: true, remove_message: null } } }));
+  await flush();
+  check("K13. ...a connection that can remove: no notice, Connect stays hidden", dom.get("ytRemoveScope").hidden === true && dom.get("ytConnectBtn").hidden === true);
+  check("K14. the home page names the YouTube feature in one plain line",
+    FILES.home.indexOf("<li>Connect your own YouTube channel and upload your own videos to it, each one only after you approve the upload.</li>") !== -1);
 
   /* ── G ── */
   OUT("\n══ G. legal and registries ══");

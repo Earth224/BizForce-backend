@@ -367,7 +367,9 @@ const fbRows = (user, task) => CUR.t.agent_feedback.filter(r => r.user_id === us
 function bfProfileColumns() {
   const dir = path.join(REPO, "supabase", "migrations");
   const cols = [];
-  fs.readdirSync(dir).sort().forEach(f => {
+  // NAMED (Nov 17 2026, P2): BEFORE every entry was read as a file, and a local folder (supabase/migrations/verify) made
+  // the check crash with EISDIR. AFTER only files are read; a folder holds no migration.
+  fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isFile()).map(d => d.name).sort().forEach(f => {
     const sql = lf(fs.readFileSync(path.join(dir, f), "utf8"));
     const create = /CREATE TABLE IF NOT EXISTS (?:public\.)?bf_profiles \(([\s\S]*?)\n\);/i.exec(sql);
     if (create) create[1].split("\n").forEach(line => { const m = /^\s+([a-z_]+)\s+[a-z]/i.exec(line); if (m && !/^(CONSTRAINT|PRIMARY|UNIQUE)$/i.test(m[1])) cols.push(m[1]); });

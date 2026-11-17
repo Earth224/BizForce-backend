@@ -5714,7 +5714,13 @@ app.post("/api/me/delete", requireAuth, yourDataDeleteLimiter, async function (r
     activeSubscriptions: getActiveSubscriptions,
     ownerAccountId: OWNER_ACCOUNT_ID,
     storage: supabase.storage,
-    publicUrlBase: process.env.SUPABASE_URL
+    publicUrlBase: process.env.SUPABASE_URL,
+    // NAMED (Nov 17 2026, P2): Google is asked to revoke a YouTube connection's access before the rows go; never blocks, logs no token.
+    beforeDelete: async function (userId) {
+      var outcome = await require("./lib/youtubeApi").revokeForDeletion({ supabase: supabase, crypt: require("./lib/apiKeyCrypto") }, userId);
+      console.log("[your-data] delete user=" + userId + " " + outcome);
+      return outcome;
+    }
   });
   const files = result.body.files;
   const line = "[your-data] delete user=" + req.user.id + " status=" + result.status + " reason=" + (result.body.reason || "deleted") +

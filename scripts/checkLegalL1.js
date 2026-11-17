@@ -60,6 +60,15 @@ const MUTATIONS = {
     "        email_verified_at: null, auto_renew_consent_at: null, auto_renew_consent_version: null, updated_at: now.toISOString()"],
   // Beyond the brief's twelve: test accounts (which cannot receive mail) and the owner are not subscribers.
   "test-accounts-mailed": ["mail", "      if (!member || uncounted(member)) continue;\n", "      if (!member) continue;\n"],
+  // NAMED (Nov 17 2026, P2): E3 and E4, account deletion's revoke hook.
+  // deleteAccount never calls the hook
+  "revoke-hook-removed": ["yourData",
+    "  if (typeof opts.beforeDelete === \"function\") {\n    try { done.push(String(await opts.beforeDelete(userId))); } catch (err) { done.push(\"before delete: failed, deletion continued\"); }\n  }\n",
+    ""],
+  // a failing revoke stops the deletion
+  "revoke-failure-blocks-deletion": ["yourData",
+    "    try { done.push(String(await opts.beforeDelete(userId))); } catch (err) { done.push(\"before delete: failed, deletion continued\"); }\n",
+    "    try { done.push(String(await opts.beforeDelete(userId))); } catch (err) { return { status: 502, body: { error: \"revoke failed\" } }; }\n"],
   "youtube-cookie-embed-back": ["profile", "\"https://www.youtube-nocookie.com/embed/\"+id", "\"https://www.youtube.com/embed/\"+id"]
 };
 const NAMES = Object.keys(MUTATIONS);
@@ -330,9 +339,12 @@ async function main() {
     textOf(partA).indexOf("choose Disconnect on the Social Agent page in BizForce, or remove BizForce from your Google Account at https://security.google.com/settings/security/permissions.") !== -1);
   check("A4. part A says BizForce uses YouTube API Services and links Google's Privacy Policy", textOf(partA).indexOf("BizForce uses YouTube API Services.") !== -1 &&
     partA.indexOf("<a href=\"https://policies.google.com/privacy\">https://policies.google.com/privacy</a>") !== -1);
-  check("A5. part A names the two permissions in plain words, and lib/googleAuth.js asks for exactly those two scopes",
-    textOf(partA).indexOf("read-only access (Google lists it as \"View your YouTube account\")") !== -1 && textOf(partA).indexOf("upload access (\"Manage your YouTube videos\")") !== -1 &&
-    GA.SCOPE === "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly", GA.SCOPE);
+  /* NAMED (Nov 17 2026, P2): BEFORE the two permissions (read-only and upload access) and GA.SCOPE the pair. AFTER the one permission,
+     youtube.force-ssl, in Google's words, what a channel connected before P2 holds, and GA.SCOPE youtube.force-ssl alone. */
+  check("A5. part A names the one permission in Google's words, and an older connection's pair, and lib/googleAuth.js asks for youtube.force-ssl alone",
+    textOf(partA).indexOf("all with one permission (Google lists it as \"See, edit, and permanently delete your YouTube videos, ratings, comments, and captions.\")") !== -1 &&
+    textOf(partA).indexOf("A channel connected before November 17, 2026 holds read-only and upload access instead, which cannot remove a video") !== -1 &&
+    GA.SCOPE === "https://www.googleapis.com/auth/youtube.force-ssl", GA.SCOPE);
   const nums = "every " + YA.CHANNEL_REFRESH_DAYS + " days, and deletes the connection if it cannot be refreshed for " + YA.AUTHORIZED_DATA_DAYS + " days";
   check("A6. part A's figures are lib/youtubeApi.js's (" + YA.CHANNEL_REFRESH_DAYS + ", " + YA.AUTHORIZED_DATA_DAYS + ", " + YA.DISCONNECT_PROMISE_DAYS + " days)",
     textOf(partA).indexOf(nums) !== -1 && textOf(partA).indexOf("After a disconnect, BizForce deletes the stored YouTube data within " + YA.DISCONNECT_PROMISE_DAYS +
@@ -626,6 +638,36 @@ async function main() {
     const usersEntry = YD.DATA.filter((d) => d.table === "users")[0], subsEntry = YD.DATA.filter((d) => d.table === "subscriptions")[0];
     check("E2. ...that record is never removed (tombstone), and the subscription record is kept", usersEntry.onDelete === "tombstone" && subsEntry.onDelete === "keep" &&
       ddb.t.users.length === 1 && ddb.t.subscriptions.length === 1 && !/from\("users"\)\.delete\(/.test(FILES.yourData));
+  }
+  /* NAMED (Nov 17 2026, P2): account deletion asks Google to revoke a YouTube connection first (server.js passes beforeDelete,
+     lib/youtubeApi.js revokeForDeletion). Run here through the real deleteAccount: the hook runs once, after the checks pass and
+     before anything is deleted; a refused deletion never calls it; a hook that throws never stops the deletion. */
+  {
+    const storage = { from: () => ({ list: async () => ({ data: [], error: null }), remove: async () => ({ data: [], error: null }) }) };
+    const run = async (hook, password) => {
+      const ddb = makeDb({ users: [{ id: ME, email: "member.one@example.invalid", role: "user", password_hash: "hash" }], profiles: [{ user_id: ME, username: "memberone" }],
+        member_youtube_connections: [{ id: "c1", user_id: ME, channel_id: "UC" + "a".repeat(22), refresh_ciphertext: "00", refresh_iv: "00", refresh_auth_tag: "00" }] });
+      let out;
+      try {
+        out = await YD.deleteAccount({ supabase: ddb, storage: storage, publicUrlBase: "https://check.supabase.co", userId: ME, body: { username: "memberone", password: password || "pw" },
+          comparePassword: async (p) => p === "pw", activeSubscriptions: async () => [], ownerAccountId: "owner", now: new Date(NOW), beforeDelete: hook(ddb) });
+      } catch (e) { out = { status: 599, body: { error: e.message } }; }
+      return { out: out, db: ddb };
+    };
+    const seen = [];
+    const a = await run((ddb) => async (userId) => {
+      seen.push({ userId: userId, role: ddb.t.users[0].role, conn: (ddb.t.member_youtube_connections || []).length, profiles: (ddb.t.profiles || []).length });
+      return "youtube revoke: revoked";
+    });
+    check("E3. deleteAccount calls beforeDelete once, with the member, while nothing is deleted yet (the YouTube connection still there), then deletes it",
+      a.out.status === 200 && seen.length === 1 && seen[0].userId === ME && seen[0].role === "user" && seen[0].conn === 1 && seen[0].profiles === 1 &&
+      (a.db.t.member_youtube_connections || []).length === 0 && a.db.t.users[0].role === "deleted", J([a.out.status, seen]));
+    let calledOnRefusal = 0;
+    const b = await run(() => async () => { calledOnRefusal++; return "x"; }, "wrong");
+    const c = await run(() => async () => { throw new Error("Google down"); });
+    check("E4. ...a refused deletion (wrong password) never calls it; a beforeDelete that throws never stops the deletion",
+      b.out.status === 403 && calledOnRefusal === 0 && c.out.status === 200 && c.db.t.users[0].role === "deleted" && (c.db.t.member_youtube_connections || []).length === 0,
+      J([b.out.status, calledOnRefusal, c.out.status]));
   }
 
   check("Z. nothing opened a socket, asked DNS or fetched", TRIPPED.length === 0, TRIPPED.join(","));
