@@ -6,7 +6,9 @@
    socket, asks real DNS or fetches.
 
      A. SIGN-IN (lib/etsyAuth.js). x-api-key is "<keystring>:<shared secret>" on every request, the token endpoint
-        included; the token endpoint gets JSON, never a form; PKCE is S256; Etsy's authorize page gets response_type,
+        included; the token endpoint gets an application/x-www-form-urlencoded body with exactly Etsy's fields, never JSON
+        (NAMED E1, Nov 17 2026; BEFORE JSON, never a form); a refused token call logs one line with the status and Etsy's
+        error, never a secret; PKCE is S256; Etsy's authorize page gets response_type,
         client_id, the redirect, the space-separated scopes (listings_w only with changes allowed), state and the
         challenge.
      B. THE ROUTES (server.js, run from its own source). Unconfigured: 503 "Etsy connection isn't set up yet." and
@@ -53,9 +55,28 @@ const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g,
 /* name -> list of [file key, anchor (exactly once), replacement] */
 const MUTATIONS = {
   "header-without-secret": [["auth", "  return String(config.keystring) + \":\" + String(config.sharedSecret);", "  return String(config.keystring);"]],
-  "form-token-exchange": [["auth",
-    "      { method: \"POST\", headers: { \"x-api-key\": apiKeyHeader(config) }, body: body, timeoutMs: TOKEN_TIMEOUT_MS });",
-    "      { method: \"POST\", headers: { \"x-api-key\": apiKeyHeader(config) }, body: body, form: true, timeoutMs: TOKEN_TIMEOUT_MS });"]],
+  // NAMED (Nov 17 2026, E1): BEFORE form-token-exchange (a form where JSON was expected). AFTER the reverse, and the fields,
+  // the header and the log line.
+  // the token call goes back to a JSON body
+  "json-body-back": [["auth",
+    "      { method: \"POST\", headers: { \"x-api-key\": apiKeyHeader(config) }, form: form, timeoutMs: TOKEN_TIMEOUT_MS });",
+    "      { method: \"POST\", headers: { \"x-api-key\": apiKeyHeader(config) }, body: form, timeoutMs: TOKEN_TIMEOUT_MS });"]],
+  // the code exchange loses code_verifier
+  "field-missing": [["auth", "    code: code,\n    code_verifier: verifier\n", "    code: code\n"]],
+  // the refresh gains a field Etsy does not list
+  "field-extra": [["auth", "{ grant_type: \"refresh_token\", client_id: config.keystring, refresh_token: refreshToken }",
+    "{ grant_type: \"refresh_token\", client_id: config.keystring, refresh_token: refreshToken, client_secret: config.sharedSecret }"]],
+  // the token call drops x-api-key
+  "api-key-dropped": [["auth",
+    "      { method: \"POST\", headers: { \"x-api-key\": apiKeyHeader(config) }, form: form, timeoutMs: TOKEN_TIMEOUT_MS });",
+    "      { method: \"POST\", headers: {}, form: form, timeoutMs: TOKEN_TIMEOUT_MS });"]],
+  // the refusal line no longer redacts what was sent (Etsy echoing the code would leak it)
+  "log-leaks-code": [["auth", "    if (typeof s === \"string\" && s.length >= 4) text = text.split(s).join(\"[redacted]\");\n", ""]],
+  // the refusal line prints the form that was sent
+  "log-prints-form": [["auth", "  return \"[etsy] token \" + (form.grant_type === \"refresh_token\" ? \"refresh\" : \"exchange\") + \" refused: \" + text.slice(0, 200);",
+    "  return \"[etsy] token \" + (form.grant_type === \"refresh_token\" ? \"refresh\" : \"exchange\") + \" refused: \" + text.slice(0, 200) + \" \" + JSON.stringify(form);"]],
+  // no line at all on a refusal
+  "log-line-missing": [["auth", "    console.warn(tokenFailureLine(config, form, status, answer && answer.json));\n", ""]],
   "pkce-plain": [["auth",
     "function challengeFor(verifier) { return base64url(crypto.createHash(\"sha256\").update(String(verifier), \"ascii\").digest()); }",
     "function challengeFor(verifier) { return String(verifier); }"]],
@@ -504,14 +525,20 @@ function makeEtsy(opts, events) {
     const u = new URL(url);
     const method = (init && init.method) || "GET";
     let body = null;
-    try { body = init && init.body ? JSON.parse(String(init.body)) : null; } catch (e) { body = "(not json)"; }
+    // NAMED (Nov 17 2026, E1): a form body is read as a form (Etsy's token endpoint), anything else as JSON.
+    const ctype = headerOf(init && init.headers, "Content-Type") || "";
+    try {
+      body = !(init && init.body) ? null : (/^application\/x-www-form-urlencoded/.test(ctype) ? Object.fromEntries(new URLSearchParams(String(init.body))) : JSON.parse(String(init.body)));
+    } catch (e) { body = "(not json)"; }
     const auth = headerOf(init && init.headers, "Authorization");
     const call = { url: url, host: u.hostname, path: u.pathname, query: u.searchParams, method: method, body: body, raw: init && init.body,
       apiKey: headerOf(init && init.headers, "x-api-key"), contentType: headerOf(init && init.headers, "Content-Type"), bearer: auth ? auth.replace(/^Bearer /, "") : null };
     calls.push(call);
     if (call.apiKey !== KEY + ":" + SECRET) return reply(403, { error: "Invalid API key" });
     if (u.hostname === "api.etsy.com" && u.pathname === "/v3/public/oauth/token" && method === "POST") {
-      if (!/^application\/json/.test(call.contentType || "") || typeof body !== "object" || body === null) return reply(400, { error: "invalid_request", error_description: "form bodies are not read" });
+      // NAMED (Nov 17 2026, E1): BEFORE JSON only. AFTER as Etsy's page states: application/x-www-form-urlencoded only.
+      if (!/^application\/x-www-form-urlencoded$/.test(call.contentType || "") || typeof body !== "object" || body === null) return reply(400, { error: "invalid_request", error_description: "the body must be form-encoded" });
+      if (o.tokenError) return reply(o.tokenError.status, o.tokenError.body);
       if (body.grant_type === "refresh_token") {
         ev.push("token:refresh");
         if (o.refresh === "refuse") return reply(400, { error: "invalid_grant" });
@@ -780,15 +807,20 @@ function allText(n) { return n ? n.textContent : ""; }
   {
     const e = makeEtsy({}), toks = await attempt(EA.exchangeCode(CONFIG, CODE, v1, REDIRECT, e.jsonRequest));
     const c = e.tokenCalls()[0] || {};
-    check("A6. the code exchange is ONE JSON POST to api.etsy.com/v3/public/oauth/token with x-api-key, grant_type, client_id, redirect_uri, code and code_verifier",
-      toks.ok && e.tokenCalls().length === 1 && c.method === "POST" && /^application\/json/.test(c.contentType || "") && c.apiKey === KEY + ":" + SECRET &&
+    // NAMED (Nov 17 2026, E1): BEFORE ONE JSON POST. AFTER ONE form-encoded POST, exactly the five fields Etsy's Step 3 table lists, every value as sent.
+    check("A6. the code exchange is ONE application/x-www-form-urlencoded POST to api.etsy.com/v3/public/oauth/token with x-api-key and exactly grant_type, client_id, redirect_uri, code and code_verifier",
+      toks.ok && e.tokenCalls().length === 1 && c.method === "POST" && c.contentType === "application/x-www-form-urlencoded" && c.apiKey === KEY + ":" + SECRET &&
+      c.body.grant_type === "authorization_code" && c.body.client_id === KEY && c.body.redirect_uri === REDIRECT && c.body.code === CODE &&
+      String(c.raw).charAt(0) !== "{" &&
       J(Object.keys(c.body || {}).sort()) === J(["client_id", "code", "code_verifier", "grant_type", "redirect_uri"]) && c.body.code_verifier === v1 &&
       toks.v.userId === ETSY_USER && toks.v.scopes === null && toks.v.expiresIn === 3600, J([toks, c.contentType, c.body && Object.keys(c.body)]));
     const e2 = makeEtsy({}), ref = await attempt(EA.refreshTokens(CONFIG, REFRESH, e2.jsonRequest));
     const c2 = e2.tokenCalls()[0] || {};
-    check("A7. a refresh is ONE JSON POST with grant_type refresh_token, client_id and refresh_token, x-api-key included, and returns the NEW pair",
-      ref.ok && ref.v.accessToken === TOKEN2 && ref.v.refreshToken === REFRESH2 && /^application\/json/.test(c2.contentType || "") && c2.apiKey === KEY + ":" + SECRET &&
-      J(Object.keys(c2.body || {}).sort()) === J(["client_id", "grant_type", "refresh_token"]));
+    // NAMED (Nov 17 2026, E1): BEFORE ONE JSON POST. AFTER form-encoded, exactly the three fields Etsy's refresh table lists.
+    check("A7. a refresh is ONE application/x-www-form-urlencoded POST with exactly grant_type refresh_token, client_id and refresh_token, x-api-key included, and returns the NEW pair",
+      ref.ok && ref.v.accessToken === TOKEN2 && ref.v.refreshToken === REFRESH2 && c2.contentType === "application/x-www-form-urlencoded" && c2.apiKey === KEY + ":" + SECRET &&
+      J(Object.keys(c2.body || {}).sort()) === J(["client_id", "grant_type", "refresh_token"]) && c2.body.grant_type === "refresh_token" && c2.body.refresh_token === REFRESH &&
+      c2.body.client_id === KEY);
     const e3 = makeEtsy({ refresh: "refuse" }), bad = await attempt(EA.refreshTokens(CONFIG, REFRESH, e3.jsonRequest));
     const e4 = makeEtsy({ refresh: "down" }), down = await attempt(EA.refreshTokens(CONFIG, REFRESH, e4.jsonRequest));
     check("A8. a refused refresh is kind rejected; Etsy failing is unreachable; neither error carries a token", !bad.ok && /rejected/.test(bad.msg) && !down.ok && /unreachable/.test(down.msg) &&
@@ -797,6 +829,23 @@ function allText(n) { return n ? n.textContent : ""; }
       (function () { try { EA.grantFrom({ access_token: "abc", refresh_token: "r", expires_in: 3600 }); return false; } catch (e) { return true; } })() &&
       (function () { try { EA.grantFrom({ access_token: TOKEN, expires_in: 3600 }); return false; } catch (e) { return true; } })() &&
       (function () { try { EA.grantFrom({ access_token: TOKEN, refresh_token: REFRESH }); return false; } catch (e) { return true; } })());
+    /* NAMED (Nov 17 2026, E1): a refused token call names its cause in one line: the http status and Etsy's error and
+       error_description, never a token, the code, the verifier, the refresh token or the shared secret, even when Etsy's
+       answer echoes one of them; at most 200 characters after the prefix. */
+    const from = LOGS.length;
+    const e5 = makeEtsy({ tokenError: { status: 400, body: { error: "invalid_grant", error_description: "code " + CODE + " was already used; verifier " + v1 + " secret " + SECRET } } });
+    const r5 = await attempt(EA.exchangeCode(CONFIG, CODE, v1, REDIRECT, e5.jsonRequest));
+    const e6 = makeEtsy({ tokenError: { status: 503, body: { error: "server_error", error_description: "x".repeat(400) + " " + REFRESH } } });
+    const r6 = await attempt(EA.refreshTokens(CONFIG, REFRESH, e6.jsonRequest));
+    const lines = LOGS.slice(from).filter(function (l) { return l.indexOf("[etsy] token ") === 0; });
+    check("A9b. a refused code exchange logs \"[etsy] token exchange refused: http 400 invalid_grant ...\" with Etsy's description, the code and verifier replaced; kind rejected",
+      !r5.ok && /rejected/.test(r5.msg) && lines.length === 2 &&
+      lines[0] === "[etsy] token exchange refused: http 400 invalid_grant code [redacted] was already used; verifier [redacted] secret [redacted]", J(lines));
+    check("A9c. a failed refresh logs \"[etsy] token refresh refused: http 503 server_error ...\", cut to 200 characters, the refresh token never in it; kind unreachable",
+      !r6.ok && /unreachable/.test(r6.msg) && lines.length === 2 && lines[1].indexOf("[etsy] token refresh refused: http 503 server_error xxx") === 0 &&
+      lines[1].length === "[etsy] token refresh refused: ".length + 200, J(lines.map(function (l) { return l.length; })));
+    check("A9d. no line of this run carries a token, a code, a verifier or the shared secret", LOGS.every(function (l) { return noSecretIn(l) && l.indexOf(v1) === -1; }),
+      J(LOGS.filter(function (l) { return !noSecretIn(l) || l.indexOf(v1) !== -1; }).slice(0, 2)));
     check("A10. the finish body: a code and a 43-character state, nothing else accepted", EA.finishShape({ code: CODE, state: st1 }).ok === true &&
       EA.finishShape({ code: CODE, state: "short" }).ok === false && EA.finishShape({ code: "a b", state: st1 }).ok === false && EA.finishShape({ state: st1 }).ok === false);
   }
