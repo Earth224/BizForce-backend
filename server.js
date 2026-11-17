@@ -14070,14 +14070,38 @@ app.post("/api/store/etsy/finish", requireAuth, requireActiveSubscription, shopi
         // A fresh token: these reads never refresh it (the row is not stored yet, so a refresh could not be saved).
         var firstEtsyRead = eapi.session(Object.assign({ id: null }, etsyRow));
         firstEtsyRead.refreshed = true;
+        /* NAMED (Nov 17 2026, E2): BEFORE every failure here answered 502 and logged nothing. AFTER each branch logs one
+           line, eapi.finishFailureLine: "[etsy] finish failed at <step>: http <status> <error> " (users_me, user_mismatch,
+           shop_read, no_shop), Etsy's error field or a short reason only. users/me naming no shop_id falls back to
+           GET /users/{user_id}/shops (getShopByOwnerUserId); a 404 there is "no shop" (422). The member's message is
+           unchanged. */
+        var etsyStep = "users_me";
         who = await eapi.me(deps, firstEtsyRead);
-        if (!who.user_id || who.user_id !== tokenUser) return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
-        if (!who.shop_id) return res.status(422).json({ error: ea.MESSAGES.noShop, code: "no_shop", saved: false });
-        etsyShop = await eapi.shop(deps, firstEtsyRead, who.shop_id);
+        if (!who.user_id || who.user_id !== tokenUser) {
+          console.warn(eapi.finishFailureLine("user_mismatch", null, who.user_id ? "user_id_differs" : "user_id_missing"));
+          return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+        }
+        etsyStep = "shop_read";
+        var etsyChecked;
+        if (who.shop_id) {
+          etsyChecked = await eapi.shopChecked(deps, firstEtsyRead, who.shop_id);
+        } else {
+          etsyChecked = await eapi.shopOfOwner(deps, firstEtsyRead, who.user_id);
+          if (etsyChecked.none) {
+            console.warn(eapi.finishFailureLine("no_shop", null, "owner_has_no_shop"));
+            return res.status(422).json({ error: ea.MESSAGES.noShop, code: "no_shop", saved: false });
+          }
+        }
+        if (!etsyChecked.shop) {
+          console.warn(eapi.finishFailureLine("no_shop", null, etsyChecked.problem));
+          return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
+        }
+        etsyShop = etsyChecked.shop;
+        who.shop_id = etsyShop.shop_id;
       } catch (readErr) {
+        console.warn(eapi.finishFailureLine(etsyStep, readErr));
         return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
       }
-      if (!etsyShop) return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
       // One Etsy shop, one member.
       var etsyHeld = await supabase.from("member_store_connections").select("id, user_id").eq("platform", "etsy").eq("external_account_id", who.shop_id);
       if (etsyHeld.error) throw etsyHeld.error;

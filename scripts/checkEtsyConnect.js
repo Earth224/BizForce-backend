@@ -77,6 +77,29 @@ const MUTATIONS = {
     "  return \"[etsy] token \" + (form.grant_type === \"refresh_token\" ? \"refresh\" : \"exchange\") + \" refused: \" + text.slice(0, 200) + \" \" + JSON.stringify(form);"]],
   // no line at all on a refusal
   "log-line-missing": [["auth", "    console.warn(tokenFailureLine(config, form, status, answer && answer.json));\n", ""]],
+  // NAMED (Nov 17 2026, E2): the finish after the token exchange.
+  // the ids compared without normalising (a number never equals the token's string prefix)
+  "id-compare-raw": [["api", "  return { user_id: digits(data.user_id), shop_id: digits(data.shop_id) };", "  return { user_id: data.user_id, shop_id: digits(data.shop_id) };"]],
+  // the shop's id compared raw
+  "shop-id-compare-raw": [["api", "  if (id && got !== id) return { problem: \"shop_id_differs\" };", "  if (id && data.shop_id !== id) return { problem: \"shop_id_differs\" };"]],
+  // no fallback: users/me without shop_id is "no shop" at once
+  "owner-fallback-dropped": [["server", "          etsyChecked = await eapi.shopOfOwner(deps, firstEtsyRead, who.user_id);\n", "          etsyChecked = { none: true };\n"]],
+  // the owner read uses a path Etsy does not document
+  "owner-path-wrong": [["api", "    data = await read(deps, s, \"/users/\" + id + \"/shops\");", "    data = await read(deps, s, \"/shops?user_id=\" + id);"]],
+  // the owner read's answer taken as a results[] list
+  "owner-shape-wrong": [["api", "  return shopFrom(data, null);\n}", "  return shopFrom(data && data.results ? data.results[0] : null, null);\n}"]],
+  // a users/me failure logs nothing
+  "finish-log-missing": [["server", "        console.warn(eapi.finishFailureLine(etsyStep, readErr));\n", ""]],
+  // the mismatch logs nothing
+  "mismatch-log-missing": [["server", "          console.warn(eapi.finishFailureLine(\"user_mismatch\", null, who.user_id ? \"user_id_differs\" : \"user_id_missing\"));\n", ""]],
+  // the line keeps ids and emails
+  "finish-log-leaks-id": [["api", "    .replace(/[^\\s@]+@[^\\s@]+/g, \"[email]\").replace(/[0-9]{5,}/g, \"[id]\");", ";"]],
+  // the line drops Etsy's error
+  "finish-log-no-etsy-error": [["api", "  var said = err ? (err.etsyError || String(err.code || err.name || \"error\")) : String(reason || \"-\");",
+    "  var said = err ? String(err.code || err.name || \"error\") : String(reason || \"-\");"]],
+  // the reads drop x-api-key
+  "read-api-key-dropped": [["api", "  return { \"x-api-key\": EA.apiKeyHeader(config), \"Authorization\": \"Bearer \" + token, \"Accept\": \"application/json\" };",
+    "  return { \"Authorization\": \"Bearer \" + token, \"Accept\": \"application/json\" };"]],
   "pkce-plain": [["auth",
     "function challengeFor(verifier) { return base64url(crypto.createHash(\"sha256\").update(String(verifier), \"ascii\").digest()); }",
     "function challengeFor(verifier) { return String(verifier); }"]],
@@ -147,7 +170,8 @@ const MUTATIONS = {
     "      var etsyPermission = body.allow_changes === true ? \"read_write\" : \"read\";",
     "      var etsyPermission = body.allow_changes === false ? \"read\" : \"read_write\";"]],
   "card-unescaped": [["proposals", "escapeHtml(payload.variations_note)", "payload.variations_note"]],
-  "token-user-unchecked": [["server", "        if (!who.user_id || who.user_id !== tokenUser) return", "        if (!who.user_id) return"]],
+  // NAMED (Nov 17 2026, E2): BEFORE anchored on the one-line return. AFTER on the mismatch branch that now logs first.
+  "token-user-unchecked": [["server", "        if (!who.user_id || who.user_id !== tokenUser) {\n", "        if (!who.user_id) {\n"]],
   "stock-cap-unchecked-at-execution": [["write", "    if (field === \"stock\" && v.value > EAPI.QUANTITY_MAX) throw fail(MESSAGES.etsyStock);\n", ""]],
   "properties-compared-in-order": [["api", "    values: byPropertyId(p.property_values).map(function (pv) {", "    values: (p.property_values || []).map(function (pv) {"]],
   "name-in-etsy-order": [["api", "  byPropertyId(product && product.property_values).forEach(function (pv) {", "  ((product && product.property_values) || []).forEach(function (pv) {"]],
@@ -566,8 +590,25 @@ function makeEtsy(opts, events) {
       return applyPut(m[1], body);
     }
     if (method !== "GET") return reply(405, { error: "method" });
-    if (p === "/users/me") return reply(200, { user_id: Number(o.meUser || ETSY_USER), shop_id: o.noShop ? null : Number(SHOP_ID) });
-    if (p === "/shops/" + SHOP_ID) return reply(200, { shop_id: Number(SHOP_ID), shop_name: o.shopName || SHOP_NAME, currency_code: "USD", url: SHOP_URL + "?ref=x" });
+    /* NAMED (Nov 17 2026, E2): Etsy's spec (getMe: Self { user_id, shop_id } integers; getShop and getShopByOwnerUserId: one
+       Shop object; ErrorSchema { error }). meStatus / shopStatus answer an error; idsAsStrings sends the ids as strings;
+       noShop leaves shop_id out of users/me, and ownerShop then has /users/{user_id}/shops answer the shop (else 404). */
+    const idOut = function (v) { return o.idsAsStrings ? String(v) : Number(v); };
+    if (p === "/users/me") {
+      if (o.meStatus) return reply(o.meStatus, { error: "Access to user 98765432 (buyer@example.invalid) is not permitted for this app" });
+      const self = { user_id: idOut(o.meUser || ETSY_USER) };
+      if (!o.noShop) self.shop_id = idOut(SHOP_ID);
+      return reply(200, self);
+    }
+    const shopBody = function () { return { shop_id: idOut(o.shopIdOther || SHOP_ID), user_id: idOut(ETSY_USER), shop_name: o.shopName || SHOP_NAME, currency_code: "USD", url: SHOP_URL + "?ref=x" }; };
+    if (p === "/users/" + ETSY_USER + "/shops") {
+      if (o.ownerStatus) return reply(o.ownerStatus, { error: "server error" });
+      return o.ownerShop ? reply(200, shopBody()) : reply(404, { error: "Shop not found for user" });
+    }
+    if (p === "/shops/" + SHOP_ID) {
+      if (o.shopStatus) return reply(o.shopStatus, { error: "Shop " + SHOP_ID + " unavailable" });
+      return reply(200, shopBody());
+    }
     if (p === "/shops/" + SHOP_ID + "/listings") {
       if (o.throttleOnce && !state.throttled) { state.throttled = true; return reply(429, { error: "Too many requests" }, { "Retry-After": "2" }); }
       const offset = Number(u.searchParams.get("offset"));
@@ -936,11 +977,46 @@ function allText(n) { return n ? n.textContent : ""; }
   check("B15. users/me naming another user than the token: 502, nothing stored", r.status === 502 && m.db.t.member_store_connections.length === 0, J([r.status, r.body]));
   m = mountRoutes({ env: CONFIGURED, etsy: { noShop: true } });
   b = await begin(m, {}); r = await finish(m, b.state);
-  check("B16. an Etsy account with no shop: 422, nothing stored, the shop never asked for", r.status === 422 && r.body.code === "no_shop" && m.db.t.member_store_connections.length === 0 &&
-    m.etsy.api("GET", /^\/v3\/application\/shops\//).length === 0);
+  // NAMED (Nov 17 2026, E2): BEFORE no shop_id meant 422 at once. AFTER users/{user_id}/shops is asked first; its 404 is the 422.
+  check("B16. an Etsy account with no shop: users/me names no shop_id, getShopByOwnerUserId answers 404: 422, nothing stored, getShop never asked",
+    r.status === 422 && r.body.code === "no_shop" && m.db.t.member_store_connections.length === 0 &&
+    m.etsy.api("GET", /^\/v3\/application\/shops\//).length === 0 && m.etsy.api("GET", /^\/v3\/application\/users\/424242\/shops$/).length === 1 &&
+    m.logs.indexOf("[etsy] finish failed at no_shop: http 200 owner_has_no_shop ") !== -1, J([r.status, m.logs]));
   m = mountRoutes({ env: CONFIGURED, etsy: { shopName: "Bad Name/../x" } });
   b = await begin(m, {}); r = await finish(m, b.state);
   check("B17. a shop name that is not letters and digits never becomes an address: 502, nothing stored", r.status === 502 && m.db.t.member_store_connections.length === 0);
+  /* NAMED (Nov 17 2026, E2): the finish after a good token exchange. Each failure branch logs one line naming its step,
+     the http status and Etsy's error (or this code's reason), with no token, id, email or name; and the fixes. */
+  check("B17b. ...and it logs \"[etsy] finish failed at no_shop: http 200 shop_name_unusable \" (the name itself never logged)",
+    m.logs.indexOf("[etsy] finish failed at no_shop: http 200 shop_name_unusable ") !== -1 && m.logs.every(function (l) { return l.indexOf("Bad Name") === -1; }), J(m.logs));
+  const e2 = async function (etsyOpts) { const mm = mountRoutes({ env: CONFIGURED, etsy: etsyOpts }); const bb = await begin(mm, {}); return { m: mm, r: await finish(mm, bb.state) }; };
+  let x = await e2({ meStatus: 403 });
+  check("B17c. users/me refused (403): 502 as before, and \"[etsy] finish failed at users_me: http 403 <Etsy's error> \" with the id and the email replaced",
+    x.r.status === 502 && x.r.body.code === "unreachable" && x.m.db.t.member_store_connections.length === 0 &&
+    x.m.logs.indexOf("[etsy] finish failed at users_me: http 403 Access to user [id] [email] is not permitted for this app ") !== -1, J(x.m.logs));
+  x = await e2({ meUser: "999" });
+  check("B17d. users/me naming another user: \"[etsy] finish failed at user_mismatch: http 200 user_id_differs \", neither id logged",
+    x.r.status === 502 && x.m.logs.indexOf("[etsy] finish failed at user_mismatch: http 200 user_id_differs ") !== -1 &&
+    x.m.logs.every(function (l) { return l.indexOf("424242") === -1 && l.indexOf("999") === -1; }), J(x.m.logs));
+  x = await e2({ shopStatus: 500 });
+  check("B17e. the shop read failing (500, retried, then given up): \"[etsy] finish failed at shop_read: http 500 Shop [id] unavailable \"",
+    x.r.status === 502 && x.m.logs.indexOf("[etsy] finish failed at shop_read: http 500 Shop [id] unavailable ") !== -1, J(x.m.logs));
+  x = await e2({ shopIdOther: "27182818" });
+  check("B17f. a shop answer naming another shop_id: 502, \"[etsy] finish failed at no_shop: http 200 shop_id_differs \"",
+    x.r.status === 502 && x.m.db.t.member_store_connections.length === 0 && x.m.logs.indexOf("[etsy] finish failed at no_shop: http 200 shop_id_differs ") !== -1, J(x.m.logs));
+  x = await e2({ idsAsStrings: true });
+  check("B17g. ids as strings (\"424242\", \"31415926\") match the token's \"424242.\" prefix and the shop asked for exactly as integers do: saved",
+    x.r.status === 200 && x.r.body.saved === true && x.m.db.t.member_store_connections[0].external_account_id === SHOP_ID, J([x.r.status, x.r.body, x.m.logs]));
+  x = await e2({ noShop: true, ownerShop: true });
+  check("B17h. users/me without shop_id, the owner's shop found by GET /users/{user_id}/shops (getShopByOwnerUserId): saved with that shop, getShop not asked",
+    x.r.status === 200 && x.r.body.saved === true && x.m.db.t.member_store_connections[0].external_account_id === SHOP_ID &&
+    x.m.db.t.member_store_connections[0].store_url === SHOP_URL && x.m.etsy.api("GET", /^\/v3\/application\/shops\//).length === 0, J([x.r.status, x.r.body, x.m.logs]));
+  x = await e2({ noShop: true, ownerStatus: 500 });
+  check("B17i. ...that owner read failing: 502, \"[etsy] finish failed at shop_read: http 500 server error \"",
+    x.r.status === 502 && x.m.logs.indexOf("[etsy] finish failed at shop_read: http 500 server error ") !== -1, J(x.m.logs));
+  check("B17j. every Etsy read in the finish: GET on openapi.etsy.com/v3/application with x-api-key \"<keystring>:<shared secret>\" and the Bearer token",
+    x.m.etsy.calls.filter(function (c) { return c.host === "openapi.etsy.com"; }).length >= 2 &&
+    x.m.etsy.calls.filter(function (c) { return c.host === "openapi.etsy.com"; }).every(function (c) { return c.method === "GET" && c.apiKey === KEY + ":" + SECRET && c.bearer === TOKEN && c.path.indexOf("/v3/application/") === 0; }));
   m = mountRoutes({ env: CONFIGURED });
   r = await hit(m, "post /api/store/connections", { body: { platform: "etsy" } });
   check("B18. POST /api/store/connections with platform etsy: 400 \"Use Connect Etsy on the Store Agent page.\"", r.status === 400 && r.body.code === "use_connect_etsy" &&
