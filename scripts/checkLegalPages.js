@@ -49,6 +49,12 @@
         says it once, naming the question, the time and each record's id,
         kind, agent and time, one call within Guide mode's allowance, and
         nothing from the buttons.
+     P. Google's OAuth review (Nov 17 2026, P1): Privacy opens with "How
+        BizForce AI uses Google user data", before the halfway point, with
+        what is accessed (and lib/googleAuth.js asks for exactly those two
+        scopes), how it is used, stored, protected and deleted (held to
+        lib/apiKeyCrypto.js and lib/backup.js), sharing, Google's Limited Use
+        sentence and link, the three Google links and the contact address.
 
    MUTATE=<name> edits the files IN MEMORY. MUTATE=all runs each in its own
    process and passes only if every one fails at least one check. A mutation
@@ -117,12 +123,41 @@ const MUTATIONS = {
   // the Terms drop the BizCash-only statement from section 8
   "terms-not-bfc-only": [["terms.html", "<p>BizForce Market trades are in BizCash only. Every listing is priced and bought in BFC, and BizForce processes no member-to-member payments in US dollars.</p>", ""]],
   // NAMED (Nov 3 2026, the records privacy sentence): privacy.html drops what a typed record question sends
-  "records-sentence-dropped": [["privacy.html", "the buttons that ask about a record send nothing to the model.</li>", "the buttons send nothing.</li>"]]
+  "records-sentence-dropped": [["privacy.html", "the buttons that ask about a record send nothing to the model.</li>", "the buttons send nothing.</li>"]],
+  // NAMED (Nov 17 2026, P1): the Google user data section, one mutation per item section P holds.
+  // the heading no longer names the app
+  "google-heading-renamed": [["lib/legalPages.js", "const GOOGLE_SECTION_HEADING = \"How BizForce AI uses Google user data\";", "const GOOGLE_SECTION_HEADING = \"How we use Google data\";"]],
+  // the app called "BizForce" instead of "BizForce AI"
+  "google-app-name-short": [["lib/legalPages.js", "    p(\"BizForce AI uses Google user data for one feature only:", "    p(\"BizForce uses Google user data for one feature only:"]],
+  // the section moved to the end of the page
+  "google-section-last": [["lib/legalPages.js", "  ].concat(googleUserDataSection(f), [\n", "  ].concat([\n"], ["lib/legalPages.js", "    address()\n  ]);", "    address()\n  ], googleUserDataSection(f));"]],
+  // (a) the code asks Google for more than the page says
+  "google-scope-added": [["lib/googleAuth.js", "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE;", "const SCOPE = UPLOAD_SCOPE + \" \" + READONLY_SCOPE + \" openid email profile\";"]],
+  // (b) the approval promise dropped
+  "google-approval-dropped": [["privacy.html", " Nothing is uploaded to, changed on or removed from YouTube without your approval.</li>", "</li>"]],
+  // (c) the encryption at rest no longer stated
+  "google-encryption-dropped": [["privacy.html", "(AES-256-GCM) before they are stored, so they are encrypted at rest;", "before they are stored;"]],
+  // (c) the YouTube connection backed up after all, while the page says it never is
+  "google-connection-backed-up": [["lib/backup.js", "  member_youtube_connections: \"members' YouTube access, sealed; members connect again\",\n", ""]],
+  // (c) the revoke (invalid_grant) deletion dropped
+  "google-revoke-delete-dropped": [["privacy.html", " Google refuses BizForce AI&#39;s next token refresh (invalid_grant).", ""]],
+  // (d) the AI training promise dropped
+  "google-no-training-dropped": [["privacy.html", "<li>Google user data is not used to develop, improve or train AI or machine-learning models, and none of it is sent to the AI model BizForce AI uses.</li>", ""]],
+  // (e) the Limited Use sentence reworded
+  "google-limited-use-reworded": [["lib/legalPages.js", ", including the Limited Use requirements.\";\nfunction googleUserDataSection", ".\";\nfunction googleUserDataSection"]],
+  // (e) the policy's link dropped
+  "google-limited-use-unlinked": [["lib/legalPages.js", "link(GOOGLE_USER_DATA_POLICY_URL, GOOGLE_LIMITED_USE_LINK)", "esc(GOOGLE_LIMITED_USE_LINK)"]],
+  // (f) the revoke page no longer linked in the section
+  "google-revoke-link-dropped": [["lib/legalPages.js", "on your Google Account's permissions page (\" + GOOGLE_PERMISSIONS_URL + \"), or by \" +", "on your Google Account's permissions page, or by \" +"]],
+  // (g) the contact line dropped
+  "google-contact-dropped": [["lib/legalPages.js", "    \"<p>Questions about how BizForce AI uses Google user data: \" + mail() + \".</p>\"\n", "    \"\"\n"]]
 };
 if (MUTATE === "all") s.runAllMutations(__filename, Object.keys(MUTATIONS));
 
 /* ── the files, read once (and mutated in memory) ───────────────────────── */
-const BACKEND_FILES = ["server.js", "lib/legalPages.js", "config/brain.js", "leadRadar.js"];
+// NAMED (Nov 17 2026, P1): BEFORE server.js, lib/legalPages.js, config/brain.js and leadRadar.js. AFTER also lib/googleAuth.js and
+// lib/backup.js, which section P holds the Google user data section to (and its mutations edit).
+const BACKEND_FILES = ["server.js", "lib/legalPages.js", "config/brain.js", "leadRadar.js", "lib/googleAuth.js", "lib/backup.js"];
 const SRC = {};
 BACKEND_FILES.forEach(f => { SRC[f] = lf(fs.readFileSync(path.join(REPO, f), "utf8")); });
 const FE_HTML = cp.execFileSync("git", ["ls-files", "*.html"], { cwd: FRONTEND }).toString().trim().split(/\r?\n/);
@@ -726,6 +761,70 @@ const fmt = n => Number(n).toLocaleString("en-US");
       said.indexOf("only your question, the current time") !== -1 && said.indexOf("just its id, kind, agent and time, never its content") !== -1 &&
       said.indexOf("at most one model call per question, counted within Guide mode's daily allowance") !== -1 &&
       said.indexOf("the buttons that ask about a record send nothing to the model") !== -1, said);
+  }
+
+  /* ── P ─────────────────────────────────────────────────────────────────── */
+  /* NAMED (Nov 17 2026, P1): Google's OAuth branding review found the privacy page "does not have sufficient content". Privacy
+     opens with "How BizForce AI uses Google user data"; each item holds for the page in the frontend AND for what the backend
+     builds now, and each claim the code can back is held to the code. */
+  section("P. How BizForce AI uses Google user data (Google's OAuth review)");
+  {
+    const START = "<h2 id=\"google-user-data\">";
+    const pages = [FE["privacy.html"] || "", built["privacy.html"]];
+    // The section runs from its heading to the next section's heading, or to the end of the page's text.
+    const endOf = h => { const a = h.indexOf(START); if (a === -1) return -1; const b = h.indexOf("<h2 ", a + 1); return b !== -1 ? b : h.indexOf("\n</div>", a); };
+    const part = h => { const a = h.indexOf(START), b = endOf(h); return a !== -1 && b > a ? h.slice(a, b) : ""; };
+    const every = fn => pages.every(h => { const sec = part(h); return !!sec && fn(sec, textOf(sec), h); });
+    const has = (t, xs) => xs.every(x => t.indexOf(x) !== -1);
+    check("P1. the heading is \"How BizForce AI uses Google user data\", naming the app exactly as \"BizForce AI\"",
+      every(sec => sec.indexOf(START + "How BizForce AI uses Google user data</h2>") === 0));
+    check("P2. it is the first section, right after the opening paragraph, and ends before the halfway point of the page",
+      every((sec, t, h) => h.indexOf("<h2 ") === h.indexOf(START) && h.indexOf(START) > h.indexOf("<p class=\"lede\">") &&
+        endOf(h) < h.length / 2 && h.indexOf("<h2 id=\"collect\">") === endOf(h)));
+    check("P3. the app is named \"BizForce AI\" throughout, never \"BizForce\" alone",
+      every((sec, t) => !/BizForce(?! AI)/.test(t) && has(t, ["BizForce AI uses Google user data for one feature only: Connect YouTube", "BizForce AI requests these two permissions and no other Google permission."])));
+    const ga = SRC["lib/googleAuth.js"];
+    const scopes = (ga.match(/https:\/\/www\.googleapis\.com\/auth\/[A-Za-z0-9._-]+/g) || []).sort();
+    check("P4. (a) what is accessed: channel id and name (youtube.readonly), uploads you choose (youtube.upload), nothing else, no Google sign-in; " +
+      "and lib/googleAuth.js asks for exactly those two scopes, no openid, email or profile",
+      every((sec, t) => has(t, ["Your YouTube channel's id and name, through the youtube.readonly permission",
+        "The ability to upload the videos you choose to your channel, through the youtube.upload permission",
+        "BizForce AI does not use Google to sign you in, and does not ask Google for your email address, name, profile picture or contacts."])) &&
+      same(scopes, ["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"]) &&
+      /\nconst SCOPE = UPLOAD_SCOPE \+ " " \+ READONLY_SCOPE;\n/.test(ga) && !/openid|userinfo|"email"|"profile"/.test(ga), JSON.stringify(scopes));
+    check("P5. (b) how it is used: to show the connected channel and to upload only what you approve; nothing else",
+      every((sec, t) => has(t, ["are used only to show you which channel is connected",
+        "A video is uploaded only after you approve it", "Nothing is uploaded to, changed on or removed from YouTube without your approval.",
+        "BizForce AI uses Google user data for nothing else"])));
+    const bk = SRC["lib/backup.js"];
+    const excluded = (bk.split("const EXCLUDED_TABLES = {")[1] || "").split("\n};")[0];
+    const crypt = fs.readFileSync(path.join(REPO, "lib/apiKeyCrypto.js"), "utf8");
+    check("P6. (c) stored and protected: tokens encrypted at rest (AES-256-GCM, lib/apiKeyCrypto.js), what is kept, the connection and video records out of " +
+      "the backups (lib/backup.js EXCLUDED_TABLES) while a request may be in one",
+      every((sec, t) => has(t, ["What is kept: your channel's id and name", "encrypted by BizForce AI's own code (AES-256-GCM) before they are stored, so they are encrypted at rest",
+        "Your YouTube connection and your video records are never copied into BizForce AI's nightly backups.",
+        "can remain in an encrypted nightly backup made before it was deleted"])) &&
+      /const ALGORITHM = "aes-256-gcm";/.test(crypt) && /\n  member_youtube_connections: /.test(excluded) && /\n  member_videos: /.test(excluded) && !/\n  agent_proposals: /.test(excluded));
+    check("P7. (c) how long and deleting: the code's " + facts.youtubeChannelDays + " and " + facts.youtubeDataDays + " day rules, on disconnect, on revoke (invalid_grant), on account deletion",
+      every((sec, t) => has(t, ["reads your channel's name again from YouTube every " + facts.youtubeChannelDays + " days, and deletes the connection and its tokens if it has not been refreshed for " + facts.youtubeDataDays + " days",
+        "When you disconnect (Disconnect on the Social Agent page): BizForce AI asks Google to revoke its access",
+        "within " + facts.youtubeDisconnectDays + " days.", "Google refuses BizForce AI's next token refresh (invalid_grant).",
+        "When you delete your BizForce AI account: the connection, the tokens, your video records and your YouTube requests are deleted with it."])));
+    check("P8. (d) sharing: not sold, not shared or transferred except to provide the feature, for security or by law; no advertising; no AI training",
+      every((sec, t) => has(t, ["BizForce AI does not sell Google user data.",
+        "except as needed to provide this feature", "to keep BizForce AI and its members secure, or as required by law.",
+        "Google user data is not used for advertising", "Google user data is not used to develop, improve or train AI or machine-learning models, and none of it is sent to the AI model"])));
+    check("P9. (e) Google's Limited Use sentence word for word, the policy a link to " + LP.GOOGLE_USER_DATA_POLICY_URL,
+      // textOf turns the closing </a> into a space, so "Policy ," is read back as "Policy,".
+      every((sec, t) => t.replace(/ ,/g, ",").indexOf("BizForce AI's use and transfer of information received from Google APIs to any other app will adhere to the Google API Services User Data Policy, including the Limited Use requirements.") !== -1 &&
+        sec.indexOf("<a href=\"https://developers.google.com/terms/api-services-user-data-policy\">Google API Services User Data Policy</a>, including the Limited Use requirements.") !== -1));
+    const linked = u => "<a href=\"" + u + "\">" + u + "</a>";
+    check("P10. (f) the YouTube Terms of Service, the Google Privacy Policy and the revoke page, each a link",
+      every(sec => [linked("https://www.youtube.com/t/terms"), linked("https://policies.google.com/privacy"), linked("https://security.google.com/settings/security/permissions")]
+        .every(x => sec.indexOf(x) !== -1)));
+    check("P11. (g) where to write with privacy questions: " + LEGAL.CONTACT_EMAIL + ", a mailto link",
+      every(sec => sec.indexOf("<p>Questions about how BizForce AI uses Google user data: <a href=\"mailto:" + LEGAL.CONTACT_EMAIL + "\">" + LEGAL.CONTACT_EMAIL + "</a>.</p>") !== -1));
+    check("P12. a privacy-only clarification: TERMS_VERSION stays " + LEGAL.TERMS_VERSION + " (as W3 decided)", LEGAL.TERMS_VERSION === "2026-11-14");
   }
 
   check("no network was touched", NETWORK.length === 0, NETWORK.join(", "));
