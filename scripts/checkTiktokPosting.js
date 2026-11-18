@@ -22,6 +22,9 @@
      K. TK1 (Nov 17 2026), TikTok's content-sharing guidelines before app review: the video's length (migration 186) read
         from the file and checked at filing and at approval, the preview, the declaration with TikTok's links directly
         above the publish button, the processing notice and the bounded status polling, the disclosure button, the wording
+     X. TK2 (Nov 18 2026): video/init per TikTok's Direct Post reference (the Content-Type, the body, the documented
+        upload_url), every documented init error code, one "[tiktok] <step> refused" log line per TikTok refusal with
+        nothing secret in it, TikTok's code on the card, fragmented and OBS Hybrid MP4
      G. legal, yourData, README, registries, the migration; R1, the highest migration (186, verify/186_verify.sql).
 
    Run: node scripts/checkTiktokPosting.js     MUTATE=<name> for one mutation, MUTATE=all for every one. */
@@ -102,8 +105,9 @@ const MUTATIONS = {
     "    var bothRows = (both.data || []).filter(function (r) { return r.path && !named[r.id] && bothIg.published[r.id]", "    var bothRows = (both.data || []).filter(function (r) { return r.path && bothIg.published[r.id]"],
   "wrong-dispatcher": ["server",
     "  publish_tiktok_post: executePublishTiktokPost,\n", "  publish_tiktok_post: executePublishYoutubeVideo,\n"],
+  // NAMED (Nov 18 2026, TK2): BEFORE the anchor was tiktok's one exact host. AFTER its host pattern, opened to any host.
   "tiktok-host-unrestricted": ["fetch",
-    "  tiktok: Object.freeze({ host: \"open-upload.tiktokapis.com\",", "  tiktok: Object.freeze({ host: STREAM_HOST,"],
+    "  tiktok: Object.freeze({ hostPattern: /^[a-z0-9-]*upload[a-z0-9-]*(?:\\.[a-z0-9-]+)?\\.tiktokapis\\.com$/,", "  tiktok: Object.freeze({ hostPattern: /^/,"],
   "youtube-profile-loosened": ["fetch",
     "allow308: true, emptyOkStatuses: Object.freeze([]) }),", "allow308: true, emptyOkStatuses: Object.freeze([201, 206]) }),"],
   "upload-url-logged": ["api",
@@ -132,8 +136,9 @@ const MUTATIONS = {
     "    if (!isFinite(ends) || ends <= deps.now()) { await markFailed(deps, video); throw fail(MESSAGES.expired); }\n", ""],
   "tiktok-cap-missing-at-send": ["api",
     "  if (today >= MV.TIKTOK_POSTS_PER_DAY) throw fail(MESSAGES.dailyCap);\n", ""],
+  // NAMED (Nov 18 2026, TK2): BEFORE anchored on "pathPrefix: \"/upload/\", allow308: false,". AFTER on the tiktok profile's own line.
   "tiktok-308-allowed": ["fetch",
-    "pathPrefix: \"/upload/\", allow308: false,", "pathPrefix: \"/upload/\", allow308: true,"],
+    "    allow308: false, emptyOkStatuses: Object.freeze([201, 206]) })", "    allow308: true, emptyOkStatuses: Object.freeze([201, 206]) })"],
   "delete-ignores-tiktok": ["videos",
     // NAMED, item 8 part 3a: FILE_ACTIONS now also names publish_instagram_post.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and publish_facebook_post after it; the mutation still drops publish_tiktok_post alone.
@@ -235,6 +240,40 @@ const MUTATIONS = {
   "private-account-line-missing": ["page", "your TikTok account must be set to private, and ", ""],
   // the stale token lifetimes back in the comment
   "token-comment-stale": ["auth", "an access token (expires_in; TikTok documents 2 hours)", "an access token (about 24 hours)"],
+  // NAMED (Nov 18 2026, TK2): section X.
+  // the JSON calls go out without the documented "application/json; charset=UTF-8"
+  "init-content-type-default": ["api",
+    "function jsonHeaders(token) { return { Authorization: \"Bearer \" + token, \"Content-Type\": JSON_TYPE }; }", "function jsonHeaders(token) { return { Authorization: \"Bearer \" + token }; }"],
+  // the old prefix rule, which refused TikTok's documented /video/ upload_url (the live failure)
+  "upload-url-old-prefix": ["api",
+    "  return u.protocol === \"https:\" && (u.port === \"\" || u.port === \"443\")", "  return String(s).indexOf(\"https://open-upload.tiktokapis.com/upload/\") === 0 && (u.port === \"\" || u.port === \"443\")"],
+  // the guarded transport still only reaches /upload/
+  "upload-profile-old-path": ["fetch",
+    "pathPrefixes: Object.freeze([\"/video/\", \"/upload/\"]),", "pathPrefixes: Object.freeze([\"/upload/\"]),"],
+  // the transport's host pattern loosened to any tiktokapis.com host (the API host included)
+  "upload-host-loose": ["fetch",
+    "hostPattern: /^[a-z0-9-]*upload[a-z0-9-]*(?:\\.[a-z0-9-]+)?\\.tiktokapis\\.com$/,", "hostPattern: /\\.tiktokapis\\.com$/,"],
+  // a 200 counted as a success whatever error.code says
+  "ok-means-2xx": ["api",
+    "answer.json && answer.json.error && answer.json.error.code === \"ok\");", "answer.json);"],
+  // TikTok's refusals not logged, or logged raw, or without the log_id, or unbounded
+  "refusal-not-logged": ["api", "  if (!tiktokOk(answer)) logRefusal(answerLine(step, answer, [tokenOf(options)]));\n", ""],
+  "transport-failure-not-logged": ["api", "    logRefusal(refusalLine(step, \"none\", (err && err.code) || \"request\", \"\", \"\", [tokenOf(options)]));\n", ""],
+  "refusal-log-unscrubbed": ["api", "  var s = String(text == null ? \"\" : text);\n", "  var s = String(text == null ? \"\" : text);\n  return s;\n"],
+  "refusal-log-id-dropped": ["api", "\" log_id=\" + l).slice(0, 300);", "\" log_id=-\").slice(0, 300);"],
+  "refusal-log-unbounded": ["api", "\" log_id=\" + l).slice(0, 300);", "\" log_id=\" + l);"],
+  "put-refusal-not-logged": ["api", "  if (!putComplete(answer)) logRefusal(answerLine(\"upload\", answer, []));\n", ""],
+  "put-transport-not-logged": ["api", "    logRefusal(refusalLine(\"upload\", \"none\", (err && err.code) || \"request\", \"\", \"\", []));\n", ""],
+  "unusable-answer-not-logged": ["api", "    logRefusal(answerLine(\"video/init\", a, [], PUBLISH_ID_RE", "    (function () {})(answerLine(\"video/init\", a, [], PUBLISH_ID_RE"],
+  // the unusable upload_url logged whole (its token in the query)
+  "unusable-url-logged-whole": ["api", "  return u.protocol.replace(/[^a-z]/g, \"\") + \" \" + host + \" \" + seg;", "  return String(s);"],
+  // the card without TikTok's code
+  "card-code-missing": ["api",
+    "  return \"TikTok didn't start the post. TikTok said: \" + c + (w ? \" (\" + w + \")\" : \"\") + \". Nothing was sent.\";",
+    "  return \"TikTok didn't start the post\" + (w ? \" (\" + w + \")\" : \"\") + \". Nothing was sent.\";"],
+  "put-card-code-missing": ["api", "function putSaid(answer) { return answer ? \" TikTok said: \" + errorCode(answer) + \".\" : \"\"; }", "function putSaid(answer) { return \"\"; }"],
+  "creator-card-code-missing": ["api", "    if (err && err.kind === \"refused\") throw fail(saidLine(err.code, err.said));\n", ""],
+  "reconnect-card-code-missing": ["api", "(err.tiktokCode ? \" TikTok said: \" + err.tiktokCode + \".\" : \"\")", "\"\""],
   "repost-slot-unchecked": ["api",
     "  if (reposting && p.repost_of) storing = storing.eq(\"tiktok_publish_id\", p.repost_of).eq(\"tiktok_status\", \"posted\");\n",
     "  if (reposting && p.repost_of) storing = storing;\n"]
@@ -330,12 +369,14 @@ const OPEN_ID2 = "-000check-open-id_2.y";
 const NICK = "Maple Street Bakery";
 const DISPLAY = "maplestreet";
 const SCOPES = "user.info.basic,video.publish";
-const UPLOAD_BASE = "https://open-upload.tiktokapis.com/upload/?upload_id=check-upload-";
+// NAMED (Nov 18 2026, TK2): BEFORE ".../upload/?upload_id=", a shape TikTok's init never answers. AFTER the documented
+// init answer, "https://open-upload.tiktokapis.com/video/?upload_id=67890&upload_token=Xza123" (content-posting-api-reference-direct-post).
+const UPLOAD_BASE = "https://open-upload.tiktokapis.com/video/?upload_token=check-token&upload_id=check-upload-";
 const PUBLISH_BASE = "v_pub_file~v2-1.check";
 const POST_ID = "7350000000000000001";
 const PAGE_PATH = "/agents/social.html";
 const REDIRECT = "https://bizforceai.net/agents/social.html";
-const SECRETS = [ACCESS, ACCESS2, WINNER, REFRESH, REFRESH2, CODE, CLIENT.secret, "check-upload-"];
+const SECRETS = [ACCESS, ACCESS2, WINNER, REFRESH, REFRESH2, CODE, CLIENT.secret, "check-upload-", "check-token"];
 function noSecretIn(text) { return SECRETS.every(function (s) { return String(text).indexOf(s) === -1; }); }
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
 const NOT_SET_UP = "TikTok connection isn't set up yet.";
@@ -577,6 +618,8 @@ function headerOf(hdrs, name) {
   return k ? String(hdrs[k]) : null;
 }
 const OK = { code: "ok", message: "", log_id: "check" };
+// NAMED (Nov 18 2026, TK2): the documented log_id example.
+const INIT_LOG_ID = "202210112248442CB9319E1FB30C1073F3";
 const PUBLIC_V4 = "142.250.80.10";
 function makeTiktok(opts) {
   const o = Object.assign({}, opts || {});
@@ -647,6 +690,10 @@ function makeTiktok(opts) {
       // NAMED (Nov 13 2026, S3): a test may change the stored row while TikTok answers the init (RP11).
       if (typeof g.onInit === "function") g.onInit();
       if (o.initError) return reply(o.initStatus || 403, { error: { code: "spam_risk_too_many_posts", message: o.initError, log_id: "x" } });
+      // NAMED (Nov 18 2026, TK2): initCode answers init with that documented error code, HTTP initStatus, message initMessage.
+      if (o.initCode) return reply(o.initStatus || 400, { error: { code: o.initCode, message: o.initMessage === undefined ? "Check error message for details." : o.initMessage, log_id: INIT_LOG_ID } });
+      if (o.initRaw) return o.initRaw;
+      if (o.initDown) return { error: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) };
       g.n++;
       const publishId = PUBLISH_BASE + "." + g.n;
       const url = o.uploadUrl || (UPLOAD_BASE + g.n);
@@ -658,12 +705,16 @@ function makeTiktok(opts) {
       let b = null;
       try { b = JSON.parse(body.toString("utf8")); } catch (e) { b = null; }
       g.statusFetches = (g.statusFetches || []).concat([b && b.publish_id]);
+      // NAMED (Nov 18 2026, TK2): statusCode answers status/fetch with that documented error code.
+      if (o.statusCode) return reply(o.statusHttp || 400, { error: { code: o.statusCode, message: "The publish_id is invalid.", log_id: INIT_LOG_ID } });
       return statusAnswer(b && b.publish_id);
     }
-    if (u.hostname === "open-upload.tiktokapis.com" && u.pathname === "/upload/" && method === "PUT") {
+    // NAMED (Nov 18 2026, TK2): BEFORE only open-upload.tiktokapis.com under "/upload/". AFTER the documented upload hosts and paths.
+    if ((u.hostname === "open-upload.tiktokapis.com" || u.hostname === "upload.us.tiktokapis.com") && (u.pathname === "/upload/" || u.pathname === "/video/") && method === "PUT") {
       EV.push("tt:put");
       const up = g.uploads[u.search];
       if (!up) return reply(404, { error: { code: "not_found" } });
+      if (o.putCode) return reply(o.putHttp || 403, { error: { code: o.putCode, message: "The upload_url has expired.", log_id: INIT_LOG_ID } });
       const want = "bytes 0-" + (up.total - 1) + "/" + up.total;
       if (entry.contentRange !== want || Number(entry.contentLength) !== up.total) return reply(416, { error: { code: "range_not_satisfiable" } });
       up.received = Buffer.from(body);
@@ -732,7 +783,7 @@ function makeTiktok(opts) {
   g.jsonRequest = function (url, options) { return guarded.json(url, options); };
   g.streamUpload = function (url, options) { return guarded.streamUpload(url, options); };
   g.of = function (pred) { return g.requests.filter(pred); };
-  g.puts = function () { return g.of(function (r) { return r.method === "PUT" && r.host === "open-upload.tiktokapis.com" && r.bytes > 0; }); };
+  g.puts = function () { return g.of(function (r) { return r.method === "PUT" && r.host !== "open.tiktokapis.com" && /\.tiktokapis\.com$/.test(r.host) && r.bytes > 0; }); };
   g.initCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/video/init/"; }); };
   g.creatorCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/creator_info/query/"; }); };
   g.statusCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/status/fetch/"; }); };
@@ -1465,13 +1516,16 @@ function pageAnswers(over) {
   video = seedVideo(m.db, mp4(10000, 34));
   a = await approve(m, proposalOf(video));
   vr = rowOf(m, video.id);
-  check("U22. TikTok refuses the init: its own words shown (no duration is parsed here), nothing stored", !a.ok && /TikTok refused the post: You have posted too many videos today\./.test(a.msg || "") &&
+  // NAMED (Nov 18 2026, TK2): BEFORE "TikTok refused the post: <words>". AFTER the code always, the words after it.
+  check("U22. TikTok refuses the init: its code and its own words shown (no duration is parsed here), nothing stored",
+    !a.ok && /TikTok didn't start the post\. TikTok said: spam_risk_too_many_posts \(You have posted too many videos today\)\. Nothing was sent\.$/.test(a.msg || "") &&
     vr.tiktok_publish_id === null && vr.tiktok_status === null && m.tiktok.puts().length === 0, a.msg);
   m = mountRoutes({ env: CONFIGURED, tiktok: { uploadUrl: "https://evil.example.com/upload/?upload_id=x" } });
   seedConnection(m.db);
   video = seedVideo(m.db, mp4(10000, 35));
   a = await approve(m, proposalOf(video));
-  check("U23. an upload URL not on open-upload.tiktokapis.com/upload/: refused, nothing stored, nothing PUT", !a.ok && rowOf(m, video.id).tiktok_publish_id === null && m.tiktok.puts().length === 0);
+  // NAMED (Nov 18 2026, TK2): BEFORE "not on open-upload.tiktokapis.com/upload/". AFTER not an upload host under tiktokapis.com, /video/ or /upload/.
+  check("U23. an upload URL not on a TikTok upload host: refused, nothing stored, nothing PUT", !a.ok && rowOf(m, video.id).tiktok_publish_id === null && m.tiktok.puts().length === 0);
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db);
   video = seedVideo(m.db, mp4(10000, 36));
@@ -1507,9 +1561,16 @@ function pageAnswers(over) {
   const sGoogle = await attempt(g.streamUpload("https://www.googleapis.com/upload/x", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
   const sPath = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/v2/x", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
   const sYtAtTt = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/e201", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
-  check("S1. the caller must name a profile; tiktok reaches only open-upload.tiktokapis.com under /upload/, and youtube never reaches it; no request",
-    !sNoProf.ok && !sGoogle.ok && sGoogle.code === "invalid_url" && !sPath.ok && sPath.code === "invalid_url" && !sYtAtTt.ok && sYtAtTt.code === "invalid_url" && g.requests.length === 0,
-    J([sNoProf.msg, sGoogle.code, sPath.code, sYtAtTt.code]));
+  // NAMED (Nov 18 2026, TK2): BEFORE only open-upload.tiktokapis.com under /upload/. AFTER an upload host under tiktokapis.com,
+  // under /video/ or /upload/; the API host, a look-alike host, http and another port are still refused.
+  const sApiHost = await attempt(g.streamUpload("https://open.tiktokapis.com/video/e201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  const sLook = await attempt(g.streamUpload("https://open-upload.tiktokapis.com.evil.example/video/e201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  const sHttp = await attempt(g.streamUpload("http://open-upload.tiktokapis.com/video/e201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  const sPort = await attempt(g.streamUpload("https://open-upload.tiktokapis.com:8443/video/e201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  check("S1. the caller must name a profile; tiktok reaches only an upload host under tiktokapis.com, under /video/ or /upload/, and youtube never reaches it; no request",
+    !sNoProf.ok && !sGoogle.ok && sGoogle.code === "invalid_url" && !sPath.ok && sPath.code === "invalid_url" && !sYtAtTt.ok && sYtAtTt.code === "invalid_url" &&
+    [sApiHost, sLook, sHttp, sPort].every(function (x) { return !x.ok && x.code === "invalid_url"; }) && g.requests.length === 0,
+    J([sNoProf.msg, sGoogle.code, sPath.code, sYtAtTt.code, sApiHost.code, sLook.code, sHttp.code, sPort.code]));
   const s201 = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/e201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
   check("S2. tiktok: an empty 201 is done (json null)", s201.ok && s201.v.status === 201 && s201.v.json === null, s201.ok ? J(s201.v) : s201.code);
   const s308 = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/redirect", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
@@ -1519,8 +1580,13 @@ function pageAnswers(over) {
   check("S4. tiktok: a 201 with a body that is not JSON, or an empty 200, is refused", !sHtml.ok && sHtml.code === "unaccepted_type" && !s200.ok, J([sHtml.code, s200.code]));
   const sYt201 = await attempt(g.streamUpload("https://www.googleapis.com/upload/e201", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
   check("S5. youtube is not loosened: an empty 201 is still refused there", !sYt201.ok, sYt201.ok ? J(sYt201.v) : sYt201.code);
-  check("S6. the two profiles, as named", J(GF.STREAM_PROFILES) === J({ youtube: { host: "www.googleapis.com", pathPrefix: "/upload/", allow308: true, emptyOkStatuses: [] },
-    tiktok: { host: "open-upload.tiktokapis.com", pathPrefix: "/upload/", allow308: false, emptyOkStatuses: [201, 206] } }) && Object.isFrozen(GF.STREAM_PROFILES));
+  // NAMED (Nov 18 2026, TK2): BEFORE tiktok { host: "open-upload.tiktokapis.com", pathPrefix: "/upload/" }. AFTER a host pattern and two prefixes.
+  const ttProf = GF.STREAM_PROFILES.tiktok;
+  check("S6. the two profiles, as named", J(GF.STREAM_PROFILES.youtube) === J({ host: "www.googleapis.com", pathPrefix: "/upload/", allow308: true, emptyOkStatuses: [] }) &&
+    Object.keys(ttProf).join() === "hostPattern,pathPrefixes,allow308,emptyOkStatuses" &&
+    String(ttProf.hostPattern) === "/^[a-z0-9-]*upload[a-z0-9-]*(?:\\.[a-z0-9-]+)?\\.tiktokapis\\.com$/" && J(ttProf.pathPrefixes) === J(["/video/", "/upload/"]) &&
+    ttProf.allow308 === false && J(ttProf.emptyOkStatuses) === J([201, 206]) && Object.isFrozen(GF.STREAM_PROFILES) && Object.isFrozen(ttProf) && Object.isFrozen(ttProf.pathPrefixes),
+    J([String(ttProf.hostPattern), ttProf.pathPrefixes]));
 
   /* ── J ── */
   OUT("\n══ J. retention and deleting a video ══");
@@ -1942,6 +2008,183 @@ function pageAnswers(over) {
     !/an access token \(about 24 hours\)/.test(FILES.auth));
 
   /* ── G ── */
+  /* ── X ── NAMED (Nov 18 2026, TK2): video/init per TikTok's Direct Post reference (developers.tiktok.com,
+     content-posting-api-reference-direct-post, -media-transfer-guide, -get-started), every TikTok refusal logged as one
+     line, TikTok's error code on the card. The live failure (Nov 17 2026): init answered error.code "ok" with an
+     upload_url under /video/, which the old prefix rule refused ("TikTok didn't start the post. Nothing was sent."). */
+  OUT("\n══ X. TK2: video/init per the docs, refusal logging, the code on the card ══");
+  const XLINES = [];
+  const tkLines = function () { const l = LOGS.filter(function (x) { return x.indexOf("[tiktok] ") === 0; }); l.forEach(function (x) { XLINES.push(x); }); return l; };
+  const cleanLog = function (l) { return noSecretIn(l) && l.indexOf(OPEN_ID) === -1 && !/https?:|upload_id|upload_token|Bearer act|Bearer rft/.test(l) && l.length <= 300; };
+  const cleanCard = function (s) { return noSecretIn(s) && String(s).indexOf(OPEN_ID) === -1 && !/https?:|upload_id|upload_token/.test(String(s)); };
+  // X1-X2: a 2.1 MB file (the live clip's size), privacy Only you, comments, duet and stitch off
+  m = mountRoutes({ env: CONFIGURED });
+  seedConnection(m.db);
+  buf = mp4(2100000, 51);
+  video = seedVideo(m.db, buf, { duration_ms: 10000 });
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video, { privacy_level: "SELF_ONLY", allow_comment: false }));
+  const xInit = m.tiktok.initCalls()[0] || {};
+  const xTypes = [m.tiktok.creatorCalls()[0], xInit, m.tiktok.statusCalls()[0]].map(function (r) { return r ? r.contentType : null; });
+  check("X1. creator_info, video/init and status/fetch carry Content-Type \"application/json; charset=UTF-8\" and the Bearer token, as TikTok's reference requires",
+    xTypes.every(function (t) { return t === "application/json; charset=UTF-8"; }) && xInit.bearer === ACCESS, J(xTypes));
+  const xb = m.tiktok.inits[0] || {};
+  check("X2. the init body for a 2.1 MB file: post_info (title, privacy_level SELF_ONLY, disable_* true, brand toggles false) and source_info FILE_UPLOAD, video_size = chunk_size = 2100000, total_chunk_count 1; posted; nothing logged",
+    a.ok && a.v.posted === true && Object.keys(xb).join() === "post_info,source_info" &&
+    J(xb.post_info) === J({ title: POST.caption, privacy_level: "SELF_ONLY", disable_comment: true, disable_duet: true, disable_stitch: true, brand_content_toggle: false, brand_organic_toggle: false }) &&
+    J(xb.source_info) === J({ source: "FILE_UPLOAD", video_size: 2100000, chunk_size: 2100000, total_chunk_count: 1 }) && tkLines().length === 0, a.ok ? J(xb) : a.msg);
+  // X3: every documented upload_url, used whole
+  const xUrls = ["https://open-upload.tiktokapis.com/video/?upload_id=67890&upload_token=check-token-x",
+    "https://upload.us.tiktokapis.com/video/?upload_id=67891&upload_token=check-token-y",
+    "https://open-upload.tiktokapis.com/upload/?upload_id=67892&upload_token=check-token-z"];
+  const xUp = [];
+  for (const u of xUrls) {
+    m = mountRoutes({ env: CONFIGURED, tiktok: { uploadUrl: u } });
+    seedConnection(m.db);
+    video = seedVideo(m.db, mp4(30000, 52));
+    a = await approve(m, proposalOf(video));
+    const p0 = m.tiktok.puts()[0] || {};
+    xUp.push(a.ok && a.v.posted === true && m.tiktok.puts().length === 1 && p0.url === u ? "ok" : (a.ok ? J(a.v) : a.msg));
+  }
+  check("X3. every upload_url TikTok documents is used whole (open-upload /video/, upload.us /video/, open-upload /upload/): one PUT to it, posted",
+    xUp.every(function (x) { return x === "ok"; }), J(xUp));
+  // X4: every documented video/init error code, at its documented HTTP status, and a 200 carrying invalid_params
+  const DOC_CODES = [[400, "invalid_param"], [403, "spam_risk_too_many_posts"], [403, "spam_risk_user_banned_from_posting"], [403, "reached_active_user_cap"],
+    [403, "unaudited_client_can_only_post_to_private_accounts"], [403, "url_ownership_unverified"], [403, "privacy_level_option_mismatch"],
+    [401, "access_token_invalid"], [401, "scope_not_authorized"], [429, "rate_limit_exceeded"], [500, "internal_error"], [200, "invalid_params"]];
+  const xBad = [];
+  for (const pair of DOC_CODES) {
+    m = mountRoutes({ env: CONFIGURED, tiktok: { initCode: pair[1], initStatus: pair[0] } });
+    seedConnection(m.db);
+    video = seedVideo(m.db, mp4(10000, 53));
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    const want = "[tiktok] video/init refused: http " + pair[0] + " " + pair[1] + " Check error message for details. log_id=" + INIT_LOG_ID;
+    const lines = tkLines();
+    const msg = a.msg || "";
+    const cardOk = pair[0] === 401 ? msg.indexOf(TK.MESSAGES.needsReconnect + " TikTok said: " + pair[1] + ".") !== -1
+      : msg.indexOf("TikTok didn't start the post. TikTok said: " + pair[1] + " (Check error message for details). Nothing was sent.") !== -1;
+    const ok = !a.ok && cardOk && lines.length === (pair[0] === 401 ? 2 : 1) && lines.every(function (l) { return l === want; }) && lines.every(cleanLog) &&
+      rowOf(m, video.id).tiktok_publish_id === null && m.tiktok.puts().length === 0;
+    if (!ok) xBad.push(pair[1] + ": " + J([msg, lines]));
+  }
+  check("X4. each documented init error code (and a 200 with error.code invalid_params): logged as \"[tiktok] video/init refused: http <status> <code> <message> log_id=<log_id>\", the card says \"TikTok said: <code>\", nothing stored, nothing PUT",
+    xBad.length === 0, J(xBad));
+  // X5: not JSON at all
+  m = mountRoutes({ env: CONFIGURED, tiktok: { initRaw: { status: 502, headers: { "content-type": "text/html" }, raw: Buffer.from("<html>Bad gateway</html>") } } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 54));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  check("X5. a 502 that is not JSON: logged with no code or log_id, the card says TikTok said: status_502",
+    !a.ok && /TikTok said: status_502\. Nothing was sent\.$/.test(a.msg || "") && J(tkLines()) === J(["[tiktok] video/init refused: http 502 - - log_id=-"]), J([a.msg, LOGS]));
+  // X6: TikTok never answers
+  m = mountRoutes({ env: CONFIGURED, tiktok: { initDown: true } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 55));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  let xl = tkLines();
+  check("X6. init never answered: logged as \"http none <transport code>\", the card says TikTok couldn't be reached",
+    !a.ok && /couldn't be reached to start the post/.test(a.msg || "") && xl.length === 1 && /^\[tiktok\] video\/init refused: http none [a-z0-9_-]+ - log_id=-$/.test(xl[0]), J([a.msg, xl]));
+  // X7: TikTok's message carrying a token, the open_id and an upload address: none of it logged or shown
+  m = mountRoutes({ env: CONFIGURED, tiktok: { initCode: "invalid_param", initStatus: 400,
+    initMessage: "Bad token " + ACCESS + " for " + OPEN_ID + " at " + UPLOAD_BASE + "9 with Bearer " + ACCESS2 + " here." } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 56));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  xl = tkLines();
+  check("X7. a TikTok message holding a token, the open_id and an upload URL: the log line and the card keep the code and log_id, and none of those",
+    !a.ok && xl.length === 1 && xl[0].indexOf("[tiktok] video/init refused: http 400 invalid_param Bad token [redacted] for [redacted] at [redacted]") === 0 &&
+    / log_id=202210112248442CB9319E1FB30C1073F3$/.test(xl[0]) && xl.every(cleanLog) && cleanCard(a.msg) && /TikTok said: invalid_param \(Bad token/.test(a.msg || ""), J([a.msg, xl]));
+  // X8: a very long message: the line is cut at 300 characters
+  m = mountRoutes({ env: CONFIGURED, tiktok: { initCode: "invalid_param", initStatus: 400, initMessage: "too long ".repeat(90) } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 57));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  xl = tkLines();
+  check("X8. a 810-character message: the log line is exactly 300 characters", !a.ok && xl.length === 1 && xl[0].length === 300 &&
+    xl[0].indexOf("[tiktok] video/init refused: http 400 invalid_param too long") === 0, J(xl.map(function (l) { return l.length; })));
+  // X9: init succeeds, but the answer can't be used
+  m = mountRoutes({ env: CONFIGURED, tiktok: { uploadUrl: "https://evil.example.com/upload/?upload_id=check-upload-77&upload_token=check-token" } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 58));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  xl = tkLines();
+  check("X9. init answered ok with an upload_url TikTok doesn't document: logged with the host and first path segment only, the card says so, nothing stored or PUT",
+    !a.ok && J(xl) === J(["[tiktok] video/init refused: http 200 ok unusable upload_url https evil.example.com /upload/ log_id=check"]) &&
+    /no usable upload address, so nothing was sent\. TikTok said: ok\.$/.test(a.msg || "") && cleanCard(a.msg) && rowOf(m, video.id).tiktok_publish_id === null &&
+    m.tiktok.puts().length === 0, J([a.msg, xl]));
+  // X10: creator_info refused at approval
+  m = mountRoutes({ env: CONFIGURED, tiktok: { creatorError: "rate_limit_exceeded", creatorStatus: 429 } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 59));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  xl = tkLines();
+  check("X10. creator_info refused at approval: logged, the card says TikTok said: rate_limit_exceeded, no init",
+    !a.ok && J(xl) === J(["[tiktok] creator_info refused: http 429 rate_limit_exceeded Posting is limited for this account right now. log_id=x"]) &&
+    /TikTok didn't start the post\. TikTok said: rate_limit_exceeded \(Posting is limited for this account right now\)\. Nothing was sent\.$/.test(a.msg || "") &&
+    m.tiktok.inits.length === 0, J([a.msg, xl]));
+  // X11: the upload PUT refused, partial, or cut off
+  m = mountRoutes({ env: CONFIGURED, tiktok: { putCode: "access_denied", putHttp: 403 } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 60));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  const xPut403 = [a.msg, tkLines()];
+  m = mountRoutes({ env: CONFIGURED, tiktok: { putStatus: 206 } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 61));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  const xPut206 = [a.msg, tkLines()];
+  m = mountRoutes({ env: CONFIGURED, tiktok: { cut: 1 } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(100000, 62));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  const xPutCut = [a.msg, tkLines()];
+  check("X11. the upload PUT: a 403 with a code, a 206, and a cut connection are each logged as \"[tiktok] upload refused\", and the card adds TikTok's code",
+    J(xPut403[1]) === J(["[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=" + INIT_LOG_ID]) &&
+    /didn't finish\..* TikTok said: access_denied\.$/.test(xPut403[0] || "") &&
+    J(xPut206[1]) === J(["[tiktok] upload refused: http 206 - - log_id=-"]) && /TikTok said: status_206\.$/.test(xPut206[0] || "") &&
+    xPutCut[1].length === 1 && /^\[tiktok\] upload refused: http none [a-z0-9_-]+ - log_id=-$/.test(xPutCut[1][0]) && /didn't finish/.test(xPutCut[0] || "") &&
+    !/TikTok said/.test(xPutCut[0] || ""), J([xPut403, xPut206, xPutCut]));
+  // X12: status/fetch refused after the bytes are all there
+  m = mountRoutes({ env: CONFIGURED, tiktok: { statusCode: "invalid_publish_id", statusHttp: 400 } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(10000, 63));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  xl = tkLines();
+  check("X12. status/fetch refused: logged, and the post stays processing (TikTok has every byte)",
+    a.ok && a.v.processing === true && J(xl) === J(["[tiktok] status/fetch refused: http 400 invalid_publish_id The publish_id is invalid. log_id=" + INIT_LOG_ID]), J([a.ok ? a.v : a.msg, xl]));
+  check("X13. every [tiktok] line in this section is at most 300 characters and holds no token, open_id, upload address or upload id; the library logs from two places only",
+    XLINES.length >= 20 && XLINES.every(cleanLog) && (stripComments(FILES.api).match(/console\.\w+\(/g) || []).length === 2, J(XLINES.filter(function (l) { return !cleanLog(l); })));
+  // X14: one rule, in the library and the guarded transport
+  check("X14. lib/tiktokApi.js and lib/guardedFetch.js hold the same upload_url rule; the docs' examples pass, the API host, http and look-alikes do not",
+    String(TK.UPLOAD_HOST_RE) === String(GF.STREAM_PROFILES.tiktok.hostPattern) && J(TK.UPLOAD_PATHS) === J(GF.STREAM_PROFILES.tiktok.pathPrefixes) &&
+    TK.JSON_TYPE === "application/json; charset=UTF-8" &&
+    ["https://open-upload.tiktokapis.com/video/?upload_id=67890&upload_token=Xza123", "https://upload.us.tiktokapis.com/video/?upload_id=67890&upload_token=chunkexample",
+      "https://open-upload.tiktokapis.com/upload/?upload_id=67890&upload_token=Xza123"].every(TK.uploadUrlOk) &&
+    !["https://open.tiktokapis.com/video/?a=1", "http://open-upload.tiktokapis.com/video/?a=1", "https://open-upload.tiktokapis.com.evil.example/video/",
+      "https://open-upload.tiktokapis.com:8443/video/", "https://open-upload.tiktokapis.com/v2/x", "https://user:pw@open-upload.tiktokapis.com/video/", "not a url"].some(TK.uploadUrlOk));
+  // X15: OBS "Hybrid MP4" and fragmented MP4 (moof boxes): sniffed as MP4, the length read when moov holds it
+  const xFtyp = box("ftyp", Buffer.concat([Buffer.from("isom", "latin1"), Buffer.from([0, 0, 2, 0]), Buffer.from("isomiso6mp41", "latin1")]));
+  const xFrag = function (seed) { return Buffer.concat([box("moof", Buffer.concat([box("mfhd", Buffer.alloc(8)), box("traf", filler(200, seed))])), box("mdat", filler(4000, seed + 1))]); };
+  const xMoov = function (mv) { return box("moov", Buffer.concat([mv, box("trak", filler(300, 5)), box("mvex", box("mehd", Buffer.alloc(8)))])); };
+  const fragOnly = Buffer.concat([xFtyp, xMoov(mvhd0(1000, 0)), xFrag(70), xFrag(72)]);
+  const hybridEnd = Buffer.concat([xFtyp, xFrag(74), xFrag(76), xMoov(mvhd0(1000, 10000))]);
+  const hybridFront = Buffer.concat([xFtyp, xMoov(mvhd0(1000, 10000)), xFrag(78), xFrag(80)]);
+  check("X15. fragmented MP4 (moov first, mvhd duration 0, then moof/mdat): MP4, length unknown from the file (the browser's is used); OBS Hybrid MP4 (moof/mdat, then a finished moov), or moov first: MP4, 10 s",
+    [fragOnly, hybridEnd, hybridFront].every(function (b) { return MV.sniffVideo(b) === "mp4"; }) && readIn(fragOnly, 512) === null &&
+    [1, 7, 4096, hybridEnd.length].every(function (n) { return readIn(hybridEnd, n) === 10000 && readIn(hybridFront, n) === 10000; }),
+    J([readIn(fragOnly, 512), readIn(hybridEnd, 4096), readIn(hybridFront, 4096)]));
+
   OUT("\n══ G. legal, yourData, README, registries, the migration ══");
   const PRIVACY = "If you connect your TikTok account, BizForce stores your TikTok name and account id and the access TikTok grants BizForce, encrypted, and uses that access only to post a video when you approve it and to check its status when you ask. Videos you send to TikTok go only to TikTok with the caption and settings you approve; BizForce cannot delete a TikTok post, so you delete it in TikTok. You can disconnect at any time, which also asks TikTok to cancel BizForce's access, and everything is deleted with your account.";
   const TERMS = "If you post to TikTok through BizForce, you confirm you have the rights to the video and its music and that it follows TikTok's rules.";
