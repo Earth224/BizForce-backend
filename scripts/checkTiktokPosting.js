@@ -254,26 +254,43 @@ const MUTATIONS = {
     "tiktok: Object.freeze({ hostPattern: TIKTOK_UPLOAD_HOST_RE, pathPattern: TIKTOK_UPLOAD_PATH_RE,", "tiktok: Object.freeze({ hostPattern: TIKTOK_UPLOAD_HOST_RE, pathPattern: /^\\/upload\\//,"],
   // the transport's host pattern loosened to any host ending in tiktokapis.com (look-alikes included)
   "upload-host-loose": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /tiktokapis\\.com$/;"],
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;","const TIKTOK_UPLOAD_HOST_RE = /tiktokapis\\.com$/;"],
   /* ── Y ── NAMED (Nov 18 2026, TK3) */
   // the TK2 rule: "/upload/" and "/video/" with the trailing slash (the live refusal)
   "y-path-slash-required": ["fetch",
     "const TIKTOK_UPLOAD_PATH_RE = /^\\/(?:upload|video)(?:\\/|$)/;", "const TIKTOK_UPLOAD_PATH_RE = /^\\/(?:upload|video)\\//;"],
   // the TK2 host rule: an "upload" label required (the API host and other subdomains refused)
   "y-host-tk2-rule": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /^[a-z0-9-]*upload[a-z0-9-]*(?:\\.[a-z0-9-]+)?\\.tiktokapis\\.com$/;"],
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;","const TIKTOK_UPLOAD_HOST_RE = /^[a-z0-9-]*upload[a-z0-9-]*(?:\\.[a-z0-9-]+)?\\.tiktokapis\\.com$/;"],
   // only open-upload.tiktokapis.com (open-upload-i18n, open-upload-va and upload.us refused)
   "y-host-one-only": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /^open-upload\\.tiktokapis\\.com$/;"],
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;","const TIKTOK_UPLOAD_HOST_RE = /^open-upload\\.tiktokapis\\.com$/;"],
   // the end not anchored: tiktokapis.com.evil.com accepted
   "y-host-end-open": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com/;"],
-  // tiktokapis.us accepted (not in TikTok's docs)
-  "y-host-us-domain": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;"],
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;","const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com/;"],
+  // NAMED (Nov 18 2026, TK4): BEFORE "y-host-us-domain" (tiktokapis.us accepted, then a fault). AFTER "y-host-com-only": the
+  // TK3 rule, tiktokapis.com only, which refused the live US answer.
+  "y-host-com-only": ["fetch",
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;"],
   // a label may start with a hyphen or run past 63 characters
   "y-host-label-loose": ["fetch",
-    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9-]+\\.)+tiktokapis\\.com$/;"],
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9-]+\\.)+tiktokapis\\.(?:com|us)$/;"],
+  /* NAMED (Nov 18 2026, TK4): the .us domain's own faults */
+  // the apex accepted (tiktokapis.us, tiktokapis.com)
+  "us-apex-accepted": ["fetch",
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*tiktokapis\\.(?:com|us)$/;"],
+  // the end not anchored: tiktokapis.us.evil.com and tiktokapis.usa accepted
+  "us-end-open": ["fetch",
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)/;"],
+  // a suffix match: evil-tiktokapis.us accepted
+  "us-suffix-only": ["fetch",
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /tiktokapis\\.(?:com|us)$/;"],
+  // any top-level domain: tiktokapis.usa, tiktokapis.uk accepted
+  "us-any-tld": ["fetch",
+    "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/;", "const TIKTOK_UPLOAD_HOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.[a-z]+$/;"],
+  // the .us host let through on http or another port (the scheme and port rules dropped for .us only)
+  "us-http-allowed": ["fetch", "  return u.protocol === \"https:\" && (u.port === \"\" || u.port === \"443\") && !u.username", "  return (u.protocol === \"https:\" || /\\.us$/.test(u.hostname)) && (u.port === \"\" || u.port === \"443\") && !u.username"],
+  "us-port-any": ["fetch", "  return u.protocol === \"https:\" && (u.port === \"\" || u.port === \"443\") && !u.username", "  return u.protocol === \"https:\" && (u.port === \"\" || u.port === \"443\" || /\\.us$/.test(u.hostname)) && !u.username"],
   // the path not anchored after the word: /uploadx accepted
   "y-path-open": ["fetch",
     "const TIKTOK_UPLOAD_PATH_RE = /^\\/(?:upload|video)(?:\\/|$)/;", "const TIKTOK_UPLOAD_PATH_RE = /^\\/(?:upload|video)/;"],
@@ -763,7 +780,8 @@ function makeTiktok(opts) {
     // NAMED (Nov 18 2026, TK2): BEFORE only open-upload.tiktokapis.com under "/upload/". AFTER the documented upload hosts and paths.
     // NAMED (Nov 18 2026, TK3): AFTER also open-upload-i18n and open-upload-va, and the paths "/upload" and "/video" with
     // no trailing slash (the live answer was "https://<host>/upload?upload_id=...").
-    if (/^(?:open-upload(?:-i18n|-va)?|upload\.us)\.tiktokapis\.com$/.test(u.hostname) && ["/upload/", "/video/", "/upload", "/video"].indexOf(u.pathname) !== -1 && method === "PUT") {
+    // NAMED (Nov 18 2026, TK4): AFTER also open-upload.tiktokapis.us (the live US account's upload host).
+    if ((/^(?:open-upload(?:-i18n|-va)?|upload\.us)\.tiktokapis\.com$/.test(u.hostname) || u.hostname === "open-upload.tiktokapis.us") &&["/upload/", "/video/", "/upload", "/video"].indexOf(u.pathname) !== -1 && method === "PUT") {
       EV.push("tt:put");
       const up = g.uploads[u.search];
       if (!up) return reply(404, { error: { code: "not_found" } });
@@ -836,7 +854,7 @@ function makeTiktok(opts) {
   g.jsonRequest = function (url, options) { return guarded.json(url, options); };
   g.streamUpload = function (url, options) { return guarded.streamUpload(url, options); };
   g.of = function (pred) { return g.requests.filter(pred); };
-  g.puts = function () { return g.of(function (r) { return r.method === "PUT" && r.host !== "open.tiktokapis.com" && /\.tiktokapis\.com$/.test(r.host) && r.bytes > 0; }); };
+  g.puts = function () { return g.of(function (r) { return r.method === "PUT" && r.host !== "open.tiktokapis.com" && /\.tiktokapis\.(?:com|us)$/.test(r.host) && r.bytes > 0; }); }; // TK4: .us too
   g.initCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/video/init/"; }); };
   g.creatorCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/creator_info/query/"; }); };
   g.statusCalls = function () { return g.of(function (r) { return r.path === "/v2/post/publish/status/fetch/"; }); };
@@ -1641,7 +1659,8 @@ function pageAnswers(over) {
     // NAMED (Nov 18 2026, TK3): BEFORE hostPattern (upload hosts only) and pathPrefixes ["/video/", "/upload/"]. AFTER the shared
     // TIKTOK_UPLOAD_HOST_RE (any subdomain of tiktokapis.com) and TIKTOK_UPLOAD_PATH_RE ("/upload" or "/video", slash optional).
     Object.keys(ttProf).join() === "hostPattern,pathPattern,allow308,emptyOkStatuses" &&
-    String(ttProf.hostPattern) === "/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.com$/" && String(ttProf.pathPattern) === "/^\\/(?:upload|video)(?:\\/|$)/" &&
+    // NAMED (Nov 18 2026, TK4): BEFORE tiktokapis\\.com$ only. AFTER tiktokapis\\.(?:com|us)$.
+    String(ttProf.hostPattern) === "/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/" && String(ttProf.pathPattern) === "/^\\/(?:upload|video)(?:\\/|$)/" &&
     ttProf.hostPattern === GF.TIKTOK_UPLOAD_HOST_RE && ttProf.pathPattern === GF.TIKTOK_UPLOAD_PATH_RE &&
     ttProf.allow308 === false && J(ttProf.emptyOkStatuses) === J([201, 206]) && Object.isFrozen(GF.STREAM_PROFILES) && Object.isFrozen(ttProf),
     J([String(ttProf.hostPattern), String(ttProf.pathPattern)]));
@@ -2268,13 +2287,15 @@ function pageAnswers(over) {
     yUp.every(function (x) { return x === "ok"; }), J(yUp));
   const Y_REFUSED = ["https://tiktokapis.com.evil.com/upload?upload_id=1", "https://evil-tiktokapis.com/upload?upload_id=1", "http://open-upload.tiktokapis.com/upload?upload_id=1",
     "https://open-upload.tiktokapis.com:8443/upload?upload_id=1", "https://user:pw@open-upload.tiktokapis.com/upload?upload_id=1", "https://user@open-upload.tiktokapis.com/upload?upload_id=1",
-    "https://tiktokapis.com/upload?upload_id=1", "https://open-upload.tiktokapis.us/upload?upload_id=1", "https://open-upload.tiktokapis.com/uploadx?upload_id=1",
+    // NAMED (Nov 18 2026, TK4): BEFORE "https://open-upload.tiktokapis.us/upload?upload_id=1" was refused here (not in TikTok's
+    // docs). AFTER it is accepted (Y8: TikTok's live init answer for a US account); the .us look-alikes are refused in Y9.
+    "https://tiktokapis.com/upload?upload_id=1", "https://open-upload.tiktokapis.com/uploadx?upload_id=1",
     "https://open-upload.tiktokapis.com/v2/upload/?upload_id=1", "https://-bad.tiktokapis.com/upload?upload_id=1", "https://" + "a".repeat(64) + ".tiktokapis.com/upload?x"];
   const yRefusedOk = Y_REFUSED.filter(TK.uploadUrlOk);
   const yg = makeTiktok({});
   const yStream = [];
   for (const u of Y_REFUSED) { const r = await attempt(yg.streamUpload(u, { profile: "tiktok", method: "PUT", body: null, contentLength: 0 })); if (r.ok || r.code !== "invalid_url") yStream.push(u + " " + (r.ok ? "ok" : r.code)); }
-  check("Y2. refused by uploadUrlOk and by the guarded PUT: tiktokapis.com.evil.com, evil-tiktokapis.com, http, port 8443, credentials, the bare domain, tiktokapis.us (not in TikTok's docs), /uploadx, /v2/upload/, a bad label; no request",
+  check("Y2. refused by uploadUrlOk and by the guarded PUT: tiktokapis.com.evil.com, evil-tiktokapis.com, http, port 8443, credentials, the bare domain, /uploadx, /v2/upload/, a bad label; no request",
     yRefusedOk.length === 0 && yStream.length === 0 && yg.requests.length === 0, J([yRefusedOk, yStream, yg.requests.length]));
   const yPaths = ["https://open-upload.tiktokapis.com/upload?x", "https://open-upload.tiktokapis.com/video?x", "https://open-upload.tiktokapis.com/upload", "https://open-upload.tiktokapis.com/upload/?x",
     "https://open-upload.tiktokapis.com:443/upload?x", "https://open.tiktokapis.com/upload?x"];
@@ -2306,7 +2327,8 @@ function pageAnswers(over) {
     ["https://tiktokapis.com.evil.com/upload?upload_id=check-upload-y9&upload_token=check-token-y9", "https tiktokapis.com.evil.com /upload"],
     ["http://open-upload.tiktokapis.com/upload/?upload_id=check-upload-y9&upload_token=check-token-y9", "http open-upload.tiktokapis.com /upload/"],
     ["https://check:pw@open-upload.tiktokapis.com/upload?upload_id=check-upload-y9&upload_token=check-token-y9", "https open-upload.tiktokapis.com credentials /upload"],
-    ["https://open-upload.tiktokapis.us/upload/12345678901234567890?upload_id=check-upload-y9&upload_token=check-token-y9", "https open-upload.tiktokapis.us /upload/"],
+    // NAMED (Nov 18 2026, TK4): BEFORE open-upload.tiktokapis.us (accepted now). AFTER the look-alike tiktokapis.usa.
+    ["https://open-upload.tiktokapis.usa/upload/12345678901234567890?upload_id=check-upload-y9&upload_token=check-token-y9", "https open-upload.tiktokapis.usa /upload/"],
     ["https://open-upload.tiktokapis.com/v2/check-upload-y9?upload_id=check-upload-y9", "https open-upload.tiktokapis.com (other path)"]];
   const yLines = [];
   const yBad = [];
@@ -2329,6 +2351,27 @@ function pageAnswers(over) {
   check("Y7. urlShape: a host that is not a plain DNS name, or longer than 253 characters, is not printed",
     TK.urlShape("https://xn--bcher-kva.example/upload") === "https xn--bcher-kva.example /upload" && TK.urlShape("https://" + "a.".repeat(130) + "com/upload").indexOf("(odd host)") !== -1 &&
     TK.urlShape("not a url") === "(not an address)", J([TK.urlShape("https://" + "a.".repeat(130) + "com/upload")]));
+  /* NAMED (Nov 18 2026, TK4): the live init answer for a US account (Nov 18 2026 08:53:31 PST, TK3 deployed) was
+     "[tiktok] video/init refused: http 200 ok unusable upload_url https open-upload.tiktokapis.us /upload log_id=...".
+     Subdomains of tiktokapis.us are now accepted; its apex and look-alikes are not. */
+  const yUsUrl = "https://open-upload.tiktokapis.us/upload?upload_id=check-upload-us1&upload_token=check-token-us1";
+  m = mountRoutes({ env: CONFIGURED, tiktok: { uploadUrl: yUsUrl } });
+  seedConnection(m.db);
+  video = seedVideo(m.db, mp4(20000, 101));
+  LOGS.length = 0;
+  a = await approve(m, proposalOf(video));
+  const yUsPut = m.tiktok.puts()[0] || {};
+  check("Y8. TK4: open-upload.tiktokapis.us with \"/upload?upload_id=...\" (the live US answer): accepted by uploadUrlOk, one PUT to the whole URL, posted, nothing logged",
+    TK.uploadUrlOk(yUsUrl) && a.ok && a.v.posted === true && m.tiktok.puts().length === 1 && yUsPut.url === yUsUrl && tkLines().length === 0, a.ok ? J(a.v) : a.msg);
+  const Y_US_REFUSED = ["https://tiktokapis.us/upload?upload_id=1", "https://tiktokapis.us.evil.com/upload?upload_id=1", "https://evil-tiktokapis.us/upload?upload_id=1",
+    "https://open-upload.tiktokapis.usa/upload?upload_id=1", "http://open-upload.tiktokapis.us/upload?upload_id=1", "https://open-upload.tiktokapis.us:8443/upload?upload_id=1",
+    "https://user:pw@open-upload.tiktokapis.us/upload?upload_id=1", "https://open-upload.tiktokapis.uk/upload?upload_id=1"];
+  const yUsOk = Y_US_REFUSED.filter(TK.uploadUrlOk);
+  const yg3 = makeTiktok({});
+  const yUsStream = [];
+  for (const u of Y_US_REFUSED) { const r = await attempt(yg3.streamUpload(u, { profile: "tiktok", method: "PUT", body: null, contentLength: 0 })); if (r.ok || r.code !== "invalid_url") yUsStream.push(u + " " + (r.ok ? "ok" : r.code)); }
+  check("Y9. TK4: refused by uploadUrlOk and by the guarded PUT: tiktokapis.us (apex), tiktokapis.us.evil.com, evil-tiktokapis.us, tiktokapis.usa, http and port 8443 on the .us host, credentials, another TLD; no request",
+    yUsOk.length === 0 && yUsStream.length === 0 && yg3.requests.length === 0, J([yUsOk, yUsStream, yg3.requests.length]));
 
   OUT("\n══ G. legal, yourData, README, registries, the migration ══");
   const PRIVACY = "If you connect your TikTok account, BizForce stores your TikTok name and account id and the access TikTok grants BizForce, encrypted, and uses that access only to post a video when you approve it and to check its status when you ask. Videos you send to TikTok go only to TikTok with the caption and settings you approve; BizForce cannot delete a TikTok post, so you delete it in TikTok. You can disconnect at any time, which also asks TikTok to cancel BizForce's access, and everything is deleted with your account.";
