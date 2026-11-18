@@ -139,7 +139,8 @@ const MUTATIONS = {
     "  if (today >= MV.TIKTOK_POSTS_PER_DAY) throw fail(MESSAGES.dailyCap);\n", ""],
   // NAMED (Nov 18 2026, TK2): BEFORE anchored on "pathPrefix: \"/upload/\", allow308: false,". AFTER on the tiktok profile's own line.
   "tiktok-308-allowed": ["fetch",
-    "    allow308: false, emptyOkStatuses: Object.freeze([201, 206]) })", "    allow308: true, emptyOkStatuses: Object.freeze([201, 206]) })"],
+    // NAMED (Nov 18 2026, TK5): re-anchored on the statusOnly line.
+    "    allow308: false, statusOnly: true, answerMaxBytes: 64 * 1024 })", "    allow308: true, statusOnly: true, answerMaxBytes: 64 * 1024 })"],
   "delete-ignores-tiktok": ["videos",
     // NAMED, item 8 part 3a: FILE_ACTIONS now also names publish_instagram_post.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and publish_facebook_post after it; the mutation still drops publish_tiktok_post alone.
@@ -326,9 +327,11 @@ const MUTATIONS = {
   "refusal-not-logged": ["api", "  if (!tiktokOk(answer)) logRefusal(answerLine(step, answer, [tokenOf(options)]));\n", ""],
   "transport-failure-not-logged": ["api", "    logRefusal(refusalLine(step, \"none\", (err && err.code) || \"request\", \"\", \"\", [tokenOf(options)]));\n", ""],
   "refusal-log-unscrubbed": ["api", "  var s = String(text == null ? \"\" : text);\n", "  var s = String(text == null ? \"\" : text);\n  return s;\n"],
-  "refusal-log-id-dropped": ["api", "\" log_id=\" + l).slice(0, 300);", "\" log_id=-\").slice(0, 300);"],
-  "refusal-log-unbounded": ["api", "\" log_id=\" + l).slice(0, 300);", "\" log_id=\" + l);"],
-  "put-refusal-not-logged": ["api", "  if (!putComplete(answer)) logRefusal(answerLine(\"upload\", answer, []));\n", ""],
+  // NAMED (Nov 18 2026, TK5): the two below re-anchored on TK5's refusalLine (head, then the content_type tail).
+  "refusal-log-id-dropped": ["api", "\" log_id=\" + l);", "\" log_id=-\");"],
+  "refusal-log-unbounded": ["api", "  return (head.slice(0, 300 - tail.length) + tail).slice(0, 300);", "  return head + tail;"],
+  // NAMED (Nov 18 2026, TK5): put-refusal-not-logged and put-card-code-missing re-anchored on TK5's sendWhole and putSaid.
+  "put-refusal-not-logged": ["api", "  if (!putComplete(answer)) {\n    var e = answer", "  if (false) {\n    var e = answer"],
   "put-transport-not-logged": ["api", "    logRefusal(refusalLine(\"upload\", \"none\", (err && err.code) || \"request\", \"\", \"\", []));\n", ""],
   // NAMED (Nov 18 2026, TK3): the two below re-anchored on TK3's log call and urlShape.
   "unusable-answer-not-logged": ["api", "    logRefusal(PUBLISH_ID_RE.test(publishId) ? answerLine(", "    (function () {})(PUBLISH_ID_RE.test(publishId) ? answerLine("],
@@ -338,7 +341,23 @@ const MUTATIONS = {
   "card-code-missing": ["api",
     "  return \"TikTok didn't start the post. TikTok said: \" + c + (w ? \" (\" + w + \")\" : \"\") + \". Nothing was sent.\";",
     "  return \"TikTok didn't start the post\" + (w ? \" (\" + w + \")\" : \"\") + \". Nothing was sent.\";"],
-  "put-card-code-missing": ["api", "function putSaid(answer) { return answer ? \" TikTok said: \" + errorCode(answer) + \".\" : \"\"; }", "function putSaid(answer) { return \"\"; }"],
+  "put-card-code-missing": ["api", "  return \" TikTok said: http \" + (/^[0-9]{3}$/.test(String(answer.status)) ? answer.status : \"-\") + c + \".\";", "  return \" TikTok said: http \" + (/^[0-9]{3}$/.test(String(answer.status)) ? answer.status : \"-\") + \".\";"],
+  /* ── Z ── NAMED (Nov 18 2026, TK5): the upload PUT judged by status, not body */
+  // the TK2-TK4 transport: a body that is there must be JSON
+  "json-required-again": ["fetch", "            succeed({ status: status, json: obj, headers: picked, contentType: answerType, bodyBytes: seen });",
+    "            if (!obj && seen > 0) return fail(new GuardedFetchError(\"not_json\", \"a \" + status + \" answer whose body is not JSON\"));\n            succeed({ status: status, json: obj, headers: picked, contentType: answerType, bodyBytes: seen });"],
+  // any answer counted as done, whatever its status
+  "status-ignored": ["api", "function putComplete(answer) { return !!answer && answer.status === 201; }", "function putComplete(answer) { return !!answer; }"],
+  // the answer body read whole, however long
+  "body-unbounded": ["fetch", "            const room = profile.answerMaxBytes - seen;", "            const room = Infinity;"],
+  // YouTube's profile given TikTok's status-only reading
+  "youtube-profile-changed": ["fetch", "allow308: true, emptyOkStatuses: Object.freeze([]) }),", "allow308: true, emptyOkStatuses: Object.freeze([]), statusOnly: true, answerMaxBytes: 64 * 1024 }),"],
+  // the content type left out of the upload line
+  "put-content-type-not-logged": ["api", "      \" content_type=\" + typeWord(answer.contentType)));", "      \"\"));"],
+  // the card without the status
+  "put-status-not-on-card": ["api", "  return \" TikTok said: http \" + (/^[0-9]{3}$/.test(String(answer.status)) ? answer.status : \"-\") + c + \".\";", "  return \" TikTok said:\" + c + \".\";"],
+  // the body put in the log line
+  "put-body-logged": ["api", "      \" content_type=\" + typeWord(answer.contentType)));", "      \" content_type=\" + typeWord(answer.contentType) + \" body=\" + JSON.stringify(answer)));"],
   "creator-card-code-missing": ["api", "    if (err && err.kind === \"refused\") throw fail(saidLine(err.code, err.said));\n", ""],
   "reconnect-card-code-missing": ["api", "(err.tiktokCode ? \" TikTok said: \" + err.tiktokCode + \".\" : \"\")", "\"\""],
   "repost-slot-unchecked": ["api",
@@ -791,6 +810,8 @@ function makeTiktok(opts) {
       up.received = Buffer.from(body);
       up.done = up.received.length === up.total;
       if (o.putStatus) return reply(o.putStatus, null);
+      // NAMED (Nov 18 2026, TK5): putAnswer { status, type, body } answers the PUT with any status, content type and raw body.
+      if (o.putAnswer) return { status: o.putAnswer.status, headers: o.putAnswer.type ? { "content-type": o.putAnswer.type } : {}, raw: Buffer.from(o.putAnswer.body || "", "utf8") };
       return o.putJson ? reply(201, { ok: true }) : reply(up.done ? 201 : 206, null);
     }
     if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/redirect") === 0) return reply(308, null, { location: "https://open-upload.tiktokapis.com/upload/x" });
@@ -798,6 +819,12 @@ function makeTiktok(opts) {
     if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/empty200") === 0) return reply(200, null);
     if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/e201") === 0) return reply(201, null);
     if (u.hostname === "www.googleapis.com" && u.pathname.indexOf("/upload/e201") === 0) return reply(201, null);
+    // NAMED (Nov 18 2026, TK5): a 201 in plain text or broken JSON (YouTube must still refuse both); a 201 with a 200 KB body (TikTok reads 64 KB).
+    if (u.hostname === "www.googleapis.com" && u.pathname.indexOf("/upload/plain201") === 0) return { status: 201, headers: { "content-type": "text/plain" }, raw: Buffer.from("OK") };
+    if (u.hostname === "www.googleapis.com" && u.pathname.indexOf("/upload/badjson201") === 0) return { status: 201, headers: { "content-type": "application/json" }, raw: Buffer.from("{") };
+    if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/big201") === 0) return { status: 201, headers: { "content-type": "text/plain" }, raw: Buffer.alloc(200 * 1024, 120) };
+    if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/plain201") === 0) return { status: 201, headers: { "content-type": "text/plain" }, raw: Buffer.from("OK") };
+    if (u.hostname === "open-upload.tiktokapis.com" && u.pathname.indexOf("/upload/badjson201") === 0) return { status: 201, headers: { "content-type": "application/json" }, raw: Buffer.from("{") };
     return reply(404, { error: { code: "no_stub", message: "no stub for " + u.pathname } });
   }
   function resolve(hostname, lookupOptions, cb) { return cb(null, [{ address: PUBLIC_V4, family: 4 }]); }
@@ -1650,19 +1677,36 @@ function pageAnswers(over) {
   check("S3. tiktok: a 308 is not allowed (redirected)", !s308.ok && s308.code === "redirected", s308.ok ? J(s308.v) : s308.code);
   const sHtml = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/html", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
   const s200 = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/empty200", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
-  check("S4. tiktok: a 201 with a body that is not JSON, or an empty 200, is refused", !sHtml.ok && sHtml.code === "unaccepted_type" && !s200.ok, J([sHtml.code, s200.code]));
+  // NAMED (Nov 18 2026, TK5): BEFORE a 201 with an HTML body was unaccepted_type and an empty 200 refused. AFTER the tiktok
+  // profile is judged by status only: both come back with their status (lib/tiktokApi.js decides; only 201 is done).
+  check("S4. tiktok: a 201 with an HTML body, and an empty 200, come back with their status, content type and body size (status only)",
+    sHtml.ok && sHtml.v.status === 201 && sHtml.v.contentType === "text/html" && sHtml.v.bodyBytes === 9 && sHtml.v.json === null &&
+    s200.ok && s200.v.status === 200 && s200.v.bodyBytes === 0, J([sHtml.ok ? sHtml.v : sHtml.code, s200.ok ? s200.v : s200.code]));
   const sYt201 = await attempt(g.streamUpload("https://www.googleapis.com/upload/e201", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
   check("S5. youtube is not loosened: an empty 201 is still refused there", !sYt201.ok, sYt201.ok ? J(sYt201.v) : sYt201.code);
+  // NAMED (Nov 18 2026, TK5): YouTube's profile is unchanged: a 201 in plain text, or broken JSON, is still refused there.
+  const sYtPlain = await attempt(g.streamUpload("https://www.googleapis.com/upload/plain201", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
+  const sYtBad = await attempt(g.streamUpload("https://www.googleapis.com/upload/badjson201", { profile: "youtube", method: "PUT", body: null, contentLength: 0 }));
+  check("S7. TK5: youtube still requires JSON: a 201 in text/plain is unaccepted_type, a 201 of broken JSON is not_json",
+    !sYtPlain.ok && sYtPlain.code === "unaccepted_type" && !sYtBad.ok && sYtBad.code === "not_json", J([sYtPlain.ok ? sYtPlain.v : sYtPlain.code, sYtBad.ok ? sYtBad.v : sYtBad.code]));
+  const sTtPlain = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/plain201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  const sTtBad = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/badjson201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  const sTtBig = await attempt(g.streamUpload("https://open-upload.tiktokapis.com/upload/big201", { profile: "tiktok", method: "PUT", body: null, contentLength: 0 }));
+  check("S8. TK5: tiktok never throws not_json: a 201 \"OK\" in text/plain and a 201 of broken JSON come back as 201 (json null); a 200 KB body is read to 64 KB only",
+    sTtPlain.ok && sTtPlain.v.status === 201 && sTtPlain.v.bodyBytes === 2 && sTtPlain.v.json === null && sTtPlain.v.contentType === "text/plain" &&
+    sTtBad.ok && sTtBad.v.status === 201 && sTtBad.v.json === null && sTtBig.ok && sTtBig.v.status === 201 && sTtBig.v.bodyBytes === 65536,
+    J([sTtPlain.ok ? sTtPlain.v : sTtPlain.code, sTtBad.ok ? sTtBad.v : sTtBad.code, sTtBig.ok ? sTtBig.v.bodyBytes : sTtBig.code]));
   // NAMED (Nov 18 2026, TK2): BEFORE tiktok { host: "open-upload.tiktokapis.com", pathPrefix: "/upload/" }. AFTER a host pattern and two prefixes.
   const ttProf = GF.STREAM_PROFILES.tiktok;
   check("S6. the two profiles, as named", J(GF.STREAM_PROFILES.youtube) === J({ host: "www.googleapis.com", pathPrefix: "/upload/", allow308: true, emptyOkStatuses: [] }) &&
     // NAMED (Nov 18 2026, TK3): BEFORE hostPattern (upload hosts only) and pathPrefixes ["/video/", "/upload/"]. AFTER the shared
     // TIKTOK_UPLOAD_HOST_RE (any subdomain of tiktokapis.com) and TIKTOK_UPLOAD_PATH_RE ("/upload" or "/video", slash optional).
-    Object.keys(ttProf).join() === "hostPattern,pathPattern,allow308,emptyOkStatuses" &&
+    // NAMED (Nov 18 2026, TK5): BEFORE emptyOkStatuses [201, 206]. AFTER statusOnly true and answerMaxBytes 64 KB.
+    Object.keys(ttProf).join() === "hostPattern,pathPattern,allow308,statusOnly,answerMaxBytes" && ttProf.statusOnly === true && ttProf.answerMaxBytes === 65536 &&
     // NAMED (Nov 18 2026, TK4): BEFORE tiktokapis\\.com$ only. AFTER tiktokapis\\.(?:com|us)$.
     String(ttProf.hostPattern) === "/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/" && String(ttProf.pathPattern) === "/^\\/(?:upload|video)(?:\\/|$)/" &&
     ttProf.hostPattern === GF.TIKTOK_UPLOAD_HOST_RE && ttProf.pathPattern === GF.TIKTOK_UPLOAD_PATH_RE &&
-    ttProf.allow308 === false && J(ttProf.emptyOkStatuses) === J([201, 206]) && Object.isFrozen(GF.STREAM_PROFILES) && Object.isFrozen(ttProf),
+    ttProf.allow308 === false && Object.isFrozen(GF.STREAM_PROFILES) && Object.isFrozen(ttProf),
     J([String(ttProf.hostPattern), String(ttProf.pathPattern)]));
 
   /* ── J ── */
@@ -2226,9 +2270,11 @@ function pageAnswers(over) {
   a = await approve(m, proposalOf(video));
   const xPutCut = [a.msg, tkLines()];
   check("X11. the upload PUT: a 403 with a code, a 206, and a cut connection are each logged as \"[tiktok] upload refused\", and the card adds TikTok's code",
-    J(xPut403[1]) === J(["[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=" + INIT_LOG_ID]) &&
-    /didn't finish\..* TikTok said: access_denied\.$/.test(xPut403[0] || "") &&
-    J(xPut206[1]) === J(["[tiktok] upload refused: http 206 - - log_id=-"]) && /TikTok said: status_206\.$/.test(xPut206[0] || "") &&
+    // NAMED (Nov 18 2026, TK5): BEFORE "... log_id=<id>" and the card "TikTok said: access_denied." / "status_206.". AFTER the
+    // line ends with content_type=<type> and the card names the status: "TikTok said: http 403 access_denied." / "http 206.".
+    J(xPut403[1]) === J(["[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=" + INIT_LOG_ID + " content_type=application/json"]) &&
+    /didn't finish\..* TikTok said: http 403 access_denied\.$/.test(xPut403[0] || "") &&
+    J(xPut206[1]) === J(["[tiktok] upload refused: http 206 - - log_id=- content_type=-"]) && /TikTok said: http 206\.$/.test(xPut206[0] || "") &&
     xPutCut[1].length === 1 && /^\[tiktok\] upload refused: http none [a-z0-9_-]+ - log_id=-$/.test(xPutCut[1][0]) && /didn't finish/.test(xPutCut[0] || "") &&
     !/TikTok said/.test(xPutCut[0] || ""), J([xPut403, xPut206, xPutCut]));
   // X12: status/fetch refused after the bytes are all there
@@ -2372,6 +2418,51 @@ function pageAnswers(over) {
   for (const u of Y_US_REFUSED) { const r = await attempt(yg3.streamUpload(u, { profile: "tiktok", method: "PUT", body: null, contentLength: 0 })); if (r.ok || r.code !== "invalid_url") yUsStream.push(u + " " + (r.ok ? "ok" : r.code)); }
   check("Y9. TK4: refused by uploadUrlOk and by the guarded PUT: tiktokapis.us (apex), tiktokapis.us.evil.com, evil-tiktokapis.us, tiktokapis.usa, http and port 8443 on the .us host, credentials, another TLD; no request",
     yUsOk.length === 0 && yUsStream.length === 0 && yg3.requests.length === 0, J([yUsOk, yUsStream, yg3.requests.length]));
+
+  /* ── Z ── NAMED (Nov 18 2026, TK5): the live PUT to open-upload.tiktokapis.us (Nov 18 2026 09:59:01 PST) was answered,
+     and the transport threw the answer away as not_json ("[tiktok] upload refused: http none not_json - log_id=-").
+     TikTok's Media Transfer Guide documents the PUT answer by status only (201 "All parts are uploaded.", 206, 400,
+     403, 404, 416, 5xx) and shows no body or content type. Each answer below is judged by its status alone. */
+  OUT("\n══ Z. TK5: the upload PUT judged by status, not body ══");
+  const ZLONG = "<html><body>Forbidden upload_token=check-token " + ACCESS + " " + OPEN_ID + "</body></html>";
+  const Z_CASES = [
+    ["201 empty", { status: 201, type: "", body: "" }, true, null, null],
+    ["201 text/plain OK", { status: 201, type: "text/plain", body: "OK" }, true, null, null],
+    ["201 text/html", { status: 201, type: "text/html; charset=utf-8", body: "<html><body>ok</body></html>" }, true, null, null],
+    ["201 JSON", { status: 201, type: "application/json", body: "{\"ok\":true}" }, true, null, null],
+    ["206 with a body", { status: 206, type: "text/plain", body: "partial" }, false, " TikTok said: http 206.", "[tiktok] upload refused: http 206 - - log_id=- content_type=text/plain"],
+    ["403 JSON error", { status: 403, type: "application/json", body: JSON.stringify({ error: { code: "access_denied", message: "The upload_url has expired.", log_id: "ZLOG403" } }) }, false,
+      " TikTok said: http 403 access_denied.", "[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=ZLOG403 content_type=application/json"],
+    ["403 HTML", { status: 403, type: "text/html", body: ZLONG }, false, " TikTok said: http 403.", "[tiktok] upload refused: http 403 - - log_id=- content_type=text/html"],
+    ["500 text", { status: 500, type: "text/plain", body: "Internal error upload_id=check-upload-z" }, false, " TikTok said: http 500.", "[tiktok] upload refused: http 500 - - log_id=- content_type=text/plain"]];
+  const zBad = [];
+  const zLines = [];
+  let zi = 0;
+  for (const c of Z_CASES) {
+    zi++;
+    m = mountRoutes({ env: CONFIGURED, tiktok: { putAnswer: c[1] } });
+    seedConnection(m.db);
+    video = seedVideo(m.db, mp4(15000, 110 + zi));
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    const l = LOGS.filter(function (x) { return x.indexOf("[tiktok] ") === 0; });
+    l.forEach(function (x) { zLines.push(x); });
+    const row = rowOf(m, video.id);
+    const good = c[2] ?
+      (a.ok && a.v.posted === true && m.tiktok.puts().length === 1 && m.tiktok.statusCalls().length >= 1 && l.length === 0) :
+      (!a.ok && typeof a.msg === "string" && a.msg.slice(-(TK.MESSAGES.unfinished + c[3]).length) === TK.MESSAGES.unfinished + c[3] && J(l) === J([c[4]]) && row.tiktok_status === "initiated" && !!row.tiktok_upload_ciphertext &&
+        cleanCard(a.msg) && a.msg.indexOf("check-token") === -1 && a.msg.indexOf("Forbidden") === -1);
+    if (!good) zBad.push([c[0], a.ok ? a.v : a.msg, l]);
+  }
+  check("Z1. a 201 is done whatever its body (empty, text/plain \"OK\", text/html, JSON): posted, then status/fetch, nothing logged",
+    zBad.filter(function (b) { return /^201/.test(b[0]); }).length === 0, J(zBad.filter(function (b) { return /^201/.test(b[0]); })));
+  check("Z2. a 206 with a body, a 403 with a JSON error, a 403 in HTML and a 500 in text: not done, the upload kept, the card says \"TikTok said: http <status>\" (and TikTok's code when it sent one), one log line with the status and content type",
+    zBad.filter(function (b) { return !/^201/.test(b[0]); }).length === 0, J(zBad.filter(function (b) { return !/^201/.test(b[0]); })));
+  check("Z3. no upload log line carries the body, the URL or query, a token or the open_id; each at most 300 characters",
+    zLines.length === 4 && zLines.every(function (x) { return cleanLog(x) && !/Forbidden|Internal error|check-token|check-upload|<html|[?&]/.test(x); }), J(zLines));
+  check("Z4. refusalLine keeps the content_type tail within 300 characters",
+    TK.refusalLine("upload", 403, "x", "a b ".repeat(200), "-", [], null, " content_type=text/html").length === 300 &&
+    /content_type=text\/html$/.test(TK.refusalLine("upload", 403, "x", "word ".repeat(80), "-", [], null, " content_type=text/html")));
 
   OUT("\n══ G. legal, yourData, README, registries, the migration ══");
   const PRIVACY = "If you connect your TikTok account, BizForce stores your TikTok name and account id and the access TikTok grants BizForce, encrypted, and uses that access only to post a video when you approve it and to check its status when you ask. Videos you send to TikTok go only to TikTok with the caption and settings you approve; BizForce cannot delete a TikTok post, so you delete it in TikTok. You can disconnect at any time, which also asks TikTok to cancel BizForce's access, and everything is deleted with your account.";
