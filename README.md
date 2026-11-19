@@ -126,6 +126,7 @@ A **gate** that says "exactly `true`" is off for `True`, `1`, `yes` or anything 
 | `INSTAGRAM_APP_SECRET` | none | That app's secret, sent in the code exchange and the long-lived token exchange. Needed only for Instagram, with `INSTAGRAM_APP_ID`. A secret; set it only on Railway and never commit it. |
 | `FACEBOOK_APP_ID` | none | The main App ID of the same Meta app (see "Facebook Pages setup" below); Instagram keeps its own pair. Needed only for Facebook on the Social Agent page; without it (or `FACEBOOK_APP_SECRET`) the Facebook connect, Page, caption, proposal and post routes answer 503 "Facebook connection isn't set up yet.", `GET /api/facebook/status` answers `facebook_available: false` and the page disables the button. Set it on Railway; never commit it. |
 | `FACEBOOK_APP_SECRET` | none | That app's App Secret, sent in the code exchange and the long-lived token exchange. Needed only for Facebook, with `FACEBOOK_APP_ID`. A secret; set it only on Railway and never commit it. |
+| `VIDEO_STORAGE_BUDGET_BYTES` | `943718400` (900 MB, `900 * 1024 * 1024` in `lib/memberVideos.js`) | The total bytes of stored video (whole files, plus the parts of uploads still in progress) above which a new upload is refused with 409 "Storage is full right now. Post or delete a waiting video first." A value that is not a positive whole number is the default. Keep it under the 1 GB of storage on Supabase Free. |
 
 ### Google Wallet
 
