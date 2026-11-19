@@ -14100,6 +14100,11 @@ app.post("/api/store/etsy/finish", requireAuth, requireActiveSubscription, shopi
         who.shop_id = etsyShop.shop_id;
       } catch (readErr) {
         console.warn(eapi.finishFailureLine(etsyStep, readErr));
+        /* NAMED (Nov 18 2026, S6): BEFORE a 404 on the shop read (live: "Could not find a shop for User with user_id")
+           was the generic 502. AFTER it is "no shop": 422 no_shop with MESSAGES.noShop. Every other failure is unchanged. */
+        if (etsyStep === "shop_read" && readErr && readErr.httpStatus === 404) {
+          return res.status(422).json({ error: ea.MESSAGES.noShop, code: "no_shop", saved: false });
+        }
         return res.status(502).json({ error: ea.MESSAGES.unreachable, code: "unreachable", saved: false });
       }
       // One Etsy shop, one member.

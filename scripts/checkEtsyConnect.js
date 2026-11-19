@@ -176,7 +176,17 @@ const MUTATIONS = {
   "properties-compared-in-order": [["api", "    values: byPropertyId(p.property_values).map(function (pv) {", "    values: (p.property_values || []).map(function (pv) {"]],
   "name-in-etsy-order": [["api", "  byPropertyId(product && product.property_values).forEach(function (pv) {", "  ((product && product.property_values) || []).forEach(function (pv) {"]],
   "target-count-unchecked": [["write",
-    "    if (etsyLive.targets.indexes.length !== (Number.isInteger(pl.target_count) ? pl.target_count : 1)) throw fail(MESSAGES.changed);\n", ""]]
+    "    if (etsyLive.targets.indexes.length !== (Number.isInteger(pl.target_count) ? pl.target_count : 1)) throw fail(MESSAGES.changed);\n", ""]],
+  // NAMED (Nov 18 2026, S6): a 404 on the finish's shop read is "no shop" (422 no_shop), in plain words; nothing else is.
+  "shop-404-generic": [["server", "        if (etsyStep === \"shop_read\" && readErr && readErr.httpStatus === 404) {\n", "        if (false) {\n"]],
+  "no-shop-old-words": [["auth",
+    "  noShop: \"This Etsy account has no shop. Sign in to Etsy with the account that owns your shop, or open a shop on Etsy first. Nothing was saved.\",",
+    "  noShop: \"This Etsy account has no shop, so there is nothing to connect. Nothing was saved.\","]],
+  "any-shop-failure-no-shop": [["server", "        if (etsyStep === \"shop_read\" && readErr && readErr.httpStatus === 404) {\n", "        if (etsyStep === \"shop_read\") {\n"]],
+  "any-step-404-no-shop": [["server", "        if (etsyStep === \"shop_read\" && readErr && readErr.httpStatus === 404) {\n", "        if (readErr && readErr.httpStatus === 404) {\n"]],
+  "store-tab-rewords-finish": [["ui",
+    "        say(\"storeConnectMsg\", \"Connected to your Etsy shop\" + (made.shop_name ? \" \" + made.shop_name : \"\") + \". Press \\\"Sync now\\\" to read your listings, stock and orders.\");\n      } else {\n        say(\"storeConnectMsg\", serverMessage(answer), true);",
+    "        say(\"storeConnectMsg\", \"Connected to your Etsy shop\" + (made.shop_name ? \" \" + made.shop_name : \"\") + \". Press \\\"Sync now\\\" to read your listings, stock and orders.\");\n      } else {\n        say(\"storeConnectMsg\", \"Etsy could not be connected. Nothing was saved.\", true);"]]
 };
 const NAMES = Object.keys(MUTATIONS);
 const MUTATE = process.env.MUTATE || "";
@@ -275,6 +285,9 @@ const SECRETS = [TOKEN, REFRESH, TOKEN2, REFRESH2, WINNER, CODE, SECRET, BUYER_E
 function noSecretIn(text) { return SECRETS.every(function (s) { return String(text).indexOf(s) === -1; }); }
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F000}-\u{1F2FF}\u{FE0F}]/u;
 const HOSTILE = "<img src=x onerror=alert(1)>";
+// NAMED (Nov 18 2026, S6): the finish route's words, written out here so a change to either is seen.
+const NO_SHOP_WORDS = "This Etsy account has no shop. Sign in to Etsy with the account that owns your shop, or open a shop on Etsy first. Nothing was saved.";
+const UNREACHABLE_WORDS = "BizForce could not finish connecting your Etsy shop just now. Try again later. Nothing was saved.";
 function b64url(buf) { return Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
 function s256(v) { return b64url(crypto.createHash("sha256").update(String(v), "ascii").digest()); }
 function stripComments(src) { return String(src).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""); }
@@ -606,7 +619,7 @@ function makeEtsy(opts, events) {
       return o.ownerShop ? reply(200, shopBody()) : reply(404, { error: "Shop not found for user" });
     }
     if (p === "/shops/" + SHOP_ID) {
-      if (o.shopStatus) return reply(o.shopStatus, { error: "Shop " + SHOP_ID + " unavailable" });
+      if (o.shopStatus) return reply(o.shopStatus, { error: o.shopError || "Shop " + SHOP_ID + " unavailable" });
       return reply(200, shopBody());
     }
     if (p === "/shops/" + SHOP_ID + "/listings") {
@@ -982,6 +995,8 @@ function allText(n) { return n ? n.textContent : ""; }
     r.status === 422 && r.body.code === "no_shop" && m.db.t.member_store_connections.length === 0 &&
     m.etsy.api("GET", /^\/v3\/application\/shops\//).length === 0 && m.etsy.api("GET", /^\/v3\/application\/users\/424242\/shops$/).length === 1 &&
     m.logs.indexOf("[etsy] finish failed at no_shop: http 200 owner_has_no_shop ") !== -1, J([r.status, m.logs]));
+  // NAMED (Nov 18 2026, S6): the no-shop words now say what to do.
+  check("B16b. ...in the words \"" + NO_SHOP_WORDS + "\"", r.body.error === NO_SHOP_WORDS && r.body.saved === false, J(r.body));
   m = mountRoutes({ env: CONFIGURED, etsy: { shopName: "Bad Name/../x" } });
   b = await begin(m, {}); r = await finish(m, b.state);
   check("B17. a shop name that is not letters and digits never becomes an address: 502, nothing stored", r.status === 502 && m.db.t.member_store_connections.length === 0);
@@ -1017,6 +1032,20 @@ function allText(n) { return n ? n.textContent : ""; }
   check("B17j. every Etsy read in the finish: GET on openapi.etsy.com/v3/application with x-api-key \"<keystring>:<shared secret>\" and the Bearer token",
     x.m.etsy.calls.filter(function (c) { return c.host === "openapi.etsy.com"; }).length >= 2 &&
     x.m.etsy.calls.filter(function (c) { return c.host === "openapi.etsy.com"; }).every(function (c) { return c.method === "GET" && c.apiKey === KEY + ":" + SECRET && c.bearer === TOKEN && c.path.indexOf("/v3/application/") === 0; }));
+  /* NAMED (Nov 18 2026, S6): live (Nov 17 2026) "[etsy] finish failed at shop_read: http 404 Could not find a shop for User
+     with user_id = [id]" gave the member the generic 502. A 404 on the shop read is now "no shop"; every other failure keeps its 502. */
+  x = await e2({ shopStatus: 404, shopError: "Could not find a shop for User with user_id = " + ETSY_USER });
+  check("B17k. the shop read answering 404 (\"Could not find a shop for User...\"): 422 no_shop in the no-shop words, nothing stored, the line still logged at shop_read",
+    x.r.status === 422 && x.r.body.code === "no_shop" && x.r.body.error === NO_SHOP_WORDS && x.r.body.saved === false && x.m.db.t.member_store_connections.length === 0 &&
+    x.m.logs.indexOf("[etsy] finish failed at shop_read: http 404 Could not find a shop for User with user_id = [id] ") !== -1, J([x.r.status, x.r.body, x.m.logs]));
+  x = await e2({ shopStatus: 500 });
+  check("B17l. the shop read answering 500: still 502 unreachable, \"" + UNREACHABLE_WORDS + "\"",
+    x.r.status === 502 && x.r.body.code === "unreachable" && x.r.body.error === UNREACHABLE_WORDS && x.m.db.t.member_store_connections.length === 0, J([x.r.status, x.r.body]));
+  x = await e2({ meStatus: 404 });
+  check("B17m. users/me answering 404 (not the shop read): still 502 unreachable", x.r.status === 502 && x.r.body.code === "unreachable" && x.r.body.error === UNREACHABLE_WORDS, J([x.r.status, x.r.body]));
+  x = await e2({ noShop: true, ownerStatus: 404 });
+  check("B17n. users/me without shop_id and the owner read answering 404: 422 no_shop in the no-shop words",
+    x.r.status === 422 && x.r.body.code === "no_shop" && x.r.body.error === NO_SHOP_WORDS, J([x.r.status, x.r.body]));
   m = mountRoutes({ env: CONFIGURED });
   r = await hit(m, "post /api/store/connections", { body: { platform: "etsy" } });
   check("B18. POST /api/store/connections with platform etsy: 400 \"Use Connect Etsy on the Store Agent page.\"", r.status === 400 && r.body.code === "use_connect_etsy" &&
@@ -1291,6 +1320,11 @@ function allText(n) { return n ? n.textContent : ""; }
     // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "etsy or shopify"; AFTER "etsy, amazon or shopify".
     /bf_store_return: "/.test(read("scripts/checkOfflineMode.js")) && /bf_store_return\n\s+\(sessionStorage: which store's page, etsy, amazon or shopify/.test(FILES.session) &&
     /var RETURN_KEY = "bf_store_return";/.test(FILES.ui));
+  // NAMED (Nov 18 2026, S6): the Store tab shows the finish route's no-shop words as they are, as an error.
+  dom = runPage(q, listAnswers({ "POST /api/store/etsy/finish": { status: 422, body: { error: NO_SHOP_WORDS, code: "no_shop", saved: false } } }), "etsy");
+  await flush();
+  check("F10b. the finish answering 422 no_shop: the Store tab shows \"" + NO_SHOP_WORDS + "\" exactly, as an error",
+    dom.els.storeConnectMsg.textContent === NO_SHOP_WORDS && /\berr\b/.test(dom.els.storeConnectMsg.className), J([dom.els.storeConnectMsg.textContent, dom.els.storeConnectMsg.className]));
   const cardFns = ["escapeHtml", "storeChangeText", "storeChangePayloadFields"].map(function (n) { return fnSource(FILES.proposals, n); });
   let card = "";
   try { const cx = { String: String }; vm.createContext(cx); vm.runInContext(cardFns.join("\n"), cx);

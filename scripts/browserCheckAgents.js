@@ -21,6 +21,7 @@
    The Executive page: its own deck, none of these tabs.
    Screenshots to <out>: <agent>-<tab>.png for ads-agent, sales and seo (every
    tab), <agent>-run.png for every other agent, and ads-agent-390.png.
+   The closing "Screenshots:" line lists every folder the run wrote an image to.
 
    NOT PART OF THE SERVER SUITE (its name does not start with "check"): run it
    by hand, last. With no Chrome it prints SKIPPED and exits 0.
@@ -57,6 +58,16 @@ const OUT = process.env.AGENT_TABS_OUT || path.join(os.homedir(), "Downloads", "
 const API_HOST = "dynamic-prosperity-production-5382.up.railway.app";
 // NAMED (Nov 15 2026, S4): the S4 section's answers; null everywhere else (every API request an empty 200, as before).
 const OUT4 = process.env.SOCIAL_S4_OUT || path.join(os.homedir(), "Downloads", "s4");
+/* NAMED (Nov 18 2026, S6): the closing "Screenshots:" line is the folders the run actually wrote an image to, as
+   browserCheckSocial does it (S5). BEFORE it printed OUT only and missed OUT4 (s4). AFTER every fs.writeFileSync of an
+   image, wherever it is called, records its folder here, so a new folder can never be left out. */
+const SHOT_DIRS = new Set();
+const writeFileSyncOf = fs.writeFileSync;
+fs.writeFileSync = function (file) {
+  const out = writeFileSyncOf.apply(fs, arguments);
+  if (typeof file === "string" && /\.(png|jpe?g|gif|webp)$/i.test(file)) SHOT_DIRS.add(path.dirname(path.resolve(file)));
+  return out;
+};
 let STORE_API = null;
 const S4_CONN = { id: "a1111111-1111-4111-8111-111111111111", platform: "shopify", store: "maple.myshopify.com", status: "connected", permission: "read_write", currency: "USD",
   connected_since: "2026-11-01T00:00:00Z", last_sync_at: "2026-11-14T00:00:00Z", stock_scope: "location", location_name: "Main warehouse", location_id: "gid://shopify/Location/1" };
@@ -348,7 +359,8 @@ true`;
     await sleep(500);
     try { fs.rmSync(chrome.profile, { recursive: true, force: true }); } catch (e) { /* Chrome may still hold a file */ }
   }
-  console.log("\nScreenshots: " + OUT);
+  const shotDirs = [...SHOT_DIRS];
+  console.log("\nScreenshots: " + (shotDirs.length ? shotDirs.join(", ") : "none written"));
   if (failures) { console.log("CHECKS FAILED: " + failures + " of " + (passes + failures)); process.exit(1); }
   console.log("ALL " + passes + " CHECKS PASSED");
   process.exit(0);
