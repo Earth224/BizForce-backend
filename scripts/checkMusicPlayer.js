@@ -1999,8 +1999,7 @@ async function stageChecks(c) {
   try { basePages = execFileSync("git", ["-C", FRONTEND, "ls-tree", "-r", "--name-only", HEADER_BASE], { encoding: "utf8" }).split("\n").filter(f => /\.html$/.test(f)); }
   catch (e) { gitErr = e.message; }
   const LOGO1 = [['<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><span class="bf-mark-host" data-bf-mark="logo" data-bf-mark-size="22"></span></div>',
-      '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>'],
-    ['<span class="bf-mark-slot" data-bf-mark="agents" data-bf-mark-size="0.9em"></span>', ""]];
+      '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>']];
   const unLogo1 = t => LOGO1.reduce((x, e) => x.split(e[0]).join(e[1]), t);
   const changedHeaders = [], withHeader = [];
   for (const f of basePages) {
@@ -2011,6 +2010,7 @@ async function stageChecks(c) {
     // NAMED (Nov 18 2026, LOGO1): BEFORE every header as HEADER_BASE's. AFTER the same, but for the named brand marks
     // (scripts/bf-marks.js): the dashboard's top bar mark is the Layered Stack, and the Agent Network mark opens the
     // headings of dashboard.html, ai-agents.html and oracle.html. Those are taken back out; no header moved.
+    // NAMED (Nov 19 2026, LOGO2): the Agent Network mark is off every heading again; only the top bar mark is set aside.
     const now = fs.existsSync(path.join(FRONTEND, f)) ? unLogo1(headerOf(frontText(f))) : "";
     if (now !== was) changedHeaders.push(f);
   }

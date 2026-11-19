@@ -2149,10 +2149,8 @@ function pageAnswers(over) {
       querySelectorAll: function (sel) { return pctx.nodes[sel] || []; } } };
   vm.createContext(pc);
   let propOk = true;
-  // NAMED (Nov 18 2026, LOGO1): the result builders now call approvalMark and postedMark (the approval mark beside
-  // "posted"/"published"); both are lifted with them. No window here, so no mark: the HTML checked is as before.
-  const markSrc = ["approvalMark", "postedMark"].map(function (n) { const a = FILES.proposals.indexOf("function " + n + "("); return a === -1 ? "" : FILES.proposals.slice(a, FILES.proposals.indexOf("\n", a)); }).join("\n");
-  try { vm.runInContext(markSrc + "\n" + propSrc + "\n;this.F = { fields: tiktokPostPayloadFields, decl: tiktokDeclarationHtml, result: tiktokResultHtml, previews: fillTiktokPreviews, poll: pollTiktokStatus };", pc); } catch (e) { propOk = false; }
+  // NAMED (Nov 19 2026, LOGO2): LOGO1 lifted approvalMark and postedMark here; LOGO2 took them off proposals.html (8d29b93 again), so this is as before LOGO1.
+  try { vm.runInContext(propSrc + "\n;this.F = { fields: tiktokPostPayloadFields, decl: tiktokDeclarationHtml, result: tiktokResultHtml, previews: fillTiktokPreviews, poll: pollTiktokStatus };", pc); } catch (e) { propOk = false; }
   const PF = propOk ? pc.F : null;
   const cardHtml = PF ? PF.fields(payloadOf({ id: PAGE_VIDEO.id, sha256: "a".repeat(64), bytes: 100, mime: "video/mp4" }, { creator_nickname: "Maple <Street>" })) : "";
   check("K32. the card's account field is the nickname filed with the post (escaped); a post filed before TK1 keeps \"your connected TikTok account\"; the private-account line",

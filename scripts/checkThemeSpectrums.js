@@ -329,18 +329,9 @@ function withoutPolishWrap(text) {
   const grid = "        '@media (max-width:560px){.ap-live-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}' +\n";
   return text.split(grid + add).length === 2 ? text.split(grid + add).join(grid) : null;
 }
-/* NAMED (Nov 18 2026, LOGO1): BEFORE S2 set aside the changes above. AFTER it also sets aside LOGO1's three edits, each
-   exactly once: bf-marks.js loaded where the page did not, workingMark(), and the launch button's "Running…" drawing
-   the Agent Network mark instead of .ap-spinner. A brand mark, not a colour of the page: S2 means what it meant. */
-function withoutLogo1(text) {
-  if (text === null || text === undefined) return null;
-  const pairs = [["  var AGENT_LABEL = String(cfg.agentLabel || \"Agent\");\n  /* NAMED (Nov 18 2026, LOGO1): the brand marks (scripts/bf-marks.js, the one source), loaded once for the running\n     indicator (workingMark) where the page did not load them itself. */\n  if (!window.BFMarks && !document.querySelector('script[src=\"/scripts/bf-marks.js\"]')) {\n    var marksTag = document.createElement(\"script\");\n    marksTag.src = \"/scripts/bf-marks.js\";\n    (document.head || document.documentElement).appendChild(marksTag);\n  }\n", "  var AGENT_LABEL = String(cfg.agentLabel || \"Agent\");\n"],
-    ["  /* NAMED (Nov 18 2026, LOGO1): an agent running shows the Agent Network mark with its centre dot pulsing\n     (prefers-reduced-motion stops the pulse), in white on the gradient button. BEFORE the round .ap-spinner;\n     it stays the fallback until bf-marks.js has loaded. */\n  function workingMark() {\n    return window.BFMarks ? window.BFMarks.svg(\"agents\", { size: 18, working: true, color: \"#FFFFFF\" }) : '<span class=\"ap-spinner\"></span>';\n  }\n", ""],
-    ["      btn.innerHTML = workingMark() + 'Running…';", "      btn.innerHTML = '<span class=\"ap-spinner\"></span>Running…';"]];
-  for (const [now, was] of pairs) { if (text.split(now).length !== 2) return null; text = text.split(now).join(was); }
-  return text;
-}
-const profilePolish = withoutPolishWrap(withoutLogo1(FILES[PROFILE_JS]));
+/* NAMED (Nov 19 2026, LOGO2): LOGO1 set aside its three edits to this file here (withoutLogo1). LOGO2 put the file back
+   to 8d29b93's, the round .ap-spinner and "Running…" as before, so there is nothing of LOGO1 to set aside. */
+const profilePolish = withoutPolishWrap(FILES[PROFILE_JS]);
 const profileNow = profilePolish === null ? null : withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(profilePolish)))));
 check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile, the agent tabs and the polish's status-line wrap set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);
@@ -400,8 +391,9 @@ function allowedAt(f, t, i) {
   if (f === "scripts/bf-profile-design.js" && /^\s*photo: \{ size: "m", shape: "circle", ring: "solid", ring_width: 3, ring_glow: 0\.5, ring_color: "#22d3ee" \},$/.test(lineAt(t, i)))
     return "a profile design's default ring colour (the member's data)";
   /* NAMED (Nov 18 2026, LOGO1): the brand marks keep the brand's own gradient and dot colours whatever the member's theme;
-     a logo is not themed. Only the two colour tables of scripts/bf-marks.js. */
-  if (f === "scripts/bf-marks.js" && /^\s*var (TONES|DOTS) = \{/.test(lineAt(t, i))) return "the brand marks' own colours (a logo is not themed)";
+     a logo is not themed. Only the two colour tables of scripts/bf-marks.js.
+     NAMED (Nov 19 2026, LOGO2): bf-marks.js draws only the Layered Stack now; its one colour table is TONES (DOTS is gone). */
+  if (f === "scripts/bf-marks.js" && /^\s*var TONES = \{/.test(lineAt(t, i))) return "the brand mark's own colours (a logo is not themed)";
   return null;
 }
 const leftover = [], allowedCount = {};

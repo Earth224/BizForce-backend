@@ -403,14 +403,15 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const header = t => { const i = t.indexOf("<header class=\"topbar bf-glass-panel\">"); return i < 0 ? "" : t.slice(i, t.indexOf("</header>", i) + 9); };
   /* NAMED (Nov 18 2026, LOGO1): BEFORE the top bar and the hero were BASELINE's byte for byte. AFTER the top bar's mark is the
      Layered Stack (filled by scripts/bf-marks.js) and the hero title carries the Agent Network mark; those two named edits are
-     taken back out here, and everything else in both is still held byte for byte. */
+     taken back out here, and everything else in both is still held byte for byte.
+     NAMED (Nov 19 2026, LOGO2): the Agent Network mark is gone from the hero title, so the hero is BASELINE's byte for byte
+     again; only the top bar's Layered Stack is still taken back out. */
   const LOGO1 = [['<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><span class="bf-mark-host" data-bf-mark="logo" data-bf-mark-size="22"></span></div>',
-      '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>'],
-    ['<h1 class="hq-hero-title hero-title"><span class="bf-mark-slot" data-bf-mark="agents" data-bf-mark-size="0.9em"></span>EXECUTIVE HQ</h1>', '<h1 class="hq-hero-title hero-title">EXECUTIVE HQ</h1>']];
+      '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>']];
   const unLogo1 = t => LOGO1.reduce((x, e) => x.split(e[0]).join(e[1]), t);
   check("the top bar, with the music button's anchor, is BASELINE's byte for byte but for the named LOGO1 mark", header(BASE).length > 500 && header(FILES[DASH]).indexOf(LOGO1[0][0]) !== -1 && unLogo1(header(FILES[DASH])) === header(BASE));
   const hero = t => t.slice(t.indexOf("<header class=\"hero hq-hero\">"), t.indexOf("<div class=\"bf-start-panel\" id=\"subscribeStartPanel\""));
-  check("the hero, the status and the paid banner are BASELINE's byte for byte but for the named LOGO1 mark", hero(BASE).length > 300 && hero(FILES[DASH]).indexOf(LOGO1[1][0]) !== -1 && unLogo1(hero(FILES[DASH])) === hero(BASE));
+  check("the hero, the status and the paid banner are BASELINE's byte for byte", hero(BASE).length > 300 && hero(FILES[DASH]) === hero(BASE));
   // from the comment that closes the top half (in both versions), so nothing slips in above Business Profile either
   const below = t => { const i = t.indexOf("<!-- Recent Activity was removed here."); return i < 0 ? "" : t.slice(i); };
   /* NAMED (Nov 11 2026, polish): BEFORE below the top half was BASELINE's byte for byte. AFTER it is BASELINE's with two

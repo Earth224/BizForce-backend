@@ -1604,9 +1604,8 @@ function pageAnswers(over) {
   const pctx = { String: String, Number: Number, Array: Array, Object: Object, isFinite: isFinite, Math: Math, API_URL: "https://api.example", token: "tok" };
   vm.createContext(pctx);
   let cardOk = true;
-  // NAMED (Nov 18 2026, LOGO1): the result builders now call approvalMark and postedMark (the approval mark beside
-  // "posted"/"published"); both are lifted with them. No window here, so no mark: the HTML checked is as before.
-  try { vm.runInContext([fnSrc("escapeHtml"), fnSrc("youtubeSize"), fnSrc("approvalMark"), fnSrc("postedMark"), kindLine, fnSrc("facebookPostPayloadFields"), fnSrc("facebookDeletePayloadFields"), fnSrc("facebookResultHtml")].join("\n"), pctx); } catch (e) { cardOk = false; }
+  // NAMED (Nov 19 2026, LOGO2): LOGO1 lifted approvalMark and postedMark here; LOGO2 took them off proposals.html (8d29b93 again), so this is as before LOGO1.
+  try { vm.runInContext([fnSrc("escapeHtml"), fnSrc("youtubeSize"), kindLine, fnSrc("facebookPostPayloadFields"), fnSrc("facebookDeletePayloadFields"), fnSrc("facebookResultHtml")].join("\n"), pctx); } catch (e) { cardOk = false; }
   const card = cardOk ? pctx.facebookPostPayloadFields({ kind: "photos", items: [{ id: "a\"b" }], message: HOSTILE + " cakes", page_id: PAGE_A }) : "";
   const vcard = cardOk ? pctx.facebookPostPayloadFields({ kind: "video", video: { id: "v\"1", bytes: 3000000 }, message: "x", page_id: HOSTILE }) : "";
   const dcard = cardOk ? pctx.facebookDeletePayloadFields({ facebook_post_id: uuid(), post_id: HOSTILE, page_id: PAGE_A }) : "";

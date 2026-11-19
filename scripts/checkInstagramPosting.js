@@ -1561,9 +1561,8 @@ function pageAnswers(over) {
   const pctx = { String: String, Number: Number, Array: Array, Object: Object, isFinite: isFinite, Math: Math, API_URL: "https://api.example", token: "tok" };
   vm.createContext(pctx);
   let cardOk = true;
-  // NAMED (Nov 18 2026, LOGO1): the result builders now call approvalMark and postedMark (the approval mark beside
-  // "posted"/"published"); both are lifted with them. No window here, so no mark: the HTML checked is as before.
-  try { vm.runInContext([fnSrc("escapeHtml"), fnSrc("youtubeSize"), fnSrc("approvalMark"), fnSrc("postedMark"), kindLine, fnSrc("instagramPostPayloadFields"), fnSrc("instagramResultHtml"), fnSrc("fillInstagramVideos")].join("\n"), pctx); } catch (e) { cardOk = false; }
+  // NAMED (Nov 19 2026, LOGO2): LOGO1 lifted approvalMark and postedMark here; LOGO2 took them off proposals.html (8d29b93 again), so this is as before LOGO1.
+  try { vm.runInContext([fnSrc("escapeHtml"), fnSrc("youtubeSize"), kindLine, fnSrc("instagramPostPayloadFields"), fnSrc("instagramResultHtml"), fnSrc("fillInstagramVideos")].join("\n"), pctx); } catch (e) { cardOk = false; }
   const card = cardOk ? pctx.instagramPostPayloadFields({ kind: "carousel", items: [{ id: "a\"b", alt: HOSTILE }], caption: HOSTILE + " cakes", ig_user_id: IG_ID }) : "";
   check("P13. the proposal card: every value escaped (the caption, the alt text, the id), the kind in words, the no-removal line", cardOk && card.indexOf("<img src=x") === -1 &&
     card.indexOf("&lt;img src=x onerror=alert(1)&gt; cakes") !== -1 && card.indexOf("Alt text: &lt;img") !== -1 && card.indexOf("data-pf-media-id=\"a&quot;b\"") !== -1 &&

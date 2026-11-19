@@ -299,17 +299,17 @@ async function mountExec(o) {
   const ORBIT_STYLE = "\n<style id=\"orbitStyle\">", ORBIT_TPL = "\n<template id=\"orbitTools\">\n";
   /* NAMED (Nov 18 2026, LOGO1): BEFORE this stretch was BASELINE's byte for byte. AFTER it is BASELINE's with the three
      brand edits and nothing else: scripts/bf-marks.js loaded after bf-session.js, the top bar's mark is the Layered Stack
-     (filled by bf-marks.js) instead of the old 24-unit layers glyph, and the hero title carries the Agent Network mark. */
+     (filled by bf-marks.js) instead of the old 24-unit layers glyph, and the hero title carries the Agent Network mark.
+     NAMED (Nov 19 2026, LOGO2): the Agent Network mark is off the hero title again, so two named brand edits remain: the
+     script tag (its comment now LOGO2's) and the top bar's Layered Stack. */
   const LOGO1_HEAD = [
     ['<script src="/scripts/bf-session.js"></script>\n',
-     '<script src="/scripts/bf-session.js"></script>\n<!-- NAMED (Nov 18 2026, LOGO1): the brand marks, from one source; fills every [data-bf-mark] on load. -->\n<script src="/scripts/bf-marks.js"></script>\n'],
+     '<script src="/scripts/bf-session.js"></script>\n<!-- NAMED (Nov 19 2026, LOGO2): the brand marks, from one source; draws the Layered Stack in the top bar ([data-bf-mark]) on load. -->\n<script src="/scripts/bf-marks.js"></script>\n'],
     ['<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>',
-     '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><span class="bf-mark-host" data-bf-mark="logo" data-bf-mark-size="22"></span></div>'],
-    ['<h1 class="hq-hero-title hero-title">EXECUTIVE HQ</h1>',
-     '<h1 class="hq-hero-title hero-title"><span class="bf-mark-slot" data-bf-mark="agents" data-bf-mark-size="0.9em"></span>EXECUTIVE HQ</h1>']];
+     '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><span class="bf-mark-host" data-bf-mark="logo" data-bf-mark-size="22"></span></div>']];
   const baseHeadRaw = BASE_DASH.slice(0, BASE_DASH.indexOf(GRID_OPEN));
   const baseHead = (() => { try { return LOGO1_HEAD.reduce((h, e) => s.replaceOnce(h, e[0], e[1], "LOGO1 edit"), baseHeadRaw); } catch (e) { return "LOGO1 edit did not apply: " + e.message; } })();
-  check("dashboard.html before the top half is byte for byte " + BASELINE + "'s but for the three named LOGO1 brand edits (" + baseHead.length + " characters)",
+  check("dashboard.html before the top half is byte for byte " + BASELINE + "'s but for the two named brand edits (" + baseHead.length + " characters)",
     baseHead.length > 1000 && cur.indexOf(ORBIT_START) !== -1 && cur.slice(0, cur.indexOf(ORBIT_START)) === baseHead, cur.slice(0, cur.indexOf(ORBIT_START)).length + " vs " + baseHead.length);
   check("the top half is one orbit: one style, one section, one template, bf-orbit.js once after it, no feature grid",
     cur.split(ORBIT_STYLE).length === 2 && cur.split("\n<section id=\"orbitTop\" class=\"bf-orbit\"").length === 2 && cur.split(ORBIT_TPL).length === 2 &&

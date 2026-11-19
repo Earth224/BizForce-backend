@@ -42,8 +42,44 @@ fs.mkdirSync(BRAND, { recursive: true });
 const NAMES = { logo: "layered-stack", approval: "force-hex", agents: "agent-network" };
 const NOTE = { logo: "Layered Stack, the BizForce AI logo", approval: "Force Hex, the approval mark", agents: "Agent Network, the agents mark" };
 
+/* NAMED (Nov 19 2026, LOGO2): the site no longer shows the Force Hex or the Agent Network, so the frontend's
+   bf-marks.js draws only the Layered Stack. BEFORE all three came from bf-marks.js. AFTER the brand/ files of the
+   other two are drawn here, by the same lines bf-marks.js used, so every file this script writes is as before. */
+const TONES = { dark: ["#22D3EE", "#8B5CF6"], light: ["#0891B2", "#6D28D9"] };
+const DOTS = { cyan: "#22D3EE", mid: "#5FA6F0", violet: "#8B5CF6" };
+function gradient(id, tone, units) {
+  const t = Array.isArray(tone) ? tone : (TONES[tone] || TONES.dark);
+  // The agents mark's spokes include level lines, whose bounding box has no height; a gradient in bounding-box units
+  // would not paint them at all, so they use the same diagonal across the whole viewBox in user space.
+  const span = units === "user" ? ' gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="120" y2="120"' : ' x1="0" y1="0" x2="1" y2="1"';
+  return '<linearGradient id="' + id + '"' + span + '><stop offset="0" stop-color="' + t[0] + '"/><stop offset="1" stop-color="' + t[1] + '"/></linearGradient>';
+}
+function approvalBody(g) {
+  return '<polygon points="60,12 101,36 101,84 60,108 19,84 19,36" fill="none" stroke="url(#' + g + ')" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<path d="M67 28 L42 66 H59 L52 94 L80 52 H63 Z" fill="url(#' + g + ')" stroke-linejoin="round" stroke-linecap="round"/>';
+}
+function agentsBody(g, gu) {
+  const corners = [[98, 60, DOTS.cyan], [79, 93, DOTS.mid], [41, 93, DOTS.violet], [22, 60, DOTS.violet], [41, 27, DOTS.mid], [79, 27, DOTS.cyan]];
+  return '<polygon points="98,60 79,93 41,93 22,60 41,27 79,27" fill="none" stroke="url(#' + gu + ')" stroke-width="3" stroke-opacity="0.55" stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<g stroke="url(#' + gu + ')" stroke-width="3" stroke-linecap="round">' +
+    corners.map(function (c) { return '<line x1="60" y1="60" x2="' + c[0] + '" y2="' + c[1] + '"/>'; }).join("") +
+    '</g>' +
+    corners.map(function (c) { return '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="8" fill="' + c[2] + '"/>'; }).join("") +
+    '<circle class="bf-mark-core" cx="60" cy="60" r="13" fill="url(#' + g + ')"/>';
+}
+// A standalone file of the Force Hex or the Agent Network: tone, tile ("square" without rounding) and ids, as bf-marks.js took them.
+function retiredSvg(kind, o) {
+  const g = o.ids + "-g", gu = o.ids + "-gu";
+  const tone = o.tone === "light" ? "light" : "dark";
+  const defs = kind === "approval" ? gradient(g, tone) : gradient(g, tone) + gradient(gu, tone, "user");
+  const body = kind === "approval" ? approvalBody(g) : agentsBody(g, gu);
+  const tile = o.tile ? '<rect width="120" height="120"' + (o.tile === "square" ? "" : ' rx="26" ry="26"') + ' fill="#070B18"/>' : "";
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs>' + defs + '</defs>' + tile + body + '</svg>';
+}
+
 function file(kind, o) {
-  return M.svg(kind, Object.assign({ xmlns: true, ids: NAMES[kind] }, o));
+  const opts = Object.assign({ xmlns: true, ids: NAMES[kind] }, o);
+  return kind === "logo" ? M.svg(kind, opts) : retiredSvg(kind, opts);
 }
 function titled(svg, title) {
   return svg.replace(">", ' role="img" aria-label="' + title + '"><title>' + title + "</title>") + "\n";
