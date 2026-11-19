@@ -66,9 +66,21 @@ const MUTATIONS = {
   "bv-tt-source-one-chunk": ["api",
     "chunk_size: plan.chunk_size, total_chunk_count: plan.total_chunk_count };",
     "chunk_size: Number(video.bytes), total_chunk_count: 1 };"],
-  "bv-tt-parts-unverified": ["api",
-    "  if (MV.partCount(video) > 1) return MV.verifyParts(deps, video);",
-    "  if (MV.partCount(video) > 1) return true;"],
+  // NAMED (Nov 18 2026, BV2): bv-tt-parts-unverified (verifyFile passing a parted video unread) is gone with verifyFile.
+  // The parts are checked while they are sent: mismatch-sends-last-chunk below.
+  // NAMED (Nov 18 2026, BV2): ONE storage read per send.
+  "double-read-again": ["api",
+    "    put = await sendVideo(deps, uploadUrl, video);\n",
+    "    await MV.measureStream(MV.partCount(video) > 1 ? MV.openRange(deps.storage, await MV.fileParts(deps.supabase, video), 0, Number(video.bytes)) : await MV.openStream(deps.storage, video.path), MV.MAX_BYTES);\n    put = await sendVideo(deps, uploadUrl, video);\n"],
+  "cursor-reopens-every-chunk": ["videos",
+    "      if (!cur || !cur.whole || cur.pos !== a) {\n",
+    "      if (true) {\n"],
+  "mismatch-sends-last-chunk": ["api",
+    "      if (err && err.code === \"body_failed\") throw new TiktokApiError(\"fingerprint\", \"body_failed\");\n",
+    "      if (err && err.code === \"body_failed\" && i < plan.ranges.length - 1) continue;\n      if (err && err.code === \"body_failed\") throw new TiktokApiError(\"fingerprint\", \"body_failed\");\n"],
+  "mismatch-not-failed": ["api",
+    "    throw fail(err && err.kind === \"fingerprint\" ? MESSAGES.stopped : MESSAGES.unfinished);\n  }\n  uploadUrl = null;\n",
+    "    if (err && err.kind === \"fingerprint\") put = { status: 201 }; else throw fail(MESSAGES.unfinished);\n  }\n  uploadUrl = null;\n"],
   "bv-tt-cap-default": ["fetch",
     "    const lengthCap = profile.maxUploadBytes || STREAM_MAX_UPLOAD_BYTES;",
     "    const lengthCap = STREAM_MAX_UPLOAD_BYTES;"],
@@ -102,9 +114,11 @@ const MUTATIONS = {
     "      declaration(consent, paid);", "      declaration(consent, false);"],
   "creator-info-not-rechecked": ["api",
     "  var checked = validatePost(postFields(p), creator, deps.limits);", "  var checked = { ok: true, value: postFields(p) };"],
+  // NAMED (Nov 18 2026, BV2): BEFORE it dropped verifyFile, the read before the send. AFTER verifyFile is gone (the send is
+  // the one read), so it drops the check the send makes: sendWhole's guard becomes a plain pass-through.
   "sha-unchecked-at-send": ["api",
-    "  if (!checked.ok) throw fail(checked.error + \" Nothing was sent.\");\n  if (!(await verifyFile(deps, video))) throw fail(MESSAGES.fingerprint);\n",
-    "  if (!checked.ok) throw fail(checked.error + \" Nothing was sent.\");\n"],
+    "  var guard = YA.fingerprintGuard(video.sha256, total, 0);\n",
+    "  var guard = new (require(\"stream\").PassThrough)();\n"],
   "upload-unsealed": ["api",
     "  var s = sealed(deps.crypt, uploadUrl);", "  var s = { ciphertext: Buffer.from(uploadUrl).toString(\"hex\"), iv: \"0\".repeat(24), authTag: \"0\".repeat(32) };"],
   // NAMED (Nov 13 2026, S3): the stored-publish branch now also steps aside for a filed repost of a posted video; the
@@ -1632,9 +1646,14 @@ function pageAnswers(over) {
   buf = mp4(10000, 29);
   video = seedVideo(m.db, buf);
   m.storage.objects[video.path].buf = mp4(10000, 30);
+  m.storage.calls.length = 0;
   a = await approve(m, proposalOf(video));
-  check("U18. the stored file no longer matches the filed fingerprint (checked by streaming): refused, no init, nothing PUT",
-    !a.ok && /no longer matches/.test(a.msg || "") && m.tiktok.inits.length === 0 && m.tiktok.puts().length === 0, a.msg);
+  const up18 = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+  // NAMED (Nov 18 2026, BV2): BEFORE refused with no init (the file was read once to check it, then again to send it).
+  // AFTER the send is the one read and the check: the PUT starts and the guard stops it before its last bytes.
+  check("U18. the stored file no longer matches the filed fingerprint: read ONCE, by the PUT; the guard stops it, TikTok never has it all, the plain words, not posted",
+    !a.ok && a.msg === "publish_tiktok_post: " + TK.MESSAGES.stopped && m.tiktok.inits.length === 1 && up18.done !== true &&
+    m.storage.calls.filter(function (x) { return x.op === "stream"; }).length === 1 && ["posted", "processing"].indexOf(rowOf(m, video.id).tiktok_status) === -1, a.msg);
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db);
   video = seedVideo(m.db, mp4(10000, 31));
@@ -2243,9 +2262,11 @@ function pageAnswers(over) {
       a.ok ? J(puts.map(function (x) { return x.contentRange; })) : a.msg);
     check("BV6. ...TikTok has every byte, in order (the fake answers 206 then 201), and the post goes on: processing, then posted",
       a.ok && up.done === true && up.chunks === 2 && sha(up.received) === sha(buf2) && ["processing", "posted"].indexOf(rowOf(m, video.id).tiktok_status) !== -1, J([up.chunks, rowOf(m, video.id).tiktok_status]));
-    check("BV7. the parts are streamed from Storage (checked first, then each chunk reads only the parts it overlaps), never downloaded whole",
+    // NAMED (Nov 18 2026, BV2): BEFORE [p0, p1] for the check, then p0 for chunk 1 and p0, p1 for chunk 2 (the 35 MB edge
+    // cuts through part 0, so it was read three times). AFTER one cursor for the send: each part once.
+    check("BV7. the parts are streamed from Storage, each ONCE for the whole send although the chunk edge (35 MB) cuts through part 0, never downloaded whole",
       J(m.db.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) ===
-        J([video.path, MV.partPath(video.path, 1), video.path, video.path, MV.partPath(video.path, 1)]) && !m.db.storage.calls.some(function (x) { return x.op === "whole"; }),
+        J([video.path, MV.partPath(video.path, 1)]) && !m.db.storage.calls.some(function (x) { return x.op === "whole"; }),
       J(m.db.storage.calls.map(function (x) { return x.op + " " + String(x.path).slice(-8); })));
 
     // a chunk refused
@@ -2281,13 +2302,67 @@ function pageAnswers(over) {
     const swapped = Buffer.from(m.db.storage.objects[MV.partPath(video.path, 1)].buf); swapped[9] ^= 0xff;
     m.db.storage.objects[MV.partPath(video.path, 1)] = { buf: swapped, created_at: new Date().toISOString() };
     a = await approve(m, proposalOf(video));
-    check("BV11. a part changed after filing: refused before TikTok is asked anything (no init, no PUT)", !a.ok && m.tiktok.inits.length === 0 && m.tiktok.puts().length === 0, a.msg);
+    up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    // NAMED (Nov 18 2026, BV2): BEFORE refused before init (the separate check read). AFTER the send finds it: the first
+    // chunk goes (206), the last one, carrying the changed part, never completes.
+    check("BV11. a part changed after filing: the first chunk goes, the last (the changed part) never completes; the plain words; not posted",
+      !a.ok && a.msg === "publish_tiktok_post: " + TK.MESSAGES.stopped && m.tiktok.inits.length === 1 && m.tiktok.puts().length === 1 && up.done !== true &&
+      ["posted", "processing"].indexOf(rowOf(m, video.id).tiktok_status) === -1, a.msg);
     // the transport's caps
     const big = await attempt(m.tiktok.streamUpload(UPLOAD_BASE + "9", { profile: "tiktok", method: "PUT", headers: {}, body: require("stream").Readable.from([]), contentLength: 128000001, contentRange: "bytes 0-128000000/128000001" }));
     const ytBig = await attempt(m.tiktok.streamUpload("https://www.googleapis.com/upload/youtube/v3/videos?upload_id=x", { profile: "youtube", method: "PUT", headers: {}, body: require("stream").Readable.from([]), contentLength: 52428801 }));
     check("BV12. the transport: TikTok's profile takes a PUT of up to 128 MB (its final chunk), more is refused; YouTube's stays at 50 MiB",
       GF.STREAM_PROFILES.tiktok.maxUploadBytes === 128000000 && !("maxUploadBytes" in GF.STREAM_PROFILES.youtube) &&
       !big.ok && /from 0 to 128000000$/.test(big.msg || "") && !ytBig.ok && /from 0 to 52428800$/.test(ytBig.msg || ""), J([big.msg, ytBig.msg]));
+
+    /* NAMED (Nov 18 2026, BV2): ONE storage read per send. The fake storage counts every stream it opens, per path. */
+    const readsOf = function (mx) {
+      const n = {};
+      mx.db.storage.calls.forEach(function (x) { if (x.op === "stream") n[x.path] = (n[x.path] || 0) + 1; });
+      return n;
+    };
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    const one1 = mp4(300000, 81);
+    video = seedVideo(m.db, one1);
+    m.db.storage.calls.length = 0;
+    a = await approve(m, proposalOf(video));
+    up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    check("ONE1. a video of one object: read from Storage exactly ONCE for the post (the PUT's guard is the check), and TikTok has every byte",
+      a.ok && J(readsOf(m)) === J({ [video.path]: 1 }) && up.done === true && sha(up.received) === sha(one1), J([a.ok || a.msg, readsOf(m)]));
+    // four parts, three chunks; the second part corrupted
+    const T4 = 3 * PB + 6 * 1024 * 1024;
+    const buf4 = mp4(T4, 82);
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf4);
+    m.db.storage.calls.length = 0;
+    a = await approve(m, proposalOf(video));
+    up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    check("ONE2. a video of four parts (three chunks): each part read exactly ONCE, and TikTok has every byte",
+      a.ok && J(readsOf(m)) === J({ [MV.partPath(video.path, 0)]: 1, [MV.partPath(video.path, 1)]: 1, [MV.partPath(video.path, 2)]: 1, [MV.partPath(video.path, 3)]: 1 }) &&
+      m.tiktok.puts().length === 3 && up.done === true && sha(up.received) === sha(buf4), J([a.ok || a.msg, readsOf(m)]));
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf4);
+    const vid4 = video.id;
+    const mid4 = MV.partPath(video.path, 1);
+    const bad4 = Buffer.from(m.db.storage.objects[mid4].buf); bad4[4096] ^= 0xff;
+    m.db.storage.objects[mid4] = { buf: bad4, created_at: new Date().toISOString() };
+    m.db.storage.calls.length = 0;
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    puts = m.tiktok.puts();
+    check("ONE3. a MIDDLE part corrupted: the first chunk goes (206), the send stops inside the middle part's chunk, and the LAST chunk is never sent",
+      !a.ok && puts.length === 1 && puts[0].contentRange === "bytes 0-" + (PB - 1) + "/" + T4 &&
+      !puts.some(function (x) { return String(x.contentRange).indexOf("bytes " + (2 * PB) + "-") === 0; }) && up.done !== true && up.received.length === PB,
+      J([a.msg, puts.map(function (x) { return x.contentRange; })]));
+    check("ONE4. ...the executor throws the plain words (so the proposal is marked failed with them); nothing is reported as posted",
+      !a.ok && a.msg === "publish_tiktok_post: " + TK.MESSAGES.stopped && TK.MESSAGES.stopped === "The video file no longer matches the one you filed, so the upload was stopped before it finished. Nothing was posted." &&
+      ["posted", "processing"].indexOf(rowOf(m, vid4).tiktok_status) === -1 && !rowOf(m, vid4).tiktok_post_id && !rowOf(m, vid4).tiktok_posted_at, J([a.msg, rowOf(m, vid4).tiktok_status]));
+    check("ONE5. ...and the read stops there too: parts 1 and 2 read once each, parts 3 and 4 never read",
+      J(readsOf(m)) === J({ [MV.partPath(video.path, 0)]: 1, [mid4]: 1 }), J(readsOf(m)));
   }
 
   /* ── G ── */

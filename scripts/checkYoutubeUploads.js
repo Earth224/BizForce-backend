@@ -22,7 +22,8 @@
         404 everywhere; delete; the caps and limiters.
      F. FILING. The metadata rules; privacy private by default; made_for_kids required; the claims screen; one pending
         upload per video; filing never sends; the generic proposals route refuses both types.
-     U. THE UPLOAD on approval. The fingerprint before anything; the 5-in-24-hours cap; 100 units reserved first and
+     U. THE UPLOAD on approval. The filed fingerprint against the row before anything, and the file itself checked by
+        the send (NAMED, Nov 18 2026, BV2: one read, no separate pass); the 5-in-24-hours cap; 100 units reserved first and
         failing closed; the session sealed before the first byte; one resume per run; a stored session gets a status
         query first and never a second insert; the frozen metadata reused; an expired session cleared; the guard that
         holds the last chunk; the record, the link, the object deleted; nothing logged.
@@ -90,9 +91,11 @@ const MUTATIONS = {
     "    if (REFUSED_BRANDS.indexOf(brand) !== -1) return \"mp4\";\n"],
   "size-mismatch-accepted": ["videos",
     "    else if (m.bytes !== declared) refusal = { status: 422, code: \"size_mismatch\", error: MESSAGES.sizeMismatch };\n", ""],
+  // NAMED (Nov 18 2026, BV2): BEFORE it dropped verifyFile, the read before the send. AFTER verifyFile is gone (the send is
+  // the one read), so it drops the check the send makes: the one-object guard becomes a plain pass-through.
   "sha-unchecked-at-send": ["api",
-    "  if ((counted.count || 0) >= MV.UPLOADS_PER_DAY) throw fail(MESSAGES.dailyCap);\n  if (!(await verifyFile(deps, video))) throw fail(MESSAGES.fingerprint);\n",
-    "  if ((counted.count || 0) >= MV.UPLOADS_PER_DAY) throw fail(MESSAGES.dailyCap);\n"],
+    "  var guard = fingerprintGuard(video.sha256, total, offset);\n",
+    "  var guard = new (require(\"stream\").PassThrough)();\n"],
   "quota-unreserved": ["api",
     "    await YQ.reserveYoutubeUnits(deps.supabase, { method: method, caller: YQ.YOUTUBE_MEMBER_CALLER, user_id: userId }, deps.now());\n", ""],
   "daily-cap-missing": ["api",
@@ -294,9 +297,18 @@ const MUTATIONS = {
   "bv-yt-308-stops": ["api",
     "      if (next > offset && next < total) { offset = next; continue; }\n",
     ""],
-  "bv-yt-parts-unverified": ["api",
-    "  if (MV.partCount(video) > 1) return MV.verifyParts(deps, video);",
-    "  if (MV.partCount(video) > 1) return true;"],
+  // NAMED (Nov 18 2026, BV2): bv-yt-parts-unverified (verifyFile passing a parted video unread) is gone with verifyFile.
+  // The parts are checked while they are sent: bv-part-sha-unchecked and mismatch-sends-last-chunk below.
+  // NAMED (Nov 18 2026, BV2): ONE storage read per send.
+  "double-read-again": ["api",
+    "  finished = await sendWithResume(deps, location, token, video, 0, false);\n",
+    "  await MV.measureStream(MV.partCount(video) > 1 ? MV.openRange(deps.storage, await MV.fileParts(deps.supabase, video), 0, Number(video.bytes)) : await MV.openStream(deps.storage, video.path), MV.MAX_BYTES);\n  finished = await sendWithResume(deps, location, token, video, 0, false);\n"],
+  "mismatch-sends-last-chunk": ["api",
+    "      if (err && (err.code === \"body_failed\" || err.code === \"storage_unreadable\")) throw new Error(\"publish_youtube_video: \" + MESSAGES.stopped);\n",
+    "      if (err && (err.code === \"body_failed\" || err.code === \"storage_unreadable\") && cursor && offset + CHUNK_BYTES < total) { offset += CHUNK_BYTES; continue; }\n      if (err && (err.code === \"body_failed\" || err.code === \"storage_unreadable\")) throw new Error(\"publish_youtube_video: \" + MESSAGES.stopped);\n"],
+  "mismatch-not-failed": ["api",
+    "      if (err && (err.code === \"body_failed\" || err.code === \"storage_unreadable\")) throw new Error(\"publish_youtube_video: \" + MESSAGES.stopped);\n",
+    "      if (err && (err.code === \"body_failed\" || err.code === \"storage_unreadable\")) return { status: 200, json: { id: \"Zz9_stopped\" } };\n"],
   "bv-part-limiter-shared": ["server",
     "  app.post(route[0], requireAuth, requireActiveSubscription, videoPartLimiter, async function (req, res, next) {",
     "  app.post(route[0], requireAuth, requireActiveSubscription, videoUploadLimiter, async function (req, res, next) {"],
@@ -1490,10 +1502,14 @@ function pageAnswers(over) {
   prop = m.db.t.agent_proposals[0];
   const changed = Buffer.from(buf); changed[1000] ^= 0xff;
   m.storage.objects[video.path].buf = changed;
+  m.storage.calls.length = 0;
   a = await approve(m, prop);
-  check("U10. the file changed after filing (same size): refused with the fingerprint message before anything; no start, no units, no session",
-    !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.fingerprint && m.google.requests.length === 0 && m.db.t.youtube_api_calls.length === 0 &&
-    !rowOf(m, video.id).session_ciphertext, a.msg);
+  const s10 = m.google.sessions[Object.keys(m.google.sessions)[0]];
+  // NAMED (Nov 18 2026, BV2): BEFORE refused before anything (the file was read once to check it, then again to send it).
+  // AFTER the send is the one read and the check: the upload starts, the guard stops it before its last bytes.
+  check("U10. the file changed after filing (same size): read ONCE, by the send; the guard stops it, YouTube never gets the whole file, the plain words, nothing recorded",
+    !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.stopped && !!s10 && !s10.done && s10.received.length < buf.length &&
+    m.storage.calls.filter(function (x) { return x.op === "stream"; }).length === 1 && !rowOf(m, video.id).youtube_video_id && rowOf(m, video.id).status === "ready", a.msg);
   // the guard
   m = mountRoutes({ env: CONFIGURED });
   seedConnection(m.db);
@@ -1502,11 +1518,13 @@ function pageAnswers(over) {
   await file(m, video);
   prop = m.db.t.agent_proposals[0];
   const changed2 = Buffer.from(buf); changed2[buf.length - 10] ^= 0xff;
-  m.storage.objects[video.path].queue = [buf, changed2];   // the check reads the filed file; the send reads a changed one
+  // NAMED (Nov 18 2026, BV2): BEFORE queue [buf, changed2] (the check read the filed file, the send a changed one). AFTER
+  // there is one read, so the change is in the file itself, in its last 10 bytes: the very bytes the guard holds back.
+  m.storage.objects[video.path].buf = changed2;
   a = await approve(m, prop);
   const s2 = m.google.sessions[Object.keys(m.google.sessions)[0]];
-  check("U11. the file changes between the check and the send: the guard holds the last chunk back, so YouTube never gets the whole file and nothing is recorded",
-    !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.fingerprint && !!s2 && !s2.done && s2.received.length < buf.length && rowOf(m, video.id).status === "ready" &&
+  check("U11. the file changed in its last bytes: the guard holds the last chunk back, so YouTube never gets the whole file and nothing is recorded",
+    !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.stopped && !!s2 && !s2.done && s2.received.length < buf.length && rowOf(m, video.id).status === "ready" &&
     !rowOf(m, video.id).youtube_video_id, a.ok ? "uploaded" : a.msg);
   const guardRun = await (async function () {
     const data = filler(200000, 2);
@@ -2031,8 +2049,9 @@ function pageAnswers(over) {
     check("BV22. every chunk but the last is a multiple of 256 KB and the same size; no PUT is over a part (the file is never held whole)",
       Number(yp[0].contentLength) === PB && Number(yp[0].contentLength) % 262144 === 0 && Number(yp[1].contentLength) === T - PB &&
       yp.every(function (x) { return Number(x.contentLength) <= PB; }), J(yp.map(function (x) { return x.contentLength; })));
-    check("BV23. the parts are read as streams from Storage, each twice (the check before sending, then its chunk), never as a whole download",
-      J(m.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) === J([video.path, MV.partPath(video.path, 1), video.path, MV.partPath(video.path, 1)]) &&
+    // NAMED (Nov 18 2026, BV2): BEFORE each twice (the check before sending, then its chunk). AFTER once, by its chunk.
+    check("BV23. the parts are read as streams from Storage, each ONCE (by its chunk; the send is the check), never as a whole download",
+      J(m.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) === J([video.path, MV.partPath(video.path, 1)]) &&
       !m.storage.calls.some(function (x) { return x.op === "whole"; }), J(m.storage.calls));
     // a cut in the second chunk: resume from YouTube's Range
     m = mountRoutes({ env: CONFIGURED, google: { cutAt: 2 } });
@@ -2056,8 +2075,12 @@ function pageAnswers(over) {
     prop = m.db.t.agent_proposals[0];
     m.storage.objects[MV.partPath(video.path, 1)].buf = swapped;
     a = await approve(m, prop);
-    check("BV25. a part changed after filing: refused with the fingerprint words before any session is started", !a.ok && /no longer matches the one you filed/.test(a.msg || "") &&
-      m.google.starts().length === 0 && m.google.puts().length === 0, a.msg);
+    // NAMED (Nov 18 2026, BV2): BEFORE refused before any session (the separate check read). AFTER the send finds it: the
+    // first chunk goes, the last (the changed part) never completes, and nothing is recorded.
+    ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    check("BV25. a part changed after filing: the send stops inside that part's chunk, YouTube never gets the whole file, the plain words, nothing recorded",
+      !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.stopped && m.google.puts().length === 1 && !!ys && !ys.done && ys.received.length === PB &&
+      !rowOf(m, video.id).youtube_video_id, a.msg);
     // the part check holds a part's last bytes back
     const held = [];
     let heldErr = null;
@@ -2071,6 +2094,75 @@ function pageAnswers(over) {
     const s2 = MV.openRange(mm.storage, MV.partSizes(T).map(function (n, i) { return { idx: i, path: "x", start: i * PB, bytes: n, sha256: "" }; }), 0, 0);
     for await (const c of s2) okRange.push(c);
     check("BV27. ...and a range touching no part reads nothing from Storage", okRange.length === 0);
+
+    /* NAMED (Nov 18 2026, BV2): ONE storage read per send. The fake storage counts every stream it opens (op "stream"),
+       per path; a whole download (op "whole") is never allowed. */
+    const readsOf = function (mx) {
+      const n = {};
+      mx.storage.calls.forEach(function (x) { if (x.op === "stream" || x.op === "whole") n[x.path] = (n[x.path] || 0) + (x.op === "whole" ? 100 : 1); });
+      return n;
+    };
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    const one1 = mp4("isom", 300000, 41);
+    video = seedVideo(m.db, one1);
+    await file(m, video);
+    m.storage.calls.length = 0;
+    a = await approve(m, m.db.t.agent_proposals[0]);
+    let rd = readsOf(m);
+    ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    check("ONE1. a video of one object (50 MB or under): its object is read from Storage exactly ONCE for the send, and arrives intact",
+      a.ok && J(rd) === J({ [video.path]: 1 }) && !!ys && ys.done && sha(ys.received) === sha(one1), J([a.ok || a.msg, rd]));
+    const T3 = 2 * PB + 6 * MIB;
+    const big3 = bigMp4(T3, PB - 50, 31);
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, big3);
+    await file(m, video);
+    m.storage.calls.length = 0;
+    a = await approve(m, m.db.t.agent_proposals[0]);
+    rd = readsOf(m);
+    ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    check("ONE2. a video of three parts: each part read exactly ONCE for the whole send (three chunks), and the file arrives intact",
+      a.ok && J(rd) === J({ [MV.partPath(video.path, 0)]: 1, [MV.partPath(video.path, 1)]: 1, [MV.partPath(video.path, 2)]: 1 }) && m.google.puts().length === 3 &&
+      !!ys && ys.done && sha(ys.received) === sha(big3), J([a.ok || a.msg, rd]));
+    // the middle part corrupted
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, big3);
+    const vid3 = video.id;
+    await file(m, video);
+    const mid = MV.partPath(video.path, 1);
+    const midBad = Buffer.from(m.storage.objects[mid].buf); midBad[4096] ^= 0xff;
+    m.storage.objects[mid].buf = midBad;
+    m.storage.calls.length = 0;
+    a = await approve(m, m.db.t.agent_proposals[0]);
+    rd = readsOf(m);
+    ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    yp = m.google.puts();
+    check("ONE3. the MIDDLE part corrupted: the first chunk goes, the send stops inside the middle part's chunk, and the LAST chunk is never sent",
+      !a.ok && yp.length === 1 && yp[0].contentRange === "bytes 0-" + (PB - 1) + "/" + T3 &&
+      !yp.some(function (x) { return String(x.contentRange).indexOf("bytes " + (2 * PB) + "-") === 0; }) && !!ys && !ys.done && ys.received.length === PB,
+      J([a.msg, yp.map(function (x) { return x.contentRange; })]));
+    check("ONE4. ...the executor throws the plain words (so the proposal is marked failed with them); nothing is reported as posted (no YouTube id, no uploaded_at, still ready)",
+      !a.ok && a.msg === "publish_youtube_video: " + YA.MESSAGES.stopped && YA.MESSAGES.stopped === "The video file no longer matches the one you filed, so the upload was stopped before it finished. Nothing was posted." &&
+      !rowOf(m, vid3).youtube_video_id && !rowOf(m, vid3).uploaded_at && rowOf(m, vid3).status === "ready", a.msg);
+    check("ONE5. ...and the read stops there too: parts 1 and 2 read once each, part 3 never read",
+      J(rd) === J({ [MV.partPath(video.path, 0)]: 1, [mid]: 1 }), J(rd));
+    // the cursor itself: a chunk boundary through the middle of a part does not read that part again
+    const cuts = await (async function () {
+      const st = mountRoutes({ env: CONFIGURED }).storage;
+      const bufs = splitParts(big3);
+      const pl = bufs.map(function (b, i) { st.objects["x/p" + i + ".mp4"] = { buf: b }; return { idx: i, path: "x/p" + i + ".mp4", start: i * PB, bytes: b.length, sha256: sha(b) }; });
+      const cur = MV.rangeCursor(st, pl, T3);
+      const edges = [0, Math.floor(PB / 2), PB + 12345, 2 * PB + 7, T3];
+      const got = [];
+      for (let i = 0; i + 1 < edges.length; i++) { const bs = []; for await (const c of cur.take(edges[i], edges[i + 1])) bs.push(c); got.push(Buffer.concat(bs)); }
+      cur.close();
+      return { whole: Buffer.concat(got).equals(big3), sizes: got.map(function (b, i) { return b.length === edges[i + 1] - edges[i]; }), streams: st.calls.filter(function (x) { return x.op === "stream"; }).length };
+    })();
+    check("ONE6. MV.rangeCursor: four chunks whose edges cut through parts give exactly the bytes asked, and the three parts are opened three times in all",
+      cuts.whole && cuts.sizes.every(Boolean) && cuts.streams === 3, J(cuts));
 
     // the preview, deletion and retention
     mm = mountRoutes({ env: CONFIGURED });
