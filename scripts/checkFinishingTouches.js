@@ -817,8 +817,13 @@ async function oracleChecks() {
   }
   check("O1. on every Oracle page the bottom-right glow is 0, with a member's theme (both corners lit) and without; the top-left glow is exactly what it was, both ways",
     wrong.length === 0, wrong.join(" | "));
+  /* NAMED (Nov 18 2026, LOGO1): oracle.html also loads scripts/bf-marks.js and its two headings carry the Agent Network
+     mark. Those named edits are taken out before the comparison, so every other line is still held to BEFORE's. */
+  const LOGO1_TAG = "<!-- NAMED (Nov 18 2026, LOGO1): the brand marks, from one source; fills every [data-bf-mark] on load. -->\n<script src=\"/scripts/bf-marks.js\"></script>\n";
+  const LOGO1_SLOT = "<span class=\"bf-mark-slot\" data-bf-mark=\"agents\" data-bf-mark-size=\"0.9em\"></span>";
+  const unLogo1 = t => t === null || t === undefined ? null : t.split(LOGO1_TAG).join("").split(LOGO1_SLOT).join("");
   const drift = ORACLE_PAGES.filter(f => {
-    const was = gitShow(BEFORE, f), now = FILES[f];
+    const was = gitShow(BEFORE, f), now = unLogo1(FILES[f]);
     if (was === null || now === null) return true;
     const A = was.split("\n"), B = now.split("\n");
     const added = B.filter(l => A.indexOf(l) === -1), lost = A.filter(l => B.indexOf(l) === -1);
