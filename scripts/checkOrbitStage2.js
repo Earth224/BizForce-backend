@@ -688,7 +688,10 @@ const goalCols = g => ({ goal_metric: g.metric, goal_weekly_target: g.target, go
   const minR = (pts) => { let best = 1e9; for (let i = 1; i < pts.length; i++) for (let s2 = 0; s2 <= 200; s2++) { const f = s2 / 200, x = pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * f, y = pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * f; best = Math.min(best, Math.hypot(x, k * y)); } return best; };
   const linkMins = S2.linkPairs().map(pr => [pr, +minR(P.O.linkPoints(pr.split("|")[0], pr.split("|")[1])).toFixed(1)]);
   check("F13. every link bends through r 175 and keeps out of the core's r 66 (the stars' clearance) at every turn of the ring", P.O.LINK_BEND_R === 175 && P.O.CORE_KEEP_R === 66 && linkMins.every(m => m[1] > 66), J(linkMins));
-  check("F14. the stars keep r 66 round the core (the satellites' r 58 and their dots)", /g\.circles\.push\(\{ x: ox \+ VIEW\.cx \* scale, y: oy \+ VIEW\.cy \* scale, r: CORE_KEEP_R \* scale \}\);/.test(FILES[ORBIT]));
+  // NAMED (Nov 19 2026, PH1): on the phone the view's own keepR (its core's half plus 18, round its satellites); on a
+  // desktop VIEW has no keepR, so it is CORE_KEEP_R (66) as before.
+  check("F14. the stars keep r 66 round the core (the satellites' r 58 and their dots); on the phone the view's keepR", /g\.circles\.push\(\{ x: ox \+ VIEW\.cx \* scale, y: oy \+ VIEW\.cy \* scale, r: \(VIEW\.keepR \|\| CORE_KEEP_R\) \* scale \}\);/.test(FILES[ORBIT]) &&
+    /var CORE_KEEP_R = 66;/.test(FILES[ORBIT]) && /keepR: core \/ 2 \+ 18,/.test(FILES[ORBIT]));
   P.close();
 
   // Sparks.

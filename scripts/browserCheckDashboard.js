@@ -28,7 +28,7 @@
    renders; each portal opens only its own grid and turns to the front; the
    badges and their beams; the core opens All tools; "/" and the search, and
    Enter opens the tool; Swap survives a reload; at 390 px the portals are a
-   row, the main boxes stack and the grid is one column; under reduced motion
+   circle round the core (PH1, Nov 19 2026; BEFORE a row), the main boxes stack and the grid is one column; under reduced motion
    (Emulation.setEmulatedMedia) nothing moves. It counts the API requests the
    dashboard makes on load at frontend 889cb13 (served from git) and now.
    Screenshots to <top>: orbit-sell.png, orbit-grow.png, orbit-connect.png,
@@ -438,12 +438,17 @@ async function starsAt(W, file) {
   const cell = Math.min(a.w / a.cols, a.h / a.rows);
   console.log("    " + W + " px sky: panel " + Math.round(a.w) + " x " + Math.round(a.h) + ", " + n + " stars, grid " + a.cols + " x " + a.rows + ", quadrants " + q.join("/") + ", closest " + md.toFixed(1) + " px");
   check(W + " px: the density rule's " + skyCount(a.w, a.h) + " still Oracle stars for a " + Math.round(a.w) + " x " + Math.round(a.h) + " panel, rays on the large bright ones",
-    n === skyCount(a.w, a.h) && a.spiked >= 2 && a.large >= 2, JSON.stringify(Object.assign({}, a, { pts: undefined })));
+    n === skyCount(a.w, a.h) && (W === 390 || (a.spiked >= 2 && a.large >= 2)), JSON.stringify(Object.assign({}, a, { pts: undefined })));
   // NAMED (Nov 11 2026, polish): BEFORE 390 px was let off the rays (no large rayed star fitted the phone panel). AFTER more
   // open sky on a phone: at least 2 large rayed stars at every size, 390 px included.
-  if (W === 390) check("390 px: at least 2 large rayed stars in the phone panel's sky (" + a.spiked + " rayed, " + a.large + " large)", a.spiked >= 2 && a.large >= 2, JSON.stringify({ spiked: a.spiked, large: a.large }));
-  check(W + " px: each quadrant holds 20% to 30% of the stars and each half 40% to 60% (" + q.join(", ") + ")",
-    n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
+  /* NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE at least 2 large rayed stars at 390 px. AFTER the phone draws the whole
+     orbit (a circle across the stage), and its corners are too small for a large star's rays to keep clear of a portal, so
+     a large one that does not fit is drawn medium (checkDashboardOrbit O15 holds the same); every star is still placed. */
+  if (W === 390) check("390 px: every star of the phone's sky placed (" + n + "), " + a.spiked + " rayed", n === skyCount(a.w, a.h), JSON.stringify({ spiked: a.spiked, large: a.large }));
+  // NAMED (Nov 19 2026, PH1): at 390 px a quadrant may hold 15% to 35% (the sky is the corners round the phone's circle).
+  const qLo = W === 390 ? 0.15 : 0.2, qHi = W === 390 ? 0.35 : 0.3;
+  check(W + " px: each quadrant holds " + qLo * 100 + "% to " + qHi * 100 + "% of the stars and each half 40% to 60% (" + q.join(", ") + ")",
+    n > 0 && q.every(v => v >= qLo * n && v <= qHi * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
   check(W + " px: no two stars closer than 60% of a cell's smaller side (" + (0.6 * cell).toFixed(1) + " px; closest " + md.toFixed(1) + ")", a.cols >= 2 && md >= 0.6 * cell - 0.5, md);
   // NAMED (Nov 11 2026, one living sky): "no running animation" became "no POSITION animation".
   check(W + " px: no star has a POSITION animation (getAnimations(): none on a star's group, opacity and scale() only on its parts, one at most each; no transition)", a.moving === 0 && b.moving === 0, a.moving + "/" + b.moving);
@@ -777,6 +782,8 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     }
 
     // 390 px: a row of portals, stacked main boxes, one column.
+    // NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE the portals were one row and the ring hidden. AFTER the phone draws
+    // the orbit: the five discs on a circle (each the same distance from the core's centre, within 2 px), the ring shown.
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await openPage(cdp, origin, "dashboard.html", {});
     await orbitReady();
@@ -786,8 +793,8 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       "return {portals:[].map.call(document.querySelectorAll('.orbit-portal'),r), svg:b.shown(document.getElementById('orbitSvg')), mains:[].map.call(document.querySelectorAll('#orbitMain > .orbit-main-box'),r)," +
       "grid:[].map.call(document.querySelectorAll('#orbitGrid > *'),r), scrollW:document.documentElement.scrollWidth," +
       "wide:[].filter.call(document.querySelectorAll('body *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391&&getComputedStyle(n).position!=='fixed'}).slice(0,8).map(function(n){var x=n.getBoundingClientRect();return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)+' '+Math.round(x.left)+'-'+Math.round(x.right)})};})()");
-    const tops = mob.portals.map(p => p[1]);
-    check("390 px: the portals are one row (same top), the ring hidden", mob.portals.length === 5 && Math.max.apply(null, tops) - Math.min.apply(null, tops) <= 4 && !mob.svg, JSON.stringify(mob.portals));
+    const discs = await evaluate(cdp, "(function(){var c=document.getElementById('orbitCore').getBoundingClientRect(),cx=c.left+c.width/2,cy=c.top+c.height/2;return [].map.call(document.querySelectorAll('.orbit-portal .orbit-disc'),function(d){var r=d.getBoundingClientRect();return Math.round(Math.hypot(r.left+r.width/2-cx,r.top+r.height/2-cy)*10)/10;});})()");
+    check("390 px: the portals sit on a circle round the core (equal distance within 2 px), the ring shown", mob.portals.length === 5 && discs.length === 5 && Math.max.apply(null, discs) - Math.min.apply(null, discs) <= 2 && mob.svg, JSON.stringify(discs));
     check("390 px: the main boxes stack", mob.mains.length === 2 && mob.mains[1][1] >= mob.mains[0][3] - 1 && mob.mains[0][0] === mob.mains[1][0], JSON.stringify(mob.mains));
     check("390 px: the grid is one column", mob.grid.length >= 2 && mob.grid.every(g => g[0] === mob.grid[0][0]) && mob.grid.every((g, i) => i === 0 || g[1] >= mob.grid[i - 1][3] - 1), JSON.stringify(mob.grid));
     const wideTop = await evaluate(cdp, "[].filter.call(document.querySelectorAll('#orbitTop, #orbitTop *'),function(n){var x=n.getBoundingClientRect();return x.width>0&&x.right>391}).map(function(n){return n.tagName+'#'+n.id+'.'+String(n.className&&n.className.baseVal!==undefined?n.className.baseVal:n.className).slice(0,40)})");
@@ -1169,7 +1176,7 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
       rm.spin === 0 && rm.dots === 3 && rm.sparks === 0 && rm.link && rm.portal, JSON.stringify(rm));
     await cdp.send("Emulation.setEmulatedMedia", { features: [] });
 
-    // A phone: the slim bar, the count on the Agents disc, a pulse on the portal an event reaches.
+    // A phone (PH1: the desktop orbit): the goal ring, the satellites, the spark to the portal an event reaches.
     await s2Size(390);
     await s2Load("visits");
     pulseRunning = THREE.slice();
@@ -1180,9 +1187,14 @@ const FOLDS = ["ccMoreRuns", "ccAllJobs", "ccPastPlans", "ccOutboundLatest"];
     await sleep(250);
     const ph = await evaluate(cdp, "window.__s2.phone()");
     await shot(cdp, path.join(STAGE2_OUT, "phone-390.png"), "#orbitTop");
-    check("stage 2: at 390 px a slim bar in the core box, 24% filled", ph.bar.shown && ph.bar.h > 0 && ph.bar.h <= 4 && Math.abs(ph.bar.frac - 0.24) < 0.01 && ph.bar.inCore, JSON.stringify(ph.bar));
-    check("stage 2: at 390 px the Agents disc counts 3 agents running", ph.count.shown && ph.count.text === "3" && ph.count.onAgents, JSON.stringify(ph.count));
-    check("stage 2: at 390 px a card lead pulses the Connect portal (no spark, the ring hidden)", ph.pulsed.join() === "connect" && ph.sparks === 0, JSON.stringify(ph));
+    /* NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE the phone's row had its own devices: a slim bar in the core box, a
+       count on the Agents disc, a pulse on the portal (no spark, the ring hidden). AFTER the phone draws the desktop's
+       orbit, so it has the desktop's: the goal ring round the core, the satellites, and the spark along its path. */
+    const phArc = await evaluate(cdp, "window.__s2.core()"), phSats = await evaluate(cdp, "window.__s2.sats()");
+    const phSpark = await evaluate(cdp, "(function(){var s=document.querySelector('.orbit-link-spark');return s?{to:s.getAttribute('data-to'),from:s.getAttribute('data-from')}:null;})()");
+    check("stage 2: at 390 px the goal ring round the core, 24% filled, as on a desktop (BEFORE a slim bar in the core box); the slim bar hidden", phArc.arcShown && Math.abs(phArc.arcFrac - 0.24) < 0.01 && !ph.bar.shown, JSON.stringify([phArc.arcShown, phArc.arcFrac, ph.bar.shown]));
+    check("stage 2: at 390 px 3 satellites circle the core for the 3 agents running, as on a desktop (BEFORE a count on the Agents disc)", phSats.dots.length === 3 && !ph.count.shown, JSON.stringify([phSats.dots.length, ph.count]));
+    check("stage 2: at 390 px a card lead sparks from the core to Connect, as on a desktop (BEFORE a pulse, no spark)", !!phSpark && phSpark.to === "connect" && phSpark.from === "core", JSON.stringify([phSpark, ph.pulsed]));
 
     // No overflow at 1440, 1024 and 390, with the longest figures (store sales, 11 running) and the dialog open.
     const flows = [];

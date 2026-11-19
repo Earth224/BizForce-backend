@@ -122,9 +122,11 @@ async function main() {
   check("S2. scripts/bf-theme.js's SCROLLBARS is the stylesheet's text, byte for byte", !!inTheme && inTheme === RULE, inTheme && inTheme.slice(0, 80));
   check("S2. the backend's lib/scrollbars.js holds the same text, and the legal pages (lib/legalPages.js) carry it inline",
     !!inLegal && inLegal === RULE && /const \{ SCROLLBARS \} = require\("\.\/scrollbars"\);/.test(FILES[LEGAL]) &&
-    /'<style id="bf-scrollbars">',\n    SCROLLBARS,\n    "<\/style>",\n    "<\/head>",/.test(FILES[LEGAL]));
+    // NAMED (Nov 19 2026, PH1): the phone layout's stylesheet link (and its NAMED comment) may follow the style, last in the head.
+    /'<style id="bf-scrollbars">',\n    SCROLLBARS,\n    "<\/style>",\n(    \/\/ NAMED \(Nov 19 2026, PH1\)[^\n]*\n    '<link rel="stylesheet" href="\/css\/bf-phone\.css">',\n)?    "<\/head>",/.test(FILES[LEGAL]));
   check("S2. ... and so does the support page, live or built (lib/supportPage.js)",
-    /const \{ SCROLLBARS \} = require\("\.\/scrollbars"\);/.test(FILES[SUPPORT]) && /'<style id="bf-scrollbars">',\n    SCROLLBARS,\n    '<\/style>',\n    '<\/head>',/.test(FILES[SUPPORT]));
+    // NAMED (Nov 19 2026, PH1): the phone layout's stylesheet link may follow the style, last in the head.
+    /const \{ SCROLLBARS \} = require\("\.\/scrollbars"\);/.test(FILES[SUPPORT]) && /'<style id="bf-scrollbars">',\n    SCROLLBARS,\n    '<\/style>',\n(    '<link rel="stylesheet" href="\/css\/bf-phone\.css">',\n)?    '<\/head>',/.test(FILES[SUPPORT]));
 
   console.log("\n══ S3. every page ══");
   const pages = FRONT.filter(r => /\.html$/.test(r) && !/^google[0-9a-f]+\.html$/.test(r));

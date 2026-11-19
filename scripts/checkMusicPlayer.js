@@ -137,9 +137,11 @@ const MUTATIONS = {
   // H: the boombox opens expanded on a first visit
   /* NAMED BEFORE → AFTER (Oct 31 2026, three stages). BEFORE: the anchor was mount's "prefs.state === \"box\" ? \"box\" : \"tag\"". AFTER: the first
      stage is decided in stageOf (the icon on the dashboard, the bar elsewhere); the mutation makes it the boombox there. */
-  "auto-expanded-on-first-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"box\"; }"]],
+  // NAMED (Nov 19 2026, PH1): stageOf also starts a phone (760 px and less) at the icon, so the anchor reads
+  // (home || phoneRow() ? "icon" : "tag"); BEFORE (home ? "icon" : "tag").
+  "auto-expanded-on-first-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home || phoneRow() ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"box\"; }"]],
   // I: the bar shown on the dashboard's first visit, not the icon
-  "bar-on-first-dashboard-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"tag\"; }"]],
+  "bar-on-first-dashboard-load": [[BOOMBOX, "return STAGES.indexOf(s) !== -1 ? s : (home || phoneRow() ? \"icon\" : \"tag\"); }", "return STAGES.indexOf(s) !== -1 ? s : \"tag\"; }"]],
   // I: the player shown on another page with no music playing
   /* NAMED re-anchor (Part 0). BEFORE: anchored on away() as "!home && (state === icon || !live)". AFTER: the same
      mutant (shown whatever the music) on today's away(), which is "!home && !live". */

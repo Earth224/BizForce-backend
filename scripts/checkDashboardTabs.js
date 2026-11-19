@@ -307,9 +307,12 @@ async function mountExec(o) {
      '<script src="/scripts/bf-session.js"></script>\n<!-- NAMED (Nov 19 2026, LOGO2): the brand marks, from one source; draws the Layered Stack in the top bar ([data-bf-mark]) on load. -->\n<script src="/scripts/bf-marks.js"></script>\n'],
     ['<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>',
      '<div class="topbar-mark bf-neon-icon bf-hq-icon directory" aria-hidden="true"><span class="bf-mark-host" data-bf-mark="logo" data-bf-mark-size="22"></span></div>']];
+  // NAMED (Nov 19 2026, PH1): one more named edit, the phone layout's stylesheet (css/bf-phone.css), last in the head.
+  const PH1_LINK = '<link rel="stylesheet" href="/css/bf-phone.css"><!-- NAMED (Nov 19 2026, PH1): the phone layout; every rule is inside @media (max-width: 760px), so the desktop is unchanged. -->\n';
+  LOGO1_HEAD.push(["</style>\n</head>\n", "</style>\n" + PH1_LINK + "</head>\n"]);
   const baseHeadRaw = BASE_DASH.slice(0, BASE_DASH.indexOf(GRID_OPEN));
   const baseHead = (() => { try { return LOGO1_HEAD.reduce((h, e) => s.replaceOnce(h, e[0], e[1], "LOGO1 edit"), baseHeadRaw); } catch (e) { return "LOGO1 edit did not apply: " + e.message; } })();
-  check("dashboard.html before the top half is byte for byte " + BASELINE + "'s but for the two named brand edits (" + baseHead.length + " characters)",
+  check("dashboard.html before the top half is byte for byte " + BASELINE + "'s but for the two named brand edits and the PH1 stylesheet (" + baseHead.length + " characters)",
     baseHead.length > 1000 && cur.indexOf(ORBIT_START) !== -1 && cur.slice(0, cur.indexOf(ORBIT_START)) === baseHead, cur.slice(0, cur.indexOf(ORBIT_START)).length + " vs " + baseHead.length);
   check("the top half is one orbit: one style, one section, one template, bf-orbit.js once after it, no feature grid",
     cur.split(ORBIT_STYLE).length === 2 && cur.split("\n<section id=\"orbitTop\" class=\"bf-orbit\"").length === 2 && cur.split(ORBIT_TPL).length === 2 &&
@@ -327,7 +330,11 @@ async function mountExec(o) {
     baseMid.length > 1000 && baseMid.indexOf("<section id=\"businessProfileSection\"") !== -1 && curMid === baseMid, curMid.length + " vs " + baseMid.length);
   const memA = BASE_DASH.indexOf("<section id=\"agentMemorySection\""), memB = BASE_DASH.indexOf("</section>", memA) + "</section>".length;
   const baseMemory = BASE_DASH.slice(memA, memB), baseRest = BASE_DASH.slice(memB);
-  check("everything after the Command Center and Agent Memory is byte for byte " + BASELINE + "'s", baseRest.length > 1000 && cur.endsWith(baseRest));
+  /* NAMED (Nov 19 2026, PH1): the dashboard's phone block (<style id="ph1Phone"> and the avatar menu's script) sits just
+     before </body>; it is set aside here (scripts/checkPhoneLayout.js checks it) and the rest is BASELINE's as before. */
+  const ph1A = cur.indexOf("<!-- PH1 (Nov 19 2026): the dashboard on a phone."), ph1B = ph1A < 0 ? -1 : cur.indexOf("</script>\n", cur.indexOf("(function avatarMenu()", ph1A));
+  const curNoPh1 = ph1A < 0 || ph1B < 0 ? cur : cur.slice(0, ph1A) + cur.slice(ph1B + "</script>\n".length);
+  check("everything after the Command Center and Agent Memory is byte for byte " + BASELINE + "'s (the named PH1 phone block set aside)", baseRest.length > 1000 && ph1A !== -1 && curNoPh1.endsWith(baseRest));
   check("the Agent Memory markup is byte for byte " + BASELINE + "'s, once", cur.split(baseMemory).length === 2);
   check("the heading, the Read stamp and Refresh are kept", /<h2 class="bf-section-title">Command Center<\/h2>/.test(cur) && /id="ccStatus">Loading…</.test(cur) && /id="ccRefresh">Refresh</.test(cur));
   check("bf-tabs.js loads before the section and bf-command-center.js right after it",

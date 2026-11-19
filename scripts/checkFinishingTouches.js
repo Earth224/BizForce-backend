@@ -707,7 +707,12 @@ async function placementWidths() {
   check("P12. no code path puts it below or outside the bar: iconSpot and its drop-below are gone, the plan's only top is the logo's centre, the bar's only top is the plan's, and place() puts the button in the bar before anything else",
     !/iconSpot\(/.test(BX) && !/hr\.bottom/.test(BX) && !/\.bottom\s*\+\s*GAP/.test(planSrc + barSrc) && planSrc.length > 0 && (planSrc.match(/top:/g) || []).length === 1 && /top: Math\.round\(cy - size \/ 2\)/.test(planSrc) &&
     (barSrc.match(/root\.style\.top =/g) || []).length === 1 && /root\.style\.top = Math\.round\(plan\.top - br\.top/.test(barSrc) && /bar\.appendChild\(root\)/.test(barSrc) &&
-    /^    function place\(\) \{\n      if \(popout\) return;\n      if \(inBar\(\)\) \{ root\.setAttribute\("data-dock", "desktop"\); placeInBar\(\); side\(\); return; \}/.test(placeSrc),
+    /^    function place\(\) \{\n      if \(popout\) return;\n      if \(inBar\(\)\) \{ root\.setAttribute\("data-dock", "desktop"\); placeInBar\(\); side\(\); return; \}/.test(placeSrc) &&
+    /* NAMED (Nov 19 2026, PH1): on a phone (760 px and less) the bar lays the button out as a flow item (no coordinates:
+       its left, top, right and bottom removed), still in the bar; away from the dashboard it is in the page's header row.
+       Neither puts it below or outside a bar. */
+    /      if \(phoneRow\(\)\) \{\n[\s\S]{0,200}?\["left", "top", "right", "bottom"\]\.forEach\(function \(k\) \{ root\.style\.removeProperty\(k\); \}\);\n        root\.setAttribute\("data-placed", "true"\);\n        return;\n      \}/.test(barSrc) &&
+    /if \(phoneRow\(\) && state === "icon" && !home\) \{ var row = headerRow\(\); if \(row\) \{ toRow\(row\); return; \} \}/.test(placeSrc),
     [planSrc.length, barSrc.length, placeSrc.slice(0, 160)].join(" | "));
 }
 
@@ -821,7 +826,13 @@ async function oracleChecks() {
   const drift = ORACLE_PAGES.filter(f => {
     const was = gitShow(BEFORE, f), now = FILES[f];
     if (was === null || now === null) return true;
-    const A = was.split("\n"), B = now.split("\n");
+    // NAMED (Nov 19 2026, PH1): two named phone edits on every page are set aside, each exactly once: the viewport meta
+    // gains ", viewport-fit=cover", and the phone layout's stylesheet (css/bf-phone.css) is linked last in the head.
+    const PH1_LINK = /^<link rel="stylesheet" href="\/css\/bf-phone\.css"><!-- NAMED \(Nov 19 2026, PH1\)/;
+    const vpWas = (was.match(/^.*<meta name="viewport".*$/m) || [""])[0], vpNow = vpWas.replace("initial-scale=1.0", "initial-scale=1.0, viewport-fit=cover");
+    const A = was.split("\n"), B0 = now.split("\n");
+    if (!vpWas || B0.filter(l => l === vpNow).length !== 1 || B0.filter(l => PH1_LINK.test(l)).length !== 1) return true;
+    const B = B0.filter(l => !PH1_LINK.test(l)).map(l => l === vpNow ? vpWas : l);
     const added = B.filter(l => A.indexOf(l) === -1), lost = A.filter(l => B.indexOf(l) === -1);
     return lost.length !== 0 || added.length !== 2 || added[1].trim() !== ":root { --bf-glow-b-alpha: 0 !important; }" || !/^\s*\/\* An Oracle page \(Nov 8 2026\)/.test(added[0]);
   });

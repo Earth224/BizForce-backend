@@ -331,7 +331,23 @@ function withoutPolishWrap(text) {
 }
 /* NAMED (Nov 19 2026, LOGO2): LOGO1 set aside its three edits to this file here (withoutLogo1). LOGO2 put the file back
    to 8d29b93's, the round .ap-spinner and "Running…" as before, so there is nothing of LOGO1 to set aside. */
-const profilePolish = withoutPolishWrap(FILES[PROFILE_JS]);
+/* NAMED (Nov 19 2026, PH1): the agent pages on a phone. Two additions are taken out, exactly once, so S2 means what it
+   meant: the live tiles' phone rules (a comment and three rules, right after the 560 px status rule: the figure and its
+   line wrap in full up to 760 px, one column at 390 px and below) and the tab row's phone rule (its edge fade), appended to
+   the tab folders' style. scripts/checkPhoneLayout.js and browserCheckPhone.js pin them. */
+function withoutPh1(text) {
+  if (text === null) return null;
+  const A0 = "        // PH1 (Nov 19 2026, the agent pages on a phone).", A1 = "        '@media (max-width:390px){.ap-live-grid{grid-template-columns:1fr}}' +\n";
+  const a = text.indexOf(A0), b = a < 0 ? -1 : text.indexOf(A1, a);
+  if (a < 0 || b < 0 || text.indexOf(A0, a + 1) !== -1 || text.slice(a, b).split("\n").length !== 7) return null;
+  let t = text.slice(0, a) + text.slice(b + A1.length);
+  const B0 = "      \"#apScheduleSection .ap-auto{margin-top:0;padding-top:0;border-top:0}\" +\n      /* PH1 (Nov 19 2026): on a phone the Run, Schedule, Activity and Learning tabs";
+  const B1 = "mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent)}}\";\n";
+  const c = t.indexOf(B0), d = c < 0 ? -1 : t.indexOf(B1, c);
+  if (c < 0 || d < 0 || t.indexOf(B0, c + 1) !== -1) return null;
+  return t.slice(0, c) + "      \"#apScheduleSection .ap-auto{margin-top:0;padding-top:0;border-top:0}\";\n" + t.slice(d + B1.length);
+}
+const profilePolish = withoutPolishWrap(withoutPh1(FILES[PROFILE_JS]));
 const profileNow = profilePolish === null ? null : withoutStoreSource(withoutB8(withoutB5(withoutB2(withoutAgentTabs(profilePolish)))));
 check("S2. " + PROFILE_JS + ": the one hand edit is sigTheme's colour reader, which hands a chart a colour, never var(); the rest reads as it did (B2's four \"Why?\" additions, B5's trigger pause words, B8/B9's four lesson additions, the Stock source tile, the agent tabs and the polish's status-line wrap set aside)",
   profileNow !== null && NEW_V.test(profileNow) && unthemed(profileNow.replace(NEW_V, () => OLD_V)) === oldProfile && oldProfile.indexOf(OLD_V) !== -1);

@@ -310,14 +310,25 @@ const agentTypeOf = raw => (/agentType:\s*"([a-z_]+)"/.exec(raw) || [])[1];
 
   /* ── T9. the Executive page, untouched ── */
   console.log("\n══ T9. the Executive page untouched ══");
-  check("T9 executive-agent.html, bf-exec-deck.js and bf-tabs.js are PRE_TABS's byte for byte", FILES[EXEC] === gitShow(EXEC) && FILES[DECK] === gitShow(DECK) && FILES[TABS_JS] === gitShow(TABS_JS));
+  // NAMED (Nov 19 2026, PH1): the phone layout's stylesheet link (css/bf-phone.css), last in the head, is set aside, once;
+  // the page already had viewport-fit=cover. Everything else is PRE_TABS's byte for byte, as before.
+  const PH1_LINK = "<link rel=\"stylesheet\" href=\"/css/bf-phone.css\"><!-- NAMED (Nov 19 2026, PH1): the phone layout; every rule is inside @media (max-width: 760px), so the desktop is unchanged. -->\n";
+  const execNoPh1 = FILES[EXEC].split(PH1_LINK).length === 2 ? FILES[EXEC].split(PH1_LINK).join("") : "(the PH1 link is not there once)";
+  check("T9 executive-agent.html (but for the named PH1 stylesheet link), bf-exec-deck.js and bf-tabs.js are PRE_TABS's byte for byte", execNoPh1 === gitShow(EXEC) && FILES[DECK] === gitShow(DECK) && FILES[TABS_JS] === gitShow(TABS_JS));
   // NAMED (Nov 11 2026, polish): BEFORE the deck was drawn by PRE_TABS's agent-profile.js as it stood. AFTER the same file
   // with the one rule the polish added (the live status line wraps below 560 px) placed after its 560 px grid rule, exactly
   // as the page has it; everything else drawn must still be PRE_TABS's, output for output.
   const POLISH_GRID = "        '@media (max-width:560px){.ap-live-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}' +\n";
   const POLISH_WRAP = "        '@media (max-width:560px){.ap-live-status{white-space:normal;overflow-wrap:anywhere;min-width:0}}' +\n";
   const preAp = gitShow(AP);
-  const beforeAp = preAp.split(POLISH_GRID).length === 2 ? preAp.split(POLISH_GRID).join(POLISH_GRID + POLISH_WRAP) : "/* the PRE_TABS 560 px grid rule moved */";
+  /* NAMED (Nov 19 2026, PH1): and the live tiles' phone rules (a comment and three rules, the figure and its line wrapping
+     up to 760 px, one column at 390 px), placed right after the polish's rule exactly as the page has them, read from the
+     page between their first and last lines (seven lines). Desktop output is unchanged by them; the deck must still draw
+     PRE_TABS's otherwise. */
+  const PH1_A = "        // PH1 (Nov 19 2026, the agent pages on a phone).", PH1_B = "        '@media (max-width:390px){.ap-live-grid{grid-template-columns:1fr}}' +\n";
+  const ph1a = FILES[AP].indexOf(PH1_A), ph1b = ph1a < 0 ? -1 : FILES[AP].indexOf(PH1_B, ph1a);
+  const PH1_TILES = ph1a >= 0 && ph1b > ph1a && FILES[AP].slice(ph1a, ph1b + PH1_B.length).split("\n").length === 8 ? FILES[AP].slice(ph1a, ph1b + PH1_B.length) : "/* the PH1 tile rules moved */\n";
+  const beforeAp = preAp.split(POLISH_GRID).length === 2 ? preAp.split(POLISH_GRID).join(POLISH_GRID + POLISH_WRAP + PH1_TILES) : "/* the PRE_TABS 560 px grid rule moved */";
   const before = await mount(EXEC, { files: { [AP]: beforeAp }, wait: 120 });
   const after = await mount(EXEC, { wait: 120 });
   const norm = d0 => d0.body.innerHTML.replace(/\d{1,2}:\d{2}:\d{2}(\s?[AP]M)?/g, "T");

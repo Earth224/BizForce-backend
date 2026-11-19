@@ -371,10 +371,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // install
     await sw.dispatch("install");
     const names = [...sw.caches.keys()];
-    check("I7. the cache is named by the build: bf-shell-<commit>", names.length === 1 && names[0] === "bf-shell-abc1234", names.join(","));
+    // NAMED (Nov 19 2026, PH1): the cache name also carries the shell's version, SHELL_REV "ph1" (BEFORE bf-shell-<commit>).
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-ph1", names.length === 1 && names[0] === "bf-shell-abc1234-ph1", names.join(","));
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
-      /var BUILD = "__BF_BUILD__";\nvar CACHE = "bf-shell-" \+ BUILD;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,600}?var SHELL_REV = "ph1";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -383,7 +384,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // activate: an older shell cache goes, another app's cache stays
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234") && sw.caches.has("someone-else"),
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-ph1") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle
@@ -766,7 +767,8 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
          loads only the music player when signed in (checkMusicPlayer G1); data-clear-only, its place in the head and the
          clear-only return in bf-session.js are unchanged. */
       check("IV5. settings.html loads bf-session.js data-clear-only, in the head, so its own no-renewal sign-out stands",
-        /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>\n  <script src="\/scripts\/bf-offline\.js"><\/script>\n<\/head>/.test(FILES[SETTINGS]));
+        // NAMED (Nov 19 2026, PH1): the phone layout's stylesheet link (css/bf-phone.css) now sits last in every head.
+        /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>\n  <script src="\/scripts\/bf-offline\.js"><\/script>\n<link rel="stylesheet" href="\/css\/bf-phone\.css"><!-- NAMED \(Nov 19 2026, PH1\)[^\n]*-->\n?<\/head>/.test(FILES[SETTINGS]));
     }
     // bf-session.js ending a session that cannot be renewed
     {

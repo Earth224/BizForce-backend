@@ -121,7 +121,8 @@ const MUTATIONS = {
   // "/" taken while typing in a field (O8)
   "slash-in-input": [[ORBIT, "    if (editable(e.target) || editable(document.activeElement)) return false;\n", ""]],
   // under reduced motion the orbit still turns (O9)
-  "reduced-motion-moves": [[ORBIT, "    if (reduced() || narrow()) { state.turn = null;", "    if (narrow()) { state.turn = null;"]],
+  // NAMED (Nov 19 2026, PH1): BEFORE the anchor was "reduced() || narrow()"; the phone now turns as the desktop does.
+  "reduced-motion-moves": [[ORBIT, "    if (reduced()) { state.turn = null;", "    if (false) { state.turn = null;"]],
   // a transition on a layout property (O10)
   "non-transform-animation": [[DASH, "transform-origin:0 0;font:inherit;cursor:pointer;transition:opacity .3s ease}", "transform-origin:0 0;font:inherit;cursor:pointer;transition:opacity .3s ease,left .6s ease-out,top .6s ease-out}"]],
   // NAMED (Nov 10 2026, visual match): the twelve below are the approved look (O14).
@@ -142,7 +143,10 @@ const MUTATIONS = {
   // below), so star-over-portal now drops the phone row's discs.
   // NAMED (Nov 11 2026, one living sky): the phone disc's box is measured once into `disc`, and its open halo kept clear around
   // it (the halo's circle holds the box, so the disc is uncovered only when both are gone).
-  "star-over-portal": [[ORBIT, "        g.boxes.push(disc);\n", ""], [ORBIT, "        g.circles.push({ x: disc.x + disc.w / 2, y: disc.y + disc.h / 2, r: hr });\n", ""]],
+  // NAMED BEFORE → AFTER (Nov 19 2026, PH1): the phone row's branch is gone (the phone draws the orbit, its portals kept
+  // clear by the ring's band, stars-on-ring-band). star-over-portal now drops each portal's label box along the ring, so a
+  // star can sit on a label (" (open)" and all) wherever a portal drifts, at every width.
+  "star-over-portal": [[ORBIT, "        g.boxes.push({ x: x - half, y: y + VIEW.labelDy * scale - labelH / 2, w: 2 * half, h: labelH });\n", ""]],
   // NAMED (Nov 11 2026, more and even stars): the fuller, even sky (O15 at 1440, 1024 and 390 px).
   "stars-clustered-low": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw, y0 = g.h / 2 + row * grid.ch / 2;"]],
   "stars-one-quadrant": [[ORBIT, "x0 = col * grid.cw, y0 = row * grid.ch;", "x0 = col * grid.cw / 2, y0 = row * grid.ch / 2;"]],
@@ -150,7 +154,8 @@ const MUTATIONS = {
   // NAMED (Nov 11 2026, one living sky): the band is the open halo's circle (r 43) and the open disc's box at every degree;
   // the halo holds the box, so the band is gone only when both are.
   "stars-on-ring-band": [[ORBIT, "        g.boxes.push({ x: x - (VIEW.portalR + 3) * scale, y: y - (VIEW.portalR + 3) * scale, w: 2 * (VIEW.portalR + 3) * scale, h: 2 * (VIEW.portalR + 3) * scale });\n", ""],
-    [ORBIT, "        g.circles.push({ x: x, y: y, r: STAR_KEEP.haloR * scale });\n", ""]],
+    // NAMED (Nov 19 2026, PH1): the halo's radius is the view's (haloR; STAR_KEEP.haloR on a desktop).
+    [ORBIT, "        g.circles.push({ x: x, y: y, r: haloR * scale });\n", ""]],
   // NAMED (Nov 11 2026, one living sky): ONE fixed set that twinkles in place, in the Oracle's colours (O15).
   // a hover lays the stars out again
   "hover-redraws": [[ORBIT, "  function showPreview(key) { preview.textContent = previewText(key); preview.hidden = false; }", "  function showPreview(key) { preview.textContent = previewText(key); preview.hidden = false; starsDrawn = \"\"; drawStars(); }"]],
@@ -302,7 +307,9 @@ function page(o) {
   w.requestAnimationFrame = cb => { frames.push(cb); return frames.length; };
   w.cancelAnimationFrame = () => {};
   const media = { reduce: !!o.reduce, narrow: !!o.narrow };
-  w.matchMedia = q => ({ matches: (/reduced-motion: reduce/.test(q) && media.reduce) || (/max-width: 640px/.test(q) && media.narrow), addEventListener() {}, addListener() {} });
+  // NAMED (Nov 19 2026, PH1): a narrow page is a phone at the site's phone breakpoint too, (max-width: 760px), which
+  // bf-orbit.js and dashboard.html now use (BEFORE only 640 px matched).
+  w.matchMedia = q => ({ matches: (/reduced-motion: reduce/.test(q) && media.reduce) || (/max-width: (640|760)px/.test(q) && media.narrow), addEventListener() {}, addListener() {} });
   // NAMED (Nov 11 2026, more and even stars): the stage's width may be given (o.stageW), as Chrome measured it; 600 otherwise.
   Object.defineProperty(w.HTMLElement.prototype, "clientWidth", { configurable: true, get() { return this.id === "orbitStage" ? (o.stageW || 600) : 0; } });
   if (o.rects) w.Element.prototype.getBoundingClientRect = function () { return o.rects(this); };
@@ -413,7 +420,11 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   const hero = t => t.slice(t.indexOf("<header class=\"hero hq-hero\">"), t.indexOf("<div class=\"bf-start-panel\" id=\"subscribeStartPanel\""));
   check("the hero, the status and the paid banner are BASELINE's byte for byte", hero(BASE).length > 300 && hero(FILES[DASH]) === hero(BASE));
   // from the comment that closes the top half (in both versions), so nothing slips in above Business Profile either
-  const below = t => { const i = t.indexOf("<!-- Recent Activity was removed here."); return i < 0 ? "" : t.slice(i); };
+  // NAMED (Nov 19 2026, PH1): the dashboard's phone block (<style id="ph1Phone"> and the avatar menu's script, just before
+  // </body>) is set aside here and checked on its own (scripts/checkPhoneLayout.js); the rest is compared as before.
+  const PH1_START = "<!-- PH1 (Nov 19 2026): the dashboard on a phone.";
+  const notPh1 = t => { const i = t.indexOf(PH1_START), j = i < 0 ? -1 : t.indexOf("</script>\n", t.indexOf("(function avatarMenu()", i)); return i < 0 || j < 0 ? t : t.slice(0, i) + t.slice(j + "</script>\n".length); };
+  const below = t => { t = notPh1(t); const i = t.indexOf("<!-- Recent Activity was removed here."); return i < 0 ? "" : t.slice(i); };
   /* NAMED (Nov 11 2026, polish): BEFORE below the top half was BASELINE's byte for byte. AFTER it is BASELINE's with two
      edits and nothing else: #taskPrompt spans both columns by class (bf-span-2) instead of an inline grid-column:1/3 (which
      made a second column on a phone), and the Command Center's style gains the phone-fit rules. */
@@ -684,18 +695,24 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
   check("each frame writes only transforms (place: style.transform and a transform attribute)", placeFn.length > 100 && !/\.style\.(?!transform)[a-zA-Z]+\s*=|setAttribute\("(?!transform)/.test(placeFn), placeFn.slice(0, 200));
 
   /* ── O11. phones ── */
-  console.log("\n══ O11. at 640 px and less ══");
-  const mob = (/@media \(max-width: 640px\)\{([\s\S]*?)\n  \}/.exec(CSS) || ["", ""])[1];
-  // The core takes its own line (flex-basis 100%) and the five portals share the next one, each a fifth of the width.
-  check("the orbit becomes a row of portals with their labels (flex, the core on its own line, five equal portals, the ring hidden, no transforms)",
-    /\.orbit-stage\{aspect-ratio:auto;display:flex;flex-wrap:wrap;[^}]*min-width:0;max-width:100%\}/.test(mob) && /\.orbit-svg\{display:none\}/.test(mob) &&
-    /\.orbit-portal,\.orbit-core\{position:relative;transform:none !important\}/.test(mob) && /\.orbit-portal\{flex:1 1 0;min-width:0;width:auto;/.test(mob) &&
-    /\.orbit-core\{order:-1;flex:1 1 100%;/.test(mob) && /orbit-portal-name/.test(FILES[ORBIT]));
+  /* NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE: at 640 px and less the orbit became a row of portals (flex, the core
+     on its own line, the ring's drawing hidden, no transforms) that never drifted. AFTER: at 760 px and less (the site's
+     phone breakpoint) it is the same orbit as the desktop's, on a circle fitted to the stage: the drawing shown, the
+     labels wrapping in full, the core sized by the view (--oc), THIS WEEK and the goal button under it, and it drifts. */
+  console.log("\n══ O11. at 760 px and less ══");
+  const mob = (/\n  @media \(max-width: 760px\)\{([\s\S]*?)\n  \}/.exec(CSS) || ["", ""])[1];
+  check("O11 the phone's orbit: the ring's drawing shown (no rule hides .orbit-svg), labels wrap in full under each disc (84 px, no ellipsis), the core sized by --oc, THIS WEEK and the goal button a row under the orbit",
+    mob.length > 0 && !/\.orbit-svg\{display:none\}/.test(CSS) && /\.orbit-portal-name\{[^}]*white-space:normal;width:84px;[^}]*overflow:visible;z-index:2/.test(mob) &&
+    !/text-overflow:ellipsis/.test(mob) && /\.orbit-core\{width:var\(--oc, 80px\);height:var\(--oc, 80px\)/.test(mob) && /\.orbit-below\{display:flex;/.test(mob) &&
+    /\n  \.orbit-below\{display:none\}/.test(CSS) && /function phoneView\(w\)/.test(FILES[ORBIT]) && /var PHONE_QUERY = "\(max-width: 760px\)";/.test(FILES[ORBIT]), mob.slice(0, 120));
   check("the main boxes stack and the grid is one column", /\.orbit-main\{grid-template-columns:1fr\}/.test(mob) && /\.orbit-grid\{grid-template-columns:1fr !important\}/.test(mob));
-  const N = page({ narrow: true, session: { bf_orbit_portal: "x" } });
+  const N = page({ narrow: true, session: { bf_orbit_portal: "x" }, stageW: 316 });
   await settle();
   N.w.BFOrbit.fold(); const n0 = N.w.BFOrbit.state.base; N.run(1000);
-  check("on a phone the row does not drift", N.w.BFOrbit.state.base === n0);
+  check("O11 on a phone the orbit drifts as the desktop's does (BEFORE the row stood still)", N.w.BFOrbit.state.base !== n0, n0 + " " + N.w.BFOrbit.state.base);
+  const nv = N.d.querySelector(".orbit-svg").getAttribute("viewBox"), ring = N.d.querySelector("ellipse.orbit-ring");
+  check("O11 the phone's view is a circle in CSS pixels: viewBox 0 0 316 h, the ring's rx equal to its ry (114 on a 316 px stage)",
+    /^0 0 316 \d+$/.test(nv || "") && ring.getAttribute("rx") === ring.getAttribute("ry") && ring.getAttribute("rx") === "114", nv + " " + ring.getAttribute("rx") + "/" + ring.getAttribute("ry"));
 
   /* ── O12. textContent only ── */
   console.log("\n══ O12. text, never markup ══");
@@ -835,14 +852,17 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       disc: [[88.3, 152.2, 74.8, 74.8], [222.6, 318.4, 83.1, 83.1], [674.5, 322.5, 74.8, 74.8], [812.9, 152.2, 74.8, 74.8], [450.6, 46.9, 74.8, 74.8]],
       name: [[107.6, 241.5, 36.1, 12.6], [230.6, 411.8, 67.1, 12.6], [684.3, 411.8, 55.2, 12.6], [827.4, 241.5, 45.7, 12.6], [465.7, 136.2, 44.6, 12.6]],
       title: [[107.6, 240.5, 36.1, 14], [230.6, 410.8, 25.6, 14], [684.3, 410.8, 55.2, 14], [827.4, 240.5, 45.7, 14], [465.7, 135.2, 44.6, 14]] },
-    /* NAMED (Nov 11 2026, polish): BEFORE the phone panel was 342 x 300.6 (padding 28 / 14, the stage's 6 px below), with
-       no room for a large rayed star. AFTER more open sky, re-measured in Chrome 156: padding 104 above and 56 below, 32 px
-       under the portal row; 342 x 444.6, everything 76 px lower. Sell's label keeps its " (open)" width. */
-    390: { narrow: true, panel: [0, 0, 342, 444.6], stage: [11, 105, 320, 180], say: [11, 289, 320, 41.6], search: [11, 340.6, 320, 45], core: [11, 109, 320, 64],
-      btn: [[11, 181, 57.6, 72], [76.6, 181, 57.6, 72], [142.2, 181, 57.6, 72], [207.8, 181, 57.6, 72], [273.4, 181, 57.6, 72]],
-      disc: [[16.8, 185, 46, 46], [82.4, 185, 46, 46], [148, 185, 46, 46], [213.6, 185, 46, 46], [279.2, 185, 46, 46]],
-      name: [[23.8, 237, 32, 12], [76.8, 237, 57.3, 12], [146.8, 237, 48.3, 12], [216.6, 237, 39.9, 12], [282.8, 237, 38.9, 12]],
-      title: [[23.8, 236, 32, 14], [76.8, 236, 22, 14], [146.8, 236, 48.3, 14], [216.6, 236, 39.9, 14], [282.8, 236, 38.9, 14]] }
+    /* NAMED (Nov 11 2026, polish): BEFORE the phone panel was 342 x 300.6 (padding 28 / 14, the stage's 6 px below).
+       NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE (Nov 11) 342 x 444.6, a row of portals under a 320 x 64 core box.
+       AFTER the phone's orbit, measured in Chrome at 390 px: a 342 x 594.6 panel (padding 12), a 316 x 340 stage holding
+       the circle (centre 158, 160; radius 114), the 100 px core, the row under it (THIS WEEK and the goal button), the
+       reserved preview and status row (2.6rem, as on a desktop) and the search. Sell open; every label 84 px wide. */
+    390: { narrow: true, phone: true, panel: [0, 0, 342, 594.6], stage: [13, 13, 316, 340], say: [13, 480, 316, 41.6], search: [13, 531.6, 316, 46], core: [121, 123, 100, 100],
+      below: [13, 357, 316, 119],
+      btn: [[36.6, 111.8, 52, 52], [78, 239.2, 52, 52], [212, 239.2, 52, 52], [253.4, 111.8, 52, 52], [145, 33, 52, 52]],
+      disc: [[36.6, 111.8, 52, 52], [75.1, 236.3, 57.8, 57.8], [212, 239.2, 52, 52], [253.4, 111.8, 52, 52], [145, 33, 52, 52]],
+      name: [[20.6, 167.8, 84, 12.6], [62, 295.2, 84, 12.6], [196, 295.2, 84, 12.6], [237.4, 167.8, 84, 12.6], [129, 89, 84, 12.6]],
+      title: [[45, 166.8, 35.3, 14], [71.6, 294.2, 24.7, 14], [211.2, 294.2, 53.7, 14], [257.2, 166.8, 44.5, 14], [149.3, 88, 43.3, 14]] }
   };
   const KEYS = ["grow", "sell", "connect", "agents", "oracle"];
   function rectsFor(G) {
@@ -852,6 +872,7 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       if (node.id === "orbitStage") return box(G.stage);
       if (node.id === "orbitCore") return box(G.core);
       if (node.id === "orbitSay") return box(G.say);
+      if (node.classList && node.classList.contains("orbit-below")) return box(G.below || [0, 0, 0, 0]);   // NAMED (Nov 19 2026, PH1)
       if (node.classList && node.classList.contains("orbit-search")) return box(G.search);
       const portal = node.closest && node.closest(".orbit-portal");
       const i = portal ? KEYS.indexOf(portal.getAttribute("data-portal")) : -1;
@@ -979,13 +1000,20 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
         }
         if (Math.hypot(st.x - (ox + 340 * sc), st.y - (oy + 160 * sc)) < 34 * sc + st.reach) bad.push(st.g.getAttribute("data-star") + " on the core");
       } else {
-        if (hitBox(st, G.core)) bad.push(st.g.getAttribute("data-star") + " on the core");
-        for (let i = 0; i < 5; i++) {
-          const d = G.disc[i], cell = G.btn[i];
-          if (hitBox(st, d)) bad.push(st.g.getAttribute("data-star") + " on a portal");
-          if (Math.hypot(st.x - (d[0] + d[2] / 2), st.y - (d[1] + d[3] / 2)) < 43 * 46 / 54 + st.reach) bad.push(st.g.getAttribute("data-star") + " under an open halo");
-          if (hitBox(st, [cell[0], G.name[i][1], cell[2], G.name[i][3]])) bad.push(st.g.getAttribute("data-star") + " under an open label");
+        /* NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE the phone's portals were a fixed row (each disc, its halo and
+           its label's cell). AFTER the phone's orbit, written here and not read from the page: a circle at the stage's
+           centre line, radius w/2 - 44 (84 to 128), centre 46 + radius from the stage's top; at every degree a portal can
+           drift to, its 58 px disc box (open size), its open halo (r 43 x 52/54) and its label (92 x 30, 30 px under the
+           disc's centre); the core and its satellites (the core's half plus 16); the row under the orbit. */
+        const w = G.stage[2], R = Math.max(84, Math.min(128, w / 2 - 44)), cx = G.stage[0] + w / 2, cy = G.stage[1] + 46 + R;
+        for (let a = 0; a < 360; a += 1) {
+          const rad = a * Math.PI / 180, px = cx + R * Math.sin(rad), py = cy + R * Math.cos(rad);
+          if (hitBox(st, [px - 29, py - 29, 58, 58])) { bad.push(st.g.getAttribute("data-star") + " on a portal at " + a); break; }
+          if (Math.hypot(st.x - px, st.y - py) < 43 * 52 / 54 + st.reach) { bad.push(st.g.getAttribute("data-star") + " under an open halo at " + a); break; }
+          if (hitBox(st, [px - 46, py + 30, 92, 30])) { bad.push(st.g.getAttribute("data-star") + " under an open label at " + a); break; }
         }
+        if (Math.hypot(st.x - (G.core[0] + G.core[2] / 2), st.y - (G.core[1] + G.core[3] / 2)) < G.core[2] / 2 + 16 + st.reach) bad.push(st.g.getAttribute("data-star") + " on the core");
+        if (G.below && hitBox(st, G.below)) bad.push(st.g.getAttribute("data-star") + " on the row under the orbit");
       }
       const edge = G.narrow ? 3 : 0;
       if (st.x - st.reach < edge || st.y - st.reach < edge || st.x + st.reach > G.panel[2] - edge || st.y + st.reach > G.panel[3] - edge) bad.push(st.g.getAttribute("data-star") + " off the panel's edge");
@@ -1012,8 +1040,12 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
       n === want && sky[0] === want && sky[7] === 0, n + " " + sky.join(","));
     const q = [0, 0, 0, 0];
     list.forEach(st => q[(st.y < h / 2 ? 0 : 2) + (st.x < w / 2 ? 0 : 1)]++);
-    check("O15 " + W0 + " px: each quadrant holds 20% to 30% of them, and each half 40% to 60% (top-left, top-right, bottom-left, bottom-right " + q.join(", ") + ")",
-      n > 0 && q.every(v => v >= 0.2 * n && v <= 0.3 * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
+    /* NAMED (Nov 19 2026, PH1): on the phone the orbit is a circle filling the stage's width, so the sky is its corners and
+       the band above THIS WEEK; a quadrant there may hold 15% to 35% (BEFORE 20% to 30% at every width). The halves keep
+       40% to 60%. */
+    const qLo = W0 === 390 ? 0.15 : 0.2, qHi = W0 === 390 ? 0.35 : 0.3;
+    check("O15 " + W0 + " px: each quadrant holds " + qLo * 100 + "% to " + qHi * 100 + "% of them, and each half 40% to 60% (top-left, top-right, bottom-left, bottom-right " + q.join(", ") + ")",
+      n > 0 && q.every(v => v >= qLo * n && v <= qHi * n) && q[0] + q[1] >= 0.4 * n && q[0] + q[1] <= 0.6 * n && q[2] + q[3] >= 0.4 * n && q[2] + q[3] <= 0.6 * n, q.join(","));
     const mix = ["small", "medium", "large"].map(s => list.filter(st => st.size === s).length / Math.max(1, n) * 100);
     check("O15 " + W0 + " px: the sizes within 10 points of 60% small, 30% medium, 10% large bright (" + mix.map(v => v.toFixed(1)).join(" / ") + "), each large one with rays",
       Math.abs(mix[0] - 60) <= 10 && Math.abs(mix[1] - 30) <= 10 && Math.abs(mix[2] - 10) <= 10 && list.every(st => st.size !== "large" || st.spiked) && mix[0] + mix[1] + mix[2] > 99.9, mix.join(","));
@@ -1023,8 +1055,12 @@ const gridSlugs = d => Array.prototype.map.call(d.querySelectorAll("#orbitGrid >
     check("O15 " + W0 + " px: one star at most in each cell of the " + cols + " x " + rows + " grid (an even grid, so each quadrant is whole cells), each where it says",
       cols >= 2 && rows >= 2 && cols % 2 === 0 && rows % 2 === 0 && new Set(cellsSeen).size === n && list.every((st, k) => st.cell === cellsSeen[k]), cellsSeen.join(" "));
     // NAMED (Nov 11 2026, polish): more open sky on a phone, so large rayed stars fit there too.
-    if (W0 === 390) check("O15 390 px: at least 2 large rayed stars fit in the phone panel's sky (" + list.filter(st => st.size === "large" && st.spiked).length + "), none turned into a medium one",
-      list.filter(st => st.size === "large" && st.spiked).length >= 2 && sky[5] === 0, JSON.stringify(skyReport[W0]));
+    /* NAMED BEFORE → AFTER (Nov 19 2026, PH1). BEFORE at least 2 large rayed stars in the phone's sky, none made medium.
+       AFTER the phone draws the whole orbit (a circle across the stage), and its corners are too small for a large star's
+       rays to keep clear of a portal; the layout then draws a medium star in that cell, as on any crowded sky. Every star
+       is still placed (none unplaced) and none is on the orbit (the clash check below). */
+    if (W0 === 390) check("O15 390 px: every star of the phone's sky is placed (" + n + "), a large one that does not fit drawn medium (" + sky[5] + "), none left out",
+      sky[7] === 0 && n === want, JSON.stringify(skyReport[W0]));
     const larges = list.filter(st => st.size === "large").map(cellOf).map(c => c.split(",").map(Number));
     check("O15 " + W0 + " px: no two large bright stars in neighbouring cells", larges.every((a, i) => larges.every((b, j) => j <= i || Math.abs(a[0] - b[0]) > 1 || Math.abs(a[1] - b[1]) > 1)), JSON.stringify(larges));
     let md = Infinity; list.forEach((a, i) => list.forEach((b, j) => { if (j > i) md = Math.min(md, Math.hypot(a.x - b.x, a.y - b.y)); }));
