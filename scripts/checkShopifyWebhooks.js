@@ -856,8 +856,9 @@ async function limiterProbe() {
   const mig = read("supabase/migrations/184_shopify_webhook_requests.sql");
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
-  check("R1. 184_shopify_webhook_requests.sql is the only 184, only 185_shopify_uninstall_hook.sql and 186_member_videos_duration.sql are above it (checkTiktokPosting G15); its VERIFY query is verify/184_verify.sql",
-    highest === 186 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql" &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("R1. 184_shopify_webhook_requests.sql is the only 184, only 185_shopify_uninstall_hook.sql, 186_member_videos_duration.sql and 187_member_video_parts.sql are above it (checkYoutubeUploads G14); its VERIFY query is verify/184_verify.sql",
+    highest === 187 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql" &&
     migFiles.filter(function (x) { return /^184_/.test(x); }).join() === "184_shopify_webhook_requests.sql" &&
     fs.existsSync(path.join(migDir, "verify", "184_verify.sql")), highest);
   check("R2. migration 184 adds request_details, answered_at, owner_notified_at and the partial index on received_at WHERE processed_at IS NULL, in BEGIN/COMMIT, and drops nothing",

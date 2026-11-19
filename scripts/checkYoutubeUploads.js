@@ -162,14 +162,16 @@ const MUTATIONS = {
     "      if (again.ok) { meta = again.value; reused = true; }\n", ""],
   "claims-unscreened": ["api",
     "    if (refused) return { status: 422, body: { error: refused.error + \" Nothing was filed.\", code: \"claims\", field: fields[i], violations: refused.violations } };\n", ""],
+  // NAMED (Nov 18 2026, BV1): the budget check now follows the ready cap, so the anchor's second line is its comment.
   "ready-cap-missing": ["videos",
-    "  if (await readyCount(deps.supabase, userId) >= READY_MAX) return { status: 409, body: { error: MESSAGES.readyCap, code: \"ready_cap\" } };\n  var path = newPath(userId, ext, deps.randomBytes);\n",
-    "  var path = newPath(userId, ext, deps.randomBytes);\n"],
+    "  if (await readyCount(deps.supabase, userId) >= READY_MAX) return { status: 409, body: { error: MESSAGES.readyCap, code: \"ready_cap\" } };\n  // NAMED (Nov 18 2026, BV1): the storage budget first,",
+    "  // NAMED (Nov 18 2026, BV1): the storage budget first,"],
   "refresh-margin-ignored": ["api",
     "const REFRESH_MARGIN_MS = 5 * 60 * 1000;", "const REFRESH_MARGIN_MS = 0;"],
   // NAMED (Nov 7 2026, TikTok posting): the stale select now reads youtube_video_id and tiktok_status too (for fileGonePatch).
   "retention-ready-kept": ["videos",
-    "    var stale = await supabase.from(\"member_videos\").select(\"id, user_id, path, youtube_video_id, tiktok_status\").eq(\"status\", \"ready\").lt(\"created_at\", cutoff).limit(PAGE_SIZE);\n",
+    // NAMED (Nov 18 2026, BV1): the select reads part_count too.
+    "    var stale = await supabase.from(\"member_videos\").select(\"id, user_id, path, part_count, youtube_video_id, tiktok_status\").eq(\"status\", \"ready\").lt(\"created_at\", cutoff).limit(PAGE_SIZE);\n",
     "    var stale = { data: [], error: null };\n"],
   "refresh-not-single-flight": ["api",
     "  var running = refreshesInFlight.get(key);\n", "  var running = null;\n"],
@@ -228,6 +230,76 @@ const MUTATIONS = {
   // the reconnect notice never shows
   "reconnect-notice-hidden": ["ui",
     "    showIf(\"ytRemoveScope\", !state.canRemove);\n", ""],
+  // NAMED (Nov 18 2026, BV1): videos over 50 MB as parts, the storage budget, chunked YouTube, every part deleted.
+  "bv-parts-one-object": ["videos",
+    "  if (!Number.isInteger(bytes) || bytes <= ONE_FILE_MAX_BYTES || bytes > MAX_BYTES) return [];",
+    "  if (!Number.isInteger(bytes) || bytes > MAX_BYTES) return [];"],
+  "bv-budget-skipped": ["videos",
+    "  var full = await budgetRefusal(deps, b.bytes);\n  if (full) return full;\n",
+    ""],
+  "bv-budget-ignores-parts": ["videos",
+    "  (parts.data || []).forEach(function (r) { total += Number(r.bytes) || 0; });\n",
+    ""],
+  "bv-budget-env-ignored": ["videos",
+    "  return Number.isInteger(v) && v > 0 ? v : BUDGET_BYTES_DEFAULT;",
+    "  return BUDGET_BYTES_DEFAULT;"],
+  "bv-budget-guesses": ["videos",
+    "    return { status: 503, body: { error: MESSAGES.storageUnknown, code: \"storage_unknown\" } };",
+    "    held = 0;"],
+  "bv-part-url-no-upsert": ["videos",
+    "createSignedUploadUrl(p.partPath, { upsert: true })",
+    "createSignedUploadUrl(p.partPath)"],
+  "bv-part-size-unchecked": ["videos",
+    "  if (size !== p.size) {",
+    "  if (false) {"],
+  "bv-finalize-early": ["videos",
+    "  if (rows.length < sizes.length) return { status: 409,",
+    "  if (false) return { status: 409,"],
+  "bv-part-sha-unchecked": ["videos",
+    "      if (seen !== total || hash.digest(\"hex\") !== sha256) return cb(partError(\"part_mismatch\"));",
+    "      if (seen !== total) return cb(partError(\"part_mismatch\"));"],
+  "bv-parts-untied": ["videos",
+    "update({ video_id: ins.data.id })",
+    "update({ video_id: null })"],
+  "bv-parts-as-one-object": ["videos",
+    "  if (declared > ONE_FILE_MAX_BYTES) return finalizeParts(deps, userId, b, path, label.value, declared);\n",
+    ""],
+  "bv-parts-no-length": ["videos",
+    "measureStream(openRange(deps.storage, parts, 0, declared), MAX_BYTES, extOf(path) === \"webm\" ? null : durationReader())",
+    "measureStream(openRange(deps.storage, parts, 0, declared), MAX_BYTES, null)"],
+  "bv-preview-no-note": ["videos",
+    "  if (partCount(video) > 1) return { status: 200, body: { url: signed.data.signedUrl, mime: video.mime, expires_in: PREVIEW_SECONDS, partial: true, note: MESSAGES.previewStart } };\n",
+    ""],
+  "bv-delete-first-part-only": ["videos",
+    "  if (row.path && !(await removeObjects(deps.storage, filePaths(row))))",
+    "  if (row.path && !(await removeObjects(deps.storage, [row.path])))"],
+  "bv-retention-first-part-only": ["videos",
+    "function allPaths(rows) { return rows.reduce(function (out, r) { return out.concat(filePaths(r)); }, []); }",
+    "function allPaths(rows) { return rows.reduce(function (out, r) { return out.concat([r.path]); }, []); }"],
+  "bv-abandoned-kept": ["videos",
+    "    if (looseRows.length) {",
+    "    if (false) {"],
+  "bv-abandoned-live-parts": ["videos",
+    "return live.indexOf(r.upload_path) === -1 && PART_PATH_RE.test(",
+    "return PART_PATH_RE.test("],
+  "bv-orphan-parts": ["videos",
+    "      var paths = allPaths(known.data || []).concat((recorded.data || []).map(function (r) { return r.path; })).filter(Boolean);",
+    "      var paths = (known.data || []).map(function (r) { return r.path; }).filter(Boolean);"],
+  "bv-yt-whole-file": ["api",
+    "function chunked(video) { return MV.partCount(video) > 1; }",
+    "function chunked(video) { return false; }"],
+  "bv-yt-chunk-not-256k": ["api",
+    "  var end = Math.min(offset + CHUNK_BYTES, total);",
+    "  var end = Math.min(offset + CHUNK_BYTES + 1000, total);"],
+  "bv-yt-308-stops": ["api",
+    "      if (next > offset && next < total) { offset = next; continue; }\n",
+    ""],
+  "bv-yt-parts-unverified": ["api",
+    "  if (MV.partCount(video) > 1) return MV.verifyParts(deps, video);",
+    "  if (MV.partCount(video) > 1) return true;"],
+  "bv-part-limiter-shared": ["server",
+    "  app.post(route[0], requireAuth, requireActiveSubscription, videoPartLimiter, async function (req, res, next) {",
+    "  app.post(route[0], requireAuth, requireActiveSubscription, videoUploadLimiter, async function (req, res, next) {"],
   // the home page loses its YouTube line
   "home-youtube-line-missing": ["home",
     "<li>Connect your own YouTube channel and upload your own videos to it, each one only after you approve the upload.</li>", ""]
@@ -389,9 +461,14 @@ function makeStorage() {
   }
   function bytesOf(o) { return o.queue && o.queue.length ? o.queue.shift() : o.buf; }
   const bucket = {
-    createSignedUploadUrl: async function (p) {
-      calls.push({ op: "sign", path: p });
+    // NAMED (Nov 18 2026, BV1): the upsert a part's URL asks for is recorded; createSignedUrl for the preview.
+    createSignedUploadUrl: async function (p, o) {
+      calls.push({ op: "sign", path: p, upsert: !!(o && o.upsert) });
       return { data: { signedUrl: "https://check.supabase.co/storage/v1/object/upload/sign/bf-video/" + p + "?token=" + SIGNED_TOKEN, path: p, token: SIGNED_TOKEN }, error: null };
+    },
+    createSignedUrl: async function (p, secs) {
+      calls.push({ op: "signRead", path: p, secs: secs });
+      return { data: { signedUrl: "https://check.supabase.co/storage/v1/object/sign/bf-video/" + p + "?token=" + SIGNED_TOKEN }, error: null };
     },
     download: function (p) {
       const builder = {
@@ -418,7 +495,7 @@ function makeStorage() {
       return { data: paths.map(function (p) { return { name: p }; }), error: null };
     },
     list: async function (prefix, opts) {
-      calls.push({ op: "list", prefix: prefix });
+      calls.push({ op: "list", prefix: prefix, search: opts && opts.search });
       const keys = Object.keys(objects);
       let items = [];
       if (prefix === "video") {
@@ -426,7 +503,10 @@ function makeStorage() {
         keys.forEach(function (k) { const m = /^video\/([^/]+)\//.exec(k); if (m) owners[m[1]] = true; });
         items = Object.keys(owners).map(function (n) { return { name: n, id: null }; });
       } else {
-        keys.forEach(function (k) { if (k.indexOf(prefix + "/") === 0 && k.slice(prefix.length + 1).indexOf("/") === -1) items.push({ name: k.slice(prefix.length + 1), id: "obj-" + sha(k).slice(0, 8), created_at: objects[k].created_at }); });
+        keys.forEach(function (k) { if (k.indexOf(prefix + "/") === 0 && k.slice(prefix.length + 1).indexOf("/") === -1) items.push({ name: k.slice(prefix.length + 1), id: "obj-" + sha(k).slice(0, 8), created_at: objects[k].created_at,
+          metadata: { size: objects[k].lazySize || objects[k].buf.length } }); });
+        // NAMED (Nov 18 2026, BV1): Storage's search matches names that contain it.
+        if (opts && opts.search) items = items.filter(function (it) { return it.name.indexOf(opts.search) !== -1; });
       }
       const off = (opts && opts.offset) || 0, lim = (opts && opts.limit) || 100;
       return { data: items.slice(off, off + lim), error: null };
@@ -439,7 +519,9 @@ function makeDb() {
   // NAMED, item 8 part 3a (Instagram posting): instagram_posts added; retention and deleting a video now read it.
   const t = { member_youtube_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], youtube_api_calls: [], business_profiles: [], instagram_posts: [],
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): lib/memberVideos.js reads facebook_posts too.
-    facebook_posts: [] };
+    facebook_posts: [],
+    // NAMED (Nov 18 2026, BV1, migration 187): the parts of a video over 50 MB.
+    member_video_parts: [] };
   const log = [];
   const fail = {};   // table -> error for the next read
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
@@ -448,6 +530,8 @@ function makeDb() {
     if (name === "member_youtube_connections" && others.some(function (r) { return r.user_id === row.user_id; })) return "member_youtube_connections_user_id_key";
     if (name === "member_videos" && row.path != null && others.some(function (r) { return r.path === row.path; })) return "member_videos_path_key";
     if (name === "job_runs" && others.some(function (r) { return r.job_name === row.job_name; })) return "job_runs_pkey";
+    if (name === "member_video_parts" && others.some(function (r) { return r.path === row.path; })) return "member_video_parts_path_key";
+    if (name === "member_video_parts" && others.some(function (r) { return r.upload_path === row.upload_path && r.idx === row.idx; })) return "member_video_parts_order_unique";
     return null;
   }
   function checkViolation(name, row) {
@@ -464,7 +548,9 @@ function makeDb() {
     }
     if (name === "member_videos") {
       if (["video/mp4", "video/webm", "video/quicktime"].indexOf(row.mime) === -1) return "member_videos_mime_check";
-      if (!(Number(row.bytes) > 0 && Number(row.bytes) <= 52428800)) return "member_videos_bytes_check";
+      // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 52428800. AFTER 524288000, and part_count 1..12.
+      if (!(Number(row.bytes) > 0 && Number(row.bytes) <= 524288000)) return "member_videos_bytes_check";
+      if (row.part_count != null && !(Number.isInteger(row.part_count) && row.part_count >= 1 && row.part_count <= 12)) return "member_videos_part_count_check";
       if (!/^[0-9a-f]{64}$/.test(row.sha256 || "")) return "member_videos_sha_check";
       if (String(row.label == null ? "" : row.label).length > 120) return "member_videos_label_check";
       if (["ready", "uploaded", "removed"].indexOf(row.status) === -1) return "member_videos_status_check";
@@ -481,6 +567,12 @@ function makeDb() {
       if ((row.purpose === "store_shopify") !== (row.flow_context != null)) return "oauth_states_context_check";
     }
     if (name === "youtube_api_calls" && ["radar", "social_search"].indexOf(row.caller) === -1) return "youtube_api_calls_caller_check";
+    if (name === "member_video_parts") {
+      if (!(Number.isInteger(row.idx) && row.idx >= 0 && row.idx <= 11)) return "member_video_parts_idx_check";
+      if (!(Number(row.bytes) > 0 && Number(row.bytes) <= 47185920)) return "member_video_parts_bytes_check";
+      if (!/^[0-9a-f]{64}$/.test(row.sha256 || "")) return "member_video_parts_sha_check";
+      if (!(/^video\/[0-9a-f-]{36}\/[0-9a-f]{32}(?:\.p[0-9]{2})?\.(mp4|webm|mov)$/.test(row.path || "") && String(row.path).indexOf("video/" + row.user_id + "/") === 0)) return "member_video_parts_path_check";
+    }
     return null;
   }
   function defaults(name, row) {
@@ -488,7 +580,7 @@ function makeDb() {
     const r = Object.assign({ id: uuid(), created_at: now }, row);
     if (name === "member_youtube_connections") { if (r.status === undefined) r.status = "connected"; if (r.token_version === undefined) r.token_version = 0; }
     if (name === "member_videos") {
-      if (r.status === undefined) r.status = "ready"; if (r.label === undefined) r.label = "";
+      if (r.status === undefined) r.status = "ready"; if (r.label === undefined) r.label = ""; if (r.part_count === undefined) r.part_count = 1;
       ["youtube_video_id", "session_ciphertext", "session_iv", "session_auth_tag", "uploaded_at"].forEach(function (k) { if (r[k] === undefined) r[k] = null; });
     }
     if (name === "oauth_states") { if (r.consumed_at === undefined) r.consumed_at = null; if (r.flow_context === undefined) r.flow_context = null; }
@@ -732,7 +824,8 @@ function makeGoogle(opts) {
       }
       EV.push("yt:put");
     }
-    const cutThis = isBodyPut && (o.cut || 0) >= g.bodyPuts;
+    // NAMED (Nov 18 2026, BV1): cutAt cuts only that body PUT (a later chunk), cut every one up to it.
+    const cutThis = isBodyPut && ((o.cut || 0) >= g.bodyPuts || o.cutAt === g.bodyPuts);
     req.destroy = function () { destroyed = true; };
     req.write = function (c) {
       if (destroyed || cut) return true;
@@ -1021,14 +1114,15 @@ function pageAnswers(over) {
     start.middleware[0] === requireAuth && start.middleware[1] === requireActiveSubscription && fin.middleware[0] === requireAuth &&
     fin.middleware[1] === requireActiveSubscription && fin.middleware[2] === start.middleware[2] && cLim.max === 10 && cLim.windowMs === 3600000 &&
     cLim.keyGenerator({ user: { id: USER } }) === "youtube-connect:" + USER);
+  // NAMED (Nov 18 2026, BV1): BEFORE thirteen routes, seven gated. AFTER part-url and part-done (a video's parts) are gated too.
   const gated = ["post /api/youtube/start", "post /api/youtube/finish", "post /api/videos/upload-url", "post /api/videos/finalize", "post /api/youtube/propose-upload",
-    "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete"];
+    "post /api/youtube/draft-metadata", "post /api/youtube/videos/:id/propose-delete", "post /api/videos/part-url", "post /api/videos/part-done"];
   // NAMED (Nov 17 2026, TK1): BEFORE twelve routes, five login-only. AFTER GET /api/videos/:id/preview (TikTok's preview of the
   // to-be-posted video) is a sixth login-only route.
   const loginOnly = ["get /api/youtube/status", "post /api/youtube/disconnect", "get /api/videos", "delete /api/videos/:id", "get /api/youtube/videos/:id/status",
     "get /api/videos/:id/preview"];
-  check("O2. the thirteen routes: seven behind a subscription, six login-only (status, disconnect, the list, delete, a video's status, the preview)",
-    Object.keys(m.routes).length === 13 &&
+  check("O2. the fifteen routes: nine behind a subscription, six login-only (status, disconnect, the list, delete, a video's status, the preview)",
+    Object.keys(m.routes).length === 15 &&
     gated.every(function (k) { return m.routes[k] && m.routes[k].middleware[0] === requireAuth && m.routes[k].middleware[1] === requireActiveSubscription; }) &&
     loginOnly.every(function (k) { return m.routes[k] && m.routes[k].middleware.length === 1 && m.routes[k].middleware[0] === requireAuth; }), Object.keys(m.routes).join(", "));
   // unconfigured
@@ -1202,15 +1296,17 @@ function pageAnswers(over) {
     !!upLim && m.routes["post /api/videos/finalize"].middleware[2] === m.routes["post /api/videos/upload-url"].middleware[2] && upLim.max === 10 && upLim.windowMs === 3600000 &&
     upLim.keyGenerator({ user: { id: USER } }) === "video-upload:" + USER);
   r = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 1048576, label: "Spring cakes" } });
-  check("V2. upload-url: a signed upload URL for video/<uid>/<32 hex>.mp4 in bf-video, and the 50 MB limit",
-    r.status === 200 && /^video\/00000000-0000-4000-8000-000000000001\/[0-9a-f]{32}\.mp4$/.test(r.body.path || "") && r.body.max_bytes === 52428800 &&
+  // NAMED (Nov 18 2026, BV1): BEFORE max_bytes 52428800. AFTER 524288000 (500 MB); at most 50 MB is still one signed URL.
+  check("V2. upload-url: a signed upload URL for video/<uid>/<32 hex>.mp4 in bf-video, and the 500 MB limit",
+    r.status === 200 && /^video\/00000000-0000-4000-8000-000000000001\/[0-9a-f]{32}\.mp4$/.test(r.body.path || "") && r.body.max_bytes === 524288000 &&
     r.body.mime === "video/mp4" && typeof r.body.upload_url === "string" && m.storage.calls.filter(function (x) { return x.op === "sign"; }).length === 1, J([r.status, r.body.path]));
   const rMov = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/quicktime", bytes: 10 } });
   const rWebm = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/webm", bytes: 10 } });
   const rGif = await hit(m, "post /api/videos/upload-url", { body: { mime: "image/heic", bytes: 10 } });
-  const rBig = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 52428801 } });
+  // NAMED (Nov 18 2026, BV1): BEFORE 52428801 was too big. AFTER 524288001 is.
+  const rBig = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 524288001 } });
   const rZero = await hit(m, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 0 } });
-  check("V3. MOV and WebM take .mov and .webm; another type is 400, over 50 MB is 413, zero bytes is 400",
+  check("V3. MOV and WebM take .mov and .webm; another type is 400, over 500 MB is 413, zero bytes is 400",
     /\.mov$/.test(rMov.body.path || "") && /\.webm$/.test(rWebm.body.path || "") && rGif.status === 400 && rGif.body.code === "unsupported" && rBig.status === 413 && rZero.status === 400,
     J([rMov.status, rWebm.status, rGif.status, rBig.status, rZero.status]));
   // finalize
@@ -1736,15 +1832,315 @@ function pageAnswers(over) {
   const vr2 = await attempt(m.ctx.videoRetentionTick());
   check("J7. ...and never rejects: a failing pass is logged by its code and answered null", vr2.ok && vr2.v === null && LOGS.some(function (l) { return l === "[VideoRetention] Scheduled run error: boom"; }));
 
+  /* ── BV ── NAMED (Nov 18 2026, BV1, migration 187): videos over 50 MB, stored as parts of 45 MiB within the Supabase
+     Free plan's 50 MB per-file limit; the storage budget; YouTube's resumable upload in 256 KB-multiple chunks, part by part;
+     the preview of the first part; deletion and retention of every part; abandoned parts. */
+  OUT("\n══ BV. videos over 50 MB, as parts ══");
+  {
+    const PB = MV.PART_BYTES;
+    const MIB = 1024 * 1024;
+    // An MP4 of `total` bytes: ftyp, an mdat of filler, then moov (its mvhd says 90.5 s) at `moovAt`, then a free box.
+    const bigMp4 = function (total, moovAt, seed) {
+      const ftyp = mp4("isom", 24).subarray(0, 24);
+      const mdat = Buffer.alloc(moovAt - 24);
+      mdat.writeUInt32BE(moovAt - 24, 0); mdat.write("mdat", 4, "latin1");
+      filler(moovAt - 32, seed || 11).copy(mdat, 8);
+      const mvhd = Buffer.alloc(108);
+      mvhd.writeUInt32BE(108, 0); mvhd.write("mvhd", 4, "latin1"); mvhd.writeUInt32BE(1000, 20); mvhd.writeUInt32BE(90500, 24);
+      const moovHead = Buffer.alloc(8); moovHead.writeUInt32BE(116, 0); moovHead.write("moov", 4, "latin1");
+      const rest = total - moovAt - 116;
+      const free = Buffer.alloc(rest); free.writeUInt32BE(rest, 0); free.write("free", 4, "latin1");
+      return Buffer.concat([ftyp, mdat, moovHead, mvhd, free]);
+    };
+    const splitParts = function (buf) {
+      const sizes = MV.partSizes(buf.length), out = [];
+      let at = 0;
+      sizes.forEach(function (n) { out.push(buf.subarray(at, at + n)); at += n; });
+      return out;
+    };
+    // A finalized parted video: its objects, its part rows (tied by video_id) and its row, part_count n.
+    const seedParted = function (db, buf, over) {
+      const userId = (over && over.user_id) || USER;
+      const p = (over && over.path) || videoPath(userId, "mp4");
+      const parts = splitParts(buf);
+      const row = seedVideo(db, buf, Object.assign({ path: p, part_count: parts.length }, over || {}));
+      delete db.storage.objects[p];
+      parts.forEach(function (b, i) {
+        const pp = MV.partPath(p, i);
+        db.storage.objects[pp] = { buf: b, created_at: new Date(Date.now() - 3 * 86400000).toISOString() };
+        db.t.member_video_parts.push({ id: uuid(), user_id: userId, video_id: row.id, upload_path: p, idx: i, path: pp, bytes: b.length, sha256: sha(b),
+          created_at: new Date(Date.now() - 3 * 86400000).toISOString() });
+      });
+      return row;
+    };
+    // The browser's side of a parted upload, through the routes: part-url, the PUT (straight into the bucket), part-done.
+    const putParts = async function (mm, buf, p, skip) {
+      const answers = [];
+      const parts = splitParts(buf);
+      for (let i = 0; i < parts.length; i++) {
+        if (skip && skip.indexOf(i) !== -1) continue;
+        const u = await hit(mm, "post /api/videos/part-url", { body: { path: p, idx: i, bytes: buf.length } });
+        mm.storage.objects[MV.partPath(p, i)] = { buf: parts[i], created_at: new Date().toISOString() };
+        const d = await hit(mm, "post /api/videos/part-done", { body: { path: p, idx: i, bytes: buf.length, sha256: sha(parts[i]) } });
+        answers.push([u.status, d.status]);
+      }
+      return answers;
+    };
+
+    // the plan
+    check("BV1. the parts: 45 MiB each (180 x 256 KiB), the last what is left; a video of at most 50 MB is one object; 500 MB is 12 parts",
+      PB === 47185920 && PB % 262144 === 0 && MV.ONE_FILE_MAX_BYTES === 52428800 && MV.MAX_BYTES === 524288000 && MV.PARTS_MAX === 12 &&
+      J(MV.partSizes(52428800)) === "[]" && J(MV.partSizes(52428801)) === J([PB, 52428801 - PB]) && MV.partSizes(524288000).length === 12 &&
+      MV.partSizes(524288000).slice(0, 11).every(function (n) { return n === PB; }) && MV.partSizes(524288000)[11] === 524288000 - 11 * PB &&
+      J(MV.partSizes(524288001)) === "[]", J(MV.partSizes(524288000)));
+    const pBase = videoPath(USER, "mov");
+    check("BV2. part 0 is the video's own path; part i adds .p<NN> before the extension, the pattern of migration 187's path check",
+      MV.partPath(pBase, 0) === pBase && MV.partPath(pBase, 1) === pBase.replace(/\.mov$/, ".p01.mov") && MV.partPath(pBase, 11) === pBase.replace(/\.mov$/, ".p11.mov") &&
+      MV.partPath(pBase, 12) === null && MV.PART_PATH_RE.test(MV.partPath(pBase, 7)) && !MV.PATH_RE.test(MV.partPath(pBase, 7)) &&
+      MV.PART_PATH_RE.source === "^video\\/[0-9a-f-]{36}\\/[0-9a-f]{32}(?:\\.p[0-9]{2})?\\.(mp4|webm|mov)$");
+
+    // upload-url over 50 MB: the plan, no URL
+    let mm = mountRoutes({ env: CONFIGURED });
+    let ru = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 300 * MIB, label: "Long cut" } });
+    check("BV3. upload-url over 50 MB: the plan (parts 7, part_bytes 45 MiB, max_bytes 500 MiB) and NO signed URL; each part asks for its own",
+      ru.status === 200 && ru.body.parts === 7 && ru.body.part_bytes === PB && ru.body.max_bytes === 524288000 && !("upload_url" in ru.body) &&
+      /^video\/00000000-0000-4000-8000-000000000001\/[0-9a-f]{32}\.mp4$/.test(ru.body.path || "") && mm.storage.calls.filter(function (x) { return x.op === "sign"; }).length === 0, J([ru.status, ru.body]));
+    const r500 = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 524288000 } });
+    const r501 = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 524288001 } });
+    check("BV4. exactly 500 MB is taken (12 parts); one byte more is 413 \"A video is at most 500 MB.\"",
+      r500.status === 200 && r500.body.parts === 12 && r501.status === 413 && r501.body.code === "too_big" && r501.body.error === "A video is at most 500 MB.", J([r500.status, r501.status, r501.body.error]));
+
+    // the storage budget
+    mm = mountRoutes({ env: CONFIGURED });
+    mm.db.t.member_videos.push({ id: uuid(), user_id: OTHER, path: videoPath(OTHER), mime: "video/mp4", bytes: 450 * MIB, sha256: sha("a"), status: "ready", label: "" });
+    mm.db.t.member_videos.push({ id: uuid(), user_id: OTHER, path: videoPath(OTHER), mime: "video/mp4", bytes: 400 * MIB, sha256: sha("b"), status: "ready", label: "" });
+    mm.db.t.member_videos.push({ id: uuid(), user_id: OTHER, path: null, mime: "video/mp4", bytes: 500 * MIB, sha256: sha("c"), status: "uploaded", label: "" });
+    const fits = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 50 * MIB } });
+    const over = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 50 * MIB + 1 } });
+    const signsBefore = mm.storage.calls.filter(function (x) { return x.op === "sign"; }).length;
+    check("BV5. the budget (900 MiB by default): every member's stored files count (850 MiB here; a deleted file does not); 50 MiB more fits, one byte more is refused 409 storage_full with the brief's words, and nothing is signed for it",
+      MV.BUDGET_BYTES_DEFAULT === 900 * MIB && fits.status === 200 && over.status === 409 && over.body.code === "storage_full" &&
+      over.body.error === "Storage is full right now. Post or delete a waiting video first." && signsBefore === 1, J([fits.status, over.status, over.body]));
+    mm.db.t.member_video_parts.push({ id: uuid(), user_id: OTHER, video_id: null, upload_path: videoPath(OTHER), idx: 0, path: videoPath(OTHER), bytes: 10 * MIB, sha256: sha("d"), created_at: new Date().toISOString() });
+    const withParts = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 45 * MIB } });
+    check("BV6. ...and parts of an upload under way count too (10 MiB here)", withParts.status === 409 && withParts.body.code === "storage_full", J([withParts.status, withParts.body.code]));
+    const mmEnv = mountRoutes({ env: Object.assign({ VIDEO_STORAGE_BUDGET_BYTES: String(2000 * MIB) }, CONFIGURED) });
+    mmEnv.db.t.member_videos.push({ id: uuid(), user_id: OTHER, path: videoPath(OTHER), mime: "video/mp4", bytes: 450 * MIB, sha256: sha("a"), status: "ready", label: "" });
+    mmEnv.db.t.member_videos.push({ id: uuid(), user_id: OTHER, path: videoPath(OTHER), mime: "video/mp4", bytes: 450 * MIB, sha256: sha("b"), status: "ready", label: "" });
+    const roomy = await hit(mmEnv, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 400 * MIB } });
+    check("BV7. the budget is configurable: VIDEO_STORAGE_BUDGET_BYTES 2000 MiB takes 400 MiB more; a bad value falls back to 900 MiB",
+      roomy.status === 200 && MV.budgetBytes({ VIDEO_STORAGE_BUDGET_BYTES: "lots" }) === 900 * MIB && MV.budgetBytes({ VIDEO_STORAGE_BUDGET_BYTES: "0" }) === 900 * MIB &&
+      MV.budgetBytes({}) === 900 * MIB, J([roomy.status, roomy.body.code]));
+    mm = mountRoutes({ env: CONFIGURED });
+    mm.db.fail.member_video_parts = { message: "down" };
+    const unknown = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: 10 } });
+    check("BV8. storage that can't be counted refuses (503 storage_unknown), never guesses; the ready cap of 2 still applies first",
+      unknown.status === 503 && unknown.body.code === "storage_unknown" && MV.READY_MAX === 2, J([unknown.status, unknown.body.code]));
+
+    // a whole parted upload: part-url, PUT, part-done, finalize
+    const T = PB + 6 * MIB;
+    const big = bigMp4(T, PB - 50, 21);
+    mm = mountRoutes({ env: CONFIGURED });
+    ru = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: T, label: "Two parts" } });
+    const bp = ru.body.path;
+    const urls = [];
+    for (let i = 0; i < 2; i++) urls.push(await hit(mm, "post /api/videos/part-url", { body: { path: bp, idx: i, bytes: T } }));
+    const signs = mm.storage.calls.filter(function (x) { return x.op === "sign"; });
+    check("BV9. part-url: one signed upload URL per part, for that part's own path, that may replace a failed try (upsert); the size each must be",
+      urls.every(function (x) { return x.status === 200 && typeof x.body.upload_url === "string"; }) && urls[0].body.bytes === PB && urls[1].body.bytes === T - PB &&
+      signs.length === 2 && signs[0].path === bp && signs[1].path === MV.partPath(bp, 1) && signs.every(function (x) { return x.upsert === true; }), J(signs));
+    const badIdx = await hit(mm, "post /api/videos/part-url", { body: { path: bp, idx: 2, bytes: T } });
+    const foreign = await hit(mm, "post /api/videos/part-url", { body: { path: videoPath(OTHER), idx: 0, bytes: T } });
+    const smallVid = await hit(mm, "post /api/videos/part-url", { body: { path: bp, idx: 0, bytes: 1000 } });
+    check("BV10. ...a part past the last is 400 bad_part, another member's path 400 bad_path, a video of at most 50 MB has no parts (400)",
+      badIdx.status === 400 && badIdx.body.code === "bad_part" && foreign.status === 400 && foreign.body.code === "bad_path" && smallVid.status === 400, J([badIdx.status, foreign.status, smallVid.status]));
+    const parts2 = splitParts(big);
+    const missing = await hit(mm, "post /api/videos/part-done", { body: { path: bp, idx: 0, bytes: T, sha256: sha(parts2[0]) } });
+    mm.storage.objects[MV.partPath(bp, 1)] = { buf: Buffer.from(parts2[1].subarray(1)), created_at: new Date().toISOString() };
+    const wrongSize = await hit(mm, "post /api/videos/part-done", { body: { path: bp, idx: 1, bytes: T, sha256: sha(parts2[1]) } });
+    check("BV11. part-done: a part not in storage is 404 part_missing; a part of the wrong size (read from Storage's listing, nothing downloaded) is deleted, 422 part_size",
+      missing.status === 404 && missing.body.code === "part_missing" && wrongSize.status === 422 && wrongSize.body.code === "part_size" && wrongSize.body.deleted === true &&
+      !mm.storage.objects[MV.partPath(bp, 1)] && mm.db.t.member_video_parts.length === 0 && !mm.storage.calls.some(function (x) { return x.op === "stream" || x.op === "whole"; }),
+      J([missing.status, wrongSize.status, wrongSize.body.code]));
+    const early = await hit(mm, "post /api/videos/finalize", { body: { path: bp, label: "Two parts", bytes: T } });
+    check("BV12. finalize before every part is recorded: 409 parts_missing, nothing deleted, no row", early.status === 409 && early.body.code === "parts_missing" && mm.db.t.member_videos.length === 0,
+      J([early.status, early.body]));
+    const done2 = await putParts(mm, big, bp);
+    const partRows = mm.db.t.member_video_parts.slice().sort(function (a2, b2) { return a2.idx - b2.idx; });
+    check("BV13. each part recorded in order with its path, size and the sha256 the browser computed, not yet a video's (video_id null)",
+      J(done2) === J([[200, 200], [200, 200]]) && partRows.length === 2 && partRows.every(function (x, i) { return x.idx === i && x.path === MV.partPath(bp, i) && x.bytes === parts2[i].length && x.sha256 === sha(parts2[i]) && x.video_id === null && x.user_id === USER; }),
+      J(done2));
+    mm.storage.calls.length = 0;
+    const fin = await hit(mm, "post /api/videos/finalize", { body: { path: bp, label: "Two parts", bytes: T } });
+    const brow = mm.db.t.member_videos[0] || {};
+    check("BV14. finalize: every part read ONCE, in order, as streams; the row holds the WHOLE file's size and sha256, part_count 2, status ready",
+      fin.status === 201 && brow.sha256 === sha(big) && Number(brow.bytes) === T && brow.part_count === 2 && brow.status === "ready" && brow.path === bp &&
+      J(mm.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) === J([bp, MV.partPath(bp, 1)]) &&
+      !mm.storage.calls.some(function (x) { return x.op === "whole"; }), J([fin.status, fin.body.code, mm.storage.calls]));
+    check("BV15. the length is read from the mvhd box even though moov starts in part 1 and ends in part 2 (90.5 s)", brow.duration_ms === 90500, brow.duration_ms);
+    check("BV16. the parts now belong to the video (video_id), and what the member sees says 2 parts and that Instagram and Facebook can't take it",
+      mm.db.t.member_video_parts.every(function (x) { return x.video_id === brow.id; }) && fin.body.video && fin.body.video.parts === 2 && fin.body.video.fits_meta === false &&
+      !("path" in fin.body.video) && !("sha256" in fin.body.video), J(fin.body.video));
+    const again = await hit(mm, "post /api/videos/part-url", { body: { path: bp, idx: 0, bytes: T } });
+    check("BV17. once it is a video, its parts can't be asked for again (409 already)", again.status === 409 && again.body.code === "already", J([again.status]));
+
+    // a part that isn't what the browser said
+    mm = mountRoutes({ env: CONFIGURED });
+    ru = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: T } });
+    await putParts(mm, big, ru.body.path);
+    const swapped = Buffer.from(parts2[1]); swapped[100] ^= 0xff;
+    mm.storage.objects[MV.partPath(ru.body.path, 1)].buf = swapped;
+    const bad = await hit(mm, "post /api/videos/finalize", { body: { path: ru.body.path, label: "", bytes: T } });
+    check("BV18. a part whose bytes are not the recorded sha256: 422 part_mismatch, EVERY part deleted with its row, no video",
+      bad.status === 422 && bad.body.code === "part_mismatch" && bad.body.deleted === true && mm.db.t.member_videos.length === 0 && mm.db.t.member_video_parts.length === 0 &&
+      Object.keys(mm.storage.objects).length === 0, J([bad.status, bad.body.code, Object.keys(mm.storage.objects).length]));
+    mm = mountRoutes({ env: CONFIGURED });
+    ru = await hit(mm, "post /api/videos/upload-url", { body: { mime: "video/mp4", bytes: T } });
+    const pngParts = splitParts(Buffer.concat([Buffer.from("not a video at all"), big.subarray(18)]));
+    for (let i = 0; i < 2; i++) {
+      mm.storage.objects[MV.partPath(ru.body.path, i)] = { buf: Buffer.from(pngParts[i]), created_at: new Date().toISOString() };
+      await hit(mm, "post /api/videos/part-done", { body: { path: ru.body.path, idx: i, bytes: T, sha256: sha(pngParts[i]) } });
+    }
+    const notVideo = await hit(mm, "post /api/videos/finalize", { body: { path: ru.body.path, label: "", bytes: T } });
+    check("BV19. parts whose first bytes are not a video: 422 unsupported, every part and row deleted",
+      notVideo.status === 422 && notVideo.body.code === "unsupported" && mm.db.t.member_video_parts.length === 0 && Object.keys(mm.storage.objects).length === 0, J([notVideo.status, notVideo.body.code]));
+
+    // the routes
+    const partLim = mm.routes["post /api/videos/part-url"].middleware[2] && mm.routes["post /api/videos/part-url"].middleware[2].limiter;
+    const bare = mountRoutes({});
+    const offUrl = await hit(bare, "post /api/videos/part-url", { body: { path: bp, idx: 0, bytes: T } });
+    const offDone = await hit(bare, "post /api/videos/part-done", { body: { path: bp, idx: 0, bytes: T, sha256: sha("x") } });
+    check("BV20. part-url and part-done: login and an active subscription, their own limiter (120 an hour, video-part:<id>); 503 when no video platform is set up",
+      !!partLim && mm.routes["post /api/videos/part-done"].middleware[2] === mm.routes["post /api/videos/part-url"].middleware[2] && partLim.max === 120 &&
+      partLim.keyGenerator({ user: { id: USER } }) === "video-part:" + USER && mm.routes["post /api/videos/part-url"].middleware[0] === requireAuth &&
+      mm.routes["post /api/videos/part-url"].middleware[1] === requireActiveSubscription && offUrl.status === 503 && offDone.status === 503, J([partLim && partLim.max, offUrl.status, offDone.status]));
+
+    // YouTube: streamed part by part, in 256 KB-multiple chunks
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, big);
+    await file(m, video);
+    prop = m.db.t.agent_proposals[0];
+    m.storage.calls.length = 0;
+    a = await approve(m, prop);
+    let ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    let yp = m.google.puts();
+    check("BV21. YouTube gets a parted video in chunks: two PUTs, \"bytes 0-47185919/T\" then \"bytes 47185920-(T-1)/T\", and the whole file arrives intact",
+      a.ok && yp.length === 2 && yp[0].contentRange === "bytes 0-" + (PB - 1) + "/" + T && yp[1].contentRange === "bytes " + PB + "-" + (T - 1) + "/" + T &&
+      !!ys && ys.done && sha(ys.received) === sha(big) && rowOf(m, video.id).youtube_video_id === YT_ID && m.google.queries().length === 0, a.ok ? J(yp.map(function (x) { return x.contentRange; })) : a.msg);
+    check("BV22. every chunk but the last is a multiple of 256 KB and the same size; no PUT is over a part (the file is never held whole)",
+      Number(yp[0].contentLength) === PB && Number(yp[0].contentLength) % 262144 === 0 && Number(yp[1].contentLength) === T - PB &&
+      yp.every(function (x) { return Number(x.contentLength) <= PB; }), J(yp.map(function (x) { return x.contentLength; })));
+    check("BV23. the parts are read as streams from Storage, each twice (the check before sending, then its chunk), never as a whole download",
+      J(m.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) === J([video.path, MV.partPath(video.path, 1), video.path, MV.partPath(video.path, 1)]) &&
+      !m.storage.calls.some(function (x) { return x.op === "whole"; }), J(m.storage.calls));
+    // a cut in the second chunk: resume from YouTube's Range
+    m = mountRoutes({ env: CONFIGURED, google: { cutAt: 2 } });
+    seedConnection(m.db);
+    video = seedParted(m.db, big);
+    await file(m, video);
+    prop = m.db.t.agent_proposals[0];
+    a = await approve(m, prop);
+    ys = m.google.sessions[Object.keys(m.google.sessions)[0]];
+    yp = m.google.puts();
+    const q = m.google.queries();
+    const resumedAt = yp[2] ? Number(/^bytes (\d+)-/.exec(yp[2].contentRange)[1]) : -1;
+    check("BV24. the second chunk cut halfway: ONE status query, then the rest from Range + 1 (mid-part), and the file arrives intact",
+      a.ok && q.length === 1 && yp.length === 3 && resumedAt > PB && resumedAt < T && yp[2].contentRange === "bytes " + resumedAt + "-" + (T - 1) + "/" + T &&
+      !!ys && ys.done && sha(ys.received) === sha(big), a.ok ? J(yp.map(function (x) { return x.contentRange; })) : a.msg);
+    // a part changed after filing
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, big);
+    await file(m, video);
+    prop = m.db.t.agent_proposals[0];
+    m.storage.objects[MV.partPath(video.path, 1)].buf = swapped;
+    a = await approve(m, prop);
+    check("BV25. a part changed after filing: refused with the fingerprint words before any session is started", !a.ok && /no longer matches the one you filed/.test(a.msg || "") &&
+      m.google.starts().length === 0 && m.google.puts().length === 0, a.msg);
+    // the part check holds a part's last bytes back
+    const held = [];
+    let heldErr = null;
+    try {
+      const stream = MV.openRange(m.storage, [{ idx: 0, path: video.path, start: 0, bytes: PB, sha256: sha(parts2[0]) }, { idx: 1, path: MV.partPath(video.path, 1), start: PB, bytes: T - PB, sha256: sha(parts2[1]) }], PB, T);
+      for await (const c of stream) held.push(c.length);
+    } catch (e) { heldErr = e; }
+    check("BV26. openRange: a part that isn't its recorded self errors part_mismatch, and its last bytes never go out",
+      !!heldErr && heldErr.code === "part_mismatch" && held.reduce(function (s2, n) { return s2 + n; }, 0) < T - PB, J([heldErr && heldErr.code, held.length]));
+    const okRange = [];
+    const s2 = MV.openRange(mm.storage, MV.partSizes(T).map(function (n, i) { return { idx: i, path: "x", start: i * PB, bytes: n, sha256: "" }; }), 0, 0);
+    for await (const c of s2) okRange.push(c);
+    check("BV27. ...and a range touching no part reads nothing from Storage", okRange.length === 0);
+
+    // the preview, deletion and retention
+    mm = mountRoutes({ env: CONFIGURED });
+    const pv = seedParted(mm.db, big);
+    const prev = await hit(mm, "get /api/videos/:id/preview", { params: { id: pv.id } });
+    check("BV28. the preview of a parted video is its first part, and says \"Preview shows the start of the video.\"",
+      prev.status === 200 && prev.body.partial === true && prev.body.note === "Preview shows the start of the video." && prev.body.url.indexOf("/" + pv.path + "?") !== -1, J(prev.body));
+    const one = seedVideo(mm.db, mp4("isom", 5000));
+    const prev1 = await hit(mm, "get /api/videos/:id/preview", { params: { id: one.id } });
+    check("BV29. ...a video of one object has no such note", prev1.status === 200 && !("partial" in prev1.body) && !("note" in prev1.body), J(prev1.body));
+    mm.storage.calls.length = 0;
+    const pvPath = pv.path;   // the row object itself is updated (path null) by the delete
+    const del = await hit(mm, "delete /api/videos/:id", { params: { id: pv.id } });
+    const removed = mm.storage.calls.filter(function (x) { return x.op === "remove"; });
+    check("BV30. Delete removes EVERY part (one call, both paths), then the part rows; the video's file is gone",
+      del.status === 200 && removed.length === 1 && J(removed[0].paths) === J([pvPath, MV.partPath(pvPath, 1)]) && !mm.storage.objects[pvPath] &&
+      !mm.storage.objects[MV.partPath(pvPath, 1)] && mm.db.t.member_video_parts.length === 0 && rowOf(mm, pv.id).path === null,
+      J([del.status, removed.length, mm.db.t.member_video_parts.length, rowOf(mm, pv.id).path, Object.keys(mm.storage.objects).length]));
+    const now = Date.parse("2026-12-01T12:00:00.000Z");
+    db = makeDb();
+    const old = seedParted(db, big, { created_at: new Date(now - 15 * 86400000).toISOString() });
+    const oldPath = old.path;   // the row object itself is updated (path null) by the pass
+    const fresh = seedParted(db, bigMp4(T, 500, 3), { created_at: new Date(now - 86400000).toISOString() });
+    const loosePath = videoPath(USER);
+    db.storage.objects[loosePath] = { buf: Buffer.alloc(100), created_at: new Date(now - 30 * 3600000).toISOString() };
+    db.storage.objects[MV.partPath(loosePath, 1)] = { buf: Buffer.alloc(100), created_at: new Date(now - 30 * 3600000).toISOString() };
+    db.t.member_video_parts.push({ id: uuid(), user_id: USER, video_id: null, upload_path: loosePath, idx: 0, path: loosePath, bytes: 100, sha256: sha("x"), created_at: new Date(now - 25 * 3600000).toISOString() });
+    db.t.member_video_parts.push({ id: uuid(), user_id: USER, video_id: null, upload_path: loosePath, idx: 1, path: MV.partPath(loosePath, 1), bytes: 100, sha256: sha("y"), created_at: new Date(now - 25 * 3600000).toISOString() });
+    const recentPath = videoPath(USER);
+    db.storage.objects[recentPath] = { buf: Buffer.alloc(100), created_at: new Date(now - 3600000).toISOString() };
+    db.t.member_video_parts.push({ id: uuid(), user_id: USER, video_id: null, upload_path: recentPath, idx: 0, path: recentPath, bytes: 100, sha256: sha("z"), created_at: new Date(now - 3600000).toISOString() });
+    // a live video whose parts were never tied to it (video_id null): never abandoned, never an orphan
+    const untied = seedParted(db, bigMp4(T, 600, 4), { created_at: new Date(now - 2 * 86400000).toISOString() });
+    db.t.member_video_parts.forEach(function (x) { if (x.upload_path === untied.path) { x.video_id = null; x.created_at = new Date(now - 2 * 86400000).toISOString(); } });
+    const tk = await MV.retentionTick({ supabase: db, storage: db.storage, now: function () { return now; } }, now);
+    check("BV31. retention, 14 days on: EVERY part of the old video is deleted, its row file-gone and its part rows gone",
+      tk.expired === 1 && !db.storage.objects[oldPath] && !db.storage.objects[MV.partPath(oldPath, 1)] && rowOf({ db: db }, old.id).path === null &&
+      !db.t.member_video_parts.some(function (x) { return x.upload_path === oldPath; }), J(tk));
+    check("BV32. abandoned parts (no video, over 24 hours) are deleted, objects and rows; a part from an hour ago stays",
+      tk.abandoned === 2 && !db.storage.objects[loosePath] && !db.storage.objects[MV.partPath(loosePath, 1)] && !db.t.member_video_parts.some(function (x) { return x.upload_path === loosePath; }) &&
+      !!db.storage.objects[recentPath] && db.t.member_video_parts.some(function (x) { return x.upload_path === recentPath; }), J(tk));
+    check("BV33. a waiting parted video's parts are kept: not old, not abandoned (even untied), not orphans",
+      !!db.storage.objects[fresh.path] && !!db.storage.objects[MV.partPath(fresh.path, 1)] && !!db.storage.objects[untied.path] && !!db.storage.objects[MV.partPath(untied.path, 1)] &&
+      db.t.member_video_parts.filter(function (x) { return x.upload_path === untied.path; }).length === 2 && tk.orphans === 0, J(tk));
+    const dbB = makeDb();
+    const bothV = seedParted(dbB, big, { youtube_video_id: YT_ID, tiktok_status: "posted" });
+    const bothPath = bothV.path;
+    dbB.t.instagram_posts.push({ id: uuid(), user_id: USER, video_id: bothV.id, status: "published" });
+    dbB.t.facebook_posts.push({ id: uuid(), user_id: USER, video_id: bothV.id, status: "published" });
+    const tkB = await MV.retentionTick({ supabase: dbB, storage: dbB.storage, now: function () { return now; } }, now);
+    check("BV34. every platform has it: EVERY part is deleted early, the row uploaded, its part rows gone",
+      tkB.both === 1 && !!bothPath && !dbB.storage.objects[bothPath] && !dbB.storage.objects[MV.partPath(bothPath, 1)] && rowOf({ db: dbB }, bothV.id).status === "uploaded" &&
+      dbB.t.member_video_parts.length === 0, J(tkB));
+    const dbL = makeDb();
+    const leftV = seedParted(dbL, big, { status: "uploaded", youtube_video_id: YT_ID });
+    const tkL = await MV.retentionTick({ supabase: dbL, storage: dbL.storage, now: function () { return now; } }, now);
+    check("BV35. an uploaded video's leftover parts: every one deleted, then path null", tkL.leftovers === 1 && Object.keys(dbL.storage.objects).length === 0 && rowOf({ db: dbL }, leftV.id).path === null, J(tkL));
+    check("BV36. the pass's log line names the abandoned parts", LOGS.some(function (l) { return /part\(s\) of uploads that never finished/.test(l); }));
+  }
+
   /* ── P ── */
   OUT("\n══ P. the pages ══");
   check("P1. the Social page: the three lines word for word, the panel, and the script after mastodon-connect.js",
-    FILES.page.indexOf("<p class=\"bsky-quiet\">Videos up to 50 MB (MP4, WebM or MOV).</p>") !== -1 &&
+    // NAMED (Nov 18 2026, BV1): BEFORE "Videos up to 50 MB (MP4, WebM or MOV)." AFTER the per-platform limits.
+    FILES.page.indexOf("<p class=\"bsky-quiet\">Videos up to 500 MB for YouTube and TikTok (MP4, WebM or MOV). Instagram and Facebook take videos up to 50 MB.</p>") !== -1 &&
     // NAMED (Nov 7 2026, TikTok posting): BEFORE "as soon as YouTube has it, or after 14 days if it's never uploaded"; AFTER every platform.
     FILES.page.indexOf("<p class=\"bsky-quiet\">BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.</p>") !== -1 &&
     FILES.page.indexOf("<p class=\"bsky-quiet\">Until Google approves BizForce, YouTube keeps uploads from BizForce private.</p>") !== -1 &&
     FILES.page.indexOf("id=\"ytConnect\"") !== -1 && FILES.page.indexOf("<script src=\"/scripts/youtube.js\"></script>") > FILES.page.indexOf("mastodon-connect.js"));
-  check("P2. the same three lines are the server's own (lib/memberVideos.js MESSAGES)", MV.MESSAGES.limits === "Videos up to 50 MB (MP4, WebM or MOV)." &&
+  check("P2. the same three lines are the server's own (lib/memberVideos.js MESSAGES)", MV.MESSAGES.limits === "Videos up to 500 MB for YouTube and TikTok (MP4, WebM or MOV). Instagram and Facebook take videos up to 50 MB." &&
     MV.MESSAGES.kept === "BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it." &&
     MV.MESSAGES.privateUntilVerified === "Until Google approves BizForce, YouTube keeps uploads from BizForce private.");
   let dom = runPage("?code=" + encodeURIComponent(CODE) + "&state=" + "S".repeat(43), pageAnswers());
@@ -1806,12 +2202,13 @@ function pageAnswers(over) {
     dom.xhr[0].url.indexOf("https://check.supabase.co/") === 0 && dom.xhr[0].headers["Content-Type"] === "video/mp4" && !!finz &&
     J(finz.body) === J({ path: "video/" + USER + "/" + "a".repeat(32) + ".mp4", label: "Spring cakes", bytes: 3 * 1048576 }), J(dom.fetches.map(function (x) { return x.path; })));
   const before = dom.fetches.length;
-  dom.get("ytFile").files = [{ name: "big.mp4", type: "video/mp4", size: 52428801 }];
+  // NAMED (Nov 18 2026, BV1): BEFORE 52428801 was refused on the page. AFTER over 500 MB is.
+  dom.get("ytFile").files = [{ name: "big.mp4", type: "video/mp4", size: 524288001 }];
   dom.get("ytFile").fire("change");
   dom.get("ytFile").files = [{ name: "photo.heic", type: "image/heic", size: 1000 }];
   dom.get("ytFile").fire("change");
   await flush();
-  check("P11. over 50 MB, or not MP4, WebM or MOV: refused on the page, nothing sent", dom.fetches.length === before && dom.xhr.length === 1);
+  check("P11. over 500 MB, or not MP4, WebM or MOV: refused on the page, nothing sent", dom.fetches.length === before && dom.xhr.length === 1);
   const list = dom.get("ytVideoList");
   /* NAMED (Nov 12 2026, Social page clean-up): BEFORE the form was built hidden under every ready row ("Prepare upload"), and
      "Made for kids?" was a fieldset LEGEND. AFTER it opens under the row on "Prepare for YouTube" (YouTube connected), and
@@ -1965,14 +2362,16 @@ function pageAnswers(over) {
     // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., Connect Facebook and Connect Etsy". AFTER Connect Amazon is named last.
     FILES.yourData.indexOf("Temporary sign-in states for Sign in with Microsoft, Connect Shopify, Connect YouTube, Connect TikTok, Connect Instagram, Connect Facebook, Connect Etsy and Connect Amazon") !== -1 &&
     FILES.yourData.indexOf("{ name: \"YouTube (Google)\", for: \"uploading the videos you approve to your own channel, when you connect it\" }") !== -1 &&
-    FILES.yourData.indexOf("\"member_media\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
+    // NAMED (Nov 18 2026, BV1, migration 187): member_video_parts is deleted before member_videos.
+    FILES.yourData.indexOf("\"member_media\", \"member_video_parts\", \"member_videos\",") !== -1 && FILES.yourData.indexOf("\"member_youtube_connections\", \"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1);
   check("G7. schemaCheck knows both tables at migration 177; backup leaves both out; accountFiles lists bf-video",
     FILES.schema.split("177_youtube_uploads.sql").length - 1 >= 2 && /member_videos/.test(FILES.backup) && /member_youtube_connections/.test(FILES.backup) &&
     FILES.accountFiles.indexOf("const BUCKETS = [PUBLIC, BOOKS, GOODS, MUSIC, VIDEO];") !== -1 && FILES.accountFiles.indexOf("const VIDEO = \"bf-video\";") !== -1);
   check("G8. README: the two env vars and the YouTube app setup", FILES.readme.indexOf("GOOGLE_OAUTH_CLIENT_ID") !== -1 && FILES.readme.indexOf("GOOGLE_OAUTH_CLIENT_SECRET") !== -1 &&
     FILES.readme.indexOf("## YouTube app setup") !== -1);
   check("G9. no other new env var: the YouTube files read only GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET (and the existing YouTube caps)",
-    (stripComments(FILES.auth + FILES.api + FILES.videos).match(/env\.[A-Z_]+/g) || []).every(function (e) { return ["env.GOOGLE_OAUTH_CLIENT_ID", "env.GOOGLE_OAUTH_CLIENT_SECRET"].indexOf(e) !== -1; }) &&
+    // NAMED (Nov 18 2026, BV1): AFTER env.VIDEO_STORAGE_BUDGET_BYTES too, the storage budget (BV7).
+    (stripComments(FILES.auth + FILES.api + FILES.videos).match(/env\.[A-Z_]+/g) || []).every(function (e) { return ["env.GOOGLE_OAUTH_CLIENT_ID", "env.GOOGLE_OAUTH_CLIENT_SECRET", "env.VIDEO_STORAGE_BUDGET_BYTES"].indexOf(e) !== -1; }) &&
     (stripComments(YT_SECTION).match(/process\.env\.[A-Z_]+/g) || []).length === 0);
   check("G10. migration 177: bf-video private at 52428800 with MP4, WebM and MOV; both tables with RLS on and nothing granted; youtube_google in the purpose check",
     FILES.migration.indexOf("VALUES ('bf-video', 'bf-video', false, 52428800, ARRAY['video/mp4', 'video/webm', 'video/quicktime'])") !== -1 &&
@@ -2000,13 +2399,28 @@ function pageAnswers(over) {
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 187 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),
     Object.keys(fresh).filter(function (k) { return EMOJI.test(fresh[k]); }).join(", "));
+
+  /* ── G14 ── NAMED (Nov 18 2026, BV1, migration 187): this check holds "the highest". */
+  {
+    const migNames = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
+    const top = migNames.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
+    const sql187 = migNames.indexOf("187_member_video_parts.sql") !== -1 ? read("supabase/migrations/187_member_video_parts.sql") : "";
+    const verify187 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "187_verify.sql")) ? read("supabase/migrations/verify/187_verify.sql") : "";
+    check("G14. R1. 187_member_video_parts.sql is the only 187 and the highest migration; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
+      top === 187 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+      sql187.indexOf("CHECK (bytes > 0 AND bytes <= 524288000)") !== -1 && sql187.indexOf("CHECK (part_count >= 1 AND part_count <= 12)") !== -1 &&
+      sql187.indexOf("ALTER TABLE public.member_video_parts ENABLE ROW LEVEL SECURITY;") !== -1 && sql187.indexOf("REVOKE ALL ON public.member_video_parts FROM anon, authenticated;") !== -1 &&
+      sql187.indexOf("CHECK (bytes > 0 AND bytes <= 47185920)") !== -1 && sql187.indexOf("UNIQUE (upload_path, idx)") !== -1 &&
+      /member_video_parts/.test(verify187) && /Expect 15 rows/.test(verify187) && !/\b(INSERT|UPDATE|DELETE|ALTER|DROP)\b/i.test(verify187.replace(/--[^\n]*/g, "")), J([top]));
+  }
 
   check("nothing logged in this whole run holds a token, a code, a client secret, a signed URL token or a session URI", LOGS.every(noSecretIn), LOGS.filter(function (l) { return !noSecretIn(l); }).length);
   check("nothing reached the network: no socket, no real DNS question and no fetch in this whole run (the tripwire)", TRIPPED.length === 0, TRIPPED.join(", "));

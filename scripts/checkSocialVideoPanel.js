@@ -67,6 +67,22 @@ const PAGE = "agents/social.html", OAUTH = "scripts/oauth-return.js", YT = "scri
 const ALL = [PAGE, OAUTH, YT, TT, IG, FB];
 
 const MUTATIONS = {
+  // NAMED (Nov 18 2026, BV1): part uploads, progress, retry, cancel, the 50 MB reasons, the partial preview (V13).
+  "bv-ui-one-url-only": [[YT, "      if (file.size > ONE_FILE_MAX_BYTES) {", "      if (false) {"]],
+  "bv-ui-max-50": [[YT, "  var MAX_BYTES = 500 * 1024 * 1024;", "  var MAX_BYTES = 50 * 1024 * 1024;"]],
+  "bv-ui-no-sha": [[YT, "{ path: plan.path, idx: idx, bytes: file.size, sha256: hex }", "{ path: plan.path, idx: idx, bytes: file.size, sha256: \"\" }"]],
+  "bv-ui-no-retry": [[YT, "          if ((err && err.final) || n >= PART_TRIES) throw err;", "          throw err;"]],
+  "bv-ui-retry-forever": [[YT, "          if ((err && err.final) || n >= PART_TRIES) throw err;", "          if (err && err.final) throw err;"]],
+  "bv-ui-retry-final": [[YT, "{ final: res.status >= 400 && res.status < 500 && res.status !== 429 }", "{ final: false }"]],
+  "bv-ui-no-progress": [[YT, "        var pct = Math.floor((done + sent) * 100 / file.size);\n        showProgress(true, pct);\n", "        var pct = Math.floor((done + sent) * 100 / file.size);\n"]],
+  "bv-ui-progress-per-part": [[YT, "        var pct = Math.floor((done + sent) * 100 / file.size);", "        var pct = Math.floor(sent * 100 / file.size);"]],
+  "bv-ui-cancel-unwired": [[YT, "    if (cancel) cancel.addEventListener(\"click\", cancelUpload);\n", ""]],
+  "bv-ui-cancel-no-abort": [[YT, "    if (upload.xhr) { try { upload.xhr.abort(); } catch (e) { /* already finished */ } }\n", ""]],
+  "bv-ui-reason-hover-only": [[YT, "          actions.appendChild(reason);\n", ""]],
+  "bv-ui-ig-size-ignored": [[IG, "  function reelSize(v) { return v.fits_meta === false || (Number(v.bytes) || 0) > META_MAX_BYTES ? REEL_SIZE : \"\"; }", "  function reelSize(v) { return \"\"; }"]],
+  "bv-ui-fb-size-ignored": [[FB, "  function videoSize(v) { return v.fits_meta === false || (Number(v.bytes) || 0) > META_MAX_BYTES ? VIDEO_SIZE : \"\"; }", "  function videoSize(v) { return \"\"; }"]],
+  "bv-ui-tt-preview-unlabelled": [[TT, "      if (res.data.partial === true) wrap.appendChild(make(\"p\", PREVIEW_START, \"bsky-quiet tt-preview-part\"));\n", ""]],
+  "bv-ui-limits-text": [[PAGE, "<p class=\"bsky-quiet\">Videos up to 500 MB for YouTube and TikTok (MP4, WebM or MOV). Instagram and Facebook take videos up to 50 MB.</p>", "<p class=\"bsky-quiet\">Videos up to 50 MB (MP4, WebM or MOV).</p>"]],
   // Your videos goes back inside the YouTube card (V1)
   "videos-inside-youtube": [
     [PAGE, "    <section class=\"context-card bsky-card\" id=\"videosCard\" aria-label=\"Your videos\">",
@@ -233,7 +249,8 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
 
   /* ── V2 ── */
   console.log("\n══ V2. the notes, word for word ══");
-  const LIMITS = "Videos up to 50 MB (MP4, WebM or MOV).";
+  // NAMED (Nov 18 2026, BV1): BEFORE "Videos up to 50 MB (MP4, WebM or MOV)." AFTER the per-platform limits.
+  const LIMITS = "Videos up to 500 MB for YouTube and TikTok (MP4, WebM or MOV). Instagram and Facebook take videos up to 50 MB.";
   const KEPT = "BizForce deletes the file once every platform you sent it to has it, or 14 days after you added it.";
   const GOOGLE = "Until Google approves BizForce, YouTube keeps uploads from BizForce private.";
   // NAMED (Nov 17 2026, TK1): BEFORE "...TikTok keeps posts from BizForce visible only to you." AFTER the account must be private too.
@@ -495,9 +512,10 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   const routes = src => Array.from(new Set((src.match(/"\/api\/[A-Za-z0-9_/-]*"/g) || []))).sort();
   // NAMED (Nov 17 2026, TK1): BEFORE every script's routes equal BASELINE's. AFTER tiktok.js adds exactly one, "/api/videos/" (the
   // preview, GET /api/videos/:id/preview); every other route is unchanged.
-  const added = { [TT]: ["\"/api/videos/\""] };
+  // NAMED (Nov 18 2026, BV1): youtube.js adds the two part routes, part-url and part-done (V13).
+  const added = { [TT]: ["\"/api/videos/\""], [YT]: ["\"/api/videos/part-done\"", "\"/api/videos/part-url\""] };
   const expectRoutes = f => Array.from(new Set(routes(BASE[f]).concat(added[f] || []))).sort();
-  check("V11a. each script calls the same routes as at " + BASELINE + " (tiktok.js adds only the preview)", [YT, TT, IG, FB].every(f => J(routes(FILES[f])) === J(expectRoutes(f))),
+  check("V11a. each script calls the same routes as at " + BASELINE + " (tiktok.js adds only the preview, youtube.js only the two part routes)", [YT, TT, IG, FB].every(f => J(routes(FILES[f])) === J(expectRoutes(f))),
     [YT, TT, IG, FB].filter(f => J(routes(FILES[f])) !== J(expectRoutes(f))).map(f => f + " " + J(routes(FILES[f]))).join(" ;; "));
   const loadReqs = rr => rr.reqs.map(x => x.method + " " + x.path).sort();
   const nowAll = await runPage(FILES, ON_ALL), baseAll = await runPage(BASE, ON_ALL);
@@ -606,6 +624,171 @@ const ON_ALL = { youtube: true, tiktok: true, instagram: true, facebook: true };
   check("V12f. the stylesheet keeps a hidden check group undrawn: .sf-check-group[hidden] { display: none; } after .sf-check-group's display: grid",
     FILES[PAGE].indexOf("    .sf-check-group { display: grid; gap: 10px; }\n") !== -1 &&
     FILES[PAGE].indexOf("    .sf-check-group[hidden] { display: none; }\n") > FILES[PAGE].indexOf("    .sf-check-group { display: grid; gap: 10px; }\n"));
+
+  /* ── V13 ── NAMED (Nov 18 2026, BV1): a video over 50 MB goes up in parts, each with its own signed URL, with a
+     progress bar, a Cancel button and up to three tries a part; Instagram and Facebook say why they can't take it; the
+     TikTok preview of a parted video says it shows the start. */
+  console.log("\n══ V13. videos up to 500 MB, in parts ══");
+  const MIB = 1024 * 1024, PART = 45 * MIB, BIG = 60 * MIB;
+  const PATH = "video/00000000-0000-4000-8000-000000000001/" + "b".repeat(32) + ".mp4";
+  const V_BIG = Object.assign({}, V_NEW, { id: "44444444-4444-4444-8444-444444444444", label: "Long cut", bytes: BIG, parts: 2, fits_meta: false });
+  const nodeCrypto = require("crypto");
+  const fakeFile = function (size) {
+    const blob = function (a, b) {
+      return { size: b - a, arrayBuffer: function () { const u = Buffer.from("bytes " + a + "-" + b); return Promise.resolve(u.buffer.slice(u.byteOffset, u.byteOffset + u.length)); }, from: a, to: b };
+    };
+    return Object.assign(blob(0, size), { name: "long.mp4", type: "video/mp4", slice: function (a, b) { return blob(a, Math.min(b, size)); } });
+  };
+  const hexOf = (a, b) => nodeCrypto.createHash("sha256").update("bytes " + a + "-" + b).digest("hex");
+  const waitFor = async (pred, tries) => { for (let i = 0; i < (tries || 400); i++) { if (pred()) return true; await new Promise(r => setTimeout(r, 2)); } return false; };
+  // The page with its PUTs answered by putPlan (an array of statuses in order, "hold" to never answer) and its own answers.
+  async function runUpload(files, over, putPlan) {
+    const reqs = [], puts = [], seen = [];
+    const base = answersFor(ON_ALL);
+    const dom = new JSDOM(stripScripts(files[PAGE]), { url: "https://bizforceai.net/agents/social.html", runScripts: "outside-only", pretendToBeVisual: true });
+    const w = dom.window;
+    windows.push(w);
+    w.localStorage.setItem("bf_token", "tok");
+    Object.defineProperty(w, "crypto", { value: { subtle: nodeCrypto.webcrypto.subtle, getRandomValues: function (a) { return nodeCrypto.webcrypto.getRandomValues(a); } }, configurable: true });
+    w.fetch = function (url, init) {
+      const p = String(url).replace(API, "");
+      const method = (init && init.method) || "GET";
+      const body = init && init.body ? JSON.parse(init.body) : undefined;
+      reqs.push({ method: method, path: p, body: body });
+      const a = (over && over(p, method, body, reqs)) || (function () {
+        if (p === "/api/videos/upload-url") return body.bytes > 50 * MIB ? { status: 200, body: { path: PATH, mime: "video/mp4", max_bytes: 500 * MIB, parts: Math.ceil(body.bytes / PART), part_bytes: PART } }
+          : { status: 200, body: { upload_url: "https://check.supabase.co/storage/v1/object/upload/sign/bf-video/" + PATH + "?token=one", path: PATH, mime: "video/mp4", max_bytes: 500 * MIB } };
+        if (p === "/api/videos/part-url") return { status: 200, body: { upload_url: "https://check.supabase.co/storage/v1/object/upload/sign/bf-video/part-" + body.idx + "?token=t", idx: body.idx, bytes: body.idx === 0 ? PART : body.bytes - PART } };
+        if (p === "/api/videos/part-done") return { status: 200, body: { recorded: true, idx: body.idx } };
+        if (p === "/api/videos/finalize") return { status: 201, body: { video: V_NEW } };
+        return base(p, method);
+      })();
+      const pr = Promise.resolve({ ok: a.status < 300, status: a.status, json: function () { return Promise.resolve(a.body); } });
+      pr.catch(function () {});
+      return pr;
+    };
+    w.XMLHttpRequest = function () {
+      const x = { upload: {}, headers: {}, status: 0, aborted: false };
+      x.open = function (m, u) { x.method = m; x.url = u; };
+      x.setRequestHeader = function (k, v) { x.headers[k] = v; };
+      x.abort = function () { x.aborted = true; setTimeout(function () { if (x.onabort) x.onabort(); }, 0); };
+      x.send = function (blob) {
+        const plan = putPlan && putPlan.length > puts.length ? putPlan[puts.length] : 200;
+        puts.push({ method: x.method, url: x.url, type: x.headers["Content-Type"], from: blob.from, to: blob.to, size: blob.size, xhr: x, msg: w.document.getElementById("ytUploadMsg").textContent });
+        if (plan === "hold") return;
+        setTimeout(function () {
+          if (x.aborted) return;
+          if (x.upload.onprogress) x.upload.onprogress({ lengthComputable: true, loaded: blob.size, total: blob.size });
+          const doc = w.document;
+          seen.push([doc.getElementById("ytUploadBar").value, doc.getElementById("ytUploadProgress").hidden, doc.getElementById("ytUploadMsg").textContent]);
+          x.status = plan;
+          x.onload();
+        }, 0);
+      };
+      return x;
+    };
+    [OAUTH, YT, TT, IG, FB].forEach(f => w.eval(files[f] + "\n//# sourceURL=" + f));
+    await flush(20);
+    return { w: w, doc: w.document, reqs: reqs, puts: puts, seen: seen };
+  }
+  const pick = async function (u, size) {
+    const input = u.doc.getElementById("ytFile");
+    Object.defineProperty(input, "files", { value: [fakeFile(size)], configurable: true });
+    input.dispatchEvent(new u.w.Event("change"));
+  };
+  const msgOf = u => u.doc.getElementById("ytUploadMsg").textContent;
+  const of = (u, p) => u.reqs.filter(x => x.path === p);
+  // the whole flow
+  let u = await runUpload(FILES);
+  await pick(u, BIG);
+  await waitFor(() => msgOf(u) === "Added.");
+  check("V13a. a 60 MB video: upload-url, then per part in order part-url, its PUT (that slice, to that part's URL) and part-done with its sha256; then finalize",
+    J(of(u, "/api/videos/upload-url").map(x => x.body)) === J([{ mime: "video/mp4", bytes: BIG, label: "" }]) &&
+    J(u.reqs.filter(x => /part-|finalize/.test(x.path)).map(x => x.path)) === J(["/api/videos/part-url", "/api/videos/part-done", "/api/videos/part-url", "/api/videos/part-done", "/api/videos/finalize"]) &&
+    J(of(u, "/api/videos/part-url").map(x => x.body)) === J([{ path: PATH, idx: 0, bytes: BIG }, { path: PATH, idx: 1, bytes: BIG }]) &&
+    J(of(u, "/api/videos/part-done").map(x => x.body)) === J([{ path: PATH, idx: 0, bytes: BIG, sha256: hexOf(0, PART) }, { path: PATH, idx: 1, bytes: BIG, sha256: hexOf(PART, BIG) }]) &&
+    J(u.puts.map(x => [x.method, x.url.split("/").pop(), x.type, x.from, x.to])) === J([["PUT", "part-0?token=t", "video/mp4", 0, PART], ["PUT", "part-1?token=t", "video/mp4", PART, BIG]]) &&
+    J(of(u, "/api/videos/finalize").map(x => x.body)) === J([{ path: PATH, label: "", bytes: BIG }]) && msgOf(u) === "Added.",
+    J([u.reqs.map(x => x.path).filter(p => /videos\//.test(p)), u.puts.map(x => [x.from, x.to]), msgOf(u)]));
+  check("V13b. the progress bar counts the whole video (75% after part 1, 100% after part 2), shown while it runs, with \"Uploading part 1 of 2… 75%\"; hidden once added",
+    J(u.seen) === J([[75, false, "Uploading part 1 of 2… 75%"], [100, false, "Uploading part 2 of 2… 100%"]]) && u.doc.getElementById("ytUploadProgress").hidden === true,
+    J([u.seen, u.doc.getElementById("ytUploadProgress").hidden]));
+  // a part that fails once is tried again
+  u = await runUpload(FILES, null, [200, 500, 200]);
+  await pick(u, BIG);
+  await waitFor(() => msgOf(u) === "Added.");
+  check("V13c. part 2's PUT fails once: \"Part 2 of 2 didn't finish. Trying again…\", a fresh part-url for it, then it goes and the video is added",
+    u.puts.length === 3 && u.puts[2].msg === "Part 2 of 2 didn't finish. Trying again…" && J(of(u, "/api/videos/part-url").map(x => x.body.idx)) === J([0, 1, 1]) && u.puts.length === 3 &&
+    of(u, "/api/videos/part-done").length === 2 && of(u, "/api/videos/finalize").length === 1 && msgOf(u) === "Added.", J([of(u, "/api/videos/part-url").map(x => x.body.idx), msgOf(u)]));
+  u = await runUpload(FILES, null, [200, 500, 500, 500]);
+  await pick(u, BIG);
+  await waitFor(() => u.puts.length === 4 && u.doc.getElementById("ytUploadProgress").hidden);
+  await flush(10);
+  check("V13d. ...three tries at most: after the third the upload stops with \"Part 2 of 2 didn't finish.\", nothing finalized",
+    u.puts.length === 4 && of(u, "/api/videos/finalize").length === 0 && msgOf(u) === "Part 2 of 2 didn't finish.", J([u.puts.length, msgOf(u)]));
+  u = await runUpload(FILES, (p) => p === "/api/videos/part-url" ? { status: 409, body: { error: "This video was already added.", code: "already" } } : null);
+  await pick(u, BIG);
+  await waitFor(() => msgOf(u) === "This video was already added.");
+  check("V13e. a refusal the server means (a 4xx from part-url) is not tried again: one ask, its words, nothing sent",
+    of(u, "/api/videos/part-url").length === 1 && u.puts.length === 0 && msgOf(u) === "This video was already added.", J([of(u, "/api/videos/part-url").length, msgOf(u)]));
+  // cancel
+  u = await runUpload(FILES, null, ["hold"]);
+  await pick(u, BIG);
+  await waitFor(() => u.puts.length === 1);
+  const shownWhileHeld = u.doc.getElementById("ytUploadProgress").hidden === false;
+  u.doc.getElementById("ytUploadCancel").click();
+  await waitFor(() => msgOf(u) === "Upload cancelled. Nothing was added.");
+  await flush(10);
+  check("V13f. Cancel upload during a part: the PUT is aborted, \"Upload cancelled. Nothing was added.\", no part-done, no finalize, the bar hidden",
+    shownWhileHeld && u.puts[0].xhr.aborted === true && msgOf(u) === "Upload cancelled. Nothing was added." && of(u, "/api/videos/part-done").length === 0 &&
+    of(u, "/api/videos/finalize").length === 0 && u.doc.getElementById("ytUploadProgress").hidden === true, J([shownWhileHeld, msgOf(u)]));
+  // the old flow and the limit
+  u = await runUpload(FILES);
+  await pick(u, 3 * MIB);
+  await waitFor(() => msgOf(u) === "Added.");
+  check("V13g. a video of at most 50 MB: one PUT to the one signed URL, no part-url, as before",
+    u.puts.length === 1 && /token=one$/.test(u.puts[0].url) && of(u, "/api/videos/part-url").length === 0 && of(u, "/api/videos/finalize").length === 1, J(u.puts.map(x => x.url)));
+  u = await runUpload(FILES);
+  const before13 = u.reqs.length;
+  await pick(u, 500 * MIB + 1);
+  await flush(10);
+  check("V13h. over 500 MB: \"A video is at most 500 MB.\" on the page, nothing sent", msgOf(u) === "A video is at most 500 MB." && u.reqs.length === before13 && u.puts.length === 0, msgOf(u));
+  // Instagram and Facebook say why
+  u = await runUpload(FILES, (p, method) => p === "/api/videos" && method === "GET" ? { status: 200, body: { videos: [V_NEW, V_BIG], max_bytes: 500 * MIB, ready_max: 2 } } : null);
+  const bigRow = rowOf(u.doc, V_BIG.id), smallRow = rowOf(u.doc, V_NEW.id);
+  const btnOf = (row, pf) => row ? row.querySelector("button[data-prepare=\"" + pf + "\"]") : null;
+  const whyOf = b => b && b.getAttribute("aria-describedby") ? u.doc.getElementById(b.getAttribute("aria-describedby")) : null;
+  const IG_WHY = "Instagram takes videos up to 50 MB from BizForce.", FB_WHY = "Facebook takes videos up to 50 MB from BizForce.";
+  check("V13i. a video over 50 MB: Prepare for Instagram and Prepare for Facebook disabled, each with its reason as the hover text AND shown beside it (aria-describedby)",
+    !!bigRow && btnOf(bigRow, "instagram").disabled === true && btnOf(bigRow, "instagram").title === IG_WHY && text(whyOf(btnOf(bigRow, "instagram"))) === IG_WHY &&
+    btnOf(bigRow, "facebook").disabled === true && btnOf(bigRow, "facebook").title === FB_WHY && text(whyOf(btnOf(bigRow, "facebook"))) === FB_WHY &&
+    bigRow.contains(whyOf(btnOf(bigRow, "instagram"))) && /sf-why/.test(whyOf(btnOf(bigRow, "facebook")).className),
+    bigRow ? J($(bigRow, "button[data-prepare]").map(b => [b.textContent, b.disabled, b.title])) : "no row");
+  check("V13j. ...while YouTube and TikTok take it (enabled), and a video of at most 50 MB has no such reason",
+    btnOf(bigRow, "youtube").disabled === false && btnOf(bigRow, "tiktok").disabled === false && btnOf(smallRow, "instagram").disabled === false &&
+    btnOf(smallRow, "facebook").disabled === false && $(smallRow, ".sf-why").length === 0);
+  // TikTok's preview of a parted video
+  u = await runUpload(FILES, (p, method) => {
+    if (p === "/api/videos" && method === "GET") return { status: 200, body: { videos: [V_NEW, V_BIG], max_bytes: 500 * MIB, ready_max: 2 } };
+    if (p === "/api/videos/" + V_BIG.id + "/preview") return { status: 200, body: { url: PREVIEW_URL, mime: "video/mp4", expires_in: 600, partial: true, note: "Preview shows the start of the video." } };
+    return null;
+  });
+  buttonIn(rowOf(u.doc, V_BIG.id), "Prepare for TikTok").click();
+  await waitFor(() => !!u.doc.querySelector("#ytVideoList .sf-panel video"));
+  await flush(5);
+  const partNote = $(u.doc, "#ytVideoList .sf-panel p").filter(p => p.textContent === "Preview shows the start of the video.");
+  buttonIn(rowOf(u.doc, V_NEW.id), "Prepare for TikTok").click();
+  await waitFor(() => !!rowOf(u.doc, V_NEW.id).querySelector(".sf-panel video"));
+  await flush(5);
+  check("V13k. TikTok's preview of a video over 50 MB says \"Preview shows the start of the video.\" under the player; a whole video's does not",
+    partNote.length === 1 && partNote[0].previousElementSibling && partNote[0].previousElementSibling.tagName === "VIDEO" &&
+    $(rowOf(u.doc, V_NEW.id), ".sf-panel p").every(p => p.textContent !== "Preview shows the start of the video."), J(partNote.length));
+  const proposalsSrc = fs.readFileSync(path.join(FRONTEND, "proposals.html"), "utf8");
+  check("V13l. the Proposals card's preview says the same when the answer is partial",
+    proposalsSrc.indexOf("msg.textContent = r.d.partial === true ? \"Preview shows the start of the video.\" : \"\";") !== -1);
+  check("V13m. the bar and Cancel sit in Your videos: <progress id=\"ytUploadBar\" max=\"100\"> labelled, Cancel upload beside it, hidden until an upload runs",
+    FILES[PAGE].indexOf("<div class=\"bsky-row\" id=\"ytUploadProgress\" hidden><progress id=\"ytUploadBar\" max=\"100\" value=\"0\" aria-label=\"Upload progress\"></progress> <button type=\"button\" class=\"action-btn action-btn--ghost\" id=\"ytUploadCancel\">Cancel upload</button></div>") !== -1 &&
+    !!u.doc.getElementById("videosCard") && u.doc.getElementById("videosCard").contains(u.doc.getElementById("ytUploadProgress")));
 
   windows.forEach(w => { try { w.close(); } catch (e) { /* closed */ } });
   console.log("");

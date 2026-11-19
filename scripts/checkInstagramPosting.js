@@ -42,6 +42,10 @@ const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g,
 
 /* Each mutation is a list of edits: [file, search, replacement]. */
 const MUTATIONS = {
+  // NAMED (Nov 18 2026, BV1): a video over 50 MB (stored as parts) is refused when filed and when approved.
+  "bv-ig-big-filed": [["api", "    if (!fitsOneUrl(video)) return { status: 400, body: { error: MESSAGES.tooBig + \" Nothing was filed.\", code: \"too_big\", field: \"video_id\" } };\n", ""]],
+  "bv-ig-big-sent": [["api", "      if (!fitsOneUrl(video)) throw fail(MESSAGES.tooBig + \" Nothing was sent.\");\n", ""]],
+  "bv-ig-fits-parts": [["api", "function fitsOneUrl(video) { return MV.partCount(video) === 1 && Number(video.bytes) <= MV.ONE_FILE_MAX_BYTES; }", "function fitsOneUrl(video) { return Number(video.bytes) <= MV.MAX_BYTES; }"]],
   // NAMED (Nov 15 2026, S4): a Reel of a video already on Instagram needs repost: true (F9b).
   "reel-repost-unflagged": [["api", "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
   "reel-repost-unnamed": [["api", "    if (livePost) { payload.repost = true; payload.repost_of = livePost.id; }\n", ""]],
@@ -120,7 +124,8 @@ const MUTATIONS = {
   "replacestate-skipped": [["ui", "    }).then(function (res) {\n      strip();\n", "    }).then(function (res) {\n"]],
   "foreign-authorize-followed": [["ui", "url.indexOf(AUTH_PREFIX) === 0", "url.indexOf(\"https://\") === 0"]],
   "non-jpeg-picked": [["ui", "      if (item.mime !== \"image/jpeg\") { tell(\"igPrepareMsg\", JPEG_ONLY, true); return; }\n", ""]],
-  "webm-choosable": [["ui", "        opt.disabled = !reelOk;\n", ""]],
+  // NAMED (Nov 18 2026, BV1): BEFORE anchored on "opt.disabled = !reelOk;". AFTER on "opt.disabled = !!why;" (the type reason, or the 50 MB one).
+  "webm-choosable": [["ui", "        opt.disabled = !!why;\n", ""]],
   "permalink-unchecked-on-page": [["ui", "typeof p.permalink === \"string\" && PERMALINK_RE.test(p.permalink)) {", "typeof p.permalink === \"string\") {"]],
   "card-caption-unescaped": [["proposals", "'<pre class=\"exec-block ig-caption\">' + escapeHtml(String(payload.caption == null ? \"\" : payload.caption))",
     "'<pre class=\"exec-block ig-caption\">' + String(payload.caption == null ? \"\" : payload.caption)"]],
@@ -1113,6 +1118,16 @@ function pageAnswers(over) {
     r.status === 201 && J(reelProp.payload) === J({ kind: "reel", video: { id: vMp4.id, sha256: vMp4.sha256, bytes: vMp4.bytes, mime: "video/mp4" }, caption: CAPTION, ig_user_id: IG_ID }) &&
     rMov.status === 201 && rWebm.status === 400 && rWebm.body.code === "reel_type" && rWebm.body.error === "Instagram Reels need an MP4 or MOV video. Nothing was filed." &&
     rAgain.status === 409 && rAgain.body.code === "pending", J([r.status, rMov.status, rWebm.status, rWebm.body.code, rAgain.status]));
+  // NAMED (Nov 18 2026, BV1): Instagram fetches ONE address, so a video over 50 MB (stored as parts) can't go; 50 MB exactly can.
+  const vParted = seedVideo(m.db, mp4(5000, 12), { bytes: 60 * 1024 * 1024, part_count: 2 });
+  const vFifty = seedVideo(m.db, mp4(5000, 13), { bytes: 52428800 });
+  const bvFiledBefore = m.db.t.agent_proposals.length;
+  const rParted = await hit(m, "post /api/instagram/propose-post", { body: { kind: "reel", video_id: vParted.id, caption: CAPTION } });
+  const filedParted = m.db.t.agent_proposals.length - bvFiledBefore;
+  const rFifty = await hit(m, "post /api/instagram/propose-post", { body: { kind: "reel", video_id: vFifty.id, caption: CAPTION } });
+  check("F9c. a video over 50 MB: 400 too_big, \"Instagram takes videos up to 50 MB from BizForce, and this one is larger. Nothing was filed.\"; a video of exactly 50 MB is filed",
+    rParted.status === 400 && rParted.body.code === "too_big" && rParted.body.error === "Instagram takes videos up to 50 MB from BizForce, and this one is larger. Nothing was filed." && filedParted === 0 && rFifty.status === 201,
+    J([rParted.status, rParted.body, rFifty.status]));
   // NAMED (Nov 15 2026, S4): a video already on Instagram is filed again only with repost: true, naming the live post.
   const vLive = seedVideo(m.db, mp4(5000, 11));
   const liveAt = iso(Date.now() - 3 * 86400000);
@@ -1256,6 +1271,17 @@ function pageAnswers(over) {
   f.db.storage.objects["bf-video/" + vid.path] = { buf: mp4(6000, 97) };
   prop = proposalOf(reelPayload(vid));
   run = await attempt(IG.executePublish(f.deps, prop));
+  // NAMED (Nov 18 2026, BV1): a Reel filed before its video was known to be over 50 MB is refused at approval, before any link.
+  {
+    const g = fresh();
+    seedConnection(g.db);
+    const pv = seedVideo(g.db, mp4(6000, 32), { bytes: 60 * 1024 * 1024, part_count: 2 });
+    const pr = proposalOf(reelPayload(pv));
+    const pRun = await attempt(IG.executePublish(g.deps, pr));
+    check("U12b. a video over 50 MB at approval: \"Instagram takes videos up to 50 MB from BizForce, and this one is larger. Nothing was sent.\", no signed link, no container",
+      !pRun.ok && pRun.msg.indexOf("Instagram takes videos up to 50 MB from BizForce, and this one is larger. Nothing was sent.") !== -1 && g.db.storage.calls.filter(function (c) { return c.op === "sign"; }).length === 0 &&
+      g.ig.containerPosts().length === 0, pRun.ok ? J(pRun.v) : pRun.msg);
+  }
   check("U12. the video's bytes changed: refused before any signed link or container", !run.ok && run.msg.indexOf(IG.MESSAGES.fingerprint) !== -1 &&
     f.db.storage.calls.filter(function (c) { return c.op === "sign"; }).length === 0 && f.ig.containerPosts().length === 0, run.ok ? J(run.v) : run.msg);
   f = fresh({ seq: Array(200).fill("IN_PROGRESS") });
@@ -1587,7 +1613,8 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("{ name: \"Instagram (Meta)\", for: \"publishing the posts you approve to your own Instagram account, when you connect it\" }") !== -1 &&
     FILES.yourData.indexOf("\"Your Instagram access: stored encrypted; the export shows only your Instagram username and the date you connected.\"") !== -1 &&
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): facebook_posts and member_facebook_pages follow the Instagram tables in the delete order, and the states name Connect Facebook last.
-    FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_videos\"") !== -1 &&
+    // NAMED (Nov 18 2026, BV1, migration 187): member_video_parts is deleted between member_media and member_videos.
+    FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_video_parts\", \"member_videos\"") !== -1 &&
     FILES.yourData.indexOf("\"member_tiktok_connections\", \"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
     // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the states name Connect Etsy last.
     // NAMED (Nov 8 2026, Amazon store connection, migration 182): BEFORE "..., Connect Facebook and Connect Etsy". AFTER Connect Amazon is named last.
@@ -1625,9 +1652,10 @@ function pageAnswers(over) {
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
-  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 187 &&
     migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

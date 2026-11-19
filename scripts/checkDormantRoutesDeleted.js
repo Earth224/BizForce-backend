@@ -371,7 +371,10 @@ const ADDED = [
   ["get", "/api/admin/shopify-data-requests"],               // admin only, read-only: open and recently answered data requests with their deadlines (492 -> 493)
   ["post", "/api/admin/shopify-data-requests/:id/answered"], // admin only: sets answered_at on a customers/data_request receipt, nothing else (493 -> 494)
   // NAMED (Nov 17 2026, TK1): BEFORE 494 routes; AFTER 495, the preview TikTok's content-sharing guidelines ask for (checkTiktokPosting K19, K20)
-  ["get", "/api/videos/:id/preview"]                         // login-only, never cached: a 10-minute signed address to the member's own video file; 410 once deleted (494 -> 495)
+  ["get", "/api/videos/:id/preview"],                        // login-only, never cached: a 10-minute signed address to the member's own video file; 410 once deleted (494 -> 495)
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 495 routes; AFTER 497, a video over 50 MB sent in parts (checkYoutubeUploads BV9 to BV20)
+  ["post", "/api/videos/part-url"],                          // subscription, own limiter: a signed upload URL for ONE part of the member's own upload (495 -> 496)
+  ["post", "/api/videos/part-done"]                          // subscription, own limiter: the part's size read from Storage, then recorded with its sha256 (496 -> 497)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

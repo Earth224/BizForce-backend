@@ -412,8 +412,10 @@ const leadPx = v => { const m = /calc\((\d+(?:\.\d+)?)px \+ env\(safe-area-inset
       Array.isArray(l2) && l2.length === 3 && l2.every(v => v.facebook_status === "unknown") && l2.filter(v => v.id === V1)[0].instagram_status === "posted");
     check("S23. a video just added (no status read) is not sent on both", J(pick(mv.publicView({ id: V1, status: "ready" }))) === J(["not_sent", null, null, "not_sent", null, null]));
     const server = FILES[SERVER];
+    // NAMED (Nov 18 2026, BV1): BEFORE within 160 characters. AFTER 400: a NAMED comment now sits before the answer, which also
+    // names one_file_max_bytes and part_bytes; the call itself is unchanged.
     check("S24. the route is unchanged: GET /api/videos, requireAuth, mv.listVideos(youtubeDeps(), req.user.id)",
-      /app\.get\("\/api\/videos", requireAuth, async function \(req, res, next\) \{[^}]{0,160}mv\.listVideos\(youtubeDeps\(\), req\.user\.id\)/.test(server));
+      /app\.get\("\/api\/videos", requireAuth, async function \(req, res, next\) \{[^}]{0,400}mv\.listVideos\(youtubeDeps\(\), req\.user\.id\)/.test(server));
     const src = FILES[MV];
     const body = name => { const i = src.indexOf(name); const j = src.indexOf("\n}\n", i); return i === -1 ? "" : src.slice(i, j); };
     check("S25. socialStatus and listVideos name no write and no model call",

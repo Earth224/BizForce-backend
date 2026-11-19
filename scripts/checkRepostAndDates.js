@@ -255,8 +255,12 @@ function fakeDb(tables) {
   check("B5. failed: \"Try again on TikTok\", \"Try again on Instagram\", \"Try again on Facebook\" enabled; YouTube (no failed state) \"Prepare for YouTube\"",
     J(all(VF)) === J([["Prepare for YouTube", false, "new"], ["Try again on TikTok", false, "failed"], ["Try again on Instagram", false, "failed"], ["Try again on Facebook", false, "failed"]]), J(all(VF)));
   const igX = S.btn(VX, "instagram"), fbX = S.btn(VX, "facebook");
+  /* NAMED (Nov 18 2026, BV1): BEFORE the file reason was the hover text only, so the button had no aria-describedby (!whyOf).
+     AFTER the reason is also shown beside the button (scripts/youtube.js row.platform), so whyOf is that reason itself, never
+     the waiting or posted explanation and never its Open Proposals link. */
+  const fileWhy = (b, t) => !!whyOf(b) && whyOf(b).textContent === t && /sf-why/.test(whyOf(b).className) && !(whyOf(b).nextElementSibling && /sf-why-link/.test(whyOf(b).nextElementSibling.className || ""));
   check("B6. the file rule wins: a WebM's Instagram (waiting) and Facebook (posted) buttons are disabled with the MP4 or MOV reason and no other",
-    !!igX && igX.disabled && igX.title === "Instagram Reels need an MP4 or MOV video." && !whyOf(igX) && !!fbX && fbX.disabled && fbX.title === "Facebook videos must be MP4 or MOV." && !whyOf(fbX) &&
+    !!igX && igX.disabled && igX.title === "Instagram Reels need an MP4 or MOV video." && fileWhy(igX, igX.title) && !!fbX && fbX.disabled && fbX.title === "Facebook videos must be MP4 or MOV." && fileWhy(fbX, fbX.title) &&
     state(VX, "youtube")[1] === false && state(VX, "tiktok")[1] === false, J([state(VX, "instagram"), state(VX, "facebook"), igX && igX.title]));
   check("B7. an unfinished upload keeps \"Prepare for YouTube\" and \"Prepare for TikTok\", enabled (the server resumes it)",
     J([state(VU, "youtube"), state(VU, "tiktok")]) === J([["Prepare for YouTube", false, "new"], ["Prepare for TikTok", false, "new"]]), J([state(VU, "youtube"), state(VU, "tiktok")]));

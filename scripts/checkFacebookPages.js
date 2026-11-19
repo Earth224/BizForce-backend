@@ -44,6 +44,10 @@ const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g,
 
 /* Each mutation is a list of edits: [file, search, replacement]. */
 const MUTATIONS = {
+  // NAMED (Nov 18 2026, BV1): a video over 50 MB (stored as parts) is refused when filed and when approved.
+  "bv-fb-big-filed": [["api", "    if (!fitsOneUrl(video)) return { status: 400, body: { error: MESSAGES.tooBig + \" Nothing was filed.\", code: \"too_big\", field: \"video_id\" } };\n", ""]],
+  "bv-fb-big-sent": [["api", "    if (!fitsOneUrl(video)) throw fail(MESSAGES.tooBig + \" Nothing was sent.\");\n", ""]],
+  "bv-fb-fits-parts": [["api", "function fitsOneUrl(video) { return MV.partCount(video) === 1 && Number(video.bytes) <= MV.ONE_FILE_MAX_BYTES; }", "function fitsOneUrl(video) { return Number(video.bytes) <= MV.MAX_BYTES; }"]],
   // NAMED (Nov 15 2026, S4): a video post of a video already on the Page needs repost: true (F9b).
   "video-repost-unflagged": [["api", "    if (livePost && b.repost !== true) return { status: 409, body: { error: MESSAGES.alreadyPosted, code: \"already_posted\" } };\n", ""]],
   "video-repost-unnamed": [["api", "    if (livePost) { payload.repost = true; payload.repost_of = livePost.id; }\n", ""]],
@@ -1111,6 +1115,16 @@ function pageAnswers(over) {
     r.status === 201 && J(vidProp.payload) === J({ kind: "video", video: { id: vMp4.id, sha256: vMp4.sha256, bytes: vMp4.bytes, mime: "video/mp4" }, message: MESSAGE, page_id: PAGE_A }) &&
     rMov.status === 201 && rWebm.status === 400 && rWebm.body.code === "video_type" && rWebm.body.error === "Facebook videos must be MP4 or MOV. Nothing was filed." &&
     rAgain.status === 409 && rAgain.body.code === "pending", J([r.status, rMov.status, rWebm.status, rWebm.body.code, rAgain.status]));
+  // NAMED (Nov 18 2026, BV1): Facebook fetches ONE address, so a video over 50 MB (stored as parts) can't go; 50 MB exactly can.
+  const vParted = seedVideo(m.db, mp4(5000, 12), { bytes: 60 * 1024 * 1024, part_count: 2 });
+  const vFifty = seedVideo(m.db, mp4(5000, 13), { bytes: 52428800 });
+  const bvFiledBefore = m.db.t.agent_proposals.length;
+  const rParted = await hit(m, "post /api/facebook/propose-post", { body: { kind: "video", video_id: vParted.id, message: MESSAGE } });
+  const filedParted = m.db.t.agent_proposals.length - bvFiledBefore;
+  const rFifty = await hit(m, "post /api/facebook/propose-post", { body: { kind: "video", video_id: vFifty.id, message: MESSAGE } });
+  check("F9c. a video over 50 MB: 400 too_big, \"Facebook takes videos up to 50 MB from BizForce, and this one is larger. Nothing was filed.\"; a video of exactly 50 MB is filed",
+    rParted.status === 400 && rParted.body.code === "too_big" && rParted.body.error === "Facebook takes videos up to 50 MB from BizForce, and this one is larger. Nothing was filed." && filedParted === 0 && rFifty.status === 201,
+    J([rParted.status, rParted.body, rFifty.status]));
   // NAMED (Nov 15 2026, S4): a video already on the Page is filed again only with repost: true, naming the live post.
   const vLive = seedVideo(m.db, mp4(5000, 11));
   const liveAt = iso(Date.now() - 3 * 86400000);
@@ -1254,6 +1268,17 @@ function pageAnswers(over) {
     /^2\d{15}$/.test(row.post_id || "") && row.permalink === "https://www.facebook.com/" + PAGE_A + "/videos/" + row.post_id + "/", run.ok ? J([run.v, row && row.permalink]) : run.msg);
   check("U11. ...the signed link is never stored, logged or returned", J(f.db.t).indexOf(SIGNED_MARK) === -1 && LOGS.every(function (l) { return l.indexOf(SIGNED_MARK) === -1; }) &&
     J(run.ok ? run.v : run.msg).indexOf(SIGNED_MARK) === -1);
+  // NAMED (Nov 18 2026, BV1): a video post filed before its video was known to be over 50 MB is refused at approval, before any link.
+  {
+    const g = fresh();
+    seedConnection(g.db);
+    const pv = seedVideo(g.db, mp4(6000, 32), { bytes: 60 * 1024 * 1024, part_count: 2 });
+    const pr = proposalOf(videoPayload(pv));
+    const pRun = await attempt(FB.executePublish(g.deps, pr));
+    check("U11b. a video over 50 MB at approval: \"Facebook takes videos up to 50 MB from BizForce, and this one is larger. Nothing was sent.\", no signed link, no graph-video call",
+      !pRun.ok && pRun.msg.indexOf("Facebook takes videos up to 50 MB from BizForce, and this one is larger. Nothing was sent.") !== -1 && g.db.storage.calls.filter(function (c) { return c.op === "sign"; }).length === 0 &&
+      g.fb.videoCalls.length === 0, pRun.ok ? J(pRun.v) : pRun.msg);
+  }
   f = fresh();
   seedConnection(f.db);
   vid = seedVideo(f.db, mp4(6000, 31));
@@ -1641,7 +1666,8 @@ function pageAnswers(over) {
     FILES.yourData.indexOf("{ name: \"Facebook (Meta)\", for: \"publishing the posts you approve to the Facebook Page you connect\" }") !== -1 &&
     FILES.yourData.indexOf("\"Your Facebook Page access and the Page's id: stored encrypted; the export shows only the Page's name and the date you connected.\"") !== -1 &&
     FILES.yourData.indexOf("\"Your Facebook posts' ids at Facebook: the export lists each post's kind, status, Facebook address and dates.\"") !== -1 &&
-    FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_videos\"") !== -1 &&
+    // NAMED (Nov 18 2026, BV1, migration 187): member_video_parts is deleted between member_media and member_videos.
+    FILES.yourData.indexOf("\"instagram_posts\", \"facebook_posts\", \"member_media\", \"member_video_parts\", \"member_videos\"") !== -1 &&
     FILES.yourData.indexOf("\"member_instagram_connections\", \"member_facebook_pages\", \"oauth_states\"") !== -1 &&
     // NAMED (Nov 8 2026, Etsy store connection, migration 181): BEFORE "..., Connect Instagram and Connect Facebook". AFTER the line
     // names Connect Etsy last; Connect Facebook is still required in it.
@@ -1673,6 +1699,7 @@ function pageAnswers(over) {
     (stripComments(FILES.auth).match(/env\.[A-Z_]+/g) || []).sort().join() === "env.FACEBOOK_APP_ID,env.FACEBOOK_APP_ID,env.FACEBOOK_APP_SECRET,env.FACEBOOK_APP_SECRET" &&
     !/process\.env/.test(stripComments(FILES.api)));
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   check("G11. videoPlatformConfigured counts Facebook (Your videos opens when any video platform is set up)",
     /function videoPlatformConfigured\(\) \{[\s\S]*?require\("\.\/lib\/facebookAuth"\)\.configured\(process\.env\) !== null;\n\}/.test(FILES.server));
   const migFiles = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(function (x) { return /^\d{3}_.*\.sql$/.test(x); });
@@ -1685,9 +1712,10 @@ function pageAnswers(over) {
   // NAMED (Nov 15 2026, Shopify webhooks, migration 184): BEFORE 183 was the highest. AFTER 184_shopify_webhook_requests.sql is above it too, by name; "the highest" is checkShopifyWebhooks R1's.
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
-  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 186 &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("R1. 180_facebook_pages.sql is the only 180, and only 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 187 &&
     migFiles.filter(function (x) { return /^180_/.test(x); }).join() === "180_facebook_pages.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 180; }).join() === "181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

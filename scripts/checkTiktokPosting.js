@@ -44,6 +44,34 @@ const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
 const readFe = (f) => fs.readFileSync(path.join(FE, f), "utf8").replace(/\r\n/g, "\n");
 
 const MUTATIONS = {
+  // NAMED (Nov 18 2026, BV1): chunked FILE_UPLOAD over 64 MB, a parted video's chunks, the transport's TikTok cap.
+  "bv-tt-one-chunk-always": ["api",
+    "  if (size <= ONE_CHUNK_MAX) return { chunk_size: size, total_chunk_count: 1, ranges: [[0, size]] };",
+    "  return { chunk_size: size, total_chunk_count: 1, ranges: [[0, size]] };"],
+  "bv-tt-count-ceil": ["api",
+    "  var count = Math.floor(size / chunk), ranges = [];",
+    "  var count = Math.ceil(size / chunk), ranges = [];"],
+  "bv-tt-chunk-too-big": ["api",
+    "  var chunk = Math.min(MV.PART_BYTES, Math.floor(size / 2));",
+    "  var chunk = Math.floor(size / 2);"],
+  "bv-tt-206-not-required": ["api",
+    "    if (last ? putComplete(answer) : answer.status === 206) continue;",
+    "    continue;"],
+  "bv-tt-no-chunk-tail": ["api",
+    "\" content_type=\" + typeWord(answer.contentType) + \" chunk=\" + (i + 1) + \"/\" + plan.ranges.length));",
+    "\" content_type=\" + typeWord(answer.contentType)));"],
+  "bv-tt-parts-as-whole": ["api",
+    "  return MV.partCount(video) > 1 ? sendParts(deps, uploadUrl, video) : sendWhole(deps, uploadUrl, video);",
+    "  return sendWhole(deps, uploadUrl, video);"],
+  "bv-tt-source-one-chunk": ["api",
+    "chunk_size: plan.chunk_size, total_chunk_count: plan.total_chunk_count };",
+    "chunk_size: Number(video.bytes), total_chunk_count: 1 };"],
+  "bv-tt-parts-unverified": ["api",
+    "  if (MV.partCount(video) > 1) return MV.verifyParts(deps, video);",
+    "  if (MV.partCount(video) > 1) return true;"],
+  "bv-tt-cap-default": ["fetch",
+    "    const lengthCap = profile.maxUploadBytes || STREAM_MAX_UPLOAD_BYTES;",
+    "    const lengthCap = STREAM_MAX_UPLOAD_BYTES;"],
   // NAMED, item 8 part 3a: the Instagram finish route consumes its state with the same lines, so the anchor now carries TikTok's purpose.
   "state-reusable": ["server",
     ".eq(\"purpose\", ta.PURPOSE)\n        .is(\"consumed_at\", null).gt(\"expires_at\", consumedAt)\n        .select(\"id\");", ".eq(\"purpose\", ta.PURPOSE)\n        .gt(\"expires_at\", consumedAt)\n        .select(\"id\");"],
@@ -140,7 +168,8 @@ const MUTATIONS = {
   // NAMED (Nov 18 2026, TK2): BEFORE anchored on "pathPrefix: \"/upload/\", allow308: false,". AFTER on the tiktok profile's own line.
   "tiktok-308-allowed": ["fetch",
     // NAMED (Nov 18 2026, TK5): re-anchored on the statusOnly line.
-    "    allow308: false, statusOnly: true, answerMaxBytes: 64 * 1024 })", "    allow308: true, statusOnly: true, answerMaxBytes: 64 * 1024 })"],
+    // NAMED (Nov 18 2026, BV1): the line now ends with maxUploadBytes too.
+    "    allow308: false, statusOnly: true, answerMaxBytes: 64 * 1024, maxUploadBytes: 128 * 1000 * 1000 })", "    allow308: true, statusOnly: true, answerMaxBytes: 64 * 1024, maxUploadBytes: 128 * 1000 * 1000 })"],
   "delete-ignores-tiktok": ["videos",
     // NAMED, item 8 part 3a: FILE_ACTIONS now also names publish_instagram_post.
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): and publish_facebook_post after it; the mutation still drops publish_tiktok_post alone.
@@ -533,7 +562,9 @@ function makeDb() {
   // NAMED, item 8 part 3a: instagram_posts added; retention and deleting a video now read it.
   const t = { member_tiktok_connections: [], member_videos: [], oauth_states: [], agent_proposals: [], notifications: [], job_runs: [], business_profiles: [], instagram_posts: [],
     // NAMED (Nov 7 2026, item 8 part 3b, Facebook Pages): lib/memberVideos.js reads facebook_posts too.
-    facebook_posts: [] };
+    facebook_posts: [],
+    // NAMED (Nov 18 2026, BV1, migration 187): the parts of a video over 50 MB.
+    member_video_parts: [] };
   const fail = {};
   function rows(name) { if (!t[name]) t[name] = []; return t[name]; }
   function sealedOk(c, i, a) { return HEX.test(c || "") && /^[0-9a-f]{24}$/.test(i || "") && /^[0-9a-f]{32}$/.test(a || ""); }
@@ -558,7 +589,9 @@ function makeDb() {
     }
     if (name === "member_videos") {
       if (["video/mp4", "video/webm", "video/quicktime"].indexOf(row.mime) === -1) return "member_videos_mime_check";
-      if (!(Number(row.bytes) > 0 && Number(row.bytes) <= 52428800)) return "member_videos_bytes_check";
+      // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 52428800. AFTER 524288000, and part_count 1..12.
+      if (!(Number(row.bytes) > 0 && Number(row.bytes) <= 524288000)) return "member_videos_bytes_check";
+      if (row.part_count != null && !(Number.isInteger(row.part_count) && row.part_count >= 1 && row.part_count <= 12)) return "member_videos_part_count_check";
       if (!/^[0-9a-f]{64}$/.test(row.sha256 || "")) return "member_videos_sha_check";
       if (["ready", "uploaded", "removed"].indexOf(row.status) === -1) return "member_videos_status_check";
       if (row.status === "ready" && row.path == null) return "member_videos_ready_path_check";
@@ -784,7 +817,9 @@ function makeTiktok(opts) {
       g.n++;
       const publishId = PUBLISH_BASE + "." + g.n;
       const url = o.uploadUrl || (UPLOAD_BASE + g.n);
-      g.uploads[new URL(url).search] = { publishId: publishId, total: b && b.source_info ? b.source_info.video_size : 0, received: Buffer.alloc(0), done: false };
+      // NAMED (Nov 18 2026, BV1): the chunk plan the init named; chunks counts the PUTs taken.
+      g.uploads[new URL(url).search] = { publishId: publishId, total: b && b.source_info ? b.source_info.video_size : 0, received: Buffer.alloc(0), done: false,
+        chunkSize: b && b.source_info ? b.source_info.chunk_size : 0, chunkCount: b && b.source_info ? b.source_info.total_chunk_count : 1, chunks: 0 };
       return reply(200, { data: { publish_id: publishId, upload_url: url }, error: OK });
     }
     if (u.hostname === "open.tiktokapis.com" && u.pathname === "/v2/post/publish/status/fetch/" && method === "POST") {
@@ -804,10 +839,17 @@ function makeTiktok(opts) {
       EV.push("tt:put");
       const up = g.uploads[u.search];
       if (!up) return reply(404, { error: { code: "not_found" } });
-      if (o.putCode) return reply(o.putHttp || 403, { error: { code: o.putCode, message: "The upload_url has expired.", log_id: INIT_LOG_ID } });
-      const want = "bytes 0-" + (up.total - 1) + "/" + up.total;
-      if (entry.contentRange !== want || Number(entry.contentLength) !== up.total) return reply(416, { error: { code: "range_not_satisfiable" } });
-      up.received = Buffer.from(body);
+      // NAMED (Nov 18 2026, BV1): putCodeAt refuses only that chunk (1-based); without it every PUT is refused, as before.
+      if (o.putCode && (o.putCodeAt === undefined || o.putCodeAt === up.chunks + 1)) return reply(o.putHttp || 403, { error: { code: o.putCode, message: "The upload_url has expired.", log_id: INIT_LOG_ID } });
+      // NAMED (Nov 18 2026, BV1): BEFORE only "bytes 0-(N-1)/N". AFTER with total_chunk_count over 1, each chunk in order:
+      // chunk_size bytes from where the last ended, the final one to the end; 206 until the last, then 201.
+      const many = up.chunkCount > 1;
+      const at = many ? up.received.length : 0;
+      const end = !many || up.chunks === up.chunkCount - 1 ? up.total : at + up.chunkSize;
+      const want = "bytes " + at + "-" + (end - 1) + "/" + up.total;
+      if (entry.contentRange !== want || Number(entry.contentLength) !== end - at) return reply(416, { error: { code: "range_not_satisfiable" } });
+      up.received = many ? Buffer.concat([up.received, body]) : Buffer.from(body);
+      up.chunks++;
       up.done = up.received.length === up.total;
       if (o.putStatus) return reply(o.putStatus, null);
       // NAMED (Nov 18 2026, TK5): putAnswer { status, type, body } answers the PUT with any status, content type and raw body.
@@ -843,7 +885,8 @@ function makeTiktok(opts) {
         g.atFirstPut = row ? { url: opened, publish_id: row.tiktok_publish_id, status: row.tiktok_status, expires: row.tiktok_upload_expires_at } : null;
       }
     }
-    const cutThis = isBodyPut && (o.cut || 0) >= g.bodyPuts;
+    // NAMED (Nov 18 2026, BV1): cutAt cuts only that body PUT (a later chunk).
+    const cutThis = isBodyPut && ((o.cut || 0) >= g.bodyPuts || o.cutAt === g.bodyPuts);
     req.destroy = function () { destroyed = true; };
     req.write = function (c) {
       if (destroyed || cut) return true;
@@ -1702,7 +1745,9 @@ function pageAnswers(over) {
     // NAMED (Nov 18 2026, TK3): BEFORE hostPattern (upload hosts only) and pathPrefixes ["/video/", "/upload/"]. AFTER the shared
     // TIKTOK_UPLOAD_HOST_RE (any subdomain of tiktokapis.com) and TIKTOK_UPLOAD_PATH_RE ("/upload" or "/video", slash optional).
     // NAMED (Nov 18 2026, TK5): BEFORE emptyOkStatuses [201, 206]. AFTER statusOnly true and answerMaxBytes 64 KB.
-    Object.keys(ttProf).join() === "hostPattern,pathPattern,allow308,statusOnly,answerMaxBytes" && ttProf.statusOnly === true && ttProf.answerMaxBytes === 65536 &&
+    // NAMED (Nov 18 2026, BV1): AFTER maxUploadBytes 128 MB too (a final chunk; BV12).
+    Object.keys(ttProf).join() === "hostPattern,pathPattern,allow308,statusOnly,answerMaxBytes,maxUploadBytes" && ttProf.statusOnly === true && ttProf.answerMaxBytes === 65536 &&
+    ttProf.maxUploadBytes === 128000000 &&
     // NAMED (Nov 18 2026, TK4): BEFORE tiktokapis\\.com$ only. AFTER tiktokapis\\.(?:com|us)$.
     String(ttProf.hostPattern) === "/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+tiktokapis\\.(?:com|us)$/" && String(ttProf.pathPattern) === "/^\\/(?:upload|video)(?:\\/|$)/" &&
     ttProf.hostPattern === GF.TIKTOK_UPLOAD_HOST_RE && ttProf.pathPattern === GF.TIKTOK_UPLOAD_PATH_RE &&
@@ -2128,6 +2173,123 @@ function pageAnswers(over) {
     FILES.auth.indexOf("an access token (expires_in; TikTok documents 2 hours), a refresh token\n   (refresh_expires_in; TikTok documents 180 days)") !== -1 &&
     !/an access token \(about 24 hours\)/.test(FILES.auth));
 
+  /* ── BV ── NAMED (Nov 18 2026, BV1, migration 187): a video over 50 MB is stored as parts; TikTok's FILE_UPLOAD takes
+     it in chunks when it is over 64 MB ("Videos with a total size greater than 64 MB must be uploaded in multiple chunks."),
+     each 5 to 64 MB, the final one up to 128 MB, total_chunk_count = floor(video_size / chunk_size), sent in order, every
+     chunk but the last answered 206 and the last 201 (developers.tiktok.com/doc/content-posting-api-media-transfer-guide). */
+  OUT("\n══ BV. videos over 50 MB: parts and chunks ══");
+  {
+    const PB = MV.PART_BYTES;
+    const seedParted = function (db, buf) {
+      const row = seedVideo(db, buf, { part_count: MV.partSizes(buf.length).length });
+      delete db.storage.objects[row.path];
+      let at = 0;
+      MV.partSizes(buf.length).forEach(function (n, i) {
+        const b = buf.subarray(at, at + n); at += n;
+        db.storage.objects[MV.partPath(row.path, i)] = { buf: b, created_at: new Date(Date.now() - 86400000).toISOString() };
+        db.t.member_video_parts.push({ id: uuid(), user_id: row.user_id, video_id: row.id, upload_path: row.path, idx: i, path: MV.partPath(row.path, i), bytes: n, sha256: sha(b),
+          created_at: new Date(Date.now() - 86400000).toISOString() });
+      });
+      return row;
+    };
+    const ttLines = function () { return LOGS.filter(function (x) { return x.indexOf("[tiktok] ") === 0; }); };
+    const rulesHold = function (size) {
+      const p = TK.chunkPlan(size);
+      const r = p.ranges;
+      return p.total_chunk_count === Math.floor(size / p.chunk_size) && r.length === p.total_chunk_count && p.total_chunk_count <= 1000 && r[0][0] === 0 && r[r.length - 1][1] === size &&
+        r.every(function (x, i) { return (i === 0 || x[0] === r[i - 1][1]) && x[1] - x[0] >= 5 * 1000 * 1000 && (i === r.length - 1 ? x[1] - x[0] <= 128 * 1000 * 1000 && x[1] - x[0] >= p.chunk_size : x[1] - x[0] === p.chunk_size && p.chunk_size <= 64 * 1000 * 1000); });
+    };
+    const p64 = TK.chunkPlan(64000000), p64b = TK.chunkPlan(64000001), p500 = TK.chunkPlan(524288000);
+    check("BV1. the chunk plan: at most 64 MB is ONE chunk (as before); above it chunks of a part (45 MiB) or half the video, floor(size / chunk) of them, the last taking the rest",
+      TK.ONE_CHUNK_MAX === 64000000 && p64.total_chunk_count === 1 && p64.chunk_size === 64000000 && p64b.total_chunk_count === 2 && p64b.chunk_size === 32000000 &&
+      J(p64b.ranges) === J([[0, 32000000], [32000000, 64000001]]) && p500.chunk_size === PB && p500.total_chunk_count === 11 && p500.ranges[10][1] - p500.ranges[10][0] === 524288000 - 10 * PB,
+      J([p64b, p500.total_chunk_count, p500.chunk_size]));
+    check("BV2. ...and TikTok's rules hold at every size from 64 MB to 500 MB: 5 to 64 MB each, the last at most 128 MB, in order, at most 1000",
+      [64000001, 70000000, 94371840, 94371841, 100000000, 200000000, 333333333, 450000000, 524288000].every(rulesHold));
+    check("BV3. sourceInfo: FILE_UPLOAD, video_size, chunk_size and total_chunk_count from the plan",
+      J(TK.sourceInfo({ bytes: 70000000 })) === J({ source: "FILE_UPLOAD", video_size: 70000000, chunk_size: 35000000, total_chunk_count: 2 }) &&
+      J(TK.sourceInfo({ bytes: 3000 })) === J({ source: "FILE_UPLOAD", video_size: 3000, chunk_size: 3000, total_chunk_count: 1 }));
+
+    // a parted video of at most 64 MB: one chunk, as before
+    const T1 = PB + 6 * 1024 * 1024;
+    const buf1 = mp4(T1, 71);
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf1);
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    let up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    let puts = m.tiktok.puts();
+    check("BV4. a parted video of 64 MB or less: ONE chunk, ONE PUT \"bytes 0-(N-1)/N\" over both parts, chunk_size the whole size; TikTok has every byte",
+      a.ok && J((m.tiktok.inits[0] || {}).source_info) === J({ source: "FILE_UPLOAD", video_size: T1, chunk_size: T1, total_chunk_count: 1 }) && puts.length === 1 &&
+      puts[0].contentRange === "bytes 0-" + (T1 - 1) + "/" + T1 && puts[0].contentLength === String(T1) && up.done === true && sha(up.received) === sha(buf1),
+      a.ok ? J(puts.map(function (x) { return x.contentRange; })) : a.msg);
+
+    // over 64 MB: chunks
+    const T2 = 70000000;
+    const buf2 = mp4(T2, 72);
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf2);
+    m.db.storage.calls.length = 0;
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    up = m.tiktok.uploads[Object.keys(m.tiktok.uploads)[0]] || {};
+    puts = m.tiktok.puts();
+    check("BV5. over 64 MB: init says chunk_size 35000000 and total_chunk_count 2; two PUTs in order, \"bytes 0-34999999/70000000\" then \"bytes 35000000-69999999/70000000\"",
+      a.ok && J((m.tiktok.inits[0] || {}).source_info) === J({ source: "FILE_UPLOAD", video_size: T2, chunk_size: 35000000, total_chunk_count: 2 }) && puts.length === 2 &&
+      puts[0].contentRange === "bytes 0-34999999/70000000" && puts[0].contentLength === "35000000" && puts[1].contentRange === "bytes 35000000-69999999/70000000" &&
+      puts[1].contentLength === "35000000" && puts.every(function (x) { return x.contentType === "video/mp4" && x.host === "open-upload.tiktokapis.com"; }),
+      a.ok ? J(puts.map(function (x) { return x.contentRange; })) : a.msg);
+    check("BV6. ...TikTok has every byte, in order (the fake answers 206 then 201), and the post goes on: processing, then posted",
+      a.ok && up.done === true && up.chunks === 2 && sha(up.received) === sha(buf2) && ["processing", "posted"].indexOf(rowOf(m, video.id).tiktok_status) !== -1, J([up.chunks, rowOf(m, video.id).tiktok_status]));
+    check("BV7. the parts are streamed from Storage (checked first, then each chunk reads only the parts it overlaps), never downloaded whole",
+      J(m.db.storage.calls.filter(function (x) { return x.op === "stream"; }).map(function (x) { return x.path; })) ===
+        J([video.path, MV.partPath(video.path, 1), video.path, video.path, MV.partPath(video.path, 1)]) && !m.db.storage.calls.some(function (x) { return x.op === "whole"; }),
+      J(m.db.storage.calls.map(function (x) { return x.op + " " + String(x.path).slice(-8); })));
+
+    // a chunk refused
+    m = mountRoutes({ env: CONFIGURED, tiktok: { putCode: "access_denied", putHttp: 403, putCodeAt: 1 } });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf2);
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    const r1 = [a.msg, ttLines(), m.tiktok.puts().length];
+    m = mountRoutes({ env: CONFIGURED, tiktok: { putCode: "access_denied", putHttp: 403, putCodeAt: 2 } });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf2);
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    const r2 = [a.msg, ttLines(), m.tiktok.puts().length];
+    check("BV8. the first chunk refused: no second PUT; logged with chunk=1/2; the card says what TikTok said",
+      !!r1[0] && r1[2] === 1 && J(r1[1]) === J(["[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=" + INIT_LOG_ID + " content_type=application/json chunk=1/2"]) &&
+      /didn't finish\..* TikTok said: http 403 access_denied\.$/.test(r1[0] || ""), J(r1));
+    check("BV9. the last chunk refused: logged with chunk=2/2, the same card", r2[2] === 2 &&
+      J(r2[1]) === J(["[tiktok] upload refused: http 403 access_denied The upload_url has expired. log_id=" + INIT_LOG_ID + " content_type=application/json chunk=2/2"]) &&
+      /TikTok said: http 403 access_denied\.$/.test(r2[0] || ""), J(r2));
+    m = mountRoutes({ env: CONFIGURED, tiktok: { cutAt: 2 } });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf2);
+    LOGS.length = 0;
+    a = await approve(m, proposalOf(video));
+    const rc = ttLines();
+    check("BV10. the second chunk cut off: logged as \"http none\" with chunk=2/2, and the card says it didn't finish",
+      !a.ok && rc.length === 1 && /^\[tiktok\] upload refused: http none [a-z0-9_-]+ - log_id=- chunk=2\/2$/.test(rc[0]) && /didn't finish/.test(a.msg || ""), J([a.msg, rc]));
+    m = mountRoutes({ env: CONFIGURED });
+    seedConnection(m.db);
+    video = seedParted(m.db, buf2);
+    const swapped = Buffer.from(m.db.storage.objects[MV.partPath(video.path, 1)].buf); swapped[9] ^= 0xff;
+    m.db.storage.objects[MV.partPath(video.path, 1)] = { buf: swapped, created_at: new Date().toISOString() };
+    a = await approve(m, proposalOf(video));
+    check("BV11. a part changed after filing: refused before TikTok is asked anything (no init, no PUT)", !a.ok && m.tiktok.inits.length === 0 && m.tiktok.puts().length === 0, a.msg);
+    // the transport's caps
+    const big = await attempt(m.tiktok.streamUpload(UPLOAD_BASE + "9", { profile: "tiktok", method: "PUT", headers: {}, body: require("stream").Readable.from([]), contentLength: 128000001, contentRange: "bytes 0-128000000/128000001" }));
+    const ytBig = await attempt(m.tiktok.streamUpload("https://www.googleapis.com/upload/youtube/v3/videos?upload_id=x", { profile: "youtube", method: "PUT", headers: {}, body: require("stream").Readable.from([]), contentLength: 52428801 }));
+    check("BV12. the transport: TikTok's profile takes a PUT of up to 128 MB (its final chunk), more is refused; YouTube's stays at 50 MiB",
+      GF.STREAM_PROFILES.tiktok.maxUploadBytes === 128000000 && !("maxUploadBytes" in GF.STREAM_PROFILES.youtube) &&
+      !big.ok && /from 0 to 128000000$/.test(big.msg || "") && !ytBig.ok && /from 0 to 52428800$/.test(ytBig.msg || ""), J([big.msg, ytBig.msg]));
+  }
+
   /* ── G ── */
   /* ── X ── NAMED (Nov 18 2026, TK2): video/init per TikTok's Direct Post reference (developers.tiktok.com,
      content-posting-api-reference-direct-post, -media-transfer-guide, -get-started), every TikTok refusal logged as one
@@ -2533,16 +2695,20 @@ function pageAnswers(over) {
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest (checkShopifyUninstallHook R1's). AFTER
   // 186_member_videos_duration.sql is above it too, by name, and "the highest" is this check's (G15).
-  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179 to 186, by name, are above it", highest === 186 &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("G13. R1. 178_tiktok_posting.sql is the only 178, and only 179 to 187, by name, are above it", highest === 187 &&
     migFiles.filter(function (x) { return /^178_/.test(x); }).join() === "178_tiktok_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 178; }).join() === "179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
   /* NAMED (Nov 17 2026, TK1): R1, the highest migration. 186_member_videos_duration.sql is the only 186 and the highest; it adds
-     member_videos.duration_ms (integer, NULL) with the CHECK 1 ms to 4 hours, and its VERIFY is verify/186_verify.sql. */
+     member_videos.duration_ms (integer, NULL) with the CHECK 1 ms to 4 hours, and its VERIFY is verify/186_verify.sql.
+     NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER it is the only 186, and only
+     187_member_video_parts.sql is above it; "the highest" is checkYoutubeUploads G14's. */
   const m186 = migFiles.filter(function (x) { return /^186_/.test(x); });
   const sql186 = m186.length === 1 ? read("supabase/migrations/" + m186[0]) : "";
   const verify186 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "186_verify.sql")) ? read("supabase/migrations/verify/186_verify.sql") : "";
-  check("G15. R1. 186_member_videos_duration.sql is the only 186 and the highest migration; duration_ms integer NULL, CHECK NULL or 1..14400000; VERIFY is verify/186_verify.sql",
-    highest === 186 && m186.join() === "186_member_videos_duration.sql" &&
+  check("G15. R1. 186_member_videos_duration.sql is the only 186, and only 187_member_video_parts.sql is above it; duration_ms integer NULL, CHECK NULL or 1..14400000; VERIFY is verify/186_verify.sql",
+    highest === 187 && m186.join() === "186_member_videos_duration.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 186; }).join() === "187_member_video_parts.sql" &&
     sql186.indexOf("ADD COLUMN IF NOT EXISTS duration_ms integer NULL;") !== -1 &&
     sql186.indexOf("CHECK (duration_ms IS NULL OR (duration_ms > 0 AND duration_ms <= 14400000))") !== -1 &&
     /member_videos_duration_check/.test(verify186) && /duration_ms/.test(verify186) && !/\b(INSERT|UPDATE|DELETE|ALTER|DROP)\b/i.test(verify186.replace(/--[^\n]*/g, "")), J([highest, m186]));

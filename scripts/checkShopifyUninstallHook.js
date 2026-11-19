@@ -513,9 +513,10 @@ async function syncNow(m) { return hit(m, "post /api/store/connections/:id/sync"
   const mig = read("supabase/migrations/185_shopify_uninstall_hook.sql");
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER only 186_member_videos_duration.sql is above it, by name;
   // "the highest" is checkTiktokPosting G15's.
-  check("R1. 185_shopify_uninstall_hook.sql is the only 185, only 186_member_videos_duration.sql is above it (checkTiktokPosting G15); its VERIFY query is verify/185_verify.sql",
-    highest === 186 && migFiles.filter(function (x) { return /^185_/.test(x); }).join() === "185_shopify_uninstall_hook.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 185; }).join() === "186_member_videos_duration.sql" &&
+  // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
+  check("R1. 185_shopify_uninstall_hook.sql is the only 185, only 186_member_videos_duration.sql and 187_member_video_parts.sql are above it (checkYoutubeUploads G14); its VERIFY query is verify/185_verify.sql",
+    highest === 187 && migFiles.filter(function (x) { return /^185_/.test(x); }).join() === "185_shopify_uninstall_hook.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 185; }).join() === "186_member_videos_duration.sql,187_member_video_parts.sql" &&
     fs.existsSync(path.join(migDir, "verify", "185_verify.sql")), highest);
   check("R2. migration 185 adds only uninstall_hook_at timestamptz NULL to member_store_connections, in BEGIN/COMMIT, and drops nothing",
     /ALTER TABLE public\.member_store_connections\n  ADD COLUMN IF NOT EXISTS uninstall_hook_at timestamptz NULL;/.test(mig) &&

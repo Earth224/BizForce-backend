@@ -35069,6 +35069,10 @@ async function facebookChoosingPurgeTick() {
                                                the private bucket bf-video
    POST   /api/videos/finalize                 { path, label, bytes }: the object streamed,
                                                sniffed, counted and hashed; a mismatch deletes it
+   POST   /api/videos/part-url                 NAMED (Nov 18 2026, BV1): { path, idx, bytes }: a signed
+                                               upload URL for one part of a video over 50 MB
+   POST   /api/videos/part-done                { path, idx, bytes, sha256 }: the part's size checked
+                                               in Storage and the part recorded (member_video_parts)
    GET    /api/videos                          the member's videos, never a path or a session
    DELETE /api/videos/:id                      a waiting video and its file
    POST   /api/youtube/propose-upload          files publish_youtube_video; never runs it
@@ -35386,10 +35390,36 @@ app.post("/api/videos/finalize", requireAuth, requireActiveSubscription, videoUp
     }
   });
 
+/* NAMED (Nov 18 2026, BV1): the parts of a video over 50 MB (lib/memberVideos.js partUrl, partDone). A 500 MB video is
+   up to 12 parts and two calls each, so these have their own hourly limit; upload-url and finalize keep theirs. */
+const videoPartLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 120,
+  keyGenerator: function (req) { return "video-part:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "You can send 120 video parts an hour. Try again later.", code: "rate_limited" }
+});
+[["/api/videos/part-url", "partUrl"], ["/api/videos/part-done", "partDone"]].forEach(function (route) {
+  app.post(route[0], requireAuth, requireActiveSubscription, videoPartLimiter, async function (req, res, next) {
+    try {
+      res.set("Cache-Control", "no-store");
+      if (!videoPlatformConfigured()) return youtubeNotConfigured(res);
+      var out = await require("./lib/memberVideos")[route[1]](youtubeDeps(), req.user.id, req.body || {});
+      return res.status(out.status).json(out.body);
+    } catch (error) {
+      console.error("[videos/" + route[1] + "] Error:", (error && error.code) || "error");
+      next(error);
+    }
+  });
+});
+
 app.get("/api/videos", requireAuth, async function (req, res, next) {
   try {
     var mv = require("./lib/memberVideos");
-    return res.json({ videos: await mv.listVideos(youtubeDeps(), req.user.id), max_bytes: mv.MAX_BYTES, ready_max: mv.READY_MAX });
+    // NAMED (Nov 18 2026, BV1): one_file_max_bytes, what Instagram and Facebook take (50 MB), and part_bytes.
+    return res.json({ videos: await mv.listVideos(youtubeDeps(), req.user.id), max_bytes: mv.MAX_BYTES, ready_max: mv.READY_MAX,
+      one_file_max_bytes: mv.ONE_FILE_MAX_BYTES, part_bytes: mv.PART_BYTES });
   } catch (error) {
     next(error);
   }

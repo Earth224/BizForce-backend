@@ -293,7 +293,11 @@ const EXPECTED_GATED = [
   // the state consumed once, the code exchanged, both tokens sealed, the participation read and stored); both need a
   // subscription, under Connect Shopify's limiter. The list, sync now and disconnect are the existing store routes,
   // unchanged (checkAmazonConnect).
-  "post /api/store/amazon/start", "post /api/store/amazon/finish"
+  "post /api/store/amazon/start", "post /api/store/amazon/finish",
+  // NAMED (Nov 18 2026, BV1, migration 187; gated 126 -> 128): BEFORE a video was one upload-url and one finalize. AFTER a
+  // video over 50 MB asks part-url for each part's signed URL and reports it with part-done; both need a subscription, like
+  // upload-url and finalize, under their own limiter (120 an hour; checkYoutubeUploads BV20).
+  "post /api/videos/part-url", "post /api/videos/part-done"
 ];
 
 const EXPECTED_ADMIN = [
