@@ -46,7 +46,8 @@ const MUTATIONS = {
   "author-not-told": [[SAFETY, "    if (hidden && item.owner_id) {", "    if (false) {"]],
   "retention-open-too": [[SAFETY, '.delete().neq("status", "open").lt("resolved_at", yearAgo)', '.delete().lt("created_at", yearAgo)']],
   "report-unlimited": [[SERVER, 'app.post("/api/reports", requireAuth, reportLimiter, async function', 'app.post("/api/reports", requireAuth, async function']],
-  "chain-dropped": [[SERVER, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick);", ".then(shopifyDataRequestReminderTick).then(copyrightRestoreTick);"]]
+  // NAMED (Nov 20 2026, P2-3): the chain now ends with the post retention
+  "chain-dropped": [[SERVER, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);", ".then(shopifyDataRequestReminderTick).then(copyrightRestoreTick).then(postRetentionTick);"]]
 };
 const T = H.setup(__filename, MUTATIONS, [SERVER, SAFETY, "scripts/bf-safety.js", "campaigns.html", "seller.html", "listing.html", "profile.html", "inbox.html", "messages.html"]);
 const { FILES, check, J, has } = T;
@@ -93,8 +94,10 @@ const report = (w, who, body) => SF.fileReport(w.db.client, who, Object.assign({
   console.log("\n══ A. the rules ══");
   const v = SF.validateReport({ object_type: "listing", object_id: ITEM.toUpperCase(), reason: "scam", detail: "  sent me a fake link  " });
   check("A1. a good report: the id lower-cased, the detail trimmed", J(v) === J({ object_type: "listing", object_id: ITEM, reason: "scam", detail: "sent me a fake link" }), J(v));
-  check("A2. the types today: profile, listing, campaign, message (posts, comments and reviews later)", J(SF.REPORTABLE_NOW) === J(["profile", "listing", "campaign", "message"]) &&
-    SF.validateReport({ object_type: "post", object_id: ITEM, reason: "spam" }).field === "object_type");
+  // NAMED (Nov 20 2026, P2-3): BEFORE profile, listing, campaign and message, a post refused. AFTER posts and comments come first
+  // (P2-3 made them); a review is still refused.
+  check("A2. the types today: post, comment, profile, listing, campaign, message (reviews later)", J(SF.REPORTABLE_NOW) === J(["post", "comment", "profile", "listing", "campaign", "message"]) &&
+    SF.validateReport({ object_type: "review", object_id: ITEM, reason: "spam" }).field === "object_type");
   check("A3. the 13 reasons", J(SF.REASONS) === J(["spam", "harassment", "hate", "sexual", "minor_safety", "violence", "health_claim", "prohibited_item", "scam", "copyright", "impersonation", "privacy", "other"]) &&
     SF.validateReport({ object_type: "listing", object_id: ITEM, reason: "rude" }).field === "reason");
   check("A4. the detail: at most 1000 characters; empty is null; not an id is refused",
@@ -170,14 +173,16 @@ const report = (w, who, body) => SF.fileReport(w.db.client, who, Object.assign({
   const none = await SF.retentionTick({ supabase: idle.client, claimDailyJob: async () => false, now: () => new Date(NOW) });
   check("D5. a day already claimed: nothing deleted", J(none) === J({ claimed: false }) && idle.log.length === 0);
   check("D6. a step of the 04:45 chain, after the Shopify reminder, through the shared daily claim (job safety_retention)",
-    has(S, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick);") &&
+    has(S, ".then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);") &&   // NAMED (Nov 20 2026, P2-3): BEFORE the line ended at copyrightRestoreTick
     has(S, 'return await require("./lib/safety").retentionTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });') && SF.RETENTION_JOB_NAME === "safety_retention");
 
   /* ── E ── */
   console.log("\n══ E. the pages ══");
   const js = FILES["scripts/bf-safety.js"] || "";
   check("E1. the report sheet posts the item, the reason and the detail, counted to 1000",
-    /call\("POST", "\/api\/reports", \{[^}]*object_type[^}]*reason[^}]*detail/.test(js) && /DETAIL_MAX = 1000/.test(js) && has(js, 'detail.value.length + " / " + DETAIL_MAX'));
+    // NAMED (Nov 20 2026, P2-3): BEFORE the body was written inside the call. AFTER it is built first (sent), so a campaign known
+    // only by its share link sends share_id in place of object_id.
+    /var sent = \{ object_type: item\.type, object_id: item\.id, reason: picked\.value, detail: detail\.value \};/.test(js) && /call\("POST", "\/api\/reports", sent\)/.test(js) && /DETAIL_MAX = 1000/.test(js) && has(js, 'detail.value.length + " / " + DETAIL_MAX'));
   const mounted = { "campaigns.html": "BFSafety.mount(", "seller.html": "BFSafety.mount(", "listing.html": "BFSafety.mount(", "profile.html": "BFSafety.mount(", "inbox.html": "BFSafety.", "messages.html": "BFSafety." };
   const missing = Object.keys(mounted).filter(f => !has(FILES[f], mounted[f]) || !has(FILES[f], '<script src="/scripts/bf-safety.js"></script>'));
   check("E2. the menu is on the campaign cards, the storefront, the listing page, a member's profile, the Inbox thread and Messages", missing.length === 0, J(missing));

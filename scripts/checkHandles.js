@@ -57,10 +57,11 @@ const ME = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8
   const migNames = fs.readdirSync(path.join(H.REPO, "supabase", "migrations")).filter(x => /^\d{3}_.*\.sql$/.test(x));
   const top = migNames.map(x => Number(x.slice(0, 3))).reduce((a, x) => Math.max(a, x), 0);
   // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): BEFORE 190 was the highest. AFTER only 191_safety.sql and
+  // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
   // 192_buy_listing_digital.sql are above it, by name; "the highest" is checkBuyListingDigital R1's.
   check("R1. 190_notifications_links.sql is the only 190, and only 191_safety.sql and 192_buy_listing_digital.sql are above it; 189_handles_and_place.sql the only 189",
-    top === 192 && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
-    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql", J([top]));
+    top === 194 && migNames.filter(x => /^190_/.test(x)).join() === "190_notifications_links.sql" && migNames.filter(x => /^189_/.test(x)).join() === "189_handles_and_place.sql" &&
+    migNames.filter(x => Number(x.slice(0, 3)) > 190).join() === "191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql", J([top]));
   const m189 = FILES[M189] || "", m190 = FILES[M190] || "";
   check("R2. 189 holds the handle format as a named CHECK, dropped first (safe to re-run)",
     has(m189, "DROP CONSTRAINT IF EXISTS bf_profiles_username_format;") && has(m189, "CHECK (username IS NULL OR username ~ '^[a-z0-9_][a-z0-9_-]{2,29}$')"));

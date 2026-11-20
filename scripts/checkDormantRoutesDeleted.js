@@ -11,6 +11,10 @@
                                GET /api/following, POST and DELETE
                                /api/favorites/:businessId, GET /api/feed,
                                POST /api/posts, DELETE /api/posts/:id
+                               (NAMED Nov 20 2026, P2-3: POST /api/posts and
+                               DELETE /api/posts/:id are new routes again, over
+                               migration 193's posts table, counted in ADDED and
+                               no longer among the 404s; the old ones stay deleted)
      deals                     GET, POST /api/deals; PUT, DELETE /api/deals/:id
      websites                  GET, POST /api/websites; DELETE /api/websites/:id
      analytics                 GET /api/analytics, POST /api/analytics/event
@@ -64,7 +68,8 @@ function check(label, ok, detail) {
 const DELETED = [
   ["get", "/api/search/businesses"], ["post", "/api/follow/:userId"], ["delete", "/api/follow/:userId"],
   ["get", "/api/followers"], ["get", "/api/following"], ["post", "/api/favorites/:businessId"],
-  ["delete", "/api/favorites/:businessId"], ["get", "/api/feed"], ["post", "/api/posts"], ["delete", "/api/posts/:id"],
+  // NAMED (Nov 20 2026, P2-3): BEFORE ["post", "/api/posts"] and ["delete", "/api/posts/:id"] were here; AFTER they are P2-3's, in ADDED
+  ["delete", "/api/favorites/:businessId"], ["get", "/api/feed"],
   ["get", "/api/deals"], ["post", "/api/deals"], ["put", "/api/deals/:id"], ["delete", "/api/deals/:id"],
   ["get", "/api/websites"], ["post", "/api/websites"], ["delete", "/api/websites/:id"],
   ["get", "/api/analytics"], ["post", "/api/analytics/event"],
@@ -77,7 +82,8 @@ const BEFORE = "f045991";
 const ROUTE_RE = /^app\.(get|post|put|patch|delete)\(\s*["']([^"']+)["']/gm;
 function routeList(src) { const out = []; let m; while ((m = ROUTE_RE.exec(src))) out.push(m[1] + " " + m[2]); ROUTE_RE.lastIndex = 0; return out; }
 const OLD_SRC = execSync("git show " + BEFORE + ":server.js", { cwd: REPO, maxBuffer: 64 * 1024 * 1024 }).toString("utf8");
-const deletedKeys = new Set(DELETED.map(function (d) { return d[0] + " " + d[1]; }));
+// NAMED (Nov 20 2026, P2-3): the old POST /api/posts and DELETE /api/posts/:id stay out of what f045991 contributes; P2-3 adds its own in ADDED.
+const deletedKeys = new Set(DELETED.map(function (d) { return d[0] + " " + d[1]; }).concat(["post /api/posts", "delete /api/posts/:id"]));
 /* Routes added since, each on purpose. The total stays exact: a route that is
    in neither list is still an extra. */
 const ADDED = [
@@ -403,7 +409,31 @@ const ADDED = [
   ["post", "/api/copyright/notices"],                        // PUBLIC, 5 an hour per address: a copyright notice, queued at priority 1 (519 -> 520)
   ["get", "/api/copyright/counter/:id"],                     // login-only: a notice about the member's own removed material (520 -> 521)
   ["post", "/api/copyright/counter/:id"],                    // login-only, 5 an hour: the member's counter-notice (521 -> 522)
-  ["post", "/api/bfp/upload-check"]                          // login-only: the member's own just-uploaded file checked by its bytes; removed when refused (522 -> 523)
+  ["post", "/api/bfp/upload-check"],                         // login-only: the member's own just-uploaded file checked by its bytes; removed when refused (522 -> 523)
+  // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): BEFORE 523 routes; AFTER 545, posts, the Following feed, Talk, Like, Save, Share,
+  // Follow and the public post page (checkPosts, checkSocialGraph, checkPostMedia, checkPublicPostPage)
+  ["post", "/api/posts/photos"],                             // login and plan, 80 an hour: one post photo or thumbnail, 600 KB at most (523 -> 524)
+  ["post", "/api/posts"],                                    // login and plan: a text or photo post, screened, 10 a day (524 -> 525)
+  ["get", "/api/posts/saved"],                               // login-only: the member's own saved posts, private (525 -> 526)
+  ["get", "/api/posts/by/:userId"],                          // PUBLIC, gated by ownerPagePublic and blocks: a member's posts (526 -> 527)
+  ["get", "/api/posts/:id"],                                 // login-only: one post the viewer may see (527 -> 528)
+  ["patch", "/api/posts/:id"],                               // login-only: the author edits the text, screened again (528 -> 529)
+  ["delete", "/api/posts/:id"],                              // login-only: the author deletes it (status removed) (529 -> 530)
+  ["get", "/api/posts/:id/comments"],                        // login-only: Talk, blocks and mutes respected (530 -> 531)
+  ["post", "/api/posts/:id/comments"],                       // login-only, 60 an hour: a comment or a reply, screened (531 -> 532)
+  ["delete", "/api/comments/:id"],                           // login-only: the commenter's own, a tombstone (532 -> 533)
+  ["post", "/api/comments/:id/hide"],                        // login-only: the post's author hides a comment on their post (533 -> 534)
+  ["post", "/api/posts/:id/like"],                           // login-only, 200 an hour (534 -> 535)
+  ["delete", "/api/posts/:id/like"],                         // login-only (535 -> 536)
+  ["post", "/api/posts/:id/save"],                           // login-only (536 -> 537)
+  ["delete", "/api/posts/:id/save"],                         // login-only (537 -> 538)
+  ["post", "/api/posts/:id/share"],                          // login-only: one counted share per member per post per day (538 -> 539)
+  ["get", "/api/feed/following"],                            // login-only: the Following feed, 10 at a time (539 -> 540)
+  ["post", "/api/follows"],                                  // login-only, 100 a day (540 -> 541)
+  ["delete", "/api/follows/:userId"],                        // login-only (541 -> 542)
+  ["get", "/api/follows/:userId/counts"],                    // PUBLIC, gated by ownerPagePublic and blocks: the two counts (542 -> 543)
+  ["get", "/api/follows/:userId/:which"],                    // login-only: followers or following, blocks respected (543 -> 544)
+  ["get", "/p/:id"]                                          // PUBLIC: a public post's page with its OG tags; 404 for anything else (544 -> 545)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

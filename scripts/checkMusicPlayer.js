@@ -358,7 +358,9 @@ function liftRoutes(fake) {
         req.file = f; cb();
       }
     }), { memoryStorage: () => ({}) }),
-    supabase: fake.client, accountFiles, requireAuth, Buffer, app: {}
+    supabase: fake.client, accountFiles, requireAuth, Buffer, app: {},
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
+    storageGuard: async () => null
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });
   vm.createContext(ctx);
@@ -1272,7 +1274,8 @@ async function boomboxChecks(c) {
   // NAMED (Nov 4 2026, the Media Library): BEFORE 47 signed-in pages; AFTER 48, with media.html, which carries both.
   // NAMED (Nov 5 2026, mailbox connection): BEFORE 48 signed-in pages; AFTER 49, with mailbox.html, which carries both.
   // NAMED (Nov 19 2026, P2-1): BEFORE 49 signed-in pages; AFTER 51, with home.html and inbox.html, which carry both.
-  const SIGNED_IN_PAGES = 51;
+  // NAMED (Nov 20 2026, P2-3): BEFORE 51 signed-in pages; AFTER 52, with compose.html, which carries both.
+  const SIGNED_IN_PAGES = 52;
   const signedInTag = html => /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html) ||
     /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>/.test(html);
   const want = [], refuse = [], wrong = [], noMist = [], signedIn = [];
@@ -2453,7 +2456,8 @@ async function liveOrderChecks() {
     // NAMED (Nov 4 2026, the Media Library): BEFORE 54 live pages; AFTER 55, with media.html.
     // NAMED (Nov 5 2026, mailbox connection): BEFORE 55 live pages; AFTER 56, with mailbox.html.
     // NAMED (Nov 19 2026, P2-1): BEFORE 56 live pages; AFTER 58, with home.html and inbox.html.
-    missing.length === 0 && signedIn.length === 58 && signedIn.indexOf("home.html") !== -1 && signedIn.indexOf("inbox.html") !== -1 && signedIn.indexOf("media.html") !== -1 && signedIn.indexOf("mailbox.html") !== -1 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
+    // NAMED (Nov 20 2026, P2-3): BEFORE 58 live pages; AFTER 59, with compose.html.
+    missing.length === 0 && signedIn.length === 59 && signedIn.indexOf("compose.html") !== -1 && signedIn.indexOf("home.html") !== -1 && signedIn.indexOf("inbox.html") !== -1 && signedIn.indexOf("media.html") !== -1 && signedIn.indexOf("mailbox.html") !== -1 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
 }
 
 /* ── G13. now playing ───────────────────────────────────────────────────── */

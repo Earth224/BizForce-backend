@@ -91,10 +91,13 @@ const id = n => "aaaaaaaa-0000-4000-8000-" + String(n).padStart(12, "0");
     has(pg, "id=\"marketList\"") && has(pg, "id=\"campaignList\"") && has(pg, "id=\"peopleList\"") && has(pg, "New in the Market"));
   check("P3. each list says plainly when it is empty", has(pg, "No listings with a photo yet.") && has(pg, "No shared campaigns right now.") && has(pg, "  if (!list.length) { el.innerHTML = '<p class=\"empty\">No public member pages yet.</p>'; return; }"));
   check("P4. a failed load says so, and does not claim there is nothing", has(pg, "It is not a statement that there is nothing here.") && has(pg, "  } catch (e) {\n    showError();\n  }"));
-  check("P5. the plain line: posts and the four tabs arrive later", has(pg, "Posts are coming. The Following, Local, Market and For You tabs arrive with them."));
+  // NAMED (Nov 20 2026, P2-3): BEFORE "Posts are coming. The Following, Local, Market and For You tabs arrive with them." AFTER posts
+  // and the Following tab are here; video and the other three tabs are what is still to come.
+  check("P5. the plain line: video posts and the three other tabs arrive later", has(pg, "Video posts are coming. The Local, Market and For You tabs arrive later."));
   check("P6. people have a Visit button to their page", has(pg, "aria-label=\"Visit ' + escapeHtml(p.name) + '\">Visit</a>"));
   check("P7. a desktop has the 600 px column and a right column; a phone one column",
-    has(pg, ".home-grid{display:grid;grid-template-columns:minmax(0,600px) minmax(0,300px);") && /@media \(max-width: 760px\)\{[\s\S]{0,200}\.home-grid\{grid-template-columns:minmax\(0,1fr\)/.test(pg));
+  // NAMED (Nov 20 2026, P2-3): BEFORE the phone rule sat within 200 characters of the media query; AFTER 1200: the feed's full-screen rules come first.
+    has(pg, ".home-grid{display:grid;grid-template-columns:minmax(0,600px) minmax(0,300px);") && /@media \(max-width: 760px\)\{[\s\S]{0,1200}\.home-grid\{grid-template-columns:minmax\(0,1fr\)/.test(pg));
   check("P8. no sample people, listings or numbers in the page", !/Jane|John|Lorem|sample|example\.com/i.test(pg.replace(/\/\*[\s\S]*?\*\//g, "")));
   check("P9. the page carries the theme, the session guard, the phone stylesheet last in the head, the bfc notice and the legal footer, and no Guide",
     has(pg, "<script src=\"/scripts/bf-session.js\"></script>") && pg.indexOf("/css/bf-phone.css") > pg.indexOf("</style>") && pg.indexOf("/css/bf-phone.css") < pg.indexOf("</head>") &&

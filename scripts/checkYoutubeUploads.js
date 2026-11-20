@@ -939,6 +939,8 @@ function mountRoutes(env) {
     FRONTEND_URL: "https://bizforceai.net",
     SOCIAL_SEARCH_LIMITS: { youtube: Object.assign({ label: "YouTube" }, LIMITS) },
     blueskyClaimsRefusal: claimsStub,
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
+    storageGuard: async function () { return null; },
     callAnthropicText: async function (prompt) {
       prompts.push(prompt);
       return { text: env.draft !== undefined ? env.draft : "TITLE: Spring cakes at Maple Street\nDESCRIPTION: How we make our spring cakes.\nTAGS: cakes, bakery, spring" };
@@ -1834,7 +1836,9 @@ function pageAnswers(over) {
     // NAMED (Nov 15 2026, W2): the chain then ends with the Shopify data request reminder (checkShopifyWebhooks J, L2).
     shopifyDataRequestReminderTick: async function () { order.push("shopifyreminder"); },
     // NAMED (Nov 20 2026, P2-2): the safety retention and the counter-notice restore follow it.
-    safetyRetentionTick: async function () { order.push("safetyretention"); }, copyrightRestoreTick: async function () { order.push("copyrightrestore"); }
+    safetyRetentionTick: async function () { order.push("safetyretention"); }, copyrightRestoreTick: async function () { order.push("copyrightrestore"); },
+    // NAMED (Nov 20 2026, P2-3): the post retention follows the copyright restore
+    postRetentionTick: async function () { order.push("postretention"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1842,7 +1846,7 @@ function pageAnswers(over) {
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
   // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
   check("J5. the 04:45 UTC chain runs videoRetentionTick after the Shopify purge, then instagramRefreshTick, then facebookChoosingPurgeTick (NAMED, item 8 parts 3a and 3b), then L1's YouTube data check and renewal emails", cronOk && scheduled.length === 1 && scheduled[0].spec === "45 4 * * *" &&
-    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore"]), J(order));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder"
+    scheduled[0].tz === "UTC" && J(order) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore", "postretention"]), J(order));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder". NAMED (Nov 20 2026, P2-3): BEFORE it ended "copyrightrestore"
   m = mountRoutes({ env: CONFIGURED });
   const vr = await attempt(m.ctx.videoRetentionTick());
   check("J6. videoRetentionTick runs lib/memberVideos.js retentionTick on youtubeDeps() (its job_runs row claimed)", vr.ok && vr.v && vr.v.claimed === true &&
@@ -2498,9 +2502,10 @@ function pageAnswers(over) {
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
   // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 192 &&
+  // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 194 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),
@@ -2516,8 +2521,8 @@ function pageAnswers(over) {
     // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
     // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
     check("G14. R1. 187_member_video_parts.sql is the only 187 and only 188_user_preferences_hq_view.sql, 189_handles_and_place.sql and 190_notifications_links.sql are above it; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
-      top === 192 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
-      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql" &&
+      top === 194 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql" &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 524288000)") !== -1 && sql187.indexOf("CHECK (part_count >= 1 AND part_count <= 12)") !== -1 &&
       sql187.indexOf("ALTER TABLE public.member_video_parts ENABLE ROW LEVEL SECURITY;") !== -1 && sql187.indexOf("REVOKE ALL ON public.member_video_parts FROM anon, authenticated;") !== -1 &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 47185920)") !== -1 && sql187.indexOf("UNIQUE (upload_path, idx)") !== -1 &&

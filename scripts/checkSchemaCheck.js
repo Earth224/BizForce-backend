@@ -226,7 +226,9 @@ const NAMED = "member_support (run " + MIG150 + ")";
   check("S1. SCHEMA_TABLES is exactly the migrations' created tables minus the dropped ones (" + want.length + "), each tagged with the file that creates it",
     J(listed) === J(want), "missing " + J(want.filter(function (x) { return listed.indexOf(x) === -1; })) + ", extra " + J(listed.filter(function (x) { return want.indexOf(x) === -1; })));
   check("S2. ...the dropped tables are not on it (053 and 123 drop " + dropped.size + ")",
-    dropped.size === 8 && S.SCHEMA_TABLES.every(function (e) { return !dropped.has(e[0]); }), J([...dropped.keys()]));
+    // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): BEFORE 8 dropped. AFTER 6: 123 dropped the old posts and follows, and 193 and
+    // 194 create new ones, so they are on the list again (tagged with 193 and 194) and no longer counted as dropped.
+    dropped.size === 6 && S.SCHEMA_TABLES.every(function (e) { return !dropped.has(e[0]); }), J([...dropped.keys()]));
   const union = new Set([].concat(BK.BACKUP_TABLES, Object.keys(BK.SKIPPED_TABLES), Object.keys(BK.EXCLUDED_TABLES)));
   const names = S.SCHEMA_TABLES.map(function (e) { return e[0]; });
   check("S3. it is exactly the union of lib/backup.js's BACKUP_TABLES, SKIPPED_TABLES and EXCLUDED_TABLES (" + union.size + ")",

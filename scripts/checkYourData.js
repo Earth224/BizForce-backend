@@ -437,7 +437,8 @@ const canon = tables => JSON.stringify(Object.keys(tables).sort().map(t => [t, t
   check("A4. no table is in both", YD.DATA.every(e => !YD.NOT_MEMBER_DATA[e.table]));
   // "sold" (marketplace_listings) deletes too: every listing but one another member bought.
   // NAMED (Nov 20 2026, P2-2): "detach" (content_reports) is in the delete order too: its rows stay, without the member
-  const delTables = YD.DATA.filter(e => e.onDelete === "delete" || e.onDelete === "sold" || e.onDelete === "detach").map(e => e.table);
+  // NAMED (Nov 20 2026, P2-3): "comment" (post_comments) is in the delete order too: the member's comments become tombstones, so replies stay in place
+  const delTables = YD.DATA.filter(e => e.onDelete === "delete" || e.onDelete === "sold" || e.onDelete === "detach" || e.onDelete === "comment").map(e => e.table);
   const ordered = YD.DELETE_ORDER.concat(YD.FINAL_DELETES);
   check("A5. every table the delete deletes is in the delete order exactly once, and nothing else is",
     delTables.every(t => ordered.filter(x => x === t).length === 1) && ordered.every(t => delTables.indexOf(t) !== -1),

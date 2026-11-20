@@ -7987,6 +7987,9 @@ app.post("/api/themes/photo", requireAuth, themePhotoLimiter, function (req, res
       const checked = memberThemes.checkPhoto(req.file);
       if (checked.error) return res.status(checked.error.indexOf("5 MB") !== -1 ? 413 : 400).json({ error: checked.error });
       const storagePath = memberThemes.photoPathFor(req.user.id, Date.now(), checked.ext);
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+      const themeFull = await storageGuard(req.file.buffer.length);
+      if (themeFull) return res.status(themeFull.status).json(themeFull.body);
       const { error } = await supabase.storage.from("bf-public")
         .upload(storagePath, req.file.buffer, { contentType: checked.contentType, upsert: false });
       if (error) return res.status(502).json({ error: "The photo could not be stored. Try again." });
@@ -8081,6 +8084,9 @@ app.post("/api/music/tracks", requireAuth, musicUploadLimiter, function (req, re
       if (checked.error) return res.status(checked.status).json({ error: checked.error });
       const row = memberMusic.trackRow(req.user.id, req.file, checked, req.body, Date.now());
       if (!memberMusic.ownTrackPath(row.storage_path, req.user.id)) return res.status(400).json({ error: "The file could not be placed in your library." });
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+      const musicFull = await storageGuard(req.file.buffer.length);
+      if (musicFull) return res.status(musicFull.status).json(musicFull.body);
       const { error: upError } = await supabase.storage.from(memberMusic.BUCKET)
         .upload(row.storage_path, req.file.buffer, { contentType: checked.mime, upsert: false });
       if (upError) return res.status(502).json({ error: "The file could not be stored. Try again." });
@@ -8300,6 +8306,9 @@ app.post("/api/media", requireAuth, requireActiveSubscription, mediaUploadLimite
 
       const before = await memberMedia.usage(supabase, userId);
       if (before.used_bytes + checked.size > memberMedia.MEMBER_MEDIA_BYTES) return res.status(413).json({ error: memberMedia.MESSAGES.full, reason: "full" });
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+      const mediaFull = await storageGuard(checked.size);
+      if (mediaFull) return res.status(mediaFull.status).json(mediaFull.body);
 
       const path = memberMedia.mediaPath(userId, checked.ext);
       const stored = await supabase.storage.from(memberMedia.BUCKET).upload(path, checked.bytes, { contentType: checked.mime, upsert: false });
@@ -8387,6 +8396,10 @@ app.delete("/api/media/:id", requireAuth, async function (req, res, next) {
       return res.status(503).json({ error: memberMedia.MESSAGES.usesUnknown });
     }
     if (uses.length) return res.status(409).json({ error: memberMedia.usesText(uses), uses: uses, reason: "in_use" });
+    // NAMED (Nov 20 2026, P2-3): nor while a post shows it (post_media, ON DELETE RESTRICT)
+    if (await require("./lib/postMedia").usedInPosts(supabase, item.id)) {
+      return res.status(409).json({ error: "This file is used in one of your posts. Delete the post first; its photos are let go 30 days later.", reason: "in_post" });
+    }
     const removed = await accountFiles.removeFiles({ supabase: supabase, storage: supabase.storage, files: [{ bucket: memberMedia.BUCKET, path: item.path }] });
     if (removed.not_queued) console.error("[media] a library file could be neither removed nor queued for user " + req.user.id);
     const { error } = await supabase.from("member_media").delete().eq("id", item.id).eq("user_id", req.user.id);
@@ -8713,6 +8726,8 @@ function safetyAdd(table, mine, theirs, flag) {
       row[mine] = req.user.id; row[theirs] = target;
       const saved = await supabase.from(table).upsert(row, { onConflict: mine + "," + theirs, ignoreDuplicates: true });
       if (saved.error) throw saved.error;
+      // NAMED (Nov 20 2026, P2-3): a block also removes the follows between the two, both ways (lib/posts.js)
+      if (table === "member_blocks") await require("./lib/posts").unfollowBoth(supabase, req.user.id, target);
       return res.status(201).json({ user_id: target, [flag]: true });
     } catch (error) { next(error); }
   };
@@ -8766,7 +8781,14 @@ app.get("/api/me/relation", requireAuth, async function (req, res, next) {
     let target = await safetyTargetId({ user_id: req.query.user_id, handle: req.query.handle });
     /* Or the owner of an item the menu is on (a campaign card or a listing knows no owner id): a listing, a campaign, or a
        message the member sent or received. */
-    if (!target && ["listing", "campaign", "message"].indexOf(req.query.object_type) !== -1 && SF.isUuid(req.query.object_id)) {
+    /* NAMED (Nov 20 2026, P2-3): a post or a comment too; and a campaign by its share id, which is all its public page knows.
+       BEFORE ["listing", "campaign", "message"] by id only. */
+    if (!target && req.query.object_type === "campaign" && typeof req.query.share_id === "string" && /^[a-z2-7]{16}$/.test(req.query.share_id)) {
+      const byShare = await supabase.from("crowdfunding_campaigns").select("owner_id").eq("share_id", req.query.share_id).maybeSingle();
+      if (byShare.error) throw byShare.error;
+      target = byShare.data ? byShare.data.owner_id : null;
+    }
+    if (!target && ["post", "comment", "listing", "campaign", "message"].indexOf(req.query.object_type) !== -1 && SF.isUuid(req.query.object_id)) {
       const item = await SF.describeObject(supabase, req.query.object_type, req.query.object_id);
       if (item && (req.query.object_type !== "message" || item.owner_id === req.user.id || item.receiver_id === req.user.id)) target = item.owner_id || null;
     }
@@ -8843,6 +8865,82 @@ app.post("/api/copyright/counter/:id", requireAuth, copyrightLimiter, async func
     return res.status(r.status).json(r.body);
   } catch (error) { next(error); }
 });
+
+/* ══ P2-3 (Nov 20 2026): POSTS, THE FOLLOWING FEED, TALK, LIKE, SAVE, SHARE, FOLLOW (lib/posts.js, lib/postMedia.js;
+   migrations 193 and 194) ═══════════════════════════════════════════════════════════════════════════════════════════
+   Every rule is in lib/posts.js; these routes pass it the server's own pieces (postDeps): the health-claims screen,
+   ownerPagePublic, and Web Push to the member's own subscribed devices. Making a post or a post photo needs an active
+   plan, like the media library: a lapsed plan's posts would not be shown (ownerPagePublic). Reading, Talk, Like, Save,
+   Share and Follow need a sign-in. GET /api/posts/by/:userId and GET /api/follows/:userId/counts also answer a visitor
+   who is not signed in, as the profile page does (viewerIdFrom; a signed-in viewer's blocks still apply). */
+function postDeps() {
+  return { sb: supabase, now: nowIso, claims: blueskyClaimsRefusal, ownerPublic: ownerPagePublic, push: sendPushToUser, env: process.env };
+}
+function postRoute(run) {
+  return async function (req, res, next) {
+    try {
+      const r = await run(req);
+      return res.status(r.status).json(r.body);
+    } catch (error) { next(error); }
+  };
+}
+const postPhotoLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 80,
+  keyGenerator: function (req) { return "post-photo:" + (req.user && req.user.id); },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Eighty photo uploads an hour at most. Try again later.", reason: "rate_limited" }
+});
+const postPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: require("./lib/postMedia").PHOTO_MAX_BYTES, files: 1 } });
+
+/* One photo or thumbnail, field "file", at most 600 KB, through the media library's rules and the shared storage guard. */
+app.post("/api/posts/photos", requireAuth, requireActiveSubscription, postPhotoLimiter, function (req, res, next) {
+  postPhotoUpload.single("file")(req, res, async function (photoError) {
+    try {
+      const PM = require("./lib/postMedia");
+      if (photoError) {
+        const big = photoError.code === "LIMIT_FILE_SIZE";
+        return res.status(big ? 413 : 400).json({ error: big ? PM.MESSAGES.tooBig : memberMedia.MESSAGES.field, reason: big ? "too_big" : "field" });
+      }
+      const r = await PM.storePhoto({ sb: supabase, storage: supabase.storage, base: process.env.SUPABASE_URL,
+        guard: function (bytes) { return storageGuard(bytes); } }, req.user.id, req.file);
+      return res.status(r.status).json(r.body);
+    } catch (error) { next(error); }
+  });
+});
+app.post("/api/posts", requireAuth, requireActiveSubscription, postRoute(function (req) { return require("./lib/posts").createPost(postDeps(), req.user.id, req.body); }));
+app.get("/api/posts/saved", requireAuth, postRoute(function (req) { return require("./lib/posts").savedPosts(postDeps(), req.user.id, req.query.cursor); }));
+app.get("/api/posts/by/:userId", postRoute(async function (req) {
+  return require("./lib/posts").postsByAuthor(postDeps(), await viewerIdFrom(req), req.params.userId, req.query.cursor);
+}));
+app.get("/api/posts/:id", requireAuth, postRoute(function (req) { return require("./lib/posts").getPost(postDeps(), req.user.id, req.params.id); }));
+app.patch("/api/posts/:id", requireAuth, postRoute(function (req) { return require("./lib/posts").editPost(postDeps(), req.user.id, req.params.id, req.body); }));
+app.delete("/api/posts/:id", requireAuth, postRoute(function (req) { return require("./lib/posts").deletePost(postDeps(), req.user.id, req.params.id); }));
+app.get("/api/posts/:id/comments", requireAuth, postRoute(function (req) { return require("./lib/posts").listComments(postDeps(), req.user.id, req.params.id, req.query.after); }));
+app.post("/api/posts/:id/comments", requireAuth, postRoute(function (req) { return require("./lib/posts").addComment(postDeps(), req.user.id, req.params.id, req.body); }));
+app.delete("/api/comments/:id", requireAuth, postRoute(function (req) { return require("./lib/posts").deleteComment(postDeps(), req.user.id, req.params.id); }));
+app.post("/api/comments/:id/hide", requireAuth, postRoute(function (req) { return require("./lib/posts").hideComment(postDeps(), req.user.id, req.params.id); }));
+app.post("/api/posts/:id/like", requireAuth, postRoute(function (req) { return require("./lib/posts").like(postDeps(), req.user.id, req.params.id, true); }));
+app.delete("/api/posts/:id/like", requireAuth, postRoute(function (req) { return require("./lib/posts").like(postDeps(), req.user.id, req.params.id, false); }));
+app.post("/api/posts/:id/save", requireAuth, postRoute(function (req) { return require("./lib/posts").save(postDeps(), req.user.id, req.params.id, true); }));
+app.delete("/api/posts/:id/save", requireAuth, postRoute(function (req) { return require("./lib/posts").save(postDeps(), req.user.id, req.params.id, false); }));
+app.post("/api/posts/:id/share", requireAuth, postRoute(function (req) { return require("./lib/posts").share(postDeps(), req.user.id, req.params.id); }));
+app.get("/api/feed/following", requireAuth, postRoute(function (req) { return require("./lib/posts").followingFeed(postDeps(), req.user.id, req.query.cursor); }));
+app.post("/api/follows", requireAuth, postRoute(function (req) { return require("./lib/posts").follow(postDeps(), req.user.id, req.body); }));
+app.delete("/api/follows/:userId", requireAuth, postRoute(function (req) { return require("./lib/posts").unfollow(postDeps(), req.user.id, req.params.userId); }));
+app.get("/api/follows/:userId/counts", postRoute(async function (req) {
+  return require("./lib/posts").followCounts(postDeps(), await viewerIdFrom(req), req.params.userId);
+}));
+app.get("/api/follows/:userId/:which", requireAuth, postRoute(function (req) {
+  return require("./lib/posts").followList(postDeps(), req.user.id, req.params.userId, req.params.which, req.query.cursor);
+}));
+
+/* P2-3 (Nov 20 2026): THE SHARED STORAGE GUARD (lib/storageGuard.js): 920 MB across every bucket, asked before every
+   upload on the site. null when `bytes` more fit; else the refusal { status, body }, and nothing may be uploaded. */
+function storageGuard(bytes) {
+  return require("./lib/storageGuard").refusal(supabase, bytes);
+}
 
 /* GATED. This was one of only two authenticated model-call routes in this file
    without requireActiveSubscription, against 31 agent tool routes that all carry
@@ -35503,7 +35601,9 @@ function youtubeDeps() {
     config: function () { return require("./lib/googleAuth").configured(process.env); },
     limits: SOCIAL_SEARCH_LIMITS.youtube,
     claims: blueskyClaimsRefusal,
-    env: process.env
+    env: process.env,
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard, which a video must pass besides its own budget
+    storageGuard: storageGuard
   };
 }
 
@@ -35527,6 +35627,17 @@ async function safetyRetentionTick() {
     return await require("./lib/safety").retentionTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
   } catch (err) {
     console.error("[SafetyRetention] Scheduled run error: " + ((err && err.code) || "error"));
+    return null;
+  }
+}
+/* P2-3 (Nov 20 2026): a step of the 04:45 UTC chain, after the copyright restore: the post retention (lib/postRetention.js,
+   job_runs post_retention): removed post and comment bodies purged after 90 days unless a report or notice holds them,
+   a removed post's photos released after 30 days, share-day rows older than 30 days deleted. Never rejects. */
+async function postRetentionTick() {
+  try {
+    return await require("./lib/postRetention").tick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });
+  } catch (err) {
+    console.error("[PostRetention] Scheduled run error: " + ((err && err.code) || "error"));
     return null;
   }
 }
@@ -47630,7 +47741,9 @@ app.get("/api/notifications", requireAuth, async function (req, res, next) {
 
     // NAMED (Nov 20 2026, P2-2): notices from a member blocked either way are left out
     const blockedSet = await require("./lib/safety").blockedIds(supabase, req.user.id);
-    return res.json({ notifications: (data || []).filter(function (n) { return !(n.actor_id && blockedSet.has(n.actor_id)); })
+    // NAMED (Nov 20 2026, P2-3): and notices from a member the reader muted (a like, a comment, a reply, a follow)
+    const mutedNoticeSet = await require("./lib/safety").mutedIds(supabase, req.user.id);
+    return res.json({ notifications: (data || []).filter(function (n) { return !(n.actor_id && (blockedSet.has(n.actor_id) || mutedNoticeSet.has(n.actor_id))); })
       .map(function (n) { return Object.assign({}, n, { link: IN.safeLink(n.link) }); }) });
   } catch (error) {
     next(error);
@@ -49634,6 +49747,9 @@ app.post("/api/marketplace/upload-digital", requireAuth, oracleUpload.single("fi
 
     const safeFileName = (file.originalname || "file").replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
     const storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName;
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    const digitalFull = await storageGuard(file.buffer.length);
+    if (digitalFull) return res.status(digitalFull.status).json(digitalFull.body);
 
     const uploadResult = await supabase.storage
       .from("bf-digital-goods")
@@ -50132,6 +50248,37 @@ const campaignPageLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: "Too many requests. Try again in a few minutes."
+});
+
+/* P2-3 (Nov 20 2026): bizforceai.net/p/<post id>, proxied here by Netlify (lib/postPage.js). Only a public, published
+   post that moderation has not hidden, whose author's pages are public, and never to a viewer blocked either way;
+   anything else is "No post found" with a 404 that does not say why. */
+const postPageLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: "Too many requests. Try again in a few minutes."
+});
+app.get("/p/:id", postPageLimiter, async function (req, res) {
+  const PP = require("./lib/postPage");
+  res.set("Content-Type", "text/html; charset=utf-8");
+  res.set("X-Content-Type-Options", "nosniff");
+  try {
+    const id = String(req.params.id || "").toLowerCase();
+    if (!PP.isPostId(id)) return res.status(404).send(PP.renderPostPage(null));
+    const post = await require("./lib/posts").publicPost(postDeps(), id);
+    if (!post) return res.status(404).send(PP.renderPostPage(null));
+    const viewer = await viewerIdFrom(req);
+    if (viewer && await require("./lib/safety").blockedEitherWay(supabase, viewer, post.author.id)) return res.status(404).send(PP.renderPostPage(null));
+    // private: the answer depends on who asks (a blocked viewer gets the plain page), so no shared cache keeps it
+    res.set("Cache-Control", "private, max-age=60");
+    return res.status(200).send(PP.renderPostPage(post));
+  } catch (err) {
+    console.error("[post page] " + ((err && err.message) || err));
+    res.set("Retry-After", "60");
+    return res.status(503).send(require("./lib/postPage").renderPostPage(null).replace("<h1>No post found</h1>", "<h1>This page could not be loaded just now</h1>"));
+  }
 });
 
 /* bizforceai.net/campaign/<share_id>, proxied here by Netlify so the page is
@@ -51497,6 +51644,9 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
 
     var safeFileName = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "book";
     var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    var bookFull = await storageGuard(pdfBuffer.length);
+    if (bookFull) return res.status(bookFull.status).json(bookFull.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
@@ -51511,6 +51661,8 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
     var epubUploadFailed = false;
     try {
       epubBuffer = await generateBookEpub(manuscriptText, { title: title, author: author });
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
+      if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
       var epubUploadResult = await supabase.storage
         .from("bf-books")
         .upload(epubStoragePath, epubBuffer, { contentType: "application/epub+zip", upsert: false });
@@ -51531,6 +51683,8 @@ app.post("/api/bizbook/generate", requireAuth, oracleUpload.fields([{ name: "fil
           ? coverFile.originalname.split(".").pop()
           : null) || COVER_EXT_BY_MIME[coverFile.mimetype] || "png";
         var candidateCoverPath = req.user.id + "/" + Date.now() + "_" + safeFileName + "_cover." + coverExt;
+        // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: cover is skipped, as when its upload fails)
+        if (await storageGuard(coverFile.buffer.length)) throw new Error("the shared storage guard refused the cover");
 
         var coverUploadResult = await supabase.storage
           .from("bf-books")
@@ -51694,6 +51848,9 @@ app.post("/api/bizbook/books/:id/cover", requireAuth, oracleUpload.single("cover
       : (COVER_EXT_BY_MIME[coverFile.mimetype] || "png");
 
     var newCoverPath = req.user.id + "/" + Date.now() + "_" + safeFileName + "_cover." + coverExt;
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    var coverFull = await storageGuard(coverFile.buffer.length);
+    if (coverFull) return res.status(coverFull.status).json(coverFull.body);
 
     var coverUploadResult = await supabase.storage
       .from("bf-books")
@@ -51897,6 +52054,9 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
     var pdfBuffer = pdfResult.buffer;
     var pageCount = (pdfResult && typeof pdfResult.pageCount === "number") ? pdfResult.pageCount : null;
     var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    var contentBookFull = await storageGuard(pdfBuffer.length);
+    if (contentBookFull) return res.status(contentBookFull.status).json(contentBookFull.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
@@ -51909,6 +52069,8 @@ app.post("/api/bizbook/books/:id/generate-from-content", requireAuth, async func
     var epubStoragePath = null;
     try {
       var epubBuffer = await generateBookEpub("", { title: title, author: author, chapters: chapters });
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
+      if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
       var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
       var epubUploadResult = await supabase.storage
         .from("bf-books")
@@ -52008,6 +52170,9 @@ app.post("/api/bizbook/books/create-from-content", requireAuth, async function (
       var pdfBuffer = pdfResult.buffer;
       var pageCount = (pdfResult && typeof pdfResult.pageCount === "number") ? pdfResult.pageCount : null;
       var storagePath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".pdf";
+      // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+      var createdBookFull = await storageGuard(pdfBuffer.length);
+      if (createdBookFull) return res.status(createdBookFull.status).json(Object.assign({ book: book }, createdBookFull.body));
 
       var uploadResult = await supabase.storage
         .from("bf-books")
@@ -52020,6 +52185,8 @@ app.post("/api/bizbook/books/create-from-content", requireAuth, async function (
       var epubStoragePath = null;
       try {
         var epubBuffer = await generateBookEpub("", { title: title, author: author, chapters: chapters });
+        // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload (refused: EPUB is skipped, as when its upload fails)
+        if (await storageGuard(epubBuffer.length)) throw new Error("the shared storage guard refused the EPUB");
         var epubPath = req.user.id + "/" + Date.now() + "_" + safeFileName + ".epub";
         var epubUploadResult = await supabase.storage
           .from("bf-books")
@@ -52276,6 +52443,9 @@ app.post("/api/cover-wraps/:id/bg-image", requireAuth, oracleUpload.single("bg_i
       ? bgFile.originalname.split(".").pop()
       : (EXT_BY_MIME[bgFile.mimetype] || "png");
     var newPath = req.user.id + "/wrap_" + req.params.id + "_" + Date.now() + "_" + safeName + "." + ext;
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    var wrapFull = await storageGuard(bgFile.buffer.length);
+    if (wrapFull) return res.status(wrapFull.status).json(wrapFull.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
@@ -52485,6 +52655,9 @@ app.post("/api/editor/image", requireAuth, oracleUpload.single("image"), async f
       ? imgFile.originalname.split(".").pop()
       : EDITOR_IMAGE_EXT_BY_MIME[imgFile.mimetype];
     var newPath = req.user.id + "/editorimg_" + Date.now() + "_" + Math.floor(Math.random() * 100000) + "." + ext;
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+    var editorFull = await storageGuard(imgFile.buffer.length);
+    if (editorFull) return res.status(editorFull.status).json(editorFull.body);
 
     var uploadResult = await supabase.storage
       .from("bf-books")
@@ -53383,6 +53556,9 @@ app.post("/api/bfp/upload-url", requireAuth, async function (req, res, next) {
   const declared = require("./lib/uploadCheck").checkDeclared(folder, req.body.contentType, req.body.size);
   if (declared.error) return res.status(declared.status).json({ error: declared.error, reason: declared.reason });
   const contentType = declared.contentType;
+  // NAMED (Nov 20 2026, P2-3): the shared storage guard (920 MB across every bucket) before this upload
+  const signedFull = await storageGuard(Number(req.body.size));
+  if (signedFull) return res.status(signedFull.status).json(signedFull.body);
   const safeName    = filename.replace(/[^a-zA-Z0-9._-]/g, "_").substring(0, 120);
   const storagePath = `${folder}/${req.user.id}/${Date.now()}_${safeName}`;
 
@@ -61917,7 +62093,11 @@ shutdownControl.setServer(app.listen(PORT, function () {
      decided queue items after a year, copyright notices after three years) and
      the counter-notice restore (copyrightRestoreTick, job_runs
      copyright_restore: a countered notice's material restored after 10
-     business days unless a court filing was recorded). */
+     business days unless a court filing was recorded).
+     NAMED (Nov 20 2026, P2-3, migrations 193 and 194): then the post
+     retention (postRetentionTick, job_runs post_retention: removed post and
+     comment bodies after 90 days unless held, a removed post's photos after
+     30 days, share-day rows after 30 days). */
   if (require.main === module) {
     cron.schedule("45 4 * * *", function () {
       cardLeads.cardLeadsPurgeTick(supabase).catch(function (err) {
@@ -61931,7 +62111,7 @@ shutdownControl.setServer(app.listen(PORT, function () {
       }).catch(function (err) {
         console.error("[ShopifyWebhookPurge] Scheduled run error: " + ((err && err.code) || "error"));
       }).then(videoRetentionTick).then(instagramRefreshTick).then(facebookChoosingPurgeTick).then(youtubeDataCheckTick).then(renewalEmailsTick)
-        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick);
+        .then(shopifyDataRequestReminderTick).then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);
     }, {
       timezone: "UTC"
     });

@@ -119,9 +119,14 @@ const settle = ms => new Promise(r => setTimeout(r, ms || 40));
   o.doc.getElementById("pfsEdit").click();
   check("R3. Edit profile opens the page's own edit mode", o.w.__edited === 1);
   check("R4. the bio and the storefront link (/@handle)", /I make hats\./.test(ot) && !!o.doc.querySelector("a.pfs-store[href=\"/@rose\"]"));
-  check("R5. no Following, Followers or Reviews, and no count for them", !/Follow|Review/i.test(ot));
+  // NAMED (Nov 20 2026, P2-3): BEFORE never Following or Followers. AFTER they are shown only from the server's counts
+  // (GET /api/follows/:id/counts); this page answers none, so none is shown. Reviews are still not shown.
+  check("R5. with no counts from the server, no Following or Followers figure; no Reviews", !/Follow|Review/i.test(ot));
   const tabs = Array.from(o.doc.querySelectorAll("[role=tab]")).map(t => t.textContent + ":" + t.getAttribute("aria-selected"));
-  check("R6. tabs Posts (selected), Shop, Services; Posts is an empty state, never a made-up post", J(tabs) === J(["Posts:true", "Shop:false", "Services:false"]) && /Posts are coming soon/.test(o.doc.getElementById("pfsPanel").textContent), J(tabs));
+  // NAMED (Nov 20 2026, P2-3): BEFORE tabs Posts, Shop, Services, and Posts said "Posts are coming soon". AFTER the owner also has a
+  // private Saved tab, and Posts is the member's grid from GET /api/posts/by/:id; unanswered here, it says so and claims nothing.
+  check("R6. tabs Posts (selected), Shop, Services, Saved (the owner's); Posts unanswered says so, never a made-up post", J(tabs) === J(["Posts:true", "Shop:false", "Services:false", "Saved:false"]) &&
+    /These could not be loaded just now\. This is not a statement that there are none\./.test(o.doc.getElementById("pfsPanel").textContent) && !o.doc.querySelector("#pfsPanel .pfs-grid"), J(tabs));
   o.doc.querySelector("[data-pfs-tab=shop]").click(); await settle();
   const shop = Array.from(o.doc.querySelectorAll("#pfsPanel .pfs-cell")).map(a => a.getAttribute("href") + "|" + a.textContent);
   check("R7. Shop: the active products only (not a draft, not a service), each opening its listing", J(shop) === J(["/listing/p1|Wool hat40 BFC"]), J(shop));

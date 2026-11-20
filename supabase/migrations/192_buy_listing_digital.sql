@@ -2,6 +2,11 @@
 -- digital listing on sale, and refuses a purchase between blocked members.
 -- Safe to re-run: CREATE OR REPLACE FUNCTION, and the guard below only drops what it finds.
 --
+-- AS APPLIED (recorded Nov 20 2026, P2-3): 192 was applied by hand as the function
+-- replacement plus its REVOKE/GRANT only, WITHOUT the unique-rule guard below. The live
+-- check found 0 unique rules on marketplace_orders(listing_id), so the guard had nothing
+-- to drop and leaving it out changed nothing.
+--
 -- THE LIVE FUNCTION (read by the owner, Nov 20 2026; the same body migration 089 transcribed)
 -- selects seller_id, price_bfc, status and title only, always marks the listing 'sold', and
 -- inserts the order without is_digital, digital_file_path or digital_file_name. So a BizCash

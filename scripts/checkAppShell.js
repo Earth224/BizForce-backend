@@ -70,7 +70,8 @@ const MUTATIONS = {
   "garage-no-create": [[GARAGE, "if (new URLSearchParams(window.location.search).get(\"create\") === \"item\") {", "if (false) {"]],
   "campaign-no-create": [[CAMPAIGNS, "if (new URLSearchParams(window.location.search).get(\"create\") === \"campaign\") {", "if (false) {"]],
   // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
-  "sw-old-rev": [[SW, "var SHELL_REV = \"p22\";", "var SHELL_REV = \"hq1\";"]],
+  // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
+  "sw-old-rev": [[SW, "var SHELL_REV = \"p23\";", "var SHELL_REV = \"hq1\";"]],
   "sw-no-bar": [[SW, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n", "  \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"]],
   "sw-no-pages": [[SW, "  \"home.html\", \"inbox.html\"   //", "  //"]],
   "oracle-touched": [["oracle.html", "</body>", "<div id=\"x\"></div></body>"]],
@@ -172,11 +173,12 @@ async function page(pathname, opts) {
   const sheet = d.doc.getElementById("bf-create");
   const opts = sheet ? Array.from(sheet.querySelectorAll("[data-create]")).map(n => n.getAttribute("data-create") + ":" + (n.getAttribute("href") || (n.getAttribute("aria-disabled") === "true" ? "soon" : "?"))) : [];
   check("C1. a modal dialog, titled Create", sheet && !sheet.hidden && sheet.getAttribute("role") === "dialog" && sheet.getAttribute("aria-modal") === "true" && d.doc.getElementById("bf-create-title").textContent === "Create");
-  check("C2. Post and Video are Coming soon and go nowhere; the rest open their real creators",
-    J(opts) === J(["post:soon", "video:soon", "product:/marketplace.html?create=product", "service:/marketplace.html?create=service", "agent:/run.html",
+  // NAMED (Nov 20 2026, P2-3): BEFORE Post was Coming soon too. AFTER Post opens the composer (/compose.html; a desktop opens it as a modal); Video stays Coming soon.
+  check("C2. Video is Coming soon and goes nowhere; Post opens the composer; the rest open their real creators",
+    J(opts) === J(["post:/compose.html", "video:soon", "product:/marketplace.html?create=product", "service:/marketplace.html?create=service", "agent:/run.html",
       "campaign:/campaigns.html?create=campaign", "garage:/garage-sale.html?create=item", "card:/digital-cards.html"]), J(opts));
   const soon = Array.from(sheet.querySelectorAll(".is-soon"));
-  check("C3. each Coming soon item says so and is not a link or a button", soon.length === 2 && soon.every(n => n.tagName === "DIV" && /Coming soon/.test(n.textContent) && !n.querySelector("a,button")));
+  check("C3. each Coming soon item says so and is not a link or a button", soon.length === 1 && soon.every(n => n.tagName === "DIV" && /Coming soon/.test(n.textContent) && !n.querySelector("a,button")));
   check("C4. focus goes into the sheet; Escape closes it and returns focus to +", d.doc.activeElement === sheet.querySelector("a.bf-create-opt") &&
     (sheet.dispatchEvent(new d.w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })), sheet.hidden === true && d.doc.activeElement === plus));
   d.w.BFTabbar.openCreate(plus);
@@ -218,7 +220,8 @@ async function page(pathname, opts) {
   console.log("\n══ W. the offline shell ══");
   const sw = FILES[SW] || "";
   // NAMED (Nov 20 2026, P2-2): BEFORE "p21". AFTER "p22": the report, block and mute menu (bf-safety.js), moderation.html and copyright.html in the shell.
-  check("W1. SHELL_REV \"p22\" in the cache's name", has(sw, "var SHELL_REV = \"p22\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+  // NAMED (Nov 20 2026, P2-3): BEFORE "p22". AFTER "p23": posts, the Following feed, Talk and follows (bf-feed.js, bf-composer.js) and compose.html in the shell.
+  check("W1. SHELL_REV \"p23\" in the cache's name", has(sw, "var SHELL_REV = \"p23\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
   check("W2. the bar, the profile header and Settings, Local are in the shell", has(sw, "  \"/scripts/bf-tabbar.js\", \"/scripts/bf-profile-shell.js\", \"/scripts/bf-local-settings.js\",\n"));
   // NAMED (Nov 20 2026, P2-2): BEFORE the line ended the list; AFTER a comma follows it, and P2-2's two pages come next.
   check("W3. Home and the Inbox are offline pages", has(sw, "  \"home.html\", \"inbox.html\",   // NAMED (Nov 19 2026, P2-1)"));

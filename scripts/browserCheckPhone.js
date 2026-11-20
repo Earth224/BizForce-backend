@@ -87,6 +87,16 @@
                        p22-settings, p22-terms, p22-privacy and p22-new (copyright,
                        moderation) the pages P2-2 changed on purpose; the proof is
                        Downloads\phone1\p22-desktop-proof.json.
+                       NAMED (Nov 20 2026, P2-3): home.html (the Following feed; on a
+                       desktop the Market and Campaigns move to the right-hand
+                       column) and privacy.html (Your data names the posts, follows,
+                       likes, saves and comments, and when a removed post's text
+                       and photos go: 11 list items added, their 9 ancestors grew,
+                       298 elements moved down, 78 where they were, none gone) are
+                       re-recorded in desktop-baseline-p23-home.json and
+                       p23-privacy.json; compose.html is new (p23-new). The other
+                       79 pages, profile.html among them, are unchanged at 1440.
+                       The proof is Downloads\phone1\p23-desktop-proof.json.
      PHONE_P21=1           only P2-1's own pages (p21Run): the rewritten addresses,
                            signed out, Home, the Inbox's tabs and a thread, the
                            profile, the Create sheet, the dashboard with the bar,
@@ -96,6 +106,13 @@
                            moderation.html (owner and not), copyright.html and its
                            counter form, the owner's waiting count; at 360, 390
                            and 430; screenshots to Downloads\p22.
+     PHONE_P23=1           only P2-3's own screens (p23Run): the Following feed,
+                           Like, Talk, the own post's menu, Home at a post,
+                           compose.html and Post, the profile's Posts and Saved,
+                           a storefront's Follow, the public post page signed out
+                           and in, few follows; answered by lib/posts.js over an
+                           in-memory database; at 360, 390 and 430; screenshots
+                           to Downloads\p23.
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -143,8 +160,8 @@ const ALL = Object.keys(MAP.pages).map(k => String(MAP.pages[k].p || "/" + k).re
 let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
-// NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too
-if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
+// NAMED (Nov 20 2026, P2-2): PHONE_P22 is its own run too; NAMED (Nov 20 2026, P2-3): and PHONE_P23
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && process.env.PHONE_P22 !== "1" && process.env.PHONE_P23 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -252,8 +269,13 @@ const P21_OUT = process.env.PHONE_P21_OUT || path.join(os.homedir(), "Downloads"
 const P22 = process.env.PHONE_P22 === "1";
 const P22_WIDTHS = String(process.env.PHONE_P22_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
 const P22_OUT = process.env.PHONE_P22_OUT || path.join(os.homedir(), "Downloads", "p22");
+// NAMED (Nov 20 2026, P2-3): PHONE_P23=1 runs only P2-3's own screens (p23Run, at the end of this file)
+const P23 = process.env.PHONE_P23 === "1";
+const P23_WIDTHS = String(process.env.PHONE_P23_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P23_OUT = process.env.PHONE_P23_OUT || path.join(os.homedir(), "Downloads", "p23");
 const BAR_HIDDEN = ["app.html", "reset-password.html", "verify-email.html", "terms.html", "privacy.html", "refund.html", "contact.html",
-  "music-popout.html", "card-view.html", "blogpost.html", "blogindex.html", "oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html"];
+  "music-popout.html", "card-view.html", "blogpost.html", "blogindex.html", "oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html",
+  "compose.html"];   // NAMED (Nov 20 2026, P2-3): the full-screen composer turns the bar off (data-bf-tabbar="off")
 const BAR_ACTIVE = { "home.html": "home", "inbox.html": "inbox", "messages.html": "inbox", "proposals.html": "inbox", "profile.html": "profile", "settings.html": "profile" };
 // a page loads the bar when it loads bf-session.js as a guard, or with data-music (settings.html); app.html's data-clear-only alone does not
 function barLoads(file) {
@@ -371,7 +393,10 @@ function api(method, u, request) {
   // above (p21Api). Without it every one of them answers {} as before, so the page runs and their baselines are unchanged.
   // NAMED (Nov 20 2026, P2-2): with PHONE_P22=1, P2-2's fixtures (p22Api), then P2-1's (the Inbox thread needs them).
   if (P22) { const a = p22Api(method, p); if (a !== undefined) return a; }
-  if (P21 || P22) { const a = p21Api(method, p); if (a !== undefined) return a; }
+  // NAMED (Nov 20 2026, P2-3): with PHONE_P23=1, posts, the feed, comments and follows are lib/posts.js over P23S.db
+  // (p23Api, a promise; the request handler awaits every answer), then P2-1's fixtures (the profile, the counts).
+  if (P23 && P23_IS(p)) return p23Api(method, u, request);
+  if (P21 || P22 || P23) { const a = p21Api(method, p); if (a !== undefined) return a; }
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -387,7 +412,13 @@ function serve() {
     try { p = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch (e) { res.writeHead(400); res.end(); return; }
     if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
-    if (P21) p = p21Rewrite(p);   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
+    // NAMED (Nov 20 2026, P2-3): /p/<id> is the backend's page (lib/postPage.js over P23S.db), as _redirects proxies it
+    if (P23 && /^\/p\/[^/]+$/.test(p)) {
+      p23PostPage(p.slice(3)).then(r => { res.writeHead(r.code, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }); res.end(r.html); },
+        e => { res.writeHead(500); res.end(String(e && e.message)); });
+      return;
+    }
+    if (P21 || P23) p = p21Rewrite(p);   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
     let file = path.resolve(root, "." + p);
     if (!fs.existsSync(file) && fs.existsSync(file + ".html")) file += ".html";
     if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end("not found"); return; }
@@ -617,12 +648,18 @@ const ORBIT = String.raw`(function(){
         else if (u.hostname === API_HOST) {
           // NAMED (Nov 20 2026, P2-2): an answer may carry its own status ({ __status, __body }: moderation.html for a
           // member who is not the owner); every other answer is 200 as before.
-          const ans = request.method === "OPTIONS" ? "" : api(request.method, u, request);
+          // NAMED (Nov 20 2026, P2-3): awaited (PHONE_P23's answers are promises; every other answer is a value, as before)
+          const ans = request.method === "OPTIONS" ? "" : await api(request.method, u, request);
           const code = ans && ans.__status ? ans.__status : 200;
           const body = ans === "" ? "" : J(ans && ans.__status ? ans.__body : ans);
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: code, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,PATCH,DELETE,OPTIONS" }] });
+        } else if (P23 && u.origin === P23_STORAGE) {
+          // NAMED (Nov 20 2026, P2-3): a post's photos, the frontend's own brand pictures
+          const pic = P21_IMG[(u.pathname.length % P21_IMG.length)];
+          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: fs.readFileSync(path.join(FRONTEND, pic)).toString("base64"),
+            responseHeaders: [{ name: "Content-Type", value: "image/png" }, { name: "Access-Control-Allow-Origin", value: "*" }] });
         } else if (HQ1 && request.url === MOON_PHOTO) {
           // HQ1: the Oracle's moon photo (Wikimedia) answered by a stand-in disc, so the moon draws with no outside request
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(MOON_STANDIN).toString("base64"),
@@ -649,6 +686,7 @@ const ORBIT = String.raw`(function(){
     if (HQ1) { await hq1Run(cdp, origin); PAGES = []; }
     else if (P21) { await p21Run(cdp, origin); PAGES = []; }
     else if (P22) { await p22Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-2)
+    else if (P23) { await p23Run(cdp, origin); PAGES = []; }   // NAMED (Nov 20 2026, P2-3)
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -696,7 +734,7 @@ const ORBIT = String.raw`(function(){
     if (MODE === "before") {
       if (ONLY !== "desktop") fs.writeFileSync(path.join(OUT, "defects-before-" + BATCH + ".json"), J(defects, null, 1));
       if (ONLY !== "phone") fs.writeFileSync(baselineFile(BATCH), J(boxes));
-    } else if (ONLY !== "desktop" && !HQ1 && !P21) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
+    } else if (ONLY !== "desktop" && !HQ1 && !P21 && !P23) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
   } finally {
     try { cdp && cdp.close(); } catch (e) { /* gone */ }
     try { chrome.proc.kill(); } catch (e) { /* gone */ }
@@ -1263,4 +1301,273 @@ async function p22Run(cdp, origin) {
     if (w === 390) { await ev("(function(){var e=document.getElementById('ownerModeration');if(e)e.scrollIntoView({block:'center'});return true;})()"); await sleep(200); await viewShot("dashboard-count-390x844.png"); }
   }
   console.log("    screenshots: " + P22_OUT);
+}
+
+/* ══ P2-3 (Nov 20 2026): PHONE_P23=1 ═══════════════════════════════════════════════════════════════════════
+   P2-3's own screens at PHONE_P23_WIDTHS (default 360, 390, 430), screenshots at 390 x 844 to PHONE_P23_OUT (default
+   Downloads\p23): Home's Following feed (a text post, a photo post of two, the member's own), Like, Talk and its sheet,
+   the own post's menu (Edit, Delete), Home opened at a post with Talk (a notice's link), compose.html (typing, then
+   Post, back on Home with the post first), the profile's Posts and Saved tabs and the follower counts, a storefront's
+   Follow, the public post page /p/<id> signed out and signed in, and the feed with few follows (people to follow).
+   The answers are the backend's own: lib/posts.js over an in-memory database (scripts/_p23Db.js, with migration 194's
+   counters), rebuilt for each width, and the post page drawn by lib/postPage.js from lib/posts.js publicPost. Photos
+   are served from P23_STORAGE (the frontend's own brand pictures). Nothing here answers without PHONE_P23=1. */
+const P23_STORAGE = "https://p23-storage.test";
+const P23S = { db: null, deps: null };
+const P23_POST = { text: uid(8001), photo: uid(8002), own: uid(8003), long: uid(8004), other: uid(8005) };
+async function p23World(empty) {
+  const { memDb } = require("./_p23Db");
+  const P = require("../lib/posts");
+  const OLD = ago(24 * 60), names = [[ROSE.id, "rose", "Rose"], [P21_PEER, "pat", "Pat's Pantry"], [P21_PEER2, "lee-ceramics", "Lee Ceramics"], [uid(4), "maple-mill", "Maple Mill"]];
+  const media = (n, owner, file, alt) => ({ id: uid(8100 + n), user_id: owner, path: "media/" + owner + "/" + file, alt_text: alt, bytes: 40000, created_at: OLD });
+  const post = (id, author, extra) => Object.assign({ id, author_id: author, kind: "text", audience: "public", status: "published", place_city: null, place_region: null, place_country: null,
+    like_count: 0, comment_count: 0, save_count: 0, share_count: 0, removed_at: null }, extra);
+  const at = hrs => ({ created_at: ago(hrs), published_at: ago(hrs) });
+  const posts = [
+    post(P23_POST.text, P21_PEER, Object.assign({ body: "Fresh jam this Saturday: strawberry, plum and a small batch of fig. Come early, the fig goes first." }, at(1))),
+    post(P23_POST.photo, P21_PEER2, Object.assign({ kind: "photo", body: "New mugs out of the kiln today." }, at(3))),
+    post(P23_POST.own, ROSE.id, Object.assign({ kind: "photo", body: "Sourdough, second bake of the morning." }, at(5))),
+    post(P23_POST.long, P21_PEER, Object.assign({ body: "We are closed on Monday for a family wedding. Orders placed over the weekend go out on Tuesday morning, and every jar ordered before Sunday night gets a free sample of the new marmalade. Thank you for your patience." }, at(26))),
+    post(P23_POST.other, uid(4), Object.assign({ body: "Stone-ground flour, milled this week." }, at(2)))
+  ];
+  const db = memDb({
+    users: names.map(n => ({ id: n[0], created_at: OLD })), posts, post_comments: [], post_likes: [], post_saves: [], post_share_days: [], notifications: [], moderation_queue: [],
+    follows: empty ? [] : [{ follower_id: ROSE.id, following_id: P21_PEER, created_at: OLD }, { follower_id: ROSE.id, following_id: P21_PEER2, created_at: OLD }, { follower_id: P21_PEER, following_id: ROSE.id, created_at: OLD }],
+    member_blocks: [], member_mutes: [], profiles: [],
+    member_media: [media(1, P21_PEER2, "mug-1.png", "A blue glazed mug"), media(2, P21_PEER2, "mug-1-thumb.png", ""), media(3, P21_PEER2, "mug-2.png", "A green glazed mug"), media(4, ROSE.id, "bread.png", "A sourdough loaf")],
+    post_media: [{ post_id: P23_POST.photo, media_id: uid(8101), thumb_media_id: uid(8102), idx: 0 }, { post_id: P23_POST.photo, media_id: uid(8103), thumb_media_id: null, idx: 1 },
+      { post_id: P23_POST.own, media_id: uid(8104), thumb_media_id: null, idx: 0 }],
+    bf_profiles: names.map((n, i) => ({ user_id: n[0], username: n[1], display_name: n[2], avatar_url: null, updated_at: ago(i + 1) }))
+  });
+  const deps = { sb: db.client, now: () => new Date(NOW).toISOString(), claims: () => null, ownerPublic: async () => true, push: async () => {}, env: { SUPABASE_URL: P23_STORAGE } };
+  // the counts come from the rows, as migration 194's triggers keep them
+  await P.like(deps, P21_PEER2, P23_POST.text, true); await P.like(deps, uid(4), P23_POST.text, true);
+  await P.like(deps, ROSE.id, P23_POST.photo, true); await P.like(deps, P21_PEER, P23_POST.photo, true);
+  await P.addComment(deps, P21_PEER, P23_POST.photo, { body: "These are lovely. Do you take orders for a set of six?" });
+  await P.addComment(deps, ROSE.id, P23_POST.photo, { body: "The blue one would suit the shop counter." });
+  await P.save(deps, ROSE.id, P23_POST.long, true);
+  db.t.notifications.length = 0;
+  return { db, deps };
+}
+const P23_IS = p => /^\/api\/(feed\/|posts|comments\/|follows|bfp\/seller\/pat$|me\/relation$)/.test(p);
+async function p23Api(method, u, request) {
+  const P = require("../lib/posts"), d = P23S.deps, me = ROSE.id, p = u.pathname, q = k => u.searchParams.get(k) || undefined;
+  let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; }
+  const out = r => r.status === 200 ? r.body : { __status: r.status, __body: r.body };
+  let m;
+  if (p === "/api/feed/following" && method === "GET") return out(await P.followingFeed(d, me, q("cursor")));
+  if (p === "/api/posts/saved") return out(await P.savedPosts(d, me, q("cursor")));
+  if ((m = /^\/api\/posts\/by\/([^/]+)$/.exec(p))) return out(await P.postsByAuthor(d, me, m[1], q("cursor")));
+  if (p === "/api/posts" && method === "POST") return out(await P.createPost(d, me, b));
+  if ((m = /^\/api\/posts\/([^/]+)\/comments$/.exec(p))) return out(method === "POST" ? await P.addComment(d, me, m[1], b) : await P.listComments(d, me, m[1], q("after")));
+  if ((m = /^\/api\/posts\/([^/]+)\/(like|save)$/.exec(p))) return out(await P[m[2]](d, me, m[1], method === "POST"));
+  if ((m = /^\/api\/posts\/([^/]+)\/share$/.exec(p))) return out(await P.share(d, me, m[1]));
+  if ((m = /^\/api\/posts\/([0-9a-f-]{36})$/.exec(p))) return out(method === "PATCH" ? await P.editPost(d, me, m[1], b) : method === "DELETE" ? await P.deletePost(d, me, m[1]) : await P.getPost(d, me, m[1]));
+  if ((m = /^\/api\/comments\/([^/]+)$/.exec(p)) && method === "DELETE") return out(await P.deleteComment(d, me, m[1]));
+  if ((m = /^\/api\/comments\/([^/]+)\/hide$/.exec(p))) return out(await P.hideComment(d, me, m[1]));
+  if (p === "/api/follows" && method === "POST") return out(await P.follow(d, me, b));
+  if ((m = /^\/api\/follows\/([^/]+)\/counts$/.exec(p))) return out(await P.followCounts(d, me, m[1]));
+  if ((m = /^\/api\/follows\/([^/]+)\/(followers|following)$/.exec(p))) return out(await P.followList(d, me, m[1], m[2], q("cursor")));
+  if ((m = /^\/api\/follows\/([^/]+)$/.exec(p)) && method === "DELETE") return out(await P.unfollow(d, me, m[1]));
+  if (p === "/api/me/relation") {   // as the server answers it: self for the member and the member's own posts
+    const who = q("user_id") || (q("object_type") === "post" ? ((P23S.db.t.posts.find(x => x.id === q("object_id")) || {}).author_id) : null) ||
+      ((P23S.db.t.bf_profiles.find(x => x.username === q("handle")) || {}).user_id);
+    if (!who) return { __status: 404, __body: { error: "Not found" } };
+    return { user_id: who, self: who === me, blocked: false, muted: false };
+  }
+  if (p === "/api/bfp/seller/pat") return { seller: { user_id: P21_PEER, username: "pat", display_name: "Pat's Pantry", tagline: "Jams and preserves", avatar_url: null }, products: [], services: [], support_links: [] };
+  return { __status: 404, __body: { error: "Not found" } };
+}
+async function p23PostPage(id) {
+  const P = require("../lib/posts"), PG = require("../lib/postPage");
+  const post = PG.isPostId(id) ? await P.publicPost(P23S.deps, id) : null;
+  return { code: post ? 200 : 404, html: PG.renderPostPage(post) };
+}
+// an open sheet or panel: inside the screen, its controls 44 px or more, no sideways scroll
+const P23_BOX = String.raw`(function(sel, ctl){
+  var s = document.querySelector(sel); if (!s || s.hidden) return null;
+  var r = s.getBoundingClientRect(), W = innerWidth;
+  var c = [].slice.call(s.querySelectorAll(ctl)).filter(function(n){ var q = n.getBoundingClientRect(); return q.width > 0 && q.height > 0; });
+  var small = c.filter(function(n){ var q = n.getBoundingClientRect(); return q.width < 43.5 || q.height < 43.5; }).map(function(n){ var q = n.getBoundingClientRect(); return (n.id || n.className || n.tagName) + " " + Math.round(q.width) + "x" + Math.round(q.height); });
+  return { l: Math.round(r.left), r: Math.round(r.right), t: Math.round(r.top), b: Math.round(r.bottom), W: W, H: innerHeight, controls: c.length, small: small, hscroll: document.documentElement.scrollWidth > W + 1 };
+})`;
+async function p23Run(cdp, origin) {
+  fs.mkdirSync(P23_OUT, { recursive: true });
+  console.log("browserCheckPhone P2-3 (the Following feed, Like, Talk, the post menu, compose, the profile's posts, Follow, the public post page, few follows) at " + P23_WIDTHS.join(", "));
+  // a token whose payload names Rose (the profile shell reads the id from it), except while signed out
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const viewShot = async file => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P23_OUT, file), Buffer.from(r.data, "base64")); };
+  const SHEETS = /^(div|section|aside)[#.](bf-safety|bf-safety-backdrop|bfp-talk|bfp-talk-backdrop)[ .]/;
+  const pageChecks = async (at, opts) => {
+    const m = await ev(MEASURE);
+    check(at + "no horizontal scroll", !m.hscroll, J(m.wide));
+    // a text post's square tile on the profile is a preview, its whole post one tap away: its clipped excerpt is set aside (named)
+    const tiles = await ev("[].map.call(document.querySelectorAll('.pfs-cell.is-text > span'),function(s){return s.textContent.slice(0,40);})");
+    const clipped = m.clipped.filter(x => !tiles.some(t => x.indexOf('"' + t.slice(0, 30)) !== -1));
+    check(at + "no text cut off" + (clipped.length < m.clipped.length ? " (a text post's tile excerpt aside)" : ""), clipped.length === 0, J(clipped));
+    check(at + "every tap target is at least 44 x 44", m.smallCount === 0, m.smallCount + " " + J(m.small));
+    const deco = m.deco.filter(x => !(opts && opts.sheet && SHEETS.test(x)));
+    check(at + "decoration is under the text" + (opts && opts.sheet ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
+    const over = m.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x) && !(opts && opts.sheet && SHEETS.test(x)));
+    check(at + "no fixed element over text or a control at rest" + (opts && opts.sheet ? " (the open sheet is meant to cover the page)" : ""), over.length === 0, J(over));
+    return m;
+  };
+  const inScreen = (b, w, h) => !!b && b.l >= -1 && b.r <= w + 1 && b.t >= -1 && b.b <= h + 1 && b.small.length === 0 && !b.hscroll;
+  const postBox = id => ev("(function(){var e=document.querySelector('#feed [data-post=\"" + id + "\"]');if(!e)return null;var r=e.getBoundingClientRect();" +
+    "var acts=[].map.call(e.querySelectorAll('.bfp-act'),function(b){var q=b.getBoundingClientRect();return b.getAttribute('data-act')+' '+Math.round(q.width)+'x'+Math.round(q.height)+' '+(b.getAttribute('aria-pressed')||'');});" +
+    "return {l:Math.round(r.left),r:Math.round(r.right),w:Math.round(r.width),h:Math.round(r.height),acts:acts,name:(e.querySelector('.bfp-name')||{}).textContent||'',photos:e.querySelectorAll('.bfp-photo').length,follow:!!e.querySelector('.bfp-follow'),dots:!!e.querySelector('.bfp-menu .bf-safety-dots'),like:(e.querySelector('[data-count=like]')||{}).textContent||'',talk:(e.querySelector('[data-count=talk]')||{}).textContent||''};})()");
+  const scrollTo = id => ev("(function(){var e=document.querySelector('#feed [data-post=\"" + id + "\"]');if(e)e.scrollIntoView({block:'start'});return !!e;})()").then(() => sleep(500));
+  const click = sel => ev("(function(){var e=document.querySelector(" + J(sel) + ");if(e)e.click();return !!e;})()");
+  const big = s => s.split(" ")[1].split("x").every(n => Number(n) >= 44);
+
+  for (const w of P23_WIDTHS) {
+    const h = HT[w] || 844;
+    const shot = async name => { if (w === 390) await viewShot(name + "-390x844.png"); };
+    Object.assign(P23S, await p23World(false));
+
+    // 1. the Following feed
+    await open(cdp, origin, "home.html", w, h, true);
+    let at = "P23 Home feed at " + w + ": ";
+    const feed = await ev("(function(){var t=document.getElementById('tabFollowing');return {ids:[].map.call(document.querySelectorAll('#feed .bfp-post'),function(e){return e.getAttribute('data-post');}),full:document.body.classList.contains('feed-full'),empty:!document.getElementById('feedEmpty').hidden,tab:t&&t.getAttribute('aria-selected')};})()");
+    check(at + "the posts of the people followed and the member's own, newest first; a member not followed is not in it",
+      J(feed.ids) === J([P23_POST.text, P23_POST.photo, P23_POST.own, P23_POST.long]) && feed.full && !feed.empty && feed.tab === "true", J(feed));
+    const first = await postBox(P23_POST.text);
+    check(at + "a post is the screen's width; Like, Talk, Save and Share, each 44 x 44 or more; the menu's three dots", !!first && Math.abs(first.w - w) <= 1 && first.acts.length === 4 &&
+      first.acts.every(big) && first.dots && first.name === "Pat's Pantry", J(first));
+    // nothing of the page shows through a full-screen post: the legal footer is at the feed's end, not over the first post
+    const foot = await ev("(function(){var f=document.querySelector('.bf-legal-footer');if(!f)return null;var r=f.getBoundingClientRect();var hit=[].some.call(f.querySelectorAll('a'),function(a){var q=a.getBoundingClientRect();if(q.bottom<=0||q.top>=innerHeight)return false;var e=document.elementFromPoint(q.left+q.width/2,q.top+q.height/2);return !!e&&(e===a||a.contains(e));});return {inFeed:!!f.closest('#feed'),top:Math.round(r.top),seen:hit};})()");
+    check(at + "the legal footer is at the feed's end, never painted over a post", !!foot && foot.inFeed && !foot.seen && foot.top >= h, J(foot));
+    await ev("(function(){var f=document.getElementById('feed');f.scrollTop=f.scrollHeight;return true;})()"); await sleep(600);
+    const footEnd = await ev("(function(){var f=document.querySelector('.bf-legal-footer'),a=f&&f.querySelector('a');if(!a)return null;var q=a.getBoundingClientRect();var e=document.elementFromPoint(q.left+q.width/2,q.top+q.height/2);return {top:Math.round(q.top),reach:!!e&&(e===a||a.contains(e))};})()");
+    check(at + "at the feed's end the footer's links can be tapped", !!footEnd && footEnd.reach, J(footEnd));
+    await ev("(function(){var f=document.getElementById('feed');f.scrollTop=0;return true;})()"); await sleep(500);
+    await pageChecks(at);
+    await shot("home-feed");
+    await scrollTo(P23_POST.photo);
+    const ph = await postBox(P23_POST.photo);
+    check(at + "a photo post: two photos, liked already (Like pressed), two likes and two comments counted", !!ph && ph.photos === 2 && /^like .* true$/.test(ph.acts[0]) && ph.talk === "2" && ph.like === "2", J(ph));
+    await pageChecks(at + "photo post: ");
+    await shot("home-photo-post");
+
+    // 2. Like, through lib/posts.js
+    await scrollTo(P23_POST.text);
+    await click('#feed [data-post="' + P23_POST.text + '"] .bfp-act[data-act=like]'); await sleep(600);
+    const liked = await postBox(P23_POST.text);
+    const row = P23S.db.t.post_likes.some(x => x.post_id === P23_POST.text && x.user_id === ROSE.id);
+    check(at + "Like: pressed, the count 2 to 3, and the like is stored", !!liked && /^like .* true$/.test(liked.acts[0]) && liked.like === "3" && row, J([liked && liked.acts[0], liked && liked.like, row]));
+
+    // 3. Talk
+    await scrollTo(P23_POST.photo);
+    await click('#feed [data-post="' + P23_POST.photo + '"] .bfp-act[data-act=talk]'); await sleep(900);
+    at = "P23 Talk at " + w + ": ";
+    const talk = await ev(P23_BOX + "('#bfp-talk','button,textarea,input')");
+    const talkInfo = await ev("(function(){var l=document.querySelectorAll('#bfpTalkList > li');return {items:l.length,focus:document.activeElement&&document.activeElement.id};})()");
+    check(at + "the sheet is inside the screen with the two comments, the box focused, every control 44 px or more", inScreen(talk, w, h) && talkInfo.items === 2 && talkInfo.focus === "bfpTalkInput", J([talk, talkInfo]));
+    await ev("(function(){var i=document.getElementById('bfpTalkInput');i.value='Saturday morning works for me.';i.dispatchEvent(new Event('input',{bubbles:true}));return true;})()");
+    await click("#bfpTalkSend"); await sleep(800);
+    const after = await ev("(function(){var c=document.querySelector('#feed [data-post=\"" + P23_POST.photo + "\"] [data-count=talk]');return {items:document.querySelectorAll('#bfpTalkList > li').length,count:c?c.textContent:''};})()");
+    check(at + "Send adds the comment to the sheet and the post's count (2 to 3), and it is stored", after.items === 3 && after.count === "3" && P23S.db.t.post_comments.length === 3, J(after));
+    await pageChecks(at, { sheet: true });
+    await shot("talk");
+    await click("#bfpTalkClose"); await sleep(400);
+
+    // 4. the member's own post: the menu has Edit and Delete
+    await scrollTo(P23_POST.own);
+    await click('#feed [data-post="' + P23_POST.own + '"] .bfp-menu .bf-safety-dots'); await sleep(700);
+    at = "P23 own post menu at " + w + ": ";
+    const menu = await ev("(function(){var s=document.getElementById('bf-safety');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();return {items:[].map.call(s.querySelectorAll('.bf-safety-item'),function(n){var q=n.getBoundingClientRect();return n.textContent.replace(/\\s+/g,' ').trim()+' '+Math.round(q.height);}),b:Math.round(r.bottom),r:Math.round(r.right)};})()");
+    check(at + "Edit and Delete (no Report, Block or Mute of oneself), each 44 px or more, inside the screen", !!menu && menu.items.some(x => /^Edit /.test(x)) && menu.items.some(x => /^Delete /.test(x)) &&
+      !menu.items.some(x => /^(Block|Mute|Report)/.test(x)) && menu.items.every(x => Number(x.split(" ").pop()) >= 44) && menu.b <= h + 1 && menu.r <= w + 1, J(menu));
+    await pageChecks(at, { sheet: true });
+    await shot("own-post-menu");
+
+    // 5. Home opened at a post with Talk (a notice's link, the public page's buttons)
+    await open(cdp, origin, "home.html?post=" + P23_POST.long + "&talk=1", w, h, true);
+    at = "P23 Home at a post at " + w + ": ";
+    const linked = await ev("(function(){var f=document.querySelector('#feed .bfp-post');var t=document.getElementById('bfp-talk');return {first:f&&f.getAttribute('data-post'),talk:!!t&&!t.hidden};})()");
+    check(at + "home.html?post=<id>&talk=1: that post first, with Talk open", linked.first === P23_POST.long && linked.talk, J(linked));
+    await pageChecks(at, { sheet: true });
+
+    // 6. compose.html: type, Post, back on Home with the post first
+    await open(cdp, origin, "compose.html", w, h, true);
+    at = "P23 compose at " + w + ": ";
+    const cp = await ev(P23_BOX + "('#composer','button,textarea,select')");
+    const cpInfo = await ev("(function(){var t=document.querySelector('.bfc-text');return {text:!!t,count:(document.querySelector('.bfc-count')||{}).textContent||'',post:!!document.querySelector('.bfc-post'),aud:(document.querySelector('.bfc-aud')||{}).textContent||'',soon:(document.querySelector('.bfc-soon')||{}).textContent||''};})()");
+    check(at + "the box, the count, photos, who sees it, and Post; every control inside the screen and 44 px or more", !!cp && cp.small.length === 0 && !cp.hscroll && cp.r <= w + 1 &&
+      cpInfo.text && /^0 \/ 2,?200$/.test(cpInfo.count.trim()) && cpInfo.post && /Public/.test(cpInfo.aud) && /Followers/.test(cpInfo.aud), J([cp, cpInfo]));
+    await ev("(function(){var t=document.querySelector('.bfc-text');t.focus();t.value='Cinnamon buns on Friday. Twelve only.';t.dispatchEvent(new Event('input',{bubbles:true}));return true;})()"); await sleep(200);
+    const count2 = await ev("(document.querySelector('.bfc-count')||{}).textContent||''");
+    check(at + "the count follows the typing", /^37 \/ 2,?200$/.test(count2.trim()), count2);
+    await pageChecks(at);
+    await shot("compose");
+    await click(".bfc-post"); await sleep(3000);
+    const back = await ev("(function(){var f=document.querySelector('#feed .bfp-post');return {path:location.pathname,first:f?((f.querySelector('.bfp-textcard,.bfp-text')||{}).textContent||''):''};})()");
+    const stored = P23S.db.t.posts.filter(x => x.author_id === ROSE.id && x.body === "Cinnamon buns on Friday. Twelve only.");
+    check(at + "Post stores it (lib/posts.js createPost) and goes Home, the new post first", stored.length === 1 && back.path === "/home.html" && back.first === "Cinnamon buns on Friday. Twelve only.", J([back, stored.length]));
+
+    // 7. the profile: Posts, Saved, the follower counts
+    await open(cdp, origin, "profile.html", w, h, true);
+    at = "P23 profile at " + w + ": ";
+    const pf = await ev("(function(){var tabs=[].map.call(document.querySelectorAll('.pfs-tab'),function(t){return t.textContent.trim();});var cells=document.querySelectorAll('#pfsPanel [data-post-tile]').length;" +
+      "var stats=[].map.call(document.querySelectorAll('.pfs-stat'),function(s){return s.textContent.replace(/\\s+/g,' ').trim();});return {tabs:tabs,cells:cells,stats:stats};})()");
+    check(at + "Posts, Shop, Services and Saved; the member's two posts as tiles (the new one too); 1 follower, 2 following", J(pf.tabs) === J(["Posts", "Shop", "Services", "Saved"]) && pf.cells === 2 &&
+      pf.stats.some(s => /^1\s*Followers?$/.test(s)) && pf.stats.some(s => /^2\s*Following$/.test(s)), J(pf));
+    await pageChecks(at);
+    await shot("profile-posts");
+    await click("#pfs-tab-saved"); await sleep(400);
+    const sv = await ev("(function(){return {cells:[].map.call(document.querySelectorAll('#pfsPanel [data-post-tile]'),function(c){return c.getAttribute('data-post-tile');}),sel:document.getElementById('pfs-tab-saved').getAttribute('aria-selected')};})()");
+    check(at + "Saved: the one saved post", sv.sel === "true" && J(sv.cells) === J([P23_POST.long]), J(sv));
+    await pageChecks(at + "saved: ");
+    await shot("profile-saved");
+
+    // 8. a storefront's Follow (Rose follows Pat already)
+    await open(cdp, origin, "@pat", w, h, true);
+    at = "P23 storefront at " + w + ": ";
+    const sf = await ev("(function(){var b=document.getElementById('sfFollow');if(!b)return null;var r=b.getBoundingClientRect();return {text:b.textContent.trim(),w:Math.round(r.width),h:Math.round(r.height),r:Math.round(r.right),count:(document.getElementById('sfFollowers')||{}).textContent||''};})()");
+    check(at + "Following (already followed), 44 px or more, with the follower count", !!sf && sf.text === "Following" && sf.w >= 44 && sf.h >= 44 && sf.r <= w && /1 follower/i.test(sf.count), J(sf));
+    await pageChecks(at);
+    await shot("storefront-follow");
+    await click("#sfFollow"); await sleep(700);
+    const unf = await ev("(document.getElementById('sfFollow')||{}).textContent||''");
+    check(at + "tapping it unfollows (stored), and it reads Follow", unf.trim() === "Follow" && !P23S.db.t.follows.some(f => f.follower_id === ROSE.id && f.following_id === P21_PEER), J(unf));
+
+    // 9. the public post page, signed out, then signed in
+    await ev("sessionStorage.setItem('phone_check_out','1'),localStorage.removeItem('bf_token'),localStorage.removeItem('bf_user'),localStorage.removeItem('bf_return_to'),true");
+    await open(cdp, origin, "p/" + P23_POST.photo, w, h, true);
+    at = "P23 public post page (signed out) at " + w + ": ";
+    const pp = await ev("(function(){var m=document.getElementById('postPage');if(!m)return null;var so=document.getElementById('ppSignedOut');return {state:m.getAttribute('data-state'),acts:[].map.call(document.querySelectorAll('[data-pp-act]'),function(a){var r=a.getBoundingClientRect();return a.getAttribute('data-pp-act')+' '+Math.round(r.width)+'x'+Math.round(r.height)+' '+a.getAttribute('href');}),photos:document.querySelectorAll('.pp-photos img').length,signedOut:!!so&&!so.hidden,robots:(document.querySelector('meta[name=robots]')||{}).content};})()");
+    check(at + "the post, its two photos, Like, Talk, Save and Follow (each 44 px or more) to sign in, noindex", !!pp && pp.state === "on" && pp.photos === 2 && pp.acts.length === 4 &&
+      pp.acts.every(a => / \/app\.html$/.test(a) && big(a)) && pp.robots === "noindex", J(pp));
+    await pageChecks(at);
+    await shot("post-page-signed-out");
+    await click('[data-pp-act="like"]'); await sleep(1200);
+    const ret = await ev("({path:location.pathname,ret:localStorage.getItem('bf_return_to')})");
+    check(at + "Like keeps this page and goes to sign-in", ret.path === "/app.html" && ret.ret === "/p/" + P23_POST.photo, J(ret));
+    await ev("sessionStorage.removeItem('phone_check_out'),localStorage.removeItem('bf_return_to'),true");
+    await open(cdp, origin, "p/" + P23_POST.photo, w, h, true);
+    at = "P23 public post page (signed in) at " + w + ": ";
+    const pin = await ev("[].map.call(document.querySelectorAll('[data-pp-act]'),function(a){return a.getAttribute('data-pp-act')+' '+a.getAttribute('href');})");
+    check(at + "Like, Talk and Save open the post in the app (Talk with &talk=1), Follow the author's storefront", J(pin) === J(["like /home.html?post=" + P23_POST.photo, "talk /home.html?post=" + P23_POST.photo + "&talk=1",
+      "save /home.html?post=" + P23_POST.photo, "follow /@lee-ceramics"]), J(pin));
+    await pageChecks(at);
+    await shot("post-page-signed-in");
+    await open(cdp, origin, "p/" + uid(8999), w, h, true);
+    const none = await ev("(document.querySelector('h1')||{}).textContent||''");
+    check("P23 public post page (no such post) at " + w + ": No post found", none === "No post found", J(none));
+
+    // 10. few follows: people to follow
+    Object.assign(P23S, await p23World(true));
+    await open(cdp, origin, "home.html", w, h, true);
+    at = "P23 few follows at " + w + ": ";
+    const em = await ev("(function(){var f=document.getElementById('findPeople');return {find:!!f&&!f.hidden,people:[].map.call(document.querySelectorAll('#findPeople [data-follow]'),function(b){var r=b.getBoundingClientRect();return b.textContent.trim()+' '+Math.round(r.width)+'x'+Math.round(r.height);}),own:document.querySelectorAll('#feed .bfp-post').length};})()");
+    check(at + "only the member's own post, then people to follow, each Follow 44 px or more", em.own === 1 && em.find && em.people.length === 3 && em.people.every(big), J(em));
+    await ev("(function(){var f=document.getElementById('findPeople');if(f)f.scrollIntoView({block:'center'});return true;})()"); await sleep(400);
+    await pageChecks(at);
+    await shot("home-few-follows");
+    await click("#findPeople [data-follow]"); await sleep(700);
+    check(at + "Follow there is stored", P23S.db.t.follows.length === 1 && P23S.db.t.follows[0].follower_id === ROSE.id, J(P23S.db.t.follows));
+  }
+  console.log("    screenshots: " + P23_OUT);
 }

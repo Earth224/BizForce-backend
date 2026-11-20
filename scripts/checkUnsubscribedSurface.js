@@ -297,7 +297,11 @@ const EXPECTED_GATED = [
   // NAMED (Nov 18 2026, BV1, migration 187; gated 126 -> 128): BEFORE a video was one upload-url and one finalize. AFTER a
   // video over 50 MB asks part-url for each part's signed URL and reports it with part-done; both need a subscription, like
   // upload-url and finalize, under their own limiter (120 an hour; checkYoutubeUploads BV20).
-  "post /api/videos/part-url", "post /api/videos/part-done"
+  "post /api/videos/part-url", "post /api/videos/part-done",
+  // NAMED (Nov 20 2026, P2-3, migrations 193 and 194; gated 128 -> 130): BEFORE no posts. AFTER making a post and uploading its
+  // photos need a subscription, like every other thing a member publishes; reading, Talk, likes, saves, shares and follows are
+  // login-only (checkPosts, checkPostMedia).
+  "post /api/posts/photos", "post /api/posts"
 ];
 
 const EXPECTED_ADMIN = [
@@ -603,7 +607,10 @@ const EXPECTED_UNAUTH_WRITES = {
   // every signed-in request does; nothing else is written, and a visitor with no token writes nothing (checkBlocks).
   "get /api/bfp/profile/:userId":           "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
   "get /api/bfp/seller/:handle":            "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
-  "get /api/marketplace/listings/:id":      "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)"
+  "get /api/marketplace/listings/:id":      "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-2)",
+  // NAMED (Nov 20 2026, P2-3; 26 -> 27): BEFORE no public post page. AFTER /p/<id> asks who the viewer is (viewerIdFrom) to leave
+  // a blocked viewer out, as P2-2's three reads do; nothing else is written (checkPublicPostPage).
+  "get /p/:id":                             "a signed-in viewer's own session last_used_at only (viewerIdFrom, P2-3)"
 };
 
 /* Login-only routes that gate PART of what they do inside the handler. The

@@ -48,11 +48,15 @@ const { FILES, check, J, has } = T;
 const SF = T.libRequire("./lib/safety");
 
 const ME = "11111111-1111-4111-8111-111111111111", THEM = "22222222-2222-4222-8222-222222222222", OTHER = "33333333-3333-4333-8333-333333333333";
+/* NAMED (Nov 20 2026, P2-3): BEFORE 12 guarded routes; AFTER 13, with GET /p/:id (a blocked visitor gets the plain "not available" page).
+   The post, Talk, like, save, share and follow routes check blocks inside lib/posts.js (viewerContext, follow), covered by
+   checkPosts and checkSocialGraph; they are not counted here. BEFORE GET /api/notifications was not mute-filtered; AFTER
+   a muted member's notices are left out (P2-3 likes, comments and follows arrive as notices). */
 const BLOCK_GUARDED = ["GET /api/profile/by-id/:userId", "GET /api/messages/:userId", "POST /api/messages", "GET /api/inbox/person/:userId", "POST /api/wallet/transfer",
-  "POST /api/wallet/support", "POST /api/marketplace/listings/:id/buy", "GET /api/crowdfunding/campaigns/by-share/:shareId", "POST /api/crowdfunding/campaigns/:id/donate",
+  "POST /api/wallet/support", "POST /api/marketplace/listings/:id/buy", "GET /api/crowdfunding/campaigns/by-share/:shareId", "GET /p/:id", "POST /api/crowdfunding/campaigns/:id/donate",
   "GET /api/bfp/profile/:userId", "GET /api/bfp/seller/:handle", "GET /api/marketplace/listings/:id"];
 const BLOCK_FILTERED = ["GET /api/conversations", "GET /api/inbox/conversations", "GET /api/notifications", "GET /api/marketplace/listings", "GET /api/crowdfunding/campaigns", "GET /api/home/starter"];
-const MUTE_FILTERED = ["GET /api/marketplace/listings", "GET /api/crowdfunding/campaigns", "GET /api/home/starter"];
+const MUTE_FILTERED = ["GET /api/notifications", "GET /api/marketplace/listings", "GET /api/crowdfunding/campaigns", "GET /api/home/starter"];
 const quiet = () => { const lines = []; const orig = console.error; console.error = (m) => lines.push(String(m)); return () => { console.error = orig; return lines; }; };
 
 (async function main() {

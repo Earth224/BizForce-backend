@@ -1045,7 +1045,9 @@ function pageAnswers(over) {
     // NAMED (Nov 15 2026, W2): the chain then ends with the Shopify data request reminder (checkShopifyWebhooks J, L2).
     shopifyDataRequestReminderTick: async function () { orderRun.push("shopifyreminder"); },
     // NAMED (Nov 20 2026, P2-2): the safety retention and the counter-notice restore follow it (checkSafetyRetention in checkReports).
-    safetyRetentionTick: async function () { orderRun.push("safetyretention"); }, copyrightRestoreTick: async function () { orderRun.push("copyrightrestore"); }
+    safetyRetentionTick: async function () { orderRun.push("safetyretention"); }, copyrightRestoreTick: async function () { orderRun.push("copyrightrestore"); },
+    // NAMED (Nov 20 2026, P2-3): the post retention follows the copyright restore
+    postRetentionTick: async function () { orderRun.push("postretention"); }
   };
   vm.createContext(cctx);
   let cronOk = true;
@@ -1053,7 +1055,7 @@ function pageAnswers(over) {
   if (scheduled[0]) { scheduled[0].fn(); await flush(); }
   // NAMED (Nov 14 2026, L1): BEFORE the order ended "facebook". AFTER it ends "facebook", "youtubedata", "renewal".
   check("T11. the 04:45 UTC chain runs instagramRefreshTick after the video retention, then Facebook's cleanup (NAMED, item 8 part 3b), then L1's two ticks", cronOk && scheduled.length === 1 && scheduled[0].tz === "UTC" &&
-    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore"]), J(orderRun));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder"
+    J(orderRun) === J(["leads", "states", "shopify", "videos", "instagram", "facebook", "youtubedata", "renewal", "shopifyreminder", "safetyretention", "copyrightrestore", "postretention"]), J(orderRun));   // NAMED (Nov 20 2026, P2-2): BEFORE it ended "shopifyreminder". NAMED (Nov 20 2026, P2-3): BEFORE it ended "copyrightrestore"
   m = mountRoutes({ env: CONFIGURED });
   const rt = await attempt(m.ctx.instagramRefreshTick());
   check("T12. instagramRefreshTick runs lib/instagramApi.js refreshTick on instagramDeps() and never rejects", rt.ok && rt.v && rt.v.claimed === true &&
@@ -1660,9 +1662,10 @@ function pageAnswers(over) {
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
   // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
   // NAMED (Nov 20 2026, P2-2, migrations 191 and 192): 191_safety.sql (blocks, mutes, reports, the moderation queue, copyright notices) and 192_buy_listing_digital.sql (bfc_buy_listing keeps digital listings on sale and copies their file) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
-  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 192 &&
+  // NAMED (Nov 20 2026, P2-3, migrations 193 and 194): 193_posts.sql (posts, post_media) and 194_social_graph.sql (follows, likes, saves, comments, share days, the count triggers) are allowed above the earlier highest too, by name; "the highest" is checkBuyListingDigital R1's.
+  check("R1. 179_instagram_posting.sql is the only 179, and only 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 194 &&
     migFiles.filter(function (x) { return /^179_/.test(x); }).join() === "179_instagram_posting.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 179; }).join() === "180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql,191_safety.sql,192_buy_listing_digital.sql,193_posts.sql,194_social_graph.sql", highest);
   check("G12. no secret in any log line of this run", LOGS.every(noSecretIn), J(LOGS.filter(function (l) { return !noSecretIn(l); }).slice(0, 2)));
   check("G13. the network tripwire never fired, and no promise was left rejected", TRIPPED.length === 0 && UNHANDLED.length === 0, J(TRIPPED.concat(UNHANDLED.map(function (e) { return String(e && e.message); }))));
 

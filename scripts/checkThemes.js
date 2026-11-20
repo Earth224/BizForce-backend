@@ -354,10 +354,11 @@ const THEMED = ALL_PAGES.filter(f => FILES[f].indexOf(TAG) !== -1);
    the phone app shell's Home and Inbox, are new and wear the member's theme, held to the same rules as the pop-out above. */
 /* NAMED BEFORE → AFTER (Nov 20 2026, P2-2). BEFORE: 63. AFTER: 65; moderation.html (the owner's queue) and copyright.html (the
    notice form) are new and wear the member's theme, held to the same rules. */
-const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html", "shopify-requests.html", "home.html", "inbox.html", "moderation.html", "copyright.html"];
+// NAMED (Nov 20 2026, P2-3): compose.html, the composer page. BEFORE 65 pages and NEW_PAGES ending at copyright.html.
+const NEW_PAGES = ["music-popout.html", "media.html", "mailbox.html", "shopify-requests.html", "home.html", "inbox.html", "moderation.html", "copyright.html", "compose.html"];
 const RULE = (() => { const m = /var RULE =\n([\s\S]*?);\n/.exec(FILES[THEME]); try { return m ? vm.runInNewContext(m[1]) : ""; } catch (e) { return ""; } })();
 check("A0. scripts/bf-theme.js carries the rule, with html::before and body::before", /html::before/.test(RULE) && /body::before/.test(RULE));
-check("A1. 65 pages load scripts/bf-theme.js", THEMED.length === 65 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
+check("A1. 66 pages load scripts/bf-theme.js", THEMED.length === 66 && NEW_PAGES.every(p => THEMED.indexOf(p) !== -1), THEMED.length);
 const firstInHead = THEMED.filter(f => { const m = /<head>\s*([\s\S]*?)\n/.exec(FILES[f]); return !m || m[1].trim() !== TAG; });
 check("A1. ... as the first element of <head>, before any style or script", firstInHead.length === 0, firstInHead.join(", "));
 const inlineLeft = THEMED.concat([SHELL]).filter(f => /body::before\s*\{[^{}]*background/i.test(noComments(f === SHELL ? FILES[f] : stylesOf(FILES[f]))));
@@ -651,6 +652,8 @@ function liftRoutes(fake) {
     supabase: fake.client, APP_MAP: APP_MAP, requireAuth: requireAuth, Buffer: Buffer, Date: Date, Promise: Promise,
     // removeUnusedThemePhotos never removes a Media Library file (memberMedia.isLibraryKey); server.js requires it at the top.
     memberMedia: require(path.join(REPO, "lib/memberMedia.js")),
+    // NAMED (Nov 20 2026, P2-3): the shared storage guard (lib/storageGuard.js) is checked by checkStorageGuard; here it always has room.
+    storageGuard: async () => null,
     app: {}
   };
   ["get", "post", "put", "delete"].forEach(m => { ctx.app[m] = function (p) { const args = [].slice.call(arguments, 1); routes.push({ method: m, path: p, mw: args.slice(0, -1), handler: args[args.length - 1] }); }; });
@@ -1054,7 +1057,8 @@ async function routesAndLib(lifted) {
     // NAMED (Nov 15 2026, W3): BEFORE 60 pages in the list; AFTER 61, with shopify-requests.html.
     // NAMED (Nov 19 2026, P2-1): BEFORE 61 pages in the list; AFTER 63, with home.html and inbox.html.
     // NAMED (Nov 20 2026, P2-2): BEFORE 63 pages in the list; AFTER 65, with moderation.html and copyright.html.
-    r.body.created_id === row.id && r.body.pages.length === 65 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1) &&
+    // NAMED (Nov 20 2026, P2-3): BEFORE 65 pages in the list; AFTER 66, with compose.html.
+    r.body.created_id === row.id && r.body.pages.length === 66 && r.body.pages.some(p => (p.key || p.file || p) === "media.html" || JSON.stringify(p).indexOf("media.html") !== -1) &&
     r.body.pages.some(p => (p.key || p.file || p) === "mailbox.html" || JSON.stringify(p).indexOf("mailbox.html") !== -1));
   fake.db.member_themes.push({ id: "bbbbbbbb-0000-4000-8000-000000000009", user_id: OTHER, name: "Theirs", theme: LIBX.DEFAULT_THEME });
   r = await callRoute(L, "get", "/api/themes");

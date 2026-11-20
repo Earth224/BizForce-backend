@@ -169,7 +169,8 @@ function world(o) {
   const r3 = await quietLog(() => SF.restoreTick({ supabase: k.db.client, claimDailyJob: async () => true, now: () => new Date("2026-12-30T04:45:00Z") }));
   check("D4. a court filing recorded: never restored", r3.restored === 0 && k.st.qUpd.length === 0);
   const S = FILES[SERVER];
-  check("D5. a step of the 04:45 chain, last, through the shared daily claim (job copyright_restore)", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick);") &&
+  // NAMED (Nov 20 2026, P2-3): BEFORE the restore was the chain's last step. AFTER the post retention (P2-3) follows it.
+  check("D5. a step of the 04:45 chain, after the safety retention and before the post retention, through the shared daily claim (job copyright_restore)", has(S, ".then(safetyRetentionTick).then(copyrightRestoreTick).then(postRetentionTick);") &&
     has(S, 'return await require("./lib/safety").restoreTick({ supabase: supabase, claimDailyJob: require("./lib/accountFiles").claimDailyJob });') && SF.RESTORE_JOB_NAME === "copyright_restore" && SF.RESTORE_BUSINESS_DAYS === 10);
 
   /* ── E ── */

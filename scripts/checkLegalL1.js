@@ -506,7 +506,8 @@ async function main() {
   }
   // NAMED (Nov 15 2026, W2): BEFORE renewalEmailsTick was last ("...then(renewalEmailsTick);"). AFTER the Shopify data request
   // reminder follows it on the next line, so the chain is pinned up to it; the order before it is unchanged.
-  const chain = /cron\.schedule\("45 4 \* \* \*"[\s\S]*?\.then\(facebookChoosingPurgeTick\)\.then\(youtubeDataCheckTick\)\.then\(renewalEmailsTick\)\n        \.then\(shopifyDataRequestReminderTick\)\.then\(safetyRetentionTick\)\.then\(copyrightRestoreTick\);/.test(FILES.server);
+  const chain = /cron\.schedule\("45 4 \* \* \*"[\s\S]*?\.then\(facebookChoosingPurgeTick\)\.then\(youtubeDataCheckTick\)\.then\(renewalEmailsTick\)\n        \.then\(shopifyDataRequestReminderTick\)\.then\(safetyRetentionTick\)\.then\(copyrightRestoreTick\)\.then\(postRetentionTick\);/.test(FILES.server);
+  // NAMED (Nov 20 2026, P2-3): AFTER the post retention follows the copyright restore on the same line.
   // NAMED (Nov 20 2026, P2-2): AFTER the safety retention and the counter-notice restore follow the Shopify reminder on its line.
   check("C16. the 04:45 UTC chain runs youtubeDataCheckTick after Facebook's cleanup, then renewalEmailsTick, then the Shopify data request reminder, then P2-2's two steps", chain &&
     /async function youtubeDataCheckTick\(\) \{\n  try \{\n    return await require\("\.\/lib\/youtubeApi"\)\.youtubeDataTick\(youtubeDeps\(\)\);/.test(FILES.server));
