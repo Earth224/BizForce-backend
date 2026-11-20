@@ -2492,9 +2492,10 @@ function pageAnswers(over) {
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
-  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 187 &&
+  // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
+  check("G12. R1. 177_youtube_uploads.sql is the only 177, and only 178_tiktok_posting.sql, 179_instagram_posting.sql, 180_facebook_pages.sql, 181_etsy_store.sql, 182_amazon_store.sql and 183_weekly_goal_and_order_status.sql are above it (checkOrbitStage2 R1)", highest === 188 &&
     migFiles.filter(function (x) { return /^177_/.test(x); }).join() === "177_youtube_uploads.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 177; }).join() === "178_tiktok_posting.sql,179_instagram_posting.sql,180_facebook_pages.sql,181_etsy_store.sql,182_amazon_store.sql,183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql", highest);
   const fresh = { "lib/googleAuth.js": FILES.auth, "lib/youtubeApi.js": FILES.api, "lib/memberVideos.js": FILES.videos, "177_youtube_uploads.sql": FILES.migration,
     "scripts/youtube.js": FILES.ui, "agents/social.html": FILES.page, "scripts/checkYoutubeUploads.js": fs.readFileSync(__filename, "utf8") };
   check("G13. no emoji in any new or edited YouTube file", Object.keys(fresh).every(function (k) { return !EMOJI.test(fresh[k]); }),
@@ -2506,8 +2507,10 @@ function pageAnswers(over) {
     const top = migNames.map(function (x) { return Number(x.slice(0, 3)); }).reduce(function (acc, x) { return Math.max(acc, x); }, 0);
     const sql187 = migNames.indexOf("187_member_video_parts.sql") !== -1 ? read("supabase/migrations/187_member_video_parts.sql") : "";
     const verify187 = fs.existsSync(path.join(REPO, "supabase", "migrations", "verify", "187_verify.sql")) ? read("supabase/migrations/verify/187_verify.sql") : "";
-    check("G14. R1. 187_member_video_parts.sql is the only 187 and the highest migration; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
-      top === 187 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+    // NAMED (Nov 19 2026, HQ1, migration 188): BEFORE 187 was the highest (top === 187). AFTER 188_user_preferences_hq_view.sql is the one above it, by name; "the highest" is checkHqViews R1's.
+    check("G14. R1. 187_member_video_parts.sql is the only 187 and only 188_user_preferences_hq_view.sql is above it; it allows 500 MiB, part_count 1..12 and member_video_parts with RLS on and nothing granted; VERIFY is verify/187_verify.sql",
+      top === 188 && migNames.filter(function (x) { return /^187_/.test(x); }).join() === "187_member_video_parts.sql" &&
+      migNames.filter(function (x) { return Number(x.slice(0, 3)) > 187; }).join() === "188_user_preferences_hq_view.sql" &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 524288000)") !== -1 && sql187.indexOf("CHECK (part_count >= 1 AND part_count <= 12)") !== -1 &&
       sql187.indexOf("ALTER TABLE public.member_video_parts ENABLE ROW LEVEL SECURITY;") !== -1 && sql187.indexOf("REVOKE ALL ON public.member_video_parts FROM anon, authenticated;") !== -1 &&
       sql187.indexOf("CHECK (bytes > 0 AND bytes <= 47185920)") !== -1 && sql187.indexOf("UNIQUE (upload_path, idx)") !== -1 &&

@@ -231,7 +231,10 @@ true`;
     const statusSeen = [];
     // NAMED (Nov 11 2026, polish): at 1440 px the status line keeps to one line (the desktop look unchanged).
     let deskStatus = null;
-    for (const page of PAGES) {
+    /* NAMED (Nov 19 2026, HQ1): AGENTS_BATCH=1 or 2 opens the first 9 or the last 8 of the 17 pages (at most 15 pages a
+       command); without it, all 17 as before. Everything after the page loop runs in either batch. */
+    const BATCH_PAGES = process.env.AGENTS_BATCH === "1" ? PAGES.slice(0, 9) : process.env.AGENTS_BATCH === "2" ? PAGES.slice(9) : PAGES;
+    for (const page of BATCH_PAGES) {
       const name = agentName(page);
       const tabs = SHARED.concat(SPECIFIC[page] ? [SPECIFIC[page]] : []);
       console.log("\n══ " + page + " ══");

@@ -768,6 +768,8 @@ async function openPage(o) {
       if (o.boombox) win.localStorage.setItem("bf_boombox", JSON.stringify(o.boombox));
       /* music already on in this tab's session (bf-music.js LIVE_KEY): with a track paused mid-way, another page shows the player */
       if (o.live) win.sessionStorage.setItem("bf_music_live", UID);
+      /* NAMED (Nov 19 2026, HQ1): the member paused or stopped the music earlier in this visit (bf-music.js HELD_KEY) */
+      if (o.held) win.sessionStorage.setItem("bf_music_live_held", UID);
       win.localStorage.setItem("bf_theme", themeCache(o.theme || MUSIC_THEME));
       win.matchMedia = q => ({ matches: !!o.reduce && /prefers-reduced-motion: reduce/.test(q), addEventListener() {}, addListener() {} });
       win.Audio = makeFakeAudio(win);
@@ -947,9 +949,15 @@ async function playerChecks() {
   await settle(20);
   const armedAtIcon = PI.BFMusic.armed();
   gesture(PI, "keydown"); await settle();
-  check("D4. in the icon stage (the dashboard's first visit) \"Play when I open BizForce\" arms nothing and plays nothing, even after a press",
-    PI.document.querySelector(".bfm-float").getAttribute("data-state") === "icon" && !armedAtIcon && !PI.BFMusic.playing() &&
-    AUDIOS.filter(x => x.win === PI).reduce((n, x) => n + x.plays, 0) === 0, PI.BFMusic.armed() + " " + PI.document.querySelector(".bfm-float").getAttribute("data-state"));
+  /* NAMED BEFORE → AFTER (Nov 19 2026, HQ1, the boombox autoplay fix). BEFORE: in the icon stage "Play when I open BizForce" armed
+     nothing, so the dashboard alone ignored the setting while every other page obeyed it (and resumed regardless of it). AFTER:
+     one rule on every page (bf-music.js loadPlayAllowed): the setting on, saved, and no pause or stop in this visit; the
+     dashboard's icon stage arms like any page, still silent until the member's first interaction. */
+  const iconPlaysBefore = AUDIOS.filter(x => x.win === PI).reduce((n, x) => n + x.plays, 0);
+  check("D4. in the icon stage (the dashboard's first visit) \"Play when I open BizForce\" arms like any page and is silent before a press; the press starts it",
+    PI.document.querySelector(".bfm-float").getAttribute("data-state") === "icon" && armedAtIcon && PI.BFMusic.playing() && PI.BFMusic.state().track_id === T2,
+    armedAtIcon + " " + PI.BFMusic.playing() + " " + iconPlaysBefore + " " + PI.document.querySelector(".bfm-float").getAttribute("data-state"));
+  PI.BFMusic.pause(); await settle();
   closeOne(PI);
   const P = await openPage(Object.assign({}, base, { store: autoStore, boombox: { state: "tag" } }));
   await settle(20);
@@ -967,6 +975,12 @@ async function playerChecks() {
   P.BFMusic.pause();
   const Q = await openPage(Object.assign({}, base, { store: Object.assign({}, autoStore, { autoplay: false }) }));
   check("D4. with it off, nothing is armed", !Q.BFMusic.armed() && !Q.BFMusic.playing());
+  /* NAMED (Nov 19 2026, HQ1): with it on but a pause or stop made earlier in this visit, the next page arms nothing either. */
+  const QH = await openPage(Object.assign({}, base, { store: autoStore, boombox: { state: "tag" }, held: true }));
+  await settle(20); gesture(QH, "keydown"); await settle();
+  check("D4. with it on but the music paused or stopped earlier in this visit, the next page arms and plays nothing, even after a press",
+    !QH.BFMusic.armed() && !QH.BFMusic.playing() && AUDIOS.filter(x => x.win === QH).reduce((n, x) => n + x.plays, 0) === 0, QH.BFMusic.armed() + " " + QH.BFMusic.playing());
+  closeOne(QH);
 
   /* D5. two tabs: one source */
   violations.length = 0;
@@ -1552,7 +1566,10 @@ async function boomboxChecks(c) {
   /* NAMED BEFORE → AFTER (Oct 31 2026, the boombox-mixer). BEFORE: timed from before jsdom built the page, which counts jsdom compiling the scripts (140 to 740 ms
      on this machine, more with the mixer). AFTER: timed from the page's DOMContentLoaded, when a browser's page
      has its scripts ready, to the first moment it plays; still within a second, and RESUME_WAIT_MS at most 500. */
-  const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
+  /* NAMED BEFORE → AFTER (Nov 19 2026, HQ1). BEFORE: the next page carried the music on whatever "Play when I open BizForce" said.
+     AFTER: only with it on (bf-music.js loadPlayAllowed); with it off the place is kept and nothing plays (checked below). */
+  const leftOff = JSON.parse(JSON.stringify(left));
+  const P2 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }) }));
   const t0 = P2.__loadedAt;
   while (!P2.BFMusic.playing() && Date.now() - t0 < 2000) await wait(5);
   const took = Date.now() - t0;
@@ -1560,7 +1577,17 @@ async function boomboxChecks(c) {
     P2.BFMusic.playing() && P2.BFMusic.state().track_id === T2 && near(P2.BFMusic.position(), 50, 0.01) && near(P2.BFMusic.state().volume, 0.4) &&
     P2.BFMusic.state().queue.join() === left.queue.join() && took < 1000 && P2.BFMusic.RESUME_WAIT_MS <= 500, took);
   P2.BFMusic.pause(); await settle(); closeOne(P2);
-  const P3 = await openPage(Object.assign({}, base, { page: "tasks.html", store: left, blockPlay: true }));
+  const POFF = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, leftOff, { autoplay: false }) }));
+  await wait(POFF.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  check("G8. with \"Play when I open BizForce\" off, the next page does not carry on: silent, nothing armed, the track and place kept",
+    !POFF.BFMusic.playing() && !POFF.BFMusic.armed() && AUDIOS.filter(x => x.win === POFF).reduce((n, x) => n + x.plays, 0) === 0 &&
+    POFF.BFMusic.state().track_id === T2 && near(POFF.BFMusic.position(), 50, 0.01), POFF.BFMusic.playing() + " " + POFF.BFMusic.armed());
+  closeOne(POFF);
+  const PHELD = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }), held: true }));
+  await wait(PHELD.BFMusic.RESUME_WAIT_MS + 150); await settle();
+  check("G8. with it on but a pause or stop made in this visit, the next page stays silent too", !PHELD.BFMusic.playing() && !PHELD.BFMusic.armed(), PHELD.BFMusic.playing() + " " + PHELD.BFMusic.armed());
+  closeOne(PHELD);
+  const P3 = await openPage(Object.assign({}, base, { page: "tasks.html", store: Object.assign({}, left, { autoplay: true }), blockPlay: true }));
   await wait(P3.BFMusic.RESUME_WAIT_MS + 150); await settle();
   const ttag = P3.document.querySelector(".bfm-tag-title");
   check("G8. where the browser will not play before a tap, the tag says \"Tap to resume\" and nothing is heard",
@@ -2129,7 +2156,9 @@ async function stageChecks(c) {
   Q0.dispatchEvent(new Q0.Event("pagehide"));
   const leftQ = JSON.parse(Q0.localStorage.getItem("bf_music") || "{}"), prefsQ = prefsOf(Q0);
   Q0.BFMusic.pause(); closeOne(Q0);
-  const Q1 = await openPage(Object.assign({}, base, { page: "crm.html", store: leftQ, boombox: prefsQ }));
+  /* NAMED (Nov 19 2026, HQ1): the music carries on to the next page only with "Play when I open BizForce" on (bf-music.js
+     loadPlayAllowed); BEFORE it carried on whatever the setting said. */
+  const Q1 = await openPage(Object.assign({}, base, { page: "crm.html", store: Object.assign({}, leftQ, { autoplay: true }), boombox: prefsQ }));
   const atOnce = shown(Q1) && boxOf(Q1).getAttribute("data-state") === "box";
   for (let i = 0; i < 200 && !Q1.BFMusic.playing(); i++) await wait(5);
   check("I5. the next page, while the music carries on, shows the player at once at its last stage (the boombox), and it plays",
@@ -2548,7 +2577,8 @@ async function nowPlayingChecks(c) {
   setHidden(N, false);
   N.BFMusic.pause(); await settle();
   /* the next page carries on: no sweep */
-  const left = JSON.parse(JSON.stringify(Object.assign({}, N.BFMusic.state(), { was_playing: true })));
+  /* NAMED (Nov 19 2026, HQ1): the carry-on runs only with "Play when I open BizForce" on (bf-music.js loadPlayAllowed). */
+  const left = JSON.parse(JSON.stringify(Object.assign({}, N.BFMusic.state(), { was_playing: true, autoplay: true })));
   closeOne(N);
   const P = await openPage(Object.assign({}, base, { page: "tasks.html", store: left }));
   const t0 = Date.now();

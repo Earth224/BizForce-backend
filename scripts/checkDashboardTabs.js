@@ -316,7 +316,10 @@ async function mountExec(o) {
     baseHead.length > 1000 && cur.indexOf(ORBIT_START) !== -1 && cur.slice(0, cur.indexOf(ORBIT_START)) === baseHead, cur.slice(0, cur.indexOf(ORBIT_START)).length + " vs " + baseHead.length);
   check("the top half is one orbit: one style, one section, one template, bf-orbit.js once after it, no feature grid",
     cur.split(ORBIT_STYLE).length === 2 && cur.split("\n<section id=\"orbitTop\" class=\"bf-orbit\"").length === 2 && cur.split(ORBIT_TPL).length === 2 &&
-    cur.split("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>\n" + TOP_END).length === 2 && cur.indexOf(GRID_OPEN) === -1 &&
+    // NAMED (Nov 19 2026, HQ1): BEFORE bf-orbit.js ended the top half. AFTER the phone block HQ1 adds follows it (<style
+    // id="hq1Phone">, bf-oracle-moon.js, bf-hq-views.js; scripts/checkHqViews.js checks it), then the top half ends.
+    cur.split("</template>\n<script src=\"/scripts/bf-orbit.js\"></script>\n<!-- HQ1 (Nov 19 2026): the phone dashboard's card views").length === 2 &&
+    cur.split("<script src=\"/scripts/bf-oracle-moon.js\"></script>\n<script src=\"/scripts/bf-hq-views.js\"></script>\n" + TOP_END).length === 2 && cur.indexOf(GRID_OPEN) === -1 &&
     (cur.slice(cur.indexOf(ORBIT_TPL), cur.indexOf("</template>")).match(/ data-card="/g) || []).length === 37);
   /* NAMED (Nov 11 2026, polish): BEFORE this stretch was BASELINE's byte for byte. AFTER it is BASELINE's with one edit and
      nothing else: #taskPrompt spans both columns by class (bf-span-2) instead of an inline grid-column:1/3, which made a

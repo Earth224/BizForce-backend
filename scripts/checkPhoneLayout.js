@@ -93,7 +93,8 @@ const MUTATIONS = {
   // the pages' header ignores the notch (H)
   "no-safe-top": [[PHONE, "padding-top: env(safe-area-inset-top, 0px);", "padding-top: 0;"]],
   // the shell's cache is not bumped (S)
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"ph1\";", "var SHELL_REV = \"\";"]],
+  // NAMED (Nov 19 2026, HQ1): SHELL_REV is "hq1" now (BEFORE "ph1"); bumped again, never back to empty.
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"hq1\";", "var SHELL_REV = \"\";"]],
   // bf-phone.css is not cached for offline (S)
   "sw-without-phone-css": [[SW, "  \"/css/bf-phone.css\",", ""]],
   // an emoji slips into the phone stylesheet (N)
@@ -251,7 +252,8 @@ check("H4. every control at least 44 px: the zero-specificity floor for buttons,
 /* ── S. the service worker ── */
 console.log("\n══ S. the service worker ══");
 const W = FILES[SW] || "";
-check("S1. the shell's cache version is bumped: SHELL_REV \"ph1\" in the cache's name", has(W, "var SHELL_REV = \"ph1\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
+// NAMED (Nov 19 2026, HQ1): BEFORE "ph1". AFTER "hq1", the dashboard's HQ1 scripts added to the shell (checkHqViews W1).
+check("S1. the shell's cache version is bumped: SHELL_REV \"hq1\" (PH1's \"ph1\", bumped again by HQ1) in the cache's name", has(W, "var SHELL_REV = \"hq1\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;"));
 check("S2. css/bf-phone.css is cached with the shell, for a page opened offline", /\n  "\/css\/bf-phone\.css",/.test(W));
 
 /* ── N. no emoji ── */

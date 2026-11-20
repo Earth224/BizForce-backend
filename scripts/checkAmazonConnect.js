@@ -1495,8 +1495,9 @@ const SELLER_Q = "?spapi_oauth_code=" + CODE + "&state=" + "S".repeat(43) + "&se
   // NAMED (Nov 15 2026, W-T4, migration 185): BEFORE 184 was the highest. AFTER 185_shopify_uninstall_hook.sql is above it too, by name; "the highest" is checkShopifyUninstallHook R1's.
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
-  check("R1. 182_amazon_store.sql is the only 182, and only 183_weekly_goal_and_order_status.sql is above it (checkOrbitStage2 R1)", highest === 187 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql" &&
-    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 182; }).join() === "183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql", highest);
+  // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
+  check("R1. 182_amazon_store.sql is the only 182, and only 183_weekly_goal_and_order_status.sql is above it (checkOrbitStage2 R1)", highest === 188 && migFiles.filter(function (x) { return /^182_/.test(x); }).join() === "182_amazon_store.sql" &&
+    migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 182; }).join() === "183_weekly_goal_and_order_status.sql,184_shopify_webhook_requests.sql,185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql", highest);
   check("G8. the four approved env vars and no other: lib/amazonAuth.js reads only AMAZON_SPAPI_APP_ID, AMAZON_LWA_CLIENT_ID, AMAZON_LWA_CLIENT_SECRET and AMAZON_SPAPI_DRAFT; lib/amazonApi.js reads none",
     J((stripComments(FILES.auth).match(/"AMAZON_[A-Z_]+"/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; }).sort()) ===
       J(["\"AMAZON_LWA_CLIENT_ID\"", "\"AMAZON_LWA_CLIENT_SECRET\"", "\"AMAZON_SPAPI_APP_ID\"", "\"AMAZON_SPAPI_DRAFT\""]) &&

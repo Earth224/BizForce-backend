@@ -7246,6 +7246,10 @@ var MIST_POSITIONS = ["top-right", "bottom-right", "top-left", "bottom-left"];
    than a migration — which is exactly why this removal needs no migration and
    leaves the stored rows alone. */
 var AGENT_CARD_ORDERS = ["importance", "alphabetical"];
+/* HQ1 (Nov 19 2026, migration 188): the phone dashboard's card views and orbit choices (user_preferences.hq_card_view and
+   hq_orbit, each NULL or one of these, held by CHECK constraints as well). */
+var HQ_CARD_VIEWS = ["large", "compact", "grid"];
+var HQ_ORBIT_CHOICES = ["shown", "hidden"];
 
 /* NAMED (Nov 11 2026, polish): THE DASHBOARD CARD ORDER IS RETIRED. The dashboard's 26-card grid and its
    ordering (scripts/bf-dashboard-order.js, settings.html's control, localStorage bf_dashboard_order and
@@ -7564,7 +7568,7 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
     const { data: row, error } = await supabase
       .from("user_preferences")
       // NAMED (Nov 11 2026, orbit stage 2): and the weekly goal (migration 183).
-      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at")
+      .select("termaximus_active, mist_position, notifications_enabled, preferred_language, agent_card_order, goal_metric, goal_weekly_target, goal_currency, goal_time_zone, goal_set_at, hq_card_view, hq_orbit")
       .eq("user_id", req.user.id)
       .maybeSingle();
 
@@ -7596,6 +7600,8 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
         preferred_language: null,
         agent_card_order: null,
         weekly_goal: null,
+        hq_card_view: null,
+        hq_orbit: null,
         available_languages: LANGUAGE_NAMES
       });
     }
@@ -7607,6 +7613,9 @@ app.get("/api/user/preferences", requireAuth, async function (req, res, next) {
       preferred_language: row.preferred_language,
       agent_card_order: row.agent_card_order,
       weekly_goal: require("./lib/orbitStage2").goalOfRow(row),
+      // HQ1 (Nov 19 2026, migration 188): the phone dashboard's card view and orbit choice; null is "never chosen".
+      hq_card_view: HQ_CARD_VIEWS.indexOf(row.hq_card_view) !== -1 ? row.hq_card_view : null,
+      hq_orbit: HQ_ORBIT_CHOICES.indexOf(row.hq_orbit) !== -1 ? row.hq_orbit : null,
       available_languages: LANGUAGE_NAMES
     });
   } catch (error) {
@@ -7739,6 +7748,24 @@ app.put("/api/user/preferences", requireAuth, async function (req, res, next) {
         updates.goal_time_zone = goalChecked.value.time_zone;
         updates.goal_set_at = updates.updated_at;
       }
+    }
+
+    /* HQ1 (Nov 19 2026, migration 188): the phone dashboard's two display choices, the same three cases:
+         key absent      -> leave the stored value alone
+         null            -> clear it: never chosen (the page reads compact, and the orbit shown)
+         a listed string -> store it; anything else is a 400 naming the valid values
+       The columns' CHECK constraints hold the same two lists. */
+    if (req.body.hq_card_view !== undefined) {
+      if (req.body.hq_card_view !== null && HQ_CARD_VIEWS.indexOf(req.body.hq_card_view) === -1) {
+        return res.status(400).json({ error: "hq_card_view must be null or one of large, compact, grid.", valid_hq_card_views: HQ_CARD_VIEWS });
+      }
+      updates.hq_card_view = req.body.hq_card_view;
+    }
+    if (req.body.hq_orbit !== undefined) {
+      if (req.body.hq_orbit !== null && HQ_ORBIT_CHOICES.indexOf(req.body.hq_orbit) === -1) {
+        return res.status(400).json({ error: "hq_orbit must be null, shown or hidden.", valid_hq_orbit: HQ_ORBIT_CHOICES });
+      }
+      updates.hq_orbit = req.body.hq_orbit;
     }
 
     const { error } = await supabase

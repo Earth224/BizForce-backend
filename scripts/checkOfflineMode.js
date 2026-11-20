@@ -372,10 +372,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     await sw.dispatch("install");
     const names = [...sw.caches.keys()];
     // NAMED (Nov 19 2026, PH1): the cache name also carries the shell's version, SHELL_REV "ph1" (BEFORE bf-shell-<commit>).
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-ph1", names.length === 1 && names[0] === "bf-shell-abc1234-ph1", names.join(","));
+    // NAMED (Nov 19 2026, HQ1): SHELL_REV is "hq1" (BEFORE "ph1"): the dashboard's two new scripts are in the shell.
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-hq1", names.length === 1 && names[0] === "bf-shell-abc1234-hq1", names.join(","));
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,600}?var SHELL_REV = "ph1";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,600}?var SHELL_REV = "hq1";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -384,7 +385,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // activate: an older shell cache goes, another app's cache stays
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-ph1") && sw.caches.has("someone-else"),
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-hq1") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle
@@ -591,8 +592,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
        (the player's track, position, volume, queue and settings, for the member signed in) is cleared at sign-out.
        NAMED BEFORE → AFTER (Nov 10 2026, orbit top half). BEFORE: PER_USER had 11 keys. AFTER: 12; bf_main_boxes (the two
        tools the member chose with Swap for the dashboard's main boxes, scripts/bf-orbit.js) is the member's choice, so
-       sign-out clears it. */
-    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "mcTargetGoalConversions", "bf_theme", "bf_music"];
+       sign-out clears it.
+       NAMED BEFORE → AFTER (Nov 19 2026, HQ1). BEFORE: PER_USER had 12 keys. AFTER: 14; bf_hq_view and bf_hq_orbit (the phone
+       dashboard's card view and orbit choice, scripts/bf-hq-views.js, the device copy of user_preferences.hq_card_view and
+       hq_orbit) are the member's choices, so sign-out clears them. */
+    const PER_USER = ["bf_token", "bf_refresh", "bf_user", "bf_offline_copy", "bizforce_ai_mailbox", "bf_agent_memories", "bf_oracle_name", "bf_oracle_date", "bf_main_boxes", "bf_hq_view", "bf_hq_orbit", "mcTargetGoalConversions", "bf_theme", "bf_music"];
     const SESSION_PREFIX = "bf_tmx_insight:";
     /* NAMED BEFORE → AFTER (Oct 28 2026, Termaximus Guide mode). BEFORE: sign-out cleared one sessionStorage prefix,
        "bf_tmx_insight:". AFTER: two, ["bf_tmx_insight:", "bf_tmx_trail"]; bf_tmx_trail is Guide mode's last five pages
@@ -664,7 +668,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
       bf_return_to: "the public page to return to after signing in; app.html must still find it"
     };
     // Calls whose key is a parameter, each read here as a helper over keys that are on the lists.
-    const DYNAMIC = { "scripts/bf-session.js": ["key"],"bizdoc.html": ["storageKey"], "scripts/termaximus-guide.js": ["insightCacheKey("] };
+    /* NAMED (Nov 19 2026, HQ1): scripts/bf-hq-views.js stores through readLocal(k) / writeLocal(k, v) (each in try/catch), so
+       its call's key is the parameter k: DYNAMIC names it, and the scan reads that file's keys from its one declaration,
+       var VIEW_KEY = "bf_hq_view", ORBIT_KEY = "bf_hq_orbit" (HQ_KEYS below). BEFORE: no helper there. */
+    const DYNAMIC = { "scripts/bf-session.js": ["key"],"bizdoc.html": ["storageKey"], "scripts/termaximus-guide.js": ["insightCacheKey("], "scripts/bf-hq-views.js": ["k"] };
+    const HQ_KEYS = /var VIEW_KEY = "(bf_[a-z_]+)", ORBIT_KEY = "(bf_[a-z_]+)";/;
     const found = {}, unknown = [];
     (function walk(dir) {
       fs.readdirSync(dir, { withFileTypes: true }).forEach(d => {
@@ -680,6 +688,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
           if (key) found[key] = (found[key] || []).concat(rel);
           else if (!(DYNAMIC[rel] || []).some(a => arg.indexOf(a) === 0)) unknown.push(rel + ": " + arg);
         }
+        if (rel === "scripts/bf-hq-views.js") { const h = HQ_KEYS.exec(text); if (h) [h[1], h[2]].forEach(k => { found[k] = (found[k] || []).concat(rel); }); else unknown.push(rel + ": no VIEW_KEY / ORBIT_KEY declaration"); }
         // The shared tab component's key, named where a page creates its tabs (see the NAMED note above KEPT).
         if (/window\.BFTabs\.create\(/.test(text)) {
           for (const m of text.matchAll(/storage:\s*\{\s*kind:\s*"(?:local|session)",\s*key:\s*([^\s},]+)\s*\}/g)) {
@@ -692,7 +701,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
         }
       });
     })(FRONTEND);
-    const unlisted = Object.keys(found).filter(k => PER_USER.indexOf(k) === -1 && SESSION_KEYS.indexOf(k) === -1 && !KEPT[k]);
+    /* NAMED (Nov 19 2026, HQ1): a sessionStorage key that starts with one of SESSION_KEYS is cleared at sign-out by that prefix
+       (bf-session.js clears PER_USER_SESSION_PREFIXES by prefix): bf_music_live_held, the music player's "paused or stopped
+       in this visit" (scripts/bf-music.js HELD_KEY), under bf_music_live. BEFORE: only an exact SESSION_KEYS entry counted. */
+    const bySessionPrefix = k => SESSION_KEYS.some(p => k.indexOf(p) === 0);
+    const unlisted = Object.keys(found).filter(k => PER_USER.indexOf(k) === -1 && SESSION_KEYS.indexOf(k) === -1 && !bySessionPrefix(k) && !KEPT[k]);
     check("IV0. every storage key in the frontend is either cleared at sign-out or kept for a stated reason (" + Object.keys(found).length + " keys)",
       Object.keys(found).length >= 20 && unlisted.length === 0 && unknown.length === 0, unlisted.concat(unknown).join(", "));
     check("IV0b. ... and the lists are not stale: every key on them is still used", PER_USER.concat(SESSION_KEYS, Object.keys(KEPT)).filter(k => !found[k]).length === 0,

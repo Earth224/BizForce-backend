@@ -62,6 +62,14 @@
                        At 1440 every element of the baseline is matched by an
                        element of the same tag, id and text whose box is
                        within 1 px, and no new element is visible.
+                       NAMED (Nov 19 2026, HQ1): privacy.html's 1440 baseline is
+                       re-recorded in desktop-baseline-hq1-privacy.json (read
+                       after the batch files, so it replaces that one page). The
+                       Your data sentence for user_preferences names the phone
+                       card view and orbit now, one line longer: that list item
+                       and its four ancestors grew 26 px, the 317 elements below
+                       moved down 26 px, the other 54 are where they were, and
+                       nothing else differs (compared element by element).
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -109,7 +117,8 @@ const ALL = Object.keys(MAP.pages).map(k => String(MAP.pages[k].p || "/" + k).re
 let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
-if (PAGES.length > 15) { console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
+if (process.env.PHONE_HQ1 !== "1" && PAGES.length > 15) {   // HQ1: its own run, no page list
+ console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
 /* ── fixtures (an owner named Rose; the checks' own answers) ── */
@@ -196,7 +205,22 @@ function topBody() {
     goal: { set: false }
   };
 }
-function api(method, u) {
+/* NAMED (Nov 19 2026, HQ1): PHONE_HQ1=1 runs only the phone dashboard's HQ1 checks (hq1Run, at the end of this file), at
+   PHONE_HQ1_WIDTHS (default 360,390,430), with screenshots to PHONE_HQ1_OUT (default Downloads\hq1). */
+const HQ1 = process.env.PHONE_HQ1 === "1";
+const HQ1_WIDTHS = String(process.env.PHONE_HQ1_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const HQ1_OUT = process.env.PHONE_HQ1_OUT || path.join(os.homedir(), "Downloads", "hq1");
+const HQS = { view: null, orbit: null, puts: [], moonAsks: 0 };
+const MOON = { illuminatedFraction: 0.8312, waxing: false, phaseAngle: 220.4, phaseName: "Waning Gibbous" };
+let ORIGIN = "";
+const MOON_PHOTO = "https://upload.wikimedia.org/wikipedia/commons/e/e1/FullMoon2010.jpg";   // oracle.html MOON_IMG_URL
+const MOON_STANDIN = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="100" cy="100" r="100" fill="#c9c9c4"/>' +
+  '<circle cx="70" cy="80" r="18" fill="#a9a9a3"/><circle cx="125" cy="120" r="24" fill="#b2b2ac"/><circle cx="120" cy="60" r="10" fill="#9f9f99"/></svg>';
+const ID_TOKEN = "x." + Buffer.from(JSON.stringify({ id: ROSE.id })).toString("base64").replace(/=+$/, "") + ".y";
+// a 20 s silent mono WAV (16-bit, 8 kHz; long enough to be playing when read), served at /__hq1/tone.wav for the boombox's track
+const TONE = (() => { const n = 160000, b = Buffer.alloc(44 + n * 2); b.write("RIFF", 0); b.writeUInt32LE(36 + n * 2, 4); b.write("WAVEfmt ", 8); b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(8000, 24); b.writeUInt32LE(16000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write("data", 36); b.writeUInt32LE(n * 2, 40); return b; })();
+function api(method, u, request) {
   const p = u.pathname;
   const since = "2026-11-07T10:00:00Z";
   if (p === "/api/auth/me") return { user: ROSE, access: { active: true, reason: "subscription" }, subscription: { status: "active", plan: "all_access", current_period_end: ago(-24 * 20), cancel_at_period_end: false } };
@@ -221,6 +245,17 @@ function api(method, u) {
   if (p === "/api/instagram/posts" || p === "/api/facebook/posts") return { posts: [] };
   if (p === "/api/tiktok/creator-info") return { creator_nickname: "Maple Street Bakery", privacy_level_options: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"], comment_disabled: false, duet_disabled: false, stitch_disabled: false, max_video_post_duration_sec: 600 };
   if (p === "/api/business-profile") return { profile: { business_name: "Maple Street Bakery", industry: "Bakery", city: "Portland", website: "https://maplestreet.example" } };
+  // NAMED (Nov 19 2026, HQ1): with PHONE_HQ1=1 the preferences remember hq_card_view and hq_orbit (a PUT sets them, null
+  // clears them), GET /api/moon answers the fixture MOON, and the music library holds one short track. BEFORE (and still
+  // without PHONE_HQ1): preferences answered {} and nothing else, so the 77-page run and its desktop baseline are unchanged.
+  if (HQ1 && p === "/api/user/preferences") {
+    if (method === "PUT") { let b = {}; try { b = JSON.parse((request && request.postData) || "{}"); } catch (e) { b = {}; } HQS.puts.push(b);
+      if ("hq_card_view" in b) HQS.view = b.hq_card_view; if ("hq_orbit" in b) HQS.orbit = b.hq_orbit; return { saved: true }; }
+    return { ok: true, preferences: {}, termaximus_active: true, hq_card_view: HQS.view, hq_orbit: HQS.orbit };
+  }
+  if (HQ1 && p === "/api/moon") { HQS.moonAsks++; return MOON; }
+  if (HQ1 && p === "/api/music") return { tracks: [{ id: "c1000000-0000-4000-8000-000000000001", title: "Check Tone", artist: "Phone Check", duration: 4, bytes: 35324 }], playlists: [], used_bytes: 35324, cap_bytes: 1073741824 };
+  if (HQ1 && /^\/api\/music\/tracks\/[^/]+\/url$/.test(p)) return { url: ORIGIN + "/__hq1/tone.wav", expires_at: new Date(Date.now() + 3600e3).toISOString() };
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -234,6 +269,7 @@ function serve() {
   const server = http.createServer((req, res) => {
     let p;
     try { p = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch (e) { res.writeHead(400); res.end(); return; }
+    if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
     let file = path.resolve(root, "." + p);
     if (!fs.existsSync(file) && fs.existsSync(file + ".html")) file += ".html";
@@ -462,10 +498,14 @@ const ORBIT = String.raw`(function(){
       try {
         if (u.origin === origin || u.protocol === "data:" || u.protocol === "blob:") await cdp.send("Fetch.continueRequest", { requestId });
         else if (u.hostname === API_HOST) {
-          const body = request.method === "OPTIONS" ? "" : J(api(request.method, u));
+          const body = request.method === "OPTIONS" ? "" : J(api(request.method, u, request));
           await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(body).toString("base64"),
             responseHeaders: [{ name: "Content-Type", value: "application/json" }, { name: "Access-Control-Allow-Origin", value: "*" },
               { name: "Access-Control-Allow-Headers", value: "*" }, { name: "Access-Control-Allow-Methods", value: "GET,POST,PUT,PATCH,DELETE,OPTIONS" }] });
+        } else if (HQ1 && request.url === MOON_PHOTO) {
+          // HQ1: the Oracle's moon photo (Wikimedia) answered by a stand-in disc, so the moon draws with no outside request
+          await cdp.send("Fetch.fulfillRequest", { requestId, responseCode: 200, body: Buffer.from(MOON_STANDIN).toString("base64"),
+            responseHeaders: [{ name: "Content-Type", value: "image/svg+xml" }, { name: "Access-Control-Allow-Origin", value: "*" }] });
         } else await cdp.send("Fetch.failRequest", { requestId, errorReason: "BlockedByClient" });
       } catch (e) { /* the page moved on */ }
     });
@@ -484,7 +524,9 @@ const ORBIT = String.raw`(function(){
       fs.readdirSync(OUT).filter(f => /^desktop-baseline-.*\.json$/.test(f)).forEach(f => Object.assign(baseline, JSON.parse(fs.readFileSync(path.join(OUT, f), "utf8"))));
     }
 
-    console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
+    ORIGIN = origin;
+    if (HQ1) { await hq1Run(cdp, origin); PAGES = []; }
+    else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
       console.log("\n  " + page);
@@ -529,7 +571,7 @@ const ORBIT = String.raw`(function(){
     if (MODE === "before") {
       if (ONLY !== "desktop") fs.writeFileSync(path.join(OUT, "defects-before-" + BATCH + ".json"), J(defects, null, 1));
       if (ONLY !== "phone") fs.writeFileSync(baselineFile(BATCH), J(boxes));
-    } else if (ONLY !== "desktop") fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
+    } else if (ONLY !== "desktop" && !HQ1) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
   } finally {
     try { cdp && cdp.close(); } catch (e) { /* gone */ }
     try { chrome.proc.kill(); } catch (e) { /* gone */ }
@@ -606,4 +648,196 @@ async function dashboardChecks(cdp, origin, w, h) {
   // sign the owner back in for the next size
   await evaluate(cdp, "sessionStorage.removeItem('phone_check_out')," + J(SEED) + ",true").catch(() => null);
   await evaluate(cdp, SEED + "true");
+}
+
+/* ══ HQ1 (Nov 19 2026): the phone dashboard's card views, orbit toggle, Oracle moon and the boombox's sound on load ══
+   PHONE_HQ1=1. At each width: for every portal x view (Large, Compact, Grid) x orbit (shown, hidden), no sideways
+   scroll, no text cut off, every tap target 44 x 44, and Compact and Grid hold one row or tile per Large card in the
+   same order with the same link; the view row, the chips, the sizes the brief gives; Swap from a row and from a tile.
+   At 390 also: the 30 screenshots (Downloads\hq1), a reload keeps both choices (the device copy at once, the
+   server's once it answers), the moon's phase and drawing equal oracle.html's, and the boombox plays on load only
+   with "Play when I open BizForce" on and no pause in this visit (an agent page and the dashboard). */
+const HQ_STATE = `(function(){var r=document.getElementById("orbitTop");return {view:r&&r.getAttribute("data-hq-view"),orbit:r&&r.getAttribute("data-hq-orbit"),open:window.BFOrbit&&window.BFOrbit.state.open,
+  local:(function(){try{return [localStorage.getItem("bf_hq_view"),localStorage.getItem("bf_hq_orbit")];}catch(e){return null;}})()};})()`;
+const HQ_LINKS = `(function(){var O=window.BFOrbit;
+  var cards=[].slice.call(document.querySelectorAll("#orbitMain > .orbit-main-box")).concat(document.getElementById("orbitGrid").hidden?[]:[].slice.call(document.querySelectorAll("#orbitGrid > .orbit-box")));
+  function slug(c){return c.getAttribute("data-card")||(c.classList.contains("orbit-dir")?"agent-directory":"?");}
+  function href(c){var a=c.querySelector("a.bf-btn");return a?a.getAttribute("href"):((O.tools()[slug(c)]||{}).href||null);}
+  var rows=[].slice.call(document.querySelectorAll("#hqList > .hq-item")).map(function(it){var a=it.querySelector("a.hq-link");return {slug:it.getAttribute("data-card"),href:a&&a.getAttribute("href")};});
+  return {cards:cards.map(function(c){return {slug:slug(c),href:href(c)};}),rows:rows};})()`;
+const HQ_MEASURE = `(function(){
+  function r(n){var b=n.getBoundingClientRect();return {w:b.width,h:b.height,l:b.left,t:b.top};}
+  function vis(n){if(!n)return false;var b=n.getBoundingClientRect();if(!(b.width>0&&b.height>0))return false;for(var e=n;e&&e.nodeType===1;e=e.parentElement){if(getComputedStyle(e).display==="none")return false;}return true;}
+  var btns=[].slice.call(document.querySelectorAll("#hqViewRow button")).filter(vis);
+  var chips=[].slice.call(document.querySelectorAll("#hqChips > .hq-chip")).filter(vis);
+  var items=[].slice.call(document.querySelectorAll("#hqList > .hq-item")).filter(vis);
+  var lefts={};items.forEach(function(it){lefts[Math.round(r(it).l)]=1;});
+  var cols=Object.keys(lefts).length, gaps=[];
+  for(var i=cols;i<items.length;i++){var a=r(items[i-cols]),b=r(items[i]);gaps.push(Math.round((b.t-(a.t+a.h))*10)/10);}
+  var colGap=cols===2&&items.length>1?Math.round((r(items[1]).l-(r(items[0]).l+r(items[0]).w))*10)/10:null;
+  return {row:vis(document.getElementById("hqViewRow")),title:(document.getElementById("hqSetTitle")||{}).textContent,
+    btns:btns.map(function(b){var x=r(b);return {id:b.id||b.getAttribute("data-view"),w:x.w,h:x.h,label:b.getAttribute("aria-label")||"",pressed:b.getAttribute("aria-pressed")};}),
+    chips:chips.map(function(c){var x=r(c);return {p:c.getAttribute("data-portal"),w:x.w,h:x.h,open:c.classList.contains("is-open")};}),
+    stage:vis(document.getElementById("orbitStage")),cards:vis(document.getElementById("orbitMain")),items:items.length,
+    minH:Math.min.apply(null,items.map(function(it){return r(it.querySelector(".hq-link")).h;}).concat([999])),cols:cols,gaps:gaps,colGap:colGap,
+    mores:[].slice.call(document.querySelectorAll("#hqList .hq-more")).filter(vis).map(function(m){var x=r(m);return Math.round(x.w)+"x"+Math.round(x.h);}),
+    icons:items.map(function(it){var n=it.querySelector(".hq-icon > .bf-neon-icon");return n?Math.round(r(n).w)+"x"+Math.round(r(n).h):"none";})};})()`;
+const HQ_TITLES = { grow: "GROW TOOLS", sell: "SELL TOOLS", connect: "CONNECT TOOLS", agents: "AGENT TOOLS", oracle: "THE ORACLE" };
+
+async function hq1Run(cdp, origin) {
+  fs.mkdirSync(HQ1_OUT, { recursive: true });
+  console.log("browserCheckPhone HQ1 (the phone dashboard's views, orbit toggle, Oracle moon, boombox sound on load) at " + HQ1_WIDTHS.join(", "));
+  // a token that names the owner (bf-music.js reads the member's id from it); the SEED's sign-in otherwise as before
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const PORTALS = ["grow", "sell", "connect", "agents", "oracle"], VIEWS = ["large", "compact", "grid"], ORBITS = ["shown", "hidden"];
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const pick = (sel) => ev("(function(){var b=document.querySelector(" + J(sel) + ");if(!b)return false;b.click();return true;})()");
+  const fresh = async (w) => {
+    HQS.view = null; HQS.orbit = null; HQS.puts = [];
+    await open(cdp, origin, "sw.js", w, HT[w], true);
+    await ev("(function(){try{localStorage.removeItem('bf_hq_view');localStorage.removeItem('bf_hq_orbit');localStorage.removeItem('bf_main_boxes');sessionStorage.clear();}catch(e){}return true;})()");
+    await open(cdp, origin, "dashboard.html", w, HT[w], true);
+  };
+  for (const w of HQ1_WIDTHS) {
+    const at = "HQ1 dashboard at " + w + ": ";
+    await fresh(w);
+    const d0 = await ev(HQ_STATE);
+    check(at + "a member who never chose sees Compact with the orbit shown", d0.view === "compact" && d0.orbit === "shown", J(d0));
+    for (const orbit of ORBITS) {
+      if ((await ev(HQ_STATE)).orbit !== orbit) await pick("#hqOrbitBtn");
+      for (const view of VIEWS) {
+        await pick('.hq-view-btn[data-view="' + view + '"]');
+        await sleep(250);
+        const bad = { hscroll: [], clipped: [], small: [], links: [], row: [], orbit: [], sizes: [], fixed: [] };
+        for (const p of PORTALS) {
+          if (orbit === "hidden") await pick('#hqChips > .hq-chip[data-portal="' + p + '"]');
+          else await ev("window.BFOrbit.open(" + J(p) + "),true");
+          await sleep(320);
+          await ev("scrollTo(0,0),true");
+          const m = await ev(MEASURE), q = await ev(HQ_MEASURE), L = await ev(HQ_LINKS), s = await ev(HQ_STATE);
+          if (m.hscroll) bad.hscroll.push(p + " " + J(m.wide));
+          if (m.clipped.length) bad.clipped.push(p + " " + J(m.clipped));
+          if (m.smallCount) bad.small.push(p + " " + J(m.small));
+          const over = m.over.filter(x => !/^button#tmx-guide-fab /.test(x)); if (over.length) bad.fixed.push(p + " " + J(over));
+          if (view === "large") { if (L.rows.length || !q.cards) bad.links.push(p + " rows " + L.rows.length + ", cards shown " + q.cards); }
+          else if (!L.cards.length || J(L.rows) !== J(L.cards) || L.rows.some(x => !x.href)) bad.links.push(p + " " + J({ cards: L.cards, rows: L.rows }).slice(0, 300));
+          const pressed = q.btns.filter(b => b.pressed === "true").map(b => b.id).sort().join();
+          const wantPressed = [view].concat(orbit === "shown" ? ["hqOrbitBtn"] : []).sort().join();
+          if (!q.row || q.title !== HQ_TITLES[p] || q.btns.map(b => b.id).join() !== "large,compact,grid,hqOrbitBtn" || q.btns.some(b => b.w < 43.5 || b.h < 43.5 || b.label.length < 4) || pressed !== wantPressed || s.view !== view || s.open !== p)
+            bad.row.push(p + " " + J({ title: q.title, btns: q.btns, s }));
+          if (orbit === "hidden" ? (q.stage || q.chips.map(c => c.p).join() !== PORTALS.join() || q.chips.some(c => c.w < 43.5 || c.h < 43.5) || q.chips.filter(c => c.open).map(c => c.p).join() !== p)
+            : (!q.stage || q.chips.length)) bad.orbit.push(p + " " + J({ stage: q.stage, chips: q.chips }));
+          if (view === "compact" && (q.cols !== 1 || q.minH < 59.5 || q.gaps.some(g => Math.abs(g - 8) > 0.6) || q.icons.some(x => x !== "40x40") || J(q.mores) !== J(["44x44", "44x44"])))
+            bad.sizes.push(p + " " + J(q));
+          if (view === "grid" && (q.cols !== 2 || q.minH < 119.5 || Math.abs(q.colGap - 10) > 0.6 || q.gaps.some(g => Math.abs(g - 10) > 0.6) || J(q.mores) !== J(["44x44", "44x44"])))
+            bad.sizes.push(p + " " + J(q));
+          if (w === 390) {
+            await ev("(function(){var t=document.getElementById('orbitTop').getBoundingClientRect().top+scrollY;scrollTo(0,Math.max(0,t-8));return true;})()");
+            await sleep(150);
+            const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+            fs.writeFileSync(path.join(HQ1_OUT, "dashboard-390x844-" + p + "-" + view + "-orbit-" + orbit + ".png"), Buffer.from(shot.data, "base64"));
+          }
+        }
+        const c = at + view + ", orbit " + orbit + ", all five portals: ";
+        check(c + "no horizontal scroll", !bad.hscroll.length, J(bad.hscroll));
+        check(c + "no text cut off", !bad.clipped.length, J(bad.clipped));
+        check(c + "every tap target at least 44 x 44", !bad.small.length, J(bad.small));
+        check(c + "no fixed element over text or a control", !bad.fixed.length, J(bad.fixed));
+        check(c + (view === "large" ? "the PH1 cards shown, no list" : "one " + (view === "grid" ? "tile" : "row") + " per Large card, the same order and the same link"), !bad.links.length, J(bad.links));
+        check(c + "the view row: the set's title, Large, Compact, Grid and the orbit button, 44 px, labelled, the pressed ones right", !bad.row.length, J(bad.row));
+        check(c + (orbit === "hidden" ? "the orbit hidden, five 44 px chips in order, the open one highlighted" : "the orbit shown, no chips"), !bad.orbit.length, J(bad.orbit));
+        if (view !== "large") check(c + (view === "compact" ? "rows at least 60 px, 8 px apart, 40 px icon tiles, Swap 44 px on the two main boxes" : "two columns 10 px apart, tiles at least 120 px, Swap 44 px on the two main boxes"), !bad.sizes.length, J(bad.sizes).slice(0, 600));
+      }
+    }
+    // Swap, from a Compact row and a Grid tile
+    for (const view of ["compact", "grid"]) {
+      await pick('.hq-view-btn[data-view="' + view + '"]');
+      await ev("window.BFOrbit.open('sell'),true"); await sleep(250);
+      const before = await ev("window.BFOrbit.mains()");
+      await pick('#hqList > .hq-item[data-main="0"] > button.hq-more'); await sleep(200);
+      const choice = await ev("(function(){var b=[].slice.call(document.querySelectorAll('#hqList .orbit-swap-list button[data-tool]')).filter(function(x){return window.BFOrbit.mains().indexOf(x.getAttribute('data-tool'))===-1;})[0];if(!b)return null;var t=b.getAttribute('data-tool');b.click();return t;})()");
+      await sleep(300);
+      const after = await ev("({mains:window.BFOrbit.mains(),first:(document.querySelector('#hqList > .hq-item')||{getAttribute:function(){return null;}}).getAttribute('data-card'),large:(document.querySelector('#orbitMain > .orbit-main-box')||{getAttribute:function(){return null;}}).getAttribute('data-card')})");
+      check(at + "Swap from a " + (view === "grid" ? "Grid tile" : "Compact row") + " (the 44 px button): the main box changes to the tool chosen, in the list and in the Large cards",
+        !!choice && after.mains[0] === choice && after.first === choice && after.large === choice && after.mains[1] === before[1], J({ before, choice, after }));
+      await pick('#hqList > .hq-item[data-main="0"] > button.hq-more'); await sleep(200);
+      await ev("(function(){var b=document.querySelector('#hqList .orbit-swap-list button[data-tool=" + J(before[0]) + "]');if(b)b.click();return true;})()"); await sleep(250);
+    }
+    if (w !== 390) continue;
+
+    // a reload keeps both choices
+    await pick('.hq-view-btn[data-view="grid"]'); await sleep(150);
+    if ((await ev(HQ_STATE)).orbit !== "hidden") await pick("#hqOrbitBtn");
+    await sleep(400);
+    const sent = { view: HQS.view, orbit: HQS.orbit };
+    await open(cdp, origin, "dashboard.html", w, HT[w], true);
+    const r1 = await ev(HQ_STATE);
+    check(at + "the choice is saved to the server (PUT hq_card_view grid, hq_orbit hidden) and a reload keeps both", sent.view === "grid" && sent.orbit === "hidden" && r1.view === "grid" && r1.orbit === "hidden", J({ sent, r1 }));
+    await ev("(function(){try{localStorage.removeItem('bf_hq_view');localStorage.removeItem('bf_hq_orbit');}catch(e){}return true;})()");
+    await open(cdp, origin, "dashboard.html", w, HT[w], true);
+    const r2 = await ev(HQ_STATE);
+    check(at + "on a device with no copy (another phone), the server's choice comes back", r2.view === "grid" && r2.orbit === "hidden" && J(r2.local) === J(["grid", "hidden"]), J(r2));
+    HQS.view = "large"; HQS.orbit = "shown";
+    await open(cdp, origin, "dashboard.html", w, HT[w], true);
+    const r3 = await ev(HQ_STATE);
+    check(at + "the server's value wins once loaded (changed elsewhere to Large, shown), and this device's copy follows", r3.view === "large" && r3.orbit === "shown" && J(r3.local) === J(["large", "shown"]), J(r3));
+
+    // the moon: the same phase and drawing as oracle.html
+    HQS.moonAsks = 0;
+    await open(cdp, origin, "oracle.html", w, HT[w], true);
+    await sleep(800);
+    const om = await ev("({phase:(document.getElementById('celMoonPhase')||{}).textContent,paths:[].map.call(document.querySelectorAll('#abyssMoon path'),function(p){return p.getAttribute('d');})})");
+    await fresh(w);
+    await ev("window.BFOrbit.open('oracle'),true"); await sleep(900);
+    const dm = await ev("(function(){var out={};['node','core'].forEach(function(k){var n=document.querySelector('[data-hq-moon='+k+']');var b=n?n.getBoundingClientRect():{width:0};" +
+      "out[k]=n?{phase:n.getAttribute('data-moon-phase'),angle:n.getAttribute('data-moon-angle'),live:n.getAttribute('data-moon-live'),hidden:n.hidden,w:Math.round(b.width),paths:[].map.call(n.querySelectorAll('path'),function(p){return p.getAttribute('d');}),img:!!n.querySelector('image')}:null;});return out;})()");
+    const gold = await ev("(function(){var t=document.getElementById('hqSetTitle');var cs=getComputedStyle(t);" +
+      "return {title:t.classList.contains('hq-gold'),anim:cs.animationName,size:cs.backgroundSize,img:cs.backgroundImage.slice(0,40),icons:document.querySelectorAll('#hqList .hq-gold-glyph').length,rings:[].filter.call(document.querySelectorAll('.hq-gold-ring'),function(n){return getComputedStyle(n).display!=='none';}).length};})()");
+    await shotPage(cdp, path.join(HQ1_OUT, "oracle-set-moon-and-gold-390.png"), 390).catch(() => null);
+    await pick("#hqOrbitBtn"); await sleep(500);
+    const cm = await ev("(function(){var n=document.querySelector('[data-hq-moon=chip]');var b=n?n.getBoundingClientRect():{width:0};return n?{phase:n.getAttribute('data-moon-phase'),hidden:n.hidden,w:Math.round(b.width),paths:[].map.call(n.querySelectorAll('path'),function(p){return p.getAttribute('d');})}:null;})()");
+    check(at + "oracle.html shows the live phase (" + om.phase + ")", om.phase === MOON.phaseName && om.paths.length > 0, J(om).slice(0, 300));
+    check(at + "the ORACLE node's moon: the same live phase and the same drawing (every path) as oracle.html's, drawn on the disc",
+      !!dm.node && dm.node.phase === om.phase && dm.node.angle === String(MOON.phaseAngle) && dm.node.live === "true" && !dm.node.hidden && dm.node.w >= 44 && dm.node.img && J(dm.node.paths) === J(om.paths), J(dm.node).slice(0, 400));
+    check(at + "the centre's moon while ORACLE is open: the same", !!dm.core && dm.core.phase === om.phase && !dm.core.hidden && dm.core.w >= 60 && J(dm.core.paths) === J(om.paths), J(dm.core).slice(0, 300));
+    check(at + "the ORACLE chip's moon (orbit hidden): the same", !!cm && cm.phase === om.phase && !cm.hidden && cm.w >= 20 && J(cm.paths) === J(om.paths), J(cm).slice(0, 300));
+    check(at + "the gold with ORACLE open: the title's shine is tmx-gold-shimmer at 260% 260%, the rings on the node and the centre, the four Oracle tools' icons gold",
+      gold.title && gold.anim === "tmx-gold-shimmer" && gold.size === "260% 260%" && /linear-gradient/.test(gold.img) && gold.icons === 4 && gold.rings >= 2, J(gold));
+
+    // the boombox's sound on load
+    const TRACK = "c1000000-0000-4000-8000-000000000001";
+    const store = (autoplay, wasPlaying) => ({ v: 1, uid: ROSE.id, track_id: TRACK, position: 0, volume: 0.8, queue: [TRACK], autoplay, was_playing: wasPlaying });
+    // the audio elements the player made (src, error, paused): the detail of a failure
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "(function(){var A=window.Audio;if(!A)return;window.__hqAud=[];window.Audio=function(s){var a=s===undefined?new A():new A(s);window.__hqAud.push(a);return a;};window.Audio.prototype=A.prototype;})();" });
+    const music = "({armed:!!(window.BFMusic&&window.BFMusic.armed()),playing:!!(window.BFMusic&&window.BFMusic.playing()),aud:(window.__hqAud||[]).map(function(x){return [String(x.src).slice(-14),x.error&&x.error.code,x.paused,x.readyState];}),msg:((document.querySelector('.bfm-msg,.bfm-status,[data-bfm-msg]')||{}).textContent||'').slice(0,80),held:(function(){try{return sessionStorage.getItem('bf_music_live_held');}catch(e){return 'x';}})()})";
+    async function load(page, st) {
+      await open(cdp, origin, "sw.js", w, HT[w], true);
+      await ev("(function(){try{sessionStorage.removeItem('bf_music_live_held');sessionStorage.removeItem('bf_music_live');" + (st ? "localStorage.setItem('bf_music'," + J(J(st)) + ");" : "") + "}catch(e){}return true;})()");
+      await open(cdp, origin, page, w, HT[w], true);
+      await sleep(700);
+    }
+    async function press() {
+      await ev("(function(){if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();return true;})()");
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "x", code: "KeyX", windowsVirtualKeyCode: 88 });
+      await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "x", code: "KeyX", windowsVirtualKeyCode: 88 });
+      await sleep(1500);
+      return ev(music);
+    }
+    for (const page of ["agents/seo.html", "dashboard.html"]) {
+      const a = "HQ1 boombox on " + page + " at " + w + ": ";
+      await load(page, store(false, true));
+      const off0 = await ev(music), off1 = await press();
+      check(a + "\"Play when I open BizForce\" off, music playing on the last page: nothing plays on load, nothing is armed, a key press starts nothing", !off0.playing && !off0.armed && !off1.playing, J([off0, off1]));
+      await load(page, store(true, false));
+      const on0 = await ev(music), on1 = await press();
+      check(a + "with it on: the track starts on load (or, where sound must wait, on the first key press)", (on0.playing || on0.armed) && on1.playing, J([on0, on1]));
+      await ev("window.BFMusic.pause(),true"); await sleep(300);
+      const other = page === "dashboard.html" ? "agents/seo.html" : "dashboard.html";
+      await open(cdp, origin, other, w, HT[w], true);
+      await sleep(700);
+      const p0 = await ev(music), p1 = await press();
+      check(a + "with it on but paused here, the next page (" + other + ") stays silent, even after a key press", !p0.playing && !p0.armed && !p1.playing && p0.held === ROSE.id, J([p0, p1]));
+    }
+  }
 }
