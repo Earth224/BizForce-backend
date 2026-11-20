@@ -1271,7 +1271,8 @@ async function boomboxChecks(c) {
      pages are counted exactly (SIGNED_IN_PAGES), and one without the mist fails here. */
   // NAMED (Nov 4 2026, the Media Library): BEFORE 47 signed-in pages; AFTER 48, with media.html, which carries both.
   // NAMED (Nov 5 2026, mailbox connection): BEFORE 48 signed-in pages; AFTER 49, with mailbox.html, which carries both.
-  const SIGNED_IN_PAGES = 49;
+  // NAMED (Nov 19 2026, P2-1): BEFORE 49 signed-in pages; AFTER 51, with home.html and inbox.html, which carry both.
+  const SIGNED_IN_PAGES = 51;
   const signedInTag = html => /<script src="\/scripts\/bf-session\.js"><\/script>/.test(html) ||
     /<script src="\/scripts\/bf-session\.js" data-clear-only data-music><\/script>/.test(html);
   const want = [], refuse = [], wrong = [], noMist = [], signedIn = [];
@@ -1315,7 +1316,8 @@ async function boomboxChecks(c) {
   const setIn = sessionWith(TOKEN, ["data-clear-only", "data-music"]), setOut = sessionWith(null, ["data-clear-only", "data-music"]);
   const appIn = sessionWith(TOKEN, ["data-clear-only"]);
   check("G1. settings.html's bf-session.js (data-clear-only data-music) loads the player when a member is signed in, never when signed out, and runs no guard; app.html's (no data-music) never",
-    setIn.added.join() === "/scripts/bf-music.js" && setOut.added.length === 0 && setIn.replaced.length === 0 && setOut.replaced.length === 0 && appIn.added.length === 0,
+    // NAMED (Nov 19 2026, P2-1): BEFORE only the player was added; AFTER the bottom bar first (scripts/bf-tabbar.js, checkAppShell J1), then the player.
+    setIn.added.join() === "/scripts/bf-tabbar.js,/scripts/bf-music.js" && setOut.added.length === 0 && setIn.replaced.length === 0 && setOut.replaced.length === 0 && appIn.added.length === 0,
     JSON.stringify([setIn, setOut, appIn]));
 
   /* G2. the dashboard: beside the logo, and every capability of the old panel in the expanded view */
@@ -2450,7 +2452,8 @@ async function liveOrderChecks() {
   check("G1. live order: on every signed-in mist page, the real file loaded as the browser loads it, the boombox is drawn (" + signedIn.length + " pages, the 7 agents/ pages among them)",
     // NAMED (Nov 4 2026, the Media Library): BEFORE 54 live pages; AFTER 55, with media.html.
     // NAMED (Nov 5 2026, mailbox connection): BEFORE 55 live pages; AFTER 56, with mailbox.html.
-    missing.length === 0 && signedIn.length === 56 && signedIn.indexOf("media.html") !== -1 && signedIn.indexOf("mailbox.html") !== -1 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
+    // NAMED (Nov 19 2026, P2-1): BEFORE 56 live pages; AFTER 58, with home.html and inbox.html.
+    missing.length === 0 && signedIn.length === 58 && signedIn.indexOf("home.html") !== -1 && signedIn.indexOf("inbox.html") !== -1 && signedIn.indexOf("media.html") !== -1 && signedIn.indexOf("mailbox.html") !== -1 && signedIn.filter(f => /^agents\//.test(f)).length === 7, missing.join(", ") + " | " + signedIn.length);
 }
 
 /* ── G13. now playing ───────────────────────────────────────────────────── */

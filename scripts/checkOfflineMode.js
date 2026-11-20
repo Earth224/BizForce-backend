@@ -373,10 +373,11 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     const names = [...sw.caches.keys()];
     // NAMED (Nov 19 2026, PH1): the cache name also carries the shell's version, SHELL_REV "ph1" (BEFORE bf-shell-<commit>).
     // NAMED (Nov 19 2026, HQ1): SHELL_REV is "hq1" (BEFORE "ph1"): the dashboard's two new scripts are in the shell.
-    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-hq1", names.length === 1 && names[0] === "bf-shell-abc1234-hq1", names.join(","));
+    // NAMED (Nov 19 2026, P2-1): BEFORE "hq1". AFTER "p21": the bottom bar, Home, the Inbox, the profile header and Settings, Local in the shell (checkAppShell W).
+    check("I7. the cache is named by the build and the shell's version: bf-shell-<commit>-p21", names.length === 1 && names[0] === "bf-shell-abc1234-p21", names.join(","));
     check("I8. netlify.toml's build writes the deploying commit into sw.js, and sw.js carries the placeholder it replaces",
       /command = 'sed -i "s\/__BF_BUILD__\/\$\{COMMIT_REF:-local\}\/" sw\.js'/.test(FILES[TOML]) && (FILES[SW].match(/__BF_BUILD__/g) || []).length === 1 &&
-      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,600}?var SHELL_REV = "hq1";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
+      /var BUILD = "__BF_BUILD__";\n[\s\S]{0,600}?var SHELL_REV = "p21";\nvar CACHE = "bf-shell-" \+ BUILD \+ "-" \+ SHELL_REV;/.test(FILES[SW]));
     const installed = sw.puts.map(p => p.key);
     const allowed = PAGES.map(p => "/" + p).concat(STATIC);
     check("I9. install caches the listed pages and files, and nothing else", installed.length === allowed.length && installed.every(k => allowed.indexOf(k) !== -1),
@@ -385,7 +386,7 @@ const ME_BODY = { user: { id: "u1", email: "owner+bftest@example.com", role: "us
     // activate: an older shell cache goes, another app's cache stays
     sw.caches.set("bf-shell-old0000", new Map()); sw.caches.set("someone-else", new Map());
     await sw.dispatch("activate");
-    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-hq1") && sw.caches.has("someone-else"),
+    check("I10. a new deploy deletes the older bf-shell cache on activate and keeps its own", sw.deleted.join(",") === "bf-shell-old0000" && sw.caches.has("bf-shell-abc1234-p21") && sw.caches.has("someone-else"),
       sw.deleted.join(","));
 
     // requests it must never handle

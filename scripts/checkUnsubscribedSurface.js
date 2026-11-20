@@ -530,7 +530,13 @@ const EXPECTED_OWN = [
   // live routes above: it reaches blogRefToken through loadArrivals, whose crypto hash .update( this file's WRITES pattern
   // reads as a write. It writes nothing and starts no task; checkDashboardTop holds every query it makes to the caller's
   // own rows and to reads, and holds it login-only on purpose, so a lapsed member still sees their own numbers.
-  "get /api/dashboard/top"
+  "get /api/dashboard/top",
+  // NAMED (Nov 19 2026, P2-1, migrations 189 and 190; effectful login-only 165 -> 168): BEFORE no Inbox and no place. AFTER
+  // opening a conversation marks the caller's own message notices from that person read, "Mark all read" marks the
+  // caller's own notices read, and Settings, Local saves the caller's own place (bf_profiles, their own row). Each writes
+  // only the caller's rows (checkInbox I3 and N7, checkHandles L7). Deliberately ungated: reading your own notices and
+  // saying where you are never need a subscription.
+  "post /api/inbox/read/:userId", "post /api/notifications/read-all", "put /api/me/place"
   // NAMED (Nov 11 2026, orbit stage 2; classified, not listed): GET /api/dashboard/pulse is login-only and READ-ONLY. It reads the
   // caller's own running agents and recent events (ai_tasks, agent_proposals, store_change_log, card_leads, social_post_drafts,
   // instagram_posts, facebook_posts, member_videos, content_library), writes nothing, starts no task and calls no model, and does

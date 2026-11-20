@@ -397,7 +397,9 @@ function bfProfileColumns() {
     "show_products", "show_portfolio", "show_music", "show_card", "show_videos", "location", "website", "social_links", "skills", "industry", "profile_design"];
   const AS_VALIDATED = ["profile_design"];
   const PD = require(path.join(__dirname, "..", "lib", "profileDesign.js"));
-  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at"];
+  // NAMED (Nov 19 2026, P2-1, migration 189): the place for Local is private (Settings, Local reads it through
+  // GET /api/me/place only), so the leak test below also proves the public profile never carries it.
+  const PRIVATE_COLS = ["id", "user_id", "created_at", "updated_at", "place_city", "place_region", "place_country", "local_opt_in"];
   const migCols = bfProfileColumns();
   check("P1. every bf_profiles column of the migrations is classified, public or private (" + migCols.length + " columns)",
     migCols.length === PUBLIC.length + PRIVATE_COLS.length && migCols.every(c => PUBLIC.indexOf(c) !== -1 || PRIVATE_COLS.indexOf(c) !== -1), migCols.join(","));

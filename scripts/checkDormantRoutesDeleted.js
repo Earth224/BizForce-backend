@@ -374,7 +374,18 @@ const ADDED = [
   ["get", "/api/videos/:id/preview"],                        // login-only, never cached: a 10-minute signed address to the member's own video file; 410 once deleted (494 -> 495)
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 495 routes; AFTER 497, a video over 50 MB sent in parts (checkYoutubeUploads BV9 to BV20)
   ["post", "/api/videos/part-url"],                          // subscription, own limiter: a signed upload URL for ONE part of the member's own upload (495 -> 496)
-  ["post", "/api/videos/part-done"]                          // subscription, own limiter: the part's size read from Storage, then recorded with its sha256 (496 -> 497)
+  ["post", "/api/videos/part-done"],                         // subscription, own limiter: the part's size read from Storage, then recorded with its sha256 (496 -> 497)
+  // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): BEFORE 497 routes; AFTER 507, the phone app shell (checkInbox, checkHandles, checkHomeStarter, checkProfileShell)
+  ["get", "/api/inbox/conversations"],                       // login-only: the member's own conversations, grouped, with unread counts (497 -> 498)
+  ["get", "/api/inbox/person/:userId"],                      // login-only: a thread's other member, handle, name and avatar only; 404 for no member (498 -> 499)
+  ["post", "/api/inbox/read/:userId"],                       // login-only: marks the member's own unread message notices from that person read (499 -> 500)
+  ["get", "/api/inbox/counts"],                              // login-only: counts of the member's own unread notices, messages and waiting approvals (500 -> 501)
+  ["post", "/api/notifications/read-all"],                   // login-only: marks the member's own unread notices read (501 -> 502)
+  ["get", "/api/me/place"],                                  // login-only: the member's own place for Local and the country codes (502 -> 503)
+  ["put", "/api/me/place"],                                  // login-only: saves the member's own place, checked by lib/places.js (503 -> 504)
+  ["get", "/api/bfp/profile/me/stats"],                      // login-only: the member's own sales count and BizCash balance (504 -> 505)
+  ["get", "/api/bfp/profile/:userId/stats"],                 // PUBLIC, gated by ownerPagePublic: a public page's completed sales count only (505 -> 506)
+  ["get", "/api/home/starter"]                               // login-only: newest listings with a photo, shared campaigns, public member pages (506 -> 507)
 ];
 /* Routes removed since, each on purpose, by a later change. */
 const REMOVED = new Set([

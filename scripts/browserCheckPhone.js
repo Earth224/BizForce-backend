@@ -70,6 +70,21 @@
                        and its four ancestors grew 26 px, the 317 elements below
                        moved down 26 px, the other 54 are where they were, and
                        nothing else differs (compared element by element).
+                       NAMED (Nov 19 2026, P2-1): at each phone width every page
+                       also gets the bottom bar's checks (barChecks): shown exactly
+                       where scripts/bf-tabbar.js's list says, at the bottom, five
+                       44 px items, the right tab active, nothing painted over it,
+                       the Guide button clear of it; the bar, like the Guide, is
+                       judged over the page at the END, not at rest. home.html and
+                       inbox.html are new (their 1440 baseline is
+                       desktop-baseline-p21-new.json); messages, proposals,
+                       settings, profile and privacy changed on purpose and each
+                       has a named desktop-baseline-p21-<page>.json, read after the
+                       batch files and HQ1's (see the P2-1 report for the proof).
+     PHONE_P21=1           only P2-1's own pages (p21Run): the rewritten addresses,
+                           signed out, Home, the Inbox's tabs and a thread, the
+                           profile, the Create sheet, the dashboard with the bar,
+                           at 360, 390 and 430; screenshots to Downloads\p21.
 
      CHROME_PATH            the browser (default: the usual Windows paths)
      BIZFORCE_FRONTEND_DIR  the frontend checkout
@@ -117,7 +132,7 @@ const ALL = Object.keys(MAP.pages).map(k => String(MAP.pages[k].p || "/" + k).re
 let PAGES = ALL, BATCH = "all";
 if (process.env.PHONE_PAGES) { PAGES = process.env.PHONE_PAGES.split(",").map(s => s.trim()).filter(Boolean); BATCH = "list"; }
 else if (process.env.PHONE_BATCH) { const b = Number(process.env.PHONE_BATCH), n = Math.min(15, Number(process.env.PHONE_SIZE) || 15); PAGES = ALL.slice((b - 1) * n, b * n); BATCH = (n === 15 ? "" : "s" + n + "-") + b; }
-if (process.env.PHONE_HQ1 !== "1" && PAGES.length > 15) {   // HQ1: its own run, no page list
+if (process.env.PHONE_HQ1 !== "1" && process.env.PHONE_P21 !== "1" && PAGES.length > 15) {   // HQ1 and P2-1: their own runs, no page list
  console.log("At most 15 pages a run: set PHONE_BATCH=1.." + Math.ceil(ALL.length / 15) + " or PHONE_PAGES."); process.exit(1); }
 const fileOf = (page, w, h) => page.replace(/[\/\\]/g, "_").replace(/\.html$/, "") + "-" + w + "x" + h + ".png";
 
@@ -210,6 +225,86 @@ function topBody() {
 const HQ1 = process.env.PHONE_HQ1 === "1";
 const HQ1_WIDTHS = String(process.env.PHONE_HQ1_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
 const HQ1_OUT = process.env.PHONE_HQ1_OUT || path.join(os.homedir(), "Downloads", "hq1");
+
+/* NAMED (Nov 19 2026, P2-1): the phone app shell's bottom bar. In every check run, at each phone width, the bar is
+   shown exactly where scripts/bf-tabbar.js's list says (and only on a page that loads bf-session.js), 56 px or more at
+   the very bottom, five items of 44 x 44 or more, the right tab active, nothing else painted over it (the big music
+   player excepted, by design) and the Guide button clear of it. Like the Guide, the bar floats over the scrolling page
+   by design, so it is judged at the END of the page (where its spacer must keep it clear), not at rest.
+   PHONE_P21=1 runs only P2-1's own pages (p21Run, at the end of this file) at PHONE_P21_WIDTHS (default 360,390,430),
+   with screenshots at 390 x 844 to PHONE_P21_OUT (default Downloads\p21). */
+const P21 = process.env.PHONE_P21 === "1";
+const P21_WIDTHS = String(process.env.PHONE_P21_WIDTHS || "360,390,430").split(",").map(Number).filter(Boolean);
+const P21_OUT = process.env.PHONE_P21_OUT || path.join(os.homedir(), "Downloads", "p21");
+const BAR_HIDDEN = ["app.html", "reset-password.html", "verify-email.html", "terms.html", "privacy.html", "refund.html", "contact.html",
+  "music-popout.html", "card-view.html", "blogpost.html", "blogindex.html", "oracle.html", "mychart.html", "calendar.html", "synastry.html", "the-third.html"];
+const BAR_ACTIVE = { "home.html": "home", "inbox.html": "inbox", "messages.html": "inbox", "proposals.html": "inbox", "profile.html": "profile", "settings.html": "profile" };
+// a page loads the bar when it loads bf-session.js as a guard, or with data-music (settings.html); app.html's data-clear-only alone does not
+function barLoads(file) {
+  let html = "";
+  try { html = fs.readFileSync(path.join(FRONTEND, file), "utf8"); } catch (e) { return false; }
+  if (!/bf-session\.js/.test(html)) return false;
+  const tag = (/<script src="\/scripts\/bf-session\.js"([^>]*)>/.exec(html) || [])[1];
+  // your-data.html writes the tag itself, data-clear-only only when signed out: signed in (as here) it is a guard
+  if (tag !== undefined && /bf_token/.test(tag)) return true;
+  return !(tag !== undefined && /data-clear-only/.test(tag) && !/data-music/.test(tag));
+}
+const P21_PEER = uid(2), P21_PEER2 = uid(3);
+const P21_IMG = ["/brand/agent-network-tile-256.png", "/brand/bizforce-logo-dark-256.png", "/brand/bizforce-logo-light-256.png", "/brand/agent-network-tile-512.png"];
+const P21_FIX = {
+  starter: {
+    listings: [["Spring cake", 40, "product"], ["Cake decorating class", 120, "service"], ["Sourdough loaf", 12, "product"], ["Wedding cake tasting", 60, "service"]]
+      .map(([t, pr, k], i) => ({ id: uid(5000 + i), title: t, price_bfc: pr, kind: k, category: "food", photo: P21_IMG[i] })),
+    campaigns: [{ title: "New oven for the bakery", goal_bfc: 5000, raised_bfc: 1850, photo: P21_IMG[3], link: "/campaign/abcdefghijklmnop" },
+      { title: "Community garden beds", goal_bfc: 2000, raised_bfc: 400, photo: null, link: "/campaign/qrstuvwxyzabcdef" }],
+    people: [{ username: "pat", name: "Pat's Pantry", tagline: "Jams and preserves", avatar_url: null, link: "/@pat" },
+      { username: "lee-ceramics", name: "Lee Ceramics", tagline: null, avatar_url: P21_IMG[1], link: "/@lee-ceramics" }]
+  },
+  counts: { notifications: 2, messages: 1, approvals: 10, badge: 3 },
+  conversations: { conversations: [
+    { other_id: P21_PEER, last_message: "Can I collect the order on Saturday morning?", last_at: ago(1), last_from_me: false, unread: 1, person: { username: "pat", name: "Pat's Pantry", avatar_url: null } },
+    { other_id: P21_PEER2, last_message: "Thanks, the mugs arrived safely.", last_at: ago(30), last_from_me: true, unread: 0, person: { username: "lee-ceramics", name: "Lee Ceramics", avatar_url: P21_IMG[1] } }
+  ], next_before: null },
+  thread: { messages: [
+    { id: uid(6001), sender_id: ROSE.id, receiver_id: P21_PEER, content: "Your order is ready. We open at 8.", created_at: ago(3) },
+    { id: uid(6002), sender_id: P21_PEER, receiver_id: ROSE.id, content: "Can I collect the order on Saturday morning?", created_at: ago(1) }
+  ], has_more: false, next_before: null },
+  notifications: { notifications: [
+    { id: uid(6101), type: "support", title: "@pat supported you with 50 BFC", message: "For the spring cakes", read: false, created_at: ago(2), link: "/wallet.html" },
+    { id: uid(6102), type: "order", title: "New order", message: "Lee Ceramics bought a Sourdough loaf", read: false, created_at: ago(5), link: "/my-purchases.html" },
+    { id: uid(6103), type: "system", title: "Welcome to BizForce", message: "Your account is ready.", read: true, created_at: ago(240), link: null }
+  ] },
+  profile: { profile: { user_id: ROSE.id, username: "rose", display_name: "Rose", title: "Baker", tagline: "Maple Street Bakery", bio: "We bake bread and cakes every morning on Maple Street." } },
+  stats: { sales: 12, bizcash: 2400 },
+  myListings: { listings: [
+    { id: uid(5000), slug: "spring-cake", title: "Spring cake", status: "active", listing_kind: "product", price_bfc: 40, media: [{ url: P21_IMG[0], type: "image/png" }] },
+    { id: uid(5001), slug: "sourdough-loaf", title: "Sourdough loaf", status: "active", listing_kind: "product", price_bfc: 12, media: [{ url: P21_IMG[2], type: "image/png" }] },
+    { id: uid(5002), slug: "cake-class", title: "Cake decorating class", status: "active", listing_kind: "service", price_bfc: 120, media: [{ url: P21_IMG[1], type: "image/png" }] }
+  ] },
+  place: { place: { place_city: "Portland", place_region: "Oregon", place_country: "US", local_opt_in: false }, countries: ["CA", "GB", "US"] }
+};
+function p21Api(method, p) {
+  if (p === "/api/home/starter") return P21_FIX.starter;
+  if (p === "/api/inbox/counts") return P21_FIX.counts;
+  if (p === "/api/inbox/conversations") return P21_FIX.conversations;
+  if (p.indexOf("/api/inbox/person/") === 0) return { person: { id: P21_PEER, username: "pat", name: "Pat's Pantry", avatar_url: null } };
+  if (p.indexOf("/api/inbox/read/") === 0) return { marked: 1 };
+  if (p.indexOf("/api/messages/") === 0 && method === "GET") return P21_FIX.thread;
+  if (p === "/api/notifications" && method === "GET") return P21_FIX.notifications;
+  if (p === "/api/bfp/profile/me" && method === "GET") return P21_FIX.profile;
+  if (p === "/api/bfp/profile/me/stats") return P21_FIX.stats;
+  if (p === "/api/marketplace/my-listings") return P21_FIX.myListings;
+  if (p === "/api/me/place" && method === "GET") return P21_FIX.place;
+  return undefined;
+}
+// the site's own rewrites (_redirects) for the addresses the bar's list names, served from disk in a P21 run
+function p21Rewrite(p) {
+  if (/^\/@[a-z0-9_-]+$/i.test(p)) return "/seller.html";
+  if (/^\/listing\/[^/]+$/.test(p)) return "/listing.html";
+  if (/^\/blog\/[^/]+\/[^/]+$/.test(p)) return "/blogpost.html";
+  if (/^\/blog\/[^/]+$/.test(p)) return "/blogindex.html";
+  return p;
+}
 const HQS = { view: null, orbit: null, puts: [], moonAsks: 0 };
 const MOON = { illuminatedFraction: 0.8312, waxing: false, phaseAngle: 220.4, phaseName: "Waning Gibbous" };
 let ORIGIN = "";
@@ -256,6 +351,9 @@ function api(method, u, request) {
   if (HQ1 && p === "/api/moon") { HQS.moonAsks++; return MOON; }
   if (HQ1 && p === "/api/music") return { tracks: [{ id: "c1000000-0000-4000-8000-000000000001", title: "Check Tone", artist: "Phone Check", duration: 4, bytes: 35324 }], playlists: [], used_bytes: 35324, cap_bytes: 1073741824 };
   if (HQ1 && /^\/api\/music\/tracks\/[^/]+\/url$/.test(p)) return { url: ORIGIN + "/__hq1/tone.wav", expires_at: new Date(Date.now() + 3600e3).toISOString() };
+  // NAMED (Nov 19 2026, P2-1): with PHONE_P21=1, Home, the Inbox, the profile and Settings, Local answer the fixtures
+  // above (p21Api). Without it every one of them answers {} as before, so the page runs and their baselines are unchanged.
+  if (P21) { const a = p21Api(method, p); if (a !== undefined) return a; }
   if (p === "/api/user/preferences") return { ok: true, preferences: {} };
   if (method !== "GET") return { ok: true };
   return {};
@@ -271,6 +369,7 @@ function serve() {
     try { p = decodeURIComponent(new URL(req.url, "http://x").pathname); } catch (e) { res.writeHead(400); res.end(); return; }
     if (p === "/__hq1/tone.wav") { res.writeHead(200, { "Content-Type": "audio/wav", "Content-Length": TONE.length, "Cache-Control": "no-store" }); res.end(TONE); return; }   // HQ1
     if (p.endsWith("/")) p += "index.html";
+    if (P21) p = p21Rewrite(p);   // P2-1: /@handle, /listing/:id, /blog/... as the site rewrites them
     let file = path.resolve(root, "." + p);
     if (!fs.existsSync(file) && fs.existsSync(file + ".html")) file += ".html";
     if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404); res.end("not found"); return; }
@@ -526,6 +625,7 @@ const ORBIT = String.raw`(function(){
 
     ORIGIN = origin;
     if (HQ1) { await hq1Run(cdp, origin); PAGES = []; }
+    else if (P21) { await p21Run(cdp, origin); PAGES = []; }
     else console.log("browserCheckPhone (" + MODE + ", batch " + BATCH + ", " + PAGES.length + " pages)");
     for (const page of PAGES) {
       currentPage = page;
@@ -548,11 +648,13 @@ const ORBIT = String.raw`(function(){
           const at = page + " at " + w + ": ";
           check(at + "no horizontal scroll", !d.hscroll, J(d.wide));
           check(at + "no text cut off (ellipsis or clipped)", d.clipped.length === 0, J(d.clipped));
-          const restOver = d.overAtRest.filter(x => !/^button#tmx-guide-fab /.test(x));
+          // NAMED (Nov 19 2026, P2-1): the bottom bar, like the Guide, floats over the scrolling page by design: judged at the end
+          const restOver = d.overAtRest.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x));
           check(at + "no fixed element over a heading, text, button or link (the Guide at the end of the page, every other one at rest too)", restOver.length === 0 && d.overAtEnd.length === 0, J(restOver.concat(d.overAtEnd)));
           check(at + "every tap target is at least 44 x 44", d.smallCount === 0, d.smallCount + " " + J(d.small));
           check(at + "decoration is under the text", d.deco.length === 0, J(d.deco));
           check(at + "no empty gap over 48 px inside a card", d.gaps.length === 0, J(d.gaps));
+          await barChecks(cdp, page, w);   // P2-1
           if (page === "dashboard.html") await dashboardChecks(cdp, origin, w, h);
         }
       }
@@ -571,7 +673,7 @@ const ORBIT = String.raw`(function(){
     if (MODE === "before") {
       if (ONLY !== "desktop") fs.writeFileSync(path.join(OUT, "defects-before-" + BATCH + ".json"), J(defects, null, 1));
       if (ONLY !== "phone") fs.writeFileSync(baselineFile(BATCH), J(boxes));
-    } else if (ONLY !== "desktop" && !HQ1) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
+    } else if (ONLY !== "desktop" && !HQ1 && !P21) fs.writeFileSync(path.join(OUT, "defects-after-" + BATCH + ".json"), J(defects, null, 1));
   } finally {
     try { cdp && cdp.close(); } catch (e) { /* gone */ }
     try { chrome.proc.kill(); } catch (e) { /* gone */ }
@@ -840,4 +942,136 @@ async function hq1Run(cdp, origin) {
       check(a + "with it on but paused here, the next page (" + other + ") stays silent, even after a key press", !p0.playing && !p0.armed && !p1.playing && p0.held === ROSE.id, J([p0, p1]));
     }
   }
+}
+
+/* ══ P2-1 (Nov 19 2026): the bottom bar on every page, and P2-1's own pages ══ */
+const BAR_STATE = String.raw`(function(){
+  var bar = document.getElementById("bf-tabbar");
+  function vis(n){ if (!n) return false; var r = n.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return false;
+    for (var e = n; e && e.nodeType === 1; e = e.parentElement) { var c = getComputedStyle(e); if (c.display === "none" || c.visibility === "hidden") return false; } return true; }
+  function nm(t){ var c = t.className && t.className.baseVal !== undefined ? t.className.baseVal : t.className; return t.tagName.toLowerCase() + (t.id ? "#" + t.id : "") + (c ? "." + String(c).trim().split(/\s+/)[0] : ""); }
+  var path = location.pathname.replace(/^\/+/, ""); if (!path) path = "index.html";
+  var out = { path: path, shown: vis(bar), iw: innerWidth, ih: innerHeight };
+  if (!out.shown) return out;
+  var br = bar.getBoundingClientRect();
+  out.h = Math.round(br.height); out.bottomGap = Math.round(innerHeight - br.bottom); out.w = Math.round(br.width);
+  out.items = [].map.call(bar.children, function(n){ var r = n.getBoundingClientRect(); return { tab: n.getAttribute("data-tab"), w: Math.round(r.width), h: Math.round(r.height), cur: n.getAttribute("aria-current") }; });
+  out.active = (bar.querySelector("[aria-current=page]") || { getAttribute: function(){ return null; } }).getAttribute("data-tab");
+  var g = document.getElementById("tmx-guide-fab");
+  if (vis(g)) { var gr = g.getBoundingClientRect(); out.guide = [Math.round(gr.left), Math.round(gr.top), Math.round(gr.right), Math.round(gr.bottom)];
+    out.guideOverlap = !(gr.bottom <= br.top + 0.5 || gr.top >= br.bottom - 0.5 || gr.right <= br.left + 0.5 || gr.left >= br.right - 0.5); }
+  // anything else painted over the bar: 20 points across it, at three heights; the topmost must be the bar
+  var cover = [];
+  for (var i = 0; i < 20; i++) { var x = br.left + (i + 0.5) * br.width / 20;
+    [br.top + 4, br.top + br.height / 2, br.bottom - 4].forEach(function(y){ var t = document.elementFromPoint(x, y); if (!t || bar.contains(t)) return;
+      var big = t.closest && t.closest(".bfm-float"); if (big && big.getBoundingClientRect().height >= 300) return;   // the big music player covers it by design
+      var k = nm(t); if (cover.indexOf(k) === -1) cover.push(k); }); }
+  out.cover = cover;
+  return out;
+})()`;
+
+async function barChecks(cdp, page, w) {
+  let s = await evaluate(cdp, BAR_STATE);
+  if (s.iw !== w) { await sleep(600); s = await evaluate(cdp, BAR_STATE); }   // a page that redirects (index.html to the dashboard) is measured once it has settled
+  const file = s.path;
+  const want = BAR_HIDDEN.indexOf(file) === -1 && barLoads(file);
+  const at = page + " at " + w + ": ";
+  check(at + "the bottom bar is " + (want ? "shown" : "not shown") + " (" + file + ", P2-1)", s.shown === want, J(s));
+  if (want) check(at + "the page is no wider than the screen, so the fixed bar and the Guide sit on it (layout viewport " + s.iw + " = " + w + ")", s.iw === w, J(s));
+  if (!want || !s.shown) return;
+  check(at + "the bar is at the very bottom, 56 px or more, five items each 44 x 44 or more, " + (BAR_ACTIVE[file] || "hq") + " active",
+    s.h >= 56 && s.bottomGap === 0 && s.items.length === 5 && s.items.every(i => i.w >= 44 && i.h >= 44) && s.active === (BAR_ACTIVE[file] || "hq"), J(s));
+  check(at + "nothing else is painted over the bar (the big music player excepted) and the Guide button clears it", s.cover.length === 0 && !s.guideOverlap, J({ cover: s.cover, guide: s.guide }));
+}
+
+async function p21Run(cdp, origin) {
+  fs.mkdirSync(P21_OUT, { recursive: true });
+  console.log("browserCheckPhone P2-1 (the bottom bar's addresses, signed out, Home, the Inbox, the profile, the Create sheet) at " + P21_WIDTHS.join(", "));
+  // a token that names the owner (the Inbox and the profile read the member's id from it); signed out when phone_check_out is set
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "try{if(!sessionStorage.getItem('phone_check_out'))localStorage.setItem('bf_token'," + J(ID_TOKEN) + ");" +
+    "else{localStorage.removeItem('bf_token');localStorage.removeItem('bf_user');localStorage.removeItem('bf_refresh_token');}}catch(e){}" });
+  const ev = x => evaluate(cdp, x);
+  const HT = { 360: 780, 390: 844, 430: 932 };
+  const viewShot = async (file) => { const r = await cdp.send("Page.captureScreenshot", { format: "png" }); fs.writeFileSync(path.join(P21_OUT, file), Buffer.from(r.data, "base64")); };
+
+  // 1. the addresses the site rewrites to a page on disk, signed in, at 390
+  for (const [addr, want] of [["@rose", true], ["listing/wool-hat", false], ["blog/rose", false], ["blog/rose/first-post", false]]) {
+    await open(cdp, origin, addr, 390, 844, true);
+    const s = await ev(BAR_STATE);
+    check("P21 /" + addr + " signed in at 390: the bar is " + (want ? "shown" : "not shown"), s.shown === want, J(s));
+  }
+  // 2. signed out: no bar anywhere; Home and an Inbox address are kept to come back to after sign-in
+  await open(cdp, origin, "sw.js", 390, 844, true);
+  await ev("sessionStorage.setItem('phone_check_out','1'),true");
+  for (const pg of ["listing.html", "seller.html?u=rose", "@rose", "index.html"]) {
+    await open(cdp, origin, pg, 390, 844, true);
+    const s = await ev(BAR_STATE);
+    check("P21 " + pg + " signed out at 390: no bar", !s.shown, J(s));
+  }
+  for (const [pg, keep] of [["home.html", "/home.html"], ["inbox.html?tab=approvals", "/inbox.html?tab=approvals"]]) {
+    await ev("(function(){try{localStorage.removeItem('bf_return_to');}catch(e){}return true;})()");
+    await open(cdp, origin, pg, 390, 844, true);
+    const r = await ev("({path:location.pathname,back:(function(){try{return localStorage.getItem('bf_return_to');}catch(e){return null;}})()})");
+    check("P21 " + pg + " signed out: sent to sign in (app.html), and " + keep + " kept to come back to", r.path === "/app.html" && r.back === keep, J(r));
+  }
+  await open(cdp, origin, "sw.js", 390, 844, true);
+  await ev("(function(){sessionStorage.removeItem('phone_check_out');try{localStorage.removeItem('bf_return_to');}catch(e){}return true;})()");
+
+  // 3. P2-1's pages at each width
+  const STATES = [
+    ["home", "home.html", null, "home"], ["inbox-messages", "inbox.html", null, "inbox"], ["inbox-thread", "inbox.html?with=" + P21_PEER, null, "inbox"],
+    ["inbox-approvals", "inbox.html?tab=approvals", null, "inbox"], ["inbox-notifications", "inbox.html?tab=notifications", null, "inbox"],
+    ["profile", "profile.html", null, "profile"], ["create-sheet", "home.html", "create", null], ["dashboard", "dashboard.html", null, "hq"]
+  ];
+  for (const w of P21_WIDTHS) {
+    const h = HT[w] || 844;
+    for (const [name, url, act, tab] of STATES) {
+      await open(cdp, origin, url, w, h, true);
+      const at = "P21 " + name + " at " + w + ": ";
+      await ev("scrollTo(0,0),true");
+      if (act === "create") { await ev("(function(){var b=document.querySelector('#bf-tabbar [data-tab=create]');if(b)b.click();return !!b;})()"); await sleep(350); }
+      if (w === 390) await viewShot(name + "-390x844.png");
+      if (act !== "create") { const s0 = await ev(BAR_STATE); check(at + "at rest the bar is on screen at the bottom with nothing over it", s0.shown && s0.bottomGap === 0 && s0.cover.length === 0, J(s0)); }
+      const rest = await ev(MEASURE);
+      check(at + "no horizontal scroll", !rest.hscroll, J(rest.wide));
+      check(at + "no text cut off", rest.clipped.length === 0, J(rest.clipped));
+      check(at + "every tap target is at least 44 x 44", rest.smallCount === 0, rest.smallCount + " " + J(rest.small));
+      const deco = rest.deco.filter(x => !(act === "create" && /^div#bf-create-backdrop /.test(x)));   // the open dialog's scrim dims the page by design
+      check(at + "decoration is under the text" + (act === "create" ? " (the open sheet's scrim aside)" : ""), deco.length === 0, J(deco));
+      const restOver = rest.over.filter(x => !/^(button#tmx-guide-fab|nav#bf-tabbar) /.test(x));
+      check(at + "the page is no wider than the screen (layout viewport " + w + ")", (await ev("innerWidth")) === w);
+      check(at + "no fixed element over text or a control at rest (the bar and the Guide are judged at the end)", restOver.length === 0, J(restOver));
+      if (act === "create") {
+        const c = await ev("(function(){var s=document.getElementById('bf-create');if(!s||s.hidden)return null;var r=s.getBoundingClientRect();var bar=document.getElementById('bf-tabbar').getBoundingClientRect();" +
+          "var top=document.elementFromPoint(bar.left+bar.width/2,bar.top+bar.height/2);" +
+          "return {t:Math.round(r.top),b:Math.round(r.bottom),l:Math.round(r.left),r:Math.round(r.right),role:s.getAttribute('role'),opts:[].map.call(s.querySelectorAll('.bf-create-opt'),function(o){var q=o.getBoundingClientRect();return Math.round(q.width)+'x'+Math.round(q.height);})," +
+          "soon:s.querySelectorAll('.is-soon').length,overBar:!!top&&(s.contains(top)||top.id==='bf-create-backdrop'),focus:s.contains(document.activeElement)};})()");
+        check(at + "the Create sheet opens from + as a bottom sheet inside the screen, over the bar, focus in it", !!c && c.role === "dialog" && c.t >= 0 && c.b <= h + 1 && c.l <= 0 && c.r >= w - 1 && c.overBar && c.focus, J(c));
+        check(at + "eight choices, each at least 44 px tall; Post and Video say Coming soon", !!c && c.opts.length === 8 && c.opts.every(o => Number(o.split("x")[1]) >= 44 && Number(o.split("x")[0]) >= 44) && c.soon === 2, J(c && c.opts));
+        continue;
+      }
+      await ev("scrollTo(0,document.documentElement.scrollHeight),true");
+      await sleep(350);
+      const end = await ev(MEASURE);
+      const endOver = end.over.filter(x => !/ sticky over /.test(x));   // a sticky header covers what scrolled under it by design; fixed overlays are judged
+      check(at + "at the end of the page no fixed element covers anything (the bar and the Guide included)", endOver.length === 0, J(end.over));
+      const s = await ev(BAR_STATE);
+      check(at + "the bar is shown, " + tab + " active, nothing over it, the Guide clear of it", s.shown && s.active === tab && s.cover.length === 0 && !s.guideOverlap && s.items.every(i => i.w >= 44 && i.h >= 44), J(s));
+      const k = await ev("(function(){function q(s){return document.querySelectorAll(s).length;}function t(s){var n=document.querySelector(s);return n?n.textContent.replace(/\\s+/g,' ').trim():'';}" +
+        "return {tiles:q('#marketList .tile'),camps:q('#campaignList .tile'),people:q('#peopleList .person'),soon:t('#soonLine'),tab:(document.querySelector('[role=tab][aria-selected=true]')||{}).id||null," +
+        "rows:q('#listBody .item'),msgs:q('#paneOpen .msg, #paneOpen [data-msg], #paneOpen li'),shell:t('#pfShell'),open:document.body.className};})()");
+      if (name === "home") check(at + "Home shows the market, campaigns and people from the fixtures, and the line about posts", k.tiles === 4 && k.camps === 2 && k.people === 2 && /Posts are coming/.test(k.soon), J(k));
+      if (name === "inbox-messages") check(at + "the Messages tab lists the two conversations", k.tab === "tab-messages" && k.rows === 2, J(k));
+      if (name === "inbox-thread") check(at + "?with= opens the conversation with its messages", k.tab === "tab-messages" && k.msgs >= 2, J(k));
+      if (name === "inbox-approvals") check(at + "the Approvals tab lists the waiting proposals", k.tab === "tab-approvals" && k.rows === 10, J(k));
+      if (name === "inbox-notifications") check(at + "the Notifications tab lists the three notices", k.tab === "tab-notifications" && k.rows === 3, J(k));
+      if (name === "profile") check(at + "the profile header: @rose, Sales 12, BizCash 2,400, the tabs; no Following, Followers or Reviews", /@rose/.test(k.shell) && /12\s*Sales/.test(k.shell) && /2,400\s*BizCash/.test(k.shell) && /Posts\s*Shop\s*Services/.test(k.shell) && !/Follow|Review/.test(k.shell), k.shell.slice(0, 300));
+    }
+  }
+  // the screenshots the brief asks for, full length too for the pages that scroll
+  for (const [name, url] of [["home", "home.html"], ["profile", "profile.html"], ["inbox-notifications", "inbox.html?tab=notifications"]]) {
+    await open(cdp, origin, url, 390, 844, true);
+    await shotPage(cdp, path.join(P21_OUT, name + "-390-full.png"), 390);
+  }
+  console.log("    screenshots: " + P21_OUT);
 }

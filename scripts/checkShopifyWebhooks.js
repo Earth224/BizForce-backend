@@ -858,8 +858,9 @@ async function limiterProbe() {
   // NAMED (Nov 17 2026, TK1, migration 186): BEFORE 185 was the highest. AFTER 186_member_videos_duration.sql is above it too, by name; "the highest" is checkTiktokPosting G15's.
   // NAMED (Nov 18 2026, BV1, migration 187): BEFORE 186 was the highest. AFTER 187_member_video_parts.sql is above it too, by name; "the highest" is checkYoutubeUploads G14's.
   // NAMED (Nov 19 2026, HQ1, migration 188): 188_user_preferences_hq_view.sql (the phone dashboard's hq_card_view and hq_orbit) is allowed above the earlier highest too, by name; "the highest" is checkHqViews R1's.
+  // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): 189_handles_and_place.sql (the handle format, the reserved handles, the place for Local) and 190_notifications_links.sql (a notification's actor, object and link) are allowed above the earlier highest too, by name; "the highest" is checkHandles R1's.
   check("R1. 184_shopify_webhook_requests.sql is the only 184, only 185_shopify_uninstall_hook.sql, 186_member_videos_duration.sql and 187_member_video_parts.sql are above it (checkYoutubeUploads G14); its VERIFY query is verify/184_verify.sql",
-    highest === 188 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql" &&
+    highest === 190 && migFiles.filter(function (x) { return Number(x.slice(0, 3)) > 184; }).join() === "185_shopify_uninstall_hook.sql,186_member_videos_duration.sql,187_member_video_parts.sql,188_user_preferences_hq_view.sql,189_handles_and_place.sql,190_notifications_links.sql" &&
     migFiles.filter(function (x) { return /^184_/.test(x); }).join() === "184_shopify_webhook_requests.sql" &&
     fs.existsSync(path.join(migDir, "verify", "184_verify.sql")), highest);
   check("R2. migration 184 adds request_details, answered_at, owner_notified_at and the partial index on received_at WHERE processed_at IS NULL, in BEGIN/COMMIT, and drops nothing",

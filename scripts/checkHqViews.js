@@ -103,7 +103,8 @@ const MUTATIONS = {
   "autoplay-ignores-pause": [[MUSIC, "  function loadPlayAllowed() { return S.autoplay === true && !held(); }", "  function loadPlayAllowed() { return S.autoplay === true; }"]],
   "pause-not-remembered": [[MUSIC, "  function pause() { hold(true); if (popoutAlive())", "  function pause() { if (popoutAlive())"]],
   "page-plays-itself": [["agents-hub.html", "</body>", "<script>window.addEventListener('load',function(){if(window.BFMusic)window.BFMusic.play();});</script></body>"]],
-  "sw-not-bumped": [[SW, "var SHELL_REV = \"hq1\";", "var SHELL_REV = \"ph1\";"]],
+  // NAMED (Nov 19 2026, P2-1): BEFORE "hq1". AFTER "p21": the bottom bar, Home, the Inbox, the profile header and Settings, Local in the shell (checkAppShell W).
+  "sw-not-bumped": [[SW, "var SHELL_REV = \"p21\";", "var SHELL_REV = \"ph1\";"]],
   // (a crescent moon, built from its code point so this file holds none: checkNoEmoji N2)
   "emoji": [[VIEWS, "  var VIEW_KEY = \"bf_hq_view\"", "  /* " + String.fromCodePoint(0x1F319) + " */ var VIEW_KEY = \"bf_hq_view\""]]
 };
@@ -158,7 +159,11 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
   const mig = FILES[MIG] || "";
   const migNames = fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter(x => /^\d{3}_.*\.sql$/.test(x));
   const top = migNames.map(x => Number(x.slice(0, 3))).reduce((a, x) => Math.max(a, x), 0);
-  check("R1. 188_user_preferences_hq_view.sql is the only 188 and the highest migration", top === 188 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql", J([top]));
+  // NAMED (Nov 19 2026, P2-1, migrations 189 and 190): BEFORE 188 was the highest. AFTER only 189_handles_and_place.sql and
+  // 190_notifications_links.sql are above it, by name; "the highest" is checkHandles R1's.
+  check("R1. 188_user_preferences_hq_view.sql is the only 188, and only 189_handles_and_place.sql and 190_notifications_links.sql are above it (checkHandles R1)",
+    top === 190 && migNames.filter(x => /^188_/.test(x)).join() === "188_user_preferences_hq_view.sql" &&
+    migNames.filter(x => Number(x.slice(0, 3)) > 188).join() === "189_handles_and_place.sql,190_notifications_links.sql", J([top]));
   check("R2. it adds hq_card_view and hq_orbit as text, only if they do not exist (safe to re-run)",
     has(mig, "ADD COLUMN IF NOT EXISTS hq_card_view text,") && has(mig, "ADD COLUMN IF NOT EXISTS hq_orbit     text;"));
   check("R3. the named CHECKs as live: user_preferences_hq_card_view_check (NULL or large, compact, grid) and user_preferences_hq_orbit_check (NULL or shown, hidden), each dropped if it exists first",
@@ -517,7 +522,8 @@ function blockAt(t, head) {   // the text from head's "{" to its matching "}", b
 
   /* ══ W. the service worker ══ */
   console.log("\n══ W. the service worker ══");
-  check("W1. SHELL_REV \"hq1\" in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"hq1\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
+  // NAMED (Nov 19 2026, P2-1): BEFORE "hq1". AFTER "p21": the bottom bar, Home, the Inbox, the profile header and Settings, Local in the shell (checkAppShell W).
+  check("W1. SHELL_REV \"p21\" (bumped past HQ1's \"hq1\") in the cache's name, and the two new scripts cached", has(FILES[SW], "var SHELL_REV = \"p21\";\nvar CACHE = \"bf-shell-\" + BUILD + \"-\" + SHELL_REV;") &&
     has(FILES[SW], "\"/scripts/bf-oracle-moon.js\", \"/scripts/bf-hq-views.js\","));
   check("W2. the dashboard loads both, after bf-orbit.js", /<script src="\/scripts\/bf-orbit\.js"><\/script>\n[\s\S]*?<script src="\/scripts\/bf-oracle-moon\.js"><\/script>\n<script src="\/scripts\/bf-hq-views\.js"><\/script>/.test(FILES[DASH]));
 

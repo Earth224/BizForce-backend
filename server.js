@@ -1521,14 +1521,11 @@ function escapeLikePattern(value) {
   return String(value || "").replace(/[\\%_]/g, "\\$&");
 }
 
+/* NAMED (Nov 19 2026, P2-1): BEFORE cut to 40 characters; AFTER lib/handles.js normalizeHandle (a leading @ dropped too)
+   cut to 30, migration 189's limit. Only sign-up uses it now, for the legacy profiles.username it suggests; the two
+   username routes check what the member typed, uncut, with lib/handles.js checkClaim (3 to 30, not reserved, not taken). */
 function normalizeUsername(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40);
+  return require("./lib/handles").normalizeHandle(value).slice(0, 30).replace(/-+$/g, "");
 }
 
 function normalizeUrl(value) {
@@ -7098,24 +7095,14 @@ app.put("/api/profile/me", requireAuth, async function (req, res, next) {
       updates.website = normalizeUrl(req.body.website);
     }
 
+    /* NAMED (Nov 19 2026, P2-1): the legacy username follows the handle's rules (lib/handles.js): 3 to 30 characters of
+       the handle format, not a reserved handle (409), not another member's (409), and two members racing for one name
+       get a 409 from the unique index, not a 500. BEFORE: at least 3 characters, up to 40, no reserved list. */
     if (Object.prototype.hasOwnProperty.call(req.body, "username")) {
-      const username = normalizeUsername(req.body.username);
-
-      if (!username || username.length < 3) {
-        return res.status(400).json({ error: "Username must be at least 3 characters" });
-      }
-
-      const { data: existing } = await supabase
-        .from("profiles")
-        .select("id, user_id")
-        .eq("username", username)
-        .maybeSingle();
-
-      if (existing && existing.user_id !== req.user.id) {
-        return res.status(409).json({ error: "Username already taken" });
-      }
-
-      updates.username = username;
+      const claim = await require("./lib/handles").checkClaim(supabase, { raw: req.body.username, table: "profiles", userId: req.user.id });
+      if (claim.error) return res.status(claim.status).json({ error: claim.error, reason: claim.reason });
+      if (!claim.handle) return res.status(400).json({ error: require("./lib/handles").FORMAT_MESSAGE, reason: "handle_format" });
+      updates.username = claim.handle;
     }
 
     updates.updated_at = nowIso();
@@ -7128,6 +7115,7 @@ app.put("/api/profile/me", requireAuth, async function (req, res, next) {
       .single();
 
     if (error) {
+      if (require("./lib/handles").isUniqueViolation(error)) return res.status(409).json({ error: require("./lib/handles").TAKEN_MESSAGE, reason: "handle_taken" });
       throw error;
     }
 
@@ -8450,11 +8438,20 @@ app.get("/api/conversations", requireAuth, async function (req, res, next) {
   }
 });
 
+/* NAMED (Nov 19 2026, P2-1): a thread is read a page at a time (lib/inbox.js THREAD_PAGE, 50; ?limit up to 100;
+   ?before=<the oldest created_at shown> for the page before it). BEFORE the whole thread came back in one answer. The
+   answer is { messages (oldest first), has_more, next_before }; messages.html and inbox.html read messages as before.
+   An id that is not a member id is a 400, never a query. */
 app.get("/api/messages/:userId", requireAuth, async function (req, res, next) {
   try {
+    const IN = require("./lib/inbox");
     const otherUserId = req.params.userId;
+    if (!IN.isUuid(otherUserId)) return res.status(400).json({ error: "That is not a member id." });
+    const cursor = IN.parseBefore(req.query.before);
+    if (cursor.error) return res.status(400).json({ error: cursor.error });
+    const limit = IN.pageLimit(req.query.limit);
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("messages")
       .select("*")
       .or(
@@ -8467,26 +8464,43 @@ app.get("/api/messages/:userId", requireAuth, async function (req, res, next) {
           ",receiver_id.eq." +
           req.user.id +
           ")"
-      )
-      .order("created_at", { ascending: true });
+      );
+    if (cursor.before) query = query.lt("created_at", cursor.before);
+    const { data, error } = await query.order("created_at", { ascending: false }).limit(limit + 1);
 
     if (error) {
       throw error;
     }
 
-    return res.json({ messages: data });
+    return res.json(IN.threadPage(data || [], limit));
   } catch (error) {
     next(error);
   }
 });
 
+/* NAMED (Nov 19 2026, P2-1): the receiver must be a member: an id that is not one is a 404 (lib/inbox.js
+   RECEIVER_MISSING) and nothing is written; a message to yourself is a 400. The notice now says who sent it and what
+   it is (actor_id, object_type "message", object_id, link /inbox.html?with=<sender>, migration 190), which is also
+   how the Inbox counts a conversation's unread messages. BEFORE any receiver_id was written as given. */
 app.post("/api/messages", requireAuth, async function (req, res, next) {
   try {
+    const IN = require("./lib/inbox");
     const receiverId = req.body.receiver_id;
     const content = safeText(req.body.content, 5000);
 
     if (!receiverId || !content) {
       return res.status(400).json({ error: "receiver_id and content are required" });
+    }
+    if (!IN.isUuid(receiverId)) {
+      return res.status(404).json({ error: IN.RECEIVER_MISSING, reason: "unknown_receiver" });
+    }
+    if (receiverId === req.user.id) {
+      return res.status(400).json({ error: "You cannot message yourself.", reason: "self_message" });
+    }
+    const receiver = await supabase.from("users").select("id").eq("id", receiverId).maybeSingle();
+    if (receiver.error) throw receiver.error;
+    if (!receiver.data) {
+      return res.status(404).json({ error: IN.RECEIVER_MISSING, reason: "unknown_receiver" });
     }
 
     const { data, error } = await supabase
@@ -8504,13 +8518,7 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
       throw error;
     }
 
-    var messageNotification = await supabase.from("notifications").insert({
-      user_id: receiverId,
-      type: "message",
-      title: "New message",
-      message: "You received a new business message.",
-      read: false
-    });
+    var messageNotification = await supabase.from("notifications").insert(IN.messageNotice(receiverId, req.user.id, data.id));
 
     if (messageNotification.error) {
       console.warn("[notifications] insert failed for POST /api/messages — the route still succeeded, the user simply was not notified:", messageNotification.error.message || messageNotification.error);
@@ -8520,6 +8528,91 @@ app.post("/api/messages", requireAuth, async function (req, res, next) {
   } catch (error) {
     next(error);
   }
+});
+
+/* ── THE INBOX (P2-1, Nov 19 2026; inbox.html, lib/inbox.js) ─────────────────
+   Conversations grouped on the server from the newest CONVERSATION_SCAN messages (?before for the next stretch), each
+   with the other person's handle, name and avatar and its unread count (the member's unread "message" notices from that
+   person). Opening a thread marks those notices read. The counts feed the bottom bar's Inbox badge. */
+app.get("/api/inbox/conversations", requireAuth, async function (req, res, next) {
+  try {
+    const IN = require("./lib/inbox");
+    const cursor = IN.parseBefore(req.query.before);
+    if (cursor.error) return res.status(400).json({ error: cursor.error });
+    let query = supabase.from("messages").select("sender_id, receiver_id, content, created_at")
+      .or("sender_id.eq." + req.user.id + ",receiver_id.eq." + req.user.id);
+    if (cursor.before) query = query.lt("created_at", cursor.before);
+    const rows = await query.order("created_at", { ascending: false }).limit(IN.CONVERSATION_SCAN);
+    if (rows.error) throw rows.error;
+    const unread = await supabase.from("notifications").select("actor_id")
+      .eq("user_id", req.user.id).eq("type", "message").eq("read", false).not("actor_id", "is", null);
+    if (unread.error) throw unread.error;
+    const list = IN.groupConversations(rows.data || [], req.user.id, IN.unreadByActor(unread.data));
+    const ids = list.map(function (c) { return c.other_id; });
+    let bf = { data: [] }, legacy = { data: [] };
+    if (ids.length) {
+      [bf, legacy] = await Promise.all([
+        supabase.from("bf_profiles").select("user_id, username, display_name, avatar_url").in("user_id", ids),
+        supabase.from("profiles").select("user_id, full_name, business_name, logo_url").in("user_id", ids)
+      ]);
+      if (bf.error) throw bf.error;
+      if (legacy.error) throw legacy.error;
+    }
+    const byId = function (rowsIn) { const m = {}; (rowsIn || []).forEach(function (r) { m[r.user_id] = r; }); return m; };
+    const bfBy = byId(bf.data), legacyBy = byId(legacy.data);
+    const scanned = rows.data || [];
+    return res.json({
+      conversations: list.map(function (c) { return Object.assign(c, { person: IN.personFrom(bfBy[c.other_id], legacyBy[c.other_id]) }); }),
+      next_before: scanned.length === IN.CONVERSATION_SCAN ? scanned[scanned.length - 1].created_at : null
+    });
+  } catch (error) { next(error); }
+});
+
+/* The person at the other end of a thread, for its header: handle, name, avatar. A member id that is no member is a 404. */
+app.get("/api/inbox/person/:userId", requireAuth, async function (req, res, next) {
+  try {
+    const IN = require("./lib/inbox");
+    const id = req.params.userId;
+    if (!IN.isUuid(id)) return res.status(404).json({ error: IN.RECEIVER_MISSING });
+    const [user, bf, legacy] = await Promise.all([
+      supabase.from("users").select("id").eq("id", id).maybeSingle(),
+      supabase.from("bf_profiles").select("user_id, username, display_name, avatar_url").eq("user_id", id).maybeSingle(),
+      supabase.from("profiles").select("user_id, full_name, business_name, logo_url").eq("user_id", id).maybeSingle()
+    ]);
+    if (user.error) throw user.error;
+    if (bf.error) throw bf.error;
+    if (legacy.error) throw legacy.error;
+    if (!user.data) return res.status(404).json({ error: IN.RECEIVER_MISSING });
+    return res.json({ person: Object.assign({ id: id }, IN.personFrom(bf.data, legacy.data)) });
+  } catch (error) { next(error); }
+});
+
+/* Opening a thread: the member's unread "message" notices from that person are marked read. */
+app.post("/api/inbox/read/:userId", requireAuth, async function (req, res, next) {
+  try {
+    const IN = require("./lib/inbox");
+    if (!IN.isUuid(req.params.userId)) return res.status(400).json({ error: "That is not a member id." });
+    const marked = await supabase.from("notifications").update({ read: true, read_at: nowIso() })
+      .eq("user_id", req.user.id).eq("type", "message").eq("actor_id", req.params.userId).eq("read", false).select("id");
+    if (marked.error) throw marked.error;
+    return res.json({ marked: (marked.data || []).length });
+  } catch (error) { next(error); }
+});
+
+/* The Inbox badge and tabs: unread notices (not messages), unread messages, and proposals waiting for approval. */
+app.get("/api/inbox/counts", requireAuth, async function (req, res, next) {
+  try {
+    const [notices, messages, approvals] = await Promise.all([
+      supabase.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", req.user.id).eq("read", false).neq("type", "message"),
+      supabase.from("notifications").select("id", { count: "exact", head: true }).eq("user_id", req.user.id).eq("read", false).eq("type", "message"),
+      supabase.from("agent_proposals").select("id", { count: "exact", head: true }).eq("user_id", req.user.id).eq("status", "pending")
+    ]);
+    if (notices.error) throw notices.error;
+    if (messages.error) throw messages.error;
+    if (approvals.error) throw approvals.error;
+    const n = notices.count || 0, m = messages.count || 0;
+    return res.json({ notifications: n, messages: m, approvals: approvals.count || 0, badge: n + m });
+  } catch (error) { next(error); }
 });
 
 /* GATED. This was one of only two authenticated model-call routes in this file
@@ -47224,27 +47317,36 @@ app.get("/api/activity/overview", requireAuth, async function (req, res, next) {
   }
 });
 
+/* NAMED (Nov 19 2026, P2-1): ?exclude=message leaves out message notices (the Inbox shows those as conversations), and
+   each row's link is passed only when it is a path on this site (lib/inbox.js safeLink), else null. */
 app.get("/api/notifications", requireAuth, async function (req, res, next) {
   try {
-    const { data, error } = await supabase
+    const IN = require("./lib/inbox");
+    let query = supabase
       .from("notifications")
       .select("*")
-      .eq("user_id", req.user.id)
+      .eq("user_id", req.user.id);
+    if (req.query.exclude === "message") query = query.neq("type", "message");
+    const { data, error } = await query
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(IN.NOTIFICATIONS_PAGE);
 
     if (error) {
       throw error;
     }
 
-    return res.json({ notifications: data });
+    return res.json({ notifications: (data || []).map(function (n) { return Object.assign({}, n, { link: IN.safeLink(n.link) }); }) });
   } catch (error) {
     next(error);
   }
 });
 
+/* NAMED (Nov 19 2026, P2-1): an id that is not one of the member's notifications is a 404 (lib/inbox.js NOTICE_MISSING),
+   not a 500. BEFORE .single() threw on no row and the error handler answered 500. */
 app.put("/api/notifications/:id/read", requireAuth, async function (req, res, next) {
   try {
+    const IN = require("./lib/inbox");
+    if (!IN.isUuid(req.params.id)) return res.status(404).json({ error: IN.NOTICE_MISSING });
     const { data, error } = await supabase
       .from("notifications")
       .update({
@@ -47254,13 +47356,29 @@ app.put("/api/notifications/:id/read", requireAuth, async function (req, res, ne
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .select("*")
-      .single();
+      .maybeSingle();
 
     if (error) {
       throw error;
     }
+    if (!data) return res.status(404).json({ error: IN.NOTICE_MISSING });
 
     return res.json({ notification: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* NAMED (Nov 19 2026, P2-1): "Mark all read" in the Inbox: every unread notice of the member's, except messages unless
+   ?include=message (a conversation's are marked read when it is opened). Answers how many it marked. */
+app.post("/api/notifications/read-all", requireAuth, async function (req, res, next) {
+  try {
+    let query = supabase.from("notifications").update({ read: true, read_at: nowIso() })
+      .eq("user_id", req.user.id).eq("read", false);
+    if (req.query.include !== "message") query = query.neq("type", "message");
+    const marked = await query.select("id");
+    if (marked.error) throw marked.error;
+    return res.json({ marked: (marked.data || []).length });
   } catch (error) {
     next(error);
   }
@@ -48562,7 +48680,11 @@ app.post("/api/wallet/support", requireAuth, requireActiveSubscription, bfcSuppo
             type: "support",
             title: "@" + me.data.username + " supported you with " + amount.toLocaleString("en-US") + " BFC",
             message: note.note,
-            read: false
+            read: false,
+            // NAMED (Nov 19 2026, P2-1): who sent it, and where it opens (the wallet's history), migration 190.
+            actor_id: req.user.id,
+            object_type: "tip",
+            link: "/wallet.html"
           });
           if (notice.error) {
             console.warn("[notifications] insert failed for POST /api/wallet/support — the support was sent, the member simply was not notified:", notice.error.message || notice.error);
@@ -49167,8 +49289,13 @@ app.post("/api/marketplace/listings", requireAuth, requireActiveSubscription, as
     if (!title)    return res.status(400).json({ error: "Title is required" });
     if (!MARKETPLACE_CATEGORIES.includes(category)) return res.status(400).json({ error: "Invalid category" });
     if (priceBfc <= 0) return res.status(400).json({ error: "Set a BizCash (BFC) price above 0. " + LISTING_BFC_ONLY_MESSAGE, field: "price_bfc" });
+    /* NAMED (Nov 19 2026, P2-1): the Create sheet's "Product listing" and "Service" open this form with the kind set, so a
+       listing is a product or a service (migration 051's listing_kind; absent means product, as the column's default).
+       The storefront's Shop and Services and the profile's tabs read it. BEFORE every listing was a product. */
+    const listingKind = req.body.listing_kind === undefined || req.body.listing_kind === null || req.body.listing_kind === "" ? "product" : req.body.listing_kind;
+    if (listingKind !== "product" && listingKind !== "service") return res.status(400).json({ error: "listing_kind is product or service.", field: "listing_kind" });
     const { data, error } = await insertListingWithSlug({
-      seller_id: req.user.id, title, description: description || "",
+      seller_id: req.user.id, title, description: description || "", listing_kind: listingKind,
       price_bfc: priceBfc, price_usd: null, category, tags, media: sanitizeMedia(req.body.media, req.user.id), status: "active",
       is_digital: isDigital, digital_file_path: isDigital ? digitalFilePath : null, digital_file_name: digitalFileName,
       created_at: nowIso(), updated_at: nowIso()
@@ -53035,30 +53162,115 @@ app.put("/api/bfp/profile/me", requireAuth, async function (req, res, next) {
       updates.font_style = "modern";
     }
 
+    /* NAMED (Nov 19 2026, P2-1): bf_profiles.username is THE handle (lib/handles.js). Empty clears it; otherwise 3 to 30
+       characters of the format migration 189 holds (400), not a reserved handle (409), not another member's (409); the
+       unique index's refusal when two members race for one handle is a 409 too, never a 500. BEFORE: any length up to 40,
+       no reserved list, and the race answered 500. */
     if (Object.prototype.hasOwnProperty.call(req.body, "username")) {
-      const username = normalizeUsername(req.body.username);
-
-      if (!username) {
-        updates.username = null;
-      } else {
-        const { data: existing } = await supabase
-          .from("bf_profiles")
-          .select("id, user_id")
-          .eq("username", username)
-          .maybeSingle();
-
-        if (existing && existing.user_id !== req.user.id) {
-          return res.status(409).json({ error: "that username is already taken" });
-        }
-
-        updates.username = username;
-      }
+      const claim = await require("./lib/handles").checkClaim(supabase, { raw: req.body.username, table: "bf_profiles", userId: req.user.id });
+      if (claim.error) return res.status(claim.status).json({ error: claim.error, reason: claim.reason });
+      updates.username = claim.handle;
     }
 
     const { data, error } = await supabase.from("bf_profiles")
       .upsert(updates, { onConflict: "user_id" }).select("*").single();
-    if (error) throw error;
+    if (error) {
+      if (require("./lib/handles").isUniqueViolation(error)) return res.status(409).json({ error: require("./lib/handles").TAKEN_MESSAGE, reason: "handle_taken" });
+      throw error;
+    }
     return res.json({ profile: data });
+  } catch (error) { next(error); }
+});
+
+/* ── P2-1 (Nov 19 2026): the member's place, for Local (lib/places.js, migration 189) ──
+   Settings, Local reads and writes it here. The member types a city and a region and picks the country from the list
+   (countries: the ISO codes; the page names them in the member's language). Never device location. local_opt_in is
+   "Show my posts in Local": off until the member turns it on. The four columns are part of the member's own bf_profiles
+   row (lib/yourData.js) and are not in BF_PUBLIC_PROFILE_COLUMNS: nothing public reads them yet. */
+app.get("/api/me/place", requireAuth, async function (req, res, next) {
+  try {
+    const PL = require("./lib/places");
+    const read = await supabase.from("bf_profiles").select("place_city, place_region, place_country, local_opt_in").eq("user_id", req.user.id).maybeSingle();
+    if (read.error) throw read.error;
+    return res.json({ place: PL.placeReply(read.data), countries: PL.COUNTRY_CODES });
+  } catch (error) { next(error); }
+});
+
+app.put("/api/me/place", requireAuth, async function (req, res, next) {
+  try {
+    const PL = require("./lib/places");
+    const checked = PL.placeUpdates(req.body);
+    if (checked.error) return res.status(400).json({ error: checked.error, field: checked.field });
+    const row = Object.assign({ user_id: req.user.id, updated_at: nowIso() }, checked.updates);
+    const saved = await supabase.from("bf_profiles").upsert(row, { onConflict: "user_id" })
+      .select("place_city, place_region, place_country, local_opt_in").single();
+    if (saved.error) throw saved.error;
+    return res.json({ place: PL.placeReply(saved.data) });
+  } catch (error) { next(error); }
+});
+
+/* ── P2-1 (Nov 19 2026): the profile header's counts ──
+   Sales: the member's completed marketplace sales (marketplace_orders as seller, status completed), counted, never
+   listed. BizCash: the member's own balance, only in the owner's answer (GET .../me/stats); a visitor's answer
+   (GET .../:userId/stats) has no bizcash key at all, and answers only while the owner's page is public. Following,
+   Followers and Reviews are not counted: they do not exist yet (P2-3, P2-7), so the page shows no zeros for them. */
+async function profileSalesCount(userId) {
+  const r = await supabase.from("marketplace_orders").select("id", { count: "exact", head: true })
+    .eq("seller_id", userId).eq("status", "completed");
+  if (r.error) throw r.error;
+  return r.count || 0;
+}
+
+app.get("/api/bfp/profile/me/stats", requireAuth, async function (req, res, next) {
+  try {
+    const sales = await profileSalesCount(req.user.id);
+    const wallet = await supabase.from("user_wallets").select("balance").eq("user_id", req.user.id).maybeSingle();
+    if (wallet.error) throw wallet.error;
+    return res.json({ sales: sales, bizcash: wallet.data ? Number(wallet.data.balance) || 0 : 0 });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/bfp/profile/:userId/stats", async function (req, res, next) {
+  try {
+    const userId = safeText(req.params.userId, 60);
+    if (!require("./lib/inbox").isUuid(userId) || !(await ownerPagePublic(userId))) return res.json({ stats: null });
+    return res.json({ stats: { sales: await profileSalesCount(userId) } });
+  } catch (error) { next(error); }
+});
+
+/* ── P2-1 (Nov 19 2026): Home before there are posts (home.html) ──
+   Real records only, never sample content: the newest active listings that carry a photo, the newest active campaigns
+   that have a share link, and members whose public page is on (a handle, and the owner's plan active: ownerPagePublic).
+   Each list may be empty; the page says so plainly. */
+const HOME_LISTINGS = 8, HOME_CAMPAIGNS = 6, HOME_PEOPLE = 8;
+app.get("/api/home/starter", requireAuth, async function (req, res, next) {
+  try {
+    const [listings, campaigns, people] = await Promise.all([
+      supabase.from("marketplace_listings").select("id, slug, seller_id, title, price_bfc, category, listing_kind, media, created_at")
+        .eq("status", "active").order("created_at", { ascending: false }).limit(60),
+      supabase.from("crowdfunding_campaigns").select("id, owner_id, title, goal_bfc, raised_bfc, media, share_id, created_at")
+        .eq("status", "active").not("share_id", "is", null).order("created_at", { ascending: false }).limit(HOME_CAMPAIGNS * 3),
+      supabase.from("bf_profiles").select("user_id, username, display_name, tagline, avatar_url, updated_at")
+        .not("username", "is", null).order("updated_at", { ascending: false }).limit(HOME_PEOPLE * 3)
+    ]);
+    if (listings.error) throw listings.error;
+    if (campaigns.error) throw campaigns.error;
+    if (people.error) throw people.error;
+    const firstPhoto = function (media) {
+      const m = (Array.isArray(media) ? media : []).find(function (x) { return x && typeof x.url === "string" && (!x.type || /^image/.test(String(x.type)) || x.kind === "image"); });
+      return m ? m.url : null;
+    };
+    const withPhoto = (listings.data || []).map(function (l) { return Object.assign({}, l, { photo: firstPhoto(l.media) }); }).filter(function (l) { return l.photo; });
+    const visible = await publicOwnersAmong(withPhoto.map(function (l) { return l.seller_id; })
+      .concat((campaigns.data || []).map(function (c) { return c.owner_id; }), (people.data || []).map(function (p) { return p.user_id; })));
+    return res.json({
+      listings: withPhoto.filter(function (l) { return visible.has(l.seller_id); }).slice(0, HOME_LISTINGS)
+        .map(function (l) { return { id: l.id, title: l.title, price_bfc: l.price_bfc, kind: l.listing_kind || "product", category: l.category, photo: l.photo }; }),
+      campaigns: (campaigns.data || []).filter(function (c) { return visible.has(c.owner_id); }).slice(0, HOME_CAMPAIGNS)
+        .map(function (c) { return { title: c.title, goal_bfc: c.goal_bfc, raised_bfc: c.raised_bfc, photo: firstPhoto(c.media), link: "/campaign/" + c.share_id }; }),
+      people: (people.data || []).filter(function (p) { return visible.has(p.user_id) && p.user_id !== req.user.id; }).slice(0, HOME_PEOPLE)
+        .map(function (p) { return { username: p.username, name: p.display_name || "@" + p.username, tagline: p.tagline || null, avatar_url: p.avatar_url || null, link: "/@" + p.username }; })
+    });
   } catch (error) { next(error); }
 });
 
